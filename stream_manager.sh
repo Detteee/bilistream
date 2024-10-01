@@ -147,9 +147,9 @@ select_area_id() {
     echo " 5) 530: 萌宅领域         6) 235: 其他单机"
     echo " 7) 107: 其他网游         8) 646: UP主日常"
     echo " 9) 102: 最终幻想14      10) 433: 格斗游戏"
-    echo " 0) 自定义"
+    echo "11) 216: 我的世界         0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-10): " area_choice
+    read -p "请选择分区 ID (0-11): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -162,6 +162,7 @@ select_area_id() {
     8) areaid=646 ;;
     9) areaid=102 ;;
     10) areaid=433 ;;
+    11) areaid=216 ;;
     0) read -p "请输入自定义分区 ID: " areaid ;;
     *)
         echo "无效选择，请重试。"
@@ -383,6 +384,7 @@ get_area_name() {
     646) echo "UP主日常" ;;
     102) echo "最终幻想14" ;;
     433) echo "格斗游戏" ;;
+    216) echo "我的世界" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
@@ -461,8 +463,9 @@ while true; do
             echo "│ 1. YouTube (YT)                     │"
             echo "│ 2. Twitch (TW)                      │"
             echo "│ 3. Both                             │"
+            echo "│ 4. None                             │"
             echo "└─────────────────────────────────────┘"
-            read -p "Enter your choice (1/2/3): " area_config_choice
+            read -p "Enter your choice (1/2/3/4): " area_config_choice
 
             case $area_config_choice in
             1)
@@ -480,6 +483,9 @@ while true; do
                 manage_service_after_change "YT"
                 manage_service_after_change "TW"
                 display_current_config "all"
+                ;;
+            4)
+                echo "No changes made."
                 ;;
             *)
                 echo "Invalid choice. No changes made."
@@ -526,7 +532,7 @@ while true; do
             echo "┌────┬──────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐"
 
             echo "$pm2_output"
-            echo "└────┴──────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘"
+            echo "└────┴─��────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘"
         fi
         echo "┌─────────────────────────────────────┐"
         echo "│    Select service to manage         │"
@@ -534,13 +540,15 @@ while true; do
         echo "│ 1. YouTube (YT)                     │"
         echo "│ 2. Twitch (TW)                      │"
         echo "│ 3. Both Services                    │"
+        echo "│ 4. None                             │"
         echo "└─────────────────────────────────────┘"
-        read -p "Enter your choice (1/2/3): " service_choice
+        read -p "Enter your choice (1/2/3/4): " service_choice
 
         case $service_choice in
         1) manage_pm2_service "YT" ;;
         2) manage_pm2_service "TW" ;;
         3) manage_all_pm2_services ;;
+        4) echo "No action taken." ;;
         *) echo "Invalid choice. No action taken." ;;
         esac
         if [ -z "$pm2_output" ]; then
@@ -566,14 +574,18 @@ while true; do
         echo "├─────────────────────────────────────┤"
         echo "│ 1. YouTube (YT)                     │"
         echo "│ 2. Twitch (TW)                      │"
+        echo "│ 3. None                             │"
         echo "└─────────────────────────────────────┘"
-        read -p "Enter your choice (1/2): " title_choice
+        read -p "Enter your choice (1/2/3): " title_choice
         case $title_choice in
         1)
             ./bili_change_live_title -c ./YT/config.yaml
             ;;
         2)
             ./bili_change_live_title -c ./TW/config.yaml
+            ;;
+        3)
+            echo "Remote live title not changed."
             ;;
         *)
             echo "Invalid choice. No changes made."

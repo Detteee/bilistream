@@ -50,7 +50,8 @@ async fn main() {
             bili_change_live_title(&cfg).await;
         }
 
-        let (is_live, scheduled_start) = live_type.get_status().await.unwrap_or((false, None));
+        let (is_live, m3u8_url, scheduled_start) =
+            live_type.get_status().await.unwrap_or((false, None, None));
 
         if is_live {
             tracing::info!("{}", format!("{}直播中", live_type.channel_name()));
@@ -70,7 +71,7 @@ async fn main() {
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
-                    live_type.get_real_m3u8_url().await.unwrap(),
+                    m3u8_url.unwrap(),
                     cfg.ffmpeg_proxy.clone(),
                 );
             } else {
@@ -82,16 +83,16 @@ async fn main() {
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
-                    live_type.get_real_m3u8_url().await.unwrap(),
+                    m3u8_url.unwrap(),
                     cfg.ffmpeg_proxy.clone(),
                 );
                 loop {
-                    let (is_live, _) = live_type.get_status().await.unwrap();
+                    let (is_live, m3u8_url, _) = live_type.get_status().await.unwrap();
                     if is_live {
                         ffmpeg(
                             cfg.bililive.bili_rtmp_url.clone(),
                             cfg.bililive.bili_rtmp_key.clone(),
-                            live_type.get_real_m3u8_url().await.unwrap(),
+                            m3u8_url.unwrap(),
                             cfg.ffmpeg_proxy.clone(),
                         );
                     } else {
@@ -183,7 +184,7 @@ async fn bili_start_live(cfg: &Config) {
             "application/x-www-form-urlencoded; charset=UTF-8",
         )
         .body(format!(
-            "room_id={}&platform=pc&area_v2={}&csrf_token={}&csrf={}",
+            "room_id={}&platform=android_link&area_v2={}&csrf_token={}&csrf={}",
             cfg.bililive.room, cfg.bililive.area_v2, cfg.bililive.bili_jct, cfg.bililive.bili_jct
         ))
         .send()
@@ -281,16 +282,12 @@ async fn bili_stop_live(cfg: &Config) {
         .json()
         .await
         .unwrap();
-    // println!("{:#?}",res);
 }
 
 pub fn ffmpeg(rtmp_url: String, rtmp_key: String, m3u8_url: String, ffmpeg_proxy: Option<String>) {
-    // let cmd = format!("{}&key={}",rtmp_url,rtmp_key);
     let cmd = format!("{}{}", rtmp_url, rtmp_key);
     let mut command = Command::new("ffmpeg");
-    // if ffmpeg_proxy.clone()!= "" {
-    //     command.arg(ffmpeg_proxy.clone());
-    // }
+
     if ffmpeg_proxy.is_some() {
         command.arg("-http_proxy");
         command.arg(ffmpeg_proxy.clone().unwrap());
@@ -315,27 +312,9 @@ pub fn ffmpeg(rtmp_url: String, rtmp_key: String, m3u8_url: String, ffmpeg_proxy
                 ffmpeg(rtmp_url, rtmp_key, m3u8_url, ffmpeg_proxy)
             }
         }
+        #[allow(non_snake_case)]
         None => {
             println!("Process terminated.");
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use config::GotifyConfig;
-//     use tokio;
-
-//     #[tokio::test]
-//     async fn test_send_gotify_notification() {
-//         let config = GotifyConfig {
-//             url: "https://gotify.com".to_string(),
-//             token: "".to_string(),
-//         };
-
-//         let message = "这是一条测试通知";
-
-//         send_gotify_notification(&config, message, "bilistream测试").await;
-//     }
-// }

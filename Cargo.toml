@@ -44,3 +44,7 @@ path = "src/bin/bili_stop_live.rs"
 [[bin]]
 name = "bili_change_live_title"
 path = "src/bin/bili_change_live_title.rs"
+
+[[bin]]
+name = "bili_start_live"
+path = "src/bin/bili_start_live.rs"

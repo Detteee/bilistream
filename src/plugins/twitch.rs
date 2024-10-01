@@ -14,7 +14,9 @@ pub struct Twitch {
 
 #[async_trait]
 impl Live for Twitch {
-    async fn get_status(&self) -> Result<(bool, Option<DateTime<Utc>>), Box<dyn Error>> {
+    async fn get_status(
+        &self,
+    ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
         let j = json!(
             {
                 "operationName":"StreamMetadata",
@@ -39,14 +41,11 @@ impl Live for Twitch {
             .json()
             .await?;
         if res["data"]["user"]["stream"]["type"] == "live" {
-            Ok((true, None))
+            let m3u8_url = self.get_streamlink_url()?;
+            Ok((true, Some(m3u8_url), None))
         } else {
-            Ok((false, None))
+            Ok((false, None, None))
         }
-    }
-
-    async fn get_real_m3u8_url(&self) -> Result<String, Box<dyn Error>> {
-        self.get_streamlink_url()
     }
 
     fn channel_name(&self) -> &str {

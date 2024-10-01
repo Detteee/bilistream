@@ -24,9 +24,9 @@ pub enum Status {
 #[async_trait]
 pub trait Live {
     fn channel_name(&self) -> &str;
-    async fn get_status(&self) -> Result<(bool, Option<DateTime<Utc>>), Box<dyn Error>>;
-    async fn get_real_m3u8_url(&self) -> Result<String, Box<dyn Error>>;
-    // fn set_room(&mut self, room: &str);
+    async fn get_status(
+        &self,
+    ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>>;
 }
 
 pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
@@ -42,11 +42,11 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
     match cfg.platform.as_str() {
-        "Youtube" => {
-            let channel_name = cfg.youtube.channel_name.as_str();
-            let channel_id = cfg.youtube.channel_id.as_str(); // Use room as channel_id
-            Ok(Box::new(Youtube::new(channel_name, channel_id))) // Create Youtube instance
-        }
+        "Youtube" => Ok(Box::new(Youtube::new(
+            &cfg.youtube.channel_name.as_str(),
+            &cfg.youtube.channel_id.as_str(),
+        ))),
+
         "Twitch" => Ok(Box::new(Twitch::new(
             &cfg.twitch.channel_id.as_str(),
             cfg.twitch.oauth_token,
@@ -58,27 +58,46 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
 
 pub async fn get_youtube_live_status(
     channel_id: &str,
-) -> Result<(bool, Option<DateTime<Utc>>), Box<dyn Error>> {
-    let output = Command::new("yt-dlp")
-        .arg("-g")
-        .arg(format!("https://www.youtube.com/@{}/live", channel_id))
-        .output()?;
+) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
+    let mut command = Command::new("yt-dlp");
+    command.arg("-g");
+
+    command.arg(format!(
+        "https://www.youtube.com/channel/{}/live",
+        channel_id
+    ));
+
+    let output = command.output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if stderr.contains("The channel is not currently live") {
+    // tracing::info!("yt-dlp -g {}", stdout);
+    if stdout.contains("ERROR: [youtube]") {
         // Check for scheduled start time in stderr
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) minutes")?.captures(&stderr)
         {
             let minutes: i64 = captures[1].parse()?;
             let start_time = Utc::now() + chrono::Duration::minutes(minutes);
-            return Ok((false, Some(start_time))); // Return scheduled start time
+            return Ok((false, None, Some(start_time))); // Return scheduled start time
         }
-        return Ok((false, None)); // Channel is not live and no scheduled time
-    } else if stdout.contains("https://") {
-        return Ok((true, None)); // Channel is currently live
+        if let Some(captures) =
+            Regex::new(r"This live event will begin in (\d+) hours")?.captures(&stderr)
+        {
+            let hours: i64 = captures[1].parse()?;
+            let start_time = Utc::now() + chrono::Duration::hours(hours);
+            return Ok((false, None, Some(start_time))); // Return scheduled start time
+        }
+        if let Some(captures) =
+            Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
+        {
+            let days: i64 = captures[1].parse()?;
+            let start_time = Utc::now() + chrono::Duration::days(days);
+            return Ok((false, None, Some(start_time))); // Return scheduled start time
+        }
+        return Ok((false, None, None)); // Channel is not live and no scheduled time
+    } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {
+        return Ok((true, Some(stdout.to_string()), None)); // Channel is currently live
     }
 
     Err("Unexpected output from yt-dlp".into())
