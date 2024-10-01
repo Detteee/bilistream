@@ -38,6 +38,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    Refer to [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 
 4. Build the project:
+   
    For Debian 12 and  other Linux distributions using glibc 2.36 or newer.
    ```
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
@@ -75,9 +76,20 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
 
 1. Set up the directory structure:
    ```
-   mkdir YT TW
+   mkdir YT 
+   mkdir TW
    cp config.yaml YT/config.yaml
    cp config.yaml TW/config.yaml
+
+   # with tree . structure
+   .
+   ├── bili_stop_live
+   ├── bilistream
+   ├── stream_manager.sh
+   ├── TW
+   │   └── config.yaml
+   └── YT
+       └── config.yaml
    ```
 
 2. Edit `YT/config.yaml` and `TW/config.yaml` with the appropriate settings for YouTube and Twitch, respectively.

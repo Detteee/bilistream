@@ -6,7 +6,7 @@
 
 ## 特性
 
-- 自动将 Twitch 和 YouTube 流重新广播到 Bilibili 直播
+- 自动将 Twitch 和 YouTube 流重新广播到 Bilibili 直播（支持监听+自动开播）
 - 支持 YouTube 上的预告窗
 - 可配置的Bilibili直播间设置（标题、分区等）
 - 使用管理脚本（`stream_manager.sh`）用于轻松配置和控制
@@ -77,9 +77,20 @@
 
 1. 设置目录结构：
    ```
-   mkdir YT TW
+   mkdir YT 
+   mkdir TW
    cp config.yaml YT/config.yaml
    cp config.yaml TW/config.yaml
+
+   # 目录树状结构(tree .)：
+   .
+   ├── bili_stop_live
+   ├── bilistream
+   ├── stream_manager.sh
+   ├── TW
+   │   └── config.yaml
+   └── YT
+       └── config.yaml
    ```
 
 2. 分别编辑 `YT/config.yaml` 和 `TW/config.yaml`，设置适当的 YouTube 和 Twitch 设置。
