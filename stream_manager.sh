@@ -226,18 +226,15 @@ select_channel_id() {
 # Function to select Twitch ID
 select_twitch_id() {
     echo "Select Twitch Channel:"
-    echo -e "${GREEN}──────────────────────────────────────${RESET}"
-    echo " 1) kamito"
-    echo " 2) 橘ひなの"
-    echo " 3) 花芽すみれ"
-    echo " 4) 夢野あかり"
-    echo " 5) 白波らむね"
-    echo " 6) とおこ"
-    echo " 7) 天帝フォルテ"
-    echo " 8) 獅子堂あかり"
+    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
+    echo " 1) kamito              6) とおこ"
+    echo " 2) 橘ひなの            7) 天帝フォルテ"
+    echo " 3) 花芽すみれ          8) 獅子堂あかり"
+    echo " 4) 夢野あかり          9) 夜よいち"
+    echo " 5) 白波らむね         10) 甘城なつき"
     echo " 0) Custom"
-    echo -e "${GREEN}──────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-8): " twitch_choice
+    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
+    read -p "Select Channel (0-10): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -271,6 +268,14 @@ select_twitch_id() {
     8)
         channel_id="shishidoakari"
         channel_name="獅子堂あかり"
+        ;;
+    9)
+        channel_id="yoichi_0v0"
+        channel_name="夜よいち"
+        ;;
+    10)
+        channel_id="nacho_dayo"
+        channel_name="甘城なつき"
         ;;
     0)
         read -p "Enter Twitch ID: " channel_id
@@ -532,7 +537,7 @@ while true; do
             echo "┌────┬──────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐"
 
             echo "$pm2_output"
-            echo "└────┴─��────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘"
+            echo "└────┴──────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘"
         fi
         echo "┌─────────────────────────────────────┐"
         echo "│    Select service to manage         │"
