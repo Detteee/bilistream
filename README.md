@@ -1,90 +1,95 @@
-This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements.
+# Bilistream
 
+This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
 
-# bilistream
+## Features
 
-bilistream is an automated tool for rebroadcasting Twitch and YouTube streams to Bilibili Live without requiring constant supervision. It's perfect for content creators who want to expand their audience across multiple platforms effortlessly.
+- Automated rebroadcasting of Twitch and YouTube streams to Bilibili Live
+- Support for scheduled streams on YouTube
+- Configurable stream settings (title, area, etc.)
+- Robust error handling and retry mechanisms
+- Optional Gotify notifications for stream status updates
+- Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 
-## Dependecies
+## Dependencies
+
 - ffmpeg
 - yt-dlp
-- streamlink (with a plugin installed [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol))
-- pm2 ()
+- streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin installed)
+- pm2 (for `stream_manager.sh`)
 
-## Build
-For debian 12
-```bash
-cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
-```
+## Installation
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/your-username/bilistream.git
+   cd bilistream
+   ```
+
+2. Install the required dependencies (example for Debian-based systems):
+   ```
+   sudo apt update
+   sudo apt install ffmpeg yt-dlp nodejs npm
+   sudo npm install -g pm2
+   pip install streamlink
+   ```
+
+3. Install the streamlink-ttvlol plugin:
+
+
+4. Build the project (for Debian 12):
+   ```
+   cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
+   ```
+
+## Configuration
+
+1. Copy the `config.yaml.example` file to `config.yaml` and:
+   ```
+   cp config.yaml.example config.yaml
+   ```
+
+2. Edit `config.yaml` with your specific settings:
+   - Set your Bilibili account details (SESSDATA, bili_jct, etc.)
+   - Configure the desired streaming platform (Twitch or YouTube)
+   - Set the channel ID and other relevant information
+
 ## Usage
-```bash
-bilistream [OPTIONS]
 
-OPTIONS:
-    -c, --config <CONFIG>    [default: ./config.yaml]
-    -h, --help               Print help information
-    -V, --version            Print version information
+### Basic Usage
+
+Run the bilistream application:
+
+```
+./bilistream -c ./config.yaml
 ```
 
-`config.yaml` Template
+### Using stream_manager.sh
 
+The `stream_manager.sh` script provides an interactive interface for managing your streams:
 
-``` yaml
-# 检测直播间隔
-Interval: 60
-# 需要转播的平台 Twitch || Youtube 
-Platform: Youtube
-# B站推流账号Cookie
-BiliLive:
-  Title: "直播间标题"
-  # 分区
-  Area_v2: 分区ID # https://api.live.bilibili.com/room/v1/Area/getList
-  SESSDATA: # in Cookie 
-  bili_jct: # in Cookie
-  DedeUserID: 账号UID # in Cookie
-  DedeUserID__ckMd5: # in Cookie
-  Room: 直播间号
-  BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/qq
-  # BiliRtmpUrl: B站开播设置页面的服务器地址
-  BiliRtmpKey: "?streamname=live_UID_xxxxxxxx&key=xxxxxxxxxxxxxxxxxxxxx=rtmp&pflag=1"
-  # BiliRtmpKey: B站开播设置页面的串流密钥,需注意,由于是?号开头的,本行需要对内容加双引号
+1. Set up the directory structure:
+   ```
+   mkdir YT TW
+   cp config.yaml YT/config.yaml
+   cp config.yaml TW/config.yaml
+   ```
 
-Twitch:
-  ChannelName: "Name of streamer" # Custom
-  ChannelID: # the string followed after https://www.twitch.tv/  
-  AuthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
+2. Edit `YT/config.yaml` and `TW/config.yaml` with the appropriate settings for YouTube and Twitch, respectively.
 
-Youtube:
-  ChannelName: "Name of streamer" # Custom
-  ChannelId: # Youtube Channel ID
-# FfmpegProxy: 
-# Ffmpeg代理地址,无需代理可以不填此项或者留空
-```
+3. Run the management script:
+   ```
+   ./stream_manager.sh
+   ```
 
-## Use of stream_manager.sh
+4. Use the interactive menu to start, stop, or manage your streams.
 
-```bash
-#cd to where you put bilistream (bin) and stream_manager.sh
-
-mkdir YT
-mkdir TW
-# follow the template to config
-vim ./YT/config.yaml # with Platform: Youtube
-vim ./TW/config.yaml # with Platform: Twitch
-# with tree .
-.
-├── bili_change_live_title
-├── bili_stop_live
-├── bilistream
-├── stream_manager.sh
-├── TW
-│   └── config.yaml
-└── YT
-    └── config.yaml
-
-# install pm2 to manage and monit
-
-./stream_manager.sh
-```
-### Bilistream manager main menu
+#### Bilistream manager main menu
 ![Main Menu](./assets/Main_menu.png)
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the [GPL-3.0 license](LICENSE).

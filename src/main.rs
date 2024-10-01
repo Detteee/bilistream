@@ -2,7 +2,7 @@ mod config;
 mod plugins;
 mod push;
 
-use crate::push::send_gotify_notification;
+// use crate::push::send_gotify_notification;
 use clap::Parser;
 use config::{load_config, Config};
 use plugins::select_live;
@@ -55,15 +55,15 @@ async fn main() {
         if is_live {
             tracing::info!("{}", format!("{}直播中", live_type.channel_name()));
 
-            // 添加Gotify推送
-            if let Some(ref gotify_config) = cfg.gotify {
-                send_gotify_notification(
-                    &gotify_config,
-                    &format!("{}开始直播", live_type.channel_name()),
-                    "bilistream",
-                )
-                .await;
-            }
+            // // 添加Gotify推送
+            // if let Some(ref gotify_config) = cfg.gotify {
+            //     send_gotify_notification(
+            //         &gotify_config,
+            //         &format!("{}开始直播", live_type.channel_name()),
+            //         "bilistream",
+            //     )
+            //     .await;
+            // }
 
             if get_bili_live_state(cfg.bililive.room.clone()).await {
                 tracing::info!("B站直播中");
