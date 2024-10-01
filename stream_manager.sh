@@ -21,7 +21,7 @@ start_service() {
     local config_path=$(get_config_path "$service")
     local log_path="$BASE_DIR/logs/log-$service.log"
     echo "Starting bilistream for $service..."
-    pm2 start "$BASE_DIR/bilistream" --name "bilistream-$service" -- -c "$config_path" --log "$log_path" --log-level info
+    pm2 start "$BASE_DIR/bilistream -c $config_path" --name "bilistream-$service" --log "$log_path" --log-level info
 }
 
 # Function to restart a service
@@ -66,15 +66,12 @@ manage_pm2_service() {
         esac
     else
         echo "bilistream-$service is not running."
-        echo "1. Start service"
-        echo "2. Do nothing"
-        read -p "Enter your choice (1/2): " action
-
-        case $action in
-        1) start_service "$service" ;;
-        2) echo "No action taken." ;;
-        *) echo "Invalid choice. No action taken." ;;
-        esac
+        read -p "Start bilistream-$service? (y/N):" action
+        if [[ $action =~ ^[Yy]$ ]]; then
+            start_service "$service"
+        else
+            echo "bilistream-$service was not started."
+        fi
     fi
 }
 
@@ -147,9 +144,10 @@ select_area_id() {
     echo " 5) 530: 萌宅领域         6) 235: 其他单机"
     echo " 7) 107: 其他网游         8) 646: UP主日常"
     echo " 9) 102: 最终幻想14      10) 433: 格斗游戏"
-    echo "11) 216: 我的世界         0) 自定义"
+    echo "11) 216: 我的世界        12) 927: DeadLock"
+    echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-11): " area_choice
+    read -p "请选择分区 ID (0-12): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -163,6 +161,7 @@ select_area_id() {
     9) areaid=102 ;;
     10) areaid=433 ;;
     11) areaid=216 ;;
+    12) areaid=927 ;;
     0) read -p "请输入自定义分区 ID: " areaid ;;
     *)
         echo "无效选择，请重试。"
@@ -375,7 +374,7 @@ get_channel_name() {
     esac
 }
 
-# Add this function to map Area IDs to names
+# Function to map Area IDs to names
 get_area_name() {
     local area_id=$1
     case $area_id in
@@ -390,6 +389,7 @@ get_area_name() {
     102) echo "最终幻想14" ;;
     433) echo "格斗游戏" ;;
     216) echo "我的世界" ;;
+    927) echo "DeadLock" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
