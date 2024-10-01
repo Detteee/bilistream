@@ -217,7 +217,6 @@ select_channel_id() {
     echo "New Title: $new_title"
 
     # Update the ChannelName in the config file
-    sed -i "s|ChannelName: .*|ChannelName: \"$channel_name\"|" "$BASE_DIR/YT/config.yaml"
 
     return 0
 }
@@ -501,8 +500,10 @@ while true; do
     2) # Change Channel ID
         select_channel_id
         if [ $? -eq 0 ]; then
-            sed -i "s|ChannelId: .*|ChannelId: ${chid}|" "$BASE_DIR/YT/config.yaml"
+            sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${chid}|" "$BASE_DIR/YT/config.yaml"
+            sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/YT/config.yaml"
             sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/YT/config.yaml"
+            echo "YouTube Channel ID, Channel Name, and Title updated in YT/config.yaml."
             manage_service_after_change "YT"
             display_current_config "YT"
         fi
@@ -510,9 +511,10 @@ while true; do
     3) # Change Twitch ID
         select_twitch_id
         if [ $? -eq 0 ]; then
-            sed -i "s|TWid: .*|TWid: ${new_twid}|" "$BASE_DIR/TW/config.yaml"
+            sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$BASE_DIR/TW/config.yaml"
+            sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/TW/config.yaml"
             sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/TW/config.yaml"
-            echo "Twitch ID and Title updated in TW/config.yaml."
+            echo "Twitch ID, Channel Name, and Title updated in TW/config.yaml."
             manage_service_after_change "TW"
             display_current_config "TW"
         fi
