@@ -21,7 +21,7 @@ start_service() {
     local config_path=$(get_config_path "$service")
     local log_path="$BASE_DIR/logs/log-$service.log"
     echo "Starting bilistream for $service..."
-    pm2 start "$BASE_DIR/bilistream -c $config_path" --name "bilistream-$service" --log "$log_path" --log-level info
+    pm2 start "$BASE_DIR/bilistream" --name "bilistream-$service" -- -c "$config_path"
 }
 
 # Function to restart a service
@@ -556,13 +556,7 @@ while true; do
         4) echo "No action taken." ;;
         *) echo "Invalid choice. No action taken." ;;
         esac
-        if [ -z "$pm2_output" ]; then
-            echo "No services are running."
-        else
-            echo "┌────┬──────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐"
-            echo "$pm2_output"
-            echo "└────┴──────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘"
-        fi
+
         ;;
     7) # Disable log rotation
         disable_log_rotation
