@@ -3,6 +3,7 @@
 [English](README.md) | [中文](README.zh_CN.md)
 
 本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发，但使用 [Cursor](https://www.cursor.com/) 进行了重大重新设计和增强。虽然它们共享相同的核心概念，但此实现提供了独特的功能和改进，包括一个全面的 `stream_manager.sh` 脚本，以便于管理。
+ 
 
 ## 特性
 

@@ -230,9 +230,9 @@ select_twitch_id() {
     echo " 3) 花芽すみれ          8) 獅子堂あかり"
     echo " 4) 夢野あかり          9) 夜よいち"
     echo " 5) 白波らむね         10) 甘城なつき"
-    echo " 0) Custom"
+    echo "11) 胡桃のあ            0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-10): " twitch_choice
+    read -p "Select Channel (0-11): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -274,6 +274,10 @@ select_twitch_id() {
     10)
         channel_id="nacho_dayo"
         channel_name="甘城なつき"
+        ;;
+    11)
+        channel_id="963noah"
+        channel_name="胡桃のあ"
         ;;
     0)
         read -p "Enter Twitch ID: " channel_id
