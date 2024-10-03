@@ -1,5 +1,41 @@
 #!/bin/bash
 
+# 根据直播标题检查分区ID
+check_area_id_with_title() {
+  local live_title=$1
+  local area_id=$2
+  # Case insensitive match
+  shopt -s nocasematch
+  if [[ "$live_title" == *"Valorant"* ]]; then
+    area_id=329
+  elif [[ "$live_title" == *"League of Legends"* ]]; then
+    area_id=86
+  elif [[ "$live_title" == *"LOL"* ]]; then
+    area_id=86
+  elif [[ "$live_title" == *"k4sen"* ]]; then
+    area_id=86
+  # elif [[ "$live_title" == *"Apex Legends"* ]]; then
+  #   area_id=240
+  # elif [[ "$live_title" == *"ApexLegends"* ]]; then
+  #   area_id=240
+  # elif [[ "$live_title" == *"Apex"* ]]; then
+  #   area_id=240
+  elif [[ "$live_title" == *"Minecraft"* ]]; then
+    area_id=216
+  elif [[ "$live_title" == *"マイクラ"* ]]; then
+    area_id=216
+  elif [[ "$live_title" == *"Overwatch"* ]]; then
+    area_id=87
+  elif [[ "$live_title" == *"Deadlock"* ]]; then
+    area_id=927
+  elif [[ "$live_title" == *"漆黒メインクエ"* ]]; then
+    area_id=102
+  fi
+  # Reset nocasematch
+  shopt -u nocasematch
+  echo $area_id
+}
+
 # Function to check if a channel is in the allowed list and get the channel name
 check_channel() {
   local platform=$1
@@ -80,42 +116,21 @@ process_danmaku() {
           if [[ "$platform" == "YT" ]]; then
             # check live channel title contains area name
             live_title=$(yt-dlp -e "https://www.youtube.com/channel/${channel_id}/live")
-            if [[ "$live_title" == *"Valorant"* ]]; then
-              area_id=329
-            elif [[ "$live_title" == *"League of Legends"* ]]; then
-              area_id=86
-            elif [[ "$live_title" == *"LOL"* ]]; then
-              area_id=86
-            elif [[ "$live_title" == *"k4sen"* ]]; then
-              area_id=86
-            # elif [[ "$live_title" == *"Apex Legends"* ]]; then
-            #   area_id=240
-            # elif [[ "$live_title" == *"ApexLegends"* ]]; then
-            #   area_id=240
-            # elif [[ "$live_title" == *"Apex"* ]]; then
-            #   area_id=240
-            elif [[ "$live_title" == *"Overwatch"* ]]; then
-              area_id=87
-            elif [[ "$live_title" == *"Deadlock"* ]]; then
-              area_id=927
-            elif [[ "$live_title" == *"Minecraft"* ]]; then
-              area_id=216
-            elif [[ "$live_title" == *"マイクラ"* ]]; then
-              area_id=216
-            elif [[ "$live_title" == *"漆黒メインクエ"* ]]; then
-              area_id=102
-            fi
+            area_id=$(check_area_id_with_title "$live_title" "$area_id")
             sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           else # TW
-            sed -i "s|Area_v2: .*|Area_v2: 646|" "$config_path"
+            live_title=$(./bilistream get-live-title TW "$channel_id")
+            area_id=$(check_area_id_with_title "$live_title" "$area_id")
+            sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           fi
           sed -i "s|Title: .*|Title: \"${new_title}\"|" "$config_path"
           echo "Updated $platform channel: $channel_name ($channel_id)"
-          sleep 30
+          # 冷却10秒
+          sleep 10
           # Trigger streaming process by restarting the bilistream service
         else
           echo "Channel $channel_name ($channel_id) is not live on $platform"
