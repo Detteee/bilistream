@@ -70,6 +70,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    (channel name) [channel id]
    ```
 
+5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
+
 ## Usage
 
 ### Basic Usage

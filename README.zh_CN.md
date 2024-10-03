@@ -70,6 +70,8 @@
    (频道名称) [频道 ID]
    ```
 
+5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如果需要弹幕命令功能)
+
 ## 使用方法
 
 ### 基本用法
