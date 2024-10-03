@@ -136,6 +136,12 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
     let live_type = select_live(cfg.clone()).await?;
 
     loop {
+        // if ffmpeg.lock exists skip the loop
+        if std::path::Path::new("./ffmpeg.lock").exists() {
+            tracing::info!("ffmpeg.lock exists, skipping the loop");
+            tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+            continue;
+        }
         let old_cfg = cfg.clone();
         cfg = load_config(Path::new(config_path))?;
 
@@ -157,10 +163,6 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
 
             if get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站直播中");
-                if std::path::Path::new("./danmaku.lock").exists() {
-                    //remove the danmaku lock file
-                    let _ = std::fs::remove_file("./danmaku.lock");
-                }
                 bili_change_live_title(&cfg).await?;
 
                 ffmpeg(
@@ -189,10 +191,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                 bili_start_live(&cfg).await?;
                 tracing::info!("B站已开播");
                 bili_change_live_title(&cfg).await?;
-                if std::path::Path::new("./danmaku.lock").exists() {
-                    //remove the danmaku lock file
-                    let _ = std::fs::remove_file("./danmaku.lock");
-                }
+
                 let current_is_live = is_live;
                 while current_is_live {
                     let (current_is_live, new_m3u8_url, _) =
@@ -211,13 +210,16 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
             }
         } else {
             if cfg.bililive.enable_danmaku_command {
-                // make a file named danmaku.lock
-                let _ = std::fs::File::create("./danmaku.lock");
-                tracing::info!("执行弹幕命令");
-                let _ = std::process::Command::new("bash")
-                    .arg("./danmaku.sh")
-                    .output()
-                    .expect("Failed to execute danmaku.sh");
+                if !std::path::Path::new("./danmaku.lock").exists() {
+                    // make a file named danmaku.lock
+                    let _ = std::fs::File::create("./danmaku.lock");
+
+                    tracing::info!("执行弹幕命令");
+                    let _ = std::process::Command::new("bash")
+                        .arg("./danmaku.sh")
+                        .output()
+                        .expect("Failed to execute danmaku.sh");
+                }
             }
             if scheduled_start.is_some() {
                 tracing::info!(
@@ -230,10 +232,6 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
             }
             if get_bili_live_status(cfg.bililive.room.clone()).await? {
                 tracing::info!("B站直播中");
-                if std::path::Path::new("./danmaku.lock").exists() {
-                    //remove the danmaku lock file
-                    let _ = std::fs::remove_file("./danmaku.lock");
-                }
                 // bili_stop_live(&cfg).await;
                 // tracing::info!("B站已关播");
             }

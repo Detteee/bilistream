@@ -29,6 +29,11 @@ restart_service() {
     local service=$1
     echo "Restarting bilistream for $service..."
     pm2 restart "bilistream-$service"
+    read -p "Do you want to remove ffmpeg lock file(to prevent two ffmpeg process)? (y/N): " remove_lock_file
+    remove_lock_file=${remove_lock_file:-N} # Default to 'N' if input is empty
+    if [[ $remove_lock_file =~ ^[Yy]$ ]]; then
+        rm -f "$BASE_DIR/ffmpeg.lock"
+    fi
 }
 
 # Function to check if a service is running

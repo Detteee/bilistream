@@ -1,6 +1,5 @@
 #!/bin/bash
 
-BASE_DIR=$(pwd)
 # Function to check if a channel is in the allowed list and get the channel name
 check_channel() {
   local platform=$1
@@ -52,11 +51,11 @@ process_danmaku() {
           config_path="./${platform}/config.yaml"
           new_title="【转播】${channel_name}"
           if [[ "$platform" == "YT" ]]; then
-            sed -i "s|Area_v2: .*|Area_v2: 646|" "$BASE_DIR"/YT/config.yaml
+            sed -i "s|Area_v2: .*|Area_v2: 646|" "$config_path"
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           else # TW
-            sed -i "s|Area_v2: .*|Area_v2: 646|" "$BASE_DIR"/TW/config.yaml
+            sed -i "s|Area_v2: .*|Area_v2: 646|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           fi
@@ -91,6 +90,8 @@ while true; do
         if [[ "$current_status" != *"Not Live"* ]]; then
           echo "Bilibili is now live. Stopping danmaku-cli..."
           pkill -f "bilibili-live-danmaku-cli"
+          # remove danmaku lock file
+          rm -f ./danmaku.lock
           break
         fi
       fi

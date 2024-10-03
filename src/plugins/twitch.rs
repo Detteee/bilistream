@@ -40,6 +40,7 @@ impl Live for Twitch {
             .await?
             .json()
             .await?;
+        println!("{:?}", res);
         if res["data"]["user"]["stream"]["type"] == "live" {
             let m3u8_url = self.get_streamlink_url()?;
             Ok((true, Some(m3u8_url), None))
