@@ -305,7 +305,7 @@ manage_service_after_change() {
             read stop_choice
             stop_choice=${stop_choice:-Y} # Default to 'Y' if input is empty
             if [[ $stop_choice =~ ^[Yy]$ ]]; then
-                ./bili_stop_live
+                ./bilistream stop-live
             fi
             restart_service "$service"
         else
@@ -436,8 +436,8 @@ display_current_config() {
 # Function to stop live stream
 stop_live_stream() {
     echo "Stopping live stream..."
-    ./bili_stop_live -c ./YT/config.yaml
-    echo "Stopped bili_stop_live."
+    ./bilistream stop-live
+    echo "Stopped bilistream."
 }
 
 manage_danmaku_service() {
@@ -606,18 +606,25 @@ while true; do
         echo "├─────────────────────────────────────┤"
         echo "│ 1. YouTube (YT)                     │"
         echo "│ 2. Twitch (TW)                      │"
-        echo "│ 3. None                             │"
+        echo "│ 3. Custom                           │"
+        echo "│ 4. None                             │"
         echo "└─────────────────────────────────────┘"
-        read -p "Enter your choice (1/2/3): " title_choice
+        read -p "Enter your choice (1/2/3/4): " title_choice
         case $title_choice in
         1)
-            ./bili_change_live_title -c ./YT/config.yaml
+            title=$(awk '/Title:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/YT/config.yaml")
+            ./bilistream change-live-title $title
             ;;
         2)
-            ./bili_change_live_title -c ./TW/config.yaml
+            title=$(awk '/Title:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/TW/config.yaml")
+            ./bilistream change-live-title $title
             ;;
         3)
-            echo "Remote live title not changed."
+            read -p "Enter the new live title: " new_title
+            ./bilistream change-live-title $new_title
+            ;;
+        4)
+            echo "No changes made."
             ;;
         *)
             echo "Invalid choice. No changes made."

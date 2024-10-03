@@ -17,7 +17,7 @@ check_channel() {
 check_live_status() {
   local platform=$1
   local channel_id=$2
-  ./get_live_status "$platform" "$channel_id"
+  ./bilistream get-live-status "$platform" "$channel_id"
 }
 
 # Function to update config
