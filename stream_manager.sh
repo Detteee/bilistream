@@ -300,9 +300,10 @@ select_twitch_id() {
     echo " 3) 花芽すみれ          8) 獅子堂あかり"
     echo " 4) 夢野あかり          9) 夜よいち"
     echo " 5) 白波らむね         10) 甘城なつき"
-    echo "11) 胡桃のあ            0) Custom"
+    echo "11) 胡桃のあ            12) 紫宮るな"
+    echo "13) 狐白うる            0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-11): " twitch_choice
+    read -p "Select Channel (0-13): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -349,7 +350,16 @@ select_twitch_id() {
         channel_id="963noah"
         channel_name="胡桃のあ"
         ;;
+    12)
+        channel_id="shinomiya_runa"
+        channel_name="紫宮るな"
+        ;;
+    13)
+        channel_id="kohaku_uru"
+        channel_name="狐白うる"
+        ;;
     0)
+
         read -p "Enter Twitch ID: " channel_id
         read -p "Enter Channel Name: " channel_name
         read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
