@@ -8,11 +8,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[clap(version = "0.1.0", author = "Dette")]
+#[command(version = "0.1.1", author = "Dette")]
 struct Opts {
-    #[clap(short, long, parse(from_os_str), default_value = "./config.yaml")]
+    #[arg(short, long, value_name = "FILE", default_value = "./config.yaml")]
     config: PathBuf,
 }
+
 #[tokio::main]
 async fn main() {
     let opts: Opts = Opts::parse();
