@@ -1,39 +1,141 @@
-mod config;
-mod plugins;
-mod push;
-
-// Re-export anything that needs to be public
-pub use config::{load_config, Config};
-
-use clap::Parser;
-use plugins::{ffmpeg, select_live};
-
-use std::path::PathBuf;
+use bilistream::config::load_config;
+use bilistream::plugins::{
+    bili_change_live_title, bili_start_live, bili_stop_live, ffmpeg, get_bili_live_status,
+    get_youtube_live_status, select_live, Live, Twitch,
+};
+use clap::{Arg, Command};
+use reqwest_middleware::ClientBuilder;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
+use std::path::Path;
 use std::time::Duration;
-use tokio;
-// Import the Bilibili functions
-use plugins::{bili_change_live_title, bili_start_live, bili_stop_live, get_bili_live_status};
-
-#[derive(Parser)]
-#[command(version = "0.1.1", author = "Dette")]
-struct Opts {
-    #[arg(short, long, value_name = "FILE", default_value = "./config.yaml")]
-    config: PathBuf,
-}
+use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let opts: Opts = Opts::parse();
+    let matches = Command::new("bilistream")
+        .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .value_name("FILE")
+                .help("Sets a custom config file"),
+        )
+        .subcommand(
+            Command::new("get-live-status")
+                .about("Check live status of a channel")
+                .arg(
+                    Arg::new("platform")
+                        .required(true)
+                        .help("Platform to check (YT, TW, bilibili)"),
+                )
+                .arg(
+                    Arg::new("channel_id")
+                        .required(true)
+                        .help("Channel ID to check"),
+                ),
+        )
+        .subcommand(Command::new("start-live").about("Start a live stream"))
+        .subcommand(Command::new("stop-live").about("Stop a live stream"))
+        .subcommand(
+            Command::new("change-live-title")
+                .about("Change the title of a live stream")
+                .arg(
+                    Arg::new("title")
+                        .required(true)
+                        .help("New title for the live stream"),
+                ),
+        )
+        .get_matches();
 
+    let config_path = matches
+        .get_one::<String>("config")
+        .map(|s| s.as_str())
+        .unwrap_or("config.yaml");
+
+    match matches.subcommand() {
+        Some(("get-live-status", sub_m)) => {
+            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
+            get_live_status(platform, channel_id).await?;
+        }
+        Some(("start-live", _)) => {
+            start_live(config_path).await?;
+        }
+        Some(("stop-live", _)) => {
+            stop_live(config_path).await?;
+        }
+        Some(("change-live-title", sub_m)) => {
+            let new_title = sub_m.get_one::<String>("title").unwrap();
+            change_live_title(config_path, new_title).await?;
+        }
+        _ => {
+            // Default behavior: run bilistream with the provided config
+            run_bilistream(config_path).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn get_live_status(
+    platform: &str,
+    channel_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match platform {
+        "bilibili" => {
+            let room_id: i32 = channel_id.parse()?;
+            let is_live = get_bili_live_status(room_id).await?;
+            println!(
+                "Bilibili live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+        }
+        "YT" => {
+            let (is_live, _, scheduled_time) = get_youtube_live_status(channel_id).await?;
+            println!(
+                "YouTube live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+            if let Some(time) = scheduled_time {
+                println!("Scheduled start time: {}", time);
+            }
+        }
+        "TW" => {
+            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+            let raw_client = reqwest::Client::builder()
+                .cookie_store(true)
+                .timeout(Duration::new(30, 0))
+                .build()?;
+            let client = ClientBuilder::new(raw_client.clone())
+                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                .build();
+
+            let cfg = load_config(Path::new("./TW/config.yaml"))?;
+            let twitch = Twitch::new(channel_id, cfg.twitch.oauth_token.clone(), client);
+
+            let (is_live, _, _) = twitch.get_status().await?;
+            println!(
+                "Twitch live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+        }
+        _ => {
+            println!("Unsupported platform: {}", platform);
+        }
+    }
+    Ok(())
+}
+
+async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger
     tracing_subscriber::fmt::init();
 
-    let mut cfg = load_config(&opts.config)?;
+    let mut cfg = load_config(Path::new(config_path))?;
     let live_type = select_live(cfg.clone()).await?;
 
     loop {
         let old_cfg = cfg.clone();
-        cfg = load_config(&opts.config)?;
+        cfg = load_config(Path::new(config_path))?;
 
         // If configuration changed, stop Bilibili live
         if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
@@ -114,7 +216,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // tracing::info!("B站已关播");
             }
         }
-        // 每60秒检测一下直播状态
         tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
     }
+}
+
+async fn start_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config(Path::new(config_path))?;
+    bili_start_live(&cfg).await?;
+    println!("Live stream started successfully");
+    Ok(())
+}
+
+async fn stop_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config(Path::new(config_path))?;
+    bili_stop_live(&cfg).await?;
+    println!("Live stream stopped successfully");
+    Ok(())
+}
+
+async fn change_live_title(
+    config_path: &str,
+    new_title: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut cfg = load_config(Path::new(config_path))?;
+    cfg.bililive.title = new_title.to_string();
+    bili_change_live_title(&cfg).await?;
+    println!("Live stream title changed successfully");
+    Ok(())
 }
