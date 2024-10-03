@@ -3,7 +3,6 @@
 [English](README.md) | [中文](README.zh_CN.md)
 
 本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发，但使用 [Cursor](https://www.cursor.com/) 进行了重大重新设计和增强。虽然它们共享相同的核心概念，但此实现提供了独特的功能和改进，包括一个全面的 `stream_manager.sh` 脚本，以便于管理。
- 
 
 ## 特性
 
@@ -11,6 +10,7 @@
 - 支持 YouTube 上的预告窗
 - 可配置的Bilibili直播间设置（标题、分区等）
 - 使用管理脚本（`stream_manager.sh`）用于轻松配置和控制
+- 当 Bilibili 直播关闭时，使用弹幕命令功能更改监听目标频道
 
 ## 依赖
 
@@ -18,6 +18,7 @@
 - yt-dlp
 - streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
 - pm2（用于 `stream_manager.sh`）
+- [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
 
 ## 安装
 
@@ -38,8 +39,7 @@
 3. 安装 streamlink-ttvlol 插件：
    查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 
-
-4. 构建项目
+4. 构建项目：
 
    适用于 Debian 12 及 glibc >= 2.36 的linux:
    ```
@@ -52,7 +52,7 @@
 
 ## 配置
 
-1. 复制 `config.yaml.example` 文件到 `config.yaml`：
+1. 复制示例配置文件：
    ```
    cp config.yaml.example config.yaml
    ```
@@ -62,36 +62,72 @@
    - 配置所需转播的平台（Twitch 或 YouTube）
    - 设置频道 ID 和其他相关信息
 
+3. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
+
+4. 创建频道列表文件：
+   在 YT 和 TW 文件夹中，分别创建 `YT_channels.txt` 和 `TW_channels.txt`，每行的格式为：
+   ```
+   (频道名称) [频道 ID]
+   ```
+
 ## 使用方法
 
-### 基本用法（直接运行）
+### 基本用法
 
-运行 bilistream 应用程序：
+运行 Bilistream 应用程序：
 
 ```
 ./bilistream -c ./config.yaml
 ```
 
-### 使用 stream_manager.sh管理
+### 命令行界面
+
+Bilistream 支持以下命令：
+
+1. 开始直播：
+   ```
+   ./bilistream start-live
+   ```
+
+2. 停止直播：
+   ```
+   ./bilistream stop-live
+   ```
+
+3. 更改直播标题：
+   ```
+   ./bilistream change-live-title <新标题>
+   ```
+
+4. 获取直播状态：
+   ```
+   ./bilistream get-live-status
+   ```
+
+### 使用 stream_manager.sh
 
 `stream_manager.sh` 脚本提供了一个交互式界面来管理您的流：
 
 1. 设置目录结构：
    ```
-   mkdir YT 
-   mkdir TW
+   mkdir YT TW
    cp config.yaml YT/config.yaml
    cp config.yaml TW/config.yaml
+   ```
 
-   # 目录树状结构(tree .)：
+   文件目录结构：
+   ```
    .
-   ├── bili_stop_live
+   ├── bilibili-live-danmaku-cli
    ├── bilistream
-   ├── stream_manager.sh
+   ├── config.json
+   ├── danmaku.sh
    ├── TW
-   │   └── config.yaml
+   │   ├── config.yaml
+   │   └── TW_channels.txt
    └── YT
-       └── config.yaml
+       ├── config.yaml
+       └── YT_channels.txt
    ```
 
 2. 分别编辑 `YT/config.yaml` 和 `TW/config.yaml`，设置适当的 YouTube 和 Twitch 设置。
@@ -103,6 +139,37 @@
 
 4. 使用交互式菜单来启动、停止或管理您的转播任务。
 
-#### Bilistream 管理器主菜单
-![主菜单](./assets/Main_menu.png)
+### 弹幕命令功能
 
+当 Bilibili 直播关闭时，您可以在 Bilibili 直播聊天中使用弹幕命令来更改监听目标频道。这允许在不重启应用程序的情况下动态控制转播目标。
+
+使用此功能：
+1. 确保 Bilibili 直播已关闭。
+2. 在 Bilibili 直播聊天中发送特定的弹幕命令。
+3. 系统将处理命令并相应地更改监听目标频道。
+
+弹幕命令格式：
+```
+%转播%YT/TW%频道名称(在 (YT/TW)_channels.txt 中)
+例如：
+%转播%YT%kamito
+%转播%TW%kamito
+
+在 YT/TW_channels.txt 中有这些行：
+(kamito) [UCgYCMluaLpERsyNXlPOvBtA]
+(kamito) [kamito_jp]
+```
+
+## 贡献
+
+欢迎贡献！请随时提交 Pull Request。
+
+## 许可证
+
+本项目采用 [GPL-3.0 许可证](LICENSE)。
+
+## 致谢
+
+- [limitcool/bilistream](https://github.com/limitcool/bilistream)
+- [Cursor](https://www.cursor.com/)
+- 本项目的所有用户

@@ -182,9 +182,10 @@ select_channel_id() {
     echo "10) 胡桃のあ         11) 猫汰つな        12) 花芽なずな"
     echo "13) 花芽すみれ       14) 獅子堂あかり    15) 紡木こかげ"
     echo "16) 神成きゅぴ       17) 夜絆ニウ        18) 天帝フォルテ"
+    echo "19) 千燈ゆうひ"
     echo " 0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel ID (0-18): " ch_choice
+    read -p "Select Channel ID (0-19): " ch_choice
 
     case $ch_choice in
     1) chid="UCgYCMluaLpERsyNXlPOvBtA" ;;
@@ -205,6 +206,7 @@ select_channel_id() {
     16) chid="UCMp55EbT_ZlqiMS3lCj01BQ" ;;
     17) chid="UCZmUoMwjyuQ59sk5_7Tx07A" ;;
     18) chid="UC8hwewh9svh92E1gXvgVazg" ;;
+    19) chid="UCuDY3ibSP2MFRgf7eo3cojg" ;;
     0) read -p "Enter custom Channel ID: " chid ;;
     *)
         echo "Invalid choice. Please try again."
@@ -373,6 +375,7 @@ get_channel_name() {
     "UCMp55EbT_ZlqiMS3lCj01BQ") echo "神成きゅぴ" ;;
     "UCZmUoMwjyuQ59sk5_7Tx07A") echo "夜絆ニウ" ;;
     "UC8hwewh9svh92E1gXvgVazg") echo "天帝フォルテ" ;;
+    "UCuDY3ibSP2MFRgf7eo3cojg") echo "千燈ゆうひ" ;;
     *) echo "Unknown Channel" ;;
     esac
 }
@@ -555,7 +558,8 @@ while true; do
         read -p "Enter the new bili_jct: " new_bili_jct
         sed -i "s|SESSDATA: .*|SESSDATA: ${new_sessdata}|" "$BASE_DIR"/*/config.yaml
         sed -i "s|bili_jct: .*|bili_jct: ${new_bili_jct}|" "$BASE_DIR"/*/config.yaml
-        echo "SESSDATA and bili_jct updated in all config files."
+        sed -i "s|\"sessdata\": \".*\"|\"sessdata\": \"${new_sessdata}\"|" "$BASE_DIR/config.json"
+        echo "SESSDATA and bili_jct updated in all config files and config.json."
         manage_service_after_change "YT"
         manage_service_after_change "TW"
         ;;
