@@ -1,5 +1,6 @@
 #!/bin/bash
 
+BASE_DIR=$(pwd)
 # Function to check if a channel is in the allowed list and get the channel name
 check_channel() {
   local platform=$1
@@ -33,6 +34,7 @@ update_config() {
 # Function to check Bilibili live status
 check_bilibili_status() {
   local room_id=$(jq -r '.roomId' config.json)
+  echo "Room ID: $room_id"
   check_live_status "bilibili" "$room_id"
 }
 # Main function to process danmaku
@@ -50,9 +52,11 @@ process_danmaku() {
           config_path="./${platform}/config.yaml"
           new_title="【转播】${channel_name}"
           if [[ "$platform" == "YT" ]]; then
+            sed -i "s|Area_v2: .*|Area_v2: 646|" "$BASE_DIR"/YT/config.yaml
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           else # TW
+            sed -i "s|Area_v2: .*|Area_v2: 646|" "$BASE_DIR"/TW/config.yaml
             sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           fi

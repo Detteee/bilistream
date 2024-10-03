@@ -24,6 +24,8 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BiliLive {
+    #[serde(rename = "EnableDanmakuCommand")]
+    pub enable_danmaku_command: bool,
     #[serde(rename = "Title")]
     pub title: String,
     #[serde(rename = "Area_v2")]
