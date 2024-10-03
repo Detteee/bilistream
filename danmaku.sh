@@ -38,20 +38,74 @@ check_bilibili_status() {
 }
 # Main function to process danmaku
 process_danmaku() {
-  echo "$1"
+  # Validate danmaku command format: %转播%平台%频道名%分区
   if [[ $1 == *"%转播%"* ]]; then
     platform=$(echo "$1" | grep -oP '%转播%\K\w+')
     channel_name=$(echo "$1" | grep -oP '%转播%\w+%\K[^%]+')
+    area_name=$(echo "$1" | grep -oP '%转播%\w+%\w+%\K[^%]+')
+    case $area_name in
+    "英雄联盟") area_id=86 ;;
+    "无畏契约") area_id=329 ;;
+    "APEX英雄") area_id=240 ;;
+    "守望先锋") area_id=87 ;;
+    "萌宅领域") area_id=530 ;;
+    "其他单机") area_id=235 ;;
+    "其他网游") area_id=107 ;;
+    "UP主日常") area_id=646 ;;
+    "最终幻想14") area_id=102 ;;
+    "格斗游戏") area_id=433 ;;
+    "我的世界") area_id=216 ;;
+    "DeadLock") area_id=927 ;;
+    *)
+      echo "Unknown area: $area_name"
+      continue
+      ;;
+    esac
+    if [ "$area_id" -eq 240 ]; then
+      if [ "$channel_name" != "kamito" ]; then
+        echo "only kamito is allowed to use apex area"
+        continue
+      fi
+    fi
 
     if [[ "$platform" == "YT" || "$platform" == "TW" ]]; then
       channel_id=$(grep -i "\(${channel_name}\)" "./${platform}/${platform}_channels.txt" | grep -oP '\[(.*?)\]' | tr -d '[]')
       if [ -n "$channel_id" ]; then
         live_status=$(check_live_status "$platform" "$channel_id")
+
         if [[ "$live_status" != *"Not Live"* ]]; then
+
           config_path="./${platform}/config.yaml"
           new_title="【转播】${channel_name}"
           if [[ "$platform" == "YT" ]]; then
-            sed -i "s|Area_v2: .*|Area_v2: 646|" "$config_path"
+            # check live channel title contains area name
+            live_title=$(yt-dlp -e "https://www.youtube.com/channel/${channel_id}/live")
+            if [[ "$live_title" == *"Valorant"* ]]; then
+              area_id=329
+            elif [[ "$live_title" == *"League of Legends"* ]]; then
+              area_id=86
+            elif [[ "$live_title" == *"LOL"* ]]; then
+              area_id=86
+            elif [[ "$live_title" == *"k4sen"* ]]; then
+              area_id=86
+            # elif [[ "$live_title" == *"Apex Legends"* ]]; then
+            #   area_id=240
+            # elif [[ "$live_title" == *"ApexLegends"* ]]; then
+            #   area_id=240
+            # elif [[ "$live_title" == *"Apex"* ]]; then
+            #   area_id=240
+            elif [[ "$live_title" == *"Overwatch"* ]]; then
+              area_id=87
+            elif [[ "$live_title" == *"Deadlock"* ]]; then
+              area_id=927
+            elif [[ "$live_title" == *"Minecraft"* ]]; then
+              area_id=216
+            elif [[ "$live_title" == *"マイクラ"* ]]; then
+              area_id=216
+            elif [[ "$live_title" == *"漆黒メインクエ"* ]]; then
+              area_id=102
+            fi
+            sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           else # TW

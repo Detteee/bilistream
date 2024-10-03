@@ -23,7 +23,8 @@ pub enum Status {
 
 #[async_trait]
 pub trait Live {
-    fn channel_name(&self) -> &str;
+    async fn get_title(&self) -> Result<String, Box<dyn Error>>;
+    // fn channel_name(&self) -> &str;
     async fn get_status(
         &self,
     ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>>;

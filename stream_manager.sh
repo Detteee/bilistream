@@ -179,55 +179,118 @@ select_area_id() {
 
 # Function to select channel ID
 select_channel_id() {
-    echo "Select Channel ID:"
+    echo "Select YouTube Channel:"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito            2) 紫宮るな         3) Narin Mikure"
-    echo " 4) 藍沢エマ          5) 八雲べに         6) 兎咲ミミ"
-    echo " 7) 英リサ            8) 一ノ瀬うるは     9) 橘ひなの"
-    echo "10) 胡桃のあ         11) 猫汰つな        12) 花芽なずな"
-    echo "13) 花芽すみれ       14) 獅子堂あかり    15) 紡木こかげ"
-    echo "16) 神成きゅぴ       17) 夜絆ニウ        18) 天帝フォルテ"
-    echo "19) 千燈ゆうひ"
-    echo " 0) Custom"
+    echo " 1) kamito              8) 橘ひなの"
+    echo " 2) 紫宮るな            9) 胡桃のあ"
+    echo " 3) Narin Mikure       10) 猫汰つな"
+    echo " 4) 藍沢エマ           11) 花芽なずな"
+    echo " 5) 八雲べに           12) 花芽すみれ"
+    echo " 6) 兎咲ミミ           13) 獅子堂あかり"
+    echo " 7) 英リサ             14) 紡木こかげ"
+    echo "15) 神成きゅぴ         16) 夜絆ニウ"
+    echo "17) 天帝フォルテ       18) 千燈ゆうひ"
+    echo "19) 一ノ瀬うるは        0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel ID (0-19): " ch_choice
+    read -p "Select Channel (0-19): " yt_choice
 
-    case $ch_choice in
-    1) chid="UCgYCMluaLpERsyNXlPOvBtA" ;;
-    2) chid="UCD5W21JqNMv_tV9nfjvF9sw" ;;
-    3) chid="UCKSpM183c85d5V2cW5qaUjA" ;;
-    4) chid="UCPkKpOHxEDcwmUAnRpIu-Ng" ;;
-    5) chid="UCjXBuHmWkieBApgBhDuJMMQ" ;;
-    6) chid="UCnvVG9RbOW3J6Ifqo-zKLiw" ;;
-    7) chid="UCurEA8YoqFwimJcAuSHU0MQ" ;;
-    8) chid="UC5LyYg6cCA4yHEYvtUsir3g" ;;
-    9) chid="UCvUc0m317LWTTPZoBQV479A" ;;
-    10) chid="UCIcAj6WkJ8vZ7DeJVgmeqKw" ;;
-    11) chid="UCIjdfjcSaEgdjwbgjxC3ZWg" ;;
-    12) chid="UCiMG6VdScBabPhJ1ZtaVmbw" ;;
-    13) chid="UCyLGcqYs7RsBb3L0SJfzGYA" ;;
-    14) chid="UCWRPqA0ehhWV4Hnp27PJCkQ" ;;
-    15) chid="UC-WX1CXssCtCtc2TNIRnJzg" ;;
-    16) chid="UCMp55EbT_ZlqiMS3lCj01BQ" ;;
-    17) chid="UCZmUoMwjyuQ59sk5_7Tx07A" ;;
-    18) chid="UC8hwewh9svh92E1gXvgVazg" ;;
-    19) chid="UCuDY3ibSP2MFRgf7eo3cojg" ;;
-    0) read -p "Enter custom Channel ID: " chid ;;
+    case $yt_choice in
+    1)
+        chid="UCgYCMluaLpERsyNXlPOvBtA"
+        channel_name="kamito"
+        ;;
+    2)
+        chid="UCD5W21JqNMv_tV9nfjvF9sw"
+        channel_name="紫宮るな"
+        ;;
+    3)
+        chid="UCKSpM183c85d5V2cW5qaUjA"
+        channel_name="Narin_Mikure"
+        ;;
+    4)
+        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        channel_name="藍沢エマ"
+        ;;
+    5)
+        chid="UCjXBuHmWkieBApgBhDuJMMQ"
+        channel_name="八雲べに"
+        ;;
+    6)
+        chid="UCnvVG9RbOW3J6Ifqo-zKLiw"
+        channel_name="兎咲ミミ"
+        ;;
+    7)
+        chid="UCurEA8YoqFwimJcAuSHU0MQ"
+        channel_name="英リサ"
+        ;;
+    8)
+        chid="UCvUc0m317LWTTPZoBQV479A"
+        channel_name="橘ひなの"
+        ;;
+    9)
+        chid="UCIcAj6WkJ8vZ7DeJVgmeqKw"
+        channel_name="胡桃のあ"
+        ;;
+    10)
+        chid="UCIjdfjcSaEgdjwbgjxC3ZWg"
+        channel_name="猫汰つな"
+        ;;
+    11)
+        chid="UCiMG6VdScBabPhJ1ZtaVmbw"
+        channel_name="花芽なずな"
+        ;;
+    12)
+        chid="UCyLGcqYs7RsBb3L0SJfzGYA"
+        channel_name="花芽すみれ"
+        ;;
+    13)
+        chid="UCWRPqA0ehhWV4Hnp27PJCkQ"
+        channel_name="獅子堂あかり"
+        ;;
+    14)
+        chid="UC-WX1CXssCtCtc2TNIRnJzg"
+        channel_name="紡木こかげ"
+        ;;
+    15)
+        chid="UCMp55EbT_ZlqiMS3lCj01BQ"
+        channel_name="神成きゅぴ"
+        ;;
+    16)
+        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
+        channel_name="夜絆ニウ"
+        ;;
+    17)
+        chid="UC8hwewh9svh92E1gXvgVazg"
+        channel_name="天帝フォルテ"
+        ;;
+    18)
+        chid="UCuDY3ibSP2MFRgf7eo3cojg"
+        channel_name="千燈ゆうひ"
+        ;;
+    19)
+        chid="UC5LyYg6cCA4yHEYvtUsir3g"
+        channel_name="一ノ瀬うるは"
+        ;;
+    0)
+        read -p "Enter custom YouTube Channel ID: " chid
+        read -p "Enter custom Channel Name: " channel_name
+        read -p "Whether to add this channel to the ./YT/YT_channels.txt? (y/N): " add_choice
+        add_choice=${add_choice:-N} # Default to 'N' if input is empty
+        if [[ $add_choice =~ ^[Yy]$ ]]; then
+            echo "($channel_name) [$chid]" >>"$BASE_DIR/YT/YT_channels.txt"
+        fi
+        ;;
     *)
-        echo "Invalid choice. Please try again."
+        echo "Invalid choice. Exiting."
         return 1
         ;;
     esac
-    echo "Selected Channel ID: $chid"
-    channel_name=$(get_channel_name "$chid")
-    new_title="【转播】$channel_name"
+
+    new_title="【转播】${channel_name}"
+    echo "Selected Channel: $channel_name (ID: $chid)"
     echo "New Title: $new_title"
-
-    # Update the ChannelName in the config file
-
     return 0
 }
-
 # Function to select Twitch ID
 select_twitch_id() {
     echo "Select Twitch Channel:"
@@ -289,6 +352,11 @@ select_twitch_id() {
     0)
         read -p "Enter Twitch ID: " channel_id
         read -p "Enter Channel Name: " channel_name
+        read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
+        add_choice=${add_choice:-N} # Default to 'N' if input is empty
+        if [[ $add_choice =~ ^[Yy]$ ]]; then
+            echo "($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
+        fi
         ;;
     *)
         echo "Invalid choice. Please try again."
@@ -359,31 +427,6 @@ disable_log_rotation() {
 setup_log_rotation
 
 # Add this function to map Channel IDs to names
-get_channel_name() {
-    local channel_id=$1
-    case $channel_id in
-    "UCgYCMluaLpERsyNXlPOvBtA") echo "kamito" ;;
-    "UCD5W21JqNMv_tV9nfjvF9sw") echo "紫宮るな" ;;
-    "UCKSpM183c85d5V2cW5qaUjA") echo "Narin Mikure" ;;
-    "UCPkKpOHxEDcwmUAnRpIu-Ng") echo "藍沢エマ" ;;
-    "UCjXBuHmWkieBApgBhDuJMMQ") echo "八雲べに" ;;
-    "UCnvVG9RbOW3J6Ifqo-zKLiw") echo "兎咲ミミ" ;;
-    "UCurEA8YoqFwimJcAuSHU0MQ") echo "英リサ" ;;
-    "UC5LyYg6cCA4yHEYvtUsir3g") echo "一ノ瀬うるは" ;;
-    "UCvUc0m317LWTTPZoBQV479A") echo "橘ひなの" ;;
-    "UCIcAj6WkJ8vZ7DeJVgmeqKw") echo "胡桃のあ" ;;
-    "UCIjdfjcSaEgdjwbgjxC3ZWg") echo "猫汰つな" ;;
-    "UCiMG6VdScBabPhJ1ZtaVmbw") echo "花芽なずな" ;;
-    "UCyLGcqYs7RsBb3L0SJfzGYA") echo "花芽すみれ" ;;
-    "UCWRPqA0ehhWV4Hnp27PJCkQ") echo "獅子堂あかり" ;;
-    "UC-WX1CXssCtCtc2TNIRnJzg") echo "紡木こかげ" ;;
-    "UCMp55EbT_ZlqiMS3lCj01BQ") echo "神成きゅぴ" ;;
-    "UCZmUoMwjyuQ59sk5_7Tx07A") echo "夜絆ニウ" ;;
-    "UC8hwewh9svh92E1gXvgVazg") echo "天帝フォルテ" ;;
-    "UCuDY3ibSP2MFRgf7eo3cojg") echo "千燈ゆうひ" ;;
-    *) echo "Unknown Channel" ;;
-    esac
-}
 
 # Function to map Area IDs to names
 get_area_name() {

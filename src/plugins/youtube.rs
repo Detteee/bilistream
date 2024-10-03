@@ -3,17 +3,29 @@ use async_trait::async_trait;
 use super::{get_youtube_live_status, Live};
 use chrono::{DateTime, Utc};
 use std::error::Error; // Ensure this is included
+use std::process::Command;
 pub struct Youtube {
-    pub channel_name: String, // Changed from room to channel_id
+    pub channel_name: String,
     pub channel_id: String,
     // pub access_token: String,
     // pub client: ClientWithMiddleware,
 }
 #[async_trait]
 impl Live for Youtube {
-    fn channel_name(&self) -> &str {
-        &self.channel_name // Return channel_id instead of room
+    async fn get_title(&self) -> Result<String, Box<dyn Error>> {
+        let mut command = Command::new("yt-dlp");
+        command.arg("-e");
+        command.arg(format!(
+            "https://www.youtube.com/channel/{}/live",
+            self.channel_id
+        ));
+        let output = command.output()?;
+        let live_title = String::from_utf8_lossy(&output.stdout);
+        Ok(live_title.to_string())
     }
+    // fn channel_name(&self) -> &str {
+    //     &self.channel_name // Return channel_id instead of room
+    // }
     async fn get_status(
         &self,
     ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {

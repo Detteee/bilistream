@@ -1,7 +1,7 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, ffmpeg, get_bili_live_status,
-    get_youtube_live_status, select_live, Live, Twitch,
+    get_youtube_live_status, select_live, Live, Twitch, Youtube,
 };
 use clap::{Arg, Command};
 use reqwest_middleware::ClientBuilder;
@@ -47,12 +47,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("New title for the live stream"),
                 ),
         )
+        .subcommand(
+            Command::new("get-live-title")
+                .about("Get the title of a live stream")
+                .arg(
+                    Arg::new("platform")
+                        .required(true)
+                        .help("Platform to check (YT, TW)"),
+                )
+                .arg(
+                    Arg::new("channel_id")
+                        .required(true)
+                        .help("Channel ID to check"),
+                ),
+        )
         .get_matches();
 
     let config_path = matches
         .get_one::<String>("config")
         .map(|s| s.as_str())
-        .unwrap_or("./YT/config.yaml");
+        .unwrap_or("./TW/config.yaml");
     // default config path is ./YT/config.yaml to prevent error
 
     match matches.subcommand() {
@@ -70,6 +84,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("change-live-title", sub_m)) => {
             let new_title = sub_m.get_one::<String>("title").unwrap();
             change_live_title(config_path, new_title).await?;
+        }
+        Some(("get-live-title", sub_m)) => {
+            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
+            get_live_title(config_path, platform, channel_id).await?;
         }
         _ => {
             // Default behavior: run bilistream with the provided config
@@ -138,7 +157,10 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
     loop {
         // if ffmpeg.lock exists skip the loop
         if std::path::Path::new("./ffmpeg.lock").exists() {
-            tracing::info!("ffmpeg.lock exists, skipping the loop");
+            tracing::info!(
+                "ffmpeg.lock exists, skipping the loop. If it is not you can remove it by rm ./ffmpeg.lock"
+            );
+
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue;
         }
@@ -159,7 +181,11 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
             live_type.get_status().await.unwrap_or((false, None, None));
 
         if is_live {
-            tracing::info!("{} 直播中", live_type.channel_name());
+            if cfg.platform == "Twitch" {
+                tracing::info!("{} 直播中", cfg.twitch.channel_name);
+            } else if cfg.platform == "Youtube" {
+                tracing::info!("{} 直播中", cfg.youtube.channel_name);
+            }
 
             if get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站直播中");
@@ -185,7 +211,11 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                         );
                     }
                 }
-                tracing::info!("{} 直播已结束", live_type.channel_name());
+                if cfg.platform == "Twitch" {
+                    tracing::info!("{} 直播已结束", cfg.twitch.channel_name);
+                } else {
+                    tracing::info!("{} 直播已结束", cfg.youtube.channel_name);
+                }
             } else {
                 tracing::info!("B站未直播");
                 bili_start_live(&cfg).await?;
@@ -206,7 +236,11 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                         );
                     }
                 }
-                tracing::info!("{} 直播已结束", live_type.channel_name());
+                if cfg.platform == "Twitch" {
+                    tracing::info!("{} 直播已结束", cfg.twitch.channel_name);
+                } else {
+                    tracing::info!("{} 直播已结束", cfg.youtube.channel_name);
+                }
             }
         } else {
             if cfg.bililive.enable_danmaku_command {
@@ -228,7 +262,11 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                     scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
                 );
             } else {
-                tracing::info!("{}未直播", live_type.channel_name());
+                if cfg.platform == "Twitch" {
+                    tracing::info!("{}未直播", cfg.twitch.channel_name);
+                } else {
+                    tracing::info!("{}未直播", cfg.youtube.channel_name);
+                }
             }
             if get_bili_live_status(cfg.bililive.room.clone()).await? {
                 tracing::info!("B站直播中");
@@ -266,5 +304,35 @@ async fn change_live_title(
     cfg.bililive.title = new_title.to_string();
     bili_change_live_title(&cfg).await?;
     println!("Live stream title changed successfully");
+    Ok(())
+}
+
+async fn get_live_title(
+    config_path: &str,
+    platform: &str,
+    channel_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config(Path::new(config_path))?;
+
+    match platform {
+        "YT" => {
+            let youtube = Youtube::new(channel_id, channel_id);
+            let title = youtube.get_title().await?;
+            println!("YouTube live title: {}", title);
+        }
+        "TW" => {
+            let twitch = Twitch::new(
+                channel_id,
+                cfg.twitch.oauth_token,
+                ClientBuilder::new(reqwest::Client::new()).build(),
+            );
+            let title = twitch.get_title().await?;
+            println!("Twitch live title: {}", title);
+        }
+        _ => {
+            println!("Unsupported platform: {}", platform);
+        }
+    }
+
     Ok(())
 }
