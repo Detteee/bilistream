@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio;
 // Import the Bilibili functions
-use plugins::{bili_change_live_title, bili_start_live, bili_stop_live, get_bili_live_state};
+use plugins::{bili_change_live_title, bili_start_live, bili_stop_live, get_bili_live_status};
 
 #[derive(Parser)]
 #[command(version = "0.1.1", author = "Dette")]
@@ -51,22 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if is_live {
             tracing::info!("{} 直播中", live_type.channel_name());
 
-            // // 添加Gotify推送
-            // if let Some(ref gotify_config) = cfg.gotify {
-            //     send_gotify_notification(
-            //         &gotify_config,
-            //         &format!("{}开始直播", live_type.channel_name()),
-            //         "bilistream",
-            //     )
-            //     .await;
-            // }
-
-            if get_bili_live_state(cfg.bililive.room).await? {
+            if get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站直播中");
                 bili_change_live_title(&cfg).await?;
-
-                // Start ffmpeg if not already running
-                // ffmpeg may stop, so we need to start it again by check if is_live still = true
 
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
@@ -95,10 +82,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!("B站已开播");
                 bili_change_live_title(&cfg).await?;
 
-                tokio::time::sleep(Duration::from_secs(5)).await;
-
-                // Start ffmpeg if not already running
-                // ffmpeg may stop, so we need to start it again by check if is_live still = true
                 let current_is_live = is_live;
                 while current_is_live {
                     let (current_is_live, new_m3u8_url, _) =
@@ -125,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 tracing::info!("{}未直播", live_type.channel_name());
             }
-            if get_bili_live_state(cfg.bililive.room.clone()).await? {
+            if get_bili_live_status(cfg.bililive.room.clone()).await? {
                 tracing::info!("B站直播中");
                 // bili_stop_live(&cfg).await;
                 // tracing::info!("B站已关播");

@@ -16,7 +16,7 @@ use std::time::Duration;
 /// # Returns
 ///
 /// * `bool` - Returns `true` if the room is live, otherwise `false`.
-pub async fn get_bili_live_state(room: i32) -> Result<bool, Box<dyn Error>> {
+pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
     // Define the retry policy with a very high number of retries
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
 

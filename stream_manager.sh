@@ -440,6 +440,32 @@ stop_live_stream() {
     echo "Stopped bili_stop_live."
 }
 
+manage_danmaku_service() {
+    if pm2 list | grep -q "danmaku"; then
+        echo "danmaku service is currently running."
+        echo "1. Restart service"
+        echo "2. Stop service"
+        echo "3. Delete service"
+        echo "4. Do nothing"
+        read -p "Enter your choice (1/2/3/4): " action
+
+        case $action in
+        1) pm2 restart danmaku ;;
+        2) pm2 stop danmaku ;;
+        3) pm2 delete danmaku ;;
+        4) echo "No action taken." ;;
+        *) echo "Invalid choice. No action taken." ;;
+        esac
+    else
+        echo "danmaku service is not running."
+        read -p "Start danmaku service? (y/N): " action
+        if [[ $action =~ ^[Yy]$ ]]; then
+            pm2 start danmaku.sh --name danmaku
+        else
+            echo "danmaku service was not started."
+        fi
+    fi
+}
 # Main menu
 while true; do
     # Display the menu
@@ -456,6 +482,7 @@ while true; do
     echo -e "${PINK}│ ${RESET}8. Display current configuration    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}9. Stop Bili Live                   ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}10. Change Live Title               ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}11. Manage Danmaku Service          ${PINK}│${RESET}"
     echo -e "${PINK}│                                     │${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
     echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
@@ -596,6 +623,9 @@ while true; do
             echo "Invalid choice. No changes made."
             ;;
         esac
+        ;;
+    11) # Manage Danmaku Service
+        manage_danmaku_service
         ;;
     *)
         echo "Exiting Bilistream Manager. Goodbye!"

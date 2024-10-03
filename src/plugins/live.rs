@@ -71,8 +71,8 @@ pub async fn get_youtube_live_status(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // tracing::info!("yt-dlp -g {}", stdout);
-    if stdout.contains("ERROR: [youtube]") {
+    // println!("yt-dlp -g {}", stderr);
+    if stderr.contains("ERROR: [youtube]") {
         // Check for scheduled start time in stderr
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) minutes")?.captures(&stderr)
