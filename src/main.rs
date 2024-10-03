@@ -19,7 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('c')
                 .long("config")
                 .value_name("FILE")
-                .help("Sets a custom config file"),
+                .help("Sets a custom config file")
+                .global(true),
         )
         .subcommand(
             Command::new("get-live-status")
@@ -51,7 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = matches
         .get_one::<String>("config")
         .map(|s| s.as_str())
-        .unwrap_or("config.yaml");
+        .unwrap_or("./YT/config.yaml");
+    // default config path is ./YT/config.yaml to prevent error
 
     match matches.subcommand() {
         Some(("get-live-status", sub_m)) => {
@@ -238,7 +240,11 @@ async fn change_live_title(
     config_path: &str,
     new_title: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = load_config(Path::new(config_path))?;
+    let config_file = Path::new(config_path);
+    if !config_file.exists() {
+        return Err(format!("Config file not found: {}", config_path).into());
+    }
+    let mut cfg = load_config(config_file)?;
     cfg.bililive.title = new_title.to_string();
     bili_change_live_title(&cfg).await?;
     println!("Live stream title changed successfully");
