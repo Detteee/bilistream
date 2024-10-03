@@ -29,19 +29,3 @@ tokio-test = "0.4.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 urlencoding = "2.1.0"
-
-# [[bin]]
-# name = "bili_stop_live"
-# path = "src/bin/bili_stop_live.rs"
-# 
-# [[bin]]
-# name = "bili_change_live_title"
-# path = "src/bin/bili_change_live_title.rs"
-# 
-# [[bin]]
-# name = "bili_start_live"
-# path = "src/bin/bili_start_live.rs"
-# 
-# [[bin]]
-# name = "get_live_status"
-# path = "src/bin/get_live_status.rs"
