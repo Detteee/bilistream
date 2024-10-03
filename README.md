@@ -153,15 +153,16 @@ To use this feature:
 
 Danmaku command format:
 ```
-%转播%YT/TW%channel_name(in (YT/TW)_channels.txt)
-e.g.
-%转播%YT%kamito
-%转播%TW%kamito
-
-with these lines in YT/TW_channels.txt
-(kamito) [UCgYCMluaLpERsyNXlPOvBtA]
-(kamito) [kamito_jp]
+%转播%YT/TW%channel_name%area_name
+channel_name must in YT/TW_channels.txt
 ```
+Example:
+```
+%转播%YT%kamito%英雄联盟
+%转播%TW%kamito%无畏契约
+```
+
+The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check https://api.live.bilibili.com/room/v1/Area/getList for more Area name and ID.
 
 ## Contributing
 

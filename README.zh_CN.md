@@ -152,15 +152,16 @@ Bilistream 支持以下命令：
 
 弹幕命令格式：
 ```
-%转播%YT/TW%频道名称(在 (YT/TW)_channels.txt 中)
-例如：
-%转播%YT%kamito
-%转播%TW%kamito
-
-在 YT/TW_channels.txt 中有这些行：
-(kamito) [UCgYCMluaLpERsyNXlPOvBtA]
-(kamito) [kamito_jp]
+%转播%YT/TW%频道名称%分区名称
+频道名称必须在 YT/TW_channels.txt 中
 ```
+例如：
+```
+%转播%YT%kamito%英雄联盟
+%转播%TW%kamito%无畏契约
+```
+
+系统将检查直播标题并在必要时调整分区ID。例如，如果直播标题包含"Valorant"，它将设置分区ID为329（无畏契约），无论指定的分区名称是什么。查看 https://api.live.bilibili.com/room/v1/Area/getList 获取更多分区名称和ID。
 
 ## 贡献
 
