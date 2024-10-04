@@ -45,7 +45,7 @@ pub fn ffmpeg(rtmp_url: String, rtmp_key: String, m3u8_url: String, ffmpeg_proxy
 
     command
         .arg("-loglevel")
-        .arg("info")
+        .arg("error")
         .arg("-stats")
         .arg("-i")
         .arg(m3u8_url)

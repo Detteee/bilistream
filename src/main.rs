@@ -278,7 +278,6 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                     let stdout = danmaku_process.stdout.expect("Failed to capture stdout");
                     let stderr = danmaku_process.stderr.expect("Failed to capture stderr");
 
-                    // Read stdout
                     std::thread::spawn(move || {
                         let reader = std::io::BufReader::new(stdout);
                         for line in reader.lines() {
@@ -288,7 +287,6 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                         }
                     });
 
-                    // Read stderr
                     std::thread::spawn(move || {
                         let reader = std::io::BufReader::new(stderr);
                         for line in reader.lines() {
