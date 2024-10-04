@@ -23,7 +23,13 @@ pub fn remove_ffmpeg_lock() -> std::io::Result<()> {
 
 /// Executes the ffmpeg command with the provided parameters.
 /// Prevents multiple instances from running simultaneously using a lock file.
-pub fn ffmpeg(rtmp_url: String, rtmp_key: String, m3u8_url: String, ffmpeg_proxy: Option<String>) {
+pub fn ffmpeg(
+    rtmp_url: String,
+    rtmp_key: String,
+    m3u8_url: String,
+    ffmpeg_proxy: Option<String>,
+    log_level: &str,
+) {
     // Check if ffmpeg is already running
     if is_ffmpeg_running() {
         println!("ffmpeg is already running. Skipping new instance.");
@@ -45,7 +51,7 @@ pub fn ffmpeg(rtmp_url: String, rtmp_key: String, m3u8_url: String, ffmpeg_proxy
 
     command
         .arg("-loglevel")
-        .arg("error")
+        .arg(log_level)
         .arg("-stats")
         .arg("-i")
         .arg(m3u8_url)

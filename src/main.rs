@@ -25,6 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Sets a custom config file")
                 .global(true),
         )
+        .arg(
+            Arg::new("ffmpeg-log-level")
+                .long("ffmpeg-log-level")
+                .value_name("LEVEL")
+                .help("Sets ffmpeg log level (error, info, debug)")
+                .default_value("error")
+                .value_parser(["error", "info", "debug"]),
+        )
         .subcommand(
             Command::new("get-live-status")
                 .about("Check live status of a channel")
@@ -72,6 +80,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("./TW/config.yaml");
     // default config path is ./YT/config.yaml to prevent error
 
+    let ffmpeg_log_level = matches
+        .get_one::<String>("ffmpeg-log-level")
+        .map(String::as_str)
+        .unwrap_or("error");
+
     match matches.subcommand() {
         Some(("get-live-status", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform").unwrap();
@@ -102,13 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let process_name = format!("bilistream-{}", file_name);
             set_title(&process_name);
             // Default behavior: run bilistream with the provided config
-            run_bilistream(config_path).await?;
+            run_bilistream(config_path, ffmpeg_log_level).await?;
         }
     }
     Ok(())
 }
 
-async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_bilistream(
+    config_path: &str,
+    ffmpeg_log_level: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger
     tracing_subscriber::fmt::init();
 
@@ -162,6 +178,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                     cfg.bililive.bili_rtmp_key.clone(),
                     m3u8_url.clone().unwrap_or_default(),
                     cfg.ffmpeg_proxy.clone(),
+                    ffmpeg_log_level,
                 );
                 let current_is_live = is_live;
                 while current_is_live {
@@ -174,6 +191,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                             cfg.bililive.bili_rtmp_key.clone(),
                             new_m3u8_url.clone().unwrap_or_default(),
                             cfg.ffmpeg_proxy.clone(),
+                            ffmpeg_log_level,
                         );
                     }
                 }
@@ -208,6 +226,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                             cfg.bililive.bili_rtmp_key.clone(),
                             new_m3u8_url.clone().unwrap_or_default(),
                             cfg.ffmpeg_proxy.clone(),
+                            ffmpeg_log_level,
                         );
                     }
                 }
