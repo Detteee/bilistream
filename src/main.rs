@@ -1,17 +1,15 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, ffmpeg, get_bili_live_status,
-    get_youtube_live_status, select_live, Live, Twitch, Youtube,
+    get_youtube_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
 };
 use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command as ProcessCommand, Stdio};
-use std::thread;
+use std::process::Command as ProcessCommand;
 use std::time::Duration;
 use tracing_subscriber;
 
@@ -24,10 +22,9 @@ async fn run_bilistream(
 
     let mut cfg = load_config(Path::new(config_path))?;
     loop {
-        // if ffmpeg.lock exists skip the loop
-        if std::path::Path::new("./ffmpeg.lock").exists() {
-            tracing::info!("ffmpeg.lock exists, skipping the loop.");
-
+        // Check if any ffmpeg or danmaku is running
+        if ffmpeg::is_any_ffmpeg_running() {
+            tracing::info!("ffmpeg lock exists, skipping the loop.");
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue;
         }
@@ -48,94 +45,79 @@ async fn run_bilistream(
             live_info.get_status().await.unwrap_or((false, None, None));
 
         if is_live {
-            if cfg.platform == "Twitch" {
-                tracing::info!("{} 直播中", cfg.twitch.channel_name);
-            } else if cfg.platform == "Youtube" {
-                tracing::info!("{} 直播中", cfg.youtube.channel_name);
-            }
+            let platform = &cfg.platform;
+            tracing::info!(
+                "{} is live",
+                match platform.as_str() {
+                    "Twitch" => &cfg.twitch.channel_name,
+                    "Youtube" => &cfg.youtube.channel_name,
+                    _ => "Unknown Platform",
+                }
+            );
 
-            if get_bili_live_status(cfg.bililive.room).await? {
+            if !get_bili_live_status(cfg.bililive.room).await? {
+                tracing::info!("B站未直播");
+                bili_start_live(&cfg).await?;
+                tracing::info!("B站已开播");
+                bili_change_live_title(&cfg).await?;
+            } else {
                 tracing::info!("B站直播中");
                 bili_change_live_title(&cfg).await?;
-                if std::path::Path::new("./danmaku.lock").exists() {
-                    tracing::info!("更改配置成功");
-                    tracing::info!("Bilibili is now live. Stopping danmaku-cli...");
+
+                // Stop danmaku if running
+                if Path::new("./danmaku.lock-YT").exists()
+                    || Path::new("./danmaku.lock-TW").exists()
+                {
+                    tracing::info!("更新配置. 停止danmaku-cli...");
                     let _ = ProcessCommand::new("pkill")
                         .arg("-f")
                         .arg("danmaku-cli")
                         .output()
                         .expect("Failed to stop danmaku-cli");
-                    let _ = std::fs::remove_file("./danmaku.lock");
+                    let _ = fs::remove_file("./danmaku.lock-YT");
+                    let _ = fs::remove_file("./danmaku.lock-TW");
                 }
+                // Execute ffmpeg with platform-specific locks
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
                     m3u8_url.clone().unwrap_or_default(),
                     cfg.ffmpeg_proxy.clone(),
                     ffmpeg_log_level,
+                    platform,
                 );
-                let current_is_live = is_live;
-                while current_is_live {
+                // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
+
+                loop {
                     let (current_is_live, new_m3u8_url, _) =
                         live_info.get_status().await.unwrap_or((false, None, None));
-
-                    if current_is_live {
-                        ffmpeg(
-                            cfg.bililive.bili_rtmp_url.clone(),
-                            cfg.bililive.bili_rtmp_key.clone(),
-                            new_m3u8_url.clone().unwrap_or_default(),
-                            cfg.ffmpeg_proxy.clone(),
-                            ffmpeg_log_level,
-                        );
+                    if !current_is_live {
+                        break;
                     }
+                    ffmpeg(
+                        cfg.bililive.bili_rtmp_url.clone(),
+                        cfg.bililive.bili_rtmp_key.clone(),
+                        new_m3u8_url.clone().unwrap_or_default(),
+                        cfg.ffmpeg_proxy.clone(),
+                        ffmpeg_log_level,
+                        platform,
+                    );
                 }
-                if cfg.platform == "Twitch" {
-                    tracing::info!("{} 直播已结束", cfg.twitch.channel_name);
-                } else {
-                    tracing::info!("{} 直播已结束", cfg.youtube.channel_name);
-                }
-            } else {
-                tracing::info!("B站未直播");
-                bili_start_live(&cfg).await?;
-                tracing::info!("B站已开播");
-                bili_change_live_title(&cfg).await?;
-                if std::path::Path::new("./danmaku.lock").exists() {
-                    tracing::info!("更改配置成功");
-                    tracing::info!("Bilibili is now live. Stopping danmaku-cli...");
-                    let _ = ProcessCommand::new("pkill")
-                        .arg("-f")
-                        .arg("danmaku-cli")
-                        .output()
-                        .expect("Failed to stop danmaku-cli");
-                    let _ = std::fs::remove_file("./danmaku.lock");
-                }
-                let current_is_live = is_live;
-                while current_is_live {
-                    let (current_is_live, new_m3u8_url, _) =
-                        live_info.get_status().await.unwrap_or((false, None, None));
 
-                    if current_is_live {
-                        ffmpeg(
-                            cfg.bililive.bili_rtmp_url.clone(),
-                            cfg.bililive.bili_rtmp_key.clone(),
-                            new_m3u8_url.clone().unwrap_or_default(),
-                            cfg.ffmpeg_proxy.clone(),
-                            ffmpeg_log_level,
-                        );
+                tracing::info!(
+                    "{} 直播结束",
+                    match platform.as_str() {
+                        "Twitch" => &cfg.twitch.channel_name,
+                        "Youtube" => &cfg.youtube.channel_name,
+                        _ => "Unknown Platform",
                     }
-                }
-                if cfg.platform == "Twitch" {
-                    tracing::info!("{} 直播已结束", cfg.twitch.channel_name);
-                } else {
-                    tracing::info!("{} 直播已结束", cfg.youtube.channel_name);
-                }
+                );
             }
         } else {
             if cfg.bililive.enable_danmaku_command {
-                if !std::path::Path::new("./danmaku.lock").exists() {
-                    run_danmaku_command();
-                }
+                run_danmaku(&cfg.platform);
             }
+            // 计划直播(预告窗)
             if scheduled_start.is_some() {
                 tracing::info!(
                     "{}未直播，计划于 {} 开始",
@@ -259,56 +241,6 @@ async fn get_live_title(
     }
 
     Ok(())
-}
-
-/// Runs the danmaku command if enabled and not already running.
-fn run_danmaku_command() {
-    if !Path::new("./danmaku.lock").exists() {
-        // Create a file named danmaku.lock
-        if let Err(e) = fs::File::create("./danmaku.lock") {
-            tracing::error!("Failed to create danmaku.lock: {}", e);
-            return;
-        }
-
-        tracing::info!("Executing danmaku command");
-        let mut danmaku_process = ProcessCommand::new("bash")
-            .arg("./danmaku.sh")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("Failed to start danmaku.sh");
-
-        let stdout = danmaku_process
-            .stdout
-            .take()
-            .expect("Failed to capture stdout");
-        let stderr = danmaku_process
-            .stderr
-            .take()
-            .expect("Failed to capture stderr");
-
-        // Spawn a thread to handle stdout
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    tracing::info!("Danmaku stdout: {}", line);
-                }
-            }
-        });
-
-        // Spawn a thread to handle stderr
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    tracing::error!("Danmaku stderr: {}", line);
-                }
-            }
-        });
-
-        tracing::info!("danmaku.sh has been executed");
-    }
 }
 
 #[tokio::main]

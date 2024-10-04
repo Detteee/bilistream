@@ -30,6 +30,8 @@ check_area_id_with_title() {
     area_id=927
   elif [[ "$live_title" == *"漆黒メインクエ"* ]]; then
     area_id=102
+  elif [[ "$live_title" == *"FF14"* ]]; then
+    area_id=102
   fi
   # Reset nocasematch
   shopt -u nocasematch
@@ -163,8 +165,6 @@ while true; do
         if [[ "$current_status" != *"Not Live"* ]]; then
           echo "Bilibili is now live. Stopping danmaku-cli..."
           pkill -f "danmaku-cli"
-          # remove danmaku lock file
-          rm -f ./danmaku.lock
           break
         fi
       fi
