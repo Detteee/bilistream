@@ -19,8 +19,11 @@ async fn run_bilistream(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger
     tracing_subscriber::fmt::init();
+    // tracing::info!("bilistream 正在运行");
 
     let mut cfg = load_config(Path::new(config_path))?;
+
+    let mut old_cfg = cfg.clone();
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
@@ -28,29 +31,30 @@ async fn run_bilistream(
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue;
         }
-        let old_cfg = cfg.clone();
         cfg = load_config(Path::new(config_path))?;
 
         // If configuration changed, stop Bilibili live
         if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
             tracing::info!("配置改变, 停止Bilibili直播");
             bili_stop_live(&old_cfg).await?;
+            old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
+            continue;
         }
-        if cfg.bililive.title != old_cfg.bililive.title {
-            tracing::info!("配置改变, 更新Bilibili直播标题");
-            bili_change_live_title(&cfg).await?;
-        }
+
         let live_info = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
             live_info.get_status().await.unwrap_or((false, None, None));
-
+        let platform = if &cfg.platform == "Youtube" {
+            "YT"
+        } else {
+            "TW"
+        };
         if is_live {
-            let platform = &cfg.platform;
             tracing::info!(
                 "{} 正在直播",
-                match platform.as_str() {
-                    "Twitch" => &cfg.twitch.channel_name,
-                    "Youtube" => &cfg.youtube.channel_name,
+                match platform {
+                    "TW" => &cfg.twitch.channel_name,
+                    "YT" => &cfg.youtube.channel_name,
                     _ => "Unknown Platform",
                 }
             );
@@ -59,64 +63,63 @@ async fn run_bilistream(
                 tracing::info!("B站未直播");
                 bili_start_live(&cfg).await?;
                 tracing::info!("B站已开播");
+            }
+            tracing::info!("B站直播中");
+            if cfg.bililive.title != old_cfg.bililive.title {
                 bili_change_live_title(&cfg).await?;
-            } else {
-                tracing::info!("B站直播中");
-                bili_change_live_title(&cfg).await?;
+                old_cfg.bililive.title = cfg.bililive.title.clone();
+            }
 
-                // Stop danmaku if running
-                if Path::new("./danmaku.lock-YT").exists()
-                    || Path::new("./danmaku.lock-TW").exists()
-                {
-                    tracing::info!("更新配置. 停止danmaku-cli...");
-                    let _ = ProcessCommand::new("pkill")
-                        .arg("-f")
-                        .arg("danmaku-cli")
-                        .output()
-                        .expect("Failed to stop danmaku-cli");
-                    let _ = fs::remove_file("./danmaku.lock-YT");
-                    let _ = fs::remove_file("./danmaku.lock-TW");
+            // Stop danmaku if running
+            if Path::new("./danmaku.lock-YT").exists() || Path::new("./danmaku.lock-TW").exists() {
+                tracing::info!("更新配置. 停止danmaku-cli...");
+                let _ = ProcessCommand::new("pkill")
+                    .arg("-f")
+                    .arg("danmaku-cli")
+                    .output()
+                    .expect("Failed to stop danmaku-cli");
+                let _ = fs::remove_file("./danmaku.lock-YT");
+                let _ = fs::remove_file("./danmaku.lock-TW");
+            }
+            // Execute ffmpeg with platform-specific locks
+            ffmpeg(
+                cfg.bililive.bili_rtmp_url.clone(),
+                cfg.bililive.bili_rtmp_key.clone(),
+                m3u8_url.clone().unwrap_or_default(),
+                cfg.ffmpeg_proxy.clone(),
+                ffmpeg_log_level,
+                platform,
+            );
+            // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
+
+            loop {
+                let (current_is_live, new_m3u8_url, _) =
+                    live_info.get_status().await.unwrap_or((false, None, None));
+                if !current_is_live {
+                    break;
                 }
-                // Execute ffmpeg with platform-specific locks
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
-                    m3u8_url.clone().unwrap_or_default(),
+                    new_m3u8_url.clone().unwrap_or_default(),
                     cfg.ffmpeg_proxy.clone(),
                     ffmpeg_log_level,
                     platform,
                 );
-                // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
+            }
 
-                loop {
-                    let (current_is_live, new_m3u8_url, _) =
-                        live_info.get_status().await.unwrap_or((false, None, None));
-                    if !current_is_live {
-                        break;
-                    }
-                    ffmpeg(
-                        cfg.bililive.bili_rtmp_url.clone(),
-                        cfg.bililive.bili_rtmp_key.clone(),
-                        new_m3u8_url.clone().unwrap_or_default(),
-                        cfg.ffmpeg_proxy.clone(),
-                        ffmpeg_log_level,
-                        platform,
-                    );
+            tracing::info!(
+                "{} 直播结束",
+                match platform {
+                    "TW" => &cfg.twitch.channel_name,
+                    "YT" => &cfg.youtube.channel_name,
+                    _ => "Unknown Platform",
                 }
-
-                tracing::info!(
-                    "{} 直播结束",
-                    match platform.as_str() {
-                        "Twitch" => &cfg.twitch.channel_name,
-                        "Youtube" => &cfg.youtube.channel_name,
-                        _ => "Unknown Platform",
-                    }
-                );
+            );
+            if cfg.bililive.enable_danmaku_command {
+                run_danmaku(platform);
             }
         } else {
-            if cfg.bililive.enable_danmaku_command {
-                run_danmaku(&cfg.platform);
-            }
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
                 tracing::info!(
@@ -125,14 +128,21 @@ async fn run_bilistream(
                     scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
                 );
             } else {
-                if cfg.platform == "Twitch" {
-                    tracing::info!("{}未直播", cfg.twitch.channel_name);
-                } else {
-                    tracing::info!("{}未直播", cfg.youtube.channel_name);
-                }
+                tracing::info!(
+                    "{} 未直播",
+                    match platform {
+                        "TW" => &cfg.twitch.channel_name,
+                        "YT" => &cfg.youtube.channel_name,
+                        _ => "Unknown Platform",
+                    }
+                );
             }
+            if cfg.bililive.enable_danmaku_command {
+                run_danmaku(platform);
+            }
+            old_cfg = cfg.clone();
+            tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
         }
-        tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
     }
 }
 async fn get_live_status(

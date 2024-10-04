@@ -8,10 +8,10 @@ pub fn is_any_ffmpeg_running() -> bool {
 }
 
 /// Checks if the ffmpeg lock file for the specified platform exists.
-pub fn is_ffmpeg_running(platform: &str) -> bool {
-    let lock_file = format!("ffmpeg.lock-{}", platform);
-    Path::new(&lock_file).exists()
-}
+// pub fn is_ffmpeg_running(platform: &str) -> bool {
+//     let lock_file = format!("ffmpeg.lock-{}", platform);
+//     Path::new(&lock_file).exists()
+// }
 
 /// Creates the ffmpeg lock file for the specified platform.
 pub fn create_ffmpeg_lock(platform: &str) -> std::io::Result<()> {

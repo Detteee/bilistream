@@ -16,7 +16,7 @@ pub fn is_any_danmaku_running() -> bool {
 pub fn create_danmaku_lock(platform: &str) -> io::Result<()> {
     let lock_file = format!("danmaku.lock-{}", platform);
     fs::File::create(&lock_file)?;
-    println!("{} created", lock_file);
+    tracing::info!("{} created", lock_file);
     Ok(())
 }
 
@@ -24,24 +24,24 @@ pub fn create_danmaku_lock(platform: &str) -> io::Result<()> {
 pub fn remove_danmaku_lock(platform: &str) -> io::Result<()> {
     let lock_file = format!("danmaku.lock-{}", platform);
     fs::remove_file(&lock_file)?;
-    println!("{} removed", lock_file);
+    tracing::info!("{} removed", lock_file);
     Ok(())
 }
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
-fn check_channel(platform: &str, channel_id: &str) -> io::Result<String> {
+fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
     let file_path = format!("./{}/{}_channels.txt", platform, platform);
     let file = fs::File::open(&file_path)?;
     let reader = io::BufReader::new(file);
-
+    // tracing::info!("检查频道: {}", file_path);
     for line in reader.lines() {
         let line = line?;
         if line
             .to_lowercase()
-            .contains(&format!("[{}]", channel_id).to_lowercase())
+            .contains(&format!("({})", channel_name).to_lowercase())
         {
             // Extract channel name using regex
-            let re = Regex::new(r"\((.*?)\)").unwrap();
+            let re = Regex::new(r"\[(.*?)\]").unwrap();
             if let Some(captures) = re.captures(&line) {
                 return Ok(captures
                     .get(1)
@@ -104,7 +104,7 @@ fn update_config(
         .to_string();
 
     fs::write(&config_path, updated_content)?;
-    println!("Updated configuration for {}: {}", platform, channel_name);
+    // tracing::info!("Updated configuration for {}: {}", platform, channel_name);
     Ok(())
 }
 
@@ -134,32 +134,35 @@ fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
 /// Processes a single danmaku command.
 async fn process_danmaku(command: &str) {
     // only line start with : is danmaku
-    if command.starts_with(":") {
-        println!("弹幕: {}", command);
-    } else {
-        return;
-    }
-    // Validate danmaku command format: %转播%平台%频道名%分区
-    if !command.contains("%转播%") {
-        println!("弹幕命令格式错误. Skipping...");
+    if !command.starts_with(" :") {
         return;
     }
 
+    // Validate danmaku command format: %转播%平台%频道名%分区
+    if !command.contains("%转播%") {
+        // tracing::error!("弹幕命令格式错误. Skipping...");
+        return;
+    }
+    let danmaku_command = command.replace(" :", "");
+    tracing::info!("弹幕:{}", danmaku_command);
+
     // Replace full-width ％ with half-width %
-    let normalized_danmaku = command.replace("％", "%");
+    let normalized_danmaku = danmaku_command.replace("％", "%");
     let parts: Vec<&str> = normalized_danmaku.split('%').collect();
 
     if parts.len() < 5 {
-        println!("弹幕命令格式错误. Skipping...");
+        tracing::error!("弹幕命令格式错误. Skipping...");
         return;
     }
 
     let platform = parts[2];
     let channel_name = parts[3];
     let area_name = parts[4];
-    println!(
+    tracing::info!(
         "平台: {}, 频道: {}, 分区: {}",
-        platform, channel_name, area_name
+        platform,
+        channel_name,
+        area_name
     );
 
     // Determine area_id based on area_name
@@ -177,30 +180,31 @@ async fn process_danmaku(command: &str) {
         "我的世界" => 216,
         "DeadLock" => 927,
         _ => {
-            println!("未知的分区: {}", area_name);
+            tracing::error!("未知的分区: {}", area_name);
             return;
         }
     };
 
     // Additional checks for specific area_ids
     if area_id == 240 && channel_name != "kamito" {
-        println!("只有'kamito'可以使用Apex分区. Skipping...");
+        tracing::error!("只有'kamito'可以使用Apex分区. Skipping...");
         return;
     }
 
-    if platform.eq_ignore_ascii_case("YT") || platform.eq_ignore_ascii_case("TW") {
+    if platform.eq("YT") || platform.eq("TW") {
         let channel_id = match check_channel(platform, channel_name) {
             Ok(id) => id,
             Err(e) => {
-                println!("检查频道时出错: {}", e);
+                tracing::error!("检查频道时出错: {}", e);
                 return;
             }
         };
 
         if channel_id.is_empty() {
-            println!(
+            tracing::error!(
                 "Channel {} not found in allowed list for {}",
-                channel_name, platform
+                channel_name,
+                platform
             );
             return;
         }
@@ -208,13 +212,13 @@ async fn process_danmaku(command: &str) {
         let live_status = match check_live_status(platform, &channel_id).await {
             Ok(status) => status,
             Err(e) => {
-                println!("获取直播状态时出错: {}", e);
+                tracing::error!("获取直播状态时出错: {}", e);
                 return;
             }
         };
 
         if !live_status.contains("Not Live") {
-            println!("area_id: {}", area_id);
+            // tracing::info!("area_id: {}", area_id);
             // let config_path = format!("./{}/config.yaml", platform);
             let new_title = format!("【转播】{}", channel_name);
 
@@ -229,7 +233,7 @@ async fn process_danmaku(command: &str) {
                 {
                     Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
                     Err(e) => {
-                        println!("获取YT直播标题时出错: {}", e);
+                        tracing::error!("获取YT直播标题时出错: {}", e);
                         return;
                     }
                 }
@@ -243,7 +247,7 @@ async fn process_danmaku(command: &str) {
                 {
                     Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
                     Err(e) => {
-                        println!("获取TW直播标题时出错: {}", e);
+                        tracing::error!("获取TW直播标题时出错: {}", e);
                         return;
                     }
                 }
@@ -258,26 +262,26 @@ async fn process_danmaku(command: &str) {
                 &new_title,
                 updated_area_id,
             ) {
-                println!("更新配置时出错: {}", e);
+                tracing::error!("更新配置时出错: {}", e);
                 return;
             }
 
-            println!("更新 {} 频道: {} ({})", platform, channel_name, channel_id);
-
-            // Cooldown for 10 seconds
-            thread::sleep(Duration::from_secs(10));
-
-            // Restart bilistream service to trigger streaming process
-            // You can implement this as needed, for example:
-            // Command::new("systemctl").arg("restart").arg("bilistream.service").spawn().expect("Failed to restart bilistream service");
+            tracing::info!(
+                "更新 {} 频道: {} 分区: {}",
+                platform,
+                channel_name,
+                area_name
+            );
         } else {
-            println!(
+            tracing::info!(
                 "频道 {} ({}) 未在 {} 直播",
-                channel_name, channel_id, platform
+                channel_name,
+                channel_id,
+                platform
             );
         }
     } else {
-        println!("不支持的平台: {}", platform);
+        tracing::error!("不支持的平台: {}", platform);
     }
 }
 
@@ -287,12 +291,12 @@ fn get_room_id() -> String {
         Ok(content) => match serde_json::from_str::<Value>(&content) {
             Ok(json) => json["roomId"].as_str().unwrap_or("").to_string(),
             Err(e) => {
-                eprintln!("解析JSON时出错: {}", e);
+                tracing::error!("解析JSON时出错: {}", e);
                 "".to_string()
             }
         },
         Err(e) => {
-            eprintln!("读取config.json时出错: {}", e);
+            tracing::error!("读取config.json时出错: {}", e);
             "".to_string()
         }
     }
@@ -302,17 +306,17 @@ fn get_room_id() -> String {
 pub fn run_danmaku(platform: &str) {
     // Check if any danmaku is already running
     if is_any_danmaku_running() {
-        println!("一个弹幕命令读取实例已经在运行. 跳过新实例.");
+        tracing::info!("一个弹幕命令读取实例已经在运行. 跳过新实例.");
         return;
     }
 
     // Create the lock file for the specified platform
     if let Err(e) = create_danmaku_lock(platform) {
-        println!("创建弹幕锁文件时出错: {}", e);
+        tracing::error!("创建弹幕锁文件时出错: {}", e);
         return;
     }
 
-    println!("在bilistream-{} 中启动弹幕命令读取", platform);
+    tracing::info!("在bilistream-{} 中启动弹幕命令读取", platform);
 
     // Start danmaku-cli in background
     let danmaku_cli = Command::new("./danmaku-cli")
@@ -349,20 +353,21 @@ pub fn run_danmaku(platform: &str) {
         }
     });
 
-    println!("弹幕命令读取已在进程bilistream-{} 中执行", platform);
+    tracing::info!("弹幕命令读取已在进程bilistream-{} 中执行", platform);
 
     // Monitor Bilibili live status every 300 seconds
     loop {
-        thread::sleep(Duration::from_secs(300));
+        tracing::info!("检查Bilibili直播间状态...");
+        thread::sleep(Duration::from_secs(60));
 
         let room_id = get_room_id();
 
         if room_id.is_empty() {
-            println!("从config.json中获取房间ID失败");
+            tracing::error!("从config.json中获取房间ID失败");
             continue;
         }
 
-        println!("Room ID: {}", room_id);
+        tracing::info!("Room ID: {}", room_id);
         let bilibili_status = match Command::new("./bilistream")
             .arg("get-live-status")
             .arg("bilibili")
@@ -371,15 +376,15 @@ pub fn run_danmaku(platform: &str) {
         {
             Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
             Err(e) => {
-                println!("检查Bilibili直播间状态时出错: {}", e);
+                tracing::error!("检查Bilibili直播间状态时出错: {}", e);
                 continue;
             }
         };
 
         if bilibili_status.contains("Not Live") {
-            println!("Bilibili 未直播. 继续弹幕命令读取...");
+            tracing::info!("Bilibili 未直播. 继续弹幕命令读取...");
         } else {
-            println!("Bilibili 正在直播. 停止弹幕命令读取...");
+            tracing::info!("Bilibili 正在直播. 停止弹幕命令读取...");
             // Kill danmaku-cli process
             Command::new("pkill")
                 .arg("-f")
@@ -389,10 +394,10 @@ pub fn run_danmaku(platform: &str) {
 
             // Remove all danmaku lock files
             if let Err(e) = remove_danmaku_lock("YT") {
-                println!("删除 danmaku.lock-YT 时出错: {}", e);
+                tracing::error!("删除 danmaku.lock-YT 时出错: {}", e);
             }
             if let Err(e) = remove_danmaku_lock("TW") {
-                println!("删除 danmaku.lock-TW 时出错: {}", e);
+                tracing::error!("删除 danmaku.lock-TW 时出错: {}", e);
             }
 
             break;
