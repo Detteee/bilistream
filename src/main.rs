@@ -6,120 +6,14 @@ use bilistream::plugins::{
 use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
-use reqwest_retry::policies::ExponentialBackoff;
-use reqwest_retry::RetryTransientMiddleware;
-use std::io::BufRead;
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
+use std::thread;
 use std::time::Duration;
 use tracing_subscriber;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let matches = Command::new("bilistream")
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .value_name("FILE")
-                .help("Sets a custom config file")
-                .global(true),
-        )
-        .arg(
-            Arg::new("ffmpeg-log-level")
-                .long("ffmpeg-log-level")
-                .value_name("LEVEL")
-                .help("Sets ffmpeg log level (error, info, debug)")
-                .default_value("error")
-                .value_parser(["error", "info", "debug"]),
-        )
-        .subcommand(
-            Command::new("get-live-status")
-                .about("Check live status of a channel")
-                .arg(
-                    Arg::new("platform")
-                        .required(true)
-                        .help("Platform to check (YT, TW, bilibili)"),
-                )
-                .arg(
-                    Arg::new("channel_id")
-                        .required(true)
-                        .help("Channel ID to check"),
-                ),
-        )
-        .subcommand(Command::new("start-live").about("Start a live stream"))
-        .subcommand(Command::new("stop-live").about("Stop a live stream"))
-        .subcommand(
-            Command::new("change-live-title")
-                .about("Change the title of a live stream")
-                .arg(
-                    Arg::new("title")
-                        .required(true)
-                        .help("New title for the live stream"),
-                ),
-        )
-        .subcommand(
-            Command::new("get-live-title")
-                .about("Get the title of a live stream")
-                .arg(
-                    Arg::new("platform")
-                        .required(true)
-                        .help("Platform to check (YT, TW)"),
-                )
-                .arg(
-                    Arg::new("channel_id")
-                        .required(true)
-                        .help("Channel ID to check"),
-                ),
-        )
-        .get_matches();
-
-    let config_path = matches
-        .get_one::<String>("config")
-        .map(|s| s.as_str())
-        .unwrap_or("./TW/config.yaml");
-    // default config path is ./YT/config.yaml to prevent error
-
-    let ffmpeg_log_level = matches
-        .get_one::<String>("ffmpeg-log-level")
-        .map(String::as_str)
-        .unwrap_or("error");
-
-    match matches.subcommand() {
-        Some(("get-live-status", sub_m)) => {
-            let platform = sub_m.get_one::<String>("platform").unwrap();
-            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
-            get_live_status(platform, channel_id).await?;
-        }
-        Some(("start-live", _)) => {
-            start_live(config_path).await?;
-        }
-        Some(("stop-live", _)) => {
-            stop_live(config_path).await?;
-        }
-        Some(("change-live-title", sub_m)) => {
-            let new_title = sub_m.get_one::<String>("title").unwrap();
-            change_live_title(config_path, new_title).await?;
-        }
-        Some(("get-live-title", sub_m)) => {
-            let platform = sub_m.get_one::<String>("platform").unwrap();
-            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
-            get_live_title(config_path, platform, channel_id).await?;
-        }
-        _ => {
-            let file_name = Path::new(config_path)
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("default");
-            let process_name = format!("bilistream-{}", file_name);
-            set_title(&process_name);
-            // Default behavior: run bilistream with the provided config
-            run_bilistream(config_path, ffmpeg_log_level).await?;
-        }
-    }
-    Ok(())
-}
 
 async fn run_bilistream(
     config_path: &str,
@@ -239,39 +133,7 @@ async fn run_bilistream(
         } else {
             if cfg.bililive.enable_danmaku_command {
                 if !std::path::Path::new("./danmaku.lock").exists() {
-                    // make a file named danmaku.lock
-                    let _ = std::fs::File::create("./danmaku.lock");
-
-                    tracing::info!("执行弹幕命令");
-                    let danmaku_process = ProcessCommand::new("bash")
-                        .arg("./danmaku.sh")
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .spawn()
-                        .expect("Failed to start danmaku.sh");
-
-                    let stdout = danmaku_process.stdout.expect("Failed to capture stdout");
-                    let stderr = danmaku_process.stderr.expect("Failed to capture stderr");
-
-                    std::thread::spawn(move || {
-                        let reader = std::io::BufReader::new(stdout);
-                        for line in reader.lines() {
-                            if let Ok(line) = line {
-                                tracing::info!("Danmaku stdout: {}", line);
-                            }
-                        }
-                    });
-
-                    std::thread::spawn(move || {
-                        let reader = std::io::BufReader::new(stderr);
-                        for line in reader.lines() {
-                            if let Ok(line) = line {
-                                tracing::error!("Danmaku stderr: {}", line);
-                            }
-                        }
-                    });
-
-                    tracing::info!("danmaku.sh 已执行");
+                    run_danmaku_command();
                 }
             }
             if scheduled_start.is_some() {
@@ -396,5 +258,162 @@ async fn get_live_title(
         }
     }
 
+    Ok(())
+}
+
+/// Runs the danmaku command if enabled and not already running.
+fn run_danmaku_command() {
+    if !Path::new("./danmaku.lock").exists() {
+        // Create a file named danmaku.lock
+        if let Err(e) = fs::File::create("./danmaku.lock") {
+            tracing::error!("Failed to create danmaku.lock: {}", e);
+            return;
+        }
+
+        tracing::info!("Executing danmaku command");
+        let mut danmaku_process = ProcessCommand::new("bash")
+            .arg("./danmaku.sh")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start danmaku.sh");
+
+        let stdout = danmaku_process
+            .stdout
+            .take()
+            .expect("Failed to capture stdout");
+        let stderr = danmaku_process
+            .stderr
+            .take()
+            .expect("Failed to capture stderr");
+
+        // Spawn a thread to handle stdout
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    tracing::info!("Danmaku stdout: {}", line);
+                }
+            }
+        });
+
+        // Spawn a thread to handle stderr
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    tracing::error!("Danmaku stderr: {}", line);
+                }
+            }
+        });
+
+        tracing::info!("danmaku.sh has been executed");
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let matches = Command::new("bilistream")
+        .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .value_name("FILE")
+                .help("Sets a custom config file")
+                .global(true),
+        )
+        .arg(
+            Arg::new("ffmpeg-log-level")
+                .long("ffmpeg-log-level")
+                .value_name("LEVEL")
+                .help("Sets ffmpeg log level (error, info, debug)")
+                .default_value("error")
+                .value_parser(["error", "info", "debug"]),
+        )
+        .subcommand(
+            Command::new("get-live-status")
+                .about("Check live status of a channel")
+                .arg(
+                    Arg::new("platform")
+                        .required(true)
+                        .help("Platform to check (YT, TW, bilibili)"),
+                )
+                .arg(
+                    Arg::new("channel_id")
+                        .required(true)
+                        .help("Channel ID to check"),
+                ),
+        )
+        .subcommand(Command::new("start-live").about("Start a live stream"))
+        .subcommand(Command::new("stop-live").about("Stop a live stream"))
+        .subcommand(
+            Command::new("change-live-title")
+                .about("Change the title of a live stream")
+                .arg(
+                    Arg::new("title")
+                        .required(true)
+                        .help("New title for the live stream"),
+                ),
+        )
+        .subcommand(
+            Command::new("get-live-title")
+                .about("Get the title of a live stream")
+                .arg(
+                    Arg::new("platform")
+                        .required(true)
+                        .help("Platform to check (YT, TW)"),
+                )
+                .arg(
+                    Arg::new("channel_id")
+                        .required(true)
+                        .help("Channel ID to check"),
+                ),
+        )
+        .get_matches();
+
+    let config_path = matches
+        .get_one::<String>("config")
+        .map(|s| s.as_str())
+        .unwrap_or("./TW/config.yaml");
+    // default config path is ./YT/config.yaml to prevent error
+
+    let ffmpeg_log_level = matches
+        .get_one::<String>("ffmpeg-log-level")
+        .map(String::as_str)
+        .unwrap_or("error");
+
+    match matches.subcommand() {
+        Some(("get-live-status", sub_m)) => {
+            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
+            get_live_status(platform, channel_id).await?;
+        }
+        Some(("start-live", _)) => {
+            start_live(config_path).await?;
+        }
+        Some(("stop-live", _)) => {
+            stop_live(config_path).await?;
+        }
+        Some(("change-live-title", sub_m)) => {
+            let new_title = sub_m.get_one::<String>("title").unwrap();
+            change_live_title(config_path, new_title).await?;
+        }
+        Some(("get-live-title", sub_m)) => {
+            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
+            get_live_title(config_path, platform, channel_id).await?;
+        }
+        _ => {
+            let file_name = Path::new(config_path)
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("default");
+            let process_name = format!("bilistream-{}", file_name);
+            set_title(&process_name);
+            // Default behavior: run bilistream with the provided config
+            run_bilistream(config_path, ffmpeg_log_level).await?;
+        }
+    }
     Ok(())
 }
