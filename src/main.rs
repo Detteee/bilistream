@@ -100,67 +100,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn get_live_status(
-    platform: &str,
-    channel_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match platform {
-        "bilibili" => {
-            let room_id: i32 = channel_id.parse()?;
-            let is_live = get_bili_live_status(room_id).await?;
-            println!(
-                "Bilibili live status: {}",
-                if is_live { "Live" } else { "Not Live" }
-            );
-        }
-        "YT" => {
-            let (is_live, _, scheduled_time) = get_youtube_live_status(channel_id).await?;
-            println!(
-                "YouTube live status: {}",
-                if is_live { "Live" } else { "Not Live" }
-            );
-            if let Some(time) = scheduled_time {
-                println!("Scheduled start time: {}", time);
-            }
-        }
-        "TW" => {
-            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
-            let raw_client = reqwest::Client::builder()
-                .cookie_store(true)
-                .timeout(Duration::new(30, 0))
-                .build()?;
-            let client = ClientBuilder::new(raw_client.clone())
-                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-                .build();
-
-            let cfg = load_config(Path::new("./TW/config.yaml"))?;
-            let twitch = Twitch::new(channel_id, cfg.twitch.oauth_token.clone(), client);
-
-            let (is_live, _, _) = twitch.get_status().await?;
-            println!(
-                "Twitch live status: {}",
-                if is_live { "Live" } else { "Not Live" }
-            );
-        }
-        _ => {
-            println!("Unsupported platform: {}", platform);
-        }
-    }
-    Ok(())
-}
-
 async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger
     tracing_subscriber::fmt::init();
 
     let mut cfg = load_config(Path::new(config_path))?;
-    let live_type = select_live(cfg.clone()).await?;
     loop {
         // if ffmpeg.lock exists skip the loop
         if std::path::Path::new("./ffmpeg.lock").exists() {
-            tracing::info!(
-                "ffmpeg.lock exists, skipping the loop. If it is not you can remove it by rm ./ffmpeg.lock"
-            );
+            tracing::info!("ffmpeg.lock exists, skipping the loop.");
 
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue;
@@ -177,7 +125,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
             tracing::info!("Configuration changed, updating Bilibili live title");
             bili_change_live_title(&cfg).await?;
         }
-
+        let live_type = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
             live_type.get_status().await.unwrap_or((false, None, None));
 
@@ -315,6 +263,54 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
         }
         tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
     }
+}
+async fn get_live_status(
+    platform: &str,
+    channel_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match platform {
+        "bilibili" => {
+            let room_id: i32 = channel_id.parse()?;
+            let is_live = get_bili_live_status(room_id).await?;
+            println!(
+                "Bilibili live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+        }
+        "YT" => {
+            let (is_live, _, scheduled_time) = get_youtube_live_status(channel_id).await?;
+            println!(
+                "YouTube live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+            if let Some(time) = scheduled_time {
+                println!("Scheduled start time: {}", time);
+            }
+        }
+        "TW" => {
+            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+            let raw_client = reqwest::Client::builder()
+                .cookie_store(true)
+                .timeout(Duration::new(30, 0))
+                .build()?;
+            let client = ClientBuilder::new(raw_client.clone())
+                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                .build();
+
+            let cfg = load_config(Path::new("./TW/config.yaml"))?;
+            let twitch = Twitch::new(channel_id, cfg.twitch.oauth_token.clone(), client);
+
+            let (is_live, _, _) = twitch.get_status().await?;
+            println!(
+                "Twitch live status: {}",
+                if is_live { "Live" } else { "Not Live" }
+            );
+        }
+        _ => {
+            println!("Unsupported platform: {}", platform);
+        }
+    }
+    Ok(())
 }
 
 async fn start_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
