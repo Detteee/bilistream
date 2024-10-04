@@ -33,11 +33,11 @@ async fn run_bilistream(
 
         // If configuration changed, stop Bilibili live
         if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
-            tracing::info!("Configuration changed, stopping Bilibili live");
+            tracing::info!("配置改变, 停止Bilibili直播");
             bili_stop_live(&old_cfg).await?;
         }
         if cfg.bililive.title != old_cfg.bililive.title {
-            tracing::info!("Configuration changed, updating Bilibili live title");
+            tracing::info!("配置改变, 更新Bilibili直播标题");
             bili_change_live_title(&cfg).await?;
         }
         let live_info = select_live(cfg.clone()).await?;
@@ -47,7 +47,7 @@ async fn run_bilistream(
         if is_live {
             let platform = &cfg.platform;
             tracing::info!(
-                "{} is live",
+                "{} 正在直播",
                 match platform.as_str() {
                     "Twitch" => &cfg.twitch.channel_name,
                     "Youtube" => &cfg.youtube.channel_name,
@@ -187,14 +187,14 @@ async fn get_live_status(
 async fn start_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_config(Path::new(config_path))?;
     bili_start_live(&cfg).await?;
-    println!("Live stream started successfully");
+    println!("直播开始成功");
     Ok(())
 }
 
 async fn stop_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_config(Path::new(config_path))?;
     bili_stop_live(&cfg).await?;
-    println!("Live stream stopped successfully");
+    println!("直播停止成功");
     Ok(())
 }
 
@@ -209,7 +209,7 @@ async fn change_live_title(
     let mut cfg = load_config(config_file)?;
     cfg.bililive.title = new_title.to_string();
     bili_change_live_title(&cfg).await?;
-    println!("Live stream title changed successfully");
+    println!("直播标题改变成功");
     Ok(())
 }
 
