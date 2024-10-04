@@ -4,6 +4,7 @@ use bilistream::plugins::{
     get_youtube_live_status, select_live, Live, Twitch, Youtube,
 };
 use clap::{Arg, Command};
+use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
@@ -93,6 +94,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get_live_title(config_path, platform, channel_id).await?;
         }
         _ => {
+            let file_name = Path::new(config_path)
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("default");
+            let process_name = format!("bilistream-{}", file_name);
+            set_title(&process_name);
             // Default behavior: run bilistream with the provided config
             run_bilistream(config_path).await?;
         }
@@ -125,9 +133,9 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
             tracing::info!("Configuration changed, updating Bilibili live title");
             bili_change_live_title(&cfg).await?;
         }
-        let live_type = select_live(cfg.clone()).await?;
+        let live_info = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
-            live_type.get_status().await.unwrap_or((false, None, None));
+            live_info.get_status().await.unwrap_or((false, None, None));
 
         if is_live {
             if cfg.platform == "Twitch" {
@@ -158,7 +166,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                 let current_is_live = is_live;
                 while current_is_live {
                     let (current_is_live, new_m3u8_url, _) =
-                        live_type.get_status().await.unwrap_or((false, None, None));
+                        live_info.get_status().await.unwrap_or((false, None, None));
 
                     if current_is_live {
                         ffmpeg(
@@ -192,7 +200,7 @@ async fn run_bilistream(config_path: &str) -> Result<(), Box<dyn std::error::Err
                 let current_is_live = is_live;
                 while current_is_live {
                     let (current_is_live, new_m3u8_url, _) =
-                        live_type.get_status().await.unwrap_or((false, None, None));
+                        live_info.get_status().await.unwrap_or((false, None, None));
 
                     if current_is_live {
                         ffmpeg(
