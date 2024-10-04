@@ -21,7 +21,7 @@ start_service() {
     local config_path=$(get_config_path "$service")
     local log_path="$BASE_DIR/logs/log-$service.log"
     echo "Starting bilistream for $service..."
-    pm2 start "$BASE_DIR/bilistream" --name "bilistream-$service" -- -c "$config_path"
+    pm2 start "$BASE_DIR/bilistream" --log "$log_path" --name "bilistream-$service" -- -c "$config_path"
 }
 
 # Function to restart a service

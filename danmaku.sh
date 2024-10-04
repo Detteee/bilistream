@@ -80,9 +80,9 @@ process_danmaku() {
     echo "Danmaku command is valid. Processing..."
     # Replace full-width ％ with half-width %
     normalized_danmaku=$(echo "$1" | sed 's/％/%/g')
-    platform=$(echo "$1" | grep -oP '%转播%\K\w+')
-    channel_name=$(echo "$1" | grep -oP '%转播%\w+%\K[^%]+')
-    area_name=$(echo "$1" | grep -oP '%转播%\w+%w+%\K[^%]+')
+    platform=$(echo "$normalized_danmaku" | grep -oP '%转播%\K\w+')
+    channel_name=$(echo "$normalized_danmaku" | grep -oP '%转播%\w+%\K[^%]+')
+    area_name=$(echo "$normalized_danmaku" | grep -oP '%转播%\w+%[^%]+%\K[^%]+')
     echo "Platform: $platform, Channel Name: $channel_name, Area Name: $area_name"
     case $area_name in
     "英雄联盟") area_id=86 ;;
@@ -115,24 +115,23 @@ process_danmaku() {
         live_status=$(check_live_status "$platform" "$channel_id")
 
         if [[ "$live_status" != *"Not Live"* ]]; then
-
+          echo "area_id: $area_id"
           config_path="./${platform}/config.yaml"
           new_title="【转播】${channel_name}"
           if [[ "$platform" == "YT" ]]; then
             # check live channel title contains area name
             live_title=$(yt-dlp -e "https://www.youtube.com/channel/${channel_id}/live")
             area_id=$(check_area_id_with_title "$live_title" "$area_id")
-            sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
-            sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
+            sed -i "/Youtube:/,/Twitch:/ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           else # TW
             live_title=$(./bilistream get-live-title TW "$channel_id")
             area_id=$(check_area_id_with_title "$live_title" "$area_id")
-            sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$config_path"
             sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$config_path"
           fi
           sed -i "s|Title: .*|Title: \"${new_title}\"|" "$config_path"
+          sed -i "s|Area_v2: .*|Area_v2: ${area_id}|" "$config_path"
           echo "Updated $platform channel: $channel_name ($channel_id)"
           # 冷却10秒
           sleep 10
