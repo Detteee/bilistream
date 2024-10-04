@@ -74,11 +74,16 @@ check_bilibili_status() {
 }
 # Main function to process danmaku
 process_danmaku() {
+  echo "Processing danmaku: $1"
   # Validate danmaku command format: %转播%平台%频道名%分区
-  if [[ $1 == *"%转播%"* ]]; then
+  if [[ $1 == *"转播"* ]]; then
+    echo "Danmaku command is valid. Processing..."
+    # Replace full-width ％ with half-width %
+    normalized_danmaku=$(echo "$1" | sed 's/％/%/g')
     platform=$(echo "$1" | grep -oP '%转播%\K\w+')
     channel_name=$(echo "$1" | grep -oP '%转播%\w+%\K[^%]+')
-    area_name=$(echo "$1" | grep -oP '%转播%\w+%\w+%\K[^%]+')
+    area_name=$(echo "$1" | grep -oP '%转播%\w+%w+%\K[^%]+')
+    echo "Platform: $platform, Channel Name: $channel_name, Area Name: $area_name"
     case $area_name in
     "英雄联盟") area_id=86 ;;
     "无畏契约") area_id=329 ;;
@@ -150,7 +155,7 @@ while true; do
     echo "Bilibili is not live. Starting/Continuing danmaku-cli..."
 
     # Start danmaku-cli in background
-    ./bilibili-live-danmaku-cli --config config.json | while IFS= read -r line; do
+    ./danmaku-cli --config config.json | while IFS= read -r line; do
       process_danmaku "$line"
 
       # Check Bilibili status every 300 seconds
@@ -158,7 +163,7 @@ while true; do
         current_status=$(check_bilibili_status)
         if [[ "$current_status" != *"Not Live"* ]]; then
           echo "Bilibili is now live. Stopping danmaku-cli..."
-          pkill -f "bilibili-live-danmaku-cli"
+          pkill -f "danmaku-cli"
           # remove danmaku lock file
           rm -f ./danmaku.lock
           break
