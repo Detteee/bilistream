@@ -21,13 +21,18 @@ async fn run_bilistream(
     let mut cfg = load_config(Path::new(config_path))?;
 
     let mut old_cfg = cfg.clone();
+    let mut log_once = false;
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
-            tracing::info!("ffmpeg lock exists, skipping the loop.");
+            if log_once == false {
+                tracing::info!("ffmpeg lock exists, skipping the loop.");
+                log_once = true;
+            }
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue;
         }
+        log_once = false;
         cfg = load_config(Path::new(config_path))?;
 
         // If configuration changed, stop Bilibili live
