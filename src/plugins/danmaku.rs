@@ -1,11 +1,15 @@
+use crate::config::Config;
 use regex::Regex;
 use serde_json::Value;
-use std::fs;
-use std::io::{self, BufRead};
-use std::path::Path;
+use serde_yaml;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use std::{
+    fs,
+    io::{self, BufRead},
+    path::Path,
+};
 
 /// Checks if any danmaku lock file exists.
 pub fn is_any_danmaku_running() -> bool {
@@ -74,36 +78,34 @@ fn update_config(
     area_id: u32,
 ) -> io::Result<()> {
     let config_path = format!("./{}/config.yaml", platform);
+    let config_path = Path::new(&config_path);
 
-    // Update ChannelId
-    let channel_id_regex = Regex::new(r"(?m)^ChannelId:.*$").unwrap();
-    let config_content = fs::read_to_string(&config_path)?;
-    let updated_content = channel_id_regex
-        .replace(&config_content, format!("ChannelId: {}", channel_id))
-        .to_string();
+    // Read the existing config.yaml
+    let config_content = fs::read_to_string(config_path)?;
 
-    // Update ChannelName
-    let channel_name_regex = Regex::new(r#"(?m)^ChannelName: .*"#).unwrap();
-    let updated_content = channel_name_regex
-        .replace(
-            &updated_content,
-            format!("ChannelName: \"{}\"", channel_name),
-        )
-        .to_string();
+    // Deserialize YAML into Config struct
+    let mut config: Config = serde_yaml::from_str(&config_content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    // Update Title
-    let title_regex = Regex::new(r#"(?m)^Title: .*"#).unwrap();
-    let updated_content = title_regex
-        .replace(&updated_content, format!("Title: \"{}\"", new_title))
-        .to_string();
+    // Update the fields
+    if platform == "YT" {
+        config.youtube.channel_id = channel_id.to_string();
+        config.youtube.channel_name = channel_name.to_string();
+    } else if platform == "TW" {
+        config.twitch.channel_id = channel_id.to_string();
+        config.twitch.channel_name = channel_name.to_string();
+    }
 
-    // Update Area_v2
-    let area_regex = Regex::new(r"(?m)^Area_v2:.*$").unwrap();
-    let updated_content = area_regex
-        .replace(&updated_content, format!("Area_v2: {}", area_id))
-        .to_string();
+    config.bililive.title = new_title.to_string();
+    config.bililive.area_v2 = area_id;
 
-    fs::write(&config_path, updated_content)?;
+    // Serialize Config struct back to YAML
+    let updated_yaml =
+        serde_yaml::to_string(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    // Write the updated YAML back to config.yaml
+    fs::write(config_path, updated_yaml)?;
+
     // tracing::info!("Updated configuration for {}: {}", platform, channel_name);
     Ok(())
 }
@@ -158,12 +160,12 @@ async fn process_danmaku(command: &str) {
     let platform = parts[2];
     let channel_name = parts[3];
     let area_name = parts[4];
-    tracing::info!(
-        "平台: {}, 频道: {}, 分区: {}",
-        platform,
-        channel_name,
-        area_name
-    );
+    // tracing::info!(
+    //     "平台: {}, 频道: {}, 分区: {}",
+    //     platform,
+    //     channel_name,
+    //     area_name
+    // );
 
     // Determine area_id based on area_name
     let area_id = match area_name {
@@ -289,7 +291,7 @@ async fn process_danmaku(command: &str) {
 fn get_room_id() -> String {
     match fs::read_to_string("config.json") {
         Ok(content) => match serde_json::from_str::<Value>(&content) {
-            Ok(json) => json["roomId"].as_str().unwrap_or("").to_string(),
+            Ok(json) => json["roomId"].to_string(),
             Err(e) => {
                 tracing::error!("解析JSON时出错: {}", e);
                 "".to_string()

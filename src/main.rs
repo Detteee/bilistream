@@ -7,10 +7,7 @@ use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
-use std::fs;
-use std::path::Path;
-use std::process::Command as ProcessCommand;
-use std::time::Duration;
+use std::{fs, path::Path, process::Command as ProcessCommand, thread, time::Duration};
 use tracing_subscriber;
 
 async fn run_bilistream(
@@ -117,7 +114,7 @@ async fn run_bilistream(
                 }
             );
             if cfg.bililive.enable_danmaku_command {
-                run_danmaku(platform);
+                thread::spawn(move || run_danmaku(platform));
             }
         } else {
             // 计划直播(预告窗)
@@ -138,7 +135,7 @@ async fn run_bilistream(
                 );
             }
             if cfg.bililive.enable_danmaku_command {
-                run_danmaku(platform);
+                thread::spawn(move || run_danmaku(platform));
             }
             old_cfg = cfg.clone();
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;

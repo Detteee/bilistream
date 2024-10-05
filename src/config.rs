@@ -29,7 +29,7 @@ pub struct BiliLive {
     #[serde(rename = "Title")]
     pub title: String,
     #[serde(rename = "Area_v2")]
-    pub area_v2: i32,
+    pub area_v2: u32,
     #[serde(rename = "SESSDATA")]
     pub sessdata: String,
     pub bili_jct: String,
