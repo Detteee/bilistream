@@ -115,40 +115,6 @@ manage_service() {
     fi
 }
 
-# Function to manage all services
-manage_all_services() {
-    echo "Managing all services..."
-    local action
-
-    echo "1. Start/Restart all services"
-    echo "2. Stop all services"
-    echo "3. Do nothing"
-    read -p "Enter your choice (1/2/3): " action
-
-    case $action in
-    1)
-        for service in YT TW; do
-            if is_service_running "$service"; then
-                restart_service "$service"
-            else
-                start_service "$service"
-            fi
-        done
-        ;;
-    2)
-        for service in YT TW; do
-            stop_service "$service"
-        done
-        ;;
-    3)
-        echo "No action taken."
-        ;;
-    *)
-        echo "Invalid choice. No action taken."
-        ;;
-    esac
-}
-
 # Function to update kamito across all configs
 update_kamito() {
     # Update TW config
@@ -218,16 +184,13 @@ select_area_id() {
 select_channel_id() {
     echo "Select YouTube Channel:"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito              8) 橘ひなの"
-    echo " 2) 紫宮るな            9) 胡桃のあ"
-    echo " 3) Narin Mikure       10) 猫汰つな"
-    echo " 4) 藍沢エマ           11) 花芽なずな"
-    echo " 5) 八雲べに           12) 花芽すみれ"
-    echo " 6) 兎咲ミミ           13) 獅子堂あかり"
-    echo " 7) 英リサ             14) 紡木こかげ"
-    echo "15) 神成きゅぴ         16) 夜絆ニウ"
-    echo "17) 天帝フォルテ       18) 千燈ゆうひ"
-    echo "19) 一ノ瀬うるは        0) Custom"
+    echo " 1) kamito               8) 橘ひなの            15) 神成きゅぴ"
+    echo " 2) 紫宮るな             9) 胡桃のあ             16) 夜絆ニウ"
+    echo " 3) Narin Mikure        10) 猫汰つな            17) 天帝フォルテ"
+    echo " 4) 藍沢エマ           11) 花芽なずな             18) 千燈ゆうひ"
+    echo " 5) 八雲べに            12) 花芽すみれ            19) 一ノ瀬うるは"
+    echo " 6) 兎咲ミミ            13) 獅子堂あかり           0) Custom"
+    echo " 7) 英リサ              14) 紡木こかげ"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
     read -p "Select Channel (0-19): " yt_choice
 
@@ -332,13 +295,11 @@ select_channel_id() {
 select_twitch_id() {
     echo "Select Twitch Channel:"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito              6) とおこ"
-    echo " 2) 橘ひなの            7) 天帝フォルテ"
-    echo " 3) 花芽すみれ          8) 獅子堂あかり"
-    echo " 4) 夢野あかり          9) 夜よいち"
+    echo " 1) kamito              6) とおこ              11) 胡桃のあ"
+    echo " 2) 橘ひなの            7) 天帝フォルテ        12) 紫宮るな"
+    echo " 3) 花芽すみれ          8) 獅子堂あかり        13) 狐白うる"
+    echo " 4) 夢野あかり          9) 夜よいち             0) Custom"
     echo " 5) 白波らむね         10) 甘城なつき"
-    echo "11) 胡桃のあ            12) 紫宮るな"
-    echo "13) 狐白うる            0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
     read -p "Select Channel (0-13): " twitch_choice
 
@@ -507,32 +468,6 @@ stop_live_stream() {
     echo "Stopped bilistream."
 }
 
-manage_danmaku_service() {
-    if pm2 list | grep -q "danmaku"; then
-        echo "danmaku service is currently running."
-        echo "1. Restart service"
-        echo "2. Stop service"
-        echo "3. Delete service"
-        echo "4. Do nothing"
-        read -p "Enter your choice (1/2/3/4): " action
-
-        case $action in
-        1) pm2 restart danmaku ;;
-        2) pm2 stop danmaku ;;
-        3) pm2 delete danmaku ;;
-        4) echo "No action taken." ;;
-        *) echo "Invalid choice. No action taken." ;;
-        esac
-    else
-        echo "danmaku service is not running."
-        read -p "Start danmaku service? (y/N): " action
-        if [[ $action =~ ^[Yy]$ ]]; then
-            pm2 start danmaku.sh --name danmaku
-        else
-            echo "danmaku service was not started."
-        fi
-    fi
-}
 # Main menu
 while true; do
     # Display the menu
@@ -544,10 +479,8 @@ while true; do
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}4. Update SESSDATA and bili_jct     ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}5. Quick setup for kamito           ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}6. Manage Services                 ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}7. Stop Bili Live                   ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}8. Change Live Title               ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}9. Manage Danmaku Service          ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}6. Manage Services                  ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}7. Display current config           ${PINK}│${RESET}"
     echo -e "${PINK}│                                     │${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
     echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
@@ -629,33 +562,25 @@ while true; do
         update_kamito
         ;;
     6) # Manage Services
-        manage_all_services
-        ;;
-    7) # Stop live stream
-        stop_live_stream
-        ;;
-    8) # Change live title
         echo "┌─────────────────────────────────────┐"
-        echo "│    Select title to change           │"
+        echo "│  Select config to update (Area ID)  │"
         echo "├─────────────────────────────────────┤"
         echo "│ 1. YouTube (YT)                     │"
         echo "│ 2. Twitch (TW)                      │"
-        echo "│ 3. Custom                           │"
+        echo "│ 3. Both                             │"
         echo "│ 4. None                             │"
         echo "└─────────────────────────────────────┘"
-        read -p "Enter your choice (1/2/3/4): " title_choice
-        case $title_choice in
+        read -p "Enter your choice (1/2/3/4): " area_config_choice
+        case $area_config_choice in
         1)
-            title=$(awk '/Title:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/YT/config.yaml")
-            "$BASE_DIR/bilistream" change-live-title "$title"
+            manage_service "YT"
             ;;
         2)
-            title=$(awk '/Title:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/TW/config.yaml")
-            "$BASE_DIR/bilistream" change-live-title "$title"
+            manage_service "TW"
             ;;
         3)
-            read -p "Enter the new live title: " new_title
-            "$BASE_DIR/bilistream" change-live-title "$new_title"
+            manage_service "YT"
+            manage_service "TW"
             ;;
         4)
             echo "No changes made."
@@ -665,9 +590,10 @@ while true; do
             ;;
         esac
         ;;
-    9) # Manage Danmaku Service
-        manage_danmaku_service
+    7) # Display current config
+        display_current_config "all"
         ;;
+
     *)
         echo "Exiting Bilistream Manager. Goodbye!"
         exit 0

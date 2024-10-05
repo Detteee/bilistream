@@ -113,6 +113,7 @@ fn update_config(
 /// Determines the area ID based on the live title.
 fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
     let title = live_title.to_lowercase();
+
     if title.contains("valorant") {
         329
     } else if title.contains("league of legends")
@@ -254,6 +255,11 @@ async fn process_danmaku(command: &str) {
                     }
                 }
             };
+
+            if live_title.contains("ウォッチパ") {
+                tracing::error!("ウォッチパ is not supported due to copyright issues");
+                return;
+            }
 
             let updated_area_id = check_area_id_with_title(&live_title, area_id);
 
