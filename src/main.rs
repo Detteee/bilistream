@@ -64,10 +64,19 @@ async fn run_bilistream(
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
                 bili_start_live(&cfg).await?;
-                tracing::info!("B站已开播");
+                tracing::info!(
+                    "B站已开播, 标题为 {},分区为 {}",
+                    cfg.bililive.title,
+                    cfg.bililive.area_v2
+                );
             }
-            tracing::info!("B站直播中");
+            tracing::info!(
+                "B站直播中, 标题为 {},分区为 {}",
+                cfg.bililive.title,
+                cfg.bililive.area_v2
+            );
             if cfg.bililive.title != old_cfg.bililive.title {
+                tracing::info!("改变B站直播标题为 {}", cfg.bililive.title);
                 bili_change_live_title(&cfg).await?;
                 old_cfg.bililive.title = cfg.bililive.title.clone();
             }

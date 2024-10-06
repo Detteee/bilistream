@@ -59,9 +59,6 @@ pub fn ffmpeg(
     }
 
     command
-        .arg("-loglevel")
-        .arg(log_level)
-        .arg("-stats")
         .arg("-re")
         .arg("-i")
         .arg(m3u8_url)
@@ -69,7 +66,10 @@ pub fn ffmpeg(
         .arg("copy")
         .arg("-f")
         .arg("flv")
-        .arg(cmd);
+        .arg(cmd)
+        .arg("-loglevel")
+        .arg(log_level)
+        .arg("-stats");
 
     match command.status() {
         Ok(status) => {
