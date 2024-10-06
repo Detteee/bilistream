@@ -62,6 +62,7 @@ pub fn ffmpeg(
         .arg("-loglevel")
         .arg(log_level)
         .arg("-stats")
+        .arg("-re")
         .arg("-i")
         .arg(m3u8_url)
         .arg("-c")

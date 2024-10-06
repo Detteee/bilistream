@@ -9,112 +9,6 @@ YELLOW='\033[1;33m'
 PINK='\033[38;5;218m'
 RESET='\033[0m'
 
-# Ensure pids and logs directories exist
-mkdir -p "$BASE_DIR/pids"
-mkdir -p "$BASE_DIR/logs"
-
-# Function to get the full path of the config file
-get_config_path() {
-    local service=$1
-    echo "$BASE_DIR/$service/config.yaml"
-}
-
-# Function to start a service using nohup
-start_service() {
-    local service=$1
-    local config_path=$(get_config_path "$service")
-    local log_path="$BASE_DIR/logs/log-$service.log"
-    local pid_file="$BASE_DIR/pids/bilistream-$service.pid"
-
-    echo "Starting bilistream for $service..."
-    nohup "$BASE_DIR/bilistream" -c "$config_path" >"$log_path" 2>&1 &
-    local pid=$!
-    echo "$pid" >"$pid_file"
-    echo "Service $service started with PID $pid."
-}
-
-# Function to restart a service
-restart_service() {
-    local service=$1
-    echo "Restarting bilistream for $service..."
-    stop_service "$service"
-    start_service "$service"
-    read -p "Do you want to remove ffmpeg lock file(to prevent two ffmpeg processes)? (y/N): " remove_lock_file
-    remove_lock_file=${remove_lock_file:-N} # Default to 'N' if input is empty
-    if [[ $remove_lock_file =~ ^[Yy]$ ]]; then
-        rm -f "$BASE_DIR/ffmpeg.lock"
-        echo "ffmpeg lock file removed."
-    fi
-}
-
-# Function to stop a service
-stop_service() {
-    local service=$1
-    local pid_file="$BASE_DIR/pids/bilistream-$service.pid"
-
-    if [[ -f "$pid_file" ]]; then
-        local pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "Stopping bilistream-$service with PID $pid..."
-            kill "$pid"
-            rm -f "$pid_file"
-            echo "Service $service stopped."
-        else
-            echo "Process $pid not running. Removing stale PID file."
-            rm -f "$pid_file"
-        fi
-    else
-        echo "No PID file found for service $service. It may not be running."
-    fi
-}
-
-# Function to check if a service is running
-is_service_running() {
-    local service=$1
-    local pid_file="$BASE_DIR/pids/bilistream-$service.pid"
-
-    if [[ -f "$pid_file" ]]; then
-        local pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
-            return 0
-        else
-            # PID file exists but process is not running
-            return 1
-        fi
-    else
-        return 1
-    fi
-}
-
-# Function to manage services without PM2
-manage_service() {
-    local service=$1
-    local action
-
-    if is_service_running "$service"; then
-        echo "bilistream-$service is currently running."
-        echo "1. Restart service"
-        echo "2. Stop service"
-        echo "3. Do nothing"
-        read -p "Enter your choice (1/2/3): " action
-
-        case $action in
-        1) restart_service "$service" ;;
-        2) stop_service "$service" ;;
-        3) echo "No action taken." ;;
-        *) echo "Invalid choice. No action taken." ;;
-        esac
-    else
-        echo "bilistream-$service is not running."
-        read -p "Start bilistream-$service? (y/N): " action
-        if [[ $action =~ ^[Yy]$ ]]; then
-            start_service "$service"
-        else
-            echo "bilistream-$service was not started."
-        fi
-    fi
-}
-
 # Function to update kamito across all configs
 update_kamito() {
     # Update TW config
@@ -129,10 +23,6 @@ update_kamito() {
     echo "All configurations updated to kamito."
     display_current_config "all"
 
-    manage_service_after_change "YT"
-    manage_service_after_change "TW"
-
-    exit 0
 }
 
 # Check for --kamito option
@@ -377,34 +267,6 @@ select_twitch_id() {
     return 0
 }
 
-# Function to manage service after config change
-manage_service_after_change() {
-    local service=$1
-    if is_service_running "$service"; then
-        read -p "bilistream-$service is running. Restart it? (y/n): " restart_choice
-        if [[ $restart_choice =~ ^[Yy]$ ]]; then
-            # After stopping bilistream, run bili_stop_live
-            echo -e "${YELLOW}If need to stop bili_stop_live, enter (Y/n):${RESET}"
-            read stop_choice
-            stop_choice=${stop_choice:-Y} # Default to 'Y' if input is empty
-            if [[ $stop_choice =~ ^[Yy]$ ]]; then
-                ./bilistream stop-live
-            fi
-            restart_service "$service"
-        else
-            echo "bilistream-$service was not restarted."
-        fi
-    else
-        read -p "bilistream-$service is not running. Start it? (y/N): " start_choice
-        start_choice=${start_choice:-N} # Default to 'N' if input is empty
-        if [[ $start_choice =~ ^[Yy]$ ]]; then
-            start_service "$service"
-        else
-            echo "bilistream-$service was not started."
-        fi
-    fi
-}
-
 # Function to map Area IDs to names
 get_area_name() {
     local area_id=$1
@@ -461,30 +323,24 @@ display_current_config() {
     echo
 }
 
-# Function to stop live stream
-stop_live_stream() {
-    echo "Stopping live stream..."
-    ./bilistream stop-live
-    echo "Stopped bilistream."
-}
-
-# Main menu
-while true; do
-    # Display the menu
+# Function to display the main menu with an additional tmux management option
+show_main_menu() {
     echo -e "${PINK}┌─────────────────────────────────────┐${RESET}"
-    echo -e "${PINK}│       ${RESET}Bilistream Manager            ${PINK}│${RESET}"
+    echo -e "${PINK}│       Bilistream Manager            ${RESET}${PINK}│${RESET}"
     echo -e "${PINK}├─────────────────────────────────────┤${RESET}"
     echo -e "${PINK}│ ${RESET}1. Change Area ID                   ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}2. Change Channel ID                ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}4. Update SESSDATA and bili_jct     ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}5. Quick setup for kamito           ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}6. Manage Services                  ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}7. Display current config           ${PINK}│${RESET}"
-    echo -e "${PINK}│                                     │${RESET}"
+    echo -e "${PINK}│ ${RESET}6. Display current config           ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
     echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
     read -p "Enter your choice: " main_choice
+}
+
+while true; do
+    show_main_menu
 
     case $main_choice in
     1) # Change Area ID
@@ -503,18 +359,14 @@ while true; do
             case $area_config_choice in
             1)
                 sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/YT/config.yaml"
-                manage_service "YT"
                 display_current_config "YT"
                 ;;
             2)
                 sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/TW/config.yaml"
-                manage_service "TW"
                 display_current_config "TW"
                 ;;
             3)
                 sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR"/*/config.yaml
-                manage_service "YT"
-                manage_service "TW"
                 display_current_config "all"
                 ;;
             4)
@@ -533,7 +385,6 @@ while true; do
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/YT/config.yaml"
             sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/YT/config.yaml"
             echo "YouTube Channel ID, Channel Name, and Title updated in YT/config.yaml."
-            manage_service_after_change "YT"
             display_current_config "YT"
         fi
         ;;
@@ -544,7 +395,6 @@ while true; do
             sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/TW/config.yaml"
             sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/TW/config.yaml"
             echo "Twitch ID, Channel Name, and Title updated in TW/config.yaml."
-            manage_service_after_change "TW"
             display_current_config "TW"
         fi
         ;;
@@ -555,45 +405,13 @@ while true; do
         sed -i "s|bili_jct: .*|bili_jct: ${new_bili_jct}|" "$BASE_DIR"/*/config.yaml
         sed -i "s|\"sessdata\": \".*\"|\"sessdata\": \"${new_sessdata}\"|" "$BASE_DIR/config.json"
         echo "SESSDATA and bili_jct updated in all config files and config.json."
-        manage_service "YT"
-        manage_service "TW"
         ;;
     5) # Quick setup for kamito
         update_kamito
         ;;
-    6) # Manage Services
-        echo "┌─────────────────────────────────────┐"
-        echo "│  Select config to update (Area ID)  │"
-        echo "├─────────────────────────────────────┤"
-        echo "│ 1. YouTube (YT)                     │"
-        echo "│ 2. Twitch (TW)                      │"
-        echo "│ 3. Both                             │"
-        echo "│ 4. None                             │"
-        echo "└─────────────────────────────────────┘"
-        read -p "Enter your choice (1/2/3/4): " area_config_choice
-        case $area_config_choice in
-        1)
-            manage_service "YT"
-            ;;
-        2)
-            manage_service "TW"
-            ;;
-        3)
-            manage_service "YT"
-            manage_service "TW"
-            ;;
-        4)
-            echo "No changes made."
-            ;;
-        *)
-            echo "Invalid choice. No changes made."
-            ;;
-        esac
-        ;;
-    7) # Display current config
+    6) # Display current config
         display_current_config "all"
         ;;
-
     *)
         echo "Exiting Bilistream Manager. Goodbye!"
         exit 0

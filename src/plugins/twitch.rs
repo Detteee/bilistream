@@ -95,7 +95,8 @@ impl Twitch {
 
     pub fn get_streamlink_url(&self) -> Result<String, Box<dyn Error>> {
         let output = Command::new("streamlink")
-            .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-as.cdn-perfprod.com,https://lb-sa.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
+            // .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-as.cdn-perfprod.com,https://lb-sa.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
+            .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-as.cdn-perfprod.com,https://lb-sa.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com")
             .arg("--twitch-disable-ads")
             .arg("--stream-url")
             .arg("--stream-type")
