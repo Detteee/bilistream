@@ -70,13 +70,13 @@ async fn run_bilistream(
                     cfg.bililive.area_v2
                 );
             }
-            tracing::info!(
-                "B站直播中, 标题为 {},分区为 {}",
-                cfg.bililive.title,
-                cfg.bililive.area_v2
-            );
+            tracing::info!("B站直播中");
             if cfg.bililive.title != old_cfg.bililive.title {
-                tracing::info!("改变B站直播标题为 {}", cfg.bililive.title);
+                tracing::info!(
+                    "改变B站直播标题为 {},分区为 {}",
+                    cfg.bililive.title,
+                    cfg.bililive.area_v2
+                );
                 bili_change_live_title(&cfg).await?;
                 old_cfg.bililive.title = cfg.bililive.title.clone();
             }

@@ -329,7 +329,7 @@ show_main_menu() {
     echo -e "${PINK}│       Bilistream Manager            ${RESET}${PINK}│${RESET}"
     echo -e "${PINK}├─────────────────────────────────────┤${RESET}"
     echo -e "${PINK}│ ${RESET}1. Change Area ID                   ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}2. Change Channel ID                ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}2. Change YouTube ID        ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}4. Update SESSDATA and bili_jct     ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}5. Quick setup for kamito           ${PINK}│${RESET}"
