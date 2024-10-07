@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::plugins::ffmpeg;
 use regex::Regex;
 use serde_json::Value;
 use serde_yaml;
@@ -10,10 +11,17 @@ use std::{
     io::{self, BufRead},
     path::Path,
 };
-
 /// Checks if any danmaku lock file exists.
 pub fn is_any_danmaku_running() -> bool {
-    Path::new("danmaku.lock-YT").exists() || Path::new("danmaku.lock-TW").exists()
+    if Path::new("danmaku.lock-YT").exists() {
+        tracing::info!("一个弹幕命令读取实例已经在YT运行.");
+        return true;
+    }
+    if Path::new("danmaku.lock-TW").exists() {
+        tracing::info!("一个弹幕命令读取实例已经在TW运行.");
+        return true;
+    }
+    false
 }
 
 /// Creates the danmaku lock file for the specified platform.
@@ -314,7 +322,6 @@ fn get_room_id() -> String {
 pub fn run_danmaku(platform: &str) {
     // Check if any danmaku is already running
     if is_any_danmaku_running() {
-        tracing::info!("一个弹幕命令读取实例已经在运行. 跳过新实例.");
         return;
     }
 
@@ -323,8 +330,6 @@ pub fn run_danmaku(platform: &str) {
         tracing::error!("创建弹幕锁文件时出错: {}", e);
         return;
     }
-
-    tracing::info!("在bilistream-{} 中启动弹幕命令读取", platform);
 
     // Start danmaku-cli in background
     let danmaku_cli = Command::new("./danmaku-cli")
@@ -392,23 +397,25 @@ pub fn run_danmaku(platform: &str) {
         if bilibili_status.contains("Not Live") {
             tracing::info!("Bilibili 未直播. 继续弹幕命令读取...");
         } else {
-            tracing::info!("Bilibili 正在直播. 停止弹幕命令读取...");
-            // Kill danmaku-cli process
-            Command::new("pkill")
-                .arg("-f")
-                .arg("danmaku-cli")
-                .output()
-                .expect("Failed to stop danmaku-cli");
+            if ffmpeg::is_any_ffmpeg_running() {
+                tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
+                // Kill danmaku-cli process
+                Command::new("pkill")
+                    .arg("-f")
+                    .arg("danmaku-cli")
+                    .output()
+                    .expect("Failed to stop danmaku-cli");
 
-            // Remove all danmaku lock files
-            if let Err(e) = remove_danmaku_lock("YT") {
-                tracing::error!("删除 danmaku.lock-YT 时出错: {}", e);
-            }
-            if let Err(e) = remove_danmaku_lock("TW") {
-                tracing::error!("删除 danmaku.lock-TW 时出错: {}", e);
-            }
+                // Remove all danmaku lock files
+                if let Err(e) = remove_danmaku_lock("YT") {
+                    tracing::error!("删除 danmaku.lock-YT 时出错: {}", e);
+                }
+                if let Err(e) = remove_danmaku_lock("TW") {
+                    tracing::error!("删除 danmaku.lock-TW 时出错: {}", e);
+                }
 
-            break;
+                break;
+            }
         }
     }
 }

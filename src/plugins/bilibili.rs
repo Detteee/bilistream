@@ -96,7 +96,7 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .await?
         .json()
         .await?;
-
+    // tracing::info!("{:#?}", _res);
     // Optionally, handle the response if needed
     // println!("{:#?}", res);
 
@@ -210,7 +210,7 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .await?
         .json()
         .await?;
-
+    // tracing::info!("{:#?}", _res);
     // Optionally, handle the response if needed
     // println!("{:#?}", res);
 

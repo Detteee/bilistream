@@ -59,7 +59,6 @@ pub fn ffmpeg(
     }
 
     command
-        .arg("-re")
         .arg("-i")
         .arg(m3u8_url)
         .arg("-c")

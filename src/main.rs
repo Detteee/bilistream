@@ -7,7 +7,7 @@ use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
-use std::{fs, path::Path, process::Command as ProcessCommand, thread, time::Duration};
+use std::{path::Path, thread, time::Duration};
 use tracing_subscriber;
 
 async fn run_bilistream(
@@ -81,28 +81,16 @@ async fn run_bilistream(
                 old_cfg.bililive.title = cfg.bililive.title.clone();
             }
 
-            // Stop danmaku if running
-            if Path::new("./danmaku.lock-YT").exists() || Path::new("./danmaku.lock-TW").exists() {
-                tracing::info!("更新配置. 停止danmaku-cli...");
-                let _ = ProcessCommand::new("pkill")
-                    .arg("-f")
-                    .arg("danmaku-cli")
-                    .output()
-                    .expect("Failed to stop danmaku-cli");
-                let _ = fs::remove_file("./danmaku.lock-YT");
-                let _ = fs::remove_file("./danmaku.lock-TW");
-            }
             // Execute ffmpeg with platform-specific locks
             ffmpeg(
                 cfg.bililive.bili_rtmp_url.clone(),
                 cfg.bililive.bili_rtmp_key.clone(),
-                m3u8_url.clone().unwrap_or_default(),
+                m3u8_url.clone().unwrap(),
                 cfg.ffmpeg_proxy.clone(),
                 ffmpeg_log_level,
                 platform,
             );
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
-
             loop {
                 let (current_is_live, new_m3u8_url, _) =
                     live_info.get_status().await.unwrap_or((false, None, None));
@@ -112,7 +100,7 @@ async fn run_bilistream(
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
-                    new_m3u8_url.clone().unwrap_or_default(),
+                    new_m3u8_url.clone().unwrap(),
                     cfg.ffmpeg_proxy.clone(),
                     ffmpeg_log_level,
                     platform,

@@ -79,10 +79,10 @@ select_channel_id() {
     echo " 3) Narin Mikure        10) 猫汰つな            17) 天帝フォルテ"
     echo " 4) 藍沢エマ           11) 花芽なずな             18) 千燈ゆうひ"
     echo " 5) 八雲べに            12) 花芽すみれ            19) 一ノ瀬うるは"
-    echo " 6) 兎咲ミミ            13) 獅子堂あかり           0) Custom"
-    echo " 7) 英リサ              14) 紡木こかげ"
+    echo " 6) 兎咲ミミ            13) 獅子堂あかり           20) 空澄セナ"
+    echo " 7) 英リサ              14) 紡木こかげ            0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-19): " yt_choice
+    read -p "Select Channel (0-20): " yt_choice
 
     case $yt_choice in
     1)
@@ -160,6 +160,10 @@ select_channel_id() {
     19)
         chid="UC5LyYg6cCA4yHEYvtUsir3g"
         channel_name="一ノ瀬うるは"
+        ;;
+    20)
+        chid="UCF_U2GCKHvDz52jWdizppIA"
+        channel_name="空澄セナ"
         ;;
     0)
         read -p "Enter custom YouTube Channel ID: " chid
@@ -329,12 +333,14 @@ show_main_menu() {
     echo -e "${PINK}│       Bilistream Manager            ${RESET}${PINK}│${RESET}"
     echo -e "${PINK}├─────────────────────────────────────┤${RESET}"
     echo -e "${PINK}│ ${RESET}1. Change Area ID                   ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}2. Change YouTube ID        ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}2. Change YouTube ID                ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}4. Update SESSDATA and bili_jct     ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}5. Quick setup for kamito           ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}6. Display current config           ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}                                    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
+
     echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
     read -p "Enter your choice: " main_choice
 }
@@ -412,6 +418,7 @@ while true; do
     6) # Display current config
         display_current_config "all"
         ;;
+
     *)
         echo "Exiting Bilistream Manager. Goodbye!"
         exit 0
