@@ -22,6 +22,7 @@ async fn run_bilistream(
 
     let mut old_cfg = cfg.clone();
     let mut log_once = false;
+    let mut start_stream = false;
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
@@ -69,16 +70,13 @@ async fn run_bilistream(
                     cfg.bililive.title,
                     cfg.bililive.area_v2
                 );
+                start_stream = true;
             }
             tracing::info!("B站直播中");
-            if cfg.bililive.title != old_cfg.bililive.title {
-                tracing::info!(
-                    "改变B站直播标题为 {},分区为 {}",
-                    cfg.bililive.title,
-                    cfg.bililive.area_v2
-                );
+
+            if !start_stream {
                 bili_change_live_title(&cfg).await?;
-                old_cfg.bililive.title = cfg.bililive.title.clone();
+                tracing::info!("B站直播标题变更为 {}", cfg.bililive.title);
             }
 
             // Execute ffmpeg with platform-specific locks
