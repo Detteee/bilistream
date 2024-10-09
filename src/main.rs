@@ -23,6 +23,7 @@ async fn run_bilistream(
     let mut old_cfg = cfg.clone();
     let mut log_once = false;
     let mut start_stream = false;
+    let mut no_live = false;
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
@@ -61,7 +62,7 @@ async fn run_bilistream(
                     _ => "Unknown Platform",
                 }
             );
-
+            no_live = false;
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
                 bili_start_live(&cfg).await?;
@@ -70,6 +71,8 @@ async fn run_bilistream(
                     cfg.bililive.title,
                     cfg.bililive.area_v2
                 );
+                bili_change_live_title(&cfg).await?;
+                tracing::info!("标题为 {}", cfg.bililive.title);
                 start_stream = true;
             }
             tracing::info!("B站直播中");
@@ -125,14 +128,17 @@ async fn run_bilistream(
                     scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
                 );
             } else {
-                tracing::info!(
-                    "{} 未直播",
-                    match platform {
-                        "TW" => &cfg.twitch.channel_name,
-                        "YT" => &cfg.youtube.channel_name,
-                        _ => "Unknown Platform",
-                    }
-                );
+                if no_live == false {
+                    tracing::info!(
+                        "{} 未直播",
+                        match platform {
+                            "TW" => &cfg.twitch.channel_name,
+                            "YT" => &cfg.youtube.channel_name,
+                            _ => "Unknown Platform",
+                        }
+                    );
+                    no_live = true;
+                };
             }
             if cfg.bililive.enable_danmaku_command {
                 thread::spawn(move || run_danmaku(platform));

@@ -14,11 +14,11 @@ use std::{
 /// Checks if any danmaku lock file exists.
 pub fn is_any_danmaku_running() -> bool {
     if Path::new("danmaku.lock-YT").exists() {
-        tracing::info!("一个弹幕命令读取实例已经在YT运行.");
+        // tracing::info!("一个弹幕命令读取实例已经在YT运行.");
         return true;
     }
     if Path::new("danmaku.lock-TW").exists() {
-        tracing::info!("一个弹幕命令读取实例已经在TW运行.");
+        // tracing::info!("一个弹幕命令读取实例已经在TW运行.");
         return true;
     }
     false
@@ -148,20 +148,21 @@ async fn process_danmaku(command: &str) {
     if !command.starts_with(" :") {
         return;
     }
+    tracing::info!("弹幕:{}", command);
 
+    let normalized_danmaku = command.replace("％", "%");
     // Validate danmaku command format: %转播%平台%频道名%分区
-    if !command.contains("%转播%") {
-        // tracing::error!("弹幕命令格式错误. Skipping...");
+    if !normalized_danmaku.contains("%转播%") {
+        tracing::error!("弹幕命令格式错误. Skipping...");
         return;
     }
-    let danmaku_command = command.replace(" :", "");
+    let danmaku_command = normalized_danmaku.replace(" :", "");
     tracing::info!("弹幕:{}", danmaku_command);
 
     // Replace full-width ％ with half-width %
-    let normalized_danmaku = danmaku_command.replace("％", "%");
-    let parts: Vec<&str> = normalized_danmaku.split('%').collect();
-
-    if parts.len() < 5 {
+    let parts: Vec<&str> = danmaku_command.split('%').collect();
+    tracing::info!("弹幕:{:?}", parts);
+    if parts.len() < 4 {
         tracing::error!("弹幕命令格式错误. Skipping...");
         return;
     }
@@ -370,7 +371,6 @@ pub fn run_danmaku(platform: &str) {
 
     // Monitor Bilibili live status every 300 seconds
     loop {
-        tracing::info!("检查Bilibili直播间状态...");
         thread::sleep(Duration::from_secs(60));
 
         let room_id = get_room_id();
@@ -380,7 +380,7 @@ pub fn run_danmaku(platform: &str) {
             continue;
         }
 
-        tracing::info!("Room ID: {}", room_id);
+        // tracing::info!("Room ID: {}", room_id);
         let bilibili_status = match Command::new("./bilistream")
             .arg("get-live-status")
             .arg("bilibili")
@@ -394,9 +394,7 @@ pub fn run_danmaku(platform: &str) {
             }
         };
 
-        if bilibili_status.contains("Not Live") {
-            tracing::info!("Bilibili 未直播. 继续弹幕命令读取...");
-        } else {
+        if !bilibili_status.contains("Not Live") {
             if ffmpeg::is_any_ffmpeg_running() {
                 tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
                 // Kill danmaku-cli process
