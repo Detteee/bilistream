@@ -148,7 +148,7 @@ async fn process_danmaku(command: &str) {
     if !command.starts_with(" :") {
         return;
     }
-    tracing::info!("弹幕:{}", command);
+    // tracing::info!("弹幕:{}", command);
 
     let normalized_danmaku = command.replace("％", "%");
     // Validate danmaku command format: %转播%平台%频道名%分区
@@ -157,7 +157,7 @@ async fn process_danmaku(command: &str) {
         return;
     }
     let danmaku_command = normalized_danmaku.replace(" :", "");
-    tracing::info!("弹幕:{}", danmaku_command);
+    // tracing::info!("{}", danmaku_command);
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();

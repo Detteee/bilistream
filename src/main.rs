@@ -182,7 +182,12 @@ async fn get_live_status(
                 .build();
 
             let cfg = load_config(Path::new("./TW/config.yaml"))?;
-            let twitch = Twitch::new(channel_id, cfg.twitch.oauth_token.clone(), client);
+            let twitch = Twitch::new(
+                channel_id,
+                cfg.twitch.oauth_token.clone(),
+                client,
+                cfg.twitch.proxy_region.clone(),
+            );
 
             let (is_live, _, _) = twitch.get_status().await?;
             println!(
@@ -242,8 +247,9 @@ async fn get_live_title(
         "TW" => {
             let twitch = Twitch::new(
                 channel_id,
-                cfg.twitch.oauth_token,
+                cfg.twitch.oauth_token.clone(),
                 ClientBuilder::new(reqwest::Client::new()).build(),
+                cfg.twitch.proxy_region.clone(),
             );
             let title = twitch.get_title().await?;
             println!("Twitch live title: {}", title);
