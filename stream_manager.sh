@@ -192,10 +192,10 @@ select_twitch_id() {
     echo " 1) kamito              6) とおこ              11) 胡桃のあ"
     echo " 2) 橘ひなの            7) 天帝フォルテ        12) 紫宮るな"
     echo " 3) 花芽すみれ          8) 獅子堂あかり        13) 狐白うる"
-    echo " 4) 夢野あかり          9) 夜よいち             0) Custom"
-    echo " 5) 白波らむね         10) 甘城なつき"
+    echo " 4) 夢野あかり          9) 夜よいち             14) 英リサ"
+    echo " 5) 白波らむね         10) 甘城なつき           0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-13): " twitch_choice
+    read -p "Select Channel (0-14): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -249,6 +249,10 @@ select_twitch_id() {
     13)
         channel_id="kohaku_uru"
         channel_name="狐白うる"
+        ;;
+    14)
+        channel_id="lisahanabusa"
+        channel_name="英リサ"
         ;;
     0)
 

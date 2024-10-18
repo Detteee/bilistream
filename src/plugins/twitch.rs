@@ -10,6 +10,7 @@ pub struct Twitch {
     pub channel_id: String,
     pub client: ClientWithMiddleware,
     pub oauth_token: String,
+    pub proxy_region: String,
 }
 
 #[async_trait]
@@ -85,19 +86,38 @@ impl Live for Twitch {
 }
 
 impl Twitch {
-    pub fn new(channel_id: &str, oauth_token: String, client: ClientWithMiddleware) -> impl Live {
+    pub fn new(
+        channel_id: &str,
+        oauth_token: String,
+        client: ClientWithMiddleware,
+        proxy_region: String,
+    ) -> impl Live {
         Twitch {
             channel_id: channel_id.to_string(),
             client,
             oauth_token,
+            proxy_region,
         }
     }
-
+    pub fn get_proxy_url(&self) -> Result<String, &'static str> {
+        match self.proxy_region.as_str() {
+            "na" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com".to_string()),
+            "eu" => Ok("--twitch-proxy-playlist=https://lb-eu.cdn-perfprod.com".to_string()),
+            "eu2" => Ok("--twitch-proxy-playlist=https://lb-eu2.cdn-perfprod.com".to_string()),
+            "eu3" => Ok("--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com".to_string()),
+            "eu4" => Ok("--twitch-proxy-playlist=https://lb-eu4.cdn-perfprod.com".to_string()),
+            "eu5" => Ok("--twitch-proxy-playlist=https://lb-eu5.cdn-perfprod.com".to_string()),
+            "as" => Ok("--twitch-proxy-playlist=https://lb-as.cdn-perfprod.com".to_string()),
+            "sa" => Ok("--twitch-proxy-playlist=https://lb-sa.cdn-perfprod.com".to_string()),
+            _ => Err("Invalid proxy region specified"),
+        }
+    }
     pub fn get_streamlink_url(&self) -> Result<String, Box<dyn Error>> {
+        let proxy_url = self.get_proxy_url()?;
         let output = Command::new("streamlink")
             // .arg("--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
-            .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com")
-            .arg("--twitch-disable-ads")
+            // .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
+            .arg(proxy_url)
             .arg("--stream-url")
             .arg("--stream-type")
             .arg("hls")

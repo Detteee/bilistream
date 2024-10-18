@@ -53,6 +53,8 @@ pub struct Twitch {
     pub channel_id: String,
     #[serde(rename = "OauthToken")]
     pub oauth_token: String,
+    #[serde(rename = "ProxyRegion")]
+    pub proxy_region: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -52,6 +52,7 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
             &cfg.twitch.channel_id.as_str(),
             cfg.twitch.oauth_token,
             client.clone(),
+            cfg.twitch.proxy_region,
         ))),
         _ => Err("unknown platform".into()),
     }
