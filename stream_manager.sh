@@ -95,7 +95,7 @@ select_channel_id() {
         ;;
     3)
         chid="UCKSpM183c85d5V2cW5qaUjA"
-        channel_name="Narin_Mikure"
+        channel_name="Narin"
         ;;
     4)
         chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
@@ -193,9 +193,10 @@ select_twitch_id() {
     echo " 2) 橘ひなの            7) 天帝フォルテ        12) 紫宮るな"
     echo " 3) 花芽すみれ          8) 獅子堂あかり        13) 狐白うる"
     echo " 4) 夢野あかり          9) 夜よいち             14) 英リサ"
-    echo " 5) 白波らむね         10) 甘城なつき           0) Custom"
+    echo " 5) 白波らむね         10) 甘城なつき           15) 千燈ゆうひ"
+    echo " 0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-14): " twitch_choice
+    read -p "Select Channel (0-15): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -253,6 +254,10 @@ select_twitch_id() {
     14)
         channel_id="lisahanabusa"
         channel_name="英リサ"
+        ;;
+    15)
+        channel_id="sendo_yuuhi"
+        channel_name="千燈ゆうひ"
         ;;
     0)
 

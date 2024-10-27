@@ -93,6 +93,7 @@ async fn run_bilistream(
             );
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
                 let (current_is_live, new_m3u8_url, _) =
                     live_info.get_status().await.unwrap_or((false, None, None));
                 if !current_is_live {
