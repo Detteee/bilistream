@@ -77,12 +77,13 @@ select_channel_id() {
     echo " 1) kamito               8) 橘ひなの            15) 神成きゅぴ"
     echo " 2) 紫宮るな             9) 胡桃のあ             16) 夜絆ニウ"
     echo " 3) Narin Mikure        10) 猫汰つな            17) 天帝フォルテ"
-    echo " 4) 藍沢エマ           11) 花芽なずな             18) 千燈ゆうひ"
-    echo " 5) 八雲べに            12) 花芽すみれ            19) 一ノ瀬うるは"
+    echo " 4) 藍沢エマ           11) 花芽なずな            18) 千燈ゆうひ"
+    echo " 5) 八雲べに            12) 花芽すみれ           19) 一ノ瀬うるは"
     echo " 6) 兎咲ミミ            13) 獅子堂あかり           20) 空澄セナ"
-    echo " 7) 英リサ              14) 紡木こかげ            0) Custom"
+    echo " 7) 英リサ              14) 紡木こかげ           21) 甘結もか"
+    echo " 0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-20): " yt_choice
+    read -p "Select Channel (0-21): " yt_choice
 
     case $yt_choice in
     1)
@@ -164,6 +165,10 @@ select_channel_id() {
     20)
         chid="UCF_U2GCKHvDz52jWdizppIA"
         channel_name="空澄セナ"
+        ;;
+    21)
+        chid="UC8vKBjGY2HVfbW9GAmgikWw"
+        channel_name="甘結もか"
         ;;
     0)
         read -p "Enter custom YouTube Channel ID: " chid
