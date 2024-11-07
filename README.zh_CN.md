@@ -23,29 +23,31 @@
 ## 安装
 
 1. 克隆仓库：
+
    ```
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
-
 2. 安装所需依赖（以 Debian 系统为例）：
+
    ```
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    sudo npm install -g pm2
    pip install streamlink
    ```
-
 3. 安装 streamlink-ttvlol 插件：
    查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-
 4. 构建项目：
 
    适用于 Debian 12 及 glibc >= 2.36 的linux:
+
    ```
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
+
    Windows（未经测试）：
+
    ```
    cargo build --target x86_64-pc-windows-gnu --release
    ```
@@ -53,23 +55,23 @@
 ## 配置
 
 1. 复制示例配置文件：
+
    ```
    cp config.yaml.example config.yaml
    ```
-
 2. 编辑 `config.yaml` 以设置您的特定设置：
+
    - 设置您的 Bilibili 账户详细信息（SESSDATA、bili_jct 等）
    - 配置所需转播的平台（Twitch 或 YouTube）
    - 设置频道 ID 和其他相关信息
-
+   - 为T台选择一个代理地区
 3. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
-
 4. 创建频道列表文件：
    在 YT 和 TW 文件夹中，分别创建 `YT_channels.txt` 和 `TW_channels.txt`，每行的格式为：
+
    ```
    (频道名称) [频道 ID]
    ```
-
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如果需要弹幕命令功能)
 
 ## 使用方法
@@ -87,21 +89,22 @@
 Bilistream 支持以下命令：
 
 1. 开始直播：
+
    ```
    ./bilistream start-live
    ```
-
 2. 停止直播：
+
    ```
    ./bilistream stop-live
    ```
-
 3. 更改直播标题：
+
    ```
    ./bilistream change-live-title <新标题>
    ```
-
 4. 获取直播状态：
+
    ```
    ./bilistream get-live-status
    ```
@@ -111,6 +114,7 @@ Bilistream 支持以下命令：
 `stream_manager.sh` 脚本提供了一个交互式界面来管理您的流：
 
 1. 设置目录结构：
+
    ```
    mkdir YT TW
    cp config.yaml YT/config.yaml
@@ -118,6 +122,7 @@ Bilistream 支持以下命令：
    ```
 
    文件目录结构：
+
    ```
    .
    ├── bilibili-live-danmaku-cli
@@ -131,14 +136,12 @@ Bilistream 支持以下命令：
        ├── config.yaml
        └── YT_channels.txt
    ```
-
 2. 分别编辑 `YT/config.yaml` 和 `TW/config.yaml`，设置适当的 YouTube 和 Twitch 设置。
-
 3. 运行管理脚本：
+
    ```
    ./stream_manager.sh
    ```
-
 4. 使用交互式菜单来启动、停止或管理您的转播任务。
 
 ### 弹幕命令功能
@@ -146,16 +149,20 @@ Bilistream 支持以下命令：
 当 Bilibili 直播关闭时，您可以在 Bilibili 直播聊天中使用弹幕命令来更改监听目标频道。这允许在不重启应用程序的情况下动态控制转播目标。
 
 使用此功能：
+
 1. 确保 Bilibili 直播已关闭。
 2. 在 Bilibili 直播聊天中发送特定的弹幕命令。
 3. 系统将处理命令并相应地更改监听目标频道。
 
 弹幕命令格式：
+
 ```
 %转播%YT/TW%频道名称%分区名称
 频道名称必须在 YT/TW_channels.txt 中
 ```
+
 例如：
+
 ```
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约

@@ -23,29 +23,31 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 ## Installation
 
 1. Clone the repository:
+
    ```
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
-
 2. Install the required dependencies (example for Debian-based systems):
+
    ```
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    sudo npm install -g pm2
    pip install streamlink
    ```
-
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-
 4. Build the project:
-   
+
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
+
    ```
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
+
    For Windows (untested):
+
    ```
    cargo build --target x86_64-pc-windows-gnu --release
    ```
@@ -53,23 +55,23 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 ## Configuration
 
 1. Copy the example configuration file:
+
    ```
    cp config.yaml.example config.yaml
    ```
-
 2. Edit `config.yaml` with your specific settings:
+
    - Set your Bilibili account details (SESSDATA, bili_jct, etc.)
    - Configure the desired streaming platform (Twitch or YouTube)
    - Set the channel ID and other relevant information
-
+   - Select a proxy region for twitch config
 3. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-
 4. Create channel list files:
    In the YT and TW folders, create `YT_channels.txt` and `TW_channels.txt` respectively, with each line in the format:
+
    ```
    (channel name) [channel id]
    ```
-
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
 
 ## Usage
@@ -87,31 +89,32 @@ Run the Bilistream application:
 Bilistream supports the following commands:
 
 1. Start a live stream:
+
    ```
    ./bilistream start-live
    ```
-
 2. Stop a live stream:
+
    ```
    ./bilistream stop-live
    ```
-
 3. Change live stream title:
+
    ```
    ./bilistream change-live-title <new_title>
    ```
-
 4. Get live status:
+
    ```
    ./bilistream get-live-status
    ```
-
 
 ### Using stream_manager.sh
 
 The `stream_manager.sh` script provides an interactive interface for managing your streams:
 
 1. Set up the directory structure:
+
    ```
    mkdir YT TW
    cp config.yaml YT/config.yaml
@@ -119,6 +122,7 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
    ```
 
    Resulting tree structure:
+
    ```
    .
    ├── bilibili-live-danmaku-cli
@@ -132,14 +136,12 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
        ├── config.yaml
        └── YT_channels.txt
    ```
-
 2. Edit `YT/config.yaml` and `TW/config.yaml` with the appropriate settings for YouTube and Twitch, respectively.
-
 3. Run the management script:
+
    ```
    ./stream_manager.sh
    ```
-
 4. Use the interactive menu to start, stop, or manage your rebroadcasting tasks.
 
 ### Danmaku Command Feature
@@ -147,16 +149,20 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
 When the Bilibili live stream is off, you can use danmaku commands in the Bilibili live chat to change the listening target channel. This allows for dynamic control of the rebroadcasting target without restarting the application.
 
 To use this feature:
+
 1. Ensure the Bilibili live stream is off.
 2. Send a specific danmaku command in the Bilibili live chat.
 3. The system will process the command and change the listening target channel accordingly.
 
 Danmaku command format:
+
 ```
 %转播%YT/TW%channel_name%area_name
 channel_name must in YT/TW_channels.txt
 ```
+
 Example:
+
 ```
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
