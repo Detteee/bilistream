@@ -21,6 +21,7 @@ Twitch:
   ChannelName: "Name of streamer" # Custom
   ChannelID: # the string followed after https://www.twitch.tv/
   AuthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
+  ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
 
 Youtube:
   ChannelName: "Name of streamer" # Custom
