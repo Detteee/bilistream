@@ -22,6 +22,7 @@ async fn run_bilistream(
 
     let mut old_cfg = cfg.clone();
     let mut log_once = false;
+    let mut log_once_2 = false;
     let mut start_stream = false;
     let mut no_live = false;
     loop {
@@ -63,6 +64,7 @@ async fn run_bilistream(
                 }
             );
             no_live = false;
+            log_once_2 = false;
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
                 bili_start_live(&cfg).await?;
@@ -123,11 +125,14 @@ async fn run_bilistream(
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                tracing::info!(
-                    "{}未直播，计划于 {} 开始",
-                    cfg.youtube.channel_name,
-                    scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
-                );
+                if log_once_2 == false {
+                    tracing::info!(
+                        "{}未直播，计划于 {} 开始",
+                        cfg.youtube.channel_name,
+                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
+                    );
+                    log_once_2 = true;
+                }
             } else {
                 if no_live == false {
                     tracing::info!(
