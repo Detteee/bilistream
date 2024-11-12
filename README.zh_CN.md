@@ -17,7 +17,6 @@
 - ffmpeg
 - yt-dlp
 - streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
-- pm2（用于 `stream_manager.sh`）
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
 
 ## 安装
@@ -46,7 +45,7 @@
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
 
-   Windows（未经测试）：
+   Windows：
 
    ```
    cargo build --target x86_64-pc-windows-gnu --release

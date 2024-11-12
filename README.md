@@ -17,7 +17,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - ffmpeg
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
-- pm2 (for `stream_manager.sh`)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
 
 ## Installation
@@ -46,7 +45,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
 
-   For Windows (untested):
+   For Windows:
 
    ```
    cargo build --target x86_64-pc-windows-gnu --release

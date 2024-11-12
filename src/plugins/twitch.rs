@@ -100,6 +100,7 @@ impl Twitch {
         }
     }
     pub fn get_proxy_url(&self) -> Result<String, &'static str> {
+        // 代理地区: na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
         match self.proxy_region.as_str() {
             "na" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com".to_string()),
             "eu" => Ok("--twitch-proxy-playlist=https://lb-eu.cdn-perfprod.com".to_string()),
