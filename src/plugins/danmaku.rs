@@ -66,16 +66,16 @@ fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
 }
 
 /// Checks live status using the bilistream CLI.
-async fn check_live_status(platform: &str, channel_id: &str) -> io::Result<String> {
-    let output = Command::new("./bilistream")
-        .arg("get-live-status")
-        .arg(platform)
-        .arg(channel_id)
-        .output()?;
+// async fn check_live_status(platform: &str, channel_id: &str) -> io::Result<String> {
+//     let output = Command::new("./bilistream")
+//         .arg("get-live-status")
+//         .arg(platform)
+//         .arg(channel_id)
+//         .output()?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout)
-}
+//     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+//     Ok(stdout)
+// }
 
 /// Updates the configuration YAML file with new values.
 fn update_config(
@@ -221,82 +221,82 @@ async fn process_danmaku(command: &str) {
             return;
         }
 
-        let live_status = match check_live_status(platform, &channel_id).await {
-            Ok(status) => status,
-            Err(e) => {
-                tracing::error!("获取直播状态时出错: {}", e);
-                return;
+        // let live_status = match check_live_status(platform, &channel_id).await {
+        //     Ok(status) => status,
+        //     Err(e) => {
+        //         tracing::error!("获取直播状态时出错: {}", e);
+        //         return;
+        //     }
+        // };
+
+        // if !live_status.contains("Not Live") {
+        // tracing::info!("area_id: {}", area_id);
+        // let config_path = format!("./{}/config.yaml", platform);
+        let new_title = format!("【转播】{}", channel_name);
+
+        let live_title = if platform.eq_ignore_ascii_case("YT") {
+            match Command::new("yt-dlp")
+                .arg("-e")
+                .arg(&format!(
+                    "https://www.youtube.com/channel/{}/live",
+                    channel_id
+                ))
+                .output()
+            {
+                Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                Err(e) => {
+                    tracing::error!("获取YT直播标题时出错: {}", e);
+                    return;
+                }
+            }
+        } else {
+            // TW
+            match Command::new("./bilistream")
+                .arg("get-live-title")
+                .arg("TW")
+                .arg(&channel_id)
+                .output()
+            {
+                Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                Err(e) => {
+                    tracing::error!("获取TW直播标题时出错: {}", e);
+                    return;
+                }
             }
         };
 
-        if !live_status.contains("Not Live") {
-            // tracing::info!("area_id: {}", area_id);
-            // let config_path = format!("./{}/config.yaml", platform);
-            let new_title = format!("【转播】{}", channel_name);
-
-            let live_title = if platform.eq_ignore_ascii_case("YT") {
-                match Command::new("yt-dlp")
-                    .arg("-e")
-                    .arg(&format!(
-                        "https://www.youtube.com/channel/{}/live",
-                        channel_id
-                    ))
-                    .output()
-                {
-                    Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                    Err(e) => {
-                        tracing::error!("获取YT直播标题时出错: {}", e);
-                        return;
-                    }
-                }
-            } else {
-                // TW
-                match Command::new("./bilistream")
-                    .arg("get-live-title")
-                    .arg("TW")
-                    .arg(&channel_id)
-                    .output()
-                {
-                    Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                    Err(e) => {
-                        tracing::error!("获取TW直播标题时出错: {}", e);
-                        return;
-                    }
-                }
-            };
-
-            if live_title.contains("ウォッチパ") {
-                tracing::error!("ウォッチパ is not supported due to copyright issues");
-                return;
-            }
-
-            let updated_area_id = check_area_id_with_title(&live_title, area_id);
-
-            if let Err(e) = update_config(
-                platform,
-                channel_name,
-                &channel_id,
-                &new_title,
-                updated_area_id,
-            ) {
-                tracing::error!("更新配置时出错: {}", e);
-                return;
-            }
-
-            tracing::info!(
-                "更新 {} 频道: {} 分区: {}",
-                platform,
-                channel_name,
-                area_name
-            );
-        } else {
-            tracing::info!(
-                "频道 {} ({}) 未在 {} 直播",
-                channel_name,
-                channel_id,
-                platform
-            );
+        if live_title.contains("ウォッチパ") {
+            tracing::error!("ウォッチパ is not supported due to copyright issues");
+            return;
         }
+
+        let updated_area_id = check_area_id_with_title(&live_title, area_id);
+
+        if let Err(e) = update_config(
+            platform,
+            channel_name,
+            &channel_id,
+            &new_title,
+            updated_area_id,
+        ) {
+            tracing::error!("更新配置时出错: {}", e);
+            return;
+        }
+
+        tracing::info!(
+            "更新 {} 频道: {} 分区: {}",
+            platform,
+            channel_name,
+            area_name
+        );
+        // } else {
+        //     tracing::info!(
+        //         "频道 {} ({}) 未在 {} 直播",
+        //         channel_name,
+        //         channel_id,
+        //         platform
+        //     );
+        // }
     } else {
         tracing::error!("不支持的平台: {}", platform);
     }

@@ -199,9 +199,10 @@ select_twitch_id() {
     echo " 3) 花芽すみれ          8) 獅子堂あかり        13) 狐白うる"
     echo " 4) 夢野あかり          9) 夜よいち             14) 英リサ"
     echo " 5) 白波らむね         10) 甘城なつき           15) 千燈ゆうひ"
+    echo " 16) Narin"
     echo " 0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-15): " twitch_choice
+    read -p "Select Channel (0-16): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -263,6 +264,10 @@ select_twitch_id() {
     15)
         channel_id="sendo_yuuhi"
         channel_name="千燈ゆうひ"
+        ;;
+    16)
+        channel_id="narinmikure"
+        channel_name="Narin"
         ;;
     0)
 

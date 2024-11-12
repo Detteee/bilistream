@@ -5,6 +5,7 @@ Platform: Youtube
 # B站推流账号Cookie
 BiliLive:
   Title: "直播间标题"
+  EnableDanmakuCommand: # true or false
   # 分区
   Area_v2: 分区ID # https://api.live.bilibili.com/room/v1/Area/getList
   SESSDATA: # in Cookie
@@ -19,8 +20,8 @@ BiliLive:
 
 Twitch:
   ChannelName: "Name of streamer" # Custom
-  ChannelID: # the string followed after https://www.twitch.tv/
-  AuthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
+  ChannelId: # the string followed after https://www.twitch.tv/
+  OauthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
 
 Youtube:
