@@ -76,17 +76,20 @@ select_area_id() {
 # Function to select channel ID
 select_channel_id() {
     echo "Select YouTube Channel:"
-    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito               2) 花芽すみれ           3) 英リサ"
-    echo " 4) 胡桃のあ            5) 橘ひなの             6) 空澄セナ"
-    echo " 7) 紫宮るな            8) 夢野あかり           9) 白波らむね"
-    echo "10) 千燈ゆうひ         11) Narin               12) とおこ"
-    echo "13) 天帝フォルテ       14) 獅子堂あかり        15) 夜よいち"
-    echo "16) 甘城なつき         17) 狐白うる            18) Anzu_o0"
-    echo "19) まふゆ"
+    echo -e "${GREEN}───────────────────────────────────────────────────────────────${RESET}"
+    echo " 1) kamito              2) 花芽なずな           3) 花芽すみれ"
+    echo " 4) 小雀とと            5) 一ノ瀬うるは         6) 胡桃のあ"
+    echo " 7) 兎咲ミミ            8) 空澄セナ             9) 橘ひなの"
+    echo "10) 英リサ             11) 如月れん            12) 神成きゅぴ"
+    echo "13) 八雲べに           14) 藍沢エマ            15) 紫宮るな"
+    echo "16) 猫汰つな           17) 小森めと            18) 白波らむね"
+    echo "19) 夢野あかり         20) 夜乃くろむ          21) 紡木こかげ"
+    echo "22) 千燈ゆうひ         23) 蝶屋はなび          24) 甘結もか"
+    echo "25) Narin Mikure       26) 獅子堂あかり        27) 天帝フォルテ"
+    echo "28) 夜絆ニウ           29) ぶいすぽっ!【公式】"
     echo " 0) Custom"
-    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-19): " yt_choice
+    echo -e "${GREEN}───────────────────────────────────────────────────────────────${RESET}"
+    read -p "Select Channel (0-29): " yt_choice
 
     case $yt_choice in
     1)
@@ -95,75 +98,115 @@ select_channel_id() {
         ;;
     2)
         chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
-        channel_name="花芽すみれ"
+        channel_name="花芽なずな"
         ;;
     3)
-        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
-        channel_name="英リサ"
+        chid="UCyLGcqYs7RsBb3L0SJfzGYA"
+        channel_name="花芽すみれ"
         ;;
     4)
+        chid="UCgTzsBI0DIRopMylJEDqnog"
+        channel_name="小雀とと"
+        ;;
+    5)
+        chid="UC5LyYg6cCA4yHEYvtUsir3g"
+        channel_name="一ノ瀬うるは"
+        ;;
+    6)
         chid="UCIcAj6WkJ8vZ7DeJVgmeqKw"
         channel_name="胡桃のあ"
         ;;
-    5)
-        chid="UCvUc0m317LWTTPZoBQV479A"
-        channel_name="橘ひなの"
+    7)
+        chid="UCnvVG9RbOW3J6Ifqo-zKLiw"
+        channel_name="兎咲ミミ"
         ;;
-    6)
+    8)
         chid="UCF_U2GCKHvDz52jWdizppIA"
         channel_name="空澄セナ"
         ;;
-    7)
+    9)
+        chid="UCvUc0m317LWTTPZoBQV479A"
+        channel_name="橘ひなの"
+        ;;
+    10)
+        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
+        channel_name="英リサ"
+        ;;
+    11)
+        chid="UCGWa1dMU_sDCaRQjdabsVgg"
+        channel_name="如月れん"
+        ;;
+    12)
+        chid="UCMp55EbT_ZlqiMS3lCj01BQ"
+        channel_name="神成きゅぴ"
+        ;;
+    13)
+        chid="UCjXBuHmWkieBApgBhDuJMMQ"
+        channel_name="八雲べに"
+        ;;
+    14)
+        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        channel_name="藍沢エマ"
+        ;;
+    15)
         chid="UCvUc0m317LWTTPZoBQV479A"
         channel_name="紫宮るな"
         ;;
-    8)
-        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
-        channel_name="夢野あかり"
+    16)
+        chid="UCIjdfjcSaEgdjwbgjxC3ZWg"
+        channel_name="猫汰つな"
         ;;
-    9)
+    17)
+        chid="UCMp55EbT_ZlqiMS3lCj01BQ"
+        channel_name="小森めと"
+        ;;
+    18)
         chid="UCjXBuHmWkieBApgBhDuJMMQ"
         channel_name="白波らむね"
         ;;
-    10)
+    19)
+        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        channel_name="夢野あかり"
+        ;;
+    20)
+        chid="UCX4WL24YEOUYd7qDsFSLDOw"
+        channel_name="夜乃くろむ"
+        ;;
+    21)
+        chid="UC-WX1CXssCtCtc2TNIRnJzg"
+        channel_name="紡木こかげ"
+        ;;
+    22)
         chid="UCuDY3ibSP2MFRgf7eo3cojg"
         channel_name="千燈ゆうひ"
         ;;
-    11)
-        chid="narinmikure"
-        channel_name="Narin"
+    23)
+        chid="UCL9hJsdk9eQa0IlWbFB2oRg"
+        channel_name="蝶屋はなび"
         ;;
-    12)
-        chid="urs_toko"
-        channel_name="とおこ"
+    24)
+        chid="UC8vKBjGY2HVfbW9GAmgikWw"
+        channel_name="甘結もか"
         ;;
-    13)
-        chid="tentei_forte"
-        channel_name="天帝フォルテ"
+    25)
+        chid="UC8hwewh9svh92E1gXvgVazg"
+        channel_name="Narin Mikure"
         ;;
-    14)
-        chid="shishidoakari"
+    26)
+        chid="UCWRPqA0ehhWV4Hnp27PJCkQ"
         channel_name="獅子堂あかり"
         ;;
-    15)
-        chid="yoichi_0v0"
-        channel_name="夜よいち"
+    27)
+        chid="UCuI5XaO-6VkOEhHao6ij7JA"
+        channel_name="天帝フォルテ"
         ;;
-    16)
-        chid="nacho_dayo"
-        channel_name="甘城なつき"
+    28)
+        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
+        channel_name="夜絆ニウ"
         ;;
-    17)
-        chid="kohaku_uru"
-        channel_name="狐白うる"
-        ;;
-    18)
-        chid="Anzu_o0"
-        channel_name="Anzu_o0"
-        ;;
-    19)
-        chid="makufuyu"
-        channel_name="まふゆ"
+    29)
+        chid="UCuI5XaO-6VkOEhHao6ij7JA"
+        channel_name="ぶいすぽっ!【公式】"
         ;;
     0)
         read -p "Enter custom YouTube Channel ID: " chid
@@ -171,7 +214,7 @@ select_channel_id() {
         read -p "Whether to add this channel to the ./YT/YT_channels.txt? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo "($channel_name) [$chid]" >>"$BASE_DIR/YT/YT_channels.txt"
+            echo -e "\n($channel_name) [$chid]" >>"$BASE_DIR/YT/YT_channels.txt"
         fi
         ;;
     *)
@@ -188,16 +231,17 @@ select_channel_id() {
 # Function to select Twitch ID
 select_twitch_id() {
     echo "Select Twitch Channel:"
-    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito              6) とおこ              11) 胡桃のあ"
-    echo " 2) 橘ひなの            7) 天帝フォルテ        12) 紫宮るな"
-    echo " 3) 花芽すみれ          8) 獅子堂あかり        13) 狐白うる"
-    echo " 4) 夢野あかり          9) 夜よいち             14) 英リサ"
-    echo " 5) 白波らむね         10) 甘城なつき           15) 千燈ゆうひ"
-    echo " 16) Narin"
+    echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
+    echo " 1) kamito              2) 花芽すみれ           3) 英リサ"
+    echo " 4) 胡桃のあ            5) 橘ひなの             6) 空澄セナ"
+    echo " 7) 紫宮るな            8) 夢野あかり           9) 白波らむね"
+    echo "10) 千燈ゆうひ         11) Narin               12) とおこ"
+    echo "13) 天帝フォルテ       14) 獅子堂あかり        15) 夜よいち"
+    echo "16) 甘城なつき         17) 狐白うる            18) Anzu_o0"
+    echo "19) まふゆ"
     echo " 0) Custom"
-    echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-16): " twitch_choice
+    echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
+    read -p "Select Channel (0-19): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -205,64 +249,76 @@ select_twitch_id() {
         channel_name="kamito"
         ;;
     2)
-        channel_id="hinanotachiba7"
-        channel_name="橘ひなの"
-        ;;
-    3)
         channel_id="kagasumire"
         channel_name="花芽すみれ"
         ;;
-    4)
-        channel_id="akarindao"
-        channel_name="夢野あかり"
-        ;;
-    5)
-        channel_id="ramuneshiranami"
-        channel_name="白波らむね"
-        ;;
-    6)
-        channel_id="urs_toko"
-        channel_name="とおこ"
-        ;;
-    7)
-        channel_id="tentei_forte"
-        channel_name="天帝フォルテ"
-        ;;
-    8)
-        channel_id="shishidoakari"
-        channel_name="獅子堂あかり"
-        ;;
-    9)
-        channel_id="yoichi_0v0"
-        channel_name="夜よいち"
-        ;;
-    10)
-        channel_id="nacho_dayo"
-        channel_name="甘城なつき"
-        ;;
-    11)
-        channel_id="963noah"
-        channel_name="胡桃のあ"
-        ;;
-    12)
-        channel_id="shinomiya_runa"
-        channel_name="紫宮るな"
-        ;;
-    13)
-        channel_id="kohaku_uru"
-        channel_name="狐白うる"
-        ;;
-    14)
+    3)
         channel_id="lisahanabusa"
         channel_name="英リサ"
         ;;
-    15)
+    4)
+        channel_id="963noah"
+        channel_name="胡桃のあ"
+        ;;
+    5)
+        channel_id="hinanotachiba7"
+        channel_name="橘ひなの"
+        ;;
+    6)
+        channel_id="asumisena"
+        channel_name="空澄セナ"
+        ;;
+    7)
+        channel_id="shinomiya_runa"
+        channel_name="紫宮るな"
+        ;;
+    8)
+        channel_id="akarindao"
+        channel_name="夢野あかり"
+        ;;
+    9)
+        channel_id="ramuneshiranami"
+        channel_name="白波らむね"
+        ;;
+    10)
         channel_id="sendo_yuuhi"
         channel_name="千燈ゆうひ"
         ;;
-    16)
+    11)
         channel_id="narinmikure"
         channel_name="Narin"
+        ;;
+    12)
+        channel_id="urs_toko"
+        channel_name="とおこ"
+        ;;
+    13)
+        channel_id="tentei_forte"
+        channel_name="天帝フォルテ"
+        ;;
+    14)
+        channel_id="shishidoakari"
+        channel_name="獅子堂あかり"
+        ;;
+    15)
+        channel_id="yoichi_0v0"
+        channel_name="夜よいち"
+        ;;
+    16)
+        channel_id="nacho_dayo"
+        channel_name="甘城なつき"
+        ;;
+    17)
+        channel_id="kohaku_uru"
+        channel_name="狐白うる"
+        ;;
+    18)
+        channel_id="anzu_o0"
+        channel_name="Anzu_o0"
+        ;;
+    19)
+        channel_id="mmafu_"
+        channel_name="まふゆ"
         ;;
     0)
 
@@ -271,7 +327,7 @@ select_twitch_id() {
         read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo "($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
+            echo -e "\n($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
         fi
         ;;
     *)
