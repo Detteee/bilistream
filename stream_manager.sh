@@ -41,9 +41,10 @@ select_area_id() {
     echo " 7) 107: 其他网游         8) 646: UP主日常"
     echo " 9) 102: 最终幻想14      10) 433: 格斗游戏"
     echo "11) 216: 我的世界        12) 927: DeadLock"
+    echo "13) 236: 主机游戏         14) 321: 原神"
     echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-12): " area_choice
+    read -p "请选择分区 ID (0-14): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -58,6 +59,8 @@ select_area_id() {
     10) areaid=433 ;;
     11) areaid=216 ;;
     12) areaid=927 ;;
+    13) areaid=236 ;;
+    14) areaid=321 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -74,16 +77,16 @@ select_area_id() {
 select_channel_id() {
     echo "Select YouTube Channel:"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito               8) 橘ひなの            15) 神成きゅぴ"
-    echo " 2) 紫宮るな             9) 胡桃のあ             16) 夜絆ニウ"
-    echo " 3) Narin Mikure        10) 猫汰つな            17) 天帝フォルテ"
-    echo " 4) 藍沢エマ           11) 花芽なずな            18) 千燈ゆうひ"
-    echo " 5) 八雲べに            12) 花芽すみれ           19) 一ノ瀬うるは"
-    echo " 6) 兎咲ミミ            13) 獅子堂あかり           20) 空澄セナ"
-    echo " 7) 英リサ              14) 紡木こかげ           21) 甘結もか"
+    echo " 1) kamito               2) 花芽すみれ           3) 英リサ"
+    echo " 4) 胡桃のあ            5) 橘ひなの             6) 空澄セナ"
+    echo " 7) 紫宮るな            8) 夢野あかり           9) 白波らむね"
+    echo "10) 千燈ゆうひ         11) Narin               12) とおこ"
+    echo "13) 天帝フォルテ       14) 獅子堂あかり        15) 夜よいち"
+    echo "16) 甘城なつき         17) 狐白うる            18) Anzu_o0"
+    echo "19) まふゆ"
     echo " 0) Custom"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-21): " yt_choice
+    read -p "Select Channel (0-19): " yt_choice
 
     case $yt_choice in
     1)
@@ -91,84 +94,76 @@ select_channel_id() {
         channel_name="kamito"
         ;;
     2)
-        chid="UCD5W21JqNMv_tV9nfjvF9sw"
-        channel_name="紫宮るな"
+        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        channel_name="花芽すみれ"
         ;;
     3)
-        chid="UCKSpM183c85d5V2cW5qaUjA"
-        channel_name="Narin"
-        ;;
-    4)
-        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
-        channel_name="藍沢エマ"
-        ;;
-    5)
-        chid="UCjXBuHmWkieBApgBhDuJMMQ"
-        channel_name="八雲べに"
-        ;;
-    6)
-        chid="UCnvVG9RbOW3J6Ifqo-zKLiw"
-        channel_name="兎咲ミミ"
-        ;;
-    7)
-        chid="UCurEA8YoqFwimJcAuSHU0MQ"
+        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
         channel_name="英リサ"
         ;;
-    8)
-        chid="UCvUc0m317LWTTPZoBQV479A"
-        channel_name="橘ひなの"
-        ;;
-    9)
+    4)
         chid="UCIcAj6WkJ8vZ7DeJVgmeqKw"
         channel_name="胡桃のあ"
         ;;
-    10)
-        chid="UCIjdfjcSaEgdjwbgjxC3ZWg"
-        channel_name="猫汰つな"
+    5)
+        chid="UCvUc0m317LWTTPZoBQV479A"
+        channel_name="橘ひなの"
         ;;
-    11)
-        chid="UCiMG6VdScBabPhJ1ZtaVmbw"
-        channel_name="花芽なずな"
-        ;;
-    12)
-        chid="UCyLGcqYs7RsBb3L0SJfzGYA"
-        channel_name="花芽すみれ"
-        ;;
-    13)
-        chid="UCWRPqA0ehhWV4Hnp27PJCkQ"
-        channel_name="獅子堂あかり"
-        ;;
-    14)
-        chid="UC-WX1CXssCtCtc2TNIRnJzg"
-        channel_name="紡木こかげ"
-        ;;
-    15)
-        chid="UCMp55EbT_ZlqiMS3lCj01BQ"
-        channel_name="神成きゅぴ"
-        ;;
-    16)
-        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
-        channel_name="夜絆ニウ"
-        ;;
-    17)
-        chid="UC8hwewh9svh92E1gXvgVazg"
-        channel_name="天帝フォルテ"
-        ;;
-    18)
-        chid="UCuDY3ibSP2MFRgf7eo3cojg"
-        channel_name="千燈ゆうひ"
-        ;;
-    19)
-        chid="UC5LyYg6cCA4yHEYvtUsir3g"
-        channel_name="一ノ瀬うるは"
-        ;;
-    20)
+    6)
         chid="UCF_U2GCKHvDz52jWdizppIA"
         channel_name="空澄セナ"
         ;;
-    21)
-        chid="UC8vKBjGY2HVfbW9GAmgikWw"
-        channel_name="甘結もか"
+    7)
+        chid="UCvUc0m317LWTTPZoBQV479A"
+        channel_name="紫宮るな"
+        ;;
+    8)
+        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        channel_name="夢野あかり"
+        ;;
+    9)
+        chid="UCjXBuHmWkieBApgBhDuJMMQ"
+        channel_name="白波らむね"
+        ;;
+    10)
+        chid="UCuDY3ibSP2MFRgf7eo3cojg"
+        channel_name="千燈ゆうひ"
+        ;;
+    11)
+        chid="narinmikure"
+        channel_name="Narin"
+        ;;
+    12)
+        chid="urs_toko"
+        channel_name="とおこ"
+        ;;
+    13)
+        chid="tentei_forte"
+        channel_name="天帝フォルテ"
+        ;;
+    14)
+        chid="shishidoakari"
+        channel_name="獅子堂あかり"
+        ;;
+    15)
+        chid="yoichi_0v0"
+        channel_name="夜よいち"
+        ;;
+    16)
+        chid="nacho_dayo"
+        channel_name="甘城なつき"
+        ;;
+    17)
+        chid="kohaku_uru"
+        channel_name="狐白うる"
+        ;;
+    18)
+        chid="Anzu_o0"
+        channel_name="Anzu_o0"
+        ;;
+    19)
+        chid="makufuyu"
+        channel_name="まふゆ"
         ;;
     0)
         read -p "Enter custom YouTube Channel ID: " chid
@@ -360,7 +355,7 @@ show_main_menu() {
     echo -e "${PINK}│ ${RESET}                                    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
 
-    echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
+    echo -e "${PINK}└───────────────────────────────���───────┘${RESET}"
     read -p "Enter your choice: " main_choice
 }
 
