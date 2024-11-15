@@ -355,7 +355,7 @@ show_main_menu() {
     echo -e "${PINK}│ ${RESET}                                    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
 
-    echo -e "${PINK}└───────────────────────────────���───────┘${RESET}"
+    echo -e "${PINK}└─────────────────────────────────────┘${RESET}"
     read -p "Enter your choice: " main_choice
 }
 
