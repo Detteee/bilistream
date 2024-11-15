@@ -191,6 +191,8 @@ async fn process_danmaku(command: &str) {
         "格斗游戏" => 433,
         "我的世界" => 216,
         "DeadLock" => 927,
+        "主机游戏" => 236,
+        "原神" => 321,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
