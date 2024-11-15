@@ -73,6 +73,28 @@ select_area_id() {
     return 0
 }
 
+# Function to map Area IDs to names
+get_area_name() {
+    local area_id=$1
+    case $area_id in
+    86) echo "英雄联盟" ;;
+    329) echo "无畏契约" ;;
+    240) echo "APEX英雄" ;;
+    87) echo "守望先锋" ;;
+    530) echo "萌宅领域" ;;
+    235) echo "其他单机" ;;
+    107) echo "其他网游" ;;
+    646) echo "UP主日常" ;;
+    102) echo "最终幻想14" ;;
+    433) echo "格斗游戏" ;;
+    216) echo "我的世界" ;;
+    927) echo "DeadLock" ;;
+    236) echo "主机游戏" ;;
+    321) echo "原神" ;;
+    *) echo "未知分区 (ID: $area_id)" ;;
+    esac
+}
+
 # Function to select channel ID
 select_channel_id() {
     echo "Select YouTube Channel:"
@@ -341,25 +363,7 @@ select_twitch_id() {
     return 0
 }
 
-# Function to map Area IDs to names
-get_area_name() {
-    local area_id=$1
-    case $area_id in
-    86) echo "英雄联盟" ;;
-    329) echo "无畏契约" ;;
-    240) echo "APEX英雄" ;;
-    87) echo "守望先锋" ;;
-    530) echo "萌宅领域" ;;
-    235) echo "其他单机" ;;
-    107) echo "其他网游" ;;
-    646) echo "UP主日常" ;;
-    102) echo "最终幻想14" ;;
-    433) echo "格斗游戏" ;;
-    216) echo "我的世界" ;;
-    927) echo "DeadLock" ;;
-    *) echo "未知分区 (ID: $area_id)" ;;
-    esac
-}
+
 
 # Update the display_current_config function
 display_current_config() {
