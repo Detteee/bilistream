@@ -119,7 +119,7 @@ select_channel_id() {
         channel_name="kamito"
         ;;
     2)
-        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        chid="UCiMG6VdScBabPhJ1ZtaVmbw"
         channel_name="花芽なずな"
         ;;
     3)
@@ -151,7 +151,7 @@ select_channel_id() {
         channel_name="橘ひなの"
         ;;
     10)
-        chid="UCZmUoMwjyuQ59sk5_7Tx07A"
+        chid="UCurEA8YoqFwimJcAuSHU0MQ"
         channel_name="英リサ"
         ;;
     11)
@@ -171,7 +171,7 @@ select_channel_id() {
         channel_name="藍沢エマ"
         ;;
     15)
-        chid="UCvUc0m317LWTTPZoBQV479A"
+        chid="UCD5W21JqNMv_tV9nfjvF9sw"
         channel_name="紫宮るな"
         ;;
     16)
@@ -183,11 +183,11 @@ select_channel_id() {
         channel_name="小森めと"
         ;;
     18)
-        chid="UCjXBuHmWkieBApgBhDuJMMQ"
+        chid="UC61OwuYOVuKkpKnid-43Twg"
         channel_name="白波らむね"
         ;;
     19)
-        chid="UCPkKpOHxEDcwmUAnRpIu-Ng"
+        chid="UCS5l_Y0oMVTjEos2LuyeSZQ"
         channel_name="夢野あかり"
         ;;
     20)
@@ -211,7 +211,7 @@ select_channel_id() {
         channel_name="甘結もか"
         ;;
     25)
-        chid="UC8hwewh9svh92E1gXvgVazg"
+        chid="UCKSpM183c85d5V2cW5qaUjA"
         channel_name="Narin Mikure"
         ;;
     26)
@@ -219,7 +219,7 @@ select_channel_id() {
         channel_name="獅子堂あかり"
         ;;
     27)
-        chid="UCuI5XaO-6VkOEhHao6ij7JA"
+        chid="UC8hwewh9svh92E1gXvgVazg"
         channel_name="天帝フォルテ"
         ;;
     28)
