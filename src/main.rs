@@ -70,9 +70,14 @@ async fn run_bilistream(
             log_once_2 = false;
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
-                let live_title: String =
-                    get_live_title(config_path, platform, &cfg.bililive.room.to_string()).await?;
+                let channel_id = if platform == "YT" {
+                    &cfg.youtube.channel_id
+                } else {
+                    &cfg.twitch.channel_id
+                };
+                let live_title = get_live_title(config_path, platform, channel_id).await?;
                 cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
+                old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
                 bili_start_live(&cfg).await?;
                 tracing::info!(
                     "B站已开播, 标题为 {},分区为 {}",
