@@ -118,11 +118,11 @@ fn update_config(
     Ok(())
 }
 
-/// Determines the area ID based on the live title.
-fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
+/// determines the area id based on the live title.
+pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
     let title = live_title.to_lowercase();
 
-    if title.contains("valorant") {
+    if title.contains("valorant") || title.contains("ヴァロ") {
         329
     } else if title.contains("league of legends")
         || title.contains("lol")
@@ -137,6 +137,12 @@ fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
         927
     } else if title.contains("漆黒メインクエ") || title.contains("ff14") {
         102
+    } else if title.contains("apex") {
+        240
+    } else if title.contains("原神") {
+        321
+    } else if title.contains("スト６") {
+        433
     } else {
         current_area_id
     }

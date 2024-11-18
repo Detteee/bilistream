@@ -1,7 +1,7 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, ffmpeg, get_bili_live_status,
-    get_youtube_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
+    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
+    get_bili_live_status, get_youtube_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
 };
 use clap::{Arg, Command};
 use proctitle::set_title;
@@ -43,6 +43,7 @@ async fn run_bilistream(
             tracing::info!("配置改变, 停止Bilibili直播");
             bili_stop_live(&old_cfg).await?;
             old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
+            log_once = false;
             continue;
         }
 
@@ -51,8 +52,10 @@ async fn run_bilistream(
             live_info.get_status().await.unwrap_or((false, None, None));
         let platform = if &cfg.platform == "Youtube" {
             "YT"
-        } else {
+        } else if &cfg.platform == "Twitch" {
             "TW"
+        } else {
+            "Unknown"
         };
         if is_live {
             tracing::info!(
@@ -67,6 +70,9 @@ async fn run_bilistream(
             log_once_2 = false;
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
+                let live_title: String =
+                    get_live_title(config_path, platform, &cfg.bililive.room.to_string()).await?;
+                cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
                 bili_start_live(&cfg).await?;
                 tracing::info!(
                     "B站已开播, 标题为 {},分区为 {}",
@@ -241,7 +247,7 @@ async fn get_live_title(
     config_path: &str,
     platform: &str,
     channel_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     let cfg = load_config(Path::new(config_path))?;
 
     match platform {
@@ -249,6 +255,7 @@ async fn get_live_title(
             let youtube = Youtube::new(channel_id, channel_id);
             let title = youtube.get_title().await?;
             println!("YouTube live title: {}", title);
+            Ok(title)
         }
         "TW" => {
             let twitch = Twitch::new(
@@ -259,13 +266,13 @@ async fn get_live_title(
             );
             let title = twitch.get_title().await?;
             println!("Twitch live title: {}", title);
+            Ok(title)
         }
         _ => {
             println!("Unsupported platform: {}", platform);
+            Err(format!("Unsupported platform: {}", platform).into())
         }
     }
-
-    Ok(())
 }
 
 #[tokio::main]
