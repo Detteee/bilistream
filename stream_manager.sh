@@ -42,9 +42,10 @@ select_area_id() {
     echo " 9) 102: 最终幻想14      10) 433: 格斗游戏"
     echo "11) 216: 我的世界        12) 927: DeadLock"
     echo "13) 236: 主机游戏        14) 321: 原神"
+    echo "15) 407: 游戏王          16) 694: 斯普拉遁3"
     echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-14): " area_choice
+    read -p "请选择分区 ID (0-16): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -61,6 +62,8 @@ select_area_id() {
     12) areaid=927 ;;
     13) areaid=236 ;;
     14) areaid=321 ;;
+    15) areaid=407 ;;
+    16) areaid=694 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -91,6 +94,8 @@ get_area_name() {
     927) echo "DeadLock" ;;
     236) echo "主机游戏" ;;
     321) echo "原神" ;;
+    407) echo "游戏王" ;;
+    694) echo "斯普拉遁3" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
