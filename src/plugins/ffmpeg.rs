@@ -35,7 +35,7 @@ pub fn ffmpeg(
     rtmp_url: String,
     rtmp_key: String,
     m3u8_url: String,
-    ffmpeg_proxy: Option<String>,
+    proxy: Option<String>,
     log_level: &str,
     platform: &str,
 ) {
@@ -54,7 +54,7 @@ pub fn ffmpeg(
     let cmd = format!("{}{}", rtmp_url, rtmp_key);
     let mut command = Command::new("ffmpeg");
 
-    if let Some(proxy) = ffmpeg_proxy {
+    if let Some(proxy) = proxy {
         command.arg("-http_proxy").arg(proxy);
     }
 

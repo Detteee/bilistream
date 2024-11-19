@@ -46,6 +46,7 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
         "Youtube" => Ok(Box::new(Youtube::new(
             &cfg.youtube.channel_name.as_str(),
             &cfg.youtube.channel_id.as_str(),
+            cfg.proxy,
         ))),
 
         "Twitch" => Ok(Box::new(Twitch::new(
@@ -60,8 +61,12 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
 
 pub async fn get_youtube_live_status(
     channel_id: &str,
+    proxy: Option<String>,
 ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
     let mut command = Command::new("yt-dlp");
+    if let Some(proxy) = proxy {
+        command.arg(format!("--proxy {}", proxy));
+    }
     command.arg("-g");
 
     command.arg(format!(

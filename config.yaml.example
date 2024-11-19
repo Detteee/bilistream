@@ -3,6 +3,9 @@ Interval: 60
 # 需要转播的平台 Twitch || Youtube
 Platform: Youtube
 # B站推流账号Cookie
+Proxy:
+# 代理地址,无需代理可以不填此项或者留空
+HolodexApiKey: 
 BiliLive:
   Title: "直播间标题"
   EnableDanmakuCommand: # true or false
@@ -17,15 +20,14 @@ BiliLive:
   # BiliRtmpUrl: B站开播设置页面的服务器地址
   BiliRtmpKey: "?streamname=live_UID_xxxxxxxx&key=xxxxxxxxxxxxxxxxxxxxx=rtmp&pflag=1"
   # BiliRtmpKey: B站开播设置页面的串流密钥,需注意,由于是?号开头的,本行需要对内容加双引号
-
+Youtube:
+  ChannelName: "Name of streamer" # Custom
+  ChannelId: # Youtube Channel ID
 Twitch:
   ChannelName: "Name of streamer" # Custom
   ChannelId: # the string followed after https://www.twitch.tv/
   OauthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
 
-Youtube:
-  ChannelName: "Name of streamer" # Custom
-  ChannelId: # Youtube Channel ID
-# FfmpegProxy:
-# Ffmpeg代理地址,无需代理可以不填此项或者留空
+
+

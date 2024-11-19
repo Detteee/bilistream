@@ -14,12 +14,14 @@ pub struct Config {
     pub youtube: Youtube,
     #[serde(rename = "Platform")]
     pub platform: String,
-    #[serde(rename = "Email")]
-    pub email: Option<EmailConfig>,
-    #[serde(rename = "FfmpegProxy")]
-    pub ffmpeg_proxy: Option<String>,
-    #[serde(rename = "Gotify")]
-    pub gotify: Option<GotifyConfig>,
+    // #[serde(rename = "Email")]
+    // pub email: Option<EmailConfig>,
+    #[serde(rename = "Proxy")]
+    pub proxy: Option<String>,
+    #[serde(rename = "HolodexApiKey")]
+    pub holodex_api_key: Option<String>,
+    // #[serde(rename = "Gotify")]
+    // pub gotify: Option<GotifyConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -65,26 +67,26 @@ pub struct Youtube {
     pub channel_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct EmailConfig {
-    #[serde(rename = "To")]
-    pub to: String,
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// pub struct EmailConfig {
+//     #[serde(rename = "To")]
+//     pub to: String,
 
-    #[serde(rename = "Subject")]
-    pub subject: String,
+//     #[serde(rename = "Subject")]
+//     pub subject: String,
 
-    #[serde(rename = "Body")]
-    pub body: String,
+//     #[serde(rename = "Body")]
+//     pub body: String,
 
-    #[serde(rename = "Host")]
-    pub host: String,
+//     #[serde(rename = "Host")]
+//     pub host: String,
 
-    #[serde(rename = "Sender")]
-    pub sender: String,
+//     #[serde(rename = "Sender")]
+//     pub sender: String,
 
-    #[serde(rename = "Password")]
-    pub password: String,
-}
+//     #[serde(rename = "Password")]
+//     pub password: String,
+// }
 
 // 读取配置文件
 pub fn load_config(config: &Path) -> Result<Config, Box<dyn Error>> {
@@ -94,10 +96,10 @@ pub fn load_config(config: &Path) -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GotifyConfig {
-    #[serde(rename = "Url")]
-    pub url: String,
-    #[serde(rename = "Token")]
-    pub token: String,
-}
+// #[derive(Debug, Serialize, Deserialize, Clone)]
+// pub struct GotifyConfig {
+//     #[serde(rename = "Url")]
+//     pub url: String,
+//     #[serde(rename = "Token")]
+//     pub token: String,
+// }

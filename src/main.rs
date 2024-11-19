@@ -23,8 +23,15 @@ async fn run_bilistream(
     let mut old_cfg = cfg.clone();
     let mut log_once = false;
     let mut log_once_2 = false;
-    let mut start_stream = false;
     let mut no_live = false;
+    let platform = if &cfg.platform == "Youtube" {
+        "YT"
+    } else if &cfg.platform == "Twitch" {
+        "TW"
+    } else {
+        "Unknown"
+    };
+    let live_info = select_live(cfg.clone()).await?;
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
@@ -38,25 +45,9 @@ async fn run_bilistream(
         log_once = false;
         cfg = load_config(Path::new(config_path))?;
 
-        // If configuration changed, stop Bilibili live
-        if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
-            tracing::info!("配置改变, 停止Bilibili直播");
-            bili_stop_live(&old_cfg).await?;
-            old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
-            log_once = false;
-            continue;
-        }
-
-        let live_info = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
             live_info.get_status().await.unwrap_or((false, None, None));
-        let platform = if &cfg.platform == "Youtube" {
-            "YT"
-        } else if &cfg.platform == "Twitch" {
-            "TW"
-        } else {
-            "Unknown"
-        };
+
         if is_live {
             tracing::info!(
                 "{} 正在直播",
@@ -68,29 +59,41 @@ async fn run_bilistream(
             );
             no_live = false;
             log_once_2 = false;
+            if platform == "YT" {
+                let live_topic = if let Ok(topic) =
+                    get_live_topic(config_path, platform, &cfg.youtube.channel_id).await
+                {
+                    topic
+                } else {
+                    get_live_title(config_path, platform, &cfg.youtube.channel_id).await?
+                };
+                cfg.bililive.area_v2 = check_area_id_with_title(&live_topic, cfg.bililive.area_v2);
+            } else {
+                let live_title =
+                    get_live_title(config_path, platform, &cfg.twitch.channel_id).await?;
+                cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
+            }
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
-                let channel_id = if platform == "YT" {
-                    &cfg.youtube.channel_id
-                } else {
-                    &cfg.twitch.channel_id
-                };
-                let live_title = get_live_title(config_path, platform, channel_id).await?;
-                cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
-                old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
+
                 bili_start_live(&cfg).await?;
                 tracing::info!(
-                    "B站已开播, 标题为 {},分区为 {}",
+                    "B站已开播, 标题为 {},分区ID为 {}",
                     cfg.bililive.title,
                     cfg.bililive.area_v2
                 );
+                old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
                 bili_change_live_title(&cfg).await?;
                 tracing::info!("标题为 {}", cfg.bililive.title);
-                start_stream = true;
-            }
-            tracing::info!("B站直播中");
-
-            if !start_stream {
+            } else {
+                // If configuration changed, stop Bilibili live
+                if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
+                    tracing::info!("配置改变, 停止Bilibili直播");
+                    bili_stop_live(&old_cfg).await?;
+                    old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
+                    log_once = false;
+                    continue;
+                }
                 bili_change_live_title(&cfg).await?;
                 tracing::info!("B站直播标题变更为 {}", cfg.bililive.title);
             }
@@ -100,7 +103,7 @@ async fn run_bilistream(
                 cfg.bililive.bili_rtmp_url.clone(),
                 cfg.bililive.bili_rtmp_key.clone(),
                 m3u8_url.clone().unwrap(),
-                cfg.ffmpeg_proxy.clone(),
+                cfg.proxy.clone(),
                 ffmpeg_log_level,
                 platform,
             );
@@ -116,7 +119,7 @@ async fn run_bilistream(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
                     new_m3u8_url.clone().unwrap(),
-                    cfg.ffmpeg_proxy.clone(),
+                    cfg.proxy.clone(),
                     ffmpeg_log_level,
                     platform,
                 );
@@ -165,10 +168,55 @@ async fn run_bilistream(
         }
     }
 }
+
+async fn get_live_topic(
+    config_path: &str,
+    platform: &str,
+    channel_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match platform {
+        "YT" => {
+            let client = reqwest::Client::new();
+            let url = format!(
+                "https://holodex.net/api/v2/users/live?channels={}",
+                channel_id
+            );
+            let cfg = load_config(Path::new(config_path))?;
+            let response = client
+                .get(&url)
+                .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
+                .send()
+                .await?;
+
+            let videos: Vec<serde_json::Value> = response.json().await?;
+
+            if let Some(video) = videos.last() {
+                if let Some(topic_id) = video.get("topic_id") {
+                    tracing::info!("YouTube live topic_id: {:?}", topic_id);
+                    println!("YouTube live topic_id: {:?}", topic_id);
+                    return Ok(topic_id.to_string());
+                } else {
+                    tracing::info!("No topic_id found for current stream");
+                    Err("No topic_id found for current stream".into())
+                }
+            } else {
+                tracing::info!("No live streams found for this channel");
+                Err("No live streams found for this channel".into())
+            }
+        }
+        _ => {
+            tracing::info!("Unsupported platform: {}", platform);
+            Err(format!("Unsupported platform: {}", platform).into())
+        }
+    }
+}
+
 async fn get_live_status(
+    config_path: &str,
     platform: &str,
     channel_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config(Path::new(config_path))?;
     match platform {
         "bilibili" => {
             let room_id: i32 = channel_id.parse()?;
@@ -179,7 +227,8 @@ async fn get_live_status(
             );
         }
         "YT" => {
-            let (is_live, _, scheduled_time) = get_youtube_live_status(channel_id).await?;
+            let (is_live, _, scheduled_time) =
+                get_youtube_live_status(channel_id, cfg.proxy.clone()).await?;
             println!(
                 "YouTube live status: {}",
                 if is_live { "Live" } else { "Not Live" }
@@ -198,7 +247,6 @@ async fn get_live_status(
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
                 .build();
 
-            let cfg = load_config(Path::new("./TW/config.yaml"))?;
             let twitch = Twitch::new(
                 channel_id,
                 cfg.twitch.oauth_token.clone(),
@@ -257,9 +305,9 @@ async fn get_live_title(
 
     match platform {
         "YT" => {
-            let youtube = Youtube::new(channel_id, channel_id);
+            let youtube = Youtube::new(channel_id, channel_id, cfg.proxy.clone());
             let title = youtube.get_title().await?;
-            println!("YouTube live title: {}", title);
+            tracing::info!("YouTube live title: {}", title);
             Ok(title)
         }
         "TW" => {
@@ -338,6 +386,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Channel ID to check"),
                 ),
         )
+        .subcommand(
+            Command::new("get-live-topic")
+                .about("Get the topic of a live stream")
+                .arg(
+                    Arg::new("platform")
+                        .required(true)
+                        .help("Platform to check (YT)"),
+                )
+                .arg(
+                    Arg::new("channel_id")
+                        .required(true)
+                        .help("Channel ID to check"),
+                ),
+        )
         .get_matches();
 
     let config_path = matches
@@ -355,7 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("get-live-status", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform").unwrap();
             let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
-            get_live_status(platform, channel_id).await?;
+            get_live_status(config_path, platform, channel_id).await?;
         }
         Some(("start-live", _)) => {
             start_live(config_path).await?;
@@ -371,6 +433,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let platform = sub_m.get_one::<String>("platform").unwrap();
             let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
             get_live_title(config_path, platform, channel_id).await?;
+        }
+        Some(("get-live-topic", sub_m)) => {
+            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
+            get_live_topic(config_path, platform, channel_id).await?;
         }
         _ => {
             let file_name = Path::new(config_path)

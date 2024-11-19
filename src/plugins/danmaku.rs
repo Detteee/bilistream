@@ -121,6 +121,7 @@ fn update_config(
 /// determines the area id based on the live title.
 pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
     let title = live_title.to_lowercase();
+    let title = title.replace("_", " ");
 
     if title.contains("valorant") || title.contains("ヴァロ") {
         329
@@ -135,14 +136,28 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
         87
     } else if title.contains("deadlock") {
         927
-    } else if title.contains("漆黒メインクエ") || title.contains("ff14") {
+    } else if title.contains("final fantasy online")
+        || title.contains("漆黒メインクエ")
+        || title.contains("ff14")
+    {
         102
     } else if title.contains("apex") {
         240
+    } else if title.contains("スト６") || title.contains("street fighter") {
+        433
+    } else if title.contains("yu-gi-oh") || title.contains("遊戯王") {
+        407
+    } else if title.contains("splatoon") || title.contains("スプラトゥーン3") {
+        694
     } else if title.contains("原神") {
         321
-    } else if title.contains("スト６") {
-        433
+    } else if title.contains("pokemon")
+        || title.contains("core keeper")
+        || title.contains("terraria")
+        || title.contains("tgc card shop simulator")
+        || title.contains("stardew valley")
+    {
+        235
     } else {
         current_area_id
     }
@@ -154,7 +169,7 @@ async fn process_danmaku(command: &str) {
     if !command.starts_with(" :") {
         return;
     }
-    // tracing::info!("弹幕:{}", command);
+    tracing::info!("弹幕:{}", &command[2..]);
 
     let normalized_danmaku = command.replace("％", "%");
     // Validate danmaku command format: %转播%平台%频道名%分区
@@ -167,7 +182,7 @@ async fn process_danmaku(command: &str) {
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
-    tracing::info!("弹幕:{:?}", parts);
+    // tracing::info!("弹幕:{:?}", parts);
     if parts.len() < 4 {
         tracing::error!("弹幕命令格式错误. Skipping...");
         return;
@@ -176,12 +191,12 @@ async fn process_danmaku(command: &str) {
     let platform = parts[2];
     let channel_name = parts[3];
     let area_name = parts[4];
-    // tracing::info!(
-    //     "平台: {}, 频道: {}, 分区: {}",
-    //     platform,
-    //     channel_name,
-    //     area_name
-    // );
+    tracing::info!(
+        "平台: {}, 频道: {}, 分区: {}",
+        platform,
+        channel_name,
+        area_name
+    );
 
     // Determine area_id based on area_name
     let area_id = match area_name {
@@ -199,6 +214,8 @@ async fn process_danmaku(command: &str) {
         "DeadLock" => 927,
         "主机游戏" => 236,
         "原神" => 321,
+        "斯普拉遁3" => 694,
+        "游戏王：决斗链接" => 407,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
@@ -273,13 +290,18 @@ async fn process_danmaku(command: &str) {
             }
         };
 
-        if live_title.contains("ウォッチパ") {
-            tracing::error!("ウォッチパ is not supported due to copyright issues");
+        if live_title.contains("ウォッチパ")
+            || live_title.contains("watchalong")
+            || live_title.contains("talk")
+            || live_title.contains("marshmallow")
+            || live_title.contains("morning")
+        {
+            tracing::error!("live title/topic contains unsupported keywords");
             return;
         }
 
         let updated_area_id = check_area_id_with_title(&live_title, area_id);
-
+        // tracing::info!("更新后的分区ID: {}", updated_area_id);
         if let Err(e) = update_config(
             platform,
             channel_name,
