@@ -50,7 +50,7 @@ async fn run_bilistream(
     } else if &cfg.platform == "Twitch" {
         "TW"
     } else {
-        "Unknown"
+        return Err("不支持的平台".into());
     };
     loop {
         // Check if any ffmpeg or danmaku is running
