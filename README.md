@@ -61,7 +61,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```
 2. Edit `config.yaml` with your specific settings:
 
-   - Set your Bilibili account details (SESSDATA, bili_jct, etc.)
    - Configure the desired streaming platform (Twitch or YouTube)
    - Set the channel ID and other relevant information
    - Select a proxy region for twitch config
@@ -81,7 +80,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 Run the Bilistream application:
 
 ```
-./bilistream -c ./config.yaml
+./bilistream -c YT/config.yaml
+./bilistream -c TW/config.yaml
 ```
 
 ### Command-line Interface
@@ -126,14 +126,18 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
    cp config.yaml TW/config.yaml
    ```
 
+   Rename bilibup to login-biliup
+
+   Rename bilibili-live-danmaku-cli to live-danmaku-cli
    Resulting tree structure:
 
    ```
    .
-   ├── bilibili-live-danmaku-cli
    ├── bilistream
    ├── config.json
-   ├── danmaku.sh
+   ├── stream_manager.sh
+   ├── login-biliup
+   ├── live-danmaku-cli
    ├── TW
    │   ├── config.yaml
    │   └── TW_channels.txt
