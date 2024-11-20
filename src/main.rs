@@ -21,7 +21,7 @@ async fn run_bilistream(
     // tracing::info!("bilistream 正在运行");
     if !Path::new("cookies.json").exists() {
         tracing::info!("cookies.json 不存在，请登录");
-        let mut command = StdCommand::new("./biliup");
+        let mut command = StdCommand::new("./login-biliup");
         command.arg("login");
         command.spawn()?.wait()?;
     } else {
@@ -33,7 +33,7 @@ async fn run_bilistream(
             > 3600 * 48
         {
             tracing::info!("cookies.json 存在时间超过48小时，刷新cookies");
-            let mut command = StdCommand::new("./biliup");
+            let mut command = StdCommand::new("./login-biliup");
             command.arg("renew");
             command.spawn()?.wait()?;
         }
