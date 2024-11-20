@@ -238,11 +238,7 @@ async fn process_danmaku(command: &str) {
         };
 
         if channel_id.is_empty() {
-            tracing::error!(
-                "Channel {} not found in allowed list for {}",
-                channel_name,
-                platform
-            );
+            tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
             return;
         }
 
@@ -328,7 +324,7 @@ async fn process_danmaku(command: &str) {
         //     );
         // }
     } else {
-        tracing::error!("不支持的平台: {}", platform);
+        tracing::error!("指令错误: {}", danmaku_command);
     }
 }
 

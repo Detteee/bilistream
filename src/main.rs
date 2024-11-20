@@ -88,7 +88,7 @@ async fn run_bilistream(
             } else {
                 // If configuration changed, stop Bilibili live
                 if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
-                    tracing::info!("配置改变, 停止Bilibili直播");
+                    tracing::info!("分区配置改变, 停止Bilibili直播");
                     bili_stop_live(&old_cfg).await?;
                     old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
                     log_once = false;
