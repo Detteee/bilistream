@@ -130,7 +130,7 @@ async fn run_bilistream(
                 match platform {
                     "TW" => &cfg.twitch.channel_name,
                     "YT" => &cfg.youtube.channel_name,
-                    _ => "Unknown Platform",
+                    _ => "未知平台",
                 }
             );
             if cfg.bililive.enable_danmaku_command {
@@ -154,7 +154,7 @@ async fn run_bilistream(
                         match platform {
                             "TW" => &cfg.twitch.channel_name,
                             "YT" => &cfg.youtube.channel_name,
-                            _ => "Unknown Platform",
+                            _ => "未知平台",
                         }
                     );
                     no_live = true;
@@ -196,17 +196,17 @@ async fn get_live_topic(
                     println!("YouTube live topic_id: {:?}", topic_id);
                     return Ok(topic_id.to_string());
                 } else {
-                    tracing::info!("No topic_id found for current stream");
-                    Err("No topic_id found for current stream".into())
+                    tracing::info!("当前YT直播没有topic_id");
+                    Err("当前YT直播没有topic_id".into())
                 }
             } else {
-                tracing::info!("No live streams found for this channel");
-                Err("No live streams found for this channel".into())
+                tracing::info!("当前频道没有直播");
+                Err("当前频道没有直播".into())
             }
         }
         _ => {
-            tracing::info!("Unsupported platform: {}", platform);
-            Err(format!("Unsupported platform: {}", platform).into())
+            tracing::info!("不支持的平台: {}", platform);
+            Err(format!("不支持的平台: {}", platform).into())
         }
     }
 }
@@ -222,19 +222,19 @@ async fn get_live_status(
             let room_id: i32 = channel_id.parse()?;
             let is_live = get_bili_live_status(room_id).await?;
             println!(
-                "Bilibili live status: {}",
-                if is_live { "Live" } else { "Not Live" }
+                "B站直播状态: {}",
+                if is_live { "直播中" } else { "未直播" }
             );
         }
         "YT" => {
             let (is_live, _, scheduled_time) =
                 get_youtube_live_status(channel_id, cfg.proxy.clone()).await?;
             println!(
-                "YouTube live status: {}",
-                if is_live { "Live" } else { "Not Live" }
+                "YouTube直播状态: {}",
+                if is_live { "直播中" } else { "未直播" }
             );
             if let Some(time) = scheduled_time {
-                println!("Scheduled start time: {}", time);
+                println!("计划开始时间: {}", time);
             }
         }
         "TW" => {
@@ -256,12 +256,12 @@ async fn get_live_status(
 
             let (is_live, _, _) = twitch.get_status().await?;
             println!(
-                "Twitch live status: {}",
-                if is_live { "Live" } else { "Not Live" }
+                "Twitch直播状态: {}",
+                if is_live { "直播中" } else { "未直播" }
             );
         }
         _ => {
-            println!("Unsupported platform: {}", platform);
+            println!("不支持的平台: {}", platform);
         }
     }
     Ok(())
@@ -307,7 +307,7 @@ async fn get_live_title(
         "YT" => {
             let youtube = Youtube::new(channel_id, channel_id, cfg.proxy.clone());
             let title = youtube.get_title().await?;
-            tracing::info!("YouTube live title: {}", title);
+            tracing::info!("YouTube直播标题: {}", title);
             Ok(title)
         }
         "TW" => {
@@ -318,12 +318,12 @@ async fn get_live_title(
                 cfg.twitch.proxy_region.clone(),
             );
             let title = twitch.get_title().await?;
-            println!("Twitch live title: {}", title);
+            tracing::info!("Twitch直播标题: {}", title);
             Ok(title)
         }
         _ => {
-            println!("Unsupported platform: {}", platform);
-            Err(format!("Unsupported platform: {}", platform).into())
+            tracing::info!("不支持的平台: {}", platform);
+            Err(format!("不支持的平台: {}", platform).into())
         }
     }
 }
@@ -336,68 +336,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('c')
                 .long("config")
                 .value_name("FILE")
-                .help("Sets a custom config file")
+                .help("设置自定义配置文件")
                 .global(true),
         )
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
                 .value_name("LEVEL")
-                .help("Sets ffmpeg log level (error, info, debug)")
+                .help("设置ffmpeg日志级别 (error, info, debug)")
                 .default_value("error")
                 .value_parser(["error", "info", "debug"]),
         )
         .subcommand(
             Command::new("get-live-status")
-                .about("Check live status of a channel")
+                .about("检查频道直播状态")
                 .arg(
                     Arg::new("platform")
                         .required(true)
-                        .help("Platform to check (YT, TW, bilibili)"),
+                        .help("检查的平台 (YT, TW, bilibili)"),
                 )
                 .arg(
                     Arg::new("channel_id")
                         .required(true)
-                        .help("Channel ID to check"),
+                        .help("检查的频道ID"),
                 ),
         )
-        .subcommand(Command::new("start-live").about("Start a live stream"))
-        .subcommand(Command::new("stop-live").about("Stop a live stream"))
+        .subcommand(Command::new("start-live").about("开始直播"))
+        .subcommand(Command::new("stop-live").about("停止直播"))
         .subcommand(
             Command::new("change-live-title")
-                .about("Change the title of a live stream")
+                .about("改变直播标题")
                 .arg(
                     Arg::new("title")
                         .required(true)
-                        .help("New title for the live stream"),
+                        .help("新直播标题"),
                 ),
         )
         .subcommand(
             Command::new("get-live-title")
-                .about("Get the title of a live stream")
+                .about("获取直播标题")
                 .arg(
                     Arg::new("platform")
                         .required(true)
-                        .help("Platform to check (YT, TW)"),
+                        .help("获取的平台 (YT, TW)"),
                 )
                 .arg(
                     Arg::new("channel_id")
                         .required(true)
-                        .help("Channel ID to check"),
+                        .help("获取的频道ID"),
                 ),
         )
         .subcommand(
             Command::new("get-live-topic")
-                .about("Get the topic of a live stream")
+                .about("获取直播topic_id")
                 .arg(
                     Arg::new("platform")
                         .required(true)
-                        .help("Platform to check (YT)"),
+                        .help("获取的平台 (仅支持YT)"),
                 )
                 .arg(
                     Arg::new("channel_id")
                         .required(true)
-                        .help("Channel ID to check"),
+                        .help("获取的频道ID"),
                 ),
         )
         .get_matches();
@@ -406,7 +406,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_one::<String>("config")
         .map(|s| s.as_str())
         .unwrap_or("./TW/config.yaml");
-    // default config path is ./YT/config.yaml to prevent error
+    // 默认配置文件路径为./YT/config.yaml，防止错误
 
     let ffmpeg_log_level = matches
         .get_one::<String>("ffmpeg-log-level")
