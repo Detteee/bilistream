@@ -61,7 +61,6 @@
    ```
 2. 编辑 `config.yaml` 以设置您的特定设置：
 
-   - 设置您的 Bilibili 账户详细信息（SESSDATA、bili_jct 等）
    - 配置所需转播的平台（Twitch 或 YouTube）
    - 设置频道 ID 和其他相关信息
    - 为T台选择一个代理地区
@@ -125,10 +124,11 @@ Bilistream 支持以下命令：
 
    ```
    .
-   ├── bilibili-live-danmaku-cli
    ├── bilistream
    ├── config.json
-   ├── danmaku.sh
+   ├── stream_manager.sh
+   ├── login-biliup
+   ├── live-danmaku-cli
    ├── TW
    │   ├── config.yaml
    │   └── TW_channels.txt
