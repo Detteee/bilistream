@@ -33,10 +33,16 @@ pub fn create_danmaku_lock(platform: &str) -> io::Result<()> {
 }
 
 /// Removes the danmaku lock file for the specified platform.
-pub fn remove_danmaku_lock(platform: &str) -> io::Result<()> {
-    let lock_file = format!("danmaku.lock-{}", platform);
-    fs::remove_file(&lock_file)?;
-    tracing::info!("{} removed", lock_file);
+pub fn remove_danmaku_lock() -> io::Result<()> {
+    if Path::new("danmaku.lock-YT").exists() {
+        fs::remove_file("danmaku.lock-YT")?;
+        tracing::info!("删除弹幕锁文件danmaku.lock-YT成功");
+    } else if Path::new("danmaku.lock-TW").exists() {
+        fs::remove_file("danmaku.lock-TW")?;
+        tracing::info!("删除弹幕锁文件danmaku.lock-TW成功");
+    } else {
+        tracing::error!("弹幕锁文件不存在");
+    }
     Ok(())
 }
 
@@ -439,12 +445,7 @@ pub fn run_danmaku(platform: &str) {
                     .expect("停止弹幕命令读取失败");
 
                 // Try to remove both lock files, logging any errors
-                let _ = remove_danmaku_lock("YT")
-                    .map_err(|e| tracing::error!("删除 danmaku.lock-YT 时出错: {}", e));
-                let _ = remove_danmaku_lock("TW")
-                    .map_err(|e| tracing::error!("删除 danmaku.lock-TW 时出错: {}", e));
-
-                break;
+                remove_danmaku_lock().expect("删除弹幕锁文件失败");
             }
         }
     }
