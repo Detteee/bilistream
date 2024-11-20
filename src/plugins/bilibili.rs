@@ -58,10 +58,10 @@ pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
 pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.sessdata,
-        cfg.bililive.bili_jct,
-        cfg.bililive.dede_user_id,
-        cfg.bililive.dede_user_id_ckmd5
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
     );
     let url = Url::parse("https://api.live.bilibili.com/")?;
     let jar = Jar::default();
@@ -90,7 +90,10 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         )
         .body(format!(
             "room_id={}&platform=android_link&area_v2={}&csrf_token={}&csrf={}",
-            cfg.bililive.room, cfg.bililive.area_v2, cfg.bililive.bili_jct, cfg.bililive.bili_jct
+            cfg.bililive.room,
+            cfg.bililive.area_v2,
+            cfg.bililive.credentials.bili_jct,
+            cfg.bililive.credentials.bili_jct
         ))
         .send()
         .await?
@@ -115,10 +118,10 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
 pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.sessdata,
-        cfg.bililive.bili_jct,
-        cfg.bililive.dede_user_id,
-        cfg.bililive.dede_user_id_ckmd5
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
     );
     let url = Url::parse("https://api.live.bilibili.com/room/v1/Room/update")?;
     let jar = Jar::default();
@@ -147,7 +150,10 @@ pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> 
         )
         .body(format!(
             "room_id={}&platform=pc&title={}&csrf_token={}&csrf={}",
-            cfg.bililive.room, cfg.bililive.title, cfg.bililive.bili_jct, cfg.bililive.bili_jct
+            cfg.bililive.room,
+            cfg.bililive.title,
+            cfg.bililive.credentials.bili_jct,
+            cfg.bililive.credentials.bili_jct
         ))
         .send()
         .await?
@@ -172,10 +178,10 @@ pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> 
 pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.sessdata,
-        cfg.bililive.bili_jct,
-        cfg.bililive.dede_user_id,
-        cfg.bililive.dede_user_id_ckmd5
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
     );
     let url = Url::parse("https://api.live.bilibili.com/")?;
     let jar = Jar::default();
@@ -204,7 +210,7 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         )
         .body(format!(
             "room_id={}&platform=pc&csrf_token={}&csrf={}",
-            cfg.bililive.room, cfg.bililive.bili_jct, cfg.bililive.bili_jct
+            cfg.bililive.room, cfg.bililive.credentials.bili_jct, cfg.bililive.credentials.bili_jct
         ))
         .send()
         .await?

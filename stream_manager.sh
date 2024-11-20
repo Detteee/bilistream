@@ -414,9 +414,8 @@ show_main_menu() {
     echo -e "${PINK}│ ${RESET}1. Change Area ID                   ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}2. Change YouTube ID                ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}4. Update SESSDATA and bili_jct     ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}5. Quick setup for kamito           ${PINK}│${RESET}"
-    echo -e "${PINK}│ ${RESET}6. Display current config           ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}4. Quick setup for kamito           ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}5. Display current config           ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}                                    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
 
@@ -483,18 +482,10 @@ while true; do
             display_current_config "TW"
         fi
         ;;
-    4) # Update SESSDATA and bili_jct
-        read -p "Enter the new SESSDATA: " new_sessdata
-        read -p "Enter the new bili_jct: " new_bili_jct
-        sed -i "s|SESSDATA: .*|SESSDATA: ${new_sessdata}|" "$BASE_DIR"/*/config.yaml
-        sed -i "s|bili_jct: .*|bili_jct: ${new_bili_jct}|" "$BASE_DIR"/*/config.yaml
-        sed -i "s|\"sessdata\": \".*\"|\"sessdata\": \"${new_sessdata}\"|" "$BASE_DIR/config.json"
-        echo "SESSDATA and bili_jct updated in all config files and config.json."
-        ;;
-    5) # Quick setup for kamito
+    4) # Quick setup for kamito
         update_kamito
         ;;
-    6) # Display current config
+    5) # Display current config
         display_current_config "all"
         ;;
 

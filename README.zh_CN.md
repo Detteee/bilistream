@@ -18,6 +18,7 @@
 - yt-dlp
 - streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
+- [biliup/biliup-rs](https://github.com/biliup/biliup-rs)（用于登录B站账号）
 
 ## 安装
 

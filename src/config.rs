@@ -1,29 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fs;
 use std::path::Path;
 
+/// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    #[serde(rename = "Interval")]
+    pub interval: u64,
     #[serde(rename = "BiliLive")]
     pub bililive: BiliLive,
     #[serde(rename = "Twitch")]
     pub twitch: Twitch,
-    #[serde(rename = "Interval")]
-    pub interval: u64,
     #[serde(rename = "Youtube")]
     pub youtube: Youtube,
+
     #[serde(rename = "Platform")]
     pub platform: String,
-    // #[serde(rename = "Email")]
-    // pub email: Option<EmailConfig>,
     #[serde(rename = "Proxy")]
     pub proxy: Option<String>,
     #[serde(rename = "HolodexApiKey")]
     pub holodex_api_key: Option<String>,
-    // #[serde(rename = "Gotify")]
-    // pub gotify: Option<GotifyConfig>,
 }
 
+/// Struct representing BiliLive-specific configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BiliLive {
     #[serde(rename = "EnableDanmakuCommand")]
@@ -32,21 +32,26 @@ pub struct BiliLive {
     pub title: String,
     #[serde(rename = "Area_v2")]
     pub area_v2: u32,
-    #[serde(rename = "SESSDATA")]
-    pub sessdata: String,
-    pub bili_jct: String,
-    #[serde(rename = "DedeUserID")]
-    pub dede_user_id: String,
-    #[serde(rename = "DedeUserID__ckMd5")]
-    pub dede_user_id_ckmd5: String,
     #[serde(rename = "Room")]
     pub room: i32,
     #[serde(rename = "BiliRtmpUrl")]
     pub bili_rtmp_url: String,
     #[serde(rename = "BiliRtmpKey")]
     pub bili_rtmp_key: String,
+    #[serde(skip_deserializing)]
+    pub credentials: Credentials,
 }
 
+/// Struct to hold credential information extracted from cookies.json.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Credentials {
+    pub sessdata: String,
+    pub bili_jct: String,
+    pub dede_user_id: String,
+    pub dede_user_id_ckmd5: String,
+}
+
+/// Struct representing Twitch configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Twitch {
     #[serde(rename = "ChannelName")]
@@ -59,6 +64,7 @@ pub struct Twitch {
     pub proxy_region: String,
 }
 
+/// Struct representing YouTube configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Youtube {
     #[serde(rename = "ChannelName")]
@@ -67,39 +73,79 @@ pub struct Youtube {
     pub channel_id: String,
 }
 
-// #[derive(Serialize, Deserialize, Debug, Clone)]
-// pub struct EmailConfig {
-//     #[serde(rename = "To")]
-//     pub to: String,
-
-//     #[serde(rename = "Subject")]
-//     pub subject: String,
-
-//     #[serde(rename = "Body")]
-//     pub body: String,
-
-//     #[serde(rename = "Host")]
-//     pub host: String,
-
-//     #[serde(rename = "Sender")]
-//     pub sender: String,
-
-//     #[serde(rename = "Password")]
-//     pub password: String,
-// }
-
-// 读取配置文件
-pub fn load_config(config: &Path) -> Result<Config, Box<dyn Error>> {
-    let file = std::fs::File::open(config)?;
-    let config: Config = serde_yaml::from_reader(file)?;
-    // println!("body = {:?}", client);
-    Ok(config)
+/// Structs to mirror the structure of cookies.json
+#[derive(Debug, Deserialize)]
+struct Cookie {
+    name: String,
+    value: String,
+    // Other fields can be added if needed
+}
+#[derive(Debug, Deserialize)]
+struct CookiesFile {
+    cookie_info: CookieInfo,
 }
 
-// #[derive(Debug, Serialize, Deserialize, Clone)]
-// pub struct GotifyConfig {
-//     #[serde(rename = "Url")]
-//     pub url: String,
-//     #[serde(rename = "Token")]
-//     pub token: String,
-// }
+#[derive(Debug, Deserialize)]
+struct CookieInfo {
+    cookies: Vec<Cookie>,
+    // domains: Vec<String>, // Included if needed
+}
+impl Credentials {
+    /// Extracts credentials from cookies and initializes a Credentials struct.
+    fn from_cookies(cookies: &[Cookie]) -> Result<Self, Box<dyn Error>> {
+        let sessdata = cookies
+            .iter()
+            .find(|cookie| cookie.name == "SESSDATA")
+            .map(|cookie| cookie.value.clone())
+            .ok_or("SESSDATA cookie not found")?;
+
+        let bili_jct = cookies
+            .iter()
+            .find(|cookie| cookie.name == "bili_jct")
+            .map(|cookie| cookie.value.clone())
+            .ok_or("bili_jct cookie not found")?;
+
+        let dede_user_id = cookies
+            .iter()
+            .find(|cookie| cookie.name == "DedeUserID")
+            .map(|cookie| cookie.value.clone())
+            .ok_or("DedeUserID cookie not found")?;
+
+        let dede_user_id_ckmd5 = cookies
+            .iter()
+            .find(|cookie| cookie.name == "DedeUserID__ckMd5")
+            .map(|cookie| cookie.value.clone())
+            .ok_or("DedeUserID__ckMd5 cookie not found")?;
+
+        Ok(Credentials {
+            sessdata,
+            bili_jct,
+            dede_user_id,
+            dede_user_id_ckmd5,
+        })
+    }
+}
+
+/// Loads credentials from the specified cookies.json file.
+fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Error>> {
+    let file_content = fs::read_to_string(path)?;
+    let cookies_file: CookiesFile = serde_json::from_str(&file_content)?;
+    Credentials::from_cookies(&cookies_file.cookie_info.cookies)
+}
+
+/// Loads the configuration along with credentials from cookies.json.
+pub fn load_config<P: AsRef<Path>>(
+    config_path: P,
+    cookies_path: P,
+) -> Result<Config, Box<dyn Error>> {
+    // Read and deserialize config.yaml
+    let config_content = fs::read_to_string(&config_path)?;
+    let mut config: Config = serde_yaml::from_str(&config_content)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Load credentials from cookies.json
+    let credentials = load_credentials(cookies_path)?;
+    config.bililive.credentials = credentials;
+
+    Ok(config)
+}
