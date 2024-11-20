@@ -105,9 +105,13 @@ Bilistream supports the following commands:
 4. Get live status:
 
    ```
-   ./bilistream get-live-status
+   ./bilistream get-live-status YT/TW/bilibili <Channel_ID/Room_ID>
    ```
+5. Get YouTube live topic:
 
+   ```
+   ./bilistream get-live-topic YT <Channel_ID>
+   ```
 ### Using stream_manager.sh
 
 The `stream_manager.sh` script provides an interactive interface for managing your streams:

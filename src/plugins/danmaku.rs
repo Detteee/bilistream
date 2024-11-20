@@ -292,7 +292,7 @@ async fn process_danmaku(command: &str) {
             || live_title.contains("marshmallow")
             || live_title.contains("morning")
         {
-            tracing::error!("live title/topic contains unsupported keywords");
+            tracing::error!("直播标题/topic包含不支持的关键词");
             return;
         }
 
@@ -365,10 +365,10 @@ pub fn run_danmaku(platform: &str) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("Failed to start danmaku-cli");
+        .expect("启动弹幕命令读取失败");
 
-    let stdout = danmaku_cli.stdout.expect("Failed to capture stdout");
-    let stderr = danmaku_cli.stderr.expect("Failed to capture stderr");
+    let stdout = danmaku_cli.stdout.expect("捕获stdout失败");
+    let stderr = danmaku_cli.stderr.expect("捕获stderr失败");
 
     // Handle stdout in a separate thread
     thread::spawn(move || {
@@ -388,7 +388,7 @@ pub fn run_danmaku(platform: &str) {
         let reader = io::BufReader::new(stderr);
         for line in reader.lines() {
             if let Ok(line) = line {
-                eprintln!("Danmaku stderr: {}", line);
+                eprintln!("弹幕stderr: {}", line);
             }
         }
     });
@@ -420,7 +420,7 @@ pub fn run_danmaku(platform: &str) {
             }
         };
 
-        if !bilibili_status.contains("Not Live") {
+        if !bilibili_status.contains("未直播") {
             if ffmpeg::is_any_ffmpeg_running() {
                 tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
                 // Kill danmaku-cli process
@@ -428,15 +428,11 @@ pub fn run_danmaku(platform: &str) {
                     .arg("-f")
                     .arg("danmaku-cli")
                     .output()
-                    .expect("Failed to stop danmaku-cli");
+                    .expect("停止弹幕命令读取失败");
 
-                // Remove all danmaku lock files
-                if let Err(e) = remove_danmaku_lock("YT") {
-                    tracing::error!("删除 danmaku.lock-YT 时出错: {}", e);
-                }
-                if let Err(e) = remove_danmaku_lock("TW") {
-                    tracing::error!("删除 danmaku.lock-TW 时出错: {}", e);
-                }
+                // Try to remove both lock files, logging any errors
+                let _ = remove_danmaku_lock("YT").map_err(|e| tracing::error!("删除 danmaku.lock-YT 时出错: {}", e));
+                let _ = remove_danmaku_lock("TW").map_err(|e| tracing::error!("删除 danmaku.lock-TW 时出错: {}", e));
 
                 break;
             }

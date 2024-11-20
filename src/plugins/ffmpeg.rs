@@ -41,13 +41,13 @@ pub fn ffmpeg(
 ) {
     // Check if any ffmpeg is already running
     if is_any_ffmpeg_running() {
-        println!("An ffmpeg instance is already running. Skipping new instance.");
+        println!("一个ffmpeg实例已经在运行。跳过新实例。");
         return;
     }
 
     // Create the lock file for the specified platform
     if let Err(e) = create_ffmpeg_lock(platform) {
-        println!("Failed to create ffmpeg lock file: {}", e);
+        println!("创建ffmpeg锁文件失败: {}", e);
         return;
     }
 
@@ -73,16 +73,16 @@ pub fn ffmpeg(
     match command.status() {
         Ok(status) => {
             if let Some(code) = status.code() {
-                println!("ffmpeg exited with status code: {}", code);
+                println!("ffmpeg退出状态码: {}", code);
             } else {
-                println!("ffmpeg terminated by signal");
+                println!("ffmpeg被信号终止");
             }
         }
-        Err(e) => println!("Failed to execute ffmpeg: {}", e),
+        Err(e) => println!("执行ffmpeg失败: {}", e),
     }
 
     // Remove the lock file after ffmpeg finishes
     if let Err(e) = remove_ffmpeg_lock(platform) {
-        println!("Failed to remove ffmpeg lock file: {}", e);
+        println!("删除ffmpeg锁文件失败: {}", e);
     }
 }
