@@ -17,7 +17,7 @@ pub fn is_any_ffmpeg_running() -> bool {
 pub fn create_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
     let lock_file = format!("ffmpeg.lock-{}", platform);
     fs::File::create(&lock_file)?;
-    println!("{} 创建成功", lock_file);
+    tracing::info!("{} 创建成功", lock_file);
     Ok(())
 }
 
@@ -25,7 +25,7 @@ pub fn create_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
 pub fn remove_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
     let lock_file = format!("ffmpeg.lock-{}", platform);
     fs::remove_file(&lock_file)?;
-    println!("{} 删除成功", lock_file);
+    tracing::info!("{} 删除成功", lock_file);
     Ok(())
 }
 
@@ -41,13 +41,13 @@ pub fn ffmpeg(
 ) {
     // Check if any ffmpeg is already running
     if is_any_ffmpeg_running() {
-        println!("一个ffmpeg实例已经在运行。跳过新实例。");
+        tracing::info!("一个ffmpeg实例已经在运行。跳过新实例。");
         return;
     }
 
     // Create the lock file for the specified platform
     if let Err(e) = create_ffmpeg_lock(platform) {
-        println!("创建ffmpeg锁文件失败: {}", e);
+        tracing::error!("创建ffmpeg锁文件失败: {}", e);
         return;
     }
 
@@ -73,16 +73,16 @@ pub fn ffmpeg(
     match command.status() {
         Ok(status) => {
             if let Some(code) = status.code() {
-                println!("ffmpeg退出状态码: {}", code);
+                tracing::info!("ffmpeg退出状态码: {}", code);
             } else {
-                println!("ffmpeg被信号终止");
+                tracing::info!("ffmpeg被信号终止");
             }
         }
-        Err(e) => println!("执行ffmpeg失败: {}", e),
+        Err(e) => tracing::error!("执行ffmpeg失败: {}", e),
     }
 
     // Remove the lock file after ffmpeg finishes
     if let Err(e) = remove_ffmpeg_lock(platform) {
-        println!("删除ffmpeg锁文件失败: {}", e);
+        tracing::error!("删除ffmpeg锁文件失败: {}", e);
     }
 }
