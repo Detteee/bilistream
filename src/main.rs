@@ -31,12 +31,11 @@ async fn run_bilistream(
     } else {
         "Unknown"
     };
-    let live_info = select_live(cfg.clone()).await?;
     loop {
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
             if log_once == false {
-                tracing::info!("ffmpeg lock exists, skipping the loop.");
+                tracing::info!("一个ffmpeg实例已经在运行。跳过检测循环。");
                 log_once = true;
             }
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
@@ -45,6 +44,7 @@ async fn run_bilistream(
         log_once = false;
         cfg = load_config(Path::new(config_path))?;
 
+        let live_info = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
             live_info.get_status().await.unwrap_or((false, None, None));
 
@@ -163,6 +163,9 @@ async fn run_bilistream(
             if cfg.bililive.enable_danmaku_command {
                 thread::spawn(move || run_danmaku(platform));
             }
+            if cfg.bililive.title != old_cfg.bililive.title {
+                log_once_2 = false;
+            }
             old_cfg = cfg.clone();
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
         }
@@ -221,10 +224,7 @@ async fn get_live_status(
         "bilibili" => {
             let room_id: i32 = channel_id.parse()?;
             let is_live = get_bili_live_status(room_id).await?;
-            println!(
-                "B站直播状态: {}",
-                if is_live { "直播中" } else { "未直播" }
-            );
+            println!("B站直播状态: {}", if is_live { "直播中" } else { "未直播" });
         }
         "YT" => {
             let (is_live, _, scheduled_time) =
@@ -355,22 +355,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .help("检查的平台 (YT, TW, bilibili)"),
                 )
-                .arg(
-                    Arg::new("channel_id")
-                        .required(true)
-                        .help("检查的频道ID"),
-                ),
+                .arg(Arg::new("channel_id").required(true).help("检查的频道ID")),
         )
         .subcommand(Command::new("start-live").about("开始直播"))
         .subcommand(Command::new("stop-live").about("停止直播"))
         .subcommand(
             Command::new("change-live-title")
                 .about("改变直播标题")
-                .arg(
-                    Arg::new("title")
-                        .required(true)
-                        .help("新直播标题"),
-                ),
+                .arg(Arg::new("title").required(true).help("新直播标题")),
         )
         .subcommand(
             Command::new("get-live-title")
@@ -380,11 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .help("获取的平台 (YT, TW)"),
                 )
-                .arg(
-                    Arg::new("channel_id")
-                        .required(true)
-                        .help("获取的频道ID"),
-                ),
+                .arg(Arg::new("channel_id").required(true).help("获取的频道ID")),
         )
         .subcommand(
             Command::new("get-live-topic")
@@ -394,11 +382,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .help("获取的平台 (仅支持YT)"),
                 )
-                .arg(
-                    Arg::new("channel_id")
-                        .required(true)
-                        .help("获取的频道ID"),
-                ),
+                .arg(Arg::new("channel_id").required(true).help("获取的频道ID")),
         )
         .get_matches();
 

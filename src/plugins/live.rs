@@ -10,17 +10,6 @@ use std::error::Error;
 use std::process::Command;
 use std::time::Duration;
 
-#[allow(dead_code)]
-/// Status of the live stream
-pub enum Status {
-    /// Stream is online.
-    Online,
-    /// Stream is offline.
-    Offline,
-    /// The status of the stream could not be determined.
-    Unknown,
-}
-
 #[async_trait]
 pub trait Live {
     async fn get_title(&self) -> Result<String, Box<dyn Error>>;
