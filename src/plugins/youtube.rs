@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 // use reqwest_middleware::ClientWithMiddleware;
 use super::{get_youtube_live_status, Live};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local};
 use std::error::Error; // Ensure this is included
 use std::process::Command;
 pub struct Youtube {
@@ -33,7 +33,7 @@ impl Live for Youtube {
     // }
     async fn get_status(
         &self,
-    ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
+    ) -> Result<(bool, Option<String>, Option<DateTime<Local>>), Box<dyn Error>> {
         let status = get_youtube_live_status(&self.channel_id, self.proxy.clone()).await?;
 
         // Check for scheduled live event
