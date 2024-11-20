@@ -3,7 +3,7 @@ use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
     get_area_name, get_bili_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
 };
-use chrono::DateTime;
+use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
@@ -172,7 +172,11 @@ async fn run_bilistream(
                             live_title
                         );
                     } else {
-                        tracing::info!("{}未直播", cfg.youtube.channel_name);
+                        tracing::info!(
+                            "{}未直播，计划于 {} 开始",
+                            cfg.youtube.channel_name,
+                            scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S")
+                        );
                     }
                     log_once_2 = true;
                 }
@@ -270,13 +274,14 @@ async fn get_live_status(
                 let videos: Vec<serde_json::Value> = response.json().await?;
                 if let Some(video) = videos.last() {
                     let status = video.get("status").unwrap();
-                    if status == "upcomming" {
-                        let start_time = video.get("start_scheduled");
+                    if status == "upcoming" {
+                        let start_time_str = video
+                            .get("start_scheduled")
+                            .and_then(|v| v.as_str())
+                            .ok_or("start_scheduled 不存在")?;
                         // 将时间字符串转换为DateTime<Local>
-                        let start_time = DateTime::parse_from_str(
-                            &start_time.unwrap().to_string(),
-                            "%Y-%m-%dT%H:%M:%S%z",
-                        )?;
+                        let start_time =
+                            DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Local);
                         println!("计划开始时间: {}", start_time);
                     } else if status == "live" {
                         println!("YouTube直播状态: 直播中");

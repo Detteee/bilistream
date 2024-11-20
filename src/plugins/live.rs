@@ -68,14 +68,16 @@ pub async fn get_youtube_live_status(
         let videos: Vec<serde_json::Value> = response.json().await?;
         if let Some(video) = videos.last() {
             let status = video.get("status").unwrap();
-            if status == "upcomming" {
-                let start_time = video.get("start_scheduled");
+            if status == "upcoming" {
+                let start_time_str = video
+                    .get("start_scheduled")
+                    .and_then(|v| v.as_str())
+                    .ok_or("start_scheduled 不存在")?;
                 // 将时间字符串转换为DateTime<Local>
-                let start_time = DateTime::parse_from_str(
-                    &start_time.unwrap().to_string(),
-                    "%Y-%m-%dT%H:%M:%S%z",
-                )?;
-                return Ok((false, None, Some(start_time.into())));
+                let start_time =
+                    DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Local);
+                // println!("计划开始时间: {}", start_time);
+                return Ok((false, None, Some(start_time)));
             } else if status == "live" {
                 return get_status_with_yt_dlp(channel_id, proxy);
             } else {
