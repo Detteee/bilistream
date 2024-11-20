@@ -1,7 +1,7 @@
 use super::{Twitch, Youtube};
 use crate::config::Config;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc}; // Add this import
+use chrono::{DateTime, Local}; // Add this import
 use regex::Regex;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::policies::ExponentialBackoff;
@@ -16,7 +16,7 @@ pub trait Live {
     // fn channel_name(&self) -> &str;
     async fn get_status(
         &self,
-    ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>>;
+    ) -> Result<(bool, Option<String>, Option<DateTime<Local>>), Box<dyn Error>>;
 }
 
 pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
@@ -44,14 +44,14 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
             client.clone(),
             cfg.twitch.proxy_region,
         ))),
-        _ => Err("unknown platform".into()),
+        _ => Err("不支持的平台".into()),
     }
 }
 
 pub async fn get_youtube_live_status(
     channel_id: &str,
     proxy: Option<String>,
-) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
+) -> Result<(bool, Option<String>, Option<DateTime<Local>>), Box<dyn Error>> {
     let mut command = Command::new("yt-dlp");
     if let Some(proxy) = proxy {
         command.arg(format!("--proxy {}", proxy));
@@ -74,21 +74,21 @@ pub async fn get_youtube_live_status(
             Regex::new(r"This live event will begin in (\d+) minutes")?.captures(&stderr)
         {
             let minutes: i64 = captures[1].parse()?;
-            let start_time = Utc::now() + chrono::Duration::minutes(minutes);
+            let start_time = chrono::Local::now() + chrono::Duration::minutes(minutes);
             return Ok((false, None, Some(start_time))); // Return scheduled start time
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) hours")?.captures(&stderr)
         {
             let hours: i64 = captures[1].parse()?;
-            let start_time = Utc::now() + chrono::Duration::hours(hours);
+            let start_time = chrono::Local::now() + chrono::Duration::hours(hours);
             return Ok((false, None, Some(start_time))); // Return scheduled start time
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
         {
             let days: i64 = captures[1].parse()?;
-            let start_time = Utc::now() + chrono::Duration::days(days);
+            let start_time = chrono::Local::now() + chrono::Duration::days(days);
             return Ok((false, None, Some(start_time))); // Return scheduled start time
         }
         return Ok((false, None, None)); // Channel is not live and no scheduled time

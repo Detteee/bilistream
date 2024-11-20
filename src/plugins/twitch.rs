@@ -1,6 +1,6 @@
 use super::Live;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local};
 use reqwest_middleware::ClientWithMiddleware;
 use serde_json::json;
 use std::error::Error;
@@ -47,7 +47,7 @@ impl Live for Twitch {
     }
     async fn get_status(
         &self,
-    ) -> Result<(bool, Option<String>, Option<DateTime<Utc>>), Box<dyn Error>> {
+    ) -> Result<(bool, Option<String>, Option<DateTime<Local>>), Box<dyn Error>> {
         let j = json!(
             {
                 "operationName":"StreamMetadata",
