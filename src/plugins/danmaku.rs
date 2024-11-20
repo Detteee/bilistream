@@ -127,6 +127,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
         329
     } else if title.contains("league of legends")
         || title.contains("lol")
+        || title.contains("ろる")
         || title.contains("k4sen")
     {
         86
@@ -166,6 +167,10 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
 /// Processes a single danmaku command.
 async fn process_danmaku(command: &str) {
     // only line start with : is danmaku
+    if command.contains("WARN  [init] Connection closed by server") {
+        tracing::info!("B站cookie过期，无法启动弹幕指令，请更新配置文件");
+        return;
+    }
     if !command.starts_with(" :") {
         return;
     }
@@ -252,7 +257,14 @@ async fn process_danmaku(command: &str) {
 
         // if !live_status.contains("Not Live") {
         // tracing::info!("area_id: {}", area_id);
-        // let config_path = format!("./{}/config.yaml", platform);
+        // let config_path = format!("./{}/config.yaml", platform);        // } else {
+        //     tracing::info!(
+        //         "频道 {} ({}) 未在 {} 直播",
+        //         channel_name,
+        //         channel_id,
+        //         platform
+        //     );
+        // }
         let new_title = format!("【转播】{}", channel_name);
 
         let live_title = if platform.eq_ignore_ascii_case("YT") {
@@ -308,21 +320,32 @@ async fn process_danmaku(command: &str) {
             tracing::error!("更新配置时出错: {}", e);
             return;
         }
-
+        let updated_area_name = match updated_area_id {
+            86 => "英雄联盟",
+            329 => "无畏契约",
+            240 => "APEX英雄",
+            87 => "守望先锋",
+            235 => "其他单机",
+            107 => "其他网游",
+            530 => "萌宅领域",
+            236 => "主机游戏",
+            321 => "原神",
+            694 => "斯普拉遁3",
+            407 => "游戏王：决斗链接",
+            433 => "格斗游戏",
+            927 => "DeadLock",
+            _ => {
+                tracing::error!("未知的分区ID: {}", updated_area_id);
+                return;
+            }
+        };
         tracing::info!(
-            "更新 {} 频道: {} 分区: {}",
+            "更新 {} 频道: {} 分区: {} (ID: {} )",
             platform,
             channel_name,
-            area_name
+            updated_area_name,
+            updated_area_id
         );
-        // } else {
-        //     tracing::info!(
-        //         "频道 {} ({}) 未在 {} 直播",
-        //         channel_name,
-        //         channel_id,
-        //         platform
-        //     );
-        // }
     } else {
         tracing::error!("指令错误: {}", danmaku_command);
     }
@@ -431,8 +454,10 @@ pub fn run_danmaku(platform: &str) {
                     .expect("停止弹幕命令读取失败");
 
                 // Try to remove both lock files, logging any errors
-                let _ = remove_danmaku_lock("YT").map_err(|e| tracing::error!("删除 danmaku.lock-YT 时出错: {}", e));
-                let _ = remove_danmaku_lock("TW").map_err(|e| tracing::error!("删除 danmaku.lock-TW 时出错: {}", e));
+                let _ = remove_danmaku_lock("YT")
+                    .map_err(|e| tracing::error!("删除 danmaku.lock-YT 时出错: {}", e));
+                let _ = remove_danmaku_lock("TW")
+                    .map_err(|e| tracing::error!("删除 danmaku.lock-TW 时出错: {}", e));
 
                 break;
             }
