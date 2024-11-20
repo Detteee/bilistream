@@ -11,10 +11,6 @@ BiliLive:
   EnableDanmakuCommand: # true or false
   # 分区
   Area_v2: 分区ID # https://api.live.bilibili.com/room/v1/Area/getList
-  SESSDATA: # in Cookie
-  bili_jct: # in Cookie
-  DedeUserID: 账号UID # in Cookie
-  DedeUserID__ckMd5: # in Cookie
   Room: 直播间号
   BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/qq
   # BiliRtmpUrl: B站开播设置页面的服务器地址

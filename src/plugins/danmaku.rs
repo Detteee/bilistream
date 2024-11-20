@@ -1,3 +1,4 @@
+use crate::config::load_config;
 use crate::config::Config;
 use crate::plugins::ffmpeg;
 use regex::Regex;
@@ -174,7 +175,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
 async fn process_danmaku(command: &str) {
     // only line start with : is danmaku
     if command.contains("WARN  [init] Connection closed by server") {
-        tracing::info!("B站cookie过期，无法启动弹幕指令，请更新配置文件");
+        tracing::info!("B站cookie过期，无法启动弹幕指令，请更新配置文件:./biliup login");
         return;
     }
     if !command.starts_with(" :") {
@@ -371,9 +372,19 @@ pub fn run_danmaku(platform: &str) {
         tracing::error!("创建弹幕锁文件时出错: {}", e);
         return;
     }
-
+    // 更新config.json中的sessdata 为cfg.bililive.credentials.sessdata
+    let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json")).unwrap();
+    Command::new("sed")
+        .arg("-i")
+        .arg(format!(
+            r#"s|\"sessdata\": \".*\"|\"sessdata\": \"{}\"|"#,
+            cfg.bililive.credentials.sessdata
+        ))
+        .arg("config.json")
+        .output()
+        .expect("更新sessdata失败");
     // Start danmaku-cli in background
-    let danmaku_cli = Command::new("./danmaku-cli")
+    let danmaku_cli = Command::new("./bilibili-live-danmaku-cli")
         .arg("--config")
         .arg("config.json")
         .stdout(Stdio::piped())

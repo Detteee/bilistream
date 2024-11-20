@@ -18,6 +18,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
+- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （for bilibili cookies）
 
 ## Installation
 
@@ -112,6 +113,7 @@ Bilistream supports the following commands:
    ```
    ./bilistream get-live-topic YT <Channel_ID>
    ```
+
 ### Using stream_manager.sh
 
 The `stream_manager.sh` script provides an interactive interface for managing your streams:
