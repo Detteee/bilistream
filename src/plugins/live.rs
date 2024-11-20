@@ -109,7 +109,7 @@ fn get_status_with_yt_dlp(
         channel_id
     ));
     let output = command.output()?;
-    println!("{:?}", output);
+    // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // println!("yt-dlp -g {}", stderr);

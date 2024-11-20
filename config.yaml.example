@@ -6,6 +6,7 @@ Platform: Youtube
 Proxy:
 # 代理地址,无需代理可以不填此项或者留空
 HolodexApiKey: 
+# Holodex Api Key from https://holodex.net/login
 BiliLive:
   Title: "直播间标题"
   EnableDanmakuCommand: # true or false
