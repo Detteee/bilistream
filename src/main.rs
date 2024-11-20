@@ -10,7 +10,6 @@ use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::process::Command as StdCommand;
 use std::{path::Path, thread, time::Duration};
-use tracing_subscriber;
 
 async fn run_bilistream(
     config_path: &str,
@@ -19,25 +18,6 @@ async fn run_bilistream(
     // Initialize the logger
     tracing_subscriber::fmt::init();
     // tracing::info!("bilistream 正在运行");
-    if !Path::new("cookies.json").exists() {
-        tracing::info!("cookies.json 不存在，请登录");
-        let mut command = StdCommand::new("./login-biliup");
-        command.arg("login");
-        command.spawn()?.wait()?;
-    } else {
-        if Path::new("cookies.json")
-            .metadata()?
-            .modified()?
-            .elapsed()?
-            .as_secs()
-            > 3600 * 48
-        {
-            tracing::info!("cookies.json 存在时间超过48小时，刷新cookies");
-            let mut command = StdCommand::new("./login-biliup");
-            command.arg("renew");
-            command.spawn()?.wait()?;
-        }
-    }
 
     let mut cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
 
@@ -68,8 +48,8 @@ async fn run_bilistream(
         let live_info = select_live(cfg.clone()).await?;
         let (is_live, m3u8_url, scheduled_start) =
             live_info.get_status().await.unwrap_or((false, None, None));
-
         if is_live {
+            check_cookies().await?;
             tracing::info!(
                 "{} 正在直播",
                 match platform {
@@ -386,6 +366,33 @@ async fn get_live_title(
     }
 }
 
+async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
+    // Retrieve live information
+    // Check for the existence of cookies.json
+    if !Path::new("cookies.json").exists() {
+        tracing::info!("cookies.json does not exist, please log in.");
+        let mut command = StdCommand::new("./login-biliup");
+        command.arg("login");
+        command.spawn()?.wait()?;
+    } else {
+        // Check if cookies.json is older than 48 hours
+        if Path::new("cookies.json")
+            .metadata()?
+            .modified()?
+            .elapsed()?
+            .as_secs()
+            > 3600 * 48
+        {
+            tracing::info!("cookies.json is older than 48 hours, refreshing cookies.");
+            let mut command = StdCommand::new("./login-biliup");
+            command.arg("renew");
+            command.spawn()?.wait()?;
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
@@ -482,7 +489,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let channel_id = sub_m.get_one::<String>("channel_id").unwrap();
             get_live_topic(config_path, platform, channel_id).await?;
         }
-        Some(("login", _)) => {}
+        Some(("login", _)) => {
+            let mut command = StdCommand::new("./login-biliup");
+            command.arg("login");
+            command.spawn()?.wait()?;
+        }
         _ => {
             let file_name = Path::new(config_path)
                 .parent()
