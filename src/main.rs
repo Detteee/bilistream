@@ -1,7 +1,8 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
-    get_bili_live_status, get_youtube_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
+    get_area_name, get_bili_live_status, get_youtube_live_status, run_danmaku, select_live, Live,
+    Twitch, Youtube,
 };
 use clap::{Arg, Command};
 use proctitle::set_title;
@@ -75,11 +76,12 @@ async fn run_bilistream(
             }
             if !get_bili_live_status(cfg.bililive.room).await? {
                 tracing::info!("B站未直播");
-
+                let area_name = get_area_name(cfg.bililive.area_v2);
                 bili_start_live(&cfg).await?;
                 tracing::info!(
-                    "B站已开播, 标题为 {},分区ID为 {}",
+                    "B站已开播, 标题为 {},分区为 {} （ID: {}）",
                     cfg.bililive.title,
+                    area_name.unwrap(),
                     cfg.bililive.area_v2
                 );
                 old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
@@ -140,11 +142,18 @@ async fn run_bilistream(
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
                 if log_once_2 == false {
-                    tracing::info!(
-                        "{}未直播，计划于 {} 开始",
-                        cfg.youtube.channel_name,
-                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S") // Format the start time
-                    );
+                    let live_title =
+                        get_live_title(config_path, platform, &cfg.youtube.channel_id).await?;
+                    if live_title != "" {
+                        tracing::info!(
+                            "{}未直播，计划于 {} 开始\n标题：{}",
+                            cfg.youtube.channel_name,
+                            scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"), // Format the start time
+                            live_title
+                        );
+                    } else {
+                        tracing::info!("{}未直播", cfg.youtube.channel_name);
+                    }
                     log_once_2 = true;
                 }
             } else {
@@ -195,8 +204,8 @@ async fn get_live_topic(
 
             if let Some(video) = videos.last() {
                 if let Some(topic_id) = video.get("topic_id") {
-                    tracing::info!("YouTube live topic_id: {:?}", topic_id);
-                    println!("YouTube live topic_id: {:?}", topic_id);
+                    // tracing::info!("YouTube live topic_id: {:?}", &topic_id);
+                    println!("YouTube live topic_id: {:?}", &topic_id);
                     return Ok(topic_id.to_string());
                 } else {
                     tracing::info!("当前YT直播没有topic_id");
@@ -287,7 +296,7 @@ async fn change_live_title(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config_file = Path::new(config_path);
     if !config_file.exists() {
-        return Err(format!("Config file not found: {}", config_path).into());
+        return Err(format!("配置文件不存在: {}", config_path).into());
     }
     let mut cfg = load_config(config_file)?;
     cfg.bililive.title = new_title.to_string();
@@ -307,7 +316,9 @@ async fn get_live_title(
         "YT" => {
             let youtube = Youtube::new(channel_id, channel_id, cfg.proxy.clone());
             let title = youtube.get_title().await?;
-            tracing::info!("YouTube直播标题: {}", title);
+            if title != "" {
+                tracing::info!("YouTube直播标题: {}", title);
+            }
             Ok(title)
         }
         "TW" => {

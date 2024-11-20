@@ -320,24 +320,9 @@ async fn process_danmaku(command: &str) {
             tracing::error!("更新配置时出错: {}", e);
             return;
         }
-        let updated_area_name = match updated_area_id {
-            86 => "英雄联盟",
-            329 => "无畏契约",
-            240 => "APEX英雄",
-            87 => "守望先锋",
-            235 => "其他单机",
-            107 => "其他网游",
-            530 => "萌宅领域",
-            236 => "主机游戏",
-            321 => "原神",
-            694 => "斯普拉遁3",
-            407 => "游戏王：决斗链接",
-            433 => "格斗游戏",
-            927 => "DeadLock",
-            _ => {
-                tracing::error!("未知的分区ID: {}", updated_area_id);
-                return;
-            }
+        let updated_area_name = match get_area_name(updated_area_id) {
+            Some(name) => name,
+            None => return, // Early return if the area ID is unknown
         };
         tracing::info!(
             "更新 {} 频道: {} 分区: {} (ID: {} )",
@@ -461,6 +446,28 @@ pub fn run_danmaku(platform: &str) {
 
                 break;
             }
+        }
+    }
+}
+
+pub fn get_area_name(area_id: u32) -> Option<&'static str> {
+    match area_id {
+        86 => Some("英雄联盟"),
+        329 => Some("无畏契约"),
+        240 => Some("APEX英雄"),
+        87 => Some("守望先锋"),
+        235 => Some("其他单机"),
+        107 => Some("其他网游"),
+        530 => Some("萌宅领域"),
+        236 => Some("主机游戏"),
+        321 => Some("原神"),
+        694 => Some("斯普拉遁3"),
+        407 => Some("游戏王：决斗链接"),
+        433 => Some("格斗游戏"),
+        927 => Some("DeadLock"),
+        _ => {
+            tracing::error!("未知的分区ID: {}", area_id);
+            None
         }
     }
 }

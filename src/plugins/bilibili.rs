@@ -18,7 +18,7 @@ use std::time::Duration;
 /// * `bool` - Returns `true` if the room is live, otherwise `false`.
 pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
     // Define the retry policy with a very high number of retries
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
 
     // Build the raw HTTP client with cookie storage and timeout
     let raw_client = reqwest::Client::builder()
@@ -68,7 +68,7 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     jar.add_cookie_str(&cookie, &url);
 
     // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
 
     // Build the HTTP client with retry middleware
     let raw_client = reqwest::Client::builder()
@@ -125,7 +125,7 @@ pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> 
     jar.add_cookie_str(&cookie, &url);
 
     // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
 
     // Build the HTTP client with retry middleware
     let raw_client = reqwest::Client::builder()
@@ -182,7 +182,7 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     jar.add_cookie_str(&cookie, &url);
 
     // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(4294967295);
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
 
     // Build the HTTP client with retry middleware
     let raw_client = reqwest::Client::builder()
