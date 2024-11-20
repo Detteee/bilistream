@@ -80,7 +80,8 @@
 运行 Bilistream 应用程序：
 
 ```
-./bilistream -c ./config.yaml
+./bilistream -c YT/config.yaml
+./bilistream -c TW/config.yaml
 ```
 
 ### 命令行界面
