@@ -384,7 +384,7 @@ pub fn run_danmaku(platform: &str) {
         .output()
         .expect("更新sessdata失败");
     // Start danmaku-cli in background
-    let danmaku_cli = Command::new("./bilibili-live-danmaku-cli")
+    let danmaku_cli = Command::new("./live-danmaku-cli")
         .arg("--config")
         .arg("config.json")
         .stdout(Stdio::piped())
