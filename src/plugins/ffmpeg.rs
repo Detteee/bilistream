@@ -17,7 +17,7 @@ pub fn is_any_ffmpeg_running() -> bool {
 pub fn create_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
     let lock_file = format!("ffmpeg.lock-{}", platform);
     fs::File::create(&lock_file)?;
-    println!("{} created", lock_file);
+    println!("{} 创建成功", lock_file);
     Ok(())
 }
 
@@ -25,7 +25,7 @@ pub fn create_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
 pub fn remove_ffmpeg_lock(platform: &str) -> std::io::Result<()> {
     let lock_file = format!("ffmpeg.lock-{}", platform);
     fs::remove_file(&lock_file)?;
-    println!("{} removed", lock_file);
+    println!("{} 删除成功", lock_file);
     Ok(())
 }
 
