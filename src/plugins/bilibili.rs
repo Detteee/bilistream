@@ -15,8 +15,10 @@ use std::time::Duration;
 ///
 /// # Returns
 ///
-/// * `bool` - Returns `true` if the room is live, otherwise `false`.
-pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
+/// * `(bool, String, u64)` - Returns `true` if the room is live, otherwise `false`.
+/// * `String` - The title of the room.
+/// * `u64` - The area ID of the room.
+pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<dyn Error>> {
     // Define the retry policy with a very high number of retries
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
 
@@ -30,11 +32,10 @@ pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
     let client = ClientBuilder::new(raw_client.clone())
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
-
     // Make the GET request to check the live status
     let res: Value = client
         .get(&format!(
-            "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id={}&platform=web",
+            "https://api.live.bilibili.com/room/v1/Room/get_info?room_id={}",
             room
         ))
         .send()
@@ -43,7 +44,13 @@ pub async fn get_bili_live_status(room: i32) -> Result<bool, Box<dyn Error>> {
         .await?;
 
     // Determine live status based on the response
-    Ok(res["data"]["live_status"] != 0)
+    println!("{:#?}", res);
+    println!("{}", res["data"]["live_status"]);
+    Ok((
+        res["data"]["live_status"] == 1,
+        res["data"]["title"].to_string(),
+        res["data"]["area_id"].as_u64().unwrap(),
+    ))
 }
 
 /// Starts a Bilibili live stream.

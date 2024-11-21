@@ -31,7 +31,7 @@ pub struct BiliLive {
     #[serde(rename = "Title")]
     pub title: String,
     #[serde(rename = "Area_v2")]
-    pub area_v2: u32,
+    pub area_v2: u64,
     #[serde(rename = "Room")]
     pub room: i32,
     #[serde(rename = "BiliRtmpUrl")]

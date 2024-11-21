@@ -26,10 +26,8 @@ async fn run_bilistream(
     // tracing::info!("bilistream 正在运行");
 
     let mut cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
-
-    let mut old_cfg = cfg.clone();
+    let mut old_cfg_title = "".to_string();
     let mut log_once = false;
-    let mut log_once_2 = false;
     let mut no_live = false;
     let platform = if &cfg.platform == "Youtube" {
         "YT"
@@ -65,7 +63,6 @@ async fn run_bilistream(
                 }
             );
             no_live = false;
-            log_once_2 = false;
             if platform == "YT" {
                 let live_topic = if let Ok(topic) =
                     get_live_topic(platform, Some(&cfg.youtube.channel_id)).await
@@ -79,7 +76,8 @@ async fn run_bilistream(
                 let live_title = get_live_title(platform, Some(&cfg.twitch.channel_id)).await?;
                 cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
             }
-            if !get_bili_live_status(cfg.bililive.room).await? {
+            let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
+            if !is_live {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(cfg.bililive.area_v2);
                 bili_start_live(&cfg).await?;
@@ -89,20 +87,28 @@ async fn run_bilistream(
                     area_name.unwrap(),
                     cfg.bililive.area_v2
                 );
-                old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
             } else {
                 // If configuration changed, stop Bilibili live
-                if cfg.bililive.area_v2 != old_cfg.bililive.area_v2 {
-                    tracing::info!("分区配置改变, 停止Bilibili直播");
-                    bili_stop_live(&old_cfg).await?;
-                    old_cfg.bililive.area_v2 = cfg.bililive.area_v2.clone();
+                if cfg.bililive.area_v2 != area_id {
+                    let to_area_name = get_area_name(cfg.bililive.area_v2);
+                    let area_name = get_area_name(area_id);
+                    tracing::warn!(
+                        "分区改变（{}->{}）, 请调整分区",
+                        area_name.unwrap(),
+                        to_area_name.unwrap()
+                    );
+                    // bili_stop_live(&cfg).await?;
+                    // bili_start_live(&cfg).await?;
                     log_once = false;
                     continue;
                 }
-                if cfg.bililive.title != old_cfg.bililive.title {
+                if cfg.bililive.title != title {
                     bili_change_live_title(&cfg).await?;
-                    tracing::info!("B站直播标题变更为 {}", cfg.bililive.title);
-                    old_cfg.bililive.title = cfg.bililive.title.clone();
+                    tracing::info!(
+                        "B站直播标题变更 （{}->{}）",
+                        &title[3..],
+                        &cfg.bililive.title[3..]
+                    );
                 }
             }
 
@@ -146,12 +152,8 @@ async fn run_bilistream(
             }
         } else {
             // 计划直播(预告窗)
-            if cfg.bililive.title != old_cfg.bililive.title {
-                log_once_2 = false;
-                old_cfg = cfg.clone();
-            }
             if scheduled_start.is_some() {
-                if log_once_2 == false {
+                if old_cfg_title != cfg.bililive.title {
                     let live_title =
                         get_live_title(platform, Some(&cfg.youtube.channel_id)).await?;
                     if live_title != "" && live_title != "空" {
@@ -168,7 +170,6 @@ async fn run_bilistream(
                             scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S")
                         );
                     }
-                    log_once_2 = true;
                 }
             } else {
                 if no_live == false {
@@ -186,7 +187,7 @@ async fn run_bilistream(
             if cfg.bililive.enable_danmaku_command {
                 thread::spawn(move || run_danmaku(platform));
             }
-
+            old_cfg_title = cfg.bililive.title.clone();
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
         }
     }
@@ -244,8 +245,18 @@ async fn get_live_status(
     match platform {
         "bilibili" => {
             let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
-            let is_live = get_bili_live_status(cfg.bililive.room).await?;
-            println!("B站直播状态: {}", if is_live { "直播中" } else { "未直播" });
+            let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
+            if is_live {
+                let area_name = get_area_name(area_id);
+                println!(
+                    "B站直播状态: 直播中, 标题: {}, 分区: {} （ID: {}）",
+                    title,
+                    area_name.unwrap(),
+                    area_id
+                );
+            } else {
+                println!("B站直播状态: 未直播");
+            }
         }
         "YT" => {
             let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;

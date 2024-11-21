@@ -90,7 +90,7 @@ fn update_config(
     channel_name: &str,
     channel_id: &str,
     new_title: &str,
-    area_id: u32,
+    area_id: u64,
 ) -> io::Result<()> {
     let config_path = format!("./{}/config.yaml", platform);
     let config_path = Path::new(&config_path);
@@ -126,7 +126,7 @@ fn update_config(
 }
 
 /// determines the area id based on the live title.
-pub fn check_area_id_with_title(live_title: &str, current_area_id: u32) -> u32 {
+pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
     let title = live_title.to_lowercase();
     let title = title.replace("_", " ");
 
@@ -457,12 +457,13 @@ pub fn run_danmaku(platform: &str) {
 
                 // Try to remove both lock files, logging any errors
                 remove_danmaku_lock().expect("删除弹幕锁文件失败");
+                break;
             }
         }
     }
 }
 
-pub fn get_area_name(area_id: u32) -> Option<&'static str> {
+pub fn get_area_name(area_id: u64) -> Option<&'static str> {
     match area_id {
         86 => Some("英雄联盟"),
         329 => Some("无畏契约"),
