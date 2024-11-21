@@ -29,6 +29,7 @@ async fn run_bilistream(
     let mut old_cfg_title = "".to_string();
     let mut log_once = false;
     let mut no_live = false;
+    let mut old_scheduled_start = None;
     let platform = if &cfg.platform == "Youtube" {
         "YT"
     } else if &cfg.platform == "Twitch" {
@@ -81,8 +82,11 @@ async fn run_bilistream(
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(cfg.bililive.area_v2);
                 bili_start_live(&cfg).await?;
+                if title != cfg.bililive.title {
+                    bili_change_live_title(&cfg).await?;
+                }
                 tracing::info!(
-                    "B站已开播, 标题为 {},分区为 {} （ID: {}）",
+                    "B站已开播，标题为 {}，分区为 {} （ID: {}）",
                     cfg.bililive.title,
                     area_name.unwrap(),
                     cfg.bililive.area_v2
@@ -93,7 +97,7 @@ async fn run_bilistream(
                     let to_area_name = get_area_name(cfg.bililive.area_v2);
                     let area_name = get_area_name(area_id);
                     tracing::warn!(
-                        "分区改变（{}->{}）, 请调整分区",
+                        "分区改变（{}->{}），请调整分区",
                         area_name.unwrap(),
                         to_area_name.unwrap()
                     );
@@ -102,13 +106,10 @@ async fn run_bilistream(
                     log_once = false;
                     continue;
                 }
-                if cfg.bililive.title != title {
+                // 如果标题改变，则变更B站直播标题
+                if title != cfg.bililive.title {
                     bili_change_live_title(&cfg).await?;
-                    tracing::info!(
-                        "B站直播标题变更 （{}->{}）",
-                        &title[3..],
-                        &cfg.bililive.title[3..]
-                    );
+                    tracing::info!("B站直播标题变更 （{}->{}）", title, cfg.bililive.title);
                 }
             }
 
@@ -153,23 +154,24 @@ async fn run_bilistream(
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                if old_cfg_title != cfg.bililive.title {
+                if old_cfg_title != cfg.bililive.title || old_scheduled_start != scheduled_start {
                     let live_title =
                         get_live_title(platform, Some(&cfg.youtube.channel_id)).await?;
                     if live_title != "" && live_title != "空" {
                         tracing::info!(
-                            "{}未直播，计划于 {} 开始, 标题：{}",
+                            "{} 未直播，计划于 {} 开始，标题：{}",
                             cfg.youtube.channel_name,
                             scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"), // Format the start time
                             live_title
                         );
                     } else {
                         tracing::info!(
-                            "{}未直播，计划于 {} 开始",
+                            "{} 未直播，计划于 {} 开始",
                             cfg.youtube.channel_name,
                             scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S")
                         );
                     }
+                    old_scheduled_start = scheduled_start;
                 }
             } else {
                 if no_live == false {
@@ -220,7 +222,7 @@ async fn get_live_topic(
             let videos: Vec<serde_json::Value> = response.json().await?;
             if let Some(video) = videos.last() {
                 if let Some(topic_id) = video.get("topic_id") {
-                    tracing::info!("YouTube直播分区: {}", topic_id.to_string());
+                    // tracing::info!("YouTube直播分区: {}", topic_id.to_string());
                     return Ok(topic_id.to_string());
                 } else {
                     tracing::info!("当前YT直播没有分区");

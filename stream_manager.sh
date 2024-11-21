@@ -19,7 +19,7 @@ update_kamito() {
     # Update YT config
     sed -i 's/ChannelId: .*/ChannelId: UCgYCMluaLpERsyNXlPOvBtA/' "$BASE_DIR/YT/config.yaml"
     sed -i 's/ChannelName: .*/ChannelName: "kamito"/' "$BASE_DIR/YT/config.yaml"
-    sed -i 's/Title: .*/Title: "【转播】kamito"/' "$BASE_DIR/YT/config.yaml"
+    sed -i 's/Title: .*/Title: 【转播】kamito/' "$BASE_DIR/YT/config.yaml"
     echo "All configurations updated to kamito."
     display_current_config "all"
 
@@ -94,7 +94,7 @@ get_area_name() {
     927) echo "DeadLock" ;;
     236) echo "主机游戏" ;;
     321) echo "原神" ;;
-    407) echo "游戏王" ;;
+    407) echo "游戏王：决斗链接" ;;
     694) echo "斯普拉遁3" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
@@ -467,7 +467,7 @@ while true; do
         if [ $? -eq 0 ]; then
             sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${chid}|" "$BASE_DIR/YT/config.yaml"
             sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/YT/config.yaml"
-            sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/YT/config.yaml"
+            sed -i "s|Title: .*|Title: ${new_title}|" "$BASE_DIR/YT/config.yaml"
             echo "YouTube Channel ID, Channel Name, and Title updated in YT/config.yaml."
             display_current_config "YT"
         fi

@@ -42,13 +42,12 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
         .await?
         .json()
         .await?;
-
+    let title = res["data"]["title"].to_string();
+    let title = title.trim_matches('"');
     // Determine live status based on the response
-    println!("{:#?}", res);
-    println!("{}", res["data"]["live_status"]);
     Ok((
         res["data"]["live_status"] == 1,
-        res["data"]["title"].to_string(),
+        title.to_string(),
         res["data"]["area_id"].as_u64().unwrap(),
     ))
 }

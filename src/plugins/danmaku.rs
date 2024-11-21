@@ -418,7 +418,7 @@ pub fn run_danmaku(platform: &str) {
         }
     });
 
-    tracing::info!("弹幕命令读取已在进程bilistream-{} 中执行", platform);
+    tracing::info!("弹幕命令读取已在进程 bilistream-{} 中执行", platform);
 
     // Monitor Bilibili live status every 300 seconds
     loop {
