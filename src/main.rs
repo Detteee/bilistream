@@ -1,13 +1,13 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
-    get_area_name, get_bili_live_status, run_danmaku, select_live, Live, Twitch, Youtube,
+    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title,
+    check_channel, ffmpeg, get_area_name, get_bili_live_status, get_twitch_live_status,
+    get_twitch_live_title, get_youtube_live_title, run_danmaku, select_live,
 };
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 use proctitle::set_title;
 use reqwest_middleware::ClientBuilder;
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::process::Command as StdCommand;
 use std::{path::Path, thread, time::Duration};
 use tracing_subscriber::fmt;
@@ -51,16 +51,20 @@ async fn run_bilistream(
         cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
 
         let live_info = select_live(cfg.clone()).await?;
-        let (is_live, m3u8_url, scheduled_start) =
-            live_info.get_status().await.unwrap_or((false, None, None));
+        let (is_live, m3u8_url, title, scheduled_start) = live_info
+            .get_status()
+            .await
+            .unwrap_or((false, None, None, None));
         if is_live {
             tracing::info!(
-                "{} 正在直播",
+                "{} 正在 {} 直播, 标题:\n          {}",
                 match platform {
                     "TW" => &cfg.twitch.channel_name,
                     "YT" => &cfg.youtube.channel_name,
                     _ => "Unknown Platform",
-                }
+                },
+                cfg.platform,
+                title.unwrap()
             );
             no_live = false;
             if platform == "YT" {
@@ -101,7 +105,9 @@ async fn run_bilistream(
                         to_area_name.unwrap()
                     );
                     // bili_stop_live(&cfg).await?;
-                    // bili_start_live(&cfg).await?;
+                    bili_start_live(&cfg).await?;
+                    bili_change_live_title(&cfg).await?;
+                    tracing::info!("已更换转播频道，标题：{}", cfg.bililive.title);
                     log_once = false;
                     continue;
                 }
@@ -124,8 +130,10 @@ async fn run_bilistream(
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                let (current_is_live, new_m3u8_url, _) =
-                    live_info.get_status().await.unwrap_or((false, None, None));
+                let (current_is_live, new_m3u8_url, _, _) = live_info
+                    .get_status()
+                    .await
+                    .unwrap_or((false, None, None, None));
                 if !current_is_live {
                     break;
                 }
@@ -153,7 +161,10 @@ async fn run_bilistream(
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                if old_cfg_title != cfg.bililive.title || old_scheduled_start != scheduled_start {
+                if old_cfg_title != cfg.bililive.title
+                    || old_scheduled_start.unwrap() - scheduled_start.unwrap()
+                        < chrono::Duration::hours(2)
+                {
                     let live_title =
                         get_live_title(platform, Some(&cfg.youtube.channel_id)).await?;
                     if live_title != "" && live_title != "空" {
@@ -266,6 +277,7 @@ async fn get_live_status(
             } else {
                 &cfg.youtube.channel_id
             };
+            let channel_name = &cfg.youtube.channel_name;
             let client = reqwest::Client::new();
             let url = format!(
                 "https://holodex.net/api/v2/users/live?channels={}",
@@ -278,55 +290,83 @@ async fn get_live_status(
                 .await?;
             if response.status().is_success() {
                 let videos: Vec<serde_json::Value> = response.json().await?;
-                if let Some(video) = videos.last() {
-                    let status = video.get("status").unwrap();
-                    if status == "upcoming" {
-                        let start_time_str = video
-                            .get("start_scheduled")
-                            .and_then(|v| v.as_str())
-                            .ok_or("start_scheduled 不存在")?;
-                        // 将时间字符串转换为DateTime<Local>
-                        let start_time =
-                            DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Local);
-                        println!("计划开始时间: {}", start_time);
-                    } else if status == "live" {
-                        println!("YouTube直播状态: 直播中");
-                    } else {
-                        println!("YouTube直播状态: 未直播");
+                println!("{:?}", videos);
+                if !videos.is_empty() {
+                    let mut vid = videos.last().unwrap();
+                    let mut flag = false;
+                    for video in videos.iter().rev() {
+                        let cname = video.get("channel");
+                        println!("{:?}", cname.unwrap().get("name"));
+                        if cname
+                            .unwrap()
+                            .get("name")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .contains(channel_name)
+                        {
+                            vid = video;
+                            flag = true;
+                            break;
+                        }
                     }
-                } else {
-                    println!("YouTube直播状态: 未直播");
+                    if flag {
+                        let status = vid.get("status").unwrap();
+                        if status == "upcoming" {
+                            let start_time_str = vid
+                                .get("start_scheduled")
+                                .and_then(|v| v.as_str())
+                                .ok_or("start_scheduled 不存在")?;
+                            // 将时间字符串转换为DateTime<Local>
+                            let start_time = DateTime::parse_from_rfc3339(&start_time_str)?
+                                .with_timezone(&Local);
+                            let title = vid.get("title").unwrap();
+                            if title != "" {
+                                println!(
+                                    "{} 计划于 {} 开始 YouTube 直播, 标题: {}",
+                                    cfg.youtube.channel_name, start_time, title
+                                );
+                            } else {
+                                println!(
+                                    "{} 计划于 {} 开始 YouTube 直播",
+                                    cfg.youtube.channel_name, start_time
+                                );
+                            }
+                        } else if status == "live" {
+                            let channel_name = cfg.youtube.channel_name;
+                            let title = vid.get("title").unwrap();
+                            let channel_id = check_channel("TW", &channel_name).unwrap();
+                            if channel_id != "" {
+                                if !get_twitch_live_status(Some(&channel_id)).await? {
+                                    println!(
+                                        "频道 {} 在 YouTube 直播中, 标题: {}",
+                                        channel_name, title
+                                    );
+                                } else {
+                                    println!(
+                                        "频道 {} 在 YouTube 直播中, 标题: {}",
+                                        channel_name, title
+                                    );
+                                }
+                            } else {
+                                println!(
+                                    "频道 {} 在 YouTube 直播中, 标题: {}",
+                                    channel_name, title
+                                );
+                            }
+                        } else {
+                            let channel_name = cfg.youtube.channel_name;
+                            println!("{} 未直播", channel_name);
+                        }
+                    } else {
+                        let channel_name = cfg.youtube.channel_name;
+                        println!("{} 未直播", channel_name)
+                    }
                 }
             }
         }
         "TW" => {
-            let cfg = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json"))?;
-            let channel_id = if let Some(id) = channel_id {
-                id
-            } else {
-                &cfg.twitch.channel_id
-            };
-            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-            let raw_client = reqwest::Client::builder()
-                .cookie_store(true)
-                .timeout(Duration::new(30, 0))
-                .build()?;
-            let client = ClientBuilder::new(raw_client.clone())
-                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-                .build();
-
-            let twitch = Twitch::new(
-                channel_id,
-                cfg.twitch.oauth_token.clone(),
-                client,
-                cfg.twitch.proxy_region.clone(),
-            );
-
-            let (is_live, _, _) = twitch.get_status().await?;
-            println!(
-                "Twitch直播状态: {}",
-                if is_live { "直播中" } else { "未直播" }
-            );
+            get_twitch_live_status(channel_id).await?;
         }
         _ => {
             println!("不支持的平台: {}", platform);
@@ -347,23 +387,15 @@ async fn get_live_title(
             } else {
                 &config.youtube.channel_id
             };
-            let youtube = Youtube::new(
-                &config.youtube.channel_name,
-                channel_id,
-                config.proxy.clone(),
-            );
-            let title_str = youtube.get_title().await?;
-            if title_str != "" {
+
+            let title_str = get_youtube_live_title(channel_id, config.proxy.clone()).await?;
+            if let Some(title) = title_str {
                 // title end with date time like 2024-11-21 01:59 remove it
-                let title = title_str
-                    .split(" 202")
-                    .next()
-                    .unwrap_or(&title_str)
-                    .to_string();
-                // tracing::info!("YouTube直播标题: {}", title);
+                let title = title.split(" 202").next().unwrap_or(&title).to_string();
+                tracing::info!("YouTube 直播标题: {}", title);
                 Ok(title)
             } else {
-                // tracing::info!("YouTube直播标题: 空");
+                tracing::info!("YouTube 直播标题: 空");
                 Ok("空".to_string())
             }
         }
@@ -374,16 +406,12 @@ async fn get_live_title(
             } else {
                 &config.twitch.channel_id
             };
-            let twitch = Twitch::new(
-                channel_id,
-                config.twitch.oauth_token.clone(),
-                ClientBuilder::new(reqwest::Client::new()).build(),
-                config.twitch.proxy_region.clone(),
-            );
-            let title = twitch.get_title().await?;
+            let client = ClientBuilder::new(reqwest::Client::new()).build();
+
+            let title = get_twitch_live_title(channel_id, client).await?;
             if title != "" {
                 // println!("Twitch直播标题: {}", title);
-                tracing::info!("Twitch直播标题: {}", title);
+                tracing::info!("Twitch 直播标题: {}", title);
             }
             Ok(title)
         }

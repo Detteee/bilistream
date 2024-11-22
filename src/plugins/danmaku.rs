@@ -48,7 +48,7 @@ pub fn remove_danmaku_lock() -> io::Result<()> {
 }
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
-fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
+pub fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
     let file_path = format!("./{}/{}_channels.txt", platform, platform);
     let file = fs::File::open(&file_path)?;
     let reader = io::BufReader::new(file);
@@ -68,8 +68,10 @@ fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
             }
         }
     }
-
-    Ok(String::new())
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("频道 {} 未在 {} 列表中", channel_name, platform),
+    ))
 }
 
 /// Checks live status using the bilistream CLI.

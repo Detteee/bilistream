@@ -1,10 +1,16 @@
 use super::Live;
+use crate::load_config;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
+use reqwest_middleware::ClientBuilder;
 use reqwest_middleware::ClientWithMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
+use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 pub struct Twitch {
     pub channel_id: String,
@@ -15,39 +21,17 @@ pub struct Twitch {
 
 #[async_trait]
 impl Live for Twitch {
-    async fn get_title(&self) -> Result<String, Box<dyn Error>> {
-        let j = json!(
-            {
-                "operationName":"StreamMetadata",
-                "variables":{
-                    "channelLogin":&self.channel_id,
-                },
-                "extensions":{
-                    "persistedQuery":{
-                        "version":1,
-                        "sha256Hash":"1c719a40e481453e5c48d9bb585d971b8b372f8ebb105b17076722264dfa5b3e"
-                    }
-                }
-            }
-        );
-        let res: serde_json::Value = self
-            .client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
-            .json(&j)
-            .send()
-            .await?
-            .json()
-            .await?;
-        // println!("{:?}", res["data"]["user"]["lastBroadcast"]["title"]);
-        Ok(res["data"]["user"]["lastBroadcast"]["title"]
-            .as_str()
-            .unwrap()
-            .to_string())
-    }
     async fn get_status(
         &self,
-    ) -> Result<(bool, Option<String>, Option<DateTime<Local>>), Box<dyn Error>> {
+    ) -> Result<
+        (
+            bool,
+            Option<String>,
+            Option<String>,
+            Option<DateTime<Local>>,
+        ),
+        Box<dyn Error>,
+    > {
         let j = json!(
             {
                 "operationName":"StreamMetadata",
@@ -74,9 +58,10 @@ impl Live for Twitch {
         // println!("{:?}", res);
         if res["data"]["user"]["stream"]["type"] == "live" {
             let m3u8_url = self.get_streamlink_url()?;
-            Ok((true, Some(m3u8_url), None))
+            let title = get_twitch_live_title(&self.channel_id, self.client.clone()).await?;
+            Ok((true, Some(m3u8_url), Some(title), None))
         } else {
-            Ok((false, None, None))
+            Ok((false, None, None, None))
         }
     }
 
@@ -145,4 +130,67 @@ impl Twitch {
             Err(error.into())
         }
     }
+}
+
+pub async fn get_twitch_live_status(
+    channel_id: Option<&str>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let cfg = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json"))?;
+    let channel_id = if let Some(id) = channel_id {
+        id
+    } else {
+        &cfg.twitch.channel_id
+    };
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+    let raw_client = reqwest::Client::builder()
+        .cookie_store(true)
+        .timeout(Duration::new(30, 0))
+        .build()?;
+    let client = ClientBuilder::new(raw_client.clone())
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build();
+
+    let twitch = Twitch::new(
+        channel_id,
+        cfg.twitch.oauth_token.clone(),
+        client,
+        cfg.twitch.proxy_region.clone(),
+    );
+
+    let (is_live, _, _, _) = twitch.get_status().await?;
+
+    Ok(is_live)
+}
+
+pub async fn get_twitch_live_title(
+    channel_id: &str,
+    client: ClientWithMiddleware,
+) -> Result<String, Box<dyn Error>> {
+    let j = json!(
+        {
+            "operationName":"StreamMetadata",
+            "variables":{
+                "channelLogin":channel_id,
+            },
+            "extensions":{
+                "persistedQuery":{
+                    "version":1,
+                    "sha256Hash":"1c719a40e481453e5c48d9bb585d971b8b372f8ebb105b17076722264dfa5b3e"
+                }
+            }
+        }
+    );
+    let res: serde_json::Value = client
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+        .json(&j)
+        .send()
+        .await?
+        .json()
+        .await?;
+    // println!("{:?}", res["data"]["user"]["lastBroadcast"]["title"]);
+    Ok(res["data"]["user"]["lastBroadcast"]["title"]
+        .as_str()
+        .unwrap()
+        .to_string())
 }
