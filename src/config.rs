@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-
+use std::process::Command;
 /// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -142,10 +142,38 @@ pub fn load_config<P: AsRef<Path>>(
     let config_content = fs::read_to_string(&config_path)?;
     let mut config: Config = serde_yaml::from_str(&config_content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
+    // Check cookies
+    check_cookies()?;
     // Load credentials from cookies.json
     let credentials = load_credentials(cookies_path)?;
     config.bililive.credentials = credentials;
 
     Ok(config)
+}
+
+fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
+    // Retrieve live information
+    // Check for the existence of cookies.json
+    if !Path::new("cookies.json").exists() {
+        tracing::info!("cookies.json 不存在，请登录");
+        let mut command = Command::new("./login-biliup");
+        command.arg("login");
+        command.spawn()?.wait()?;
+    } else {
+        // Check if cookies.json is older than 48 hours
+        if Path::new("cookies.json")
+            .metadata()?
+            .modified()?
+            .elapsed()?
+            .as_secs()
+            > 3600 * 24 * 3
+        {
+            tracing::info!("cookies.json 已超过3天，正在刷新");
+            let mut command = Command::new("./login-biliup");
+            command.arg("renew");
+            command.spawn()?.wait()?;
+        }
+    }
+
+    Ok(())
 }

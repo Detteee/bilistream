@@ -54,7 +54,6 @@ async fn run_bilistream(
         let (is_live, m3u8_url, scheduled_start) =
             live_info.get_status().await.unwrap_or((false, None, None));
         if is_live {
-            check_cookies().await?;
             tracing::info!(
                 "{} 正在直播",
                 match platform {
@@ -420,33 +419,6 @@ async fn change_live_title(
     cfg.bililive.title = new_title.to_string();
     bili_change_live_title(&cfg).await?;
     println!("直播标题改变成功");
-    Ok(())
-}
-
-async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
-    // Retrieve live information
-    // Check for the existence of cookies.json
-    if !Path::new("cookies.json").exists() {
-        tracing::info!("cookies.json 不存在，请登录");
-        let mut command = StdCommand::new("./login-biliup");
-        command.arg("login");
-        command.spawn()?.wait()?;
-    } else {
-        // Check if cookies.json is older than 48 hours
-        if Path::new("cookies.json")
-            .metadata()?
-            .modified()?
-            .elapsed()?
-            .as_secs()
-            > 3600 * 24 * 3
-        {
-            tracing::info!("cookies.json 已超过3天，正在刷新");
-            let mut command = StdCommand::new("./login-biliup");
-            command.arg("renew");
-            command.spawn()?.wait()?;
-        }
-    }
-
     Ok(())
 }
 
