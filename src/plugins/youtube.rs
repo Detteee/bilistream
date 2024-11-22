@@ -62,6 +62,7 @@ pub async fn get_youtube_live_status(
         channel_id
     );
     let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
+    let channel_name = &cfg.youtube.channel_name;
     let response = client
         .get(&url)
         .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
@@ -69,35 +70,62 @@ pub async fn get_youtube_live_status(
         .await?;
     if response.status().is_success() {
         let videos: Vec<serde_json::Value> = response.json().await?;
-        if let Some(video) = videos.last() {
-            let status = video.get("status").unwrap();
-            if status == "upcoming" {
-                let start_time_str = video
-                    .get("start_scheduled")
-                    .and_then(|v| v.as_str())
-                    .ok_or("start_scheduled 不存在")?;
-                // 将时间字符串转换为DateTime<Local>
-                let start_time =
-                    DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Local);
-                if video.get("title").is_some() {
-                    let title = video.get("title").unwrap();
-                    // println!("计划开始时间: {}", start_time);
-                    return Ok((false, None, Some(title.to_string()), Some(start_time)));
-                } else {
-                    return Ok((false, None, None, Some(start_time)));
+        if !videos.is_empty() {
+            let mut vid = videos.last().unwrap();
+            let mut flag = false;
+            for video in videos.iter().rev() {
+                let cname = video.get("channel");
+                // println!("{:?}", cname.unwrap().get("name"));
+                if cname
+                    .unwrap()
+                    .get("name")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains(channel_name)
+                {
+                    vid = video;
+                    flag = true;
+                    break;
                 }
-            } else if status == "live" {
-                return get_status_with_yt_dlp(channel_id, proxy).await;
+            }
+            if flag {
+                let status = vid.get("status").unwrap();
+                if status == "upcoming" {
+                    let start_time_str = vid
+                        .get("start_scheduled")
+                        .and_then(|v| v.as_str())
+                        .ok_or("start_scheduled 不存在")?;
+                    // 将时间字符串转换为DateTime<Local>
+                    let start_time =
+                        DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Local);
+                    if vid.get("title").is_some() {
+                        let title = vid.get("title").unwrap();
+                        // println!("计划开始时间: {}", start_time);
+                        return Ok((false, None, Some(title.to_string()), Some(start_time)));
+                    } else {
+                        return Ok((false, None, None, Some(start_time)));
+                    }
+                } else if status == "live" {
+                    if let Some(title) = vid.get("title").and_then(|v| v.as_str()) {
+                        // println!("title: {}", title);
+                        return get_status_with_yt_dlp(channel_id, proxy, Some(title.to_string()))
+                            .await;
+                    } else {
+                        return get_status_with_yt_dlp(channel_id, proxy, None).await;
+                    }
+                } else {
+                    return Ok((false, None, None, None));
+                }
             } else {
-                tracing::info!("Holodex获取直播状态失败，使用yt-dlp获取");
-                return get_status_with_yt_dlp(channel_id, proxy).await;
+                return Ok((false, None, None, None));
             }
         } else {
             return Ok((false, None, None, None));
         }
     } else {
-        tracing::info!("Holodex获取直播状态失败，使用yt-dlp获取");
-        return get_status_with_yt_dlp(channel_id, proxy).await;
+        tracing::error!("Holodex获取直播状态失败，使用yt-dlp获取");
+        return get_status_with_yt_dlp(channel_id, proxy, None).await;
     }
 }
 
@@ -106,7 +134,6 @@ pub async fn get_youtube_live_title(
     proxy: Option<String>,
 ) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
-
     let channel_name = &cfg.youtube.channel_name;
     let client = reqwest::Client::new();
     let url = format!(
@@ -126,7 +153,7 @@ pub async fn get_youtube_live_title(
             let mut flag = false;
             for video in videos.iter().rev() {
                 let cname = video.get("channel");
-                println!("{:?}", cname.unwrap().get("name"));
+                // println!("{:?}", cname.unwrap().get("name"));
                 if cname
                     .unwrap()
                     .get("name")
@@ -172,6 +199,7 @@ pub async fn get_youtube_live_title(
 async fn get_status_with_yt_dlp(
     channel_id: &str,
     proxy: Option<String>,
+    title: Option<String>,
 ) -> Result<
     (
         bool,
@@ -204,29 +232,45 @@ async fn get_status_with_yt_dlp(
         {
             let minutes: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::minutes(minutes);
-            let title = get_youtube_live_title(channel_id, proxy).await?;
-            return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            if title.is_some() {
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            } else {
+                let title = get_youtube_live_title(channel_id, proxy).await?;
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            }
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) hours")?.captures(&stderr)
         {
             let hours: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::hours(hours);
-            let title = get_youtube_live_title(channel_id, proxy).await?;
-            return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            if title.is_some() {
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            } else {
+                let title = get_youtube_live_title(channel_id, proxy).await?;
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            }
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
         {
             let days: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::days(days);
-            let title = get_youtube_live_title(channel_id, proxy).await?;
-            return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            if title.is_some() {
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            } else {
+                let title = get_youtube_live_title(channel_id, proxy).await?;
+                return Ok((false, None, title, Some(start_time))); // Return scheduled start time
+            }
         }
         return Ok((false, None, None, None)); // Channel is not live and no scheduled time
     } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {
-        let title = get_youtube_live_title(channel_id, proxy).await?;
-        return Ok((true, Some(stdout.to_string()), title, None)); // Channel is currently live
+        if title.is_some() {
+            return Ok((true, Some(stdout.to_string()), title, None)); // Channel is currently live
+        } else {
+            let title = get_youtube_live_title(channel_id, proxy).await?;
+            return Ok((true, Some(stdout.to_string()), title, None)); // Channel is currently live
+        }
     }
 
     Err("Unexpected output from yt-dlp".into())
