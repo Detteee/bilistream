@@ -48,7 +48,10 @@ pub fn remove_danmaku_lock() -> io::Result<()> {
 }
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
-pub fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
+pub fn check_channel(
+    platform: &str,
+    channel_name: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let file_path = format!("./{}/{}_channels.txt", platform, platform);
     let file = fs::File::open(&file_path)?;
     let reader = io::BufReader::new(file);
@@ -64,14 +67,11 @@ pub fn check_channel(platform: &str, channel_name: &str) -> io::Result<String> {
             if let Some(captures) = re.captures(&line) {
                 return Ok(captures
                     .get(1)
-                    .map_or(String::new(), |m| m.as_str().to_string()));
+                    .map_or(None, |m| Some(m.as_str().to_string())));
             }
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("频道 {} 未在 {} 列表中", channel_name, platform),
-    ))
+    Ok(None)
 }
 
 /// Checks live status using the bilistream CLI.
@@ -251,29 +251,15 @@ async fn process_danmaku(command: &str) {
             }
         };
 
-        if channel_id.is_empty() {
+        if channel_id.is_none() {
             tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
             return;
         }
 
-        // let live_status = match check_live_status(platform, &channel_id).await {
-        //     Ok(status) => status,
-        //     Err(e) => {
-        //         tracing::error!("获取直播状态时出错: {}", e);
-        //         return;
-        //     }
-        // };
+        // Use a reference to the String inside channel_id without moving it
+        let channel_id_str = channel_id.as_ref().unwrap();
 
-        // if !live_status.contains("Not Live") {
-        // tracing::info!("area_id: {}", area_id);
-        // let config_path = format!("./{}/config.yaml", platform);        // } else {
-        //     tracing::info!(
-        //         "频道 {} ({}) 未在 {} 直播",
-        //         channel_name,
-        //         channel_id,
-        //         platform
-        //     );
-        // }
+        // Now you can use channel_id_str where needed without moving channel_id
         let new_title = format!("【转播】{}", channel_name);
 
         let live_title = if platform.eq_ignore_ascii_case("YT") {
@@ -281,7 +267,7 @@ async fn process_danmaku(command: &str) {
                 .arg("-e")
                 .arg(&format!(
                     "https://www.youtube.com/channel/{}/live",
-                    channel_id
+                    channel_id_str
                 ))
                 .output()
             {
@@ -296,7 +282,7 @@ async fn process_danmaku(command: &str) {
             match Command::new("./bilistream")
                 .arg("get-live-title")
                 .arg("TW")
-                .arg(&channel_id)
+                .arg(channel_id_str)
                 .output()
             {
                 Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -322,7 +308,7 @@ async fn process_danmaku(command: &str) {
         if let Err(e) = update_config(
             platform,
             channel_name,
-            &channel_id,
+            &channel_id_str,
             &new_title,
             updated_area_id,
         ) {

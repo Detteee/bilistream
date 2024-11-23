@@ -306,9 +306,15 @@ async fn get_live_status(
                             .unwrap()
                             .contains(channel_name)
                         {
-                            vid = video;
-                            flag = true;
-                            break;
+                            let topic_id = video.get("topic_id").unwrap();
+                            if topic_id.as_str().unwrap().contains("membersonly") {
+                                // tracing::info!("频道 {} 正在进行会限直播", channel_name);
+                                println!("频道 {} 正在进行会限直播", channel_name);
+                            } else {
+                                vid = video;
+                                flag = true;
+                                break;
+                            }
                         }
                     }
                     if flag {
@@ -337,15 +343,18 @@ async fn get_live_status(
                             let channel_name = cfg.youtube.channel_name;
                             let title = vid.get("title").unwrap();
                             let channel_id = check_channel("TW", &channel_name).unwrap();
-                            if channel_id != "" {
-                                if !get_twitch_live_status(Some(&channel_id)).await? {
+                            if channel_id.is_some() {
+                                if !get_twitch_live_status(channel_id.as_ref().unwrap())
+                                    .await
+                                    .unwrap()
+                                {
                                     println!(
                                         "频道 {} 在 YouTube 直播中, 标题: {}",
                                         channel_name, title
                                     );
                                 } else {
                                     println!(
-                                        "频道 {} 在 YouTube 直播中, 标题: {}",
+                                        "频道 {} 在 Twitch 直播中, 标题: {}",
                                         channel_name, title
                                     );
                                 }
@@ -367,6 +376,12 @@ async fn get_live_status(
             }
         }
         "TW" => {
+            let cfg = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json"))?;
+            let channel_id = if let Some(id) = channel_id {
+                id
+            } else {
+                &cfg.twitch.channel_id
+            };
             get_twitch_live_status(channel_id).await?;
         }
         _ => {

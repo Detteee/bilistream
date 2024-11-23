@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 // use reqwest_middleware::ClientWithMiddleware;
+use super::danmaku::check_channel;
+use super::twitch::get_twitch_live_status;
 use super::Live;
 use crate::config::load_config;
 use chrono::{DateTime, Local};
@@ -79,8 +81,8 @@ pub async fn get_youtube_live_status(
                     .unwrap()
                     .contains(channel_name)
                 {
-                    let live_topic = video.get("topic_id").unwrap();
-                    if live_topic.as_str().unwrap().contains("membersonly") {
+                    let topic_id = video.get("topic_id").unwrap();
+                    if topic_id.as_str().unwrap().contains("membersonly") {
                         // tracing::info!("频道 {} 正在进行会限直播", channel_name);
                     } else {
                         vid = video;
@@ -107,6 +109,15 @@ pub async fn get_youtube_live_status(
                         return Ok((false, None, None, Some(start_time)));
                     }
                 } else if status == "live" {
+                    let tw_channel_id = check_channel("TW", channel_name).unwrap();
+                    if tw_channel_id.is_some() {
+                        if get_twitch_live_status(tw_channel_id.as_ref().unwrap())
+                            .await
+                            .unwrap()
+                        {
+                            return Ok((false, None, None, None));
+                        }
+                    }
                     if let Some(title) = vid.get("title").and_then(|v| v.as_str()) {
                         // println!("title: {}", title);
                         return get_status_with_yt_dlp(channel_id, proxy, Some(title.to_string()))
