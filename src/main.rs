@@ -348,21 +348,12 @@ async fn get_live_status(
                                     .await
                                     .unwrap()
                                 {
-                                    println!(
-                                        "频道 {} 在 YouTube 直播中, 标题: {}",
-                                        channel_name, title
-                                    );
+                                    println!("{} 在 YouTube 直播中, 标题: {}", channel_name, title);
                                 } else {
-                                    println!(
-                                        "频道 {} 在 Twitch 直播中, 标题: {}",
-                                        channel_name, title
-                                    );
+                                    println!("{} 在 Twitch 直播中, 标题: {}", channel_name, title);
                                 }
                             } else {
-                                println!(
-                                    "频道 {} 在 YouTube 直播中, 标题: {}",
-                                    channel_name, title
-                                );
+                                println!("{} 在 YouTube 直播中, 标题: {}", channel_name, title);
                             }
                         } else {
                             let channel_name = cfg.youtube.channel_name;
@@ -372,6 +363,8 @@ async fn get_live_status(
                         let channel_name = cfg.youtube.channel_name;
                         println!("{} 未直播", channel_name)
                     }
+                } else {
+                    println!("{} 未直播", cfg.youtube.channel_name);
                 }
             }
         }
@@ -382,7 +375,11 @@ async fn get_live_status(
             } else {
                 &cfg.twitch.channel_id
             };
-            get_twitch_live_status(channel_id).await?;
+            if get_twitch_live_status(channel_id).await? {
+                println!("{} 在 Twitch 直播中", cfg.twitch.channel_name);
+            } else {
+                println!("{} 未在 Twitch 直播", cfg.twitch.channel_name);
+            }
         }
         _ => {
             println!("不支持的平台: {}", platform);

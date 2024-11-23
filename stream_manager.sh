@@ -13,13 +13,13 @@ RESET='\033[0m'
 update_kamito() {
     # Update TW config
     sed -i 's/ChannelId: .*/ChannelId: kamito_jp/' "$BASE_DIR/TW/config.yaml"
-    sed -i 's/ChannelName: .*/ChannelName: "kamito"/' "$BASE_DIR/TW/config.yaml"
-    sed -i 's/Title: .*/Title: "【转播】kamito"/' "$BASE_DIR/TW/config.yaml"
+    sed -i 's/ChannelName: .*/ChannelName: "Kamito"/' "$BASE_DIR/TW/config.yaml"
+    sed -i 's/Title: .*/Title: "【转播】Kamito"/' "$BASE_DIR/TW/config.yaml"
 
     # Update YT config
     sed -i 's/ChannelId: .*/ChannelId: UCgYCMluaLpERsyNXlPOvBtA/' "$BASE_DIR/YT/config.yaml"
-    sed -i 's/ChannelName: .*/ChannelName: "kamito"/' "$BASE_DIR/YT/config.yaml"
-    sed -i 's/Title: .*/Title: 【转播】kamito/' "$BASE_DIR/YT/config.yaml"
+    sed -i 's/ChannelName: .*/ChannelName: "Kamito"/' "$BASE_DIR/YT/config.yaml"
+    sed -i 's/Title: .*/Title: 【转播】Kamito/' "$BASE_DIR/YT/config.yaml"
     echo "All configurations updated to kamito."
     display_current_config "all"
 
@@ -121,7 +121,7 @@ select_channel_id() {
     case $yt_choice in
     1)
         chid="UCgYCMluaLpERsyNXlPOvBtA"
-        channel_name="kamito"
+        channel_name="Kamito"
         ;;
     2)
         chid="UCiMG6VdScBabPhJ1ZtaVmbw"
@@ -273,7 +273,7 @@ select_twitch_id() {
     case $twitch_choice in
     1)
         channel_id="kamito_jp"
-        channel_name="kamito"
+        channel_name="Kamito"
         ;;
     2)
         channel_id="kagasumire"
