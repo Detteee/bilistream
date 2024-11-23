@@ -20,7 +20,7 @@ update_kamito() {
     sed -i 's/ChannelId: .*/ChannelId: UCgYCMluaLpERsyNXlPOvBtA/' "$BASE_DIR/YT/config.yaml"
     sed -i 's/ChannelName: .*/ChannelName: "Kamito"/' "$BASE_DIR/YT/config.yaml"
     sed -i 's/Title: .*/Title: 【转播】Kamito/' "$BASE_DIR/YT/config.yaml"
-    echo "All configurations updated to kamito."
+    echo "All configurations updated to Kamito."
     display_current_config "all"
 
 }
@@ -104,7 +104,7 @@ get_area_name() {
 select_channel_id() {
     echo "Select YouTube Channel:"
     echo -e "${GREEN}───────────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito              2) 花芽なずな           3) 花芽すみれ"
+    echo " 1) Kamito              2) 花芽なずな           3) 花芽すみれ"
     echo " 4) 小雀とと            5) 一ノ瀬うるは         6) 胡桃のあ"
     echo " 7) 兎咲ミミ            8) 空澄セナ             9) 橘ひなの"
     echo "10) 英リサ             11) 如月れん            12) 神成きゅぴ"
@@ -259,7 +259,7 @@ select_channel_id() {
 select_twitch_id() {
     echo "Select Twitch Channel:"
     echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
-    echo " 1) kamito              2) 花芽すみれ           3) 英リサ"
+    echo " 1) Kamito              2) 花芽すみれ           3) 英リサ"
     echo " 4) 胡桃のあ            5) 橘ひなの             6) 空澄セナ"
     echo " 7) 紫宮るな            8) 夢野あかり           9) 白波らむね"
     echo "10) 千燈ゆうひ         11) Narin               12) とおこ"

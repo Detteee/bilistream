@@ -291,13 +291,13 @@ async fn get_live_status(
                 .await?;
             if response.status().is_success() {
                 let videos: Vec<serde_json::Value> = response.json().await?;
-                println!("{:?}", videos);
+                // println!("{:?}", videos);
                 if !videos.is_empty() {
                     let mut vid = videos.last().unwrap();
                     let mut flag = false;
                     for video in videos.iter().rev() {
                         let cname = video.get("channel");
-                        println!("{:?}", cname.unwrap().get("name"));
+                        // println!("{:?}", cname.unwrap().get("name"));
                         if cname
                             .unwrap()
                             .get("name")
