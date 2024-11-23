@@ -23,7 +23,7 @@ pub trait Live {
 }
 
 pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
-    // 设置最大重试次数为4294967295次
+    // 设置最大重试次数为5次
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
     let raw_client = reqwest::Client::builder()
         .cookie_store(true)

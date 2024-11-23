@@ -161,15 +161,16 @@ async fn run_bilistream(
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                if old_cfg_title != cfg.bililive.title
-                    || old_scheduled_start.unwrap() - scheduled_start.unwrap()
-                        < chrono::Duration::hours(2)
-                {
+                let mut diff = chrono::Duration::seconds(0);
+                if old_scheduled_start.is_some() {
+                    diff = old_scheduled_start.unwrap() - scheduled_start.unwrap();
+                }
+                if !old_cfg_title.contains(&cfg.bililive.title) || diff.num_hours() > 2 {
                     let live_title =
                         get_live_title(platform, Some(&cfg.youtube.channel_id)).await?;
                     if live_title != "" && live_title != "空" {
                         tracing::info!(
-                            "{} 未直播，计划于 {} 开始，标题：{}",
+                            "{} 未直播，计划于 {} 开始，标题：\n          {}",
                             cfg.youtube.channel_name,
                             scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"), // Format the start time
                             live_title
@@ -392,10 +393,10 @@ async fn get_live_title(
             if let Some(title) = title_str {
                 // title end with date time like 2024-11-21 01:59 remove it
                 let title = title.split(" 202").next().unwrap_or(&title).to_string();
-                tracing::info!("YouTube 直播标题: {}", title);
+                // tracing::info!("YouTube 直播标题: {}", title);
                 Ok(title)
             } else {
-                tracing::info!("YouTube 直播标题: 空");
+                // tracing::info!("YouTube 直播标题: 空");
                 Ok("空".to_string())
             }
         }

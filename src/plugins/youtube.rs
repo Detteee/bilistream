@@ -11,14 +11,9 @@ pub struct Youtube {
     pub channel_name: String,
     pub channel_id: String,
     pub proxy: Option<String>,
-    // pub access_token: String,
-    // pub client: ClientWithMiddleware,
 }
 #[async_trait]
 impl Live for Youtube {
-    // fn channel_name(&self) -> &str {
-    //     &self.channel_name // Return channel_id instead of room
-    // }
     async fn get_status(
         &self,
     ) -> Result<
@@ -84,9 +79,14 @@ pub async fn get_youtube_live_status(
                     .unwrap()
                     .contains(channel_name)
                 {
-                    vid = video;
-                    flag = true;
-                    break;
+                    let live_topic = video.get("topic_id").unwrap();
+                    if live_topic.as_str().unwrap().contains("membersonly") {
+                        // tracing::info!("频道 {} 正在进行会限直播", channel_name);
+                    } else {
+                        vid = video;
+                        flag = true;
+                        break;
+                    }
                 }
             }
             if flag {
@@ -147,13 +147,11 @@ pub async fn get_youtube_live_title(
         .await?;
     if response.status().is_success() {
         let videos: Vec<serde_json::Value> = response.json().await?;
-        // println!("{:?}", videos);
         if !videos.is_empty() {
             let mut vid = videos.last().unwrap();
             let mut flag = false;
             for video in videos.iter().rev() {
                 let cname = video.get("channel");
-                // println!("{:?}", cname.unwrap().get("name"));
                 if cname
                     .unwrap()
                     .get("name")
@@ -162,9 +160,12 @@ pub async fn get_youtube_live_title(
                     .unwrap()
                     .contains(channel_name)
                 {
-                    vid = video;
-                    flag = true;
-                    break;
+                    let live_topic = video.get("topic_id").unwrap();
+                    if !live_topic.as_str().unwrap().contains("membersonly") {
+                        vid = video;
+                        flag = true;
+                        break;
+                    }
                 }
             }
             if flag {
@@ -190,9 +191,12 @@ pub async fn get_youtube_live_title(
             channel_id
         ));
         let output = command.output()?;
-        let live_title = String::from_utf8_lossy(&output.stdout);
-        // println!("live_title: {}", live_title);
-        Ok(Some(live_title.to_string()))
+        let title_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(title) = title_str.split(" 202").next() {
+            Ok(Some(title.to_string()))
+        } else {
+            Ok(Some("空".to_string()))
+        }
     }
 }
 
