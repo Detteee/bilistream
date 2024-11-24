@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 // use reqwest_middleware::ClientWithMiddleware;
-use super::danmaku::check_channel;
+use super::danmaku::get_channel_id;
 use super::twitch::get_twitch_live_status;
 use super::Live;
 use crate::config::load_config;
@@ -109,7 +109,7 @@ pub async fn get_youtube_live_status(
                         return Ok((false, None, None, Some(start_time)));
                     }
                 } else if status == "live" {
-                    let tw_channel_id = check_channel("TW", channel_name).unwrap();
+                    let tw_channel_id = get_channel_id("TW", channel_name).unwrap();
                     if tw_channel_id.is_some() {
                         if get_twitch_live_status(tw_channel_id.as_ref().unwrap())
                             .await

@@ -48,7 +48,7 @@ pub fn remove_danmaku_lock() -> io::Result<()> {
 }
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
-pub fn check_channel(
+pub fn get_channel_id(
     platform: &str,
     channel_name: &str,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
@@ -68,6 +68,32 @@ pub fn check_channel(
                 return Ok(captures
                     .get(1)
                     .map_or(None, |m| Some(m.as_str().to_string())));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn get_channel_name(
+    platform: &str,
+    channel_id: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let file_path = format!("./{}/{}_channels.txt", platform, platform);
+    let file = fs::File::open(&file_path)?;
+    let reader = io::BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
+        if line.contains(channel_id) {
+            let re = Regex::new(r"\((.*?)\)").unwrap();
+            if re.is_match(&line) {
+                return Ok(Some(
+                    re.captures(&line)
+                        .unwrap()
+                        .get(1)
+                        .unwrap()
+                        .as_str()
+                        .to_string(),
+                ));
             }
         }
     }
@@ -236,14 +262,8 @@ async fn process_danmaku(command: &str) {
         }
     };
 
-    // Additional checks for specific area_ids
-    if area_id == 240 && channel_name != "kamito" {
-        tracing::error!("只有'kamito'可以使用Apex分区. Skipping...");
-        return;
-    }
-
     if platform.eq("YT") || platform.eq("TW") {
-        let channel_id = match check_channel(platform, channel_name) {
+        let channel_id = match get_channel_id(platform, channel_name) {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("检查频道时出错: {}", e);
@@ -304,7 +324,11 @@ async fn process_danmaku(command: &str) {
         }
 
         let updated_area_id = check_area_id_with_title(&live_title, area_id);
-        // tracing::info!("更新后的分区ID: {}", updated_area_id);
+        // Additional checks for specific area_ids
+        if updated_area_id == 240 && channel_name != "Kamito" {
+            tracing::error!("只有'Kamito'可以使用Apex分区. Skipping...");
+            return;
+        }
         if let Err(e) = update_config(
             platform,
             channel_name,

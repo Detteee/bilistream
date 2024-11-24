@@ -1,7 +1,7 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title,
-    check_channel, ffmpeg, get_area_name, get_bili_live_status, get_twitch_live_status,
+    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
+    get_area_name, get_bili_live_status, get_channel_id, get_channel_name, get_twitch_live_status,
     get_twitch_live_title, get_youtube_live_title, run_danmaku, select_live,
 };
 use chrono::{DateTime, Local};
@@ -278,7 +278,10 @@ async fn get_live_status(
             } else {
                 &cfg.youtube.channel_id
             };
-            let channel_name = &cfg.youtube.channel_name;
+            let mut channel_name = get_channel_name("YT", channel_id).unwrap();
+            if channel_name.is_none() {
+                channel_name = Some(cfg.youtube.channel_name.clone());
+            }
             let client = reqwest::Client::new();
             let url = format!(
                 "https://holodex.net/api/v2/users/live?channels={}",
@@ -304,12 +307,15 @@ async fn get_live_status(
                             .unwrap()
                             .as_str()
                             .unwrap()
-                            .contains(channel_name)
+                            .contains(channel_name.as_ref().unwrap())
                         {
                             let topic_id = video.get("topic_id").unwrap();
                             if topic_id.as_str().unwrap().contains("membersonly") {
                                 // tracing::info!("频道 {} 正在进行会限直播", channel_name);
-                                println!("频道 {} 正在进行会限直播", channel_name);
+                                println!(
+                                    "频道 {} 正在进行会限直播",
+                                    channel_name.as_ref().unwrap()
+                                );
                             } else {
                                 vid = video;
                                 flag = true;
@@ -331,29 +337,44 @@ async fn get_live_status(
                             if title != "" {
                                 println!(
                                     "{} 计划于 {} 开始 YouTube 直播, 标题: {}",
-                                    cfg.youtube.channel_name, start_time, title
+                                    channel_name.as_ref().unwrap(),
+                                    start_time,
+                                    title
                                 );
                             } else {
                                 println!(
                                     "{} 计划于 {} 开始 YouTube 直播",
-                                    cfg.youtube.channel_name, start_time
+                                    channel_name.as_ref().unwrap(),
+                                    start_time
                                 );
                             }
                         } else if status == "live" {
-                            let channel_name = cfg.youtube.channel_name;
                             let title = vid.get("title").unwrap();
-                            let channel_id = check_channel("TW", &channel_name).unwrap();
+                            let channel_id =
+                                get_channel_id("TW", channel_name.as_ref().unwrap()).unwrap();
                             if channel_id.is_some() {
                                 if !get_twitch_live_status(channel_id.as_ref().unwrap())
                                     .await
                                     .unwrap()
                                 {
-                                    println!("{} 在 YouTube 直播中, 标题: {}", channel_name, title);
+                                    println!(
+                                        "{} 在 YouTube 直播中, 标题: {}",
+                                        channel_name.as_ref().unwrap(),
+                                        title
+                                    );
                                 } else {
-                                    println!("{} 在 Twitch 直播中, 标题: {}", channel_name, title);
+                                    println!(
+                                        "{} 在 Twitch 直播中, 标题: {}",
+                                        channel_name.as_ref().unwrap(),
+                                        title
+                                    );
                                 }
                             } else {
-                                println!("{} 在 YouTube 直播中, 标题: {}", channel_name, title);
+                                println!(
+                                    "{} 在 YouTube 直播中, 标题: {}",
+                                    channel_name.as_ref().unwrap(),
+                                    title
+                                );
                             }
                         } else {
                             let channel_name = cfg.youtube.channel_name;
@@ -375,10 +396,15 @@ async fn get_live_status(
             } else {
                 &cfg.twitch.channel_id
             };
+            let mut channel_name = get_channel_name("TW", channel_id).unwrap();
+            if channel_name.is_none() {
+                channel_name = Some(channel_id.to_string());
+            }
+
             if get_twitch_live_status(channel_id).await? {
-                println!("{} 在 Twitch 直播中", cfg.twitch.channel_name);
+                println!("{} 在 Twitch 直播中", channel_name.unwrap());
             } else {
-                println!("{} 未在 Twitch 直播", cfg.twitch.channel_name);
+                println!("{} 未在 Twitch 直播", channel_name.unwrap());
             }
         }
         _ => {
