@@ -192,6 +192,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         || title.contains("terraria")
         || title.contains("tgc card shop simulator")
         || title.contains("stardew valley")
+        || title.contains("gta")
     {
         235
     } else {
@@ -209,12 +210,12 @@ async fn process_danmaku(command: &str) {
     if !command.starts_with(" :") {
         return;
     }
-    tracing::info!("弹幕:{}", &command[2..]);
+    // tracing::info!("弹幕:{}", &command[2..]);
 
     let normalized_danmaku = command.replace("％", "%");
     // Validate danmaku command format: %转播%平台%频道名%分区
     if !normalized_danmaku.contains("%转播%") {
-        tracing::error!("弹幕命令格式错误. Skipping...");
+        // tracing::error!("弹幕命令格式错误. Skipping...");
         return;
     }
     let danmaku_command = normalized_danmaku.replace(" :", "");
@@ -279,24 +280,47 @@ async fn process_danmaku(command: &str) {
         // Use a reference to the String inside channel_id without moving it
         let channel_id_str = channel_id.as_ref().unwrap();
 
-        // Now you can use channel_id_str where needed without moving channel_id
-        let new_title = format!("【转播】{}", channel_name);
-
         let live_title = if platform.eq_ignore_ascii_case("YT") {
-            match Command::new("yt-dlp")
-                .arg("-e")
-                .arg(&format!(
-                    "https://www.youtube.com/channel/{}/live",
-                    channel_id_str
-                ))
+            // get youtube live topic
+            match Command::new("./bilistream")
+                .arg("get-live-topic")
+                .arg("YT")
+                .arg(channel_id_str)
                 .output()
             {
                 Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
                 Err(e) => {
-                    tracing::error!("获取YT直播标题时出错: {}", e);
-                    return;
+                    tracing::error!("获取YT直播分区时出错: {}", e);
+                    match Command::new("yt-dlp")
+                        .arg("-e")
+                        .arg(&format!(
+                            "https://www.youtube.com/channel/{}/live",
+                            channel_id_str
+                        ))
+                        .output()
+                    {
+                        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                        Err(e) => {
+                            tracing::error!("获取YT直播标题时出错: {}", e);
+                            return;
+                        }
+                    }
                 }
             }
+            // match Command::new("yt-dlp")
+            //     .arg("-e")
+            //     .arg(&format!(
+            //         "https://www.youtube.com/channel/{}/live",
+            //         channel_id_str
+            //     ))
+            //     .output()
+            // {
+            //     Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            //     Err(e) => {
+            //         tracing::error!("获取YT直播标题时出错: {}", e);
+            //         return;
+            //     }
+            // }
         } else {
             // TW
             match Command::new("./bilistream")
@@ -312,17 +336,22 @@ async fn process_danmaku(command: &str) {
                 }
             }
         };
-
+        println!("{}", live_title);
+        let live_title = live_title.to_lowercase();
         if live_title.contains("ウォッチパ")
             || live_title.contains("watchalong")
             || live_title.contains("talk")
+            || live_title.contains("zatsudan")
+            || live_title.contains("雑談")
             || live_title.contains("marshmallow")
             || live_title.contains("morning")
+            || live_title.contains("freechat")
         {
             tracing::error!("直播标题/topic包含不支持的关键词");
             return;
         }
-
+        // Now you can use channel_id_str where needed without moving channel_id
+        let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_title, area_id);
         // Additional checks for specific area_ids
         if updated_area_id == 240 && channel_name != "Kamito" {
@@ -490,6 +519,9 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         407 => Some("游戏王：决斗链接"),
         433 => Some("格斗游戏"),
         927 => Some("DeadLock"),
+        216 => Some("我的世界"),
+        646 => Some("UP主日常"),
+        102 => Some("最终幻想14"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None

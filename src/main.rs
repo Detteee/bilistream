@@ -80,6 +80,12 @@ async fn run_bilistream(
                 let live_title = get_live_title(platform, Some(&cfg.twitch.channel_id)).await?;
                 cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
             }
+            if cfg.bililive.area_v2 == 0 {
+                tracing::info!("标题包含的直播分区不支持,等待10min后重新检测");
+                // 等待10min后重新检测
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            }
             let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
             if !is_live {
                 tracing::info!("B站未直播");
@@ -99,17 +105,16 @@ async fn run_bilistream(
                 if cfg.bililive.area_v2 != area_id {
                     let to_area_name = get_area_name(cfg.bililive.area_v2);
                     let area_name = get_area_name(area_id);
-                    tracing::warn!(
+                    tracing::info!(
                         "分区改变（{}->{}），请调整分区",
                         area_name.unwrap(),
                         to_area_name.unwrap()
                     );
                     // bili_stop_live(&cfg).await?;
-                    bili_start_live(&cfg).await?;
+                    // bili_start_live(&cfg).await?;
                     bili_change_live_title(&cfg).await?;
                     tracing::info!("已更换转播频道，标题：{}", cfg.bililive.title);
                     log_once = false;
-                    continue;
                 }
                 // 如果标题改变，则变更B站直播标题
                 if title != cfg.bililive.title {
@@ -129,7 +134,7 @@ async fn run_bilistream(
             );
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 let (current_is_live, new_m3u8_url, _, _) = live_info
                     .get_status()
                     .await
@@ -137,6 +142,10 @@ async fn run_bilistream(
                 if !current_is_live {
                     break;
                 }
+                // let (is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
+                // if !is_live {
+                //     bili_start_live(&cfg).await?;
+                // }
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -220,6 +229,7 @@ async fn get_live_topic(
             } else {
                 &cfg.youtube.channel_id
             };
+            let channel_name = get_channel_name("YT", channel_id).unwrap();
             let url = format!(
                 "https://holodex.net/api/v2/users/live?channels={}",
                 channel_id
@@ -231,13 +241,35 @@ async fn get_live_topic(
                 .await?;
 
             let videos: Vec<serde_json::Value> = response.json().await?;
-            if let Some(video) = videos.last() {
-                if let Some(topic_id) = video.get("topic_id") {
-                    // tracing::info!("YouTube直播分区: {}", topic_id.to_string());
-                    return Ok(topic_id.to_string());
+            if !videos.is_empty() {
+                let mut vid = videos.last().unwrap();
+                let mut flag = false;
+                for video in videos.iter().rev() {
+                    let cname = video.get("channel");
+                    if cname
+                        .unwrap()
+                        .get("name")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .contains(channel_name.as_ref().unwrap())
+                    {
+                        vid = video;
+                        flag = true;
+                        break;
+                    }
+                }
+                if flag {
+                    let topic_id = vid.get("topic_id").unwrap();
+                    if topic_id.as_str().is_some() {
+                        return Ok(topic_id.to_string());
+                    } else {
+                        tracing::info!("当前YT直播没有分区");
+                        Err("当前YT直播没有分区".into())
+                    }
                 } else {
-                    tracing::info!("当前YT直播没有分区");
-                    Err("当前YT直播没有分区".into())
+                    tracing::info!("当前频道没有直播");
+                    Err("当前频道没有直播".into())
                 }
             } else {
                 tracing::info!("当前频道没有直播");
@@ -427,7 +459,7 @@ async fn get_live_title(
                 &config.youtube.channel_id
             };
 
-            let title_str = get_youtube_live_title(channel_id, config.proxy.clone()).await?;
+            let title_str = get_youtube_live_title(channel_id).await?;
             if let Some(title) = title_str {
                 // title end with date time like 2024-11-21 01:59 remove it
                 let title = title.split(" 202").next().unwrap_or(&title).to_string();

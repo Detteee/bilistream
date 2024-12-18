@@ -27,7 +27,7 @@ impl Live for Youtube {
         ),
         Box<dyn Error>,
     > {
-        Ok(get_youtube_live_status(&self.channel_id, self.proxy.clone()).await?)
+        Ok(get_youtube_live_status(&self.channel_id).await?)
     }
 }
 
@@ -43,7 +43,6 @@ impl Youtube {
 
 pub async fn get_youtube_live_status(
     channel_id: &str,
-    proxy: Option<String>,
 ) -> Result<
     (
         bool,
@@ -59,6 +58,7 @@ pub async fn get_youtube_live_status(
         channel_id
     );
     let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
+    let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let response = client
         .get(&url)
@@ -67,11 +67,16 @@ pub async fn get_youtube_live_status(
         .await?;
     if response.status().is_success() {
         let videos: Vec<serde_json::Value> = response.json().await?;
+        println!("{:?}", videos);
+
         if !videos.is_empty() {
             let mut vid = videos.last().unwrap();
             let mut flag = false;
             for video in videos.iter().rev() {
                 let cname = video.get("channel");
+                if cname.is_none() {
+                    continue;
+                }
                 // println!("{:?}", cname.unwrap().get("name"));
                 if cname
                     .unwrap()
@@ -140,11 +145,9 @@ pub async fn get_youtube_live_status(
     }
 }
 
-pub async fn get_youtube_live_title(
-    channel_id: &str,
-    proxy: Option<String>,
-) -> Result<Option<String>, Box<dyn Error>> {
+pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
+    let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let client = reqwest::Client::new();
     let url = format!(
@@ -250,7 +253,7 @@ async fn get_status_with_yt_dlp(
             if title.is_some() {
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             } else {
-                let title = get_youtube_live_title(channel_id, proxy).await?;
+                let title = get_youtube_live_title(channel_id).await?;
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             }
         }
@@ -262,7 +265,7 @@ async fn get_status_with_yt_dlp(
             if title.is_some() {
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             } else {
-                let title = get_youtube_live_title(channel_id, proxy).await?;
+                let title = get_youtube_live_title(channel_id).await?;
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             }
         }
@@ -274,7 +277,7 @@ async fn get_status_with_yt_dlp(
             if title.is_some() {
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             } else {
-                let title = get_youtube_live_title(channel_id, proxy).await?;
+                let title = get_youtube_live_title(channel_id).await?;
                 return Ok((false, None, title, Some(start_time))); // Return scheduled start time
             }
         }
@@ -283,7 +286,7 @@ async fn get_status_with_yt_dlp(
         if title.is_some() {
             return Ok((true, Some(stdout.to_string()), title, None)); // Channel is currently live
         } else {
-            let title = get_youtube_live_title(channel_id, proxy).await?;
+            let title = get_youtube_live_title(channel_id).await?;
             return Ok((true, Some(stdout.to_string()), title, None)); // Channel is currently live
         }
     }
