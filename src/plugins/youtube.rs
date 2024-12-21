@@ -67,7 +67,6 @@ pub async fn get_youtube_live_status(
         .await?;
     if response.status().is_success() {
         let videos: Vec<serde_json::Value> = response.json().await?;
-        println!("{:?}", videos);
 
         if !videos.is_empty() {
             let mut vid = videos.last().unwrap();
@@ -86,13 +85,14 @@ pub async fn get_youtube_live_status(
                     .unwrap()
                     .contains(channel_name)
                 {
-                    let topic_id = video.get("topic_id").unwrap();
-                    if topic_id.as_str().unwrap().contains("membersonly") {
-                        // tracing::info!("频道 {} 正在进行会限直播", channel_name);
-                    } else {
-                        vid = video;
-                        flag = true;
-                        break;
+                    if let Some(topic_id) = video.get("topic_id") {
+                        if topic_id.as_str().unwrap().contains("membersonly") {
+                            // tracing::info!("频道 {} 正在进行会限直播", channel_name);
+                        } else {
+                            vid = video;
+                            flag = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -174,12 +174,21 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                     .unwrap()
                     .contains(channel_name)
                 {
-                    let live_topic = video.get("topic_id").unwrap();
-                    if !live_topic.as_str().unwrap().contains("membersonly") {
-                        vid = video;
-                        flag = true;
-                        break;
+                    if let Some(topic_id) = video.get("topic_id") {
+                        if topic_id.as_str().unwrap().contains("membersonly") {
+                            // tracing::info!("频道 {} 正在进行会限直播", channel_name);
+                        } else {
+                            vid = video;
+                            flag = true;
+                            break;
+                        }
                     }
+                    // let live_topic = video.get("topic_id").unwrap();
+                    // if !live_topic.as_str().unwrap().contains("membersonly") {
+                    //     vid = video;
+                    //     flag = true;
+                    //     break;
+                    // }
                 }
             }
             if flag {
