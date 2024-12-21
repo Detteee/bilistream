@@ -93,6 +93,10 @@ pub async fn get_youtube_live_status(
                             flag = true;
                             break;
                         }
+                    } else {
+                        vid = video;
+                        flag = true;
+                        break;
                     }
                 }
             }
@@ -182,6 +186,10 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                             flag = true;
                             break;
                         }
+                    } else {
+                        vid = video;
+                        flag = true;
+                        break;
                     }
                     // let live_topic = video.get("topic_id").unwrap();
                     // if !live_topic.as_str().unwrap().contains("membersonly") {

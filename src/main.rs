@@ -260,13 +260,14 @@ async fn get_live_topic(
                     }
                 }
                 if flag {
-                    let topic_id = vid.get("topic_id").unwrap();
-                    if topic_id.as_str().is_some() {
-                        return Ok(topic_id.to_string());
-                    } else {
-                        tracing::info!("当前YT直播没有分区");
-                        Err("当前YT直播没有分区".into())
+                    let topic_id = vid.get("topic_id");
+                    if let Some(topic) = topic_id {
+                        if let Some(topic_str) = topic.as_str() {
+                            return Ok(topic_str.to_string());
+                        }
                     }
+                    tracing::info!("当前YT直播没有分区");
+                    Err("当前YT直播没有分区".into())
                 } else {
                     tracing::info!("当前频道没有直播");
                     Err("当前频道没有直播".into())
