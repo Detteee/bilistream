@@ -211,7 +211,7 @@ async fn process_danmaku(command: &str) {
         return;
     }
     // tracing::info!("弹幕:{}", &command[2..]);
-
+    let command = command.replace(" ", "");
     let normalized_danmaku = command.replace("％", "%");
     // Validate danmaku command format: %转播%平台%频道名%分区
     if !normalized_danmaku.contains("%转播%") {
