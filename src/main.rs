@@ -252,6 +252,7 @@ async fn get_live_topic(
                         .unwrap()
                         .as_str()
                         .unwrap()
+                        .replace(" ", "")
                         .contains(channel_name.as_ref().unwrap())
                     {
                         vid = video;
@@ -333,13 +334,13 @@ async fn get_live_status(
                     let mut flag = false;
                     for video in videos.iter().rev() {
                         let cname = video.get("channel");
-                        // println!("{:?}", cname.unwrap().get("name"));
                         if cname
                             .unwrap()
                             .get("name")
                             .unwrap()
                             .as_str()
                             .unwrap()
+                            .replace(" ", "")
                             .contains(channel_name.as_ref().unwrap())
                         {
                             let topic_id = video.get("topic_id").unwrap();

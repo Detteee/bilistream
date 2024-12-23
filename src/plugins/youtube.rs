@@ -83,6 +83,7 @@ pub async fn get_youtube_live_status(
                     .unwrap()
                     .as_str()
                     .unwrap()
+                    .replace(" ", "")
                     .contains(channel_name)
                 {
                     if let Some(topic_id) = video.get("topic_id") {
@@ -176,6 +177,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                     .unwrap()
                     .as_str()
                     .unwrap()
+                    .replace(" ", "")
                     .contains(channel_name)
                 {
                     if let Some(topic_id) = video.get("topic_id") {
