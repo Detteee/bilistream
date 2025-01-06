@@ -195,6 +195,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         || title.contains("gta")
     {
         235
+    } else if title.contains("tarkov") || title.contains("タルコフ") {
+        252
     } else {
         current_area_id
     }
@@ -257,6 +259,7 @@ async fn process_danmaku(command: &str) {
         "原神" => 321,
         "斯普拉遁3" => 694,
         "游戏王：决斗链接" => 407,
+        "逃离塔科夫" => 252,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
@@ -522,6 +525,7 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         216 => Some("我的世界"),
         646 => Some("UP主日常"),
         102 => Some("最终幻想14"),
+        252 => Some("逃离塔科夫"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None

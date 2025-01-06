@@ -43,7 +43,7 @@ select_area_id() {
     echo "11) 216: 我的世界        12) 927: DeadLock"
     echo "13) 236: 主机游戏        14) 321: 原神"
     echo "15) 407: 游戏王          16) 694: 斯普拉遁3"
-    echo " 0) 自定义"
+    echo "17) 252: 逃离塔科夫       0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
     read -p "请选择分区 ID (0-16): " area_choice
 
@@ -64,6 +64,7 @@ select_area_id() {
     14) areaid=321 ;;
     15) areaid=407 ;;
     16) areaid=694 ;;
+    17) areaid=252 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -96,6 +97,7 @@ get_area_name() {
     321) echo "原神" ;;
     407) echo "游戏王：决斗链接" ;;
     694) echo "斯普拉遁3" ;;
+    252) echo "逃离塔科夫" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
@@ -217,7 +219,7 @@ select_channel_id() {
         ;;
     25)
         chid="UCKSpM183c85d5V2cW5qaUjA"
-        channel_name="Narin Mikure"
+        channel_name="Narin"
         ;;
     26)
         chid="UCWRPqA0ehhWV4Hnp27PJCkQ"

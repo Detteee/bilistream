@@ -76,9 +76,15 @@ async fn run_bilistream(
                     get_live_title(platform, Some(&cfg.youtube.channel_id)).await?
                 };
                 cfg.bililive.area_v2 = check_area_id_with_title(&live_topic, cfg.bililive.area_v2);
+                if cfg.bililive.area_v2 == 240 && !cfg.youtube.channel_id.contains("Kamito") {
+                    cfg.bililive.area_v2 = 0
+                };
             } else {
                 let live_title = get_live_title(platform, Some(&cfg.twitch.channel_id)).await?;
                 cfg.bililive.area_v2 = check_area_id_with_title(&live_title, cfg.bililive.area_v2);
+                if cfg.bililive.area_v2 == 240 && !cfg.twitch.channel_id.contains("Kamito") {
+                    cfg.bililive.area_v2 = 0
+                };
             }
             if cfg.bililive.area_v2 == 0 {
                 tracing::info!("标题包含的直播分区不支持,等待10min后重新检测");
@@ -105,11 +111,13 @@ async fn run_bilistream(
                 if cfg.bililive.area_v2 != area_id {
                     let to_area_name = get_area_name(cfg.bililive.area_v2);
                     let area_name = get_area_name(area_id);
-                    tracing::info!(
-                        "分区改变（{}->{}），请调整分区",
-                        area_name.unwrap(),
-                        to_area_name.unwrap()
-                    );
+                    if area_name.is_some() && to_area_name.is_some() {
+                        tracing::info!(
+                            "分区改变（{}->{}），请调整分区",
+                            area_name.unwrap(),
+                            to_area_name.unwrap()
+                        );
+                    }
                     // bili_stop_live(&cfg).await?;
                     // bili_start_live(&cfg).await?;
                     bili_change_live_title(&cfg).await?;
