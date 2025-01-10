@@ -35,8 +35,8 @@
    ```
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
-   sudo npm install -g pm2
    pip install streamlink
+   pip install riotwatcher
    ```
 3. 安装 streamlink-ttvlol 插件：
    查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
