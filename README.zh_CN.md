@@ -35,8 +35,8 @@
    ```
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
-   sudo npm install -g pm2
    pip install streamlink
+   pip install riotwatcher
    ```
 3. 安装 streamlink-ttvlol 插件：
    查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -201,7 +201,7 @@ Bilistream 支持以下命令：
 
 ## 许可证
 
-本项目采用 [GPL-3.0 许可证](LICENSE)。
+本项目采用 [Unlicense许可证](LICENSE)。
 
 ## 致谢
 

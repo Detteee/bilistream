@@ -20,7 +20,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
 - [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （auto update bilibili cookies）
-- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (to League of Legends in-game IDs:)
+- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (to monitor League of Legends in-game IDs:)
 
 ## Installation
 
@@ -35,8 +35,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
-   sudo npm install -g pm2
    pip install streamlink
+   pip install riotwatcher
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -74,8 +74,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    (channel name) [channel id]
    ```
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
-
 6. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+
    - Create a file named `invalid_words.txt` with one word per line
    - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
      ```yaml
@@ -83,7 +83,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
      LolMonitorInterval: 1               # Check interval in seconds
      ```
    - The program will monitor in-game players and stop streaming if any blacklisted words are found
-  
+
 ## Usage
 
 ### Basic Usage
@@ -199,7 +199,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the [GPL-3.0 license](LICENSE).
+This project is licensed under the [unlicense](LICENSE).
 
 ## Acknowledgements
 
