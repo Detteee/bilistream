@@ -21,6 +21,10 @@ pub struct Config {
     pub proxy: Option<String>,
     #[serde(rename = "HolodexApiKey")]
     pub holodex_api_key: Option<String>,
+    #[serde(rename = "RiotApiKey")]
+    pub riot_api_key: Option<String>,
+    #[serde(rename = "LolMonitorInterval")]
+    pub lol_monitor_interval: Option<u64>,
 }
 
 /// Struct representing BiliLive-specific configuration.

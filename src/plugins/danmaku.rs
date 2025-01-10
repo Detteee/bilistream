@@ -262,7 +262,7 @@ async fn process_danmaku(command: &str) {
         "斯普拉遁3" => 694,
         "游戏王：决斗链接" => 407,
         "逃离塔科夫" => 252,
-        "使命召唤" => 318,
+        "使命召唤:战区" => 318,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
@@ -360,8 +360,8 @@ async fn process_danmaku(command: &str) {
         let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_title, area_id);
         // Additional checks for specific area_ids
-        if updated_area_id == 240 && channel_name != "Kamito" {
-            tracing::error!("只有'Kamito'可以使用Apex分区. Skipping...");
+        if (updated_area_id == 240 || updated_area_id == 318) && channel_name != "Kamito" {
+            tracing::error!("只有'Kamito'可以使用 Apex or COD 分区. Skipping...");
             return;
         }
         if let Err(e) = update_config(

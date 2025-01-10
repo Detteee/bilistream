@@ -76,7 +76,20 @@ select_area_id() {
         ;;
     esac
     echo "已选择分区 ID: $areaid"
+
     return 0
+}
+
+update_riot_api_key() {
+    echo "从https://developer.riotgames.com/获取API Key"
+    read -p "请输入Riot API Key: " riot_api_key
+    if [ ! -z "$riot_api_key" ]; then
+        sed -i "s/RiotApiKey: .*/RiotApiKey: $riot_api_key/" "$BASE_DIR/YT/config.yaml"
+        sed -i "s/RiotApiKey: .*/RiotApiKey: $riot_api_key/" "$BASE_DIR/TW/config.yaml"
+        echo "Riot API Key 已更新。"
+    else
+        echo "Riot API Key 为空，跳过更新。"
+    fi
 }
 
 # Function to map Area IDs to names
@@ -421,6 +434,7 @@ show_main_menu() {
     echo -e "${PINK}│ ${RESET}3. Change Twitch ID                 ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}4. Quick setup for kamito           ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}5. Display current config           ${PINK}│${RESET}"
+    echo -e "${PINK}│ ${RESET}6. Update Riot API Key              ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}                                    ${PINK}│${RESET}"
     echo -e "${PINK}│ ${RESET}Enter any other key to exit         ${PINK}│${RESET}"
 
@@ -465,6 +479,10 @@ while true; do
                 echo "Invalid choice. No changes made."
                 ;;
             esac
+
+            if [ "$areaid" -eq 86 ]; then
+                update_riot_api_key
+            fi  
         fi
         ;;
     2) # Change Channel ID
@@ -492,6 +510,9 @@ while true; do
         ;;
     5) # Display current config
         display_current_config "all"
+        ;;
+    6) # Update Riot API Key
+        update_riot_api_key
         ;;
 
     *)

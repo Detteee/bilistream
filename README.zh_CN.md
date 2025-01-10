@@ -11,6 +11,7 @@
 - 可配置的Bilibili直播间设置（标题、分区等）
 - 使用管理脚本（`stream_manager.sh`）用于轻松配置和控制
 - 当 Bilibili 直播关闭时，使用弹幕命令功能更改监听目标频道
+- 支持英雄联盟游戏内玩家名称检测（可配置屏蔽词）
 
 ## 依赖
 
@@ -19,6 +20,7 @@
 - streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
 - [biliup/biliup-rs](https://github.com/biliup/biliup-rs)（用于登录B站账号）
+- (可选项)[riotwatcher](https://riot-watcher.readthedocs.io/en/latest/)（用于英雄联盟游戏内玩家名称违禁词检测）
 
 ## 安装
 
@@ -130,6 +132,9 @@ Bilistream 支持以下命令：
    ├── stream_manager.sh
    ├── login-biliup
    ├── live-danmaku-cli
+   ├── get_lol_id.py
+   ├── invalid_words.txt
+   ├── puuid.txt
    ├── TW
    │   ├── config.yaml
    │   └── TW_channels.txt
@@ -170,6 +175,25 @@ Bilistream 支持以下命令：
 ```
 
 系统将检查直播标题并在必要时调整分区ID。例如，如果直播标题包含"Valorant"，它将设置分区ID为329（无畏契约），无论指定的分区名称是什么。查看 https://api.live.bilibili.com/room/v1/Area/getList 获取更多分区名称和ID。
+
+### 英雄联盟游戏内玩家名称检测
+
+如果您想使用英雄联盟游戏内玩家名称检测功能：
+
+1. 从 [Riot Developer Portal](https://developer.riotgames.com/) 获取 API Key
+2. 创建 `puuid.txt` 文件，每行格式为：
+   ```
+   (频道名称) [PUUID]
+   ```
+3. 创建 `invalid_words.txt` 文件，每行一个需要检测的屏蔽词
+4. 在配置文件中设置：
+   ```yaml
+   bililive:
+     area_v2: 86  # 英雄联盟分区
+   riot_api_key: "YOUR-RIOT-API-KEY"
+   ```
+
+当检测到游戏中有包含屏蔽词的玩家名称时，直播会自动停止。
 
 ## 贡献
 

@@ -11,6 +11,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - Configurable Bilibili live settings (title, area, etc.)
 - Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 - Danmaku command feature for changing the listening target channel when Bilibili live is off
+- Stop Bilibili live automatically when LOL in-game player IDs contain invalid words
 
 ## Dependencies
 
@@ -18,7 +19,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
-- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （for bilibili cookies）
+- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （auto update bilibili cookies）
+- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (to League of Legends in-game IDs:)
 
 ## Installation
 
@@ -73,6 +75,15 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
 
+6. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+   - Create a file named `invalid_words.txt` with one word per line
+   - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
+     ```yaml
+     RiotApiKey: "YOUR-RIOT-API-KEY"    # Get from https://developer.riotgames.com/
+     LolMonitorInterval: 1               # Check interval in seconds
+     ```
+   - The program will monitor in-game players and stop streaming if any blacklisted words are found
+  
 ## Usage
 
 ### Basic Usage
@@ -138,6 +149,9 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
    ├── stream_manager.sh
    ├── login-biliup
    ├── live-danmaku-cli
+   ├── get_lol_id.py
+   ├── invalid_words.txt
+   ├── puuid.txt
    ├── TW
    │   ├── config.yaml
    │   └── TW_channels.txt

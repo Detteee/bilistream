@@ -1,4 +1,4 @@
-use bilistream::config::load_config;
+use bilistream::config::{load_config, Config};
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
     get_area_name, get_bili_live_status, get_channel_id, get_channel_name, get_twitch_live_status,
@@ -7,9 +7,10 @@ use bilistream::plugins::{
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 use proctitle::set_title;
+use regex::Regex;
 use reqwest_middleware::ClientBuilder;
 use std::process::Command as StdCommand;
-use std::{path::Path, thread, time::Duration};
+use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
 use tracing_subscriber::fmt;
 fn init_logger() {
     tracing_subscriber::fmt()
@@ -129,6 +130,11 @@ async fn run_bilistream(
                     bili_change_live_title(&cfg).await?;
                     tracing::info!("B站直播标题变更 （{}->{}）", title, cfg.bililive.title);
                 }
+            }
+
+            if cfg.bililive.area_v2 == 86 {
+                let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
+                monitor_lol_game(&cfg, puuid)?;
             }
 
             // Execute ffmpeg with platform-specific locks
@@ -529,6 +535,60 @@ async fn change_live_title(
     bili_change_live_title(&cfg).await?;
     println!("直播标题改变成功");
     Ok(())
+}
+
+fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn Error>> {
+    if let Some(puuid_str) = puuid {
+        let cfg_clone = cfg.clone();
+        let interval = cfg.lol_monitor_interval.unwrap_or(1);
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            loop {
+                rt.block_on(async {
+                    let output = StdCommand::new("python3")
+                        .arg("get_lol_id.py")
+                        .arg(cfg_clone.riot_api_key.clone().unwrap())
+                        .arg(&puuid_str)
+                        .output()
+                        .unwrap();
+                    if let Ok(ids) = String::from_utf8(output.stdout) {
+                        // tracing::info!("In game players: {}", ids.trim());
+                        if let Ok(invalid_words) = fs::read_to_string("invalid_words.txt") {
+                            if let Some(word) =
+                                invalid_words.lines().find(|word| ids.contains(word))
+                            {
+                                bili_stop_live(&cfg_clone).await.unwrap();
+                                tracing::info!("检测到非法词汇:{}，停止直播", word);
+                                return;
+                            }
+                        }
+                    }
+                });
+                thread::sleep(Duration::from_secs(interval));
+            }
+        });
+    }
+    Ok(())
+}
+
+fn get_puuid_from_file(channel_name: &str) -> Result<Option<String>, Box<dyn Error>> {
+    let file = fs::File::open("./puuid.txt")?;
+    let reader = io::BufReader::new(file);
+    let mut puuid = None;
+
+    for line in reader.lines() {
+        let line = line?;
+        if line
+            .to_lowercase()
+            .contains(&format!("({})", channel_name).to_lowercase())
+        {
+            let re = Regex::new(r"\[(.*?)\]").unwrap();
+            if let Some(captures) = re.captures(&line) {
+                puuid = captures.get(1).map(|m| m.as_str().to_string());
+            }
+        }
+    }
+    Ok(puuid)
 }
 
 #[tokio::main]
