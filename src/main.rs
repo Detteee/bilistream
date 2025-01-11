@@ -564,6 +564,10 @@ fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn E
                         }
                     }
                 });
+                // if ffmpeg is not running, stop the thread
+                if !ffmpeg::is_any_ffmpeg_running() {
+                    return;
+                }
                 thread::sleep(Duration::from_secs(interval));
             }
         });

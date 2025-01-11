@@ -57,7 +57,7 @@ pub fn ffmpeg(
     if let Some(proxy) = proxy {
         command.arg("-http_proxy").arg(proxy);
     }
-
+    // cache 8 seconds before output
     command
         .arg("-i")
         .arg(m3u8_url)
