@@ -134,7 +134,7 @@ async fn run_bilistream(
 
             if cfg.bililive.area_v2 == 86 {
                 let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
-                monitor_lol_game(&cfg, puuid)?;
+                monitor_lol_game(puuid)?;
             }
 
             // Execute ffmpeg with platform-specific locks
@@ -149,6 +149,10 @@ async fn run_bilistream(
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+                if cfg.bililive.area_v2 == 86 {
+                    let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
+                    monitor_lol_game(puuid)?;
+                }
                 let (current_is_live, new_m3u8_url, _, _) = live_info
                     .get_status()
                     .await
@@ -537,9 +541,9 @@ async fn change_live_title(
     Ok(())
 }
 
-fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn Error>> {
+fn monitor_lol_game(puuid: Option<String>) -> Result<(), Box<dyn Error>> {
     if let Some(puuid_str) = puuid {
-        let cfg_clone = cfg.clone();
+        let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
         let interval = cfg.lol_monitor_interval.unwrap_or(1);
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -547,7 +551,7 @@ fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn E
                 rt.block_on(async {
                     let output = StdCommand::new("python3")
                         .arg("get_lol_id.py")
-                        .arg(cfg_clone.riot_api_key.clone().unwrap())
+                        .arg(cfg.riot_api_key.clone().unwrap())
                         .arg(&puuid_str)
                         .output()
                         .unwrap();
@@ -557,7 +561,7 @@ fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn E
                             if let Some(word) =
                                 invalid_words.lines().find(|word| ids.contains(word))
                             {
-                                bili_stop_live(&cfg_clone).await.unwrap();
+                                bili_stop_live(&cfg).await.unwrap();
                                 tracing::info!("检测到非法词汇:{}，停止直播", word);
                                 return;
                             }
