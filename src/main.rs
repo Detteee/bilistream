@@ -1,4 +1,4 @@
-use bilistream::config::{load_config, Config};
+use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
     get_area_name, get_bili_live_status, get_channel_id, get_channel_name, get_twitch_live_status,
@@ -9,6 +9,8 @@ use clap::{Arg, Command};
 use proctitle::set_title;
 use regex::Regex;
 use reqwest_middleware::ClientBuilder;
+use riven::consts::PlatformRoute;
+use riven::RiotApi;
 use std::process::Command as StdCommand;
 use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
 use tracing_subscriber::fmt;
@@ -134,7 +136,7 @@ async fn run_bilistream(
 
             if cfg.bililive.area_v2 == 86 {
                 let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
-                monitor_lol_game(&cfg, puuid)?;
+                monitor_lol_game(puuid).await?;
             }
 
             // Execute ffmpeg with platform-specific locks
@@ -149,6 +151,10 @@ async fn run_bilistream(
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+                if cfg.bililive.area_v2 == 86 {
+                    let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
+                    monitor_lol_game(puuid).await?;
+                }
                 let (current_is_live, new_m3u8_url, _, _) = live_info
                     .get_status()
                     .await
@@ -537,34 +543,42 @@ async fn change_live_title(
     Ok(())
 }
 
-fn monitor_lol_game(cfg: &Config, puuid: Option<String>) -> Result<(), Box<dyn Error>> {
+async fn monitor_lol_game(puuid: Option<String>) -> Result<(), Box<dyn Error>> {
     if let Some(puuid_str) = puuid {
-        let cfg_clone = cfg.clone();
+        let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
         let interval = cfg.lol_monitor_interval.unwrap_or(1);
+        let riot_api = RiotApi::new(cfg.riot_api_key.clone().unwrap());
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             loop {
                 rt.block_on(async {
-                    let output = StdCommand::new("python3")
-                        .arg("get_lol_id.py")
-                        .arg(cfg_clone.riot_api_key.clone().unwrap())
-                        .arg(&puuid_str)
-                        .output()
-                        .unwrap();
-                    if let Ok(ids) = String::from_utf8(output.stdout) {
-                        // tracing::info!("In game players: {}", ids.trim());
-                        if let Ok(invalid_words) = fs::read_to_string("invalid_words.txt") {
-                            if let Some(word) =
-                                invalid_words.lines().find(|word| ids.contains(word))
-                            {
-                                bili_stop_live(&cfg_clone).await.unwrap();
-                                tracing::info!("检测到非法词汇:{}，停止直播", word);
-                                return;
+                    if let Ok(game_data) = riot_api
+                        .spectator_v5()
+                        .get_current_game_info_by_puuid(PlatformRoute::JP1, &puuid_str)
+                        .await
+                    {
+                        if game_data.is_some() {
+                            let riot_ids: Vec<String> = game_data
+                                .unwrap()
+                                .participants
+                                .iter()
+                                .filter_map(|p| p.riot_id.clone())
+                                .collect();
+                            let ids = format!("{:?}", riot_ids);
+                            tracing::info!("In game players: {}", ids);
+                            if let Ok(invalid_words) = fs::read_to_string("invalid_words.txt") {
+                                if let Some(word) =
+                                    invalid_words.lines().find(|word| ids.contains(word))
+                                {
+                                    bili_stop_live(&cfg).await.unwrap();
+                                    tracing::info!("检测到非法词汇:{}，停止直播", word);
+                                    return;
+                                }
                             }
                         }
                     }
                 });
-                // if ffmpeg is not running, stop the thread
+
                 if !ffmpeg::is_any_ffmpeg_running() {
                     return;
                 }

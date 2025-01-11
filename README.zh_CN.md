@@ -11,7 +11,7 @@
 - 可配置的Bilibili直播间设置（标题、分区等）
 - 使用管理脚本（`stream_manager.sh`）用于轻松配置和控制
 - 当 Bilibili 直播关闭时，使用弹幕命令功能更改监听目标频道
-- 支持英雄联盟游戏内玩家名称检测（可配置屏蔽词）
+- 监控英雄联盟游戏内玩家名称并在检测到违禁词时停止直播
 
 ## 依赖
 
@@ -26,13 +26,13 @@
 
 1. 克隆仓库：
 
-   ```
+   ```bash
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
 2. 安装所需依赖（以 Debian 系统为例）：
 
-   ```
+   ```bash
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
@@ -44,13 +44,13 @@
 
    适用于 Debian 12 及 glibc >= 2.36 的linux:
 
-   ```
+   ```bash
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
 
    Windows：
 
-   ```
+   ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
@@ -58,7 +58,7 @@
 
 1. 复制示例配置文件：
 
-   ```
+   ```bash
    cp config.yaml.example config.yaml
    ```
 2. 编辑 `config.yaml` 以设置您的特定设置：
@@ -70,7 +70,7 @@
 4. 创建频道列表文件：
    在 YT 和 TW 文件夹中，分别创建 `YT_channels.txt` 和 `TW_channels.txt`，每行的格式为：
 
-   ```
+   ```txt
    (频道名称) [频道 ID]
    ```
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如果需要弹幕命令功能)
@@ -81,7 +81,7 @@
 
 运行 Bilistream 应用程序：
 
-```
+```bash
 ./bilistream -c YT/config.yaml
 ./bilistream -c TW/config.yaml
 ```
@@ -92,22 +92,22 @@ Bilistream 支持以下命令：
 
 1. 开始直播：
 
-   ```
+   ```bash
    ./bilistream start-live
    ```
 2. 停止直播：
 
-   ```
+   ```bash
    ./bilistream stop-live
    ```
 3. 更改直播标题：
 
-   ```
+   ```bash
    ./bilistream change-live-title <新标题>
    ```
 4. 获取直播状态：
 
-   ```
+   ```bash
    ./bilistream get-live-status
    ```
 
@@ -117,7 +117,7 @@ Bilistream 支持以下命令：
 
 1. 设置目录结构：
 
-   ```
+   ```bash
    mkdir YT TW
    cp config.yaml YT/config.yaml
    cp config.yaml TW/config.yaml
@@ -125,7 +125,7 @@ Bilistream 支持以下命令：
 
    文件目录结构：
 
-   ```
+   ```bash
    .
    ├── bilistream
    ├── config.json
@@ -145,7 +145,7 @@ Bilistream 支持以下命令：
 2. 分别编辑 `YT/config.yaml` 和 `TW/config.yaml`，设置适当的 YouTube 和 Twitch 设置。
 3. 运行管理脚本：
 
-   ```
+   ```bash
    ./stream_manager.sh
    ```
 4. 使用交互式菜单来启动、停止或管理您的转播任务。
@@ -162,19 +162,19 @@ Bilistream 支持以下命令：
 
 弹幕命令格式：
 
-```
+```txt
 %转播%YT/TW%频道名称%分区名称
 频道名称必须在 YT/TW_channels.txt 中
 ```
 
 例如：
 
-```
+```txt
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
 ```
 
-系统将检查直播标题并在必要时调整分区ID。例如，如果直播标题包含"Valorant"，它将设置分区ID为329（无畏契约），无论指定的分区名称是什么。查看 https://api.live.bilibili.com/room/v1/Area/getList 获取更多分区名称和ID。
+系统将检查直播标题并在必要时调整分区ID。例如，如果直播标题包含"Valorant"，它将设置分区ID为329（无畏契约），无论指定的分区名称是什么。查看 [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) 获取更多分区名称和ID。
 
 ### 英雄联盟游戏内玩家名称检测
 
@@ -182,11 +182,13 @@ Bilistream 支持以下命令：
 
 1. 从 [Riot Developer Portal](https://developer.riotgames.com/) 获取 API Key
 2. 创建 `puuid.txt` 文件，每行格式为：
-   ```
+
+   ```txt
    (频道名称) [PUUID]
    ```
 3. 创建 `invalid_words.txt` 文件，每行一个需要检测的屏蔽词
 4. 在配置文件中设置：
+
    ```yaml
    bililive:
      area_v2: 86  # 英雄联盟分区
@@ -205,6 +207,5 @@ Bilistream 支持以下命令：
 
 ## 致谢
 
-- [limitcool/bilistream](https://github.com/limitcool/bilistream)
-- [Cursor](https://www.cursor.com/)
+- [limitcool/bilistream	](https://github.com/limitcool/bilistream)
 - 本项目的所有用户

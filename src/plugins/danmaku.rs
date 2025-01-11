@@ -199,6 +199,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         252
     } else if title.contains("call of duty") || title.contains("BO6") {
         318
+    } else if title.contains("elden ring") || title.contains("エルデンリング") {
+        555
     } else {
         current_area_id
     }
@@ -263,6 +265,7 @@ async fn process_danmaku(command: &str) {
         "游戏王：决斗链接" => 407,
         "逃离塔科夫" => 252,
         "使命召唤:战区" => 318,
+        "艾尔登法环" => 555,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
@@ -530,6 +533,7 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         102 => Some("最终幻想14"),
         252 => Some("逃离塔科夫"),
         318 => Some("使命召唤:战区"),
+        555 => Some("艾尔登法环"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None

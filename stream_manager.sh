@@ -44,9 +44,10 @@ select_area_id() {
     echo "13) 236: 主机游戏        14) 321: 原神"
     echo "15) 407: 游戏王          16) 694: 斯普拉遁3"
     echo "17) 252: 逃离塔科夫      18) 318: 使命召唤:战区"
+    echo "19) 555: 艾尔登法环"
     echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-18): " area_choice
+    read -p "请选择分区 ID (0-19): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -67,6 +68,7 @@ select_area_id() {
     16) areaid=694 ;;
     17) areaid=252 ;;
     18) areaid=318 ;;
+    19) areaid=555 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -114,6 +116,7 @@ get_area_name() {
     694) echo "斯普拉遁3" ;;
     252) echo "逃离塔科夫" ;;
     318) echo "使命召唤:战区" ;;
+    555) echo "艾尔登法环" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
@@ -372,7 +375,7 @@ select_twitch_id() {
         read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo -e "\n($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
+            echo -e "($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
         fi
         ;;
     *)
