@@ -1,4 +1,4 @@
-use bilistream::config::{load_config, Config};
+use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
     get_area_name, get_bili_live_status, get_channel_id, get_channel_name, get_twitch_live_status,

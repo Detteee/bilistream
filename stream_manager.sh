@@ -372,7 +372,7 @@ select_twitch_id() {
         read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo -e "\n($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
+            echo -e "($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
         fi
         ;;
     *)

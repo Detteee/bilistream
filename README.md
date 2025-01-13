@@ -12,6 +12,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 - Danmaku command feature for changing the listening target channel when Bilibili live is off
 - Stop Bilibili live automatically when LOL in-game player IDs contain invalid words
+- Monitors League of Legends in-game players and stops streaming if blacklisted words are found in player names
 
 ## Dependencies
 
@@ -20,37 +21,39 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
 - [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （auto update bilibili cookies）
-- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (to monitor League of Legends in-game IDs:)
+- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (for League of Legends in-game IDs monitoring:)
 
 ## Installation
 
 1. Clone the repository:
 
-   ```
+   ```bash
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
+
 2. Install the required dependencies (example for Debian-based systems):
 
-   ```
+   ```bash
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
    pip install riotwatcher
    ```
+
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 4. Build the project:
 
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
 
-   ```
+   ```bash
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
 
    For Windows:
 
-   ```
+   ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
@@ -58,9 +61,10 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 
 1. Copy the example configuration file:
 
-   ```
+   ```bash
    cp config.yaml.example config.yaml
    ```
+
 2. Edit `config.yaml` with your specific settings:
 
    - Configure the desired streaming platform (Twitch or YouTube)
@@ -70,18 +74,21 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 4. Create channel list files:
    In the YT and TW folders, create `YT_channels.txt` and `TW_channels.txt` respectively, with each line in the format:
 
-   ```
+   ```txt
    (channel name) [channel id]
    ```
+
 5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
 6. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
    - Create a file named `invalid_words.txt` with one word per line
    - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
+
      ```yaml
      RiotApiKey: "YOUR-RIOT-API-KEY"    # Get from https://developer.riotgames.com/
      LolMonitorInterval: 1               # Check interval in seconds
      ```
+
    - The program will monitor in-game players and stop streaming if any blacklisted words are found
 
 ## Usage
@@ -90,7 +97,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 
 Run the Bilistream application:
 
-```
+```bash
 ./bilistream -c YT/config.yaml
 ./bilistream -c TW/config.yaml
 ```
@@ -101,27 +108,31 @@ Bilistream supports the following commands:
 
 1. Start a live stream:
 
-   ```
+   ```bash
    ./bilistream start-live
    ```
+
 2. Stop a live stream:
 
-   ```
+   ```bash
    ./bilistream stop-live
    ```
+
 3. Change live stream title:
 
-   ```
+   ```bash
    ./bilistream change-live-title <new_title>
    ```
+
 4. Get live status:
 
-   ```
+   ```bash
    ./bilistream get-live-status YT/TW/bilibili <Channel_ID/Room_ID>
    ```
+
 5. Get YouTube live topic:
 
-   ```
+   ```bash
    ./bilistream get-live-topic YT <Channel_ID>
    ```
 
@@ -131,7 +142,7 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
 
 1. Set up the directory structure:
 
-   ```
+   ```bash
    mkdir YT TW
    cp config.yaml YT/config.yaml
    cp config.yaml TW/config.yaml
@@ -142,7 +153,7 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
    Rename bilibili-live-danmaku-cli to live-danmaku-cli
    Resulting tree structure:
 
-   ```
+   ```txt
    .
    ├── bilistream
    ├── config.json
@@ -159,12 +170,14 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
        ├── config.yaml
        └── YT_channels.txt
    ```
+
 2. Edit `YT/config.yaml` and `TW/config.yaml` with the appropriate settings for YouTube and Twitch, respectively.
 3. Run the management script:
 
-   ```
+   ```bash
    ./stream_manager.sh
    ```
+
 4. Use the interactive menu to start, stop, or manage your rebroadcasting tasks.
 
 ### Danmaku Command Feature
@@ -179,19 +192,19 @@ To use this feature:
 
 Danmaku command format:
 
-```
+```txt
 %转播%YT/TW%channel_name%area_name
 channel_name must in YT/TW_channels.txt
 ```
 
 Example:
 
-```
+```txt
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
 ```
 
-The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check https://api.live.bilibili.com/room/v1/Area/getList for more Area name and ID.
+The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check <https://api.live.bilibili.com/room/v1/Area/getList> for more Area name and ID.
 
 ## Contributing
 
