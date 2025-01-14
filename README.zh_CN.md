@@ -20,7 +20,6 @@
 - streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
 - [biliup/biliup-rs](https://github.com/biliup/biliup-rs)（用于登录B站账号）
-- (可选项)[riotwatcher](https://riot-watcher.readthedocs.io/en/latest/)（用于英雄联盟游戏内玩家名称违禁词检测）
 
 ## 安装
 
@@ -36,7 +35,6 @@
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
-   pip install riotwatcher
    ```
 3. 安装 streamlink-ttvlol 插件：
    查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -132,7 +130,6 @@ Bilistream 支持以下命令：
    ├── stream_manager.sh
    ├── login-biliup
    ├── live-danmaku-cli
-   ├── get_lol_id.py
    ├── invalid_words.txt
    ├── puuid.txt
    ├── TW

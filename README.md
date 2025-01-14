@@ -19,8 +19,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
-- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) （auto update bilibili cookies）
-- (Optinonal) [riotwatcher](https://riot-watcher.readthedocs.io/en/latest/) (for League of Legends in-game IDs monitoring:)
+- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) (auto update bilibili cookies)
 
 ## Installation
 
@@ -36,7 +35,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    sudo apt update
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
-   pip install riotwatcher
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -150,7 +148,6 @@ The `stream_manager.sh` script provides an interactive interface for managing yo
    ├── stream_manager.sh
    ├── login-biliup
    ├── live-danmaku-cli
-   ├── get_lol_id.py
    ├── invalid_words.txt
    ├── puuid.txt
    ├── TW
