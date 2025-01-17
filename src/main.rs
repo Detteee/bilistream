@@ -565,7 +565,7 @@ async fn monitor_lol_game(puuid: Option<String>) -> Result<(), Box<dyn Error>> {
                                 .filter_map(|p| p.riot_id.clone())
                                 .collect();
                             let ids = format!("{:?}", riot_ids);
-                            tracing::info!("In game players: {}", ids);
+                            // tracing::info!("In game players: {}", ids);
                             if let Ok(invalid_words) = fs::read_to_string("invalid_words.txt") {
                                 if let Some(word) =
                                     invalid_words.lines().find(|word| ids.contains(word))
