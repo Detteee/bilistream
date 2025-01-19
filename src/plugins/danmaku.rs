@@ -163,7 +163,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
     } else if title.contains("league of legends")
         || title.contains("lol")
         || title.contains("ろる")
-        || title.contains("k4sen")
+        || title.contains("ろ、る")
     {
         86
     } else if title.contains("minecraft") || title.contains("マイクラ") {
@@ -187,6 +187,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         694
     } else if title.contains("原神") {
         321
+    } else if title.contains("monhun") || title.contains("モンハン") {
+        578
     } else if title.contains("pokemon")
         || title.contains("core keeper")
         || title.contains("terraria")
@@ -266,6 +268,7 @@ async fn process_danmaku(command: &str) {
         "逃离塔科夫" => 252,
         "使命召唤:战区" => 318,
         "艾尔登法环" => 555,
+        "怪物猎人" => 578,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
             return;
@@ -534,6 +537,7 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         252 => Some("逃离塔科夫"),
         318 => Some("使命召唤:战区"),
         555 => Some("艾尔登法环"),
+        578 => Some("怪物猎人"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None
