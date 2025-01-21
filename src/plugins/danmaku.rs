@@ -366,8 +366,10 @@ async fn process_danmaku(command: &str) {
         let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_title, area_id);
         // Additional checks for specific area_ids
-        if (updated_area_id == 240 || updated_area_id == 318) && channel_name != "Kamito" {
-            tracing::error!("只有'Kamito'可以使用 Apex or COD 分区. Skipping...");
+        if (updated_area_id == 240 || updated_area_id == 318 || updated_area_id == 252)
+            && channel_name != "Kamito"
+        {
+            tracing::error!("只有'Kamito'可以使用 Apex, COD or Tarkov 分区. Skipping...");
             return;
         }
         if let Err(e) = update_config(
