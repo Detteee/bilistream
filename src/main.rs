@@ -45,7 +45,11 @@ async fn run_bilistream(
         // Check if any ffmpeg or danmaku is running
         if ffmpeg::is_any_ffmpeg_running() {
             if log_once == false {
-                tracing::info!("一个ffmpeg实例已经在运行。跳过检测循环。");
+                if platform == "YT" {
+                    tracing::info!("ffmpeg-TW 正在运行");
+                } else {
+                    tracing::info!("ffmpeg-YT 正在运行");
+                }
                 log_once = true;
             }
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;

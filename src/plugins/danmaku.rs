@@ -15,37 +15,13 @@ use std::{
 };
 /// Checks if any danmaku lock file exists.
 pub fn is_any_danmaku_running() -> bool {
-    if Path::new("danmaku.lock-YT").exists() {
-        // tracing::info!("一个弹幕命令读取实例已经在YT运行.");
-        return true;
-    }
-    if Path::new("danmaku.lock-TW").exists() {
-        // tracing::info!("一个弹幕命令读取实例已经在TW运行.");
-        return true;
-    }
-    false
-}
+    let output = Command::new("pgrep")
+        .arg("-f")
+        .arg("live-danmaku-cli")
+        .output()
+        .expect("Failed to execute pgrep");
 
-/// Creates the danmaku lock file for the specified platform.
-pub fn create_danmaku_lock(platform: &str) -> io::Result<()> {
-    let lock_file = format!("danmaku.lock-{}", platform);
-    fs::File::create(&lock_file)?;
-    tracing::info!("{} created", lock_file);
-    Ok(())
-}
-
-/// Removes the danmaku lock file for the specified platform.
-pub fn remove_danmaku_lock() -> io::Result<()> {
-    if Path::new("danmaku.lock-YT").exists() {
-        fs::remove_file("danmaku.lock-YT")?;
-        tracing::info!("删除弹幕锁文件danmaku.lock-YT成功");
-    } else if Path::new("danmaku.lock-TW").exists() {
-        fs::remove_file("danmaku.lock-TW")?;
-        tracing::info!("删除弹幕锁文件danmaku.lock-TW成功");
-    } else {
-        tracing::error!("弹幕锁文件不存在");
-    }
-    Ok(())
+    output.status.success()
 }
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
@@ -100,18 +76,6 @@ pub fn get_channel_name(
     }
     Ok(None)
 }
-
-/// Checks live status using the bilistream CLI.
-// async fn check_live_status(platform: &str, channel_id: &str) -> io::Result<String> {
-//     let output = Command::new("./bilistream")
-//         .arg("get-live-status")
-//         .arg(platform)
-//         .arg(channel_id)
-//         .output()?;
-
-//     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-//     Ok(stdout)
-// }
 
 /// Updates the configuration YAML file with new values.
 fn update_config(
@@ -220,29 +184,66 @@ async fn process_danmaku(command: &str) {
         return;
     }
     // tracing::info!("弹幕:{}", &command[2..]);
-    let command = command.replace(" ", "");
+    let command = command.replace(" ", "").replace("　", "");
     let normalized_danmaku = command.replace("％", "%");
 
     // Add check for 查询 command
     if normalized_danmaku.contains("%查询") {
-        // Check YT config
-        if let Ok(yt_cfg) = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json")) {
-            let yt_area_name = get_area_name(yt_cfg.bililive.area_v2).unwrap_or("未知分区");
-            let _ = bilibili::send_danmaku(
-                &yt_cfg,
-                &format!("油管：{} - {}", yt_cfg.youtube.channel_name, yt_area_name),
-            )
-            .await;
+        // tracing::info!("查询弹幕");
+        // Check if bilistream-YT is running
+        let yt_pid = Command::new("pgrep")
+            .arg("bilistream-YT")
+            .output()
+            .expect("获取YT进程ID失败");
+        if yt_pid.status.success() {
+            // tracing::info!(
+            //     "YT进程ID: {}",
+            //     String::from_utf8_lossy(&yt_pid.stdout).trim()
+            // );
+            // Check YT config
+            if let Ok(yt_cfg) = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))
+            {
+                let yt_area_name = get_area_name(yt_cfg.bililive.area_v2).unwrap_or("未知分区");
+                let _ = bilibili::send_danmaku(
+                    &yt_cfg,
+                    &format!("YT：{} - {}", yt_cfg.youtube.channel_name, yt_area_name),
+                )
+                .await;
+                // tracing::info!("油管查询弹幕成功");
+            }
+        } else {
+            // tracing::error!("YT进程ID不存在");
+            if let Ok(yt_cfg) = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))
+            {
+                let _ = bilibili::send_danmaku(&yt_cfg, "YT监听未启动").await;
+            }
         }
-
-        // Check TW config
-        if let Ok(tw_cfg) = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json")) {
-            let tw_area_name = get_area_name(tw_cfg.bililive.area_v2).unwrap_or("未知分区");
-            let _ = bilibili::send_danmaku(
-                &tw_cfg,
-                &format!("T台：{} - {}", tw_cfg.twitch.channel_name, tw_area_name),
-            )
-            .await;
+        let tw_pid = Command::new("pgrep")
+            .arg("bilistream-TW")
+            .output()
+            .expect("获取TW进程ID失败");
+        if tw_pid.status.success() {
+            // tracing::info!(
+            //     "TW进程ID: {}",
+            //     String::from_utf8_lossy(&tw_pid.stdout).trim()
+            // );
+            // Check TW config
+            if let Ok(tw_cfg) = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json"))
+            {
+                let tw_area_name = get_area_name(tw_cfg.bililive.area_v2).unwrap_or("未知分区");
+                let _ = bilibili::send_danmaku(
+                    &tw_cfg,
+                    &format!("TW：{} - {}", tw_cfg.twitch.channel_name, tw_area_name),
+                )
+                .await;
+                // tracing::info!("T台查询弹幕成功");
+            }
+        } else {
+            // tracing::error!("TW进程ID不存在");
+            if let Ok(tw_cfg) = load_config(Path::new("TW/config.yaml"), Path::new("cookies.json"))
+            {
+                let _ = bilibili::send_danmaku(&tw_cfg, "TW监听未启动").await;
+            }
         }
         return;
     }
@@ -520,14 +521,14 @@ fn get_room_id() -> String {
 pub fn run_danmaku(platform: &str) {
     // Check if any danmaku is already running
     if is_any_danmaku_running() {
+        // if platform == "YT" {
+        //     tracing::info!("弹幕命令读取已在进程 bilistream-YT 中执行");
+        // } else if platform == "TW" {
+        //     tracing::info!("弹幕命令读取已在进程 bilistream-TW 中执行");
+        // }
         return;
     }
 
-    // Create the lock file for the specified platform
-    if let Err(e) = create_danmaku_lock(platform) {
-        tracing::error!("创建弹幕锁文件时出错: {}", e);
-        return;
-    }
     // 更新config.json中的sessdata 为cfg.bililive.credentials.sessdata
     let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json")).unwrap();
     Command::new("sed")
@@ -611,8 +612,6 @@ pub fn run_danmaku(platform: &str) {
                     .output()
                     .expect("停止弹幕命令读取失败");
 
-                // Try to remove both lock files, logging any errors
-                remove_danmaku_lock().expect("删除弹幕锁文件失败");
                 break;
             }
         }
