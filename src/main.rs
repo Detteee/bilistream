@@ -1,8 +1,9 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, check_area_id_with_title, ffmpeg,
-    get_area_name, get_bili_live_status, get_channel_id, get_channel_name, get_twitch_live_status,
-    get_twitch_live_title, get_youtube_live_title, run_danmaku, select_live,
+    bili_change_live_title, bili_start_live, bili_stop_live, bilibili, check_area_id_with_title,
+    ffmpeg, get_area_name, get_bili_live_status, get_channel_id, get_channel_name,
+    get_twitch_live_status, get_twitch_live_title, get_youtube_live_title, run_danmaku,
+    select_live,
 };
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
@@ -666,6 +667,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
         )
         .subcommand(Command::new("login").about("登录"))
+        .subcommand(
+            Command::new("send-danmaku")
+                .about("发送弹幕到直播间")
+                .arg(Arg::new("message").required(true).help("弹幕内容")),
+        )
         .get_matches();
 
     let config_path = matches
@@ -729,6 +735,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut command = StdCommand::new("./login-biliup");
             command.arg("login");
             command.spawn()?.wait()?;
+        }
+        Some(("send-danmaku", sub_m)) => {
+            let message = sub_m.get_one::<String>("message").unwrap();
+            let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+            bilibili::send_danmaku(&cfg, message).await?;
+            println!("弹幕发送成功");
         }
         _ => {
             let file_name = Path::new(config_path)

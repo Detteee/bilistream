@@ -228,3 +228,39 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+pub async fn send_danmaku(
+    cfg: &Config,
+    message: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let cookie = format!(
+        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
+    );
+    let resp: Value = client
+        .post("https://api.live.bilibili.com/msg/send")
+        .header("Cookie", &cookie)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "bubble=0&msg={}&color=16777215&mode=1&fontsize=25&rnd={}&roomid={}&csrf_token={}&csrf={}",
+            message,
+            chrono::Local::now().timestamp(),
+            cfg.bililive.room,
+            cfg.bililive.credentials.bili_jct,
+            cfg.bililive.credentials.bili_jct
+        ))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if resp["code"].as_i64() != Some(0) {
+        return Err(format!("Failed to send danmaku: {}", resp["message"]).into());
+    }
+
+    Ok(resp)
+}
