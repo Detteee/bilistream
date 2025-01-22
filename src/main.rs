@@ -3,7 +3,7 @@ use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_id,
     get_channel_name, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
-    get_youtube_live_title, run_danmaku, select_live,
+    get_youtube_live_title, is_ffmpeg_running, run_danmaku, select_live,
 };
 
 use chrono::{DateTime, Local};
@@ -33,6 +33,20 @@ async fn run_bilistream(
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     init_logger();
     // tracing::info!("bilistream 正在运行");
+    if is_ffmpeg_running() {
+        //pkill ffmpeg;
+        let mut cmd = StdCommand::new("pkill");
+        cmd.arg("ffmpeg");
+        cmd.spawn()?;
+    }
+    let mut cmd = StdCommand::new("pgrep");
+    cmd.arg("live-danmaku-cli");
+    let output = cmd.output()?;
+    if output.status.success() {
+        let mut cmd = StdCommand::new("pkill");
+        cmd.arg("live-danmaku-cli");
+        cmd.spawn()?;
+    }
 
     loop {
         let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;

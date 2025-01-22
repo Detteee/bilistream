@@ -428,7 +428,7 @@ async fn process_danmaku(command: &str) {
             let _ = bilibili::send_danmaku(
                 &cfg,
                 &format!(
-                    "完成：{} - {} - {}",
+                    "更新：{} - {} - {}",
                     platform, channel_name, updated_area_name
                 ),
             )
