@@ -209,7 +209,7 @@ async fn run_bilistream(
                     _ => "未知平台",
                 }
             );
-            if cfg.bililive.enable_danmaku_command {
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
                 thread::spawn(move || run_danmaku());
             }
         } else {
@@ -240,7 +240,7 @@ async fn run_bilistream(
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
             }
-            if cfg.bililive.enable_danmaku_command {
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
                 thread::spawn(move || run_danmaku());
             }
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
