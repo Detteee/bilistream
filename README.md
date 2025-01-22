@@ -19,7 +19,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
-- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) (auto update bilibili cookies)
 
 ## Setup
 
@@ -91,9 +90,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 .
 ├── bilistream           # Main executable
 ├── config.yaml          # Main configuration file
-├── cookies.json         # Bilibili login cookies
+├── cookies.json         # Bilibili login cookies (./bilistream login)
 ├── stream_manager.sh    # Management script
-├── login-biliup        # Bilibili login tool
 ├── live-danmaku-cli    # Danmaku client
 ├── invalid_words.txt    # Filtered words for LOL players ID
 ├── puuid.txt           # League of Legends PUUID cache
@@ -163,6 +161,18 @@ Bilistream supports the following commands:
 
     ```bash
     ./bilistream completion bash|zsh|fish
+    ```
+
+11. Login to Bilibili:
+
+    ```bash
+    ./bilistream login
+    ```
+
+12. Renew Bilibili tokens:
+
+    ```bash
+    ./bilistream renew [--cookies cookies.json]
     ```
 
 ### Danmaku Command Feature

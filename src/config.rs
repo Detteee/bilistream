@@ -148,6 +148,7 @@ pub async fn load_config<P: AsRef<Path>>(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     // Check cookies
     check_cookies().await?;
+
     // Load credentials from cookies.json
     let credentials = load_credentials(cookies_path)?;
     config.bililive.credentials = credentials;

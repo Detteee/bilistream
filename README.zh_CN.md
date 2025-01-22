@@ -19,7 +19,6 @@
 - yt-dlp
 - streamlink (需安装 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件)
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (用于弹幕命令功能)
-- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) (自动更新哔哩哔哩 cookies)
 
 ## 安装步骤
 
@@ -94,9 +93,8 @@
 
 ├── bilistream           # 主程序
 ├── config.yaml          # 主配置文件
-├── cookies.json         # 哔哩哔哩登录 cookies
+├── cookies.json         # 哔哩哔哩登录 cookies (./bilistream login)
 ├── stream_manager.sh    # 管理脚本
-├── login-biliup        # 哔哩哔哩登录工具
 ├── live-danmaku-cli    # 弹幕客户端
 ├── invalid_words.txt    # 英雄联盟 玩家名称自动下播屏蔽词
 ├── puuid.txt           # 英雄联盟 PUUID 缓存
@@ -174,6 +172,18 @@ Bilistream 支持以下命令：
 
     ```bash
     ./bilistream completion bash|zsh|fish
+    ```
+
+11. 登录哔哩哔哩：
+
+    ```bash
+    ./bilistream login
+    ```
+
+12. 更新哔哩哔哩令牌：
+
+    ```bash
+    ./bilistream renew [--cookies cookies.json]
     ```
 
 ### Shell 命令补全

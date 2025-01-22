@@ -6,7 +6,6 @@ use regex::Regex;
 use serde_json::Value;
 use serde_yaml;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -14,8 +13,16 @@ use std::{
     io::{self, BufRead},
     path::Path,
 };
-static DANMAKU_LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+pub fn is_danmaku_running() -> bool {
+    let mut cmd = Command::new("pgrep");
+    cmd.arg("-f").arg("live-danmaku-cli");
+    let output = cmd.output().expect("Failed to execute pgrep");
+    if output.status.success() {
+        return true;
+    }
+    false
+}
 /// Checks if a channel is in the allowed list and retrieves the channel name.
 pub fn get_channel_id(
     platform: &str,
@@ -472,102 +479,97 @@ fn get_room_id() -> String {
 }
 
 /// Main function to execute danmaku processing.
-pub async fn run_danmaku() {
-    // 更新config.json中的sessdata 为cfg.bililive.credentials.sessdata
-    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))
-        .await
-        .unwrap();
-    Command::new("sed")
-        .arg("-i")
-        .arg(format!(
-            r#"s|\"sessdata\": \".*\"|\"sessdata\": \"{}\"|"#,
-            cfg.bililive.credentials.sessdata
-        ))
-        .arg("config.json")
-        .output()
-        .expect("更新sessdata失败");
-    // Start danmaku-cli in background
-    let danmaku_cli = Command::new("./live-danmaku-cli")
-        .arg("--config")
-        .arg("config.json")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("启动弹幕命令读取失败");
-
-    let stdout = danmaku_cli.stdout.expect("捕获stdout失败");
-    let stderr = danmaku_cli.stderr.expect("捕获stderr失败");
-
-    // Handle stdout in a separate thread
-    thread::spawn(move || {
-        let reader = io::BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                // Process each danmaku command
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(process_danmaku(&line));
-            }
-        }
-    });
-
-    // Handle stderr in a separate thread
-    thread::spawn(move || {
-        let reader = io::BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                eprintln!("弹幕stderr: {}", line);
-            }
-        }
-    });
-    // Only log the initialization message once
-    if !DANMAKU_LOGGING_INITIALIZED.swap(true, Ordering::SeqCst) {
-        tracing::info!("弹幕命令读取 is running");
-    }
-
-    // Reset the flag when the stream ends or restarts
-    if !ffmpeg::is_ffmpeg_running() {}
-
-    // Monitor Bilibili live status every 300 seconds
-    loop {
-        thread::sleep(Duration::from_secs(60));
-
-        let room_id = get_room_id();
-
-        if room_id.is_empty() {
-            tracing::error!("从config.json中获取房间ID失败");
-            continue;
-        }
-
-        // tracing::info!("Room ID: {}", room_id);
-        let bilibili_status = match Command::new("./bilistream")
-            .arg("get-live-status")
-            .arg("bilibili")
-            .arg(room_id)
+pub fn run_danmaku() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        // 更新config.json中的sessdata 为cfg.bililive.credentials.sessdata
+        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))
+            .await
+            .unwrap();
+        Command::new("sed")
+            .arg("-i")
+            .arg(format!(
+                r#"s|\"sessdata\": \".*\"|\"sessdata\": \"{}\"|"#,
+                cfg.bililive.credentials.sessdata
+            ))
+            .arg("config.json")
             .output()
-        {
-            Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
-            Err(e) => {
-                tracing::error!("检查Bilibili直播间状态时出错: {}", e);
+            .expect("更新sessdata失败");
+        // Start danmaku-cli in background
+        let danmaku_cli = Command::new("./live-danmaku-cli")
+            .arg("--config")
+            .arg("config.json")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("启动弹幕命令读取失败");
+
+        let stdout = danmaku_cli.stdout.expect("捕获stdout失败");
+        let stderr = danmaku_cli.stderr.expect("捕获stderr失败");
+
+        // Handle stdout in a separate thread
+        thread::spawn(move || {
+            let reader = io::BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    // Process each danmaku command
+                    tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(process_danmaku(&line));
+                }
+            }
+        });
+
+        // Handle stderr in a separate thread
+        thread::spawn(move || {
+            let reader = io::BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    eprintln!("弹幕stderr: {}", line);
+                }
+            }
+        });
+        tracing::info!("弹幕命令读取 is running");
+        // Monitor Bilibili live status every 300 seconds
+        loop {
+            thread::sleep(Duration::from_secs(60));
+
+            let room_id = get_room_id();
+
+            if room_id.is_empty() {
+                tracing::error!("从config.json中获取房间ID失败");
                 continue;
             }
-        };
 
-        if !bilibili_status.contains("未直播") {
-            if ffmpeg::is_ffmpeg_running() {
-                DANMAKU_LOGGING_INITIALIZED.store(false, Ordering::SeqCst);
-                tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
-                // Kill danmaku-cli process
-                Command::new("pkill")
-                    .arg("-f")
-                    .arg("danmaku-cli")
-                    .output()
-                    .expect("停止弹幕命令读取失败");
+            // tracing::info!("Room ID: {}", room_id);
+            let bilibili_status = match Command::new("./bilistream")
+                .arg("get-live-status")
+                .arg("bilibili")
+                .arg(room_id)
+                .output()
+            {
+                Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+                Err(e) => {
+                    tracing::error!("检查Bilibili直播间状态时出错: {}", e);
+                    continue;
+                }
+            };
 
-                break;
+            if !bilibili_status.contains("未直播") {
+                if ffmpeg::is_ffmpeg_running() {
+                    tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
+                    // Kill danmaku-cli process
+                    Command::new("pkill")
+                        .arg("-f")
+                        .arg("danmaku-cli")
+                        .output()
+                        .expect("停止弹幕命令读取失败");
+
+                    break;
+                }
             }
         }
-    }
+    });
 }
 
 pub fn get_area_name(area_id: u64) -> Option<&'static str> {
