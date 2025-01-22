@@ -1,8 +1,9 @@
+use crate::plugins::bilibili;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::path::PathBuf;
 /// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -137,7 +138,7 @@ fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Erro
 }
 
 /// Loads the configuration along with credentials from cookies.json.
-pub fn load_config<P: AsRef<Path>>(
+pub async fn load_config<P: AsRef<Path>>(
     config_path: P,
     cookies_path: P,
 ) -> Result<Config, Box<dyn Error>> {
@@ -146,7 +147,7 @@ pub fn load_config<P: AsRef<Path>>(
     let mut config: Config = serde_yaml::from_str(&config_content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     // Check cookies
-    check_cookies()?;
+    check_cookies().await?;
     // Load credentials from cookies.json
     let credentials = load_credentials(cookies_path)?;
     config.bililive.credentials = credentials;
@@ -154,14 +155,11 @@ pub fn load_config<P: AsRef<Path>>(
     Ok(config)
 }
 
-fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
-    // Retrieve live information
+async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
     // Check for the existence of cookies.json
     if !Path::new("cookies.json").exists() {
         tracing::info!("cookies.json 不存在，请登录");
-        let mut command = Command::new("./login-biliup");
-        command.arg("login");
-        command.spawn()?.wait()?;
+        bilibili::login().await?;
     } else {
         // Check if cookies.json is older than 48 hours
         if Path::new("cookies.json")
@@ -172,9 +170,7 @@ fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
             > 3600 * 24 * 3
         {
             tracing::info!("cookies.json 已超过3天，正在刷新");
-            let mut command = Command::new("./login-biliup");
-            command.arg("renew");
-            command.spawn()?.wait()?;
+            bilibili::renew(PathBuf::from("cookies.json")).await?;
         }
     }
 

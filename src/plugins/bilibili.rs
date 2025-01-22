@@ -1,11 +1,41 @@
 use crate::config::Config;
-use reqwest::{cookie::Jar, Url};
+use md5::{Digest, Md5};
+use qrcode::QrCode;
+use reqwest::cookie::{CookieStore, Jar};
+use reqwest::Url;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::error::Error;
-use std::time::Duration;
+use std::fs;
+use std::io::Seek;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+enum AppKeyStore {
+    BiliTV,
+    Android,
+}
+
+impl AppKeyStore {
+    fn app_key(&self) -> &'static str {
+        match self {
+            Self::BiliTV => "4409e2ce8ffd12b8",
+            Self::Android => "1d8b6e7d45233436",
+        }
+    }
+
+    fn appsec(&self) -> &'static str {
+        match self {
+            Self::BiliTV => "59b43e04ad6965f34319062b478f83dd",
+            Self::Android => "560c52ccd288fed045859ed18bffd973",
+        }
+    }
+}
+
 /// Retrieves the live status of a Bilibili room.
 ///
 /// # Arguments
@@ -425,6 +455,314 @@ pub async fn bili_update_area(cfg: &Config, area_id: u64) -> Result<(), Box<dyn 
             serde_json::to_string_pretty(&res).unwrap_or_default()
         ))?;
     }
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ResponseData<T> {
+    code: i64,
+    message: String,
+    data: Option<T>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ResponseValue {
+    Login(LoginInfo),
+    OAuth(OAuthInfo),
+    Value(Value),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LoginInfo {
+    pub cookie_info: Value,
+    pub sso: Vec<String>,
+    pub token_info: TokenInfo,
+    pub platform: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenInfo {
+    pub access_token: String,
+    pub expires_in: u32,
+    pub mid: u64,
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OAuthInfo {
+    pub mid: u64,
+    pub access_token: String,
+    pub expires_in: u32,
+    pub refresh: bool,
+}
+
+#[derive(Clone)]
+struct StatefulClient {
+    client: reqwest::Client,
+    cookie_store: Arc<Jar>,
+}
+
+impl StatefulClient {
+    fn new(headers: reqwest::header::HeaderMap) -> Self {
+        let cookie_store = Arc::new(Jar::default());
+        let client = reqwest::Client::builder()
+            .cookie_provider(cookie_store.clone())
+            .default_headers(headers)
+            .build()
+            .unwrap();
+
+        Self {
+            client,
+            cookie_store,
+        }
+    }
+}
+
+pub struct Credential(StatefulClient);
+
+impl Credential {
+    pub fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "Referer",
+            reqwest::header::HeaderValue::from_static("https://www.bilibili.com/"),
+        );
+        Self(StatefulClient::new(headers))
+    }
+
+    pub async fn get_qrcode(&self) -> Result<Value, Box<dyn Error>> {
+        let mut form = json!({
+            "appkey": "4409e2ce8ffd12b8", // BiliTV appkey
+            "local_id": "0",
+            "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        });
+
+        let urlencoded = serde_urlencoded::to_string(&form)?;
+        let sign = self.sign(&urlencoded, "59b43e04ad6965f34319062b478f83dd"); // BiliTV appsec
+        form["sign"] = Value::from(sign);
+
+        Ok(self
+            .0
+            .client
+            .post("http://passport.bilibili.com/x/passport-tv-login/qrcode/auth_code")
+            .form(&form)
+            .send()
+            .await?
+            .json()
+            .await?)
+    }
+
+    fn sign(&self, param: &str, app_sec: &str) -> String {
+        let mut hasher = Md5::new();
+        hasher.update(format!("{}{}", param, app_sec));
+        format!("{:x}", hasher.finalize())
+    }
+
+    async fn login_by_qrcode(&self, value: Value) -> Result<LoginInfo, Box<dyn Error>> {
+        let mut form = json!({
+            "appkey": "4409e2ce8ffd12b8",
+            "auth_code": value["data"]["auth_code"],
+            "local_id": "0",
+            "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        });
+
+        let urlencoded = serde_urlencoded::to_string(&form)?;
+        let sign = self.sign(&urlencoded, "59b43e04ad6965f34319062b478f83dd");
+        form["sign"] = Value::from(sign);
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let res: ResponseData<ResponseValue> = self
+                .0
+                .client
+                .post("http://passport.bilibili.com/x/passport-tv-login/qrcode/poll")
+                .form(&form)
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            match res {
+                ResponseData {
+                    code: 0,
+                    data: Some(ResponseValue::Login(info)),
+                    ..
+                } => {
+                    // Save cookies from response
+                    if let Some(cookies) = info.cookie_info.get("cookies") {
+                        let base_url = Url::parse("https://bilibili.com")?;
+                        for cookie in cookies.as_array().unwrap_or(&Vec::new()) {
+                            let cookie_str = format!(
+                                "{}={}",
+                                cookie["name"].as_str().unwrap_or(""),
+                                cookie["value"].as_str().unwrap_or("")
+                            );
+                            self.0.cookie_store.add_cookie_str(&cookie_str, &base_url);
+                        }
+                    }
+                    return Ok(LoginInfo {
+                        platform: Some("BiliTV".to_string()),
+                        ..info
+                    });
+                }
+                ResponseData { code: 86039, .. } => {
+                    print!("\rWaiting for QR code scan...");
+                }
+                _ => {
+                    return Err(format!("Login failed: {:#?}", res).into());
+                }
+            }
+        }
+    }
+
+    pub async fn renew_tokens(&self, login_info: LoginInfo) -> Result<LoginInfo, Box<dyn Error>> {
+        let keypair = match login_info.platform.as_deref() {
+            Some("BiliTV") => AppKeyStore::BiliTV,
+            Some("Android") => AppKeyStore::Android,
+            Some(_) => return Err("Unknown platform".into()),
+            None => return Ok(login_info),
+        };
+
+        let mut payload = json!({
+            "access_key": login_info.token_info.access_token,
+            "actionKey": "appkey",
+            "appkey": keypair.app_key(),
+            "refresh_token": login_info.token_info.refresh_token,
+            "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        });
+
+        let urlencoded = serde_urlencoded::to_string(&payload)?;
+        let sign = self.sign(&urlencoded, keypair.appsec());
+        payload["sign"] = Value::from(sign);
+
+        let response: ResponseData<ResponseValue> = self
+            .0
+            .client
+            .post("https://passport.bilibili.com/x/passport-login/oauth2/refresh_token")
+            .form(&payload)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        match response.data {
+            Some(ResponseValue::Login(info)) if !info.cookie_info.is_null() => {
+                if let Some(cookies) = info.cookie_info.get("cookies") {
+                    let base_url = Url::parse("https://bilibili.com")?;
+                    for cookie in cookies.as_array().unwrap_or(&Vec::new()) {
+                        let cookie_str = format!(
+                            "{}={}",
+                            cookie["name"].as_str().unwrap_or(""),
+                            cookie["value"].as_str().unwrap_or("")
+                        );
+                        self.0.cookie_store.add_cookie_str(&cookie_str, &base_url);
+                    }
+                }
+                Ok(LoginInfo {
+                    platform: login_info.platform,
+                    ..info
+                })
+            }
+            _ => Err("Failed to renew tokens".into()),
+        }
+    }
+}
+
+/// Login to Bilibili using QR code and save cookies
+pub async fn login() -> Result<(), Box<dyn Error>> {
+    let credential = Credential::new();
+
+    // Get QR code
+    let qrcode_res = credential.get_qrcode().await?;
+
+    // Generate and display QR code
+    let qr_url = qrcode_res["data"]["url"]
+        .as_str()
+        .ok_or("Failed to get QR code URL")?;
+
+    let qr = QrCode::new(qr_url)?;
+    let qr_string = qr
+        .render::<char>()
+        .quiet_zone(false)
+        .module_dimensions(2, 1)
+        .build();
+    println!("Please scan the QR code to login:\n{}", qr_string);
+
+    // Wait for scan and get login info
+    let login_info = credential.login_by_qrcode(qrcode_res).await?;
+
+    // Create cookie info structure
+    let mut cookies = Vec::new();
+    let base_url = Url::parse("https://bilibili.com")?;
+
+    if let Some(cookie_header) = credential.0.cookie_store.cookies(&base_url) {
+        let cookie_str = cookie_header.to_str().unwrap_or_default();
+        for cookie_part in cookie_str.split("; ") {
+            if let Some((name, value)) = cookie_part.split_once('=') {
+                let expires = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64
+                    + 15552000; // 180 days
+
+                cookies.push(json!({
+                    "name": name,
+                    "value": value,
+                    "expires": expires,
+                    "http_only": 0,
+                    "secure": 0
+                }));
+            }
+        }
+    }
+
+    let cookie_info = json!({
+        "cookies": cookies,
+        "domains": [
+            ".bilibili.com",
+            ".biligame.com",
+            ".bigfun.cn",
+            ".bigfunapp.cn",
+            ".dreamcast.hk"
+        ]
+    });
+
+    // Create final login info structure
+    let final_info = json!({
+        "cookie_info": cookie_info,
+        "sso": [
+            "https://passport.bilibili.com/api/v2/sso",
+            "https://passport.biligame.com/api/v2/sso",
+            "https://passport.bigfunapp.cn/api/v2/sso"
+        ],
+        "token_info": login_info.token_info,
+        "platform": "BiliTV"
+    });
+
+    // Save to file
+    fs::write("cookies.json", serde_json::to_string_pretty(&final_info)?)?;
+    println!("Login successful! Cookies saved to cookies.json");
+
+    Ok(())
+}
+
+/// Renews the authentication tokens using the existing login info
+pub async fn renew(user_cookie: PathBuf) -> Result<(), Box<dyn Error>> {
+    let credential = Credential::new();
+    let mut file = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(&user_cookie)?;
+
+    let login_info: LoginInfo = serde_json::from_reader(&file)?;
+    let new_info = credential.renew_tokens(login_info).await?;
+
+    file.rewind()?;
+    file.set_len(0)?;
+    serde_json::to_writer_pretty(std::io::BufWriter::new(&file), &new_info)?;
+    tracing::info!("{new_info:?}");
 
     Ok(())
 }

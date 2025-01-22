@@ -133,7 +133,7 @@ impl Twitch {
 }
 
 pub async fn get_twitch_live_status(channel_id: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
     let raw_client = reqwest::Client::builder()
         .cookie_store(true)

@@ -13,6 +13,7 @@ use regex::Regex;
 use reqwest_middleware::ClientBuilder;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
+use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
@@ -49,7 +50,7 @@ async fn run_bilistream(
     }
 
     loop {
-        let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+        let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
         let (yt_is_live, yt_m3u8_url, yt_topic, scheduled_start) = yt_live
@@ -125,7 +126,7 @@ async fn run_bilistream(
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
                     if let Ok(cfg) =
-                        load_config(Path::new("config.yaml"), Path::new("cookies.json"))
+                        load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
                     {
                         if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                             tracing::error!("B站直播间封面替换失败: {}", e);
@@ -257,7 +258,7 @@ async fn get_live_topic(
     match platform {
         "YT" => {
             let client = reqwest::Client::new();
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -325,7 +326,7 @@ async fn get_live_status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match platform {
         "bilibili" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
             if is_live {
                 let area_name = get_area_name(area_id);
@@ -340,7 +341,7 @@ async fn get_live_status(
             }
         }
         "YT" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -458,7 +459,7 @@ async fn get_live_status(
             }
         }
         "TW" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -488,7 +489,7 @@ async fn get_live_title(
 ) -> Result<String, Box<dyn std::error::Error>> {
     match platform {
         "YT" => {
-            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -507,7 +508,7 @@ async fn get_live_title(
             }
         }
         "TW" => {
-            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -532,7 +533,7 @@ async fn start_live(
     config_path: &str,
     optional_platform: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+    let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
     let area_v2 = if optional_platform == Some("YT") {
         cfg.youtube.area_v2
     } else if optional_platform == Some("TW") {
@@ -546,7 +547,7 @@ async fn start_live(
 }
 
 async fn stop_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+    let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
     bili_stop_live(&cfg).await?;
     println!("直播停止成功");
     Ok(())
@@ -560,7 +561,7 @@ async fn change_live_title(
     if !config_file.exists() {
         return Err(format!("配置文件不存在: {}", config_path).into());
     }
-    let cfg = load_config(config_file, Path::new("cookies.json"))?;
+    let cfg = load_config(config_file, Path::new("cookies.json")).await?;
     bili_change_live_title(&cfg, new_title).await?;
     println!("直播标题改变成功");
     Ok(())
@@ -568,7 +569,7 @@ async fn change_live_title(
 
 async fn monitor_lol_game(puuid: Option<String>) -> Result<(), Box<dyn Error>> {
     if let Some(puuid_str) = puuid {
-        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
         let interval = cfg.lol_monitor_interval.unwrap_or(1);
         let riot_api = RiotApi::new(cfg.riot_api_key.clone().unwrap());
         thread::spawn(move || {
@@ -642,7 +643,7 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
                 area_name.unwrap(),
                 to_area_name.unwrap()
             );
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             bili_update_area(&cfg, new_area).await?;
         }
     }
@@ -652,7 +653,7 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.2.1")
+        .version("0.2.2")
         .arg(
             Arg::new("config")
                 .short('c')
@@ -712,7 +713,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
         )
-        .subcommand(Command::new("login").about("登录"))
+        .subcommand(
+            Command::new("login")
+                .about("通过二维码登录Bilibili")
+                .long_about("在终端显示一个二维码，你可以用Bilibili移动应用扫描登录。将登录凭证保存到cookies.json"),
+        )
         .subcommand(
             Command::new("send-danmaku")
                 .about("发送弹幕到直播间")
@@ -736,12 +741,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
         )
         .subcommand(
+            Command::new("renew")
+                .about("更新Bilibili登录令牌")
+                .arg(
+                    Arg::new("cookies")
+                        .short('c')
+                        .long("cookies")
+                        .value_name("FILE")
+                        .help("Path to cookies.json file")
+                        .default_value("cookies.json"),
+                ),
+        )
+        .subcommand(
             Command::new("completion")
-                .about("Generate shell completion scripts")
+                .about("生成shell自动补全脚本")
                 .arg(
                     Arg::new("shell")
                         .required(true)
-                        .help("Target shell (bash, zsh, fish)")
+                        .help("目标shell (bash, zsh, fish)")
                         .value_parser(["bash", "zsh", "fish"]),
                 ),
         )
@@ -809,19 +826,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(("login", _)) => {
-            let mut command = StdCommand::new("./login-biliup");
-            command.arg("login");
-            command.spawn()?.wait()?;
+            tracing::info!("Starting Bilibili login process...");
+            bilibili::login().await?;
         }
         Some(("send-danmaku", sub_m)) => {
             let message = sub_m.get_one::<String>("message").unwrap();
-            let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
             bilibili::send_danmaku(&cfg, message).await?;
             println!("弹幕发送成功");
         }
         Some(("replace-cover", sub_m)) => {
             let image_path = sub_m.get_one::<String>("image_path").unwrap();
-            let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
             bilibili::bili_change_cover(&cfg, image_path).await?;
             println!("直播间封面更换成功");
         }
@@ -830,7 +846,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .get_one::<u64>("area_id")
                 .expect("Required argument");
 
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
             if current_area != *area_id {
                 update_area(current_area, *area_id).await?;
@@ -838,11 +854,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if current_area != *area_id {
                     println!("直播间分区更新失败");
                 } else {
-                    println!("直播间分区更新成功");
+                    let current_area_name = get_area_name(current_area);
+                    let area_name = get_area_name(*area_id);
+                    if current_area_name.is_some() && area_name.is_some() {
+                        println!(
+                            "直播间分区更新成功, {} -> {}",
+                            current_area_name.unwrap(),
+                            area_name.unwrap()
+                        );
+                    } else {
+                        println!("直播间分区更新成功, {} -> {}", current_area, area_id);
+                    }
                 }
             } else {
                 println!("分区相同，无须更新");
             }
+        }
+        Some(("renew", sub_m)) => {
+            let cookies_path = sub_m.get_one::<String>("cookies").unwrap();
+            bilibili::renew(PathBuf::from(cookies_path)).await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
