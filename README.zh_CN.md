@@ -2,26 +2,26 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发，但使用 [Cursor](https://www.cursor.com/) 进行了重大重新设计和增强。虽然它们共享相同的核心概念，但此实现提供了独特的功能和改进，包括一个全面的 `stream_manager.sh` 脚本，以便于管理。
+本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发，但使用 [Cursor](https://www.cursor.com/) 进行了重大重新设计和增强。虽然核心理念相同，但此实现提供了独特的功能和改进，包括用于更轻松管理的综合 `stream_manager.sh` 脚本。
 
-## 特性
+## 功能特点
 
-- 自动将 Twitch 和 YouTube 流重新广播到 Bilibili 直播（支持监听+自动开播）
-- 支持 YouTube 上的预告窗
-- 可配置的Bilibili直播间设置（标题、分区等）
-- 使用管理脚本（`stream_manager.sh`）用于轻松配置和控制
-- 当 Bilibili 直播关闭时，使用弹幕命令功能更改监听目标频道
-- 监控英雄联盟游戏内玩家名称并在检测到违禁词时停止直播
+- 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
+- 支持 YouTube 预定直播
+- 可配置的哔哩哔哩直播设置（标题、分区等）
+- 管理脚本（`stream_manager.sh`）用于更改配置
+- 当哔哩哔哩直播关闭时可通过弹幕命令更改监听目标频道
+- 监控英雄联盟游戏内玩家名称，如发现黑名单词汇则停止直播
 
 ## 依赖
 
 - ffmpeg
 - yt-dlp
-- streamlink（安装了 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件）
-- [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli)（用于弹幕命令功能）
-- [biliup/biliup-rs](https://github.com/biliup/biliup-rs)（用于登录B站账号）
+- streamlink (需安装 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件)
+- [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (用于弹幕命令功能)
+- [biliup/biliup-rs](https://github.com/biliup/biliup-rs) (自动更新哔哩哔哩 cookies)
 
-## 安装
+## 安装步骤
 
 1. 克隆仓库：
 
@@ -29,6 +29,7 @@
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
+
 2. 安装所需依赖（以 Debian 系统为例）：
 
    ```bash
@@ -36,55 +37,83 @@
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
    ```
-3. 安装 streamlink-ttvlol 插件：
-   查看[2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-4. 构建项目：
 
-   适用于 Debian 12 及 glibc >= 2.36 的linux:
+3. 安装 streamlink-ttvlol 插件：
+   按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
+
+4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如需弹幕命令功能)
+
+5. 构建项目：
+
+   对于 Debian 12 和其他使用 glibc 2.36 或更新版本的 Linux 发行版：
 
    ```bash
    cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
    ```
 
-   Windows：
+   对于 Windows：
 
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
-## 配置
-
-1. 复制示例配置文件：
-
-   ```bash
+6. 配置 `config.yaml`：
+   ```yaml
+   # 复制并编辑示例配置
    cp config.yaml.example config.yaml
    ```
-2. 编辑 `config.yaml` 以设置您的特定设置：
+   查看 `config.yaml.example` 了解详细配置选项：
+   - 哔哩哔哩直播间设置
+   - YouTube/Twitch 频道设置
+   - 不同游戏分类的分区 ID
+   - 代理设置
+   - 各种服务的 API 密钥
 
-   - 配置所需转播的平台（Twitch 或 YouTube）
-   - 设置频道 ID 和其他相关信息
-   - 为T台选择一个代理地区
-3. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
-4. 创建频道列表文件：
-   在 YT 和 TW 文件夹中，分别创建 `YT_channels.txt` 和 `TW_channels.txt`，每行的格式为：
+7. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
+
+8. 创建频道列表文件：
+   在根目录创建 `YT_channels.txt` 和 `TW_channels.txt`，每行格式为：
 
    ```txt
-   (频道名称) [频道 ID]
+   (频道名称) [频道ID]
    ```
-5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如果需要弹幕命令功能)
+
+9. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
+
+    - 创建名为 `invalid_words.txt` 的文件，每行一个词
+    - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
+
+      ```yaml
+      RiotApiKey: "YOUR-RIOT-API-KEY"    # 从 https://developer.riotgames.com/ 获取
+      LolMonitorInterval: 1               # 检查间隔（秒）
+      ```
+    - 程序将监控游戏内玩家，如发现黑名单词汇则停止直播
+
+## 文件结构
+```
+.
+├── bilistream           # 主程序
+├── config.yaml          # 主配置文件
+├── config.yaml.example  # 示例配置
+├── cookies.json         # 哔哩哔哩登录 cookies
+├── stream_manager.sh    # 管理脚本
+├── login-biliup        # 哔哩哔哩登录工具
+├── live-danmaku-cli    # 弹幕客户端
+├── invalid_words.txt    # 弹幕过滤词
+├── puuid.txt           # 英雄联盟 PUUID 缓存
+├── TW_channels.txt     # Twitch 频道列表
+└── YT_channels.txt     # YouTube 频道列表
+```
 
 ## 使用方法
 
-### 基本用法
-
-运行 Bilistream 应用程序：
+运行 Bilistream 应用：
 
 ```bash
-./bilistream -c YT/config.yaml
-./bilistream -c TW/config.yaml
+./bilistream 
 ```
 
-### 命令行界面
+### 子功能
 
 Bilistream 支持以下命令：
 
@@ -93,69 +122,40 @@ Bilistream 支持以下命令：
    ```bash
    ./bilistream start-live
    ```
+
 2. 停止直播：
 
    ```bash
    ./bilistream stop-live
    ```
+
 3. 更改直播标题：
 
    ```bash
    ./bilistream change-live-title <新标题>
    ```
+
 4. 获取直播状态：
 
    ```bash
-   ./bilistream get-live-status
+   ./bilistream get-live-status YT/TW/bilibili <频道ID/房间号>
    ```
 
-### 使用 stream_manager.sh
-
-`stream_manager.sh` 脚本提供了一个交互式界面来管理您的流：
-
-1. 设置目录结构：
+5. 获取 YouTube 直播主题：
 
    ```bash
-   mkdir YT TW
-   cp config.yaml YT/config.yaml
-   cp config.yaml TW/config.yaml
+   ./bilistream get-live-topic YT <频道ID>
    ```
-
-   文件目录结构：
-
-   ```bash
-   .
-   ├── bilistream
-   ├── config.json
-   ├── stream_manager.sh
-   ├── login-biliup
-   ├── live-danmaku-cli
-   ├── invalid_words.txt
-   ├── puuid.txt
-   ├── TW
-   │   ├── config.yaml
-   │   └── TW_channels.txt
-   └── YT
-       ├── config.yaml
-       └── YT_channels.txt
-   ```
-2. 分别编辑 `YT/config.yaml` 和 `TW/config.yaml`，设置适当的 YouTube 和 Twitch 设置。
-3. 运行管理脚本：
-
-   ```bash
-   ./stream_manager.sh
-   ```
-4. 使用交互式菜单来启动、停止或管理您的转播任务。
 
 ### 弹幕命令功能
 
-当 Bilibili 直播关闭时，您可以在 Bilibili 直播聊天中使用弹幕命令来更改监听目标频道。这允许在不重启应用程序的情况下动态控制转播目标。
+当哔哩哔哩直播关闭时，您可以在直播间聊天中使用弹幕命令来更改监听目标频道。这允许在不重启应用的情况下动态控制转播目标。
 
-使用此功能：
+使用方法：
 
-1. 确保 Bilibili 直播已关闭。
-2. 在 Bilibili 直播聊天中发送特定的弹幕命令。
-3. 系统将处理命令并相应地更改监听目标频道。
+1. 确保哔哩哔哩直播处于关闭状态
+2. 在哔哩哔哩直播聊天中发送特定弹幕命令
+3. 系统将处理命令并相应更改监听目标频道
 
 弹幕命令格式：
 
@@ -164,35 +164,14 @@ Bilistream 支持以下命令：
 频道名称必须在 YT/TW_channels.txt 中
 ```
 
-例如：
+示例：
 
 ```txt
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
 ```
 
-系统将检查直播标题并在必要时调整分区ID。例如，如果直播标题包含"Valorant"，它将设置分区ID为329（无畏契约），无论指定的分区名称是什么。查看 [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) 获取更多分区名称和ID。
-
-### 英雄联盟游戏内玩家名称检测
-
-如果您想使用英雄联盟游戏内玩家名称检测功能：
-
-1. 从 [Riot Developer Portal](https://developer.riotgames.com/) 获取 API Key
-2. 创建 `puuid.txt` 文件，每行格式为：
-
-   ```txt
-   (频道名称) [PUUID]
-   ```
-3. 创建 `invalid_words.txt` 文件，每行一个需要检测的屏蔽词
-4. 在配置文件中设置：
-
-   ```yaml
-   bililive:
-     area_v2: 86  # 英雄联盟分区
-   riot_api_key: "YOUR-RIOT-API-KEY"
-   ```
-
-当检测到游戏中有包含屏蔽词的玩家名称时，直播会自动停止。
+系统会检查直播标题并根据需要调整分区 ID。例如，如果直播标题包含 "Valorant"，无论指定的分区名称是什么，都会将分区 ID 设置为 329（无畏契约）。查看 [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) 获取更多分区名称和 ID。
 
 ## 贡献
 
@@ -200,9 +179,9 @@ Bilistream 支持以下命令：
 
 ## 许可证
 
-本项目采用 [Unlicense许可证](LICENSE)。
+本项目采用 [unlicense](LICENSE) 许可证。
 
 ## 致谢
 
-- [limitcool/bilistream	](https://github.com/limitcool/bilistream)
+- [limitcool/bilistream](https://github.com/limitcool/bilistream)
 - 本项目的所有用户

@@ -61,7 +61,7 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
 /// # Returns
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
-pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
+pub async fn bili_start_live(cfg: &Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
         cfg.bililive.credentials.sessdata,
@@ -97,7 +97,7 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .body(format!(
             "room_id={}&platform=android_link&area_v2={}&csrf_token={}&csrf={}",
             cfg.bililive.room,
-            cfg.bililive.area_v2,
+            area_v2,
             cfg.bililive.credentials.bili_jct,
             cfg.bililive.credentials.bili_jct
         ))
@@ -121,7 +121,7 @@ pub async fn bili_start_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
 /// # Returns
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
-pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> {
+pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
         cfg.bililive.credentials.sessdata,
@@ -157,7 +157,7 @@ pub async fn bili_change_live_title(cfg: &Config) -> Result<(), Box<dyn Error>> 
         .body(format!(
             "room_id={}&platform=pc&title={}&csrf_token={}&csrf={}",
             cfg.bililive.room,
-            cfg.bililive.title,
+            title,
             cfg.bililive.credentials.bili_jct,
             cfg.bililive.credentials.bili_jct
         ))

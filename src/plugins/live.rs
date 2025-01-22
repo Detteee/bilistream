@@ -22,7 +22,7 @@ pub trait Live {
     >;
 }
 
-pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
+pub async fn select_live(cfg: Config, platform: &str) -> Result<Box<dyn Live>, Box<dyn Error>> {
     // 设置最大重试次数为5次
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
     let raw_client = reqwest::Client::builder()
@@ -34,14 +34,14 @@ pub async fn select_live(cfg: Config) -> Result<Box<dyn Live>, Box<dyn Error>> {
     let client = ClientBuilder::new(raw_client.clone())
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
-    match cfg.platform.as_str() {
-        "Youtube" => Ok(Box::new(Youtube::new(
+    match platform {
+        "YT" => Ok(Box::new(Youtube::new(
             &cfg.youtube.channel_name.as_str(),
             &cfg.youtube.channel_id.as_str(),
             cfg.proxy,
         ))),
 
-        "Twitch" => Ok(Box::new(Twitch::new(
+        "TW" => Ok(Box::new(Twitch::new(
             &cfg.twitch.channel_id.as_str(),
             cfg.twitch.oauth_token,
             client.clone(),

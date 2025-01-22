@@ -1,26 +1,19 @@
 use std::process::Command;
-
-/// Checks if any ffmpeg lock file exists.
-pub fn is_any_ffmpeg_running() -> bool {
-    // Check for ffmpeg-YT or ffmpeg-TW processes and identify which one
+// if ffmpeg is already running
+pub fn is_ffmpeg_running() -> bool {
     let output = Command::new("pgrep")
-        .arg("-af") // -a to show full command line
-        .arg("ffmpeg") // Just search for ffmpeg
+        .arg("-af")
+        .arg("ffmpeg")
         .output()
         .expect("Failed to execute pgrep");
-
     if output.status.success() {
         let process_info = String::from_utf8_lossy(&output.stdout);
-        if process_info.contains("-progress ffmpeg-YT") {
-            return true;
-        } else if process_info.contains("-progress ffmpeg-TW") {
+        if process_info.contains("ffmpeg -re -thread_queue_size 1024") {
             return true;
         }
     }
-
-    return false;
+    false
 }
-
 /// Executes the ffmpeg command with the provided parameters.
 pub fn ffmpeg(
     rtmp_url: String,
@@ -28,13 +21,10 @@ pub fn ffmpeg(
     m3u8_url: String,
     proxy: Option<String>,
     log_level: &str,
-    platform: &str,
 ) {
-    // Check if any ffmpeg is already running
-    if is_any_ffmpeg_running() {
+    if is_ffmpeg_running() {
         return;
     }
-
     let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
     // name the ffmpeg process as ffmpeg-platform
 
@@ -43,10 +33,8 @@ pub fn ffmpeg(
     if let Some(proxy) = proxy {
         child.arg("-http_proxy").arg(proxy);
     }
+    // Input options
     child
-        .arg("-progress")
-        .arg(format!("ffmpeg-{}", platform))
-        // Input options
         .arg("-re") // Read input at native frame rate
         .arg("-thread_queue_size")
         .arg("1024")

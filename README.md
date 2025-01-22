@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
+This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier managementsss
 
 ## Features
 
@@ -21,7 +21,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
 - [biliup/biliup-rs](https://github.com/biliup/biliup-rs) (auto update bilibili cookies)
 
-## Installation
+## Setup
 
 1. Clone the repository:
 
@@ -29,6 +29,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
+
 2. Install the required dependencies (example for Debian-based systems):
 
    ```bash
@@ -36,9 +37,13 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
    ```
+
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-4. Build the project:
+
+4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
+
+5. Build the project:
 
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
 
@@ -52,27 +57,28 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
-## Configuration
-
-1. Copy the example configuration file:
-
-   ```bash
+6. Configure `config.yaml`:
+   ```yaml
+   # Copy and edit the example config
    cp config.yaml.example config.yaml
    ```
-2. Edit `config.yaml` with your specific settings:
+   See `config.yaml.example` for detailed configuration options:
+   - Bilibili live room settings
+   - YouTube/Twitch channel settings
+   - Area IDs for different game categories
+   - Proxy settings
+   - API keys for various services
 
-   - Configure the desired streaming platform (Twitch or YouTube)
-   - Set the channel ID and other relevant information
-   - Select a proxy region for twitch config
-3. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-4. Create channel list files:
-   In the YT and TW folders, create `YT_channels.txt` and `TW_channels.txt` respectively, with each line in the format:
+7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
+
+8.  Create channel list files:
+   Create `YT_channels.txt` and `TW_channels.txt` in the root directory, with each line in the format:
 
    ```txt
    (channel name) [channel id]
    ```
-5. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
-6. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+
+9.  (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
    - Create a file named `invalid_words.txt` with one word per line
    - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
@@ -83,18 +89,32 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
      ```
    - The program will monitor in-game players and stop streaming if any blacklisted words are found
 
-## Usage
+## File Structure
+```
+.
+├── bilistream           # Main executable
+├── config.yaml          # Main configuration file
+├── config.yaml.example  # Example configuration
+├── cookies.json         # Bilibili login cookies
+├── stream_manager.sh    # Management script
+├── login-biliup        # Bilibili login tool
+├── live-danmaku-cli    # Danmaku client
+├── invalid_words.txt    # Filtered words for danmaku
+├── puuid.txt           # League of Legends PUUID cache
+├── TW_channels.txt     # Twitch channel list
+└── YT_channels.txt     # YouTube channel list
 
-### Basic Usage
+```
+
+## Usage
 
 Run the Bilistream application:
 
 ```bash
-./bilistream -c YT/config.yaml
-./bilistream -c TW/config.yaml
+./bilistream 
 ```
 
-### Command-line Interface
+### Subfunction
 
 Bilistream supports the following commands:
 
@@ -124,46 +144,6 @@ Bilistream supports the following commands:
    ./bilistream get-live-topic YT <Channel_ID>
    ```
 
-### Using stream_manager.sh
-
-The `stream_manager.sh` script provides an interactive interface for managing your streams:
-
-1. Set up the directory structure:
-
-   ```bash
-   mkdir YT TW
-   cp config.yaml YT/config.yaml
-   cp config.yaml TW/config.yaml
-   ```
-
-   Rename bilibup to login-biliup
-
-   Rename bilibili-live-danmaku-cli to live-danmaku-cli
-   Resulting tree structure:
-
-   ```txt
-   .
-   ├── bilistream
-   ├── config.json
-   ├── stream_manager.sh
-   ├── login-biliup
-   ├── live-danmaku-cli
-   ├── invalid_words.txt
-   ├── puuid.txt
-   ├── TW
-   │   ├── config.yaml
-   │   └── TW_channels.txt
-   └── YT
-       ├── config.yaml
-       └── YT_channels.txt
-   ```
-2. Edit `YT/config.yaml` and `TW/config.yaml` with the appropriate settings for YouTube and Twitch, respectively.
-3. Run the management script:
-
-   ```bash
-   ./stream_manager.sh
-   ```
-4. Use the interactive menu to start, stop, or manage your rebroadcasting tasks.
 
 ### Danmaku Command Feature
 

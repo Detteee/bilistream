@@ -57,7 +57,7 @@ pub async fn get_youtube_live_status(
         "https://holodex.net/api/v2/users/live?channels={}",
         channel_id
     );
-    let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
+    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
     let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let response = client
@@ -151,7 +151,7 @@ pub async fn get_youtube_live_status(
 }
 
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let cfg = load_config(Path::new("YT/config.yaml"), Path::new("cookies.json"))?;
+    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
     let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let client = reqwest::Client::new();

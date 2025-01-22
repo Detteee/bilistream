@@ -11,18 +11,16 @@ RESET='\033[0m'
 
 # Function to update kamito across all configs
 update_kamito() {
-    # Update TW config
-    sed -i 's/ChannelId: .*/ChannelId: kamito_jp/' "$BASE_DIR/TW/config.yaml"
-    sed -i 's/ChannelName: .*/ChannelName: "Kamito"/' "$BASE_DIR/TW/config.yaml"
-    sed -i 's/Title: .*/Title: "【转播】Kamito"/' "$BASE_DIR/TW/config.yaml"
+    # Update Twitch section
+    sed -i '/Twitch:/,$ s|ChannelId: .*|ChannelId: kamito_jp|' "$BASE_DIR/config.yaml"
+    sed -i '/Twitch:/,$ s|ChannelName: .*|ChannelName: "Kamito"|' "$BASE_DIR/config.yaml"
 
-    # Update YT config
-    sed -i 's/ChannelId: .*/ChannelId: UCgYCMluaLpERsyNXlPOvBtA/' "$BASE_DIR/YT/config.yaml"
-    sed -i 's/ChannelName: .*/ChannelName: "Kamito"/' "$BASE_DIR/YT/config.yaml"
-    sed -i 's/Title: .*/Title: 【转播】Kamito/' "$BASE_DIR/YT/config.yaml"
+    # Update YouTube section
+    sed -i '/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: UCgYCMluaLpERsyNXlPOvBtA|' "$BASE_DIR/config.yaml"
+    sed -i '/Youtube:/,/Twitch:/ s|ChannelName: .*|ChannelName: "Kamito"|' "$BASE_DIR/config.yaml"
+
     echo "All configurations updated to Kamito."
     display_current_config "all"
-
 }
 
 # Check for --kamito option
@@ -400,28 +398,24 @@ display_current_config() {
 
     if [ "$1" = "YT" ] || [ "$1" = "all" ]; then
         echo -e "${GREEN}├─── YouTube (YT)${RESET}"
-        local yt_area_id=$(grep 'Area_v2:' "$BASE_DIR/YT/config.yaml" | awk '{print $2}')
+        local yt_area_id=$(awk '/^Youtube:/{flag=1} flag&&/^[[:space:]]*Area_v2:/{print $2; exit}' "$BASE_DIR/config.yaml")
         local yt_area_name=$(get_area_name "$yt_area_id")
-        local yt_channel_id=$(awk '/Youtube:/{flag=1; next} /ChannelId:/ && flag {print $2; exit}' "$BASE_DIR/YT/config.yaml")
-        local yt_channel_name=$(awk '/Youtube:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/YT/config.yaml")
-        local yt_title=$(grep 'Title:' "$BASE_DIR/YT/config.yaml" | sed 's/Title: //' | sed 's/"//g')
+        local yt_channel_id=$(awk '/^Youtube:/{flag=1} flag&&/^[[:space:]]*ChannelId:/{print $2; exit}' "$BASE_DIR/config.yaml")
+        local yt_channel_name=$(awk '/^Youtube:/{flag=1} flag&&/^[[:space:]]*ChannelName:/{gsub(/"/, ""); print $2; exit}' "$BASE_DIR/config.yaml")
         echo -e "${GREEN}│    ├─ Area: ${RESET}$yt_area_name (ID: $yt_area_id)"
         echo -e "${GREEN}│    ├─ Channel ID: ${RESET}$yt_channel_id"
-        echo -e "${GREEN}│    ├─ Channel Name: ${RESET}$yt_channel_name"
-        echo -e "${GREEN}│    └─ Title: ${RESET}$yt_title"
+        echo -e "${GREEN}│    └─ Channel Name: ${RESET}$yt_channel_name"
     fi
 
     if [ "$1" = "TW" ] || [ "$1" = "all" ]; then
         echo -e "${GREEN}├─── Twitch (TW)${RESET}"
-        local tw_area_id=$(grep 'Area_v2:' "$BASE_DIR/TW/config.yaml" | awk '{print $2}')
+        local tw_area_id=$(awk '/^Twitch:/{flag=1} flag&&/^[[:space:]]*Area_v2:/{print $2; exit}' "$BASE_DIR/config.yaml")
         local tw_area_name=$(get_area_name "$tw_area_id")
-        local tw_channel_id=$(awk '/Twitch:/{flag=1; next} /ChannelId:/ && flag {print $2; exit}' "$BASE_DIR/TW/config.yaml")
-        local tw_channel_name=$(awk '/Twitch:/{flag=1; next} /ChannelName:/ && flag {gsub(/"/, ""); print $2; exit}' "$BASE_DIR/TW/config.yaml")
-        local tw_title=$(grep 'Title:' "$BASE_DIR/TW/config.yaml" | sed 's/Title: //' | sed 's/"//g')
+        local tw_channel_id=$(awk '/^Twitch:/{flag=1} flag&&/^[[:space:]]*ChannelId:/{print $2; exit}' "$BASE_DIR/config.yaml")
+        local tw_channel_name=$(awk '/^Twitch:/{flag=1} flag&&/^[[:space:]]*ChannelName:/{gsub(/"/, ""); print $2; exit}' "$BASE_DIR/config.yaml")
         echo -e "${GREEN}│    ├─ Area: ${RESET}$tw_area_name (ID: $tw_area_id)"
         echo -e "${GREEN}│    ├─ Channel ID: ${RESET}$tw_channel_id"
-        echo -e "${GREEN}│    ├─ Channel Name: ${RESET}$tw_channel_name"
-        echo -e "${GREEN}│    └─ Title: ${RESET}$tw_title"
+        echo -e "${GREEN}│    └─ Channel Name: ${RESET}$tw_channel_name"
     fi
 
     echo
@@ -466,15 +460,16 @@ while true; do
 
             case $area_config_choice in
             1)
-                sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/YT/config.yaml"
+                sed -i "/Youtube:/,/Twitch:/ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
                 display_current_config "YT"
                 ;;
             2)
-                sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/TW/config.yaml"
+                sed -i "/Twitch:/,$ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
                 display_current_config "TW"
                 ;;
             3)
-                sed -i "s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR"/*/config.yaml
+                sed -i "/Youtube:/,/Twitch:/ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
+                sed -i "/Twitch:/,$ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
                 display_current_config "all"
                 ;;
             4)
@@ -490,23 +485,21 @@ while true; do
             fi  
         fi
         ;;
-    2) # Change Channel ID
+    2) # Change YouTube Channel ID
         select_channel_id
         if [ $? -eq 0 ]; then
-            sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${chid}|" "$BASE_DIR/YT/config.yaml"
-            sed -i "s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/YT/config.yaml"
-            sed -i "s|Title: .*|Title: ${new_title}|" "$BASE_DIR/YT/config.yaml"
-            echo "YouTube Channel ID, Channel Name, and Title updated in YT/config.yaml."
+            sed -i "/Youtube:/,/Twitch:/ s|ChannelId: .*|ChannelId: ${chid}|" "$BASE_DIR/config.yaml"
+            sed -i "/Youtube:/,/Twitch:/ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/config.yaml"
+            echo "YouTube Channel ID and Channel Name updated in config.yaml."
             display_current_config "YT"
         fi
         ;;
     3) # Change Twitch ID
         select_twitch_id
         if [ $? -eq 0 ]; then
-            sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$BASE_DIR/TW/config.yaml"
-            sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/TW/config.yaml"
-            sed -i "s|Title: .*|Title: \"${new_title}\"|" "$BASE_DIR/TW/config.yaml"
-            echo "Twitch ID, Channel Name, and Title updated in TW/config.yaml."
+            sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$BASE_DIR/config.yaml"
+            sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/config.yaml"
+            echo "Twitch ID and Channel Name updated in config.yaml."
             display_current_config "TW"
         fi
         ;;

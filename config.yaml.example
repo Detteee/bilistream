@@ -1,32 +1,24 @@
 # 检测直播间隔
 Interval: 60
-# 需要转播的平台 Twitch || Youtube
-Platform: Youtube
-# B站推流账号Cookie
-Proxy:
-# 代理地址,无需代理可以不填此项或者留空
-HolodexApiKey: 
-# Holodex Api Key from https://holodex.net/login
-RiotApiKey: 
-# Riot API Key from https://developer.riotgames.com/
-LolMonitorInterval: 1
-# 监控LOL游戏间隔
+Proxy:# 代理地址,无需代理可以不填此项或者留空
+HolodexApiKey: # Holodex Api Key from https://holodex.net/login
+RiotApiKey: # Riot API Key from https://developer.riotgames.com/
+LolMonitorInterval: 1 # 监控LOL游戏间隔(秒)
 BiliLive:
-  Title: "直播间标题"
   EnableDanmakuCommand: # true or false
-  # 分区
-  Area_v2: 分区ID # https://api.live.bilibili.com/room/v1/Area/getList
   Room: 直播间号
   BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/qq
   # BiliRtmpUrl: B站开播设置页面的服务器地址
   BiliRtmpKey: "?streamname=live_UID_xxxxxxxx&key=xxxxxxxxxxxxxxxxxxxxx=rtmp&pflag=1"
   # BiliRtmpKey: B站开播设置页面的串流密钥,需注意,由于是?号开头的,本行需要对内容加双引号
 Youtube:
-  ChannelName: "Name of streamer" # Custom
+  ChannelName: # 频道名称 (将出现于转播标题)
   ChannelId: # Youtube Channel ID
+  AreaV2: # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
 Twitch:
-  ChannelName: "Name of streamer" # Custom
+  ChannelName: # 频道名称 (将出现于转播标题)
   ChannelId: # the string followed after https://www.twitch.tv/
+  AreaV2: # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
   OauthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
 

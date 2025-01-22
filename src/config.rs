@@ -14,9 +14,6 @@ pub struct Config {
     pub twitch: Twitch,
     #[serde(rename = "Youtube")]
     pub youtube: Youtube,
-
-    #[serde(rename = "Platform")]
-    pub platform: String,
     #[serde(rename = "Proxy")]
     pub proxy: Option<String>,
     #[serde(rename = "HolodexApiKey")]
@@ -32,10 +29,6 @@ pub struct Config {
 pub struct BiliLive {
     #[serde(rename = "EnableDanmakuCommand")]
     pub enable_danmaku_command: bool,
-    #[serde(rename = "Title")]
-    pub title: String,
-    #[serde(rename = "Area_v2")]
-    pub area_v2: u64,
     #[serde(rename = "Room")]
     pub room: i32,
     #[serde(rename = "BiliRtmpUrl")]
@@ -60,6 +53,8 @@ pub struct Credentials {
 pub struct Twitch {
     #[serde(rename = "ChannelName")]
     pub channel_name: String,
+    #[serde(rename = "Area_v2")]
+    pub area_v2: u64,
     #[serde(rename = "ChannelId")]
     pub channel_id: String,
     #[serde(rename = "OauthToken")]
@@ -75,6 +70,8 @@ pub struct Youtube {
     pub channel_name: String,
     #[serde(rename = "ChannelId")]
     pub channel_id: String,
+    #[serde(rename = "Area_v2")]
+    pub area_v2: u64,
 }
 
 /// Structs to mirror the structure of cookies.json
