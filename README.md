@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier managementsss
+This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
 
 ## Features
 
@@ -29,7 +29,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
-
 2. Install the required dependencies (example for Debian-based systems):
 
    ```bash
@@ -37,12 +36,9 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
    ```
-
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-
 4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
-
 5. Build the project:
 
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
@@ -56,50 +52,50 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-
 6. Configure `config.yaml`:
+
    ```yaml
    # Copy and edit the example config
    cp config.yaml.example config.yaml
    ```
+
    See `config.yaml.example` for detailed configuration options:
+
    - Bilibili live room settings
    - YouTube/Twitch channel settings
    - Area IDs for different game categories
    - Proxy settings
    - API keys for various services
-
 7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-
-8.  Create channel list files:
+8. Create channel list files:
    Create `YT_channels.txt` and `TW_channels.txt` in the root directory, with each line in the format:
 
-   ```txt
+```txt
    (channel name) [channel id]
-   ```
+```
 
-9.  (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+9. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
-   - Create a file named `invalid_words.txt` with one word per line
-   - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
+- Create a file named `invalid_words.txt` with one word per line
+- Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
 
-     ```yaml
-     RiotApiKey: "YOUR-RIOT-API-KEY"    # Get from https://developer.riotgames.com/
-     LolMonitorInterval: 1               # Check interval in seconds
-     ```
-   - The program will monitor in-game players and stop streaming if any blacklisted words are found
+  ```yaml
+  RiotApiKey: "YOUR-RIOT-API-KEY"    # Get from https://developer.riotgames.com/
+  LolMonitorInterval: 1               # Check interval in seconds
+  ```
+- The program will monitor in-game players and stop streaming if any blacklisted words are found
 
 ## File Structure
+
 ```
 .
 ├── bilistream           # Main executable
 ├── config.yaml          # Main configuration file
-├── config.yaml.example  # Example configuration
 ├── cookies.json         # Bilibili login cookies
 ├── stream_manager.sh    # Management script
 ├── login-biliup        # Bilibili login tool
 ├── live-danmaku-cli    # Danmaku client
-├── invalid_words.txt    # Filtered words for danmaku
+├── invalid_words.txt    # Filtered words for LOL players ID
 ├── puuid.txt           # League of Legends PUUID cache
 ├── TW_channels.txt     # Twitch channel list
 └── YT_channels.txt     # YouTube channel list
@@ -143,7 +139,6 @@ Bilistream supports the following commands:
    ```bash
    ./bilistream get-live-topic YT <Channel_ID>
    ```
-
 
 ### Danmaku Command Feature
 

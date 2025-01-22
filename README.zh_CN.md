@@ -91,15 +91,14 @@
 
 ## 文件结构
 ```
-.
+
 ├── bilistream           # 主程序
 ├── config.yaml          # 主配置文件
-├── config.yaml.example  # 示例配置
 ├── cookies.json         # 哔哩哔哩登录 cookies
 ├── stream_manager.sh    # 管理脚本
 ├── login-biliup        # 哔哩哔哩登录工具
 ├── live-danmaku-cli    # 弹幕客户端
-├── invalid_words.txt    # 弹幕过滤词
+├── invalid_words.txt    # 英雄联盟 玩家名称自动下播屏蔽词
 ├── puuid.txt           # 英雄联盟 PUUID 缓存
 ├── TW_channels.txt     # Twitch 频道列表
 └── YT_channels.txt     # YouTube 频道列表
