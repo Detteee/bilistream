@@ -116,10 +116,10 @@
 
 Bilistream 支持以下命令：
 
-1. 开始直播：
+1. 开始直播（可选指定平台分区）：
 
    ```bash
-   ./bilistream start-live
+   ./bilistream start-live [YT|TW]  # 平台可选，默认为其他单机分区
    ```
 
 2. 停止直播：
@@ -145,6 +145,65 @@ Bilistream 支持以下命令：
    ```bash
    ./bilistream get-live-topic YT <频道ID>
    ```
+
+6. 获取直播标题：
+
+   ```bash
+   ./bilistream get-live-title YT/TW <频道ID>
+   ```
+
+7. 发送弹幕：
+
+   ```bash
+   ./bilistream send-danmaku <弹幕内容>
+   ```
+
+8. 更换直播间封面：
+
+   ```bash
+   ./bilistream replace-cover <图片路径>
+   ```
+
+9. 更新直播间分区：
+
+   ```bash
+   ./bilistream update-area <分区ID>
+   ```
+
+10. 生成命令补全脚本：
+
+    ```bash
+    ./bilistream completion bash|zsh|fish
+    ```
+
+### Shell 命令补全
+
+Bilistream 支持 bash、zsh 和 fish shell 的命令补全功能。启用方法：
+
+#### Bash
+```bash
+# 生成补全脚本
+./bilistream completion bash > ~/.local/share/bash-completion/completions/bilistream
+# 重新加载补全
+source ~/.bashrc
+```
+
+#### Zsh
+```bash
+# 生成补全脚本
+./bilistream completion zsh > ~/.zsh/completion/_bilistream
+# 重新加载补全
+source ~/.zshrc
+```
+
+#### Fish
+```bash
+# 生成补全脚本
+mkdir -p ~/.config/fish/completions
+./bilistream completion fish > ~/.config/fish/completions/bilistream.fish
+# 重新加载补全
+source ~/.config/fish/completions/bilistream.fish
+```
 
 ### 弹幕命令功能
 

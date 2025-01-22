@@ -1,5 +1,5 @@
-# 检测直播间隔
-Interval: 60
+Interval: 60 # 检测直播间隔
+AutoCover: true # 自动更换封面
 Proxy:# 代理地址,无需代理可以不填此项或者留空
 HolodexApiKey: # Holodex Api Key from https://holodex.net/login
 RiotApiKey: # Riot API Key from https://developer.riotgames.com/

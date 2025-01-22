@@ -1,10 +1,11 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, bilibili, check_area_id_with_title,
-    ffmpeg, get_area_name, get_bili_live_status, get_channel_id, get_channel_name,
-    get_twitch_live_status, get_twitch_live_title, get_youtube_live_title, run_danmaku,
-    select_live,
+    bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
+    check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_id,
+    get_channel_name, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
+    get_youtube_live_title, run_danmaku, select_live,
 };
+
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 // use proctitle::set_title;
@@ -13,8 +14,12 @@ use reqwest_middleware::ClientBuilder;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
 use std::process::Command as StdCommand;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
 use tracing_subscriber::fmt;
+
+static NO_LIVE: AtomicBool = AtomicBool::new(false);
+
 fn init_logger() {
     tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
@@ -29,15 +34,15 @@ async fn run_bilistream(
     init_logger();
     // tracing::info!("bilistream 正在运行");
 
-    let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
-    let mut no_live = false;
     loop {
+        let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
         let (yt_is_live, yt_m3u8_url, yt_topic, scheduled_start) = yt_live
             .get_status()
             .await
             .unwrap_or((false, None, None, None));
+
         // Check Twitch status
         let tw_live = select_live(cfg.clone(), "TW").await?;
         let mut tw_is_live = false;
@@ -49,7 +54,9 @@ async fn run_bilistream(
                 .await
                 .unwrap_or((false, None, None, None));
         }
+
         if yt_is_live || tw_is_live {
+            NO_LIVE.store(false, Ordering::SeqCst);
             let (platform, channel_name, channel_id, mut area_v2, cfg_title) = if yt_is_live {
                 (
                     "YT",
@@ -95,12 +102,24 @@ async fn run_bilistream(
                 tokio::time::sleep(Duration::from_secs(600)).await;
                 continue;
             }
-            no_live = false;
             let (bili_is_live, bili_title, bili_area_id) =
                 get_bili_live_status(cfg.bililive.room).await?;
             if !bili_is_live {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
+                if cfg.auto_cover {
+                    let cover_path =
+                        get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
+                    if let Ok(cfg) =
+                        load_config(Path::new("config.yaml"), Path::new("cookies.json"))
+                    {
+                        if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                            tracing::error!("B站直播间封面替换失败: {}", e);
+                        } else {
+                            tracing::info!("B站直播间封面替换成功");
+                        }
+                    }
+                }
                 bili_start_live(&cfg, area_v2).await?;
                 if bili_title != cfg_title {
                     bili_change_live_title(&cfg, &cfg_title).await?;
@@ -112,21 +131,10 @@ async fn run_bilistream(
                     area_v2
                 );
             } else {
-                // If configuration changed, stop Bilibili live
+                // If configuration changed, update Bilibili live
                 if bili_area_id != area_v2 {
-                    let to_area_name = get_area_name(area_v2);
-                    let area_name = get_area_name(bili_area_id);
-                    if area_name.is_some() && to_area_name.is_some() {
-                        tracing::info!(
-                            "分区改变（{}->{}），请调整分区",
-                            area_name.unwrap(),
-                            to_area_name.unwrap()
-                        );
-                    }
-                    // bili_stop_live(&cfg).await?;
-                    // bili_start_live(&cfg).await?;
+                    update_area(bili_area_id, area_v2).await?;
                     bili_change_live_title(&cfg, &cfg_title).await?;
-                    tracing::info!("已更换转播频道，标题：{}", cfg_title);
                 }
                 // 如果标题改变，则变更B站直播标题
                 if bili_title != cfg_title {
@@ -139,7 +147,6 @@ async fn run_bilistream(
                 let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
                 monitor_lol_game(puuid).await?;
             }
-
             // Execute ffmpeg with platform-specific locks
             ffmpeg(
                 cfg.bililive.bili_rtmp_url.clone(),
@@ -212,14 +219,14 @@ async fn run_bilistream(
                     );
                 }
             } else {
-                if no_live == false {
+                if !NO_LIVE.load(Ordering::SeqCst) {
                     tracing::info!(
                         "YT: {} 未直播, TW: {} 未直播",
                         cfg.youtube.channel_name,
                         cfg.twitch.channel_name
                     );
-                    no_live = true;
-                };
+                    NO_LIVE.store(true, Ordering::SeqCst);
+                }
             }
             if cfg.bililive.enable_danmaku_command {
                 thread::spawn(move || run_danmaku());
@@ -611,9 +618,27 @@ fn get_puuid_from_file(channel_name: &str) -> Result<Option<String>, Box<dyn Err
     Ok(puuid)
 }
 
+async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Error>> {
+    if current_area != new_area {
+        let to_area_name = get_area_name(new_area);
+        let area_name = get_area_name(current_area);
+        if area_name.is_some() && to_area_name.is_some() {
+            tracing::info!(
+                "分区改变（{}->{})",
+                area_name.unwrap(),
+                to_area_name.unwrap()
+            );
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            bili_update_area(&cfg, new_area).await?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
+        .version("0.2.1")
         .arg(
             Arg::new("config")
                 .short('c')
@@ -678,6 +703,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Command::new("send-danmaku")
                 .about("发送弹幕到直播间")
                 .arg(Arg::new("message").required(true).help("弹幕内容")),
+        )
+        .subcommand(
+            Command::new("replace-cover").about("更换直播间封面").arg(
+                Arg::new("image_path")
+                    .required(true)
+                    .help("封面图片路径 (支持jpg/png格式)"),
+            ),
+        )
+        .subcommand(
+            Command::new("update-area")
+                .about("更新Bilibili直播间分区")
+                .arg(
+                    Arg::new("area_id")
+                        .help("新分区ID")
+                        .required(true)
+                        .value_parser(clap::value_parser!(u64)),
+                ),
+        )
+        .subcommand(
+            Command::new("completion")
+                .about("Generate shell completion scripts")
+                .arg(
+                    Arg::new("shell")
+                        .required(true)
+                        .help("Target shell (bash, zsh, fish)")
+                        .value_parser(["bash", "zsh", "fish"]),
+                ),
         )
         .get_matches();
 
@@ -752,6 +804,145 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
             bilibili::send_danmaku(&cfg, message).await?;
             println!("弹幕发送成功");
+        }
+        Some(("replace-cover", sub_m)) => {
+            let image_path = sub_m.get_one::<String>("image_path").unwrap();
+            let cfg = load_config(Path::new(config_path), Path::new("cookies.json"))?;
+            bilibili::bili_change_cover(&cfg, image_path).await?;
+            println!("直播间封面更换成功");
+        }
+        Some(("update-area", sub_matches)) => {
+            let area_id = sub_matches
+                .get_one::<u64>("area_id")
+                .expect("Required argument");
+
+            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))?;
+            let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
+            if current_area != *area_id {
+                update_area(current_area, *area_id).await?;
+                let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
+                if current_area != *area_id {
+                    println!("直播间分区更新失败");
+                } else {
+                    println!("直播间分区更新成功");
+                }
+            } else {
+                println!("分区相同，无须更新");
+            }
+        }
+        Some(("completion", sub_m)) => {
+            let shell = sub_m.get_one::<String>("shell").unwrap();
+            let mut cmd = Command::new("bilistream")
+                .version("0.2.1")
+                .arg(
+                    Arg::new("config")
+                        .short('c')
+                        .long("config")
+                        .value_name("FILE")
+                        .help("设置自定义配置文件")
+                        .global(true),
+                )
+                .arg(
+                    Arg::new("ffmpeg-log-level")
+                        .long("ffmpeg-log-level")
+                        .value_name("LEVEL")
+                        .help("设置ffmpeg日志级别 (error, info, debug)")
+                        .default_value("error")
+                        .value_parser(["error", "info", "debug"]),
+                )
+                .subcommand(
+                    Command::new("get-live-status")
+                        .about("检查频道直播状态")
+                        .visible_alias("get-status")
+                        .arg(
+                            Arg::new("platform")
+                                .required(true)
+                                .value_parser(["YT", "TW", "bilibili"])
+                                .help("检查的平台 (YT, TW, bilibili)"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("get-live-title")
+                        .about("获取直播标题")
+                        .visible_alias("get-title")
+                        .arg(
+                            Arg::new("platform")
+                                .required(true)
+                                .value_parser(["YT", "TW"])
+                                .help("获取的平台 (YT, TW)"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("get-live-topic")
+                        .about("获取直播topic_id")
+                        .arg(
+                            Arg::new("platform")
+                                .required(true)
+                                .help("获取的平台 (仅支持YT)"),
+                        )
+                        .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
+                )
+                .subcommand(Command::new("login").about("登录"))
+                .subcommand(
+                    Command::new("send-danmaku")
+                        .about("发送弹幕到直播间")
+                        .arg(Arg::new("message").required(true).help("弹幕内容")),
+                )
+                .subcommand(
+                    Command::new("replace-cover").about("更换直播间封面").arg(
+                        Arg::new("image_path")
+                            .required(true)
+                            .help("封面图片路径 (支持jpg/png格式)"),
+                    ),
+                )
+                .subcommand(
+                    Command::new("update-area")
+                        .about("更新Bilibili直播间分区")
+                        .arg(
+                            Arg::new("area_id")
+                                .help("新分区ID")
+                                .required(true)
+                                .value_parser(clap::value_parser!(u64)),
+                        ),
+                )
+                .subcommand(
+                    Command::new("completion")
+                        .about("Generate shell completion scripts")
+                        .arg(
+                            Arg::new("shell")
+                                .required(true)
+                                .help("Target shell (bash, zsh, fish)")
+                                .value_parser(["bash", "zsh", "fish"]),
+                        ),
+                );
+
+            match shell.as_str() {
+                "bash" => {
+                    clap_complete::generate(
+                        clap_complete::shells::Bash,
+                        &mut cmd,
+                        "bilistream",
+                        &mut std::io::stdout(),
+                    );
+                }
+                "zsh" => {
+                    clap_complete::generate(
+                        clap_complete::shells::Zsh,
+                        &mut cmd,
+                        "bilistream",
+                        &mut std::io::stdout(),
+                    );
+                }
+                "fish" => {
+                    clap_complete::generate(
+                        clap_complete::shells::Fish,
+                        &mut cmd,
+                        "bilistream",
+                        &mut std::io::stdout(),
+                    );
+                }
+                _ => unreachable!(),
+            }
         }
         _ => {
             // let process_name = format!("bilistream");

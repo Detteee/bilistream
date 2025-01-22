@@ -6,6 +6,8 @@ use std::process::Command;
 /// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    #[serde(rename = "AutoCover")]
+    pub auto_cover: bool,
     #[serde(rename = "Interval")]
     pub interval: u64,
     #[serde(rename = "BiliLive")]

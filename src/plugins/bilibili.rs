@@ -6,7 +6,6 @@ use reqwest_retry::RetryTransientMiddleware;
 use serde_json::Value;
 use std::error::Error;
 use std::time::Duration;
-
 /// Retrieves the live status of a Bilibili room.
 ///
 /// # Arguments
@@ -263,4 +262,169 @@ pub async fn send_danmaku(
     }
 
     Ok(resp)
+}
+
+/// Updates the live stream cover on Bilibili.
+///
+/// # Arguments
+///
+/// * `cfg` - Reference to the application configuration.
+/// * `image_path` - Path to the new cover image.
+///
+/// # Returns
+///
+/// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
+pub async fn bili_change_cover(cfg: &Config, image_path: &str) -> Result<(), Box<dyn Error>> {
+    let cookie = format!(
+        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
+    );
+    let url = Url::parse("https://api.bilibili.com/x/upload/web/image")?;
+    let jar = Jar::default();
+    jar.add_cookie_str(&cookie, &url);
+
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .cookie_provider(jar.into())
+        .timeout(Duration::new(30, 0))
+        .build()?;
+
+    // Step 1: Upload image
+    let file_content = tokio::fs::read(image_path).await?;
+    let form = reqwest::multipart::Form::new()
+        .text("csrf", cfg.bililive.credentials.bili_jct.clone())
+        .text("bucket", "live")
+        .text("dir", "new_room_cover")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(file_content)
+                .file_name(image_path.to_string())
+                .mime_str("image/jpeg")?,
+        );
+
+    let upload_res: Value = client
+        .post(format!(
+            "https://api.bilibili.com/x/upload/web/image?csrf={}",
+            cfg.bililive.credentials.bili_jct
+        ))
+        .header("Cookie", &cookie)
+        .multipart(form)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if upload_res["code"].as_i64() != Some(0) {
+        return Err(format!("Failed to upload image: {}", upload_res["message"]).into());
+    }
+
+    let image_url = upload_res["data"]["location"]
+        .as_str()
+        .ok_or("Failed to get image URL from upload response")?;
+
+    // Step 2: Update cover
+    let update_res: Value = client
+        .post("https://api.live.bilibili.com/xlive/app-blink/v1/preLive/UpdatePreLiveInfo")
+        .header("Cookie", &cookie)
+        .header("Accept", "application/json, text/plain, */*")
+        .header(
+            "content-type",
+            "application/x-www-form-urlencoded; charset=UTF-8",
+        )
+        .form(&[
+            ("platform", "web"),
+            ("mobi_app", "web"),
+            ("build", "1"),
+            ("cover", image_url),
+            ("coverVertical", ""),
+            ("liveDirectionType", "1"),
+            ("csrf_token", cfg.bililive.credentials.bili_jct.as_str()),
+            ("csrf", cfg.bililive.credentials.bili_jct.as_str()),
+            ("visit_id", ""),
+        ])
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if update_res["code"].as_i64() != Some(0) {
+        println!("Request parameters:");
+        println!("cover: {}", image_url);
+        println!("csrf_token: {}", cfg.bililive.credentials.bili_jct);
+        return Err(format!(
+            "Failed to update cover: {} (Response: {})",
+            update_res["message"],
+            serde_json::to_string_pretty(&update_res).unwrap_or_default()
+        ))?;
+    }
+
+    Ok(())
+}
+
+/// Updates the area of a Bilibili live room.
+///
+/// # Arguments
+///
+/// * `cfg` - Reference to the application configuration
+/// * `area_id` - The new area ID to set
+///
+/// # Returns
+///
+/// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error
+pub async fn bili_update_area(cfg: &Config, area_id: u64) -> Result<(), Box<dyn Error>> {
+    let cookie = format!(
+        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
+        cfg.bililive.credentials.sessdata,
+        cfg.bililive.credentials.bili_jct,
+        cfg.bililive.credentials.dede_user_id,
+        cfg.bililive.credentials.dede_user_id_ckmd5
+    );
+    let url = Url::parse("https://api.live.bilibili.com/")?;
+    let jar = Jar::default();
+    jar.add_cookie_str(&cookie, &url);
+
+    // Define the retry policy
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+
+    // Build the HTTP client with retry middleware
+    let raw_client = reqwest::Client::builder()
+        .cookie_store(true)
+        .cookie_provider(jar.into())
+        .timeout(Duration::new(30, 0))
+        .build()?;
+    let client = ClientBuilder::new(raw_client.clone())
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build();
+
+    let form_data = [
+        ("room_id", cfg.bililive.room.to_string()),
+        ("area_id", area_id.to_string()),
+        ("activity_id", "0".to_string()),
+        ("platform", "pc".to_string()),
+        ("csrf_token", cfg.bililive.credentials.bili_jct.clone()),
+        ("csrf", cfg.bililive.credentials.bili_jct.clone()),
+        ("visit_id", "".to_string()),
+    ];
+
+    let res: Value = client
+        .post("https://api.live.bilibili.com/room/v1/Room/update")
+        .header("Cookie", &cookie)
+        .form(&form_data)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if res["code"].as_i64() != Some(0) {
+        return Err(format!(
+            "Failed to update room area: {} (Response: {})",
+            res["message"],
+            serde_json::to_string_pretty(&res).unwrap_or_default()
+        ))?;
+    }
+
+    Ok(())
 }

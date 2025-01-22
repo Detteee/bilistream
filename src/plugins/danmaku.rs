@@ -6,6 +6,7 @@ use regex::Regex;
 use serde_json::Value;
 use serde_yaml;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -13,6 +14,7 @@ use std::{
     io::{self, BufRead},
     path::Path,
 };
+static DANMAKU_LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Checks if a channel is in the allowed list and retrieves the channel name.
 pub fn get_channel_id(
@@ -504,8 +506,13 @@ pub fn run_danmaku() {
             }
         }
     });
+    // Only log the initialization message once
+    if !DANMAKU_LOGGING_INITIALIZED.swap(true, Ordering::SeqCst) {
+        tracing::info!("弹幕命令读取 is running");
+    }
 
-    tracing::info!("弹幕命令读取 is running");
+    // Reset the flag when the stream ends or restarts
+    if !ffmpeg::is_ffmpeg_running() {}
 
     // Monitor Bilibili live status every 300 seconds
     loop {
@@ -534,6 +541,7 @@ pub fn run_danmaku() {
 
         if !bilibili_status.contains("未直播") {
             if ffmpeg::is_ffmpeg_running() {
+                DANMAKU_LOGGING_INITIALIZED.store(false, Ordering::SeqCst);
                 tracing::info!("ffmpeg 正在运行. 停止弹幕命令读取...");
                 // Kill danmaku-cli process
                 Command::new("pkill")

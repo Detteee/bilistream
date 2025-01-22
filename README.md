@@ -110,14 +110,14 @@ Run the Bilistream application:
 ./bilistream 
 ```
 
-### Subfunction
+### Subcommands
 
 Bilistream supports the following commands:
 
-1. Start a live stream:
+1. Start a live stream with optional platform-specific area:
 
    ```bash
-   ./bilistream start-live
+   ./bilistream start-live [YT|TW]  # Platform optional, defaults to other games area
    ```
 2. Stop a live stream:
 
@@ -139,6 +139,31 @@ Bilistream supports the following commands:
    ```bash
    ./bilistream get-live-topic YT <Channel_ID>
    ```
+6. Get live title:
+
+   ```bash
+   ./bilistream get-live-title YT/TW <Channel_ID>
+   ```
+7. Send danmaku message:
+
+   ```bash
+   ./bilistream send-danmaku <message>
+   ```
+8. Replace bilibili room cover:
+
+   ```bash
+   ./bilistream replace-cover <image_path>
+   ```
+9. Update bilibili area:
+
+   ```bash
+   ./bilistream update-area <area_id>
+   ```
+10. Generate shell completions:
+
+    ```bash
+    ./bilistream completion bash|zsh|fish
+    ```
 
 ### Danmaku Command Feature
 
@@ -165,6 +190,35 @@ Example:
 ```
 
 The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) for more Area name and ID.
+
+### Shell Completions
+
+Bilistream supports command completion for bash, zsh, and fish shells. To enable completions:
+
+#### Bash
+```bash
+# Generate completions
+./bilistream completion bash > ~/.local/share/bash-completion/completions/bilistream
+# Reload completions
+source ~/.bashrc
+```
+
+#### Zsh
+```bash
+# Generate completions
+./bilistream completion zsh > ~/.zsh/completion/_bilistream
+# Reload completions
+source ~/.zshrc
+```
+
+#### Fish
+```bash
+# Generate completions
+mkdir -p ~/.config/fish/completions
+./bilistream completion fish > ~/.config/fish/completions/bilistream.fish
+# Reload completions
+source ~/.config/fish/completions/bilistream.fish
+```
 
 ## Contributing
 
