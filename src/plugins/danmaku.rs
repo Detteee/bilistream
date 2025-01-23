@@ -386,11 +386,11 @@ async fn process_danmaku(command: &str) {
             || live_title.contains("morning")
             || live_title.contains("freechat")
         {
-            tracing::error!("直播标题/topic包含不支持的关键词");
+            tracing::error!("直播标题/topic包含不支持的关键词:\n{}`", live_title);
             if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
             {
-                let _ =
-                    bilibili::send_danmaku(&cfg, "错误：直播标题/topic包含不支持的关键词").await;
+                let _ = bilibili::send_danmaku(&cfg, "错误：目标直播标题/topic包含不支持的关键词")
+                    .await;
             }
             return;
         }

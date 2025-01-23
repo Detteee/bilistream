@@ -4,6 +4,7 @@ use bilistream::plugins::{
     check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_id,
     get_channel_name, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
     get_youtube_live_title, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
+    send_danmaku,
 };
 
 use chrono::{DateTime, Local};
@@ -16,10 +17,12 @@ use riven::RiotApi;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
 use tracing_subscriber::fmt;
 
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
+static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 
 fn init_logger() {
     tracing_subscriber::fmt()
@@ -119,19 +122,6 @@ async fn run_bilistream(
             if !bili_is_live {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
-                if cfg.auto_cover {
-                    let cover_path =
-                        get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
-                    if let Ok(cfg) =
-                        load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-                    {
-                        if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                            tracing::error!("B站直播间封面替换失败: {}", e);
-                        } else {
-                            tracing::info!("B站直播间封面替换成功");
-                        }
-                    }
-                }
                 bili_start_live(&cfg, area_v2).await?;
                 if bili_title != cfg_title {
                     bili_change_live_title(&cfg, &cfg_title).await?;
@@ -143,15 +133,34 @@ async fn run_bilistream(
                     area_v2
                 );
             } else {
-                // If configuration changed, update Bilibili live
+                // 如果target channel改变，则变更B站直播标题
+                if bili_title != cfg_title {
+                    bili_change_live_title(&cfg, &cfg_title).await?;
+                    tracing::info!("B站直播标题变更 （{}->{}）", bili_title, cfg_title);
+                    // title is 【转播】频道名
+                    let bili_channel_name = bili_title.split("【转播】").last().unwrap();
+                    if bili_channel_name != channel_name {
+                        send_danmaku(
+                            &cfg,
+                            &format!("换台：{} -> {}", bili_channel_name, channel_name),
+                        )
+                        .await?;
+                    }
+                }
+                // If area_v2 changed, update Bilibili live area
                 if bili_area_id != area_v2 {
                     update_area(bili_area_id, area_v2).await?;
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
-                // 如果标题改变，则变更B站直播标题
-                if bili_title != cfg_title {
-                    bili_change_live_title(&cfg, &cfg_title).await?;
-                    tracing::info!("B站直播标题变更 （{}->{}）", bili_title, cfg_title);
+                // If auto_cover is enabled, update Bilibili live cover
+                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
+                    let cover_path =
+                        get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
+                    if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                        tracing::error!("B站直播间封面替换失败: {}", e);
+                    } else {
+                        tracing::info!("B站直播间封面替换成功");
+                    }
                 }
             }
 
@@ -217,18 +226,32 @@ async fn run_bilistream(
             if scheduled_start.is_some() {
                 let live_title = get_live_title("YT", Some(&cfg.youtube.channel_id)).await?;
                 if live_title != "" && live_title != "空" {
-                    print!(
-                        "\r\x1b[K{} 未直播，计划于 {} 开始，标题：{}",
+                    let current_message = format!(
+                        "\r\x1b[K YT: {} 未直播，计划于 {} 开始，\n 标题：{}\n TW: {} 未直播\n",
                         cfg.youtube.channel_name,
                         scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"),
-                        live_title
+                        live_title,
+                        cfg.twitch.channel_name
                     );
+
+                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    if *last != current_message {
+                        print!("{}", current_message);
+                        *last = current_message;
+                    }
                 } else {
-                    print!(
-                        "\r\x1b[K{} 未直播，计划于 {} 开始",
+                    let current_message = format!(
+                        "\r\x1b[K YT: {} 未直播，计划于 {} 开始\n TW: {} 未直播\n",
                         cfg.youtube.channel_name,
-                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S")
+                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"),
+                        cfg.twitch.channel_name
                     );
+
+                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    if *last != current_message {
+                        print!("{}", current_message);
+                        *last = current_message;
+                    }
                 }
             } else {
                 if !NO_LIVE.load(Ordering::SeqCst) {
