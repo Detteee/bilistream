@@ -259,10 +259,31 @@ select_channel_id() {
     0)
         read -p "Enter custom YouTube Channel ID: " chid
         read -p "Enter custom Channel Name: " channel_name
-        read -p "Whether to add this channel to the ./YT/YT_channels.txt? (y/N): " add_choice
+        read -p "Whether to add/update this channel in channels.json? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo -e "\n($channel_name) [$chid]" >>"$BASE_DIR/YT/YT_channels.txt"
+            # Check if channel already exists
+            if jq -e ".channels[] | select(.name == \"$channel_name\")" channels.json > /dev/null; then
+                # Update existing channel's YouTube platform
+                temp_file=$(mktemp)
+                jq "(.channels[] | select(.name == \"$channel_name\").platforms.youtube) |= \"$chid\"" channels.json > "$temp_file"
+                mv "$temp_file" channels.json
+                echo "Updated YouTube ID for existing channel: $channel_name"
+            else
+                # Create new channel entry
+                new_channel="{
+                  \"name\": \"$channel_name\",
+                  \"platforms\": {
+                    \"youtube\": \"$chid\"
+                  }
+                }"
+                
+                # Add new channel to JSON file
+                temp_file=$(mktemp)
+                jq ".channels += [$new_channel]" channels.json > "$temp_file"
+                mv "$temp_file" channels.json
+                echo "Added new channel: $channel_name"
+            fi
         fi
         ;;
     *)
@@ -369,13 +390,33 @@ select_twitch_id() {
         channel_name="まふゆ"
         ;;
     0)
-
         read -p "Enter Twitch ID: " channel_id
         read -p "Enter Channel Name: " channel_name
-        read -p "Whether to add this channel to the ./TW/TW_channels.txt? (y/N): " add_choice
+        read -p "Whether to add/update this channel in channels.json? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
-            echo -e "($channel_name) [$channel_id]" >>"$BASE_DIR/TW/TW_channels.txt"
+            # Check if channel already exists
+            if jq -e ".channels[] | select(.name == \"$channel_name\")" channels.json > /dev/null; then
+                # Update existing channel's Twitch platform
+                temp_file=$(mktemp)
+                jq "(.channels[] | select(.name == \"$channel_name\").platforms.twitch) |= \"$channel_id\"" channels.json > "$temp_file"
+                mv "$temp_file" channels.json
+                echo "Updated Twitch ID for existing channel: $channel_name"
+            else
+                # Create new channel entry
+                new_channel="{
+                  \"name\": \"$channel_name\",
+                  \"platforms\": {
+                    \"twitch\": \"$channel_id\"
+                  }
+                }"
+                
+                # Add new channel to JSON file
+                temp_file=$(mktemp)
+                jq ".channels += [$new_channel]" channels.json > "$temp_file"
+                mv "$temp_file" channels.json
+                echo "Added new channel: $channel_name"
+            fi
         fi
         ;;
     *)

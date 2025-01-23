@@ -253,12 +253,10 @@ async fn process_danmaku(command: &str) {
     let command = command.replace(" ", "").replace("　", "");
     let normalized_danmaku = command.replace("％", "%");
 
+    let cfg = load_config().await.unwrap();
     // Add check for 查询 command
     if normalized_danmaku.contains("%查询") {
         // tracing::info!("查询弹幕");
-        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))
-            .await
-            .unwrap();
         let channel_name = cfg.youtube.channel_name.clone();
         let area_name = get_area_name(cfg.youtube.area_v2);
         let _ = bilibili::send_danmaku(
@@ -268,9 +266,11 @@ async fn process_danmaku(command: &str) {
         .await;
         let channel_name = cfg.twitch.channel_name.clone();
         let area_name = get_area_name(cfg.twitch.area_v2);
+        // bilibili 发送弹幕cooldown > 1秒
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         let _ = bilibili::send_danmaku(
             &cfg,
-            &format!("T台: {} - {}", channel_name, area_name.unwrap()),
+            &format!("TW: {} - {}", channel_name, area_name.unwrap()),
         )
         .await;
         return;
@@ -289,9 +289,7 @@ async fn process_danmaku(command: &str) {
     // tracing::info!("弹幕:{:?}", parts);
     if parts.len() < 4 {
         tracing::error!("弹幕命令格式错误. Skipping...");
-        if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await {
-            let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
-        }
+        let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
         return;
     }
 
@@ -329,11 +327,7 @@ async fn process_danmaku(command: &str) {
         "怪物猎人" => 578,
         _ => {
             tracing::error!("未知的分区: {}", area_name);
-            if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-            {
-                let _ =
-                    bilibili::send_danmaku(&cfg, &format!("错误：未知的分区 {}", area_name)).await;
-            }
+            let _ = bilibili::send_danmaku(&cfg, &format!("错误：未知的分区 {}", area_name)).await;
             return;
         }
     };
@@ -343,26 +337,18 @@ async fn process_danmaku(command: &str) {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("检查频道时出错: {}", e);
-                if let Ok(cfg) =
-                    load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-                {
-                    let _ =
-                        bilibili::send_danmaku(&cfg, &format!("错误：检查频道时出错 {}", e)).await;
-                }
+                let _ = bilibili::send_danmaku(&cfg, &format!("错误：检查频道时出错 {}", e)).await;
                 return;
             }
         };
 
         if channel_id.is_none() {
             tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
-            if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-            {
-                let _ = bilibili::send_danmaku(
-                    &cfg,
-                    &format!("错误：频道 {} 未在{}列表中", channel_name, platform),
-                )
-                .await;
-            }
+            let _ = bilibili::send_danmaku(
+                &cfg,
+                &format!("错误：频道 {} 未在{}列表中", channel_name, platform),
+            )
+            .await;
             return;
         }
 
@@ -391,16 +377,11 @@ async fn process_danmaku(command: &str) {
                         Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
                         Err(e) => {
                             tracing::error!("获取YT直播标题时出错: {}", e);
-                            if let Ok(cfg) =
-                                load_config(Path::new("config.yaml"), Path::new("cookies.json"))
-                                    .await
-                            {
-                                let _ = bilibili::send_danmaku(
-                                    &cfg,
-                                    &format!("错误：获取YT直播标题时出错 {}", e),
-                                )
-                                .await;
-                            }
+                            let _ = bilibili::send_danmaku(
+                                &cfg,
+                                &format!("错误：获取YT直播标题时出错 {}", e),
+                            )
+                            .await;
                             return;
                         }
                     }
@@ -431,15 +412,9 @@ async fn process_danmaku(command: &str) {
                 Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
                 Err(e) => {
                     tracing::error!("获取TW直播标题时出错: {}", e);
-                    if let Ok(cfg) =
-                        load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-                    {
-                        let _ = bilibili::send_danmaku(
-                            &cfg,
-                            &format!("错误：获取TW直播标题时出错 {}", e),
-                        )
-                        .await;
-                    }
+                    let _ =
+                        bilibili::send_danmaku(&cfg, &format!("错误：获取TW直播标题时出错 {}", e))
+                            .await;
                     return;
                 }
             }
@@ -456,11 +431,8 @@ async fn process_danmaku(command: &str) {
             || live_title.contains("freechat")
         {
             tracing::error!("直播标题/topic包含不支持的关键词:\n{}`", live_title);
-            if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-            {
-                let _ = bilibili::send_danmaku(&cfg, "错误：目标直播标题/topic包含不支持的关键词")
-                    .await;
-            }
+            let _ =
+                bilibili::send_danmaku(&cfg, "错误：目标直播标题/topic包含不支持的关键词").await;
             return;
         }
         // Now you can use channel_id_str where needed without moving channel_id
@@ -471,34 +443,22 @@ async fn process_danmaku(command: &str) {
             && channel_name != "Kamito"
         {
             tracing::error!("只有'Kamito'可以使用 Apex, COD or Tarkov 分区. Skipping...");
-            if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-            {
-                let _ = bilibili::send_danmaku(
-                    &cfg,
-                    "错误：只有'Kamito'可以使用 Apex, COD or Tarkov 分区",
-                )
-                .await;
-            }
+            let _ =
+                bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD or Tarkov 分区")
+                    .await;
             return;
         }
 
         if let Err(e) = update_config(platform, channel_name, &channel_id_str, updated_area_id) {
             tracing::error!("更新配置时出错: {}", e);
-            if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-            {
-                let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
-            }
+            let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
             return;
         }
 
         let updated_area_name = match get_area_name(updated_area_id) {
             Some(name) => name,
             None => {
-                if let Ok(cfg) =
-                    load_config(Path::new("config.yaml"), Path::new("cookies.json")).await
-                {
-                    let _ = bilibili::send_danmaku(&cfg, "错误：无法获取更新后的分区名称").await;
-                }
+                let _ = bilibili::send_danmaku(&cfg, "错误：无法获取更新后的分区名称").await;
                 return;
             }
         };
@@ -512,21 +472,17 @@ async fn process_danmaku(command: &str) {
         );
 
         // Send success notification
-        if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await {
-            let _ = bilibili::send_danmaku(
-                &cfg,
-                &format!(
-                    "更新：{} - {} - {}",
-                    platform, channel_name, updated_area_name
-                ),
-            )
-            .await;
-        }
+        let _ = bilibili::send_danmaku(
+            &cfg,
+            &format!(
+                "更新：{} - {} - {}",
+                platform, channel_name, updated_area_name
+            ),
+        )
+        .await;
     } else {
         tracing::error!("指令错误: {}", danmaku_command);
-        if let Ok(cfg) = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await {
-            let _ = bilibili::send_danmaku(&cfg, &format!("错误：不支持的平台 {}", platform)).await;
-        }
+        let _ = bilibili::send_danmaku(&cfg, &format!("错误：不支持的平台 {}", platform)).await;
     }
 }
 
@@ -552,9 +508,7 @@ pub fn run_danmaku() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         // 更新config.json中的sessdata 为cfg.bililive.credentials.sessdata
-        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json"))
-            .await
-            .unwrap();
+        let cfg = load_config().await.unwrap();
         Command::new("sed")
             .arg("-i")
             .arg(format!(
@@ -598,7 +552,7 @@ pub fn run_danmaku() {
                 }
             }
         });
-        tracing::info!("弹幕命令读取 is running");
+        tracing::info!("弹幕命令读取启动");
         // Monitor Bilibili live status every 300 seconds
         loop {
             thread::sleep(Duration::from_secs(60));

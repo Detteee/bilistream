@@ -1,13 +1,11 @@
-use async_trait::async_trait;
-// use reqwest_middleware::ClientWithMiddleware;
 use super::danmaku::get_channel_id;
 use super::twitch::get_twitch_live_status;
 use super::Live;
 use crate::config::load_config;
+use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use regex::Regex;
 use std::error::Error; // Ensure this is included
-use std::path::Path;
 use std::process::Command;
 pub struct Youtube {
     pub channel_name: String,
@@ -57,7 +55,7 @@ pub async fn get_youtube_live_status(
         "https://holodex.net/api/v2/users/live?channels={}",
         channel_id
     );
-    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+    let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let response = client
@@ -151,7 +149,7 @@ pub async fn get_youtube_live_status(
 }
 
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+    let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let channel_name = &cfg.youtube.channel_name;
     let client = reqwest::Client::new();

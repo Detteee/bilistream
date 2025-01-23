@@ -2,7 +2,7 @@ use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_id,
-    get_channel_name, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
+    get_channel_name, get_puuid, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
     get_youtube_live_title, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
     send_danmaku,
 };
@@ -10,7 +10,6 @@ use bilistream::plugins::{
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 // use proctitle::set_title;
-use regex::Regex;
 use reqwest_middleware::ClientBuilder;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
@@ -18,7 +17,7 @@ use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
+use std::{error::Error, thread, time::Duration};
 use textwrap;
 use tracing_subscriber::fmt;
 use unicode_width::UnicodeWidthStr;
@@ -29,17 +28,14 @@ static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 fn init_logger() {
     tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
-        .with_target(false)
+        .with_target(true)
         .with_span_events(fmt::format::FmtSpan::NONE)
         .init();
 }
-async fn run_bilistream(
-    config_path: &str,
-    ffmpeg_log_level: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     init_logger();
-    // tracing::info!("bilistream 正在运行");
+
     if is_ffmpeg_running() {
         //pkill ffmpeg;
         let mut cmd = StdCommand::new("pkill");
@@ -53,7 +49,7 @@ async fn run_bilistream(
     }
 
     loop {
-        let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
+        let cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
         let (yt_is_live, yt_m3u8_url, yt_topic, scheduled_start) = yt_live
@@ -135,6 +131,16 @@ async fn run_bilistream(
                     area_name.unwrap(),
                     area_v2
                 );
+                // If auto_cover is enabled, update Bilibili live cover
+                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
+                    let cover_path =
+                        get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
+                    if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                        tracing::error!("B站直播间封面替换失败: {}", e);
+                    } else {
+                        tracing::info!("B站直播间封面替换成功");
+                    }
+                }
             } else {
                 // 如果target channel改变，则变更B站直播标题
                 if bili_title != cfg_title {
@@ -168,8 +174,10 @@ async fn run_bilistream(
             }
 
             if area_v2 == 86 {
-                let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
-                monitor_lol_game(puuid).await?;
+                let puuid = get_puuid(&cfg.youtube.channel_name)?;
+                if puuid != "" {
+                    monitor_lol_game(puuid).await?;
+                }
             }
             // Execute ffmpeg with platform-specific locks
             ffmpeg(
@@ -183,8 +191,10 @@ async fn run_bilistream(
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if area_v2 == 86 {
-                    let puuid = get_puuid_from_file(&cfg.youtube.channel_name)?;
-                    monitor_lol_game(puuid).await?;
+                    let puuid = get_puuid(&cfg.youtube.channel_name)?;
+                    if puuid != "" {
+                        monitor_lol_game(puuid).await?;
+                    }
                 }
                 let (current_is_live, new_m3u8_url, _, _) = if yt_is_live {
                     yt_live
@@ -325,7 +335,7 @@ async fn get_live_topic(
     match platform {
         "YT" => {
             let client = reqwest::Client::new();
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -393,7 +403,7 @@ async fn get_live_status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match platform {
         "bilibili" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
             if is_live {
                 let area_name = get_area_name(area_id);
@@ -408,7 +418,7 @@ async fn get_live_status(
             }
         }
         "YT" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -526,7 +536,7 @@ async fn get_live_status(
             }
         }
         "TW" => {
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
@@ -556,11 +566,11 @@ async fn get_live_title(
 ) -> Result<String, Box<dyn std::error::Error>> {
     match platform {
         "YT" => {
-            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
-                &config.youtube.channel_id
+                &cfg.youtube.channel_id
             };
 
             let title_str = get_youtube_live_title(channel_id).await?;
@@ -575,11 +585,11 @@ async fn get_live_title(
             }
         }
         "TW" => {
-            let config = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
-                &config.twitch.channel_id
+                &cfg.twitch.channel_id
             };
             let client = ClientBuilder::new(reqwest::Client::new()).build();
 
@@ -596,11 +606,8 @@ async fn get_live_title(
         }
     }
 }
-async fn start_live(
-    config_path: &str,
-    optional_platform: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
+async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config().await?;
     let area_v2 = if optional_platform == Some("YT") {
         cfg.youtube.area_v2
     } else if optional_platform == Some("TW") {
@@ -613,91 +620,64 @@ async fn start_live(
     Ok(())
 }
 
-async fn stop_live(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
+async fn stop_live() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config().await?;
     bili_stop_live(&cfg).await?;
     println!("直播停止成功");
     Ok(())
 }
 
-async fn change_live_title(
-    config_path: &str,
-    new_title: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config_file = Path::new(config_path);
-    if !config_file.exists() {
-        return Err(format!("配置文件不存在: {}", config_path).into());
-    }
-    let cfg = load_config(config_file, Path::new("cookies.json")).await?;
+async fn change_live_title(new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config().await?;
     bili_change_live_title(&cfg, new_title).await?;
     println!("直播标题改变成功");
     Ok(())
 }
 
-async fn monitor_lol_game(puuid: Option<String>) -> Result<(), Box<dyn Error>> {
-    if let Some(puuid_str) = puuid {
-        let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
-        let interval = cfg.lol_monitor_interval.unwrap_or(1);
-        let riot_api = RiotApi::new(cfg.riot_api_key.clone().unwrap());
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            loop {
-                rt.block_on(async {
-                    if let Ok(game_data) = riot_api
-                        .spectator_v5()
-                        .get_current_game_info_by_puuid(PlatformRoute::JP1, &puuid_str)
-                        .await
-                    {
-                        if game_data.is_some() {
-                            let riot_ids: Vec<String> = game_data
-                                .unwrap()
-                                .participants
-                                .iter()
-                                .filter_map(|p| p.riot_id.clone())
-                                .collect();
-                            let ids = format!("{:?}", riot_ids);
-                            // tracing::info!("In game players: {}", ids);
-                            if let Ok(invalid_words) = fs::read_to_string("invalid_words.txt") {
-                                if let Some(word) =
-                                    invalid_words.lines().find(|word| ids.contains(word))
-                                {
-                                    bili_stop_live(&cfg).await.unwrap();
-                                    tracing::info!("检测到非法词汇:{}，停止直播", word);
-                                    return;
-                                }
+async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
+    let cfg = load_config().await?;
+
+    let interval = cfg.lol_monitor_interval.unwrap_or(1);
+    let riot_api = RiotApi::new(cfg.riot_api_key.clone().unwrap());
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        loop {
+            rt.block_on(async {
+                if let Ok(game_data) = riot_api
+                    .spectator_v5()
+                    .get_current_game_info_by_puuid(PlatformRoute::JP1, &puuid)
+                    .await
+                {
+                    if game_data.is_some() {
+                        let riot_ids: Vec<String> = game_data
+                            .unwrap()
+                            .participants
+                            .iter()
+                            .filter_map(|p| p.riot_id.clone())
+                            .collect();
+                        let ids = format!("{:?}", riot_ids);
+                        // tracing::info!("In game players: {}", ids);
+                        if let Ok(invalid_words) = std::fs::read_to_string("invalid_words.txt") {
+                            if let Some(word) =
+                                invalid_words.lines().find(|word| ids.contains(word))
+                            {
+                                bili_stop_live(&cfg).await.unwrap();
+                                tracing::info!("检测到非法词汇:{}，停止直播", word);
+                                return;
                             }
                         }
                     }
-                });
-
-                if !ffmpeg::is_ffmpeg_running() {
-                    return;
                 }
-                thread::sleep(Duration::from_secs(interval));
-            }
-        });
-    }
-    Ok(())
-}
+            });
 
-fn get_puuid_from_file(channel_name: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let file = fs::File::open("./puuid.txt")?;
-    let reader = io::BufReader::new(file);
-    let mut puuid = None;
-
-    for line in reader.lines() {
-        let line = line?;
-        if line
-            .to_lowercase()
-            .contains(&format!("({})", channel_name).to_lowercase())
-        {
-            let re = Regex::new(r"\[(.*?)\]").unwrap();
-            if let Some(captures) = re.captures(&line) {
-                puuid = captures.get(1).map(|m| m.as_str().to_string());
+            if !ffmpeg::is_ffmpeg_running() {
+                return;
             }
+            thread::sleep(Duration::from_secs(interval));
         }
-    }
-    Ok(puuid)
+    });
+
+    Ok(())
 }
 
 async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Error>> {
@@ -710,7 +690,7 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
                 area_name.unwrap(),
                 to_area_name.unwrap()
             );
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             bili_update_area(&cfg, new_area).await?;
         }
     }
@@ -721,14 +701,6 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
         .version("0.2.2")
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .value_name("FILE")
-                .help("设置自定义配置文件")
-                .global(true),
-        )
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
@@ -831,11 +803,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .get_matches();
 
-    let config_path = matches
-        .get_one::<String>("config")
-        .map(|s| s.as_str())
-        .unwrap_or("config.yaml");
-
     let ffmpeg_log_level = matches
         .get_one::<String>("ffmpeg-log-level")
         .map(String::as_str)
@@ -854,17 +821,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("start-live", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform");
             if platform.is_none() {
-                start_live(config_path, None).await?;
+                start_live(None).await?;
             } else {
-                start_live(config_path, Some(platform.unwrap())).await?;
+                start_live(Some(platform.unwrap())).await?;
             }
         }
         Some(("stop-live", _)) => {
-            stop_live(config_path).await?;
+            stop_live().await?;
         }
         Some(("change-live-title", sub_m)) => {
             let new_title = sub_m.get_one::<String>("title").unwrap();
-            change_live_title(config_path, new_title).await?;
+            change_live_title(new_title).await?;
         }
         Some(("get-live-title", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform").unwrap();
@@ -898,22 +865,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(("send-danmaku", sub_m)) => {
             let message = sub_m.get_one::<String>("message").unwrap();
-            let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             bilibili::send_danmaku(&cfg, message).await?;
             println!("弹幕发送成功");
         }
         Some(("replace-cover", sub_m)) => {
             let image_path = sub_m.get_one::<String>("image_path").unwrap();
-            let cfg = load_config(Path::new(config_path), Path::new("cookies.json")).await?;
+            let cfg = load_config().await?;
             bilibili::bili_change_cover(&cfg, image_path).await?;
             println!("直播间封面更换成功");
         }
         Some(("update-area", sub_matches)) => {
+            let cfg = load_config().await?;
             let area_id = sub_matches
                 .get_one::<u64>("area_id")
                 .expect("Required argument");
 
-            let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
             let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
             if current_area != *area_id {
                 update_area(current_area, *area_id).await?;
@@ -1059,7 +1026,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // let process_name = format!("bilistream");
             // set_title(&process_name);
             // Default behavior: run bilistream with the provided config
-            run_bilistream(config_path, ffmpeg_log_level).await?;
+            run_bilistream(ffmpeg_log_level).await?;
         }
     }
     Ok(())

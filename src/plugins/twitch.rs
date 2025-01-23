@@ -8,7 +8,6 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -95,7 +94,7 @@ impl Twitch {
             "eu5" => Ok("--twitch-proxy-playlist=https://lb-eu5.cdn-perfprod.com".to_string()),
             "as" => Ok("--twitch-proxy-playlist=https://lb-as.cdn-perfprod.com".to_string()),
             "sa" => Ok("--twitch-proxy-playlist=https://lb-sa.cdn-perfprod.com".to_string()),
-            // "eul" => Ok("--twitch-proxy-playlist=https://eu.luminous.dev".to_string()),
+            "eul" => Ok("--twitch-proxy-playlist=https://eu.luminous.dev".to_string()),
             "eu2l" => Ok("--twitch-proxy-playlist=https://eu2.luminous.dev".to_string()),
             "asl" => Ok("--twitch-proxy-playlist=https://as.luminous.dev".to_string()),
             "all" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com,https://eu.luminous.dev,https://eu2.luminous.dev,https://as.luminous.dev".to_string()),
@@ -107,8 +106,6 @@ impl Twitch {
     pub fn get_streamlink_url(&self) -> Result<String, Box<dyn Error>> {
         let proxy_url = self.get_proxy_url()?;
         let output = Command::new("streamlink")
-            // .arg("--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
-            // .arg("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com")
             .arg(proxy_url)
             .arg("--stream-url")
             .arg("--stream-type")
@@ -133,7 +130,7 @@ impl Twitch {
 }
 
 pub async fn get_twitch_live_status(channel_id: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    let cfg = load_config(Path::new("config.yaml"), Path::new("cookies.json")).await?;
+    let cfg = load_config().await?;
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
     let raw_client = reqwest::Client::builder()
         .cookie_store(true)
@@ -181,7 +178,6 @@ pub async fn get_twitch_live_title(
         .await?
         .json()
         .await?;
-    // println!("{:?}", res["data"]["user"]["lastBroadcast"]["title"]);
     Ok(res["data"]["user"]["lastBroadcast"]["title"]
         .as_str()
         .unwrap()

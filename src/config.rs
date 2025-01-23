@@ -1,9 +1,16 @@
 use crate::plugins::bilibili;
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
+
+lazy_static! {
+    static ref BILISTREAM_PATH: std::path::PathBuf = std::env::current_exe().unwrap();
+    static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.yaml");
+    static ref COOKIES_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("cookies.json");
+}
+
 /// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -138,40 +145,31 @@ fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Erro
 }
 
 /// Loads the configuration along with credentials from cookies.json.
-pub async fn load_config<P: AsRef<Path>>(
-    config_path: P,
-    cookies_path: P,
-) -> Result<Config, Box<dyn Error>> {
+pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     // Read and deserialize config.yaml
-    let config_content = fs::read_to_string(&config_path)?;
+    let config_content = fs::read_to_string(&*CONFIG_PATH)?;
     let mut config: Config = serde_yaml::from_str(&config_content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     // Check cookies
     check_cookies().await?;
 
     // Load credentials from cookies.json
-    let credentials = load_credentials(cookies_path)?;
-    config.bililive.credentials = credentials;
+    let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path);
+    config.bililive.credentials = credentials?;
 
     Ok(config)
 }
 
 async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
     // Check for the existence of cookies.json
-    if !Path::new("cookies.json").exists() {
+    if !COOKIES_PATH.exists() {
         tracing::info!("cookies.json 不存在，请登录");
         bilibili::login().await?;
     } else {
         // Check if cookies.json is older than 48 hours
-        if Path::new("cookies.json")
-            .metadata()?
-            .modified()?
-            .elapsed()?
-            .as_secs()
-            > 3600 * 24 * 3
-        {
+        if COOKIES_PATH.metadata()?.modified()?.elapsed()?.as_secs() > 3600 * 24 * 3 {
             tracing::info!("cookies.json 已超过3天，正在刷新");
-            bilibili::renew(PathBuf::from("cookies.json")).await?;
+            bilibili::renew(COOKIES_PATH.to_path_buf()).await?;
         }
     }
 
