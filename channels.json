@@ -1,0 +1,249 @@
+{
+  "channels": [
+    {
+      "name": "Kamito",
+      "platforms": {
+        "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
+        "twitch": "kamito_jp"
+      },
+      "riot_puuid": "WT5ZsJaUGr5JkgjcDbtBEXgTPT-p7edPxlrHDYZ4sNlX85Ob_vCTB9XYNrLr1sdj62JVWhBgwL7MIw"
+    },
+    {
+      "name": "花芽なずな",
+      "platforms": {
+        "youtube": "UCiMG6VdScBabPhJ1ZtaVmbw"
+      }
+    },
+    {
+      "name": "花芽すみれ",
+      "platforms": {
+        "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA",
+        "twitch": "kagasumire"
+      },
+      "riot_puuid": "83YSmCVmDvYK46p3GmS0AdprnZQ7ckQzgWY4R1ogOB-GvbOqzhIBGvpU65wv3HvvIeVtqcKv5W-suA"
+    },
+    {
+      "name": "小雀とと",
+      "platforms": {
+        "youtube": "UCgTzsBI0DIRopMylJEDqnog"
+      },
+      "riot_puuid": "0YwSBvHyYtzNORejfhjjJOGz3UbUutZXXz-HWkI-ME8-6LyAMGuNh1ICLS1tktV6AJPXYzW0fPT59w"
+    },
+    {
+      "name": "一ノ瀬うるは",
+      "platforms": {
+        "youtube": "UC5LyYg6cCA4yHEYvtUsir3g"
+      },
+      "riot_puuid": "7E0529pn5Cyk8ACYSxDz6_K-NhNM80kW84_KjET77gfmU3qMmRgt8V2zArQeSwYjRMt7lUtVrUbdsw"
+    },
+    {
+      "name": "胡桃のあ",
+      "platforms": {
+        "youtube": "UCIcAj6WkJ8vZ7DeJVgmeqKw",
+        "twitch": "963noah"
+      },
+      "riot_puuid": "MDiBt0ywb8_Iiz4w_QVO2j2ugAu9IMd14ttTLyDC4eXvYCfy6feGb38biExOIyC0U8XzncX-xDi4_g"
+    },
+    {
+      "name": "兎咲ミミ",
+      "platforms": {
+        "youtube": "UCnvVG9RbOW3J6Ifqo-zKLiw"
+      },
+      "riot_puuid": "KO8dvVeM1LdwRatMoIVNlEyjkmjmdgnMv_2dz7NTy2cHx5h7MhrwfzdPXgsnetZDh8mLVXRnkCRh0A"
+    },
+    {
+      "name": "空澄セナ",
+      "platforms": {
+        "youtube": "UCF_U2GCKHvDz52jWdizppIA",
+        "twitch": "asumisena"
+      },
+      "riot_puuid": "V19LHghzX0autH6Gsh2CS4JO9Nq7kO9o4bIrBVaO1KbMRHudGNgqByI7d-GM2QyUV8XZpCmcSEyDvQ"
+    },
+    {
+      "name": "橘ひなの",
+      "platforms": {
+        "youtube": "UCvUc0m317LWTTPZoBQV479A",
+        "twitch": "hinanotachiba7"
+      },
+      "riot_puuid": "VBRP9g9wNrvyV6i1lSwwSVEnobRRJOa24Y1vyHnnk1pJJhaVO6EU8Yf1CBdX8gPPmbrXQ5Cl9fIg7A"
+    },
+    {
+      "name": "英リサ",
+      "platforms": {
+        "youtube": "UCurEA8YoqFwimJcAuSHU0MQ",
+        "twitch": "lisahanabusa"
+      }
+    },
+    {
+      "name": "如月れん",
+      "platforms": {
+        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
+        "twitch": "ren_kisaragi__"
+      },
+      "riot_puuid": "KjyMzB8x5HCJYygy8AlxE-YEvejsBSEoY04ZAsdiqj_2blcS9LnkyvGpV6JsQkxwdDoJrH9_IeC0MA"
+    },
+    {
+      "name": "神成きゅぴ",
+      "platforms": {
+        "youtube": "UCMp55EbT_ZlqiMS3lCj01BQ"
+      }
+    },
+    {
+      "name": "八雲べに",
+      "platforms": {
+        "youtube": "UCjXBuHmWkieBApgBhDuJMMQ"
+      },
+      "riot_puuid": "5VAYeHRWHYzLvyYeb4nNRZuZPHeBUyQ8xpE8mgTMf3KQsX-73SsN_lqYHfJWfR2M5Svf35yJqfxCzA"
+    },
+    {
+      "name": "藍沢エマ",
+      "platforms": {
+        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng"
+      }
+    },
+    {
+      "name": "紫宮るな",
+      "platforms": {
+        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw",
+        "twitch": "shinomiya_runa"
+      },
+      "riot_puuid": "EkYVJYRQAJheLNbvnG_hE5QR0LmRU-Gq-IdL8wHfRtOfQyYpVWk8ngWcA_JwLfRswPmhV4hrNkxTmQ"
+    },
+    {
+      "name": "猫汰つな",
+      "platforms": {
+        "youtube": "UCIjdfjcSaEgdjwbgjxC3ZWg"
+      },
+      "riot_puuid": "NZMHgkLgRNt7GzV7KrDMnPOUVrXuye7RGFJ2UB7kc84tLGsbqM-8txvXPz4GE1a4LiABJPOWEWClew"
+    },
+    {
+      "name": "小森めと",
+      "platforms": {
+        "youtube": "UCzUNASdzI4PV5SlqtYwAkKQ"
+      }
+    },
+    {
+      "name": "白波らむね",
+      "platforms": {
+        "youtube": "UC61OwuYOVuKkpKnid-43Twg",
+        "twitch": "ramuneshiranami"
+      },
+      "riot_puuid": "feCDrVqSMb8pUkh-P7gaYNrP07EIdU2iFRsy0u8m1dYPDDFa3EkvFL-rSoy7cM9PhJEn-RPfkS5P9g"
+    },
+    {
+      "name": "夢野あかり",
+      "platforms": {
+        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ",
+        "twitch": "akarindao"
+      },
+      "riot_puuid": "rHYfGMspqOBz2pCoHprVG_xIJGP_i3nEGm41Q2-fveg4VIVZXvcb0I37BJP5KfwXF5iLXBaZXXNjbQ"
+    },
+    {
+      "name": "夜乃くろむ",
+      "platforms": {
+        "youtube": "UCX4WL24YEOUYd7qDsFSLDOw"
+      },
+      "riot_puuid": "SB3XmMqVAOwfITL7PI9CqrpQWUj_1HKjUxF-z8RxJ5YoYMN1ArInxrHzmJeF3FDHe5AN_Ia5FPHCWQ"
+    },
+    {
+      "name": "紡木こかげ",
+      "platforms": {
+        "youtube": "UC-WX1CXssCtCtc2TNIRnJzg"
+      }
+    },
+    {
+      "name": "千燈ゆうひ",
+      "platforms": {
+        "youtube": "UCuDY3ibSP2MFRgf7eo3cojg",
+        "twitch": "sendo_yuuhi"
+      },
+      "riot_puuid": "HKELuBV0wznS9CYlX8r8L3ZlVSCXEHr5PwJkcBkAaIe6RrcrrBLlaZEsHxffi9W7Cah9m8PX-ipfoA"
+    },
+    {
+      "name": "蝶屋はなび",
+      "platforms": {
+        "youtube": "UCL9hJsdk9eQa0IlWbFB2oRg"
+      }
+    },
+    {
+      "name": "甘結もか",
+      "platforms": {
+        "youtube": "UC8vKBjGY2HVfbW9GAmgikWw"
+      }
+    },
+    {
+      "name": "Narin",
+      "platforms": {
+        "youtube": "UCKSpM183c85d5V2cW5qaUjA",
+        "twitch": "narinmikure"
+      },
+      "riot_puuid": "pwvdeGmgJ-s-tFOux3Pt7vbgy6mA4DhhyHVWKdzV0GWCATmhPhsMpIMlvqI1bxPZMUxUn3T52pRsiw"
+    },
+    {
+      "name": "獅子堂あかり",
+      "platforms": {
+        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ",
+        "twitch": "shishidoakari"
+      }
+    },
+    {
+      "name": "天帝フォルテ",
+      "platforms": {
+        "youtube": "UC8hwewh9svh92E1gXvgVazg",
+        "twitch": "tentei_forte"
+      },
+      "riot_puuid": "JGbu7B6ajjntnp3O5A3Hr9EYY2CxwF3njPFN_LWOmrbaUqQwW5pnUgW49nO2D-L35YKFkuzaHG1pFQ"
+    },
+    {
+      "name": "夜絆ニウ",
+      "platforms": {
+        "youtube": "UCZmUoMwjyuQ59sk5_7Tx07A"
+      }
+    },
+    {
+      "name": "ぶいすぽっ!【公式】",
+      "platforms": {
+        "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
+      }
+    },
+    {
+      "name": "とおこ",
+      "platforms": {
+        "twitch": "urs_toko"
+      },
+      "riot_puuid": "u8LIlHBKAusIsjA6fs4skEQq1VgUc_mdPPBpUDic5S3Qe0oTNWE5MuTyBNw8QQOHNXeVxNOYk9HEzA"
+    },
+    {
+      "name": "夜よいち",
+      "platforms": {
+        "twitch": "yoichi_0v0"
+      },
+      "riot_puuid": "R4RZ8cf1LzWeIixWjRoHHVuPozNI9_Tg9zPz-j0Jv78oxV2SEDnBcmcO1Rr5Ai13tNl1GHtzHyff1g"
+    },
+    {
+      "name": "甘城なつき",
+      "platforms": {
+        "twitch": "nacho_dayo"
+      }
+    },
+    {
+      "name": "狐白うる",
+      "platforms": {
+        "twitch": "kohaku_uru"
+      },
+      "riot_puuid": "H89m2wwV4PSxsmwumtbwbJOgln_LLEoE-pVoeUkiGn_q4KxrepcOuuEGBP9jk_Zrs3u1kwFk05DZow"
+    },
+    {
+      "name": "Anzu_o0",
+      "platforms": {
+        "twitch": "anzu_o0"
+      }
+    },
+    {
+      "name": "まふゆ",
+      "platforms": {
+        "twitch": "mmafu_"
+      }
+    }
+  ]
+} 

@@ -2,7 +2,7 @@ use crate::config::load_config;
 use crate::config::Config;
 use crate::plugins::bilibili;
 use crate::plugins::ffmpeg;
-use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_yaml;
 use std::process::{Command, Stdio};
@@ -13,7 +13,6 @@ use std::{
     io::{self, BufRead},
     path::Path,
 };
-
 pub fn is_danmaku_running() -> bool {
     let mut cmd = Command::new("pgrep");
     cmd.arg("-f").arg("live-danmaku-cli");
@@ -23,27 +22,42 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
-/// Checks if a channel is in the allowed list and retrieves the channel name.
+#[derive(Serialize, Deserialize, Clone)]
+struct Platforms {
+    youtube: Option<String>,
+    twitch: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Channel {
+    name: String,
+    platforms: Platforms,
+    riot_puuid: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ChannelsConfig {
+    channels: Vec<Channel>,
+}
+
+fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
+    let content = fs::read_to_string("channels.json")?;
+    let config: ChannelsConfig = serde_json::from_str(&content)?;
+    Ok(config)
+}
+
 pub fn get_channel_id(
     platform: &str,
     channel_name: &str,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let file_path = format!("{}_channels.txt", platform);
-    let file = fs::File::open(&file_path)?;
-    let reader = io::BufReader::new(file);
-    // tracing::info!("检查频道: {}", file_path);
-    for line in reader.lines() {
-        let line = line?;
-        if line
-            .to_lowercase()
-            .contains(&format!("({})", channel_name).to_lowercase())
-        {
-            // Extract channel name using regex
-            let re = Regex::new(r"\[(.*?)\]").unwrap();
-            if let Some(captures) = re.captures(&line) {
-                return Ok(captures
-                    .get(1)
-                    .map_or(None, |m| Some(m.as_str().to_string())));
+    let config = load_channels()?;
+
+    for channel in config.channels {
+        if channel.name == channel_name {
+            match platform {
+                "YT" => return Ok(channel.platforms.youtube),
+                "TW" => return Ok(channel.platforms.twitch),
+                _ => return Ok(None),
             }
         }
     }
@@ -54,26 +68,81 @@ pub fn get_channel_name(
     platform: &str,
     channel_id: &str,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let file_path = format!("{}_channels.txt", platform);
-    let file = fs::File::open(&file_path)?;
-    let reader = io::BufReader::new(file);
-    for line in reader.lines() {
-        let line = line?;
-        if line.contains(channel_id) {
-            let re = Regex::new(r"\((.*?)\)").unwrap();
-            if re.is_match(&line) {
-                return Ok(Some(
-                    re.captures(&line)
-                        .unwrap()
-                        .get(1)
-                        .unwrap()
-                        .as_str()
-                        .to_string(),
-                ));
+    let config = load_channels()?;
+
+    for channel in config.channels {
+        match platform {
+            "YT" => {
+                if let Some(id) = channel.platforms.youtube {
+                    if id == channel_id {
+                        return Ok(Some(channel.name));
+                    }
+                }
             }
+            "TW" => {
+                if let Some(id) = channel.platforms.twitch {
+                    if id == channel_id {
+                        return Ok(Some(channel.name));
+                    }
+                }
+            }
+            _ => return Ok(None),
         }
     }
     Ok(None)
+}
+
+pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let config = load_channels()?;
+
+    for channel in config.channels {
+        if channel.name == channel_name {
+            if let Some(puuid) = channel.riot_puuid {
+                return Ok(puuid);
+            }
+        }
+    }
+    Err("PUUID not found for channel".into())
+}
+
+// Optional: Helper function to get all channels for a platform
+pub fn get_all_channels(
+    platform: &str,
+) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let config = load_channels()?;
+    let mut channels = Vec::new();
+
+    for channel in config.channels {
+        match platform {
+            "YT" => {
+                if let Some(id) = channel.platforms.youtube {
+                    channels.push((channel.name, id));
+                }
+            }
+            "TW" => {
+                if let Some(id) = channel.platforms.twitch {
+                    channels.push((channel.name, id));
+                }
+            }
+            _ => (),
+        }
+    }
+
+    Ok(channels)
+}
+
+// Optional: Helper function to get all PUUIDs
+pub fn get_all_puuids() -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let config = load_channels()?;
+    let mut puuids = Vec::new();
+
+    for channel in config.channels {
+        if let Some(puuid) = channel.riot_puuid {
+            puuids.push((channel.name, puuid));
+        }
+    }
+
+    Ok(puuids)
 }
 
 /// Updates the configuration YAML file with new values.
