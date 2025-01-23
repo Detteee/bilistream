@@ -19,7 +19,9 @@ use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::{error::Error, fs, io, io::BufRead, path::Path, thread, time::Duration};
+use textwrap;
 use tracing_subscriber::fmt;
+use unicode_width::UnicodeWidthStr;
 
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
@@ -27,6 +29,7 @@ static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 fn init_logger() {
     tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
+        .with_target(false)
         .with_span_events(fmt::format::FmtSpan::NONE)
         .init();
 }
@@ -226,30 +229,29 @@ async fn run_bilistream(
             if scheduled_start.is_some() {
                 let live_title = get_live_title("YT", Some(&cfg.youtube.channel_id)).await?;
                 if live_title != "" && live_title != "空" {
-                    let current_message = format!(
-                        "\r\x1b[K YT: {} 未直播，计划于 {} 开始，\n 标题：{}\n TW: {} 未直播\n",
-                        cfg.youtube.channel_name,
-                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"),
-                        live_title,
-                        cfg.twitch.channel_name
+                    let current_message = box_message(
+                        &cfg.youtube.channel_name,
+                        scheduled_start.unwrap(),
+                        Some(&live_title),
+                        &cfg.twitch.channel_name,
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
                     if *last != current_message {
-                        print!("{}", current_message);
+                        tracing::info!("{}", current_message);
                         *last = current_message;
                     }
                 } else {
-                    let current_message = format!(
-                        "\r\x1b[K YT: {} 未直播，计划于 {} 开始\n TW: {} 未直播\n",
-                        cfg.youtube.channel_name,
-                        scheduled_start.unwrap().format("%Y-%m-%d %H:%M:%S"),
-                        cfg.twitch.channel_name
+                    let current_message = box_message(
+                        &cfg.youtube.channel_name,
+                        scheduled_start.unwrap(),
+                        None,
+                        &cfg.twitch.channel_name,
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
                     if *last != current_message {
-                        print!("{}", current_message);
+                        tracing::info!("{}", current_message);
                         *last = current_message;
                     }
                 }
@@ -269,6 +271,51 @@ async fn run_bilistream(
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
         }
     }
+}
+
+fn box_message(
+    yt_channel: &str,
+    scheduled_time: DateTime<Local>,
+    title: Option<&str>,
+    tw_channel: &str,
+) -> String {
+    let yt_line = format!(
+        "YT: {} 未直播，计划于 {} 开始，",
+        yt_channel,
+        scheduled_time.format("%Y-%m-%d %H:%M:%S")
+    );
+    let width = yt_line.width() + 2;
+
+    let mut message = format!(
+        "\r\x1b[K\x1b[1m┌{:─<width$}┐\n\
+         │ {} │\n",
+        "",
+        yt_line,
+        width = width
+    );
+
+    if let Some(title_text) = title {
+        let wrapped_title = textwrap::fill(title_text, width - 6);
+        for line in wrapped_title.lines() {
+            let padding = width - 6 - line.width();
+            message.push_str(&format!("│     {}{} │\n", line, " ".repeat(padding)));
+        }
+    }
+
+    message.push_str(&format!("├{:─<width$}┤\n", "", width = width));
+
+    let tw_line = format!("TW: {} 未直播", tw_channel);
+    let padding = width - 2 - tw_line.width();
+    message.push_str(&format!(
+        "│ {}{} │\n\
+         └{:─<width$}┘\x1b[0m",
+        tw_line,
+        " ".repeat(padding),
+        "",
+        width = width
+    ));
+
+    message
 }
 
 async fn get_live_topic(
