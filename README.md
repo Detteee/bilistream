@@ -66,11 +66,22 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    - Proxy settings
    - API keys for various services
 7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-8. Create channel list files:
-   Create `YT_channels.txt` and `TW_channels.txt` in the root directory, with each line in the format:
+8. Create channels configuration file:
+   Create `channels.json` in the root directory with the following structure:
 
-```txt
-   (channel name) [channel id]
+```json
+{
+  "channels": [
+    {
+      "name": "Channel Name",
+      "platforms": {
+        "youtube": "YouTube Channel ID",
+        "twitch": "Twitch Channel ID"
+      },
+      "riot_puuid": "League of Legends PUUID"  // Optional
+    }
+  ]
+}
 ```
 
 9. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
@@ -86,18 +97,16 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 
 ## File Structure
 
-```
+```txt
 .
 ├── bilistream           # Main executable
+├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
+├── config.json          # Danmaku client configuration
 ├── config.yaml          # Main configuration file
 ├── cookies.json         # Bilibili login cookies (./bilistream login)
-├── stream_manager.sh    # Management script
-├── live-danmaku-cli    # Danmaku client
 ├── invalid_words.txt    # Filtered words for LOL players ID
-├── puuid.txt           # League of Legends PUUID cache
-├── TW_channels.txt     # Twitch channel list
-└── YT_channels.txt     # YouTube channel list
-
+├── live-danmaku-cli     # Danmaku client
+└── stream_manager.sh    # Management script
 ```
 
 ## Usage

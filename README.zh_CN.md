@@ -70,14 +70,48 @@
 
 7. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
 
-8. 创建频道列表文件：
+8. 创建频道配置文件：
+   在根目录创建 `channels.json`，使用以下结构：
+
+```json
+{
+  "channels": [
+    {
+      "name": "频道名称",
+      "platforms": {
+        "youtube": "YouTube频道ID",
+        "twitch": "Twitch频道ID"
+      },
+      "riot_puuid": "英雄联盟PUUID"  // 可选
+    }
+  ]
+}
+```
+
+示例：
+```json
+{
+  "channels": [
+    {
+      "name": "Kamito",
+      "platforms": {
+        "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
+        "twitch": "kamito_jp"
+      },
+      "riot_puuid": "WT5ZsJaUGr5JkgjcDbtBEXgTPT-p7edPxlrHDYZ4sNlX85Ob_vCTB9XYNrLr1sdj62JVWhBgwL7MIw"
+    }
+  ]
+}
+```
+
+9. 创建频道列表文件：
    在根目录创建 `YT_channels.txt` 和 `TW_channels.txt`，每行格式为：
 
    ```txt
    (频道名称) [频道ID]
    ```
 
-9. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
+10. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
     - 创建名为 `invalid_words.txt` 的文件，每行一个词
     - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
@@ -89,17 +123,17 @@
     - 程序将监控游戏内玩家，如发现黑名单词汇则停止直播
 
 ## 文件结构
-```
+```txt
+.
+├── bilistream           # Main executable
+├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
+├── config.json          # Danmaku client configuration
+├── config.yaml          # Main configuration file
+├── cookies.json         # Bilibili login cookies (./bilistream login)
+├── invalid_words.txt    # Filtered words for LOL players ID
+├── live-danmaku-cli     # Danmaku client
+└── stream_manager.sh    # Management script
 
-├── bilistream           # 主程序
-├── config.yaml          # 主配置文件
-├── cookies.json         # 哔哩哔哩登录 cookies (./bilistream login)
-├── stream_manager.sh    # 管理脚本
-├── live-danmaku-cli    # 弹幕客户端
-├── invalid_words.txt    # 英雄联盟 玩家名称自动下播屏蔽词
-├── puuid.txt           # 英雄联盟 PUUID 缓存
-├── TW_channels.txt     # Twitch 频道列表
-└── YT_channels.txt     # YouTube 频道列表
 ```
 
 ## 使用方法
