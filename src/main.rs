@@ -159,6 +159,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // If area_v2 changed, update Bilibili live area
                 if bili_area_id != area_v2 {
                     update_area(bili_area_id, area_v2).await?;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
                 // If auto_cover is enabled, update Bilibili live cover
@@ -174,7 +175,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             if area_v2 == 86 {
-                let puuid = get_puuid(&cfg.youtube.channel_name)?;
+                let puuid = get_puuid(&channel_name)?;
                 if puuid != "" {
                     monitor_lol_game(puuid).await?;
                 }
@@ -191,7 +192,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if area_v2 == 86 {
-                    let puuid = get_puuid(&cfg.youtube.channel_name)?;
+                    let puuid = get_puuid(&channel_name)?;
                     if puuid != "" {
                         monitor_lol_game(puuid).await?;
                     }
@@ -223,14 +224,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 );
             }
 
-            tracing::info!(
-                "{} 直播结束",
-                match platform {
-                    "TW" => &cfg.twitch.channel_name,
-                    "YT" => &cfg.youtube.channel_name,
-                    _ => "未知平台",
-                }
-            );
+            tracing::info!("{} 直播结束", channel_name);
+            send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await?;
             if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
                 thread::spawn(move || run_danmaku());
             }
@@ -267,11 +262,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             } else {
                 if !NO_LIVE.load(Ordering::SeqCst) {
-                    tracing::info!(
-                        "YT: {} 未直播, TW: {} 未直播",
-                        cfg.youtube.channel_name,
-                        cfg.twitch.channel_name
+                    let current_message = box_message(
+                        &cfg.youtube.channel_name,
+                        Local::now(), // Use current time since there's no scheduled time
+                        None,         // No title when not streaming
+                        &cfg.twitch.channel_name,
                     );
+                    tracing::info!("{}", current_message);
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
             }
