@@ -169,7 +169,7 @@ async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
         // Check if cookies.json is older than 48 hours
         if COOKIES_PATH.metadata()?.modified()?.elapsed()?.as_secs() > 3600 * 24 * 3 {
             tracing::info!("cookies.json 已超过3天，正在刷新");
-            bilibili::renew(COOKIES_PATH.to_path_buf()).await?;
+            bilibili::renew().await?;
         }
     }
 

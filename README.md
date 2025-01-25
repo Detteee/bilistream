@@ -121,68 +121,54 @@ Run the Bilistream application:
 
 Bilistream supports the following commands:
 
-1. Start a live stream with optional platform-specific area:
+1. Start streaming:
 
    ```bash
-   ./bilistream start-live [YT|TW]  # Platform optional, defaults to other games area
+   ./bilistream
    ```
-2. Stop a live stream:
+2. Login to Bilibili:
 
    ```bash
-   ./bilistream stop-live
+   ./bilistream login
    ```
-3. Change live stream title:
-
-   ```bash
-   ./bilistream change-live-title <new_title>
-   ```
-4. Get live status:
-
-   ```bash
-   ./bilistream get-live-status YT/TW/bilibili <Channel_ID/Room_ID>
-   ```
-5. Get YouTube live topic:
-
-   ```bash
-   ./bilistream get-live-topic YT <Channel_ID>
-   ```
-6. Get live title:
-
-   ```bash
-   ./bilistream get-live-title YT/TW <Channel_ID>
-   ```
-7. Send danmaku message:
+3. Send danmaku (chat message):
 
    ```bash
    ./bilistream send-danmaku <message>
    ```
-8. Replace bilibili room cover:
+4. Replace stream cover:
 
    ```bash
    ./bilistream replace-cover <image_path>
    ```
-9. Update bilibili area:
+5. Update stream area:
 
    ```bash
    ./bilistream update-area <area_id>
    ```
-10. Generate shell completions:
+6. Renew Bilibili tokens:
 
-    ```bash
-    ./bilistream completion bash|zsh|fish
-    ```
+   ```bash
+   ./bilistream renew
+   ```
+7. Get live status:
 
-11. Login to Bilibili:
+   ```bash
+   ./bilistream get-live-status <platform> [channel_id]
+   # platform: YT, TW
+   ```
+8. Get live area:
 
-    ```bash
-    ./bilistream login
-    ```
+   ```bash
+   ./bilistream get-live-area <platform> [channel_id]
+   # platform: YT, TW, Bilibili
+   ```
+9. Generate shell completions:
 
-12. Renew Bilibili tokens:
-
-    ```bash
-    ./bilistream renew [--cookies cookies.json]
-    ```
+   ```bash
+   ./bilistream completion <shell>
+   # shell: bash, zsh, fish
+   ```
 
 ### Danmaku Command Feature
 
@@ -215,6 +201,7 @@ The system will check the live title and adjust the area ID if necessary. For ex
 Bilistream supports command completion for bash, zsh, and fish shells. To enable completions:
 
 #### Bash
+
 ```bash
 # Generate completions
 ./bilistream completion bash > ~/.local/share/bash-completion/completions/bilistream
@@ -223,6 +210,7 @@ source ~/.bashrc
 ```
 
 #### Zsh
+
 ```bash
 # Generate completions
 ./bilistream completion zsh > ~/.zsh/completion/_bilistream
@@ -231,6 +219,7 @@ source ~/.zshrc
 ```
 
 #### Fish
+
 ```bash
 # Generate completions
 mkdir -p ~/.config/fish/completions

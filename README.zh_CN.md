@@ -28,7 +28,6 @@
    git clone https://github.com/your-username/bilistream.git
    cd bilistream
    ```
-
 2. 安装所需依赖（以 Debian 系统为例）：
 
    ```bash
@@ -36,12 +35,9 @@
    sudo apt install ffmpeg yt-dlp nodejs npm
    pip install streamlink
    ```
-
 3. 安装 streamlink-ttvlol 插件：
    按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
-
 4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如需弹幕命令功能)
-
 5. 构建项目：
 
    对于 Debian 12 和其他使用 glibc 2.36 或更新版本的 Linux 发行版：
@@ -55,21 +51,21 @@
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-
 6. 配置 `config.yaml`：
+
    ```yaml
    # 复制并编辑示例配置
    cp config.yaml.example config.yaml
    ```
+
    查看 `config.yaml.example` 了解详细配置选项：
+
    - 哔哩哔哩直播间设置
    - YouTube/Twitch 频道设置
    - 不同游戏分类的分区 ID
    - 代理设置
    - 各种服务的 API 密钥
-
 7. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
-
 8. 创建频道配置文件：
    在根目录创建 `channels.json`，使用以下结构：
 
@@ -88,29 +84,12 @@
 }
 ```
 
-示例：
-```json
-{
-  "channels": [
-    {
-      "name": "Kamito",
-      "platforms": {
-        "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
-        "twitch": "kamito_jp"
-      },
-      "riot_puuid": "WT5ZsJaUGr5JkgjcDbtBEXgTPT-p7edPxlrHDYZ4sNlX85Ob_vCTB9XYNrLr1sdj62JVWhBgwL7MIw"
-    }
-  ]
-}
-```
-
 9. 创建频道列表文件：
    在根目录创建 `YT_channels.txt` 和 `TW_channels.txt`，每行格式为：
 
    ```txt
    (频道名称) [频道ID]
    ```
-
 10. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
     - 创建名为 `invalid_words.txt` 的文件，每行一个词
@@ -123,6 +102,7 @@
     - 程序将监控游戏内玩家，如发现黑名单词汇则停止直播
 
 ## 文件结构
+
 ```txt
 .
 ├── bilistream           # Main executable
@@ -144,110 +124,58 @@
 ./bilistream 
 ```
 
-### 子功能
+### 子命令
 
 Bilistream 支持以下命令：
 
-1. 开始直播（可选指定平台分区）：
+1. 开始直播：
 
    ```bash
-   ./bilistream start-live [YT|TW]  # 平台可选，默认为其他单机分区
+   ./bilistream
    ```
-
-2. 停止直播：
+2. 登录哔哩哔哩：
 
    ```bash
-   ./bilistream stop-live
+   ./bilistream login
    ```
-
-3. 更改直播标题：
-
-   ```bash
-   ./bilistream change-live-title <新标题>
-   ```
-
-4. 获取直播状态：
-
-   ```bash
-   ./bilistream get-live-status YT/TW/bilibili <频道ID/房间号>
-   ```
-
-5. 获取 YouTube 直播主题：
-
-   ```bash
-   ./bilistream get-live-topic YT <频道ID>
-   ```
-
-6. 获取直播标题：
-
-   ```bash
-   ./bilistream get-live-title YT/TW <频道ID>
-   ```
-
-7. 发送弹幕：
+3. 发送弹幕：
 
    ```bash
    ./bilistream send-danmaku <弹幕内容>
    ```
-
-8. 更换直播间封面：
+4. 更换直播间封面：
 
    ```bash
    ./bilistream replace-cover <图片路径>
    ```
-
-9. 更新直播间分区：
+5. 更新直播间分区：
 
    ```bash
    ./bilistream update-area <分区ID>
    ```
+6. 更新哔哩哔哩令牌：
 
-10. 生成命令补全脚本：
+   ```bash
+   ./bilistream renew
+   ```
+7. 获取直播状态：
 
-    ```bash
-    ./bilistream completion bash|zsh|fish
-    ```
+   ```bash
+   ./bilistream get-live-status <平台> [频道ID]
+   # 平台: YT, TW
+   ```
+8. 获取直播分区：
 
-11. 登录哔哩哔哩：
+   ```bash
+   ./bilistream get-live-area <平台> [频道ID]
+   # 平台: YT, TW
+   ```
+9. 生成命令补全脚本：
 
-    ```bash
-    ./bilistream login
-    ```
-
-12. 更新哔哩哔哩令牌：
-
-    ```bash
-    ./bilistream renew [--cookies cookies.json]
-    ```
-
-### Shell 命令补全
-
-Bilistream 支持 bash、zsh 和 fish shell 的命令补全功能。启用方法：
-
-#### Bash
-```bash
-# 生成补全脚本
-./bilistream completion bash > ~/.local/share/bash-completion/completions/bilistream
-# 重新加载补全
-source ~/.bashrc
-```
-
-#### Zsh
-```bash
-# 生成补全脚本
-./bilistream completion zsh > ~/.zsh/completion/_bilistream
-# 重新加载补全
-source ~/.zshrc
-```
-
-#### Fish
-```bash
-# 生成补全脚本
-mkdir -p ~/.config/fish/completions
-./bilistream completion fish > ~/.config/fish/completions/bilistream.fish
-# 重新加载补全
-source ~/.config/fish/completions/bilistream.fish
-```
+   ```bash
+   ./bilistream completion <shell>
+   # shell: bash, zsh, fish
+   ```
 
 ### 弹幕命令功能
 

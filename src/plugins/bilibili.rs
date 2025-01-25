@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::error::Error;
 use std::fs;
 use std::io::Seek;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -742,19 +742,33 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
     });
 
     // Save to file
-    fs::write("cookies.json", serde_json::to_string_pretty(&final_info)?)?;
+    let bilistream_dir = std::env::var("BILISTREAM_DIR").unwrap_or_else(|_| {
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    });
+    let cookies_path = Path::new(&bilistream_dir).with_file_name("cookies.json");
+    fs::write(cookies_path, serde_json::to_string_pretty(&final_info)?)?;
     println!("Login successful! Cookies saved to cookies.json");
 
     Ok(())
 }
 
 /// Renews the authentication tokens using the existing login info
-pub async fn renew(user_cookie: PathBuf) -> Result<(), Box<dyn Error>> {
+pub async fn renew() -> Result<(), Box<dyn Error>> {
+    let bilistream_dir = std::env::var("BILISTREAM_DIR").unwrap_or_else(|_| {
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    });
+    let cookies_path = Path::new(&bilistream_dir).with_file_name("cookies.json");
     let credential = Credential::new();
     let mut file = std::fs::File::options()
         .read(true)
         .write(true)
-        .open(&user_cookie)?;
+        .open(&cookies_path)?;
 
     let login_info: LoginInfo = serde_json::from_reader(&file)?;
     let new_info = credential.renew_tokens(login_info).await?;

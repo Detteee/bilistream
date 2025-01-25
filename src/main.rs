@@ -11,7 +11,6 @@ use chrono::{DateTime, Local};
 use clap::{Arg, Command};
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
-use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -325,6 +324,18 @@ async fn get_live_area(
     channel_id: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     match platform {
+        "Bilibili" => {
+            let cfg = load_config().await?;
+            let (_, _, area_id) = get_bili_live_status(cfg.bililive.room).await?;
+            let area_name = get_area_name(area_id);
+            if let Some(area_name) = area_name {
+                tracing::info!("当前B站直播分区: {}", area_name);
+                Ok(area_name.to_string())
+            } else {
+                tracing::info!("当前B站直播没有分区");
+                Err("当前B站直播没有分区".into())
+            }
+        }
         "YT" => {
             let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
@@ -706,12 +717,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
         )
         .subcommand(
-            Command::new("get-live-topic")
-                .about("获取直播topic_id")
+            Command::new("get-live-area")
+                .about("获取直播分区")
                 .arg(
                     Arg::new("platform")
                         .required(true)
-                        .help("获取的平台 (仅支持YT)"),
+                        .value_parser(["YT", "TW", "Bilibili"])
+                        .help("获取的平台 (YT, TW, Bilibili)"),
                 )
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
         )
@@ -745,14 +757,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             Command::new("renew")
                 .about("更新Bilibili登录令牌")
-                .arg(
-                    Arg::new("cookies")
-                        .short('c')
-                        .long("cookies")
-                        .value_name("FILE")
-                        .help("Path to cookies.json file")
-                        .default_value("cookies.json"),
-                ),
+
         )
         .subcommand(
             Command::new("completion")
@@ -814,10 +819,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let platform = sub_m.get_one::<String>("platform").unwrap();
             let channel_id = sub_m.get_one::<String>("channel_id");
             if channel_id.is_none() {
-                if platform == "YT" {
-                    println!("YouTube直播分区: {}", get_live_area(platform, None).await?);
-                } else {
-                    println!("Twitch直播分区: {}", get_live_area(platform, None).await?);
+                match platform.as_str() {
+                    "Bilibili" => {
+                        println!("Bilibili直播分区: {}", get_live_area(platform, None).await?);
+                    }
+                    "YT" => {
+                        println!("YouTube直播分区: {}", get_live_area(platform, None).await?);
+                    }
+                    "TW" => {
+                        println!("Twitch直播分区: {}", get_live_area(platform, None).await?);
+                    }
+                    _ => {
+                        println!("不支持的平台: {}", platform);
+                    }
                 }
             } else {
                 if platform == "YT" {
@@ -878,9 +892,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("分区相同，无须更新");
             }
         }
-        Some(("renew", sub_m)) => {
-            let cookies_path = sub_m.get_one::<String>("cookies").unwrap();
-            bilibili::renew(PathBuf::from(cookies_path)).await?;
+        Some(("renew", _)) => {
+            bilibili::renew().await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
@@ -925,12 +938,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(
-                    Command::new("get-live-topic")
-                        .about("获取直播topic_id")
+                    Command::new("get-live-area")
+                        .about("获取直播分区")
                         .arg(
                             Arg::new("platform")
                                 .required(true)
-                                .help("获取的平台 (仅支持YT)"),
+                                .value_parser(["YT", "TW"])
+                                .help("获取的平台 (YT, TW)"),
                         )
                         .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
                 )
