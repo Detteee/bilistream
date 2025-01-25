@@ -49,11 +49,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         let cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
-        let (yt_is_live, yt_area, yt_title, yt_m3u8_url, scheduled_start) = yt_live
+        let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start) = yt_live
             .get_status()
             .await
             .unwrap_or((false, None, None, None, None));
-
+        if scheduled_start.is_some() {
+            if scheduled_start.unwrap() > Local::now() + Duration::from_secs(2 * 24 * 60 * 60) {
+                scheduled_start = None;
+            }
+        }
         // Check Twitch status
         let tw_live = select_live(cfg.clone(), "TW").await?;
         let mut tw_is_live = false;
@@ -95,11 +99,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 platform,
                 title.clone().unwrap()
             );
-            if yot_area.is_some() {
-                area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
-            } else {
-                area_v2 = check_area_id_with_title(&title.unwrap(), area_v2);
-            }
+            area_v2 = check_area_id_with_title(&title.unwrap(), area_v2);
+            area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
             if area_v2 == 240 && !channel_id.contains("Kamito") {
                 area_v2 = 0
             };
@@ -143,6 +144,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     // title is 【转播】频道名
                     let bili_channel_name = bili_title.split("【转播】").last().unwrap();
                     if bili_channel_name != channel_name {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
                         send_danmaku(
                             &cfg,
                             &format!("换台：{} -> {}", bili_channel_name, channel_name),
@@ -160,6 +162,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                     if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                         tracing::error!("B站直播间封面替换失败: {}", e);
                     } else {
@@ -219,9 +222,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             tracing::info!("{} 直播结束", channel_name);
-            send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await?;
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                thread::spawn(move || run_danmaku());
+            if cfg.bililive.enable_danmaku_command {
+                if !is_danmaku_running() {
+                    thread::spawn(move || run_danmaku());
+                }
+                send_danmaku(
+                    &cfg,
+                    &format!("{} 直播结束，可使用弹幕指令换台", channel_name),
+                )
+                .await?;
+            } else {
+                send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await?;
             }
         } else {
             // 计划直播(预告窗)

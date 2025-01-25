@@ -162,15 +162,10 @@ Bilistream 支持以下命令：
 
    ```bash
    ./bilistream get-live-status <平台> [频道ID]
-   # 平台: YT, TW
+   # 平台: YT, TW, bilibili, all
    ```
-8. 获取直播分区：
 
-   ```bash
-   ./bilistream get-live-area <平台> [频道ID]
-   # 平台: YT, TW
-   ```
-9. 生成命令补全脚本：
+8. 生成命令补全脚本：
 
    ```bash
    ./bilistream completion <shell>

@@ -203,7 +203,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         87
     } else if title.contains("deadlock") {
         927
-    } else if title.contains("final fantasy online")
+    } else if title.contains("final fantasy")
         || title.contains("漆黒メインクエ")
         || title.contains("ff14")
     {
@@ -218,7 +218,10 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         694
     } else if title.contains("原神") {
         321
-    } else if title.contains("monhun") || title.contains("モンハン") {
+    } else if title.contains("monhun")
+        || title.contains("モンハン")
+        || title.contains("monster hunter")
+    {
         578
     } else if title.contains("pokemon")
         || title.contains("core keeper")
@@ -429,6 +432,9 @@ async fn process_danmaku(command: &str) {
             || live_title.contains("marshmallow")
             || live_title.contains("morning")
             || live_title.contains("freechat")
+            || live_title.contains("どうぶつの森")
+            || live_title.contains("animal crossing")
+        // || live_title.contains("just chatting")
         {
             tracing::error!("直播标题/topic包含不支持的关键词:\n{}`", live_title);
             let _ =

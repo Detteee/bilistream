@@ -107,8 +107,8 @@ pub async fn get_youtube_status(
                     if is_tw_live {
                         return Ok((false, None, None, None, None));
                     } else {
-                        let (is_live, m3u8_url, title, _, _) =
-                            get_status_with_yt_dlp(channel_id, proxy, title).await?;
+                        let (is_live, _, _, m3u8_url, _) =
+                            get_status_with_yt_dlp(channel_id, proxy, title.clone()).await?;
                         return Ok((is_live, topic, title, m3u8_url, None));
                     }
                 }

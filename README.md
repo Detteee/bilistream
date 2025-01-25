@@ -155,15 +155,9 @@ Bilistream supports the following commands:
 
    ```bash
    ./bilistream get-live-status <platform> [channel_id]
-   # platform: YT, TW
+   # platform: YT, TW, bilibili, all
    ```
-8. Get live area:
-
-   ```bash
-   ./bilistream get-live-area <platform> [channel_id]
-   # platform: YT, TW, Bilibili
-   ```
-9. Generate shell completions:
+8. Generate shell completions:
 
    ```bash
    ./bilistream completion <shell>
