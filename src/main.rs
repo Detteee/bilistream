@@ -2,15 +2,13 @@ use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_id,
-    get_channel_name, get_puuid, get_thumbnail, get_twitch_live_status, get_twitch_live_title,
-    get_youtube_live_title, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
+    get_channel_name, get_puuid, get_thumbnail, get_twitch_status, get_youtube_live_title,
+    get_youtube_status, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
     send_danmaku,
 };
 
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
-// use proctitle::set_title;
-use reqwest_middleware::ClientBuilder;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
 use std::path::PathBuf;
@@ -52,21 +50,22 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         let cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
-        let (yt_is_live, yt_m3u8_url, yt_topic, scheduled_start) = yt_live
+        let (yt_is_live, yt_area, yt_title, yt_m3u8_url, scheduled_start) = yt_live
             .get_status()
             .await
-            .unwrap_or((false, None, None, None));
+            .unwrap_or((false, None, None, None, None));
 
         // Check Twitch status
         let tw_live = select_live(cfg.clone(), "TW").await?;
         let mut tw_is_live = false;
         let mut tw_m3u8_url = None;
         let mut tw_title = None;
+        let mut tw_area = None;
         if !yt_is_live {
-            (tw_is_live, tw_m3u8_url, tw_title, _) = tw_live
+            (tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
                 .get_status()
                 .await
-                .unwrap_or((false, None, None, None));
+                .unwrap_or((false, None, None, None, None));
         }
 
         if yt_is_live || tw_is_live {
@@ -88,24 +87,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     format!("【转播】{}", cfg.twitch.channel_name),
                 )
             };
-            let title = if yt_is_live { yt_topic } else { tw_title };
+            let yot_area = if yt_is_live { yt_area } else { tw_area };
+            let title = if yt_is_live { yt_title } else { tw_title };
             let m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
             tracing::info!(
                 "{} 正在 {} 直播, 标题:\n          {}",
                 channel_name,
                 platform,
-                title.unwrap()
+                title.clone().unwrap()
             );
-            let live_topic_or_title = if yt_is_live {
-                if let Ok(topic) = get_live_topic("YT", Some(&channel_id)).await {
-                    topic
-                } else {
-                    get_live_title("YT", Some(&channel_id)).await?
-                }
+            if yot_area.is_some() {
+                area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
             } else {
-                get_live_title("TW", Some(&channel_id)).await?
-            };
-            area_v2 = check_area_id_with_title(&live_topic_or_title, area_v2);
+                area_v2 = check_area_id_with_title(&title.unwrap(), area_v2);
+            }
             if area_v2 == 240 && !channel_id.contains("Kamito") {
                 area_v2 = 0
             };
@@ -197,16 +192,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         monitor_lol_game(puuid).await?;
                     }
                 }
-                let (current_is_live, new_m3u8_url, _, _) = if yt_is_live {
+                let (current_is_live, _, _, new_m3u8_url, _) = if yt_is_live {
                     yt_live
                         .get_status()
                         .await
-                        .unwrap_or((false, None, None, None))
+                        .unwrap_or((false, None, None, None, None))
                 } else {
                     tw_live
                         .get_status()
                         .await
-                        .unwrap_or((false, None, None, None))
+                        .unwrap_or((false, None, None, None, None))
                 };
                 if !current_is_live {
                     break;
@@ -325,66 +320,48 @@ fn box_message(
     message
 }
 
-async fn get_live_topic(
+async fn get_live_area(
     platform: &str,
     channel_id: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     match platform {
         "YT" => {
-            let client = reqwest::Client::new();
             let cfg = load_config().await?;
             let channel_id = if let Some(id) = channel_id {
                 id
             } else {
                 &cfg.youtube.channel_id
             };
-            let channel_name = get_channel_name("YT", channel_id).unwrap();
-            let url = format!(
-                "https://holodex.net/api/v2/users/live?channels={}",
-                channel_id
-            );
-            let response = client
-                .get(&url)
-                .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
-                .send()
-                .await?;
+            let (_, topic, _, _, _) = get_youtube_status(channel_id).await?;
+            if let Some(topic) = topic {
+                tracing::info!("当前YT直播分区: {}", topic);
+                Ok(topic)
+            } else {
+                tracing::info!("当前YT直播没有分区");
+                Err("当前YT直播没有分区".into())
+            }
+        }
 
-            let videos: Vec<serde_json::Value> = response.json().await?;
-            if !videos.is_empty() {
-                let mut vid = videos.last().unwrap();
-                let mut flag = false;
-                for video in videos.iter().rev() {
-                    let cname = video.get("channel");
-                    if cname
-                        .unwrap()
-                        .get("name")
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .replace(" ", "")
-                        .contains(channel_name.as_ref().unwrap())
-                    {
-                        vid = video;
-                        flag = true;
-                        break;
-                    }
-                }
-                if flag {
-                    let topic_id = vid.get("topic_id");
-                    if let Some(topic) = topic_id {
-                        if let Some(topic_str) = topic.as_str() {
-                            return Ok(topic_str.to_string());
-                        }
-                    }
-                    tracing::info!("当前YT直播没有分区");
-                    Err("当前YT直播没有分区".into())
+        "TW" => {
+            let cfg = load_config().await?;
+            let channel_id = if let Some(id) = channel_id {
+                id
+            } else {
+                &cfg.twitch.channel_id
+            };
+            let (is_live, game_name, _) = get_twitch_status(&channel_id).await?;
+            if is_live {
+                if let Some(game_name) = game_name {
+                    tracing::info!("当前Twitch直播分区: {}", game_name);
+                    Ok(game_name)
                 } else {
-                    tracing::info!("当前频道没有直播");
-                    Err("当前频道没有直播".into())
+                    tracing::info!("当前Twitch直播没有分区");
+                    Err("当前Twitch直播没有分区".into())
                 }
             } else {
-                tracing::info!("当前频道没有直播");
-                Err("当前频道没有直播".into())
+                let channel_name = get_channel_name("TW", channel_id).unwrap().unwrap();
+                tracing::info!("当前 {} 未在Twitch直播", channel_name);
+                Err(format!("当前 {} 未在Twitch直播", channel_name).into())
             }
         }
         _ => {
@@ -493,32 +470,20 @@ async fn get_live_status(
                             }
                         } else if status == "live" {
                             let title = vid.get("title").unwrap();
-                            let channel_id =
-                                get_channel_id("TW", channel_name.as_ref().unwrap()).unwrap();
-                            if channel_id.is_some() {
-                                if !get_twitch_live_status(channel_id.as_ref().unwrap())
-                                    .await
-                                    .unwrap()
-                                {
-                                    println!(
-                                        "{} 在 YouTube 直播中, 标题: {}",
-                                        channel_name.as_ref().unwrap(),
-                                        title
-                                    );
+                            let channel_id = get_channel_id("TW", channel_name.as_ref().unwrap())?
+                                .unwrap_or_default();
+                            let platform =
+                                if channel_id != "" && get_twitch_status(&channel_id).await?.0 {
+                                    "Twitch"
                                 } else {
-                                    println!(
-                                        "{} 在 Twitch 直播中, 标题: {}",
-                                        channel_name.as_ref().unwrap(),
-                                        title
-                                    );
-                                }
-                            } else {
-                                println!(
-                                    "{} 在 YouTube 直播中, 标题: {}",
-                                    channel_name.as_ref().unwrap(),
-                                    title
-                                );
-                            }
+                                    "YouTube"
+                                };
+                            println!(
+                                "{} 在 {} 直播中, 标题: {}",
+                                channel_name.as_ref().unwrap(),
+                                platform,
+                                title
+                            );
                         } else {
                             let channel_name = cfg.youtube.channel_name;
                             println!("{} 未直播", channel_name);
@@ -544,7 +509,7 @@ async fn get_live_status(
                 channel_name = Some(channel_id.to_string());
             }
 
-            if get_twitch_live_status(channel_id).await? {
+            if get_twitch_status(channel_id).await?.0 {
                 println!("{} 在 Twitch 直播中", channel_name.unwrap());
             } else {
                 println!("{} 未在 Twitch 直播", channel_name.unwrap());
@@ -588,14 +553,15 @@ async fn get_live_title(
             } else {
                 &cfg.twitch.channel_id
             };
-            let client = ClientBuilder::new(reqwest::Client::new()).build();
 
-            let title = get_twitch_live_title(channel_id, client).await?;
-            if title != "" {
+            let title = get_twitch_status(channel_id).await?.2;
+            if title.is_some() {
                 // println!("Twitch直播标题: {}", title);
-                tracing::info!("Twitch 直播标题: {}", title);
+                tracing::info!("Twitch 直播标题: {}", title.clone().unwrap());
+                Ok(title.unwrap())
+            } else {
+                Ok("空".to_string())
             }
-            Ok(title)
         }
         _ => {
             tracing::info!("不支持的平台: {}", platform);
@@ -844,16 +810,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Some(("get-live-topic", sub_m)) => {
+        Some(("get-live-area", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform").unwrap();
             let channel_id = sub_m.get_one::<String>("channel_id");
             if channel_id.is_none() {
-                println!("YouTube直播分区: {}", get_live_topic(platform, None).await?);
+                if platform == "YT" {
+                    println!("YouTube直播分区: {}", get_live_area(platform, None).await?);
+                } else {
+                    println!("Twitch直播分区: {}", get_live_area(platform, None).await?);
+                }
             } else {
-                println!(
-                    "YouTube直播分区: {}",
-                    get_live_topic(platform, Some(channel_id.unwrap())).await?
-                );
+                if platform == "YT" {
+                    println!(
+                        "YouTube直播分区: {}",
+                        get_live_area(platform, Some(channel_id.unwrap())).await?
+                    );
+                } else {
+                    println!(
+                        "Twitch直播分区: {}",
+                        get_live_area(platform, Some(channel_id.unwrap())).await?
+                    );
+                }
             }
         }
         Some(("login", _)) => {

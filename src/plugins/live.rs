@@ -18,6 +18,7 @@ pub trait Live {
             bool,
             Option<String>,
             Option<String>,
+            Option<String>,
             Option<DateTime<Local>>,
         ),
         Box<dyn Error>,
