@@ -505,12 +505,12 @@ while true; do
                 display_current_config "YT"
                 ;;
             2)
-                sed -i "/Twitch:/,$ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
+                sed -i "/Twitch:/,/Youtube:/ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
                 display_current_config "TW"
                 ;;
             3)
                 sed -i "/Youtube:/,/Twitch:/ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
-                sed -i "/Twitch:/,$ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
+                sed -i "/Twitch:/,/Youtube:/ s|Area_v2: .*|Area_v2: ${areaid}|" "$BASE_DIR/config.yaml"
                 display_current_config "all"
                 ;;
             4)
