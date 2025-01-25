@@ -8,6 +8,7 @@ use bilistream::plugins::{
 
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
+use regex::Regex;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
 use std::process::Command as StdCommand;
@@ -236,8 +237,22 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
                     if *last != current_message {
-                        tracing::info!("{}", current_message);
-                        *last = current_message;
+                        // Only update if message content changed significantly
+                        let time_diff = if let Some(last_time) = extract_time(&last) {
+                            if let Some(current_time) = extract_time(&current_message) {
+                                (current_time - last_time).num_minutes().abs()
+                            } else {
+                                i64::MAX
+                            }
+                        } else {
+                            i64::MAX
+                        };
+
+                        // Only update if time difference is more than 5 minutes or other content changed
+                        if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
+                            tracing::info!("{}", current_message);
+                            *last = current_message;
+                        }
                     }
                 } else {
                     let current_message = box_message(
@@ -249,8 +264,22 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
                     if *last != current_message {
-                        tracing::info!("{}", current_message);
-                        *last = current_message;
+                        // Only update if message content changed significantly
+                        let time_diff = if let Some(last_time) = extract_time(&last) {
+                            if let Some(current_time) = extract_time(&current_message) {
+                                (current_time - last_time).num_minutes().abs()
+                            } else {
+                                i64::MAX
+                            }
+                        } else {
+                            i64::MAX
+                        };
+
+                        // Only update if time difference is more than 5 minutes or other content changed
+                        if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
+                            tracing::info!("{}", current_message);
+                            *last = current_message;
+                        }
                     }
                 }
             } else {
@@ -609,6 +638,18 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
     Ok(())
 }
 
+fn extract_time(message: &str) -> Option<DateTime<Local>> {
+    let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").ok()?;
+    re.find(message)
+        .and_then(|m| DateTime::parse_from_str(m.as_str(), "%Y-%m-%d %H:%M:%S").ok())
+        .map(|dt| dt.with_timezone(&Local))
+}
+
+fn remove_time(message: &str) -> String {
+    let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
+    re.replace_all(message, "TIME").to_string()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
@@ -627,8 +668,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .arg(
                     Arg::new("platform")
                         .required(true)
-                        .value_parser(["YT", "TW", "bilibili"])
-                        .help("获取的平台 (YT, TW, bilibili)"),
+                        .value_parser(["YT", "TW", "bilibili","all"])
+                        .help("获取的平台 (YT, TW, bilibili, all)"),
                 )
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
         )
@@ -796,8 +837,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .arg(
                             Arg::new("platform")
                                 .required(true)
-                                .value_parser(["YT", "TW", "bilibili"])
-                                .help("检查的平台 (YT, TW, bilibili)"),
+                                .value_parser(["YT", "TW", "bilibili", "all"])
+                                .help("检查的平台 (YT, TW, bilibili, all)"),
                         ),
                 )
                 .subcommand(Command::new("login").about("登录"))

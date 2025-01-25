@@ -166,8 +166,7 @@ async fn get_status_with_yt_dlp(
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // println!("yt-dlp -g {}", stderr);
-    if stderr.contains("ERROR: [youtube]") {
+    if stderr.contains("ERROR: [youtube") {
         // Check for scheduled start time in stderr
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) minutes")?.captures(&stderr)

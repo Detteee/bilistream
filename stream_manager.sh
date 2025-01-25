@@ -538,8 +538,8 @@ while true; do
     3) # Change Twitch ID
         select_twitch_id
         if [ $? -eq 0 ]; then
-            sed -i "/Twitch:/,$ s|ChannelId: .*|ChannelId: ${channel_id}|" "$BASE_DIR/config.yaml"
-            sed -i "/Twitch:/,$ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/config.yaml"
+            sed -i "/Twitch:/,/Youtube:/ s|ChannelId: .*|ChannelId: ${channel_id}|" "$BASE_DIR/config.yaml"
+            sed -i "/Twitch:/,/Youtube:/ s|ChannelName: .*|ChannelName: \"${channel_name}\"|" "$BASE_DIR/config.yaml"
             echo "Twitch ID and Channel Name updated in config.yaml."
             display_current_config "TW"
         fi
