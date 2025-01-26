@@ -8,10 +8,11 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 
 - Automated rebroadcasting of Twitch and YouTube streams to Bilibili Live
 - Support for scheduled streams on YouTube
-- Configurable Bilibili live settings (title, area, etc.)
+- Configurable and auto update Bilibili live settings (title, area and thumbnail)
 - Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 - Danmaku command feature for changing the listening target channel when Bilibili live is off
 - Monitor League of Legends Live game and stops Bilibili live if blacklisted words are found in player names
+- Detects and avoids rebroadcasting content already being streamed by monitored Bilibili live rooms
 
 ## Dependencies
 
@@ -65,6 +66,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    - Area IDs for different game categories
    - Proxy settings
    - API keys for various services
+   - Anti collision settings
+
 7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
 8. Create channels configuration file:
    Create `channels.json` in the root directory with the following structure:

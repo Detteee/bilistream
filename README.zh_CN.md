@@ -8,10 +8,11 @@
 
 - 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
 - 支持 YouTube 预定直播
-- 可配置的哔哩哔哩直播设置（标题、分区等）
+- 可配置/自动更新的哔哩哔哩直播设置（标题、分区和封面）
 - 管理脚本（`stream_manager.sh`）用于更改配置
 - 当哔哩哔哩直播关闭时可通过弹幕命令更改监听目标频道
 - 监控英雄联盟游戏内玩家名称，如发现黑名单词汇则停止直播
+- 自动检测并避免转播已被转播的频道
 
 ## 依赖
 
@@ -65,6 +66,7 @@
    - 不同游戏分类的分区 ID
    - 代理设置
    - 各种服务的 API 密钥
+   - 防撞车设置
 7. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
 8. 创建频道配置文件：
    在根目录创建 `channels.json`，使用以下结构：
@@ -164,7 +166,6 @@ Bilistream 支持以下命令：
    ./bilistream get-live-status <平台> [频道ID]
    # 平台: YT, TW, bilibili, all
    ```
-
 8. 生成命令补全脚本：
 
    ```bash
