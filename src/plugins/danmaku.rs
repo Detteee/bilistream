@@ -1,3 +1,5 @@
+use super::twitch::get_twitch_status;
+use super::youtube::get_youtube_status;
 use crate::config::load_config;
 use crate::config::Config;
 use crate::plugins::bilibili;
@@ -358,61 +360,42 @@ async fn process_danmaku(command: &str) {
         // Use a reference to the String inside channel_id without moving it
         let channel_id_str = channel_id.as_ref().unwrap();
 
-        let live_title = if platform.eq_ignore_ascii_case("YT") {
-            // get youtube live topic
-            match Command::new("./bilistream")
-                .arg("get-live-topic")
-                .arg("YT")
-                .arg(channel_id_str)
-                .output()
-            {
-                Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                Err(e) => {
-                    tracing::error!("获取YT直播分区时出错: {}", e);
-                    match Command::new("yt-dlp")
-                        .arg("-e")
-                        .arg(&format!(
-                            "https://www.youtube.com/channel/{}/live",
-                            channel_id_str
-                        ))
-                        .output()
-                    {
-                        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                        Err(e) => {
-                            tracing::error!("获取YT直播标题时出错: {}", e);
-                            let _ = bilibili::send_danmaku(
-                                &cfg,
-                                &format!("错误：获取YT直播标题时出错 {}", e),
-                            )
-                            .await;
+        let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
+            // get youtube live status
+            match get_youtube_status(channel_id_str).await {
+                Ok((_, topic, title, _, _)) => {
+                    let t = match title {
+                        Some(t) => t,
+                        None => {
+                            tracing::error!("获取YT直播标题失败");
+                            let _ = bilibili::send_danmaku(&cfg, "错误：获取YT直播标题失败").await;
                             return;
                         }
-                    }
+                    };
+                    (t, topic.unwrap_or_default())
+                }
+                Err(e) => {
+                    tracing::error!("获取YT直播标题时出错: {}", e);
+                    let _ =
+                        bilibili::send_danmaku(&cfg, &format!("错误：获取YT直播标题时出错 {}", e))
+                            .await;
+                    return;
                 }
             }
-            // match Command::new("yt-dlp")
-            //     .arg("-e")
-            //     .arg(&format!(
-            //         "https://www.youtube.com/channel/{}/live",
-            //         channel_id_str
-            //     ))
-            //     .output()
-            // {
-            //     Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            //     Err(e) => {
-            //         tracing::error!("获取YT直播标题时出错: {}", e);
-            //         return;
-            //     }
-            // }
         } else {
             // TW
-            match Command::new("./bilistream")
-                .arg("get-live-title")
-                .arg("TW")
-                .arg(channel_id_str)
-                .output()
-            {
-                Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            match get_twitch_status(channel_id_str).await {
+                Ok((_, topic, title)) => {
+                    let t = match title {
+                        Some(t) => t,
+                        None => {
+                            tracing::error!("获取TW直播标题失败");
+                            let _ = bilibili::send_danmaku(&cfg, "错误：获取TW直播标题失败").await;
+                            return;
+                        }
+                    };
+                    (t, topic.unwrap_or_default())
+                }
                 Err(e) => {
                     tracing::error!("获取TW直播标题时出错: {}", e);
                     let _ =
@@ -422,28 +405,27 @@ async fn process_danmaku(command: &str) {
                 }
             }
         };
-        println!("{}", live_title);
-        let live_title = live_title.to_lowercase();
-        if live_title.contains("ウォッチパ")
-            || live_title.contains("watchalong")
-            || live_title.contains("talk")
-            || live_title.contains("zatsudan")
-            || live_title.contains("雑談")
-            || live_title.contains("marshmallow")
-            || live_title.contains("morning")
-            || live_title.contains("freechat")
-            || live_title.contains("どうぶつの森")
-            || live_title.contains("animal crossing")
-        // || live_title.contains("just chatting")
+        let live_topic_title = format!("{} {}", live_topic, live_title).to_lowercase();
+        if live_topic_title.contains("ウォッチパ")
+            || live_topic_title.contains("watchalong")
+            || live_topic_title.contains("talk")
+            || live_topic_title.contains("zatsudan")
+            || live_topic_title.contains("雑談")
+            || live_topic_title.contains("marshmallow")
+            || live_topic_title.contains("morning")
+            || live_topic_title.contains("freechat")
+            || live_topic_title.contains("どうぶつの森")
+            || live_topic_title.contains("animal crossing")
+            || live_topic_title.contains("just chatting")
         {
-            tracing::error!("直播标题/topic包含不支持的关键词:\n{}`", live_title);
+            tracing::error!("直播标题/topic包含不支持的关键词:\n{}", live_topic_title);
             let _ =
                 bilibili::send_danmaku(&cfg, "错误：目标直播标题/topic包含不支持的关键词").await;
             return;
         }
         // Now you can use channel_id_str where needed without moving channel_id
         // let new_title = format!("【转播】{}", channel_name);
-        let updated_area_id = check_area_id_with_title(&live_title, area_id);
+        let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
         // Additional checks for specific area_ids
         if (updated_area_id == 240 || updated_area_id == 318 || updated_area_id == 252)
             && channel_name != "Kamito"
