@@ -625,8 +625,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("获取直播状态、标题和分区")
                 .arg(
                     Arg::new("platform")
-                        .required(true)
-                        .value_parser(["YT", "TW", "bilibili","all"])
+                        .required(false)
+                        .value_parser(["YT", "TW", "bilibili", "all"])
+                        .default_value("all")
                         .help("获取的平台 (YT, TW, bilibili, all)"),
                 )
                 .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
@@ -696,13 +697,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match matches.subcommand() {
         Some(("get-live-status", sub_m)) => {
-            let platform = sub_m.get_one::<String>("platform").unwrap();
+            let platform = sub_m
+                .get_one::<String>("platform")
+                .map(String::as_str)
+                .unwrap_or("all");
             let channel_id = sub_m.get_one::<String>("channel_id");
-            if channel_id.is_none() {
-                get_live_status(platform, None).await?;
-            } else {
-                get_live_status(platform, Some(channel_id.unwrap())).await?;
-            }
+            get_live_status(platform, channel_id.map(String::as_str)).await?;
         }
         Some(("start-live", sub_m)) => {
             let platform = sub_m.get_one::<String>("platform");
