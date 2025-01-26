@@ -239,6 +239,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         318
     } else if title.contains("elden ring") || title.contains("エルデンリング") {
         555
+    } else if title.contains("zelda") || title.contains("ゼルダ") {
+        308
     } else {
         current_area_id
     }
@@ -345,6 +347,7 @@ async fn process_danmaku(command: &str) {
             // get youtube live status
             match get_youtube_status(channel_id_str).await {
                 Ok((_, topic, title, _, _)) => {
+                    println!("title: {:?}", title);
                     let t = match title {
                         Some(t) => t,
                         None => {
@@ -585,6 +588,7 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         318 => Some("使命召唤:战区"),
         555 => Some("艾尔登法环"),
         578 => Some("怪物猎人"),
+        308 => Some("塞尔达传说"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None
@@ -614,6 +618,7 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         "使命召唤:战区" => Ok(318),
         "艾尔登法环" => Ok(555),
         "怪物猎人" => Ok(578),
+        "塞尔达传说" => Ok(308),
         _ => Err(format!("未知的分区: {}", area_name).into()),
     }
 }

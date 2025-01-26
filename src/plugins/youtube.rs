@@ -1,3 +1,4 @@
+use super::danmaku::get_channel_name;
 use super::twitch::get_twitch_status;
 use super::Live;
 use crate::config::load_config;
@@ -54,7 +55,7 @@ pub async fn get_youtube_status(
     let client = reqwest::Client::new();
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
-    let channel_name = &cfg.youtube.channel_name;
+    let channel_name = get_channel_name("YT", channel_id).unwrap();
     let url = format!(
         "https://holodex.net/api/v2/users/live?channels={}",
         channel_id
@@ -65,7 +66,6 @@ pub async fn get_youtube_status(
         .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
         .send()
         .await?;
-
     if !response.status().is_success() {
         tracing::error!("Holodex获取直播状态失败，使用yt-dlp获取");
         return get_status_with_yt_dlp(channel_id, proxy, None).await;
@@ -84,13 +84,12 @@ pub async fn get_youtube_status(
                 .as_str()
                 .unwrap()
                 .replace(" ", "")
-                .contains(channel_name)
+                .contains(channel_name.as_deref().unwrap_or(""))
             {
                 let status = video
                     .get("status")
                     .and_then(|s| s.as_str())
                     .unwrap_or("none");
-
                 let topic = video
                     .get("topic_id")
                     .and_then(|t| t.as_str())
@@ -210,7 +209,7 @@ async fn get_status_with_yt_dlp(
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
-    let channel_name = &cfg.youtube.channel_name;
+    let channel_name = get_channel_name("YT", channel_id).unwrap();
     let client = reqwest::Client::new();
     let url = format!(
         "https://holodex.net/api/v2/users/live?channels={}",
@@ -235,7 +234,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                     .as_str()
                     .unwrap()
                     .replace(" ", "")
-                    .contains(channel_name)
+                    .contains(channel_name.as_deref().unwrap_or(""))
                 {
                     if let Some(topic_id) = video.get("topic_id") {
                         if topic_id.as_str().unwrap().contains("membersonly") {

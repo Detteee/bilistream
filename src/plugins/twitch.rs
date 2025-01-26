@@ -86,28 +86,35 @@ impl Twitch {
             proxy_region,
         }
     }
-    pub fn get_proxy_url(&self) -> Result<String, &'static str> {
-        // 代理地区: na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
-        match self.proxy_region.as_str() {
-            "na" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com".to_string()),
-            "eu" => Ok("--twitch-proxy-playlist=https://lb-eu.cdn-perfprod.com".to_string()),
-            "eu2" => Ok("--twitch-proxy-playlist=https://lb-eu2.cdn-perfprod.com".to_string()),
-            "eu3" => Ok("--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com".to_string()),
-            "eu4" => Ok("--twitch-proxy-playlist=https://lb-eu4.cdn-perfprod.com".to_string()),
-            "eu5" => Ok("--twitch-proxy-playlist=https://lb-eu5.cdn-perfprod.com".to_string()),
-            "as" => Ok("--twitch-proxy-playlist=https://lb-as.cdn-perfprod.com".to_string()),
-            "sa" => Ok("--twitch-proxy-playlist=https://lb-sa.cdn-perfprod.com".to_string()),
-            "eul" => Ok("--twitch-proxy-playlist=https://eu.luminous.dev".to_string()),
-            "eu2l" => Ok("--twitch-proxy-playlist=https://eu2.luminous.dev".to_string()),
-            "asl" => Ok("--twitch-proxy-playlist=https://as.luminous.dev".to_string()),
-            "all" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com,https://eu.luminous.dev,https://eu2.luminous.dev,https://as.luminous.dev".to_string()),
-            "perf" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com".to_string()),
-            "lu" => Ok("--twitch-proxy-playlist=https://eu.luminous.dev,https://eu2.luminous.dev,https://as.luminous.dev".to_string()),
-            _ => Err("Invalid proxy region specified"),
+    fn get_streamlink_url(&self) -> Result<String, Box<dyn Error>> {
+        // First try with configured proxy region
+        match self.try_with_proxy(&self.proxy_region) {
+            Ok(url) => return Ok(url),
+            Err(e) => tracing::warn!("Failed with configured proxy {}: {}", self.proxy_region, e),
         }
+
+        // Try backup proxy regions in order
+        let backup_regions = ["asl", "as", "na", "sa", "eu", "eu3"];
+        for region in backup_regions {
+            if region == self.proxy_region {
+                continue; // Skip if it's the same as the already tried region
+            }
+            match self.try_with_proxy(region) {
+                Ok(url) => {
+                    tracing::info!("Successfully got stream URL with backup proxy: {}", region);
+                    return Ok(url);
+                }
+                Err(e) => tracing::debug!("Failed with backup proxy {}: {}", region, e),
+            }
+        }
+
+        // If all proxies fail, return the last error
+        tracing::error!("Failed to get stream URL with all proxy regions");
+        Err("Failed to get stream URL with all proxy regions".into())
     }
-    pub fn get_streamlink_url(&self) -> Result<String, Box<dyn Error>> {
-        let proxy_url = self.get_proxy_url()?;
+
+    fn try_with_proxy(&self, proxy_region: &str) -> Result<String, Box<dyn Error>> {
+        let proxy_url = self.get_proxy_url_for_region(proxy_region)?;
         let output = Command::new("streamlink")
             .arg(proxy_url)
             .arg("--stream-url")
@@ -128,6 +135,26 @@ impl Twitch {
         } else {
             let error = String::from_utf8(output.stderr)?;
             Err(error.into())
+        }
+    }
+
+    fn get_proxy_url_for_region(&self, region: &str) -> Result<String, &'static str> {
+        match region {
+            "na" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com".to_string()),
+            "eu" => Ok("--twitch-proxy-playlist=https://lb-eu.cdn-perfprod.com".to_string()),
+            "eu2" => Ok("--twitch-proxy-playlist=https://lb-eu2.cdn-perfprod.com".to_string()),
+            "eu3" => Ok("--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com".to_string()),
+            "eu4" => Ok("--twitch-proxy-playlist=https://lb-eu4.cdn-perfprod.com".to_string()),
+            "eu5" => Ok("--twitch-proxy-playlist=https://lb-eu5.cdn-perfprod.com".to_string()),
+            "as" => Ok("--twitch-proxy-playlist=https://lb-as.cdn-perfprod.com".to_string()),
+            "sa" => Ok("--twitch-proxy-playlist=https://lb-sa.cdn-perfprod.com".to_string()),
+            "eul" => Ok("--twitch-proxy-playlist=https://eu.luminous.dev".to_string()),
+            "eu2l" => Ok("--twitch-proxy-playlist=https://eu2.luminous.dev".to_string()),
+            "asl" => Ok("--twitch-proxy-playlist=https://as.luminous.dev".to_string()),
+            "all" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com,https://eu.luminous.dev,https://eu2.luminous.dev,https://as.luminous.dev".to_string()),
+            "perf" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com".to_string()),
+            "" => Ok(String::new()),
+            _ => Err("Invalid proxy region specified"),
         }
     }
 }

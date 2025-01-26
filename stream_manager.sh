@@ -43,9 +43,10 @@ select_area_id() {
     echo "15) 407: 游戏王          16) 694: 斯普拉遁3"
     echo "17) 252: 逃离塔科夫      18) 318: 使命召唤:战区"
     echo "19) 555: 艾尔登法环      20) 578: 怪物猎人"
+    echo "21) 308: 塞尔达传说"
     echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-20): " area_choice
+    read -p "请选择分区 ID (0-21): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -68,6 +69,7 @@ select_area_id() {
     18) areaid=318 ;;
     19) areaid=555 ;;
     20) areaid=578 ;;
+    21) areaid=308 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -117,6 +119,7 @@ get_area_name() {
     318) echo "使命召唤:战区" ;;
     555) echo "艾尔登法环" ;;
     578) echo "怪物猎人" ;;
+    308) echo "塞尔达传说" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
