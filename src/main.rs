@@ -102,13 +102,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 );
                                 send_danmaku(
                                     &cfg,
-                                    &format!(
-                                        "{}({})正在转播 {}，跳过本次转播",
-                                        room_name, room_id, target_name
-                                    ),
+                                    &format!("{}正在转播 {}", room_name, target_name),
                                 )
                                 .await?;
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                send_danmaku(&cfg, &format!("直播间号：{}", room_id)).await?;
                                 *last_collision = Some(current_collision);
+                                if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
+                                    thread::spawn(move || run_danmaku());
+                                    tokio::time::sleep(Duration::from_secs(2)).await;
+                                    send_danmaku(&cfg, "撞车：可使用弹幕指令换台").await?;
+                                }
                             }
                             tokio::time::sleep(Duration::from_secs(30)).await;
                             continue 'outer; // 跳转到外层循环重新检测
