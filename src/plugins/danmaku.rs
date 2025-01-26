@@ -309,30 +309,11 @@ async fn process_danmaku(command: &str) {
     );
 
     // Determine area_id based on area_name
-    let area_id = match area_name {
-        "英雄联盟" => 86,
-        "无畏契约" => 329,
-        "APEX英雄" => 240,
-        "守望先锋" => 87,
-        "萌宅领域" => 530,
-        "其他单机" => 235,
-        "其他网游" => 107,
-        "UP主日常" => 646,
-        "最终幻想14" => 102,
-        "格斗游戏" => 433,
-        "我的世界" => 216,
-        "DeadLock" => 927,
-        "主机游戏" => 236,
-        "原神" => 321,
-        "斯普拉遁3" => 694,
-        "游戏王：决斗链接" => 407,
-        "逃离塔科夫" => 252,
-        "使命召唤:战区" => 318,
-        "艾尔登法环" => 555,
-        "怪物猎人" => 578,
-        _ => {
-            tracing::error!("未知的分区: {}", area_name);
-            let _ = bilibili::send_danmaku(&cfg, &format!("错误：未知的分区 {}", area_name)).await;
+    let area_id = match get_area_id(area_name) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("{}", e);
+            let _ = bilibili::send_danmaku(&cfg, &format!("错误：{}", e)).await;
             return;
         }
     };
@@ -419,8 +400,7 @@ async fn process_danmaku(command: &str) {
             || live_topic_title.contains("just chatting")
         {
             tracing::error!("直播标题/topic包含不支持的关键词:\n{}", live_topic_title);
-            let _ =
-                bilibili::send_danmaku(&cfg, "错误：目标直播标题/topic包含不支持的关键词").await;
+            let _ = bilibili::send_danmaku(&cfg, "错误：目标直播标题/分区包含不支持的关键词").await;
             return;
         }
         // Now you can use channel_id_str where needed without moving channel_id
@@ -609,5 +589,31 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
             tracing::error!("未知的分区ID: {}", area_id);
             None
         }
+    }
+}
+
+fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    match area_name {
+        "英雄联盟" => Ok(86),
+        "无畏契约" => Ok(329),
+        "APEX英雄" => Ok(240),
+        "守望先锋" => Ok(87),
+        "萌宅领域" => Ok(530),
+        "其他单机" => Ok(235),
+        "其他网游" => Ok(107),
+        "UP主日常" => Ok(646),
+        "最终幻想14" => Ok(102),
+        "格斗游戏" => Ok(433),
+        "我的世界" => Ok(216),
+        "DeadLock" => Ok(927),
+        "主机游戏" => Ok(236),
+        "原神" => Ok(321),
+        "斯普拉遁3" => Ok(694),
+        "游戏王：决斗链接" => Ok(407),
+        "逃离塔科夫" => Ok(252),
+        "使命召唤:战区" => Ok(318),
+        "艾尔登法环" => Ok(555),
+        "怪物猎人" => Ok(578),
+        _ => Err(format!("未知的分区: {}", area_name).into()),
     }
 }
