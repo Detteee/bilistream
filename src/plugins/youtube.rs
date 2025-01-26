@@ -18,11 +18,11 @@ impl Live for Youtube {
         &self,
     ) -> Result<
         (
-            bool,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<DateTime<Local>>,
+            bool,                    // is_live
+            Option<String>,          // topic
+            Option<String>,          // title
+            Option<String>,          // m3u8_url
+            Option<DateTime<Local>>, // start_time
         ),
         Box<dyn Error>,
     > {
@@ -101,13 +101,18 @@ pub async fn get_youtube_status(
                     .map(|s| s.to_string());
 
                 if status == "live" {
-                    let (is_tw_live, _, _) =
-                        get_twitch_status(cfg.twitch.channel_id.as_str()).await?;
-                    if is_tw_live {
-                        return Ok((false, None, None, None, None));
+                    let tw_channel_name =
+                        get_channel_name("TW", channel_name.as_deref().unwrap()).unwrap();
+                    if tw_channel_name.is_some() {
+                        let (is_tw_live, _, _) =
+                            get_twitch_status(tw_channel_name.as_deref().unwrap()).await?;
+                        if is_tw_live {
+                            return Ok((false, None, None, None, None));
+                        }
                     } else {
                         let (is_live, _, _, m3u8_url, _) =
                             get_status_with_yt_dlp(channel_id, proxy, title.clone()).await?;
+                        println!("{}", is_live);
                         return Ok((is_live, topic, title, m3u8_url, None));
                     }
                 }
@@ -142,11 +147,11 @@ async fn get_status_with_yt_dlp(
     title: Option<String>,
 ) -> Result<
     (
-        bool,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<DateTime<Local>>,
+        bool,                    // is_live
+        Option<String>,          // topic
+        Option<String>,          // title
+        Option<String>,          // m3u8_url
+        Option<DateTime<Local>>, // start_time
     ),
     Box<dyn Error>,
 > {

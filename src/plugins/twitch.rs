@@ -101,10 +101,13 @@ impl Twitch {
             }
             match self.try_with_proxy(region) {
                 Ok(url) => {
-                    tracing::info!("Successfully got stream URL with backup proxy: {}", region);
+                    tracing::info!(
+                        "Successfully got stream URL with backup proxy region: {}",
+                        region
+                    );
                     return Ok(url);
                 }
-                Err(e) => tracing::debug!("Failed with backup proxy {}: {}", region, e),
+                Err(e) => tracing::debug!("Failed with backup proxy region {}: {}", region, e),
             }
         }
 
@@ -161,7 +164,14 @@ impl Twitch {
 
 pub async fn get_twitch_status(
     channel_id: &str,
-) -> Result<(bool, Option<String>, Option<String>), Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        bool,           // is_live
+        Option<String>, // topic
+        Option<String>, // title
+    ),
+    Box<dyn std::error::Error>,
+> {
     let client = Client::new();
 
     let query = r#"

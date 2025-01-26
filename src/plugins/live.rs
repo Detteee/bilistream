@@ -15,11 +15,11 @@ pub trait Live {
         &self,
     ) -> Result<
         (
-            bool,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<DateTime<Local>>,
+            bool,                    // is_live
+            Option<String>,          // topic
+            Option<String>,          // title
+            Option<String>,          // m3u8_url
+            Option<DateTime<Local>>, // start_time
         ),
         Box<dyn Error>,
     >;
