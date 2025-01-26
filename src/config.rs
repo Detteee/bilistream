@@ -1,6 +1,7 @@
 use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -16,6 +17,8 @@ lazy_static! {
 pub struct Config {
     #[serde(rename = "AutoCover")]
     pub auto_cover: bool,
+    #[serde(rename = "AntiCollision")]
+    pub enable_anti_collision: bool,
     #[serde(rename = "Interval")]
     pub interval: u64,
     #[serde(rename = "BiliLive")]
@@ -32,6 +35,8 @@ pub struct Config {
     pub riot_api_key: Option<String>,
     #[serde(rename = "LolMonitorInterval")]
     pub lol_monitor_interval: Option<u64>,
+    #[serde(rename = "AntiCollisionList")]
+    pub anti_collision: HashMap<String, i32>,
 }
 
 /// Struct representing BiliLive-specific configuration.

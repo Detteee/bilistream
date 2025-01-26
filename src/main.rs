@@ -1,9 +1,9 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_name,
-    get_puuid, get_thumbnail, get_twitch_status, get_youtube_status, is_danmaku_running,
-    is_ffmpeg_running, run_danmaku, select_live, send_danmaku,
+    check_area_id_with_title, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
+    get_channel_name, get_puuid, get_thumbnail, get_twitch_status, get_youtube_status,
+    is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live, send_danmaku,
 };
 
 use chrono::{DateTime, Local};
@@ -21,6 +21,7 @@ use unicode_width::UnicodeWidthStr;
 
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
+static LAST_COLLISION: Mutex<Option<(String, i32, String)>> = Mutex::new(None);
 
 fn init_logger() {
     tracing_subscriber::fmt()
@@ -45,7 +46,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         cmd.spawn()?;
     }
 
-    loop {
+    'outer: loop {
         let cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
@@ -71,6 +72,53 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 .unwrap_or((false, None, None, None, None));
         }
 
+        if cfg.enable_anti_collision && (yt_is_live || tw_is_live) {
+            let target_name = if yt_is_live {
+                &cfg.youtube.channel_name
+            } else {
+                &cfg.twitch.channel_name
+            };
+            // Load aliases from channels.json
+            let aliases = get_aliases(target_name)?;
+
+            // Check all anti-collision rooms
+            for (room_name, room_id) in &cfg.anti_collision {
+                match get_bili_live_status(*room_id).await {
+                    Ok((true, title, _)) => {
+                        // Check title contains target name or aliases
+                        let contains_collision = title.contains(target_name)
+                            || aliases.iter().any(|alias| title.contains(alias));
+
+                        if contains_collision {
+                            let current_collision =
+                                (room_name.clone(), *room_id, target_name.clone());
+                            let mut last_collision = LAST_COLLISION.lock().unwrap();
+                            if last_collision.as_ref() != Some(&current_collision) {
+                                tracing::warn!(
+                                    "🚨 检测到 {} 的直播间 {} 正在转播 {}，跳过本次转播",
+                                    room_name,
+                                    room_id,
+                                    target_name
+                                );
+                                send_danmaku(
+                                    &cfg,
+                                    &format!(
+                                        "{}({})正在转播 {}，跳过本次转播",
+                                        room_name, room_id, target_name
+                                    ),
+                                )
+                                .await?;
+                                *last_collision = Some(current_collision);
+                            }
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            continue 'outer; // 跳转到外层循环重新检测
+                        }
+                    }
+                    Err(e) => tracing::error!("获取防撞直播间 {} 状态失败: {}", room_id, e),
+                    _ => (),
+                }
+            }
+        }
         if yt_is_live || tw_is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
             let (platform, channel_name, channel_id, mut area_v2, cfg_title) = if yt_is_live {
@@ -611,7 +659,7 @@ fn remove_time(message: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.2.2")
+        .version("0.2.3")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")

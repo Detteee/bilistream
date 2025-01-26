@@ -35,6 +35,8 @@ struct Channel {
     name: String,
     platforms: Platforms,
     riot_puuid: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -410,13 +412,9 @@ async fn process_danmaku(command: &str) {
         // let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
         // Additional checks for specific area_ids
-        if (updated_area_id == 240 || updated_area_id == 318 || updated_area_id == 252)
-            && channel_name != "Kamito"
-        {
-            tracing::error!("只有'Kamito'可以使用 Apex, COD or Tarkov 分区. Skipping...");
-            let _ =
-                bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD or Tarkov 分区")
-                    .await;
+        if (updated_area_id == 240 || updated_area_id == 318) && channel_name != "Kamito" {
+            tracing::error!("只有'Kamito'可以使用 Apex, COD 分区. Skipping...");
+            let _ = bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD 分区").await;
             return;
         }
 
@@ -621,4 +619,14 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         "塞尔达传说" => Ok(308),
         _ => Err(format!("未知的分区: {}", area_name).into()),
     }
+}
+
+pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let channels = load_channels()?;
+    Ok(channels
+        .channels
+        .iter()
+        .find(|c| c.name == target_name)
+        .map(|c| c.aliases.clone())
+        .unwrap_or_default())
 }

@@ -1,5 +1,6 @@
 Interval: 60 # 检测直播间隔
 AutoCover: true # 自动更换封面
+EnableAntiCollision: false # 撞车监控
 Proxy:# 代理地址,无需代理可以不填此项或者留空
 HolodexApiKey: # Holodex Api Key from https://holodex.net/login
 RiotApiKey: # Riot API Key from https://developer.riotgames.com/
@@ -21,6 +22,11 @@ Twitch:
   AreaV2: # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
   OauthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+
+AntiCollisionList:
+  B站ID1: 房间号1  # ID仅用于弹幕提醒撞车
+  B站ID2: 房间号2  # 房间号用于检测撞车
+  # 添加更多需要监控的直播间...
 
 
 
