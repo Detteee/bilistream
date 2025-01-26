@@ -23,6 +23,12 @@ static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 static LAST_COLLISION: Mutex<Option<(String, i32, String)>> = Mutex::new(None);
 
+#[derive(PartialEq)]
+enum CollisionResult {
+    Continue,
+    Proceed,
+}
+
 fn init_logger() {
     tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
@@ -62,126 +68,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         }
         // Check Twitch status
         let tw_live = select_live(cfg.clone(), "TW").await?;
-        let mut tw_is_live = false;
-        let mut tw_m3u8_url = None;
-        let mut tw_title = None;
-        let mut tw_area = None;
-        if !yt_is_live && !cfg.enable_anti_collision {
-            (tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
-                .get_status()
-                .await
-                .unwrap_or((false, None, None, None, None));
-        }
+        let (mut tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
+            .get_status()
+            .await
+            .unwrap_or((false, None, None, None, None));
 
         // Modified main code section
         if cfg.enable_anti_collision {
-            let mut yt_collision = None;
-            let mut tw_collision = None;
-
-            // Check YouTube collision first
-            if yt_is_live {
-                let target_name = &cfg.youtube.channel_name;
-                let aliases = get_aliases(target_name)?;
-                yt_collision = check_collision(target_name, &aliases).await?;
-            }
-
-            // If YouTube collided or not live, check Twitch
-            if !yt_is_live || yt_collision.is_some() {
-                (tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None));
-                let target_name = &cfg.twitch.channel_name;
-                let aliases = get_aliases(target_name)?;
-                tw_collision = check_collision(target_name, &aliases).await?;
-            }
-
-            // Handle collision results
-            let mut last_collision = LAST_COLLISION.lock().unwrap();
-            if yt_collision.is_some() && tw_collision.is_some() {
-                let current = (
-                    yt_collision.as_ref().unwrap().0.clone(),
-                    yt_collision.as_ref().unwrap().1,
-                    "双平台".to_string(),
-                );
-
-                if last_collision.as_ref() != Some(&current) {
-                    tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
-                    // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
-                    // tokio::time::sleep(Duration::from_secs(2)).await;
-                    send_danmaku(
-                        &cfg,
-                        &format!(
-                            "{}({})正在转{}",
-                            yt_collision.as_ref().unwrap().0,
-                            yt_collision.as_ref().unwrap().1,
-                            yt_collision.as_ref().unwrap().2,
-                        ),
-                    )
-                    .await?;
-                    if yt_collision.as_ref().unwrap().0 != tw_collision.as_ref().unwrap().0 {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        send_danmaku(
-                            &cfg,
-                            &format!(
-                                "{}({})正在转{}",
-                                tw_collision.as_ref().unwrap().0,
-                                tw_collision.as_ref().unwrap().1,
-                                tw_collision.as_ref().unwrap().2,
-                            ),
-                        )
-                        .await?;
-                    }
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                        thread::spawn(move || run_danmaku());
-                    }
-                    send_danmaku(&cfg, "撞车：可使用弹幕指令换台").await?;
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    *last_collision = Some(current);
-                }
-                continue 'outer;
-            } else if let Some(collision) = yt_collision.or(tw_collision) {
-                let other_live = if collision.2 == cfg.youtube.channel_name {
-                    let ol = tw_is_live;
-                    yt_is_live = false;
-                    ol
-                } else {
-                    let ol = yt_is_live;
-                    tw_is_live = false;
-                    ol
-                };
-
-                if !other_live && last_collision.as_ref() != Some(&collision) {
-                    tracing::warn!(
-                        "{}（{}）撞车，{}（{}）未开播",
-                        collision.0,
-                        collision.1,
-                        if collision.2 == cfg.youtube.channel_name {
-                            "Twitch"
-                        } else {
-                            "YouTube"
-                        },
-                        if collision.2 == cfg.youtube.channel_name {
-                            cfg.twitch.channel_name.clone()
-                        } else {
-                            cfg.youtube.channel_name.clone()
-                        }
-                    );
-                    send_danmaku(
-                        &cfg,
-                        &format!("{}({})正在转{}", collision.0, collision.1, collision.2,),
-                    )
-                    .await?;
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                        thread::spawn(move || run_danmaku());
-                    }
-                    send_danmaku(&cfg, "撞车：可使用弹幕指令换台").await?;
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    *last_collision = Some(collision);
-                    continue 'outer;
-                }
+            match handle_collisions(&mut yt_is_live, &mut tw_is_live).await? {
+                CollisionResult::Continue => continue 'outer,
+                CollisionResult::Proceed => (),
             }
         }
 
@@ -749,6 +645,124 @@ async fn check_collision(
         }
     }
     Ok(None)
+}
+
+async fn handle_collisions(
+    yt_is_live: &mut bool,
+    tw_is_live: &mut bool,
+) -> Result<CollisionResult, Box<dyn Error>> {
+    let cfg = load_config().await?;
+
+    let mut yt_collision = None;
+    let mut tw_collision = None;
+
+    // YouTube collision check
+    if *yt_is_live {
+        let target_name = &cfg.youtube.channel_name;
+        let aliases = get_aliases(target_name)?;
+        yt_collision = check_collision(target_name, &aliases).await?;
+    }
+
+    // Twitch collision check
+    if *tw_is_live {
+        let target_name = &cfg.twitch.channel_name;
+        let aliases = get_aliases(target_name)?;
+        tw_collision = check_collision(target_name, &aliases).await?;
+    }
+
+    // Collision handling logic
+    let mut last_collision = LAST_COLLISION.lock().unwrap();
+    if yt_collision.is_some() && tw_collision.is_some() {
+        let current = (
+            yt_collision.as_ref().unwrap().0.clone(),
+            yt_collision.as_ref().unwrap().1,
+            "双平台".to_string(),
+        );
+
+        if last_collision.as_ref() != Some(&current) {
+            tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
+            // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
+            // tokio::time::sleep(Duration::from_secs(2)).await;
+            send_danmaku(
+                &cfg,
+                &format!(
+                    "{}({})正在转{}",
+                    yt_collision.as_ref().unwrap().0,
+                    yt_collision.as_ref().unwrap().1,
+                    yt_collision.as_ref().unwrap().2,
+                ),
+            )
+            .await?;
+            if yt_collision.as_ref().unwrap().0 != tw_collision.as_ref().unwrap().0 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                send_danmaku(
+                    &cfg,
+                    &format!(
+                        "{}({})正在转{}",
+                        tw_collision.as_ref().unwrap().0,
+                        tw_collision.as_ref().unwrap().1,
+                        tw_collision.as_ref().unwrap().2,
+                    ),
+                )
+                .await?;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
+                thread::spawn(move || run_danmaku());
+            }
+            send_danmaku(&cfg, "撞车：可使用弹幕指令换台").await?;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            *last_collision = Some(current);
+            Ok(CollisionResult::Continue)
+        } else {
+            Ok(CollisionResult::Continue)
+        }
+    } else if let Some(collision) = yt_collision.or(tw_collision) {
+        let other_live = if collision.2 == cfg.youtube.channel_name {
+            let ol = *tw_is_live;
+            *yt_is_live = false;
+            ol
+        } else {
+            let ol = *yt_is_live;
+            *tw_is_live = false;
+            ol
+        };
+
+        if !other_live && last_collision.as_ref() != Some(&collision) {
+            tracing::warn!(
+                "{}（{}）撞车，{}（{}）未开播",
+                collision.0,
+                collision.1,
+                if collision.2 == cfg.youtube.channel_name {
+                    "Twitch"
+                } else {
+                    "YouTube"
+                },
+                if collision.2 == cfg.youtube.channel_name {
+                    cfg.twitch.channel_name.clone()
+                } else {
+                    cfg.youtube.channel_name.clone()
+                }
+            );
+            send_danmaku(
+                &cfg,
+                &format!("{}({})正在转{}", collision.0, collision.1, collision.2,),
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
+                thread::spawn(move || run_danmaku());
+            }
+            send_danmaku(&cfg, "撞车：可使用弹幕指令换台").await?;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            *last_collision = Some(collision);
+            Ok(CollisionResult::Continue)
+        } else {
+            Ok(CollisionResult::Proceed)
+        }
+    } else {
+        Ok(CollisionResult::Proceed)
+    }
 }
 
 #[tokio::main]
