@@ -2,8 +2,8 @@ use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, ffmpeg, get_area_name, get_bili_live_status, get_channel_name,
-    get_puuid, get_thumbnail, get_twitch_status, get_youtube_live_title, get_youtube_status,
-    is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live, send_danmaku,
+    get_puuid, get_thumbnail, get_twitch_status, get_youtube_status, is_danmaku_running,
+    is_ffmpeg_running, run_danmaku, select_live, send_danmaku,
 };
 
 use chrono::{DateTime, Local};
@@ -162,7 +162,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                         tracing::error!("B站直播间封面替换失败: {}", e);
                     } else {
@@ -237,12 +237,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                let live_title = get_live_title("YT", Some(&cfg.youtube.channel_id)).await?;
-                if live_title != "" && live_title != "空" {
+                if yt_title.is_some() {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
                         scheduled_start.unwrap(),
-                        Some(&live_title),
+                        Some(&yt_title.unwrap()),
                         &cfg.twitch.channel_name,
                     );
 
@@ -506,58 +505,6 @@ async fn get_live_status(
     }
 }
 
-async fn get_live_title(
-    platform: &str,
-    channel_id: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    match platform {
-        "bilibili" => {
-            let cfg = load_config().await?;
-            let title = get_bili_live_status(cfg.bililive.room).await?.1;
-            Ok(title)
-        }
-        "YT" => {
-            let cfg = load_config().await?;
-            let channel_id = if let Some(id) = channel_id {
-                id
-            } else {
-                &cfg.youtube.channel_id
-            };
-
-            let title_str = get_youtube_live_title(channel_id).await?;
-            if let Some(title) = title_str {
-                // title end with date time like 2024-11-21 01:59 remove it
-                let title = title.split(" 202").next().unwrap_or(&title).to_string();
-                // tracing::info!("YouTube 直播标题: {}", title);
-                Ok(title)
-            } else {
-                // tracing::info!("YouTube 直播标题: 空");
-                Ok("空".to_string())
-            }
-        }
-        "TW" => {
-            let cfg = load_config().await?;
-            let channel_id = if let Some(id) = channel_id {
-                id
-            } else {
-                &cfg.twitch.channel_id
-            };
-
-            let title = get_twitch_status(channel_id).await?.2;
-            if title.is_some() {
-                // println!("Twitch直播标题: {}", title);
-                tracing::info!("Twitch 直播标题: {}", title.clone().unwrap());
-                Ok(title.unwrap())
-            } else {
-                Ok("空".to_string())
-            }
-        }
-        _ => {
-            tracing::info!("不支持的平台: {}", platform);
-            Err(format!("不支持的平台: {}", platform).into())
-        }
-    }
-}
 async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_config().await?;
     let area_v2 = if optional_platform == Some("YT") {
