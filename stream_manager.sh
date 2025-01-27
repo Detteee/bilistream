@@ -87,8 +87,7 @@ update_riot_api_key() {
     echo "从https://developer.riotgames.com/获取API Key"
     read -p "请输入Riot API Key: " riot_api_key
     if [ ! -z "$riot_api_key" ]; then
-        sed -i "s/RiotApiKey: .*/RiotApiKey: $riot_api_key/" "$BASE_DIR/YT/config.yaml"
-        sed -i "s/RiotApiKey: .*/RiotApiKey: $riot_api_key/" "$BASE_DIR/TW/config.yaml"
+        sed -i "s/RiotApiKey: .*/RiotApiKey: $riot_api_key/" "$BASE_DIR/config.yaml"
         echo "Riot API Key 已更新。"
     else
         echo "Riot API Key 为空，跳过更新。"
