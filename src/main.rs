@@ -250,7 +250,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if yt_title.is_some() {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
-                        scheduled_start.unwrap(),
+                        Some(scheduled_start.unwrap()),
                         Some(&yt_title.unwrap()),
                         &cfg.twitch.channel_name,
                     );
@@ -277,7 +277,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 } else {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
-                        scheduled_start.unwrap(),
+                        None,
                         None,
                         &cfg.twitch.channel_name,
                     );
@@ -306,8 +306,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if !NO_LIVE.load(Ordering::SeqCst) {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
-                        Local::now(), // Use current time since there's no scheduled time
-                        None,         // No title when not streaming
+                        None,
+                        None, // No title when not streaming
                         &cfg.twitch.channel_name,
                     );
                     tracing::info!("{}", current_message);
@@ -324,16 +324,25 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
 fn box_message(
     yt_channel: &str,
-    scheduled_time: DateTime<Local>,
+    scheduled_time: Option<DateTime<Local>>,
     title: Option<&str>,
     tw_channel: &str,
 ) -> String {
-    let yt_line = format!(
-        "YT: {} 未直播，计划于 {} 开始，",
-        yt_channel,
-        scheduled_time.format("%Y-%m-%d %H:%M:%S")
-    );
-    let width = yt_line.width() + 2;
+    // Initialize variables first
+    let (yt_line, width) = if scheduled_time.is_some() {
+        let line = format!(
+            "YT: {} 未直播，计划于 {} 开始，",
+            yt_channel,
+            scheduled_time.unwrap().format("%Y-%m-%d %H:%M:%S")
+        );
+        (line.clone(), line.width() + 2)
+    } else {
+        let line = format!(
+            "YT: {} 未直播                                   ",
+            yt_channel
+        );
+        (line.clone(), line.width() + 2)
+    };
 
     let mut message = format!(
         "\r\x1b[K\x1b[1m┌{:─<width$}┐\n\
@@ -1019,8 +1028,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => {
-            // let process_name = format!("bilistream");
-            // set_title(&process_name);
             // Default behavior: run bilistream with the provided config
             run_bilistream(ffmpeg_log_level).await?;
         }
