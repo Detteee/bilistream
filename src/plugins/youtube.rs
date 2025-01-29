@@ -72,6 +72,7 @@ pub async fn get_youtube_status(
     }
 
     let videos: Vec<serde_json::Value> = response.json().await?;
+    // println!("{:?}", videos);
     if videos.is_empty() {
         return get_status_with_yt_dlp(channel_id, proxy, None).await;
     }

@@ -57,7 +57,9 @@ pub fn get_channel_id(
     let config = load_channels()?;
 
     for channel in config.channels {
-        if channel.name == channel_name {
+        // Check both name and aliases
+        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
+        if all_names.iter().any(|n| n == channel_name) {
             match platform {
                 "YT" => return Ok(channel.platforms.youtube),
                 "TW" => return Ok(channel.platforms.twitch),
@@ -100,13 +102,17 @@ pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error
     let config = load_channels()?;
 
     for channel in config.channels {
-        if channel.name == channel_name {
+        // Check both name and aliases
+        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
+        if all_names.iter().any(|n| n == channel_name) {
             if let Some(puuid) = channel.riot_puuid {
                 return Ok(puuid);
             }
         }
     }
-    Err("PUUID not found for channel".into())
+    // Err("PUUID not found for channel".into())
+    tracing::error!("PUUID not found for channel: {}", channel_name);
+    Ok("".to_string())
 }
 
 // Optional: Helper function to get all channels for a platform
@@ -133,20 +139,6 @@ pub fn get_all_channels(
     }
 
     Ok(channels)
-}
-
-// Optional: Helper function to get all PUUIDs
-pub fn get_all_puuids() -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    let config = load_channels()?;
-    let mut puuids = Vec::new();
-
-    for channel in config.channels {
-        if let Some(puuid) = channel.riot_puuid {
-            puuids.push((channel.name, puuid));
-        }
-    }
-
-    Ok(puuids)
 }
 
 /// Updates the configuration YAML file with new values.
@@ -235,6 +227,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         || title.contains("gta")
     {
         235
+    } else if title.contains("clubhouse") || title.contains("アソビ大全") {
+        236
     } else if title.contains("tarkov") || title.contains("タルコフ") {
         252
     } else if title.contains("call of duty") || title.contains("BO6") {
@@ -243,8 +237,31 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         555
     } else if title.contains("zelda") || title.contains("ゼルダ") {
         308
+    } else if title.contains("delta force") {
+        878
+    } else if title.contains("dark and darker") || title.contains("dad") {
+        795
     } else {
         current_area_id
+    }
+}
+
+fn resolve_area_alias(alias: &str) -> &str {
+    match alias.to_lowercase().as_str() {
+        "101" | "ろる" | "ろ、る" | "tft" => "英雄联盟",
+        "瓦" | "ヴァロ" => "无畏契约",
+        "mc" | "マイクラ" | "minecraft" => "我的世界",
+        "ff14" => "最终幻想14",
+        "mhw" | "猛汉王" | "モンハン" | "monhun" => "怪物猎人",
+        "洲" | "三角洲" => "三角洲行动",
+        "apex" | "派" => "APEX英雄",
+        "st6" | "街霸" => "格斗游戏",
+        "tkf" | "tarkov" | "塔科夫" | "タルコフ" => "逃离塔科夫",
+        "cod" | "使命召唤" => "使命召唤:战区",
+        "dad" => "Dark and Darker",
+        "elden" | "エルデンリング" => "艾尔登法环",
+        "zelda" | "ゼルダ" | "塞尔达" => "塞尔达传说",
+        _ => alias,
     }
 }
 
@@ -302,17 +319,10 @@ async fn process_danmaku(command: &str) {
         return;
     }
 
-    let platform = parts[2];
+    let platform = parts[2].to_uppercase();
     let channel_name = parts[3];
-    let area_name = parts[4];
-    tracing::info!(
-        "平台: {}, 频道: {}, 分区: {}",
-        platform,
-        channel_name,
-        area_name
-    );
-
-    // Determine area_id based on area_name
+    let area_alias = parts[4];
+    let area_name = resolve_area_alias(area_alias);
     let area_id = match get_area_id(area_name) {
         Ok(id) => id,
         Err(e) => {
@@ -321,9 +331,15 @@ async fn process_danmaku(command: &str) {
             return;
         }
     };
+    tracing::info!(
+        "平台: {}, 频道: {}, 分区: {}",
+        platform,
+        channel_name,
+        area_name
+    );
 
     if platform.eq("YT") || platform.eq("TW") {
-        let channel_id = match get_channel_id(platform, channel_name) {
+        let channel_id = match get_channel_id(&platform, channel_name) {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("检查频道时出错: {}", e);
@@ -344,17 +360,25 @@ async fn process_danmaku(command: &str) {
 
         // Use a reference to the String inside channel_id without moving it
         let channel_id_str = channel_id.as_ref().unwrap();
+        let channel_name = match get_channel_name(&platform, channel_id_str) {
+            Ok(name) => name,
+            Err(e) => {
+                tracing::error!("获取频道名称时出错: {}", e);
+                return;
+            }
+        };
 
         let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
             match get_youtube_status(channel_id_str).await {
                 Ok((_, topic, title, _, _)) => {
-                    println!("title: {:?}", title);
                     let t = match title {
                         Some(t) => t,
                         None => {
                             tracing::error!("获取YT直播标题失败");
                             let _ = bilibili::send_danmaku(&cfg, "错误：获取YT直播标题失败").await;
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            let _ = bilibili::send_danmaku(&cfg, "请确认是否已开（预告）窗").await;
                             return;
                         }
                     };
@@ -392,33 +416,51 @@ async fn process_danmaku(command: &str) {
             }
         };
         let live_topic_title = format!("{} {}", live_topic, live_title).to_lowercase();
-        if live_topic_title.contains("ウォッチパ")
-            || live_topic_title.contains("watchalong")
-            || live_topic_title.contains("talk")
-            || live_topic_title.contains("zatsudan")
-            || live_topic_title.contains("雑談")
-            || live_topic_title.contains("marshmallow")
-            || live_topic_title.contains("morning")
-            || live_topic_title.contains("freechat")
-            || live_topic_title.contains("どうぶつの森")
-            || live_topic_title.contains("animal crossing")
-            || live_topic_title.contains("just chatting")
+        let keywords = vec![
+            "ウォッチパ",
+            "watchalong",
+            "talk",
+            "zatsudan",
+            "雑談",
+            "marshmallow",
+            "morning",
+            "freechat",
+            "どうぶつの森",
+            "animal crossing",
+            "just chatting",
+            "asmr",
+            "dbd",
+            "dead by daylight",
+            "l4d2",
+            "left 4 dead 2",
+        ];
+        if let Some(keyword) = keywords
+            .iter()
+            .find(|keyword| live_topic_title.contains(*keyword))
         {
-            tracing::error!("直播标题/topic包含不支持的关键词:\n{}", live_topic_title);
-            let _ = bilibili::send_danmaku(&cfg, "错误：目标直播标题/分区包含不支持的关键词").await;
+            tracing::error!("直播标题/分区包含不支持的关键词:\n{}", live_topic_title);
+            let _ = bilibili::send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await;
             return;
         }
+
         // Now you can use channel_id_str where needed without moving channel_id
         // let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
         // Additional checks for specific area_ids
-        if (updated_area_id == 240 || updated_area_id == 318) && channel_name != "Kamito" {
+        if (updated_area_id == 240 || updated_area_id == 318)
+            && channel_name.as_deref() != Some("Kamito")
+        {
             tracing::error!("只有'Kamito'可以使用 Apex, COD 分区. Skipping...");
             let _ = bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD 分区").await;
             return;
         }
 
-        if let Err(e) = update_config(platform, channel_name, &channel_id_str, updated_area_id) {
+        if let Err(e) = update_config(
+            &platform,
+            channel_name.as_deref().unwrap(),
+            &channel_id_str,
+            updated_area_id,
+        ) {
             tracing::error!("更新配置时出错: {}", e);
             let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
             return;
@@ -435,7 +477,7 @@ async fn process_danmaku(command: &str) {
         tracing::info!(
             "更新 {} 频道: {} 分区: {} (ID: {} )",
             platform,
-            channel_name,
+            channel_name.as_deref().unwrap(),
             updated_area_name,
             updated_area_id
         );
@@ -445,7 +487,9 @@ async fn process_danmaku(command: &str) {
             &cfg,
             &format!(
                 "更新：{} - {} - {}",
-                platform, channel_name, updated_area_name
+                platform,
+                channel_name.as_deref().unwrap(),
+                updated_area_name
             ),
         )
         .await;
@@ -587,6 +631,8 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         555 => Some("艾尔登法环"),
         578 => Some("怪物猎人"),
         308 => Some("塞尔达传说"),
+        878 => Some("三角洲行动"),
+        795 => Some("Dark and Darker"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None
@@ -617,6 +663,8 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         "艾尔登法环" => Ok(555),
         "怪物猎人" => Ok(578),
         "塞尔达传说" => Ok(308),
+        "三角洲行动" => Ok(878),
+        "Dark and Darker" => Ok(795),
         _ => Err(format!("未知的分区: {}", area_name).into()),
     }
 }

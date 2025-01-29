@@ -2,6 +2,7 @@
   "channels": [
     {
       "name": "Kamito",
+      "aliases": ["k","kamito","kmt"],
       "platforms": {
         "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
         "twitch": "kamito_jp"
@@ -10,14 +11,14 @@
     },
     {
       "name": "花芽なずな",
-      "aliases": ["花芽荠"],
+      "aliases": ["花芽荠","nazuna","nazu","nazup"],
       "platforms": {
         "youtube": "UCiMG6VdScBabPhJ1ZtaVmbw"
       }
     },
     {
       "name": "花芽すみれ",
-      "aliases": ["花芽堇"],
+      "aliases": ["花芽堇","sumire","kagasumire","sumi","su酱"],
       "platforms": {
         "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA",
         "twitch": "kagasumire"
@@ -68,7 +69,7 @@
     },
     {
       "name": "橘ひなの",
-      "aliases": ["橘雏乃"],
+      "aliases": ["橘雏乃","hinano","hnn"],
       "platforms": {
         "youtube": "UCvUc0m317LWTTPZoBQV479A",
         "twitch": "hinanotachiba7"
@@ -85,7 +86,7 @@
     },
     {
       "name": "如月れん",
-      "aliases": ["如月怜"],
+      "aliases": ["如月怜","ren"],
       "platforms": {
         "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
         "twitch": "ren_kisaragi__"
@@ -97,7 +98,8 @@
       "aliases": ["神成丘比","qp"],
       "platforms": {
         "youtube": "UCMp55EbT_ZlqiMS3lCj01BQ"
-      }
+      },
+      "riot_puuid": "nxY4cV2GvzUqU8PJ3DX_keVWqV3ur01D43wpj4J8L37-kkeuWlQZ46s_W22JDDvW5lE-HRplY7qDPg"
     },
     {
       "name": "八雲べに",
@@ -111,7 +113,8 @@
       "name": "藍沢エマ",
       "aliases": ["蓝泽艾玛","ema"],
       "platforms": {
-        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng"
+        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng",
+        "twitch": "emtsmaru"
       }
     },
     {
@@ -125,7 +128,7 @@
     },
     {
       "name": "猫汰つな",
-      "aliases": ["猫汰月奈","tsuna","红猫"],
+      "aliases": ["猫汰月奈","tsuna","红猫","tuna"],
       "platforms": {
         "youtube": "UCIjdfjcSaEgdjwbgjxC3ZWg"
       },
@@ -166,14 +169,15 @@
     },
     {
       "name": "紡木こかげ",
-      "aliases": ["纺木小景","蓝猪","小景","蓝色小猪"],
+      "aliases": ["纺木小景","蓝猪","小景","蓝色小猪","kogake","kkg"],
       "platforms": {
         "youtube": "UC-WX1CXssCtCtc2TNIRnJzg"
-      }
+      },
+      "riot_puuid": "GPqAiRgoxCPMLLg_iigy5tNJ7o7HXw6LBiLAz-i_8YAWfhGdshQoaldXhVC2BrJJAxe33la7IdfXHQ"
     },
     {
       "name": "千燈ゆうひ",
-      "aliases": ["千灯夕阳","jk"],
+      "aliases": ["千灯夕阳","jk","千灯"],
       "platforms": {
         "youtube": "UCuDY3ibSP2MFRgf7eo3cojg",
         "twitch": "sendo_yuuhi"
@@ -182,12 +186,14 @@
     },
     {
       "name": "蝶屋はなび",
+      "aliases": ["hanabi"],
       "platforms": {
         "youtube": "UCL9hJsdk9eQa0IlWbFB2oRg"
       }
     },
     {
       "name": "甘結もか",
+      "aliases": ["moka"],
       "platforms": {
         "youtube": "UC8vKBjGY2HVfbW9GAmgikWw"
       }
@@ -202,7 +208,7 @@
     },
     {
       "name": "獅子堂あかり",
-      "aliases": ["uouo"],
+      "aliases": ["uouo","狮子堂"],
       "platforms": {
         "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ",
         "twitch": "shishidoakari"
@@ -210,6 +216,7 @@
     },
     {
       "name": "天帝フォルテ",
+      "aliases": ["天帝","forte"],
       "platforms": {
         "youtube": "UC8hwewh9svh92E1gXvgVazg",
         "twitch": "tentei_forte"
@@ -218,6 +225,7 @@
     },
     {
       "name": "夜絆ニウ",
+      "aliases": ["niu"],
       "platforms": {
         "youtube": "UCZmUoMwjyuQ59sk5_7Tx07A"
       }
@@ -237,6 +245,7 @@
     },
     {
       "name": "夜よいち",
+      "aliases": ["夜一"],
       "platforms": {
         "twitch": "yoichi_0v0"
       },
@@ -244,12 +253,14 @@
     },
     {
       "name": "甘城なつき",
+      "aliases": ["nacho","nachoneko","なつき"],
       "platforms": {
         "twitch": "nacho_dayo"
       }
     },
     {
       "name": "狐白うる",
+      "aliases": ["狐白","uru","god"],
       "platforms": {
         "twitch": "kohaku_uru"
       },
@@ -263,8 +274,26 @@
     },
     {
       "name": "まふゆ",
+      "aliases": ["mafuyu"],
       "platforms": {
         "twitch": "mmafu_"
+      }
+    },
+    {
+      "name": "白那しずく",
+      "aliases": ["467","shizuku","白那"],
+      "platforms": {
+        "youtube": "UCAHQGIKolfBfoeXXMY79SBA",
+        "twitch": "shirona_shizuku"
+      },
+      "riot_puuid": "2_Jfn9RlncOQn6A2elU_hMOLkMrsaRGTscrWM0urm7cONIY10YPKsQaZFVMTMrheOzdBIJHoadepjg"
+    },
+    {
+      "name": "絲依とい",
+      "aliases": ["toitoi"],
+      "platforms": {
+        "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ",
+        "twitch": "itoitoi_q"
       }
     }
   ]
