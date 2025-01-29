@@ -57,7 +57,9 @@ pub fn get_channel_id(
     let config = load_channels()?;
 
     for channel in config.channels {
-        if channel.name == channel_name {
+        // Check both name and aliases
+        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
+        if all_names.iter().any(|n| n == channel_name) {
             match platform {
                 "YT" => return Ok(channel.platforms.youtube),
                 "TW" => return Ok(channel.platforms.twitch),
@@ -100,7 +102,9 @@ pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error
     let config = load_channels()?;
 
     for channel in config.channels {
-        if channel.name == channel_name {
+        // Check both name and aliases
+        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
+        if all_names.iter().any(|n| n == channel_name) {
             if let Some(puuid) = channel.riot_puuid {
                 return Ok(puuid);
             }
@@ -133,20 +137,6 @@ pub fn get_all_channels(
     }
 
     Ok(channels)
-}
-
-// Optional: Helper function to get all PUUIDs
-pub fn get_all_puuids() -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    let config = load_channels()?;
-    let mut puuids = Vec::new();
-
-    for channel in config.channels {
-        if let Some(puuid) = channel.riot_puuid {
-            puuids.push((channel.name, puuid));
-        }
-    }
-
-    Ok(puuids)
 }
 
 /// Updates the configuration YAML file with new values.
@@ -344,6 +334,13 @@ async fn process_danmaku(command: &str) {
 
         // Use a reference to the String inside channel_id without moving it
         let channel_id_str = channel_id.as_ref().unwrap();
+        let channel_name = match get_channel_name(platform, channel_id_str) {
+            Ok(name) => name,
+            Err(e) => {
+                tracing::error!("获取频道名称时出错: {}", e);
+                return;
+            }
+        };
 
         let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
@@ -412,13 +409,20 @@ async fn process_danmaku(command: &str) {
         // let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
         // Additional checks for specific area_ids
-        if (updated_area_id == 240 || updated_area_id == 318) && channel_name != "Kamito" {
+        if (updated_area_id == 240 || updated_area_id == 318)
+            && channel_name.as_deref() != Some("Kamito")
+        {
             tracing::error!("只有'Kamito'可以使用 Apex, COD 分区. Skipping...");
             let _ = bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD 分区").await;
             return;
         }
 
-        if let Err(e) = update_config(platform, channel_name, &channel_id_str, updated_area_id) {
+        if let Err(e) = update_config(
+            platform,
+            channel_name.as_deref().unwrap(),
+            &channel_id_str,
+            updated_area_id,
+        ) {
             tracing::error!("更新配置时出错: {}", e);
             let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
             return;
@@ -435,7 +439,7 @@ async fn process_danmaku(command: &str) {
         tracing::info!(
             "更新 {} 频道: {} 分区: {} (ID: {} )",
             platform,
-            channel_name,
+            channel_name.as_deref().unwrap(),
             updated_area_name,
             updated_area_id
         );
@@ -445,7 +449,9 @@ async fn process_danmaku(command: &str) {
             &cfg,
             &format!(
                 "更新：{} - {} - {}",
-                platform, channel_name, updated_area_name
+                platform,
+                channel_name.as_deref().unwrap(),
+                updated_area_name
             ),
         )
         .await;
