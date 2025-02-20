@@ -776,7 +776,7 @@ pub async fn renew() -> Result<(), Box<dyn Error>> {
     file.rewind()?;
     file.set_len(0)?;
     serde_json::to_writer_pretty(std::io::BufWriter::new(&file), &new_info)?;
-    tracing::info!("{new_info:?}");
+    // tracing::info!("{new_info:?}");
 
     Ok(())
 }

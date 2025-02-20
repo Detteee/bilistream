@@ -43,10 +43,11 @@ select_area_id() {
     echo "15) 407: 游戏王          16) 694: 斯普拉遁3"
     echo "17) 252: 逃离塔科夫      18) 318: 使命召唤:战区"
     echo "19) 555: 艾尔登法环      20) 578: 怪物猎人"
-    echo "21) 308: 塞尔达传说"
+    echo "21) 308: 塞尔达传说      22) 878: 三角洲行动"
+    echo "23) 795: Dark and Darker"
     echo " 0) 自定义"
     echo -e "${GREEN}──────────────────────────────────────────────────────────${RESET}"
-    read -p "请选择分区 ID (0-21): " area_choice
+    read -p "请选择分区 ID (0-23): " area_choice
 
     case $area_choice in
     1) areaid=86 ;;
@@ -70,6 +71,8 @@ select_area_id() {
     19) areaid=555 ;;
     20) areaid=578 ;;
     21) areaid=308 ;;
+    22) areaid=878 ;;
+    23) areaid=795 ;;
     0)
         read -p "请输入自定义分区 ID: " areaid
         ;;
@@ -119,6 +122,8 @@ get_area_name() {
     555) echo "艾尔登法环" ;;
     578) echo "怪物猎人" ;;
     308) echo "塞尔达传说" ;;
+    878) echo "三角洲行动" ;;
+    795) echo "Dark and Darker" ;;
     *) echo "未知分区 (ID: $area_id)" ;;
     esac
 }
@@ -136,10 +141,11 @@ select_channel_id() {
     echo "19) 夢野あかり         20) 夜乃くろむ          21) 紡木こかげ"
     echo "22) 千燈ゆうひ         23) 蝶屋はなび          24) 甘結もか"
     echo "25) Narin Mikure       26) 獅子堂あかり        27) 天帝フォルテ"
-    echo "28) 夜絆ニウ           29) ぶいすぽっ!【公式】"
+    echo "28) 夜絆ニウ           29) 白那しずく          30) 絲依とい"
+    echo "31) ぶいすぽっ!【公式】"
     echo " 0) Custom"
     echo -e "${GREEN}───────────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-29): " yt_choice
+    read -p "Select Channel (0-31): " yt_choice
 
     case $yt_choice in
     1)
@@ -255,6 +261,14 @@ select_channel_id() {
         channel_name="夜絆ニウ"
         ;;
     29)
+        chid="UCAHQGIKolfBfoeXXMY79SBA"
+        channel_name="白那しずく"
+        ;;
+    30)
+        chid="UCZrYHIPsKhYAXqOls2kQQNQ"
+        channel_name="絲依とい"
+        ;;
+    31)
         chid="UCuI5XaO-6VkOEhHao6ij7JA"
         channel_name="ぶいすぽっ!【公式】"
         ;;
@@ -299,20 +313,22 @@ select_channel_id() {
     echo "New Title: $new_title"
     return 0
 }
+
 # Function to select Twitch ID
 select_twitch_id() {
     echo "Select Twitch Channel:"
     echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
     echo " 1) Kamito              2) 花芽すみれ           3) 英リサ"
-    echo " 4) 胡桃のあ            5) 橘ひなの             6) 空澄セナ"
-    echo " 7) 紫宮るな            8) 夢野あかり           9) 白波らむね"
-    echo "10) 千燈ゆうひ         11) Narin               12) とおこ"
-    echo "13) 天帝フォルテ       14) 獅子堂あかり        15) 夜よいち"
-    echo "16) 甘城なつき         17) 狐白うる            18) Anzu_o0"
-    echo "19) まふゆ"
+    echo " 4) 如月れん            5) 胡桃のあ             6) 橘ひなの"
+    echo " 7) 空澄セナ            8) 藍沢エマ             9) 紫宮るな"
+    echo "10) 夢野あかり         11) 白波らむね          12) 千燈ゆうひ"
+    echo "13) Narin             14) とおこ              15) 天帝フォルテ"
+    echo "16) 獅子堂あかり       17) 夜よいち            18) 甘城なつき"
+    echo "19) 狐白うる          20) Anzu_o0             21) まふゆ"
+    echo "22) 白那しずく         23) 絲依とい"
     echo " 0) Custom"
     echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-19): " twitch_choice
+    read -p "Select Channel (0-23): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -328,72 +344,88 @@ select_twitch_id() {
         channel_name="英リサ"
         ;;
     4)
+        channel_id="ren_kisaragi__"
+        channel_name="如月れん"
+        ;;
+    5)
         channel_id="963noah"
         channel_name="胡桃のあ"
         ;;
-    5)
+    6)
         channel_id="hinanotachiba7"
         channel_name="橘ひなの"
         ;;
-    6)
+    7)
         channel_id="asumisena"
         channel_name="空澄セナ"
         ;;
-    7)
+    8)
+        channel_id="emtsmaru"
+        channel_name="藍沢エマ"
+        ;;
+    9)
         channel_id="shinomiya_runa"
         channel_name="紫宮るな"
         ;;
-    8)
+    10)
         channel_id="akarindao"
         channel_name="夢野あかり"
         ;;
-    9)
+    11)
         channel_id="ramuneshiranami"
         channel_name="白波らむね"
         ;;
-    10)
+    12)
         channel_id="sendo_yuuhi"
         channel_name="千燈ゆうひ"
         ;;
-    11)
+    13)
         channel_id="narinmikure"
         channel_name="Narin"
         ;;
-    12)
+    14)
         channel_id="urs_toko"
         channel_name="とおこ"
         ;;
-    13)
+    15)
         channel_id="tentei_forte"
         channel_name="天帝フォルテ"
         ;;
-    14)
+    16)
         channel_id="shishidoakari"
         channel_name="獅子堂あかり"
         ;;
-    15)
+    17)
         channel_id="yoichi_0v0"
         channel_name="夜よいち"
         ;;
-    16)
+    18)
         channel_id="nacho_dayo"
         channel_name="甘城なつき"
         ;;
-    17)
+    19)
         channel_id="kohaku_uru"
         channel_name="狐白うる"
         ;;
-    18)
+    20)
         channel_id="anzu_o0"
         channel_name="Anzu_o0"
         ;;
-    19)
+    21)
         channel_id="mmafu_"
         channel_name="まふゆ"
         ;;
+    22)
+        channel_id="shirona_shizuku"
+        channel_name="白那しずく"
+        ;;
+    23)
+        channel_id="itoitoi_q"
+        channel_name="絲依とい"
+        ;;
     0)
-        read -p "Enter Twitch ID: " channel_id
-        read -p "Enter Channel Name: " channel_name
+        read -p "Enter custom Twitch Channel ID: " channel_id
+        read -p "Enter custom Channel Name: " channel_name
         read -p "Whether to add/update this channel in channels.json? (y/N): " add_choice
         add_choice=${add_choice:-N} # Default to 'N' if input is empty
         if [[ $add_choice =~ ^[Yy]$ ]]; then
@@ -422,7 +454,7 @@ select_twitch_id() {
         fi
         ;;
     *)
-        echo "Invalid choice. Please try again."
+        echo "Invalid choice. Exiting."
         return 1
         ;;
     esac
@@ -431,8 +463,6 @@ select_twitch_id() {
     echo "New Title: $new_title"
     return 0
 }
-
-
 
 # Update the display_current_config function
 display_current_config() {

@@ -110,11 +110,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 title.clone().unwrap()
             );
             area_v2 = check_area_id_with_title(&title.unwrap(), area_v2);
-            area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
+            if yot_area.is_some() {
+                area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
+            }
+
             if area_v2 == 240 && !channel_id.contains("Kamito") {
                 area_v2 = 0
             };
-
             if area_v2 == 0 {
                 tracing::info!("标题包含的直播分区不支持,等待10min后重新检测");
                 // 等待10min后重新检测
@@ -479,12 +481,20 @@ async fn get_live_status(
 
             let (is_live, topic, title, _, start_time) = get_youtube_status(&channel_id).await?;
             if is_live {
-                println!(
-                    "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
-                    channel_name,
-                    topic.unwrap(),
-                    title.unwrap()
-                );
+                if topic.is_some() {
+                    println!(
+                        "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
+                        channel_name,
+                        topic.unwrap(),
+                        title.unwrap()
+                    );
+                } else {
+                    println!(
+                        "{} 在 YouTube 直播中, 标题: {}",
+                        channel_name,
+                        title.unwrap()
+                    );
+                }
             } else {
                 if start_time.is_some() {
                     println!(
