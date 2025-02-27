@@ -22,12 +22,23 @@ use unicode_width::UnicodeWidthStr;
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 static LAST_COLLISION: Mutex<Option<(String, i32, String)>> = Mutex::new(None);
+static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(PartialEq)]
 enum CollisionResult {
     Continue,
     Proceed,
 }
+
+const BANNED_KEYWORDS: [&str; 7] = [
+    "どうぶつの森",
+    "animal crossing",
+    "asmr",
+    "dbd",
+    "dead by daylight",
+    "l4d2",
+    "left 4 dead 2",
+];
 
 fn init_logger() {
     tracing_subscriber::fmt()
@@ -101,7 +112,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 )
             };
             let yot_area = if yt_is_live { yt_area } else { tw_area };
-            let title = if yt_is_live { yt_title } else { tw_title };
+            let mut title = if yt_is_live { yt_title } else { tw_title };
             let m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
             tracing::info!(
                 "{} 正在 {} 直播, 标题:\n          {}",
@@ -109,22 +120,46 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 platform,
                 title.clone().unwrap()
             );
-            area_v2 = check_area_id_with_title(&title.unwrap(), area_v2);
+
             if yot_area.is_some() {
-                area_v2 = check_area_id_with_title(&yot_area.unwrap(), area_v2);
+                title = Some(format!("{} {}", yot_area.unwrap(), title.unwrap()));
+            }
+            area_v2 = check_area_id_with_title(&title.as_ref().unwrap(), area_v2);
+            if area_v2 == 86 {
+                let puuid = get_puuid(&channel_name)?;
+                if puuid != "" {
+                    monitor_lol_game(puuid).await?;
+                }
+            } else {
+                INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
             }
             if area_v2 == 240 && !channel_id.contains("Kamito") {
-                area_v2 = 0
+                send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await?;
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
+                    thread::spawn(move || run_danmaku());
+                    thread::sleep(Duration::from_secs(2));
+                    send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
+                }
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue;
             };
-            if area_v2 == 0 {
-                tracing::info!("标题包含的直播分区不支持,等待10min后重新检测");
-                // 等待10min后重新检测
-                tokio::time::sleep(Duration::from_secs(600)).await;
+            if let Some(keyword) = BANNED_KEYWORDS
+                .iter()
+                .find(|k| title.as_ref().unwrap().contains(*k))
+            {
+                tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
+                send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await?;
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
+                    thread::spawn(move || run_danmaku());
+                    thread::sleep(Duration::from_secs(2));
+                    send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
+                }
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue;
             }
             let (bili_is_live, bili_title, bili_area_id) =
                 get_bili_live_status(cfg.bililive.room).await?;
-            if !bili_is_live {
+            if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
                 bili_start_live(&cfg, area_v2).await?;
@@ -182,12 +217,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             }
 
-            if area_v2 == 86 {
-                let puuid = get_puuid(&channel_name)?;
-                if puuid != "" {
-                    monitor_lol_game(puuid).await?;
-                }
-            }
             // Execute ffmpeg with platform-specific locks
             ffmpeg(
                 cfg.bililive.bili_rtmp_url.clone(),
@@ -216,7 +245,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .await
                         .unwrap_or((false, None, None, None, None))
                 };
-                if !current_is_live {
+                let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
+                if !current_is_live || !bili_is_live {
                     break;
                 }
                 // let (is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
@@ -588,9 +618,30 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                             if let Some(word) =
                                 invalid_words.lines().find(|word| ids.contains(word))
                             {
-                                bili_stop_live(&cfg).await.unwrap();
-                                tracing::info!("检测到非法词汇:{}，停止直播", word);
-                                return;
+                                INVALID_ID_DETECTED.store(true, Ordering::SeqCst);
+                                let is_live =
+                                    get_bili_live_status(cfg.bililive.room).await.unwrap().0;
+                                if is_live {
+                                    tracing::error!("检测到非法词汇:{}，停止直播", word);
+                                    bili_stop_live(&cfg).await.unwrap();
+                                    let mut cmd = StdCommand::new("pkill");
+                                    cmd.arg("ffmpeg");
+                                    cmd.spawn().unwrap();
+                                    send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
+                                        .await
+                                        .unwrap();
+                                    if cfg.bililive.enable_danmaku_command && !is_danmaku_running()
+                                    {
+                                        thread::spawn(move || run_danmaku());
+                                        thread::sleep(Duration::from_secs(2));
+                                        send_danmaku(&cfg, "可使用弹幕指令进行换台").await.unwrap();
+                                    }
+                                    return;
+                                } else {
+                                    tracing::error!("检测到非法词汇:{}，不转播", word);
+                                }
+                            } else {
+                                INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
                             }
                         }
                     }
@@ -603,6 +654,7 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
             thread::sleep(Duration::from_secs(interval));
         }
     });
+    tokio::time::sleep(Duration::from_secs(interval)).await;
 
     Ok(())
 }

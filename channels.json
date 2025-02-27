@@ -215,6 +215,15 @@
       }
     },
     {
+      "name": "小清水透",
+      "aliases": ["吸酱","toru"],
+      "platforms": {
+        "youtube": "UCUP8TmlO7NNra88AMqGU_vQ",
+        "twitch": "toru_2434"
+      },
+      "riot_puuid": "fEdPS61QDYU0bE3jFsrwrAnv4jgEbChZ2n9c0KW8XXQQVSzXcyoe87L7KPxH75yKN_4oPRHD_Z4P1"
+    },
+    {
       "name": "天帝フォルテ",
       "aliases": ["天帝forte","天帝"],
       "platforms": {

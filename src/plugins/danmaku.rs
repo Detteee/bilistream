@@ -24,6 +24,24 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
+const BANNED_KEYWORDS: [&str; 16] = [
+    "ウォッチパ",
+    "watchalong",
+    "talk",
+    "zatsudan",
+    "雑談",
+    "marshmallow",
+    "morning",
+    "freechat",
+    "どうぶつの森",
+    "animal crossing",
+    "just chatting",
+    "asmr",
+    "dbd",
+    "dead by daylight",
+    "l4d2",
+    "left 4 dead 2",
+];
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {
     youtube: Option<String>,
@@ -250,7 +268,7 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
 
 fn resolve_area_alias(alias: &str) -> &str {
     match alias.to_lowercase().as_str() {
-        "101" | "ろる" | "ろ、る" | "tft" => "英雄联盟",
+        "101" | "lol" | "ろる" | "ろ、る" | "tft" => "英雄联盟",
         "瓦" | "ヴァロ" => "无畏契约",
         "mc" | "マイクラ" | "minecraft" => "我的世界",
         "ff14" => "最终幻想14",
@@ -419,25 +437,8 @@ async fn process_danmaku(command: &str) {
             }
         };
         let live_topic_title = format!("{} {}", live_topic, live_title).to_lowercase();
-        let keywords = vec![
-            "ウォッチパ",
-            "watchalong",
-            "talk",
-            "zatsudan",
-            "雑談",
-            "marshmallow",
-            "morning",
-            "freechat",
-            "どうぶつの森",
-            "animal crossing",
-            "just chatting",
-            "asmr",
-            "dbd",
-            "dead by daylight",
-            "l4d2",
-            "left 4 dead 2",
-        ];
-        if let Some(keyword) = keywords
+
+        if let Some(keyword) = BANNED_KEYWORDS
             .iter()
             .find(|keyword| live_topic_title.contains(*keyword))
         {
