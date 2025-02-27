@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced using [Cursor](https://www.cursor.com/). While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
+This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced. While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
 
 ## Features
 
@@ -33,8 +33,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 
    ```bash
    sudo apt update
-   sudo apt install ffmpeg yt-dlp nodejs npm
-   pip install streamlink
+   sudo apt install ffmpeg python3-pip
+   pip install yt-dlp streamlink
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -67,7 +67,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    - Proxy settings
    - API keys for various services
    - Anti collision settings
-
 7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
 8. Create channels configuration file:
    Create `channels.json` in the root directory with the following structure:

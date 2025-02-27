@@ -2,15 +2,15 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发，但使用 [Cursor](https://www.cursor.com/) 进行了重大重新设计和增强。虽然核心理念相同，但此实现提供了独特的功能和改进，包括用于更轻松管理的综合 `stream_manager.sh` 脚本。
+本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发。虽然核心理念相同，但此实现提供了独特的功能和改进，包括用于更轻松管理的综合 `stream_manager.sh` 脚本。
 
 ## 功能特点
 
 - 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
-- 支持 YouTube 预定直播
+- 支持 YouTube 的预定直播
 - 可配置/自动更新的哔哩哔哩直播设置（标题、分区和封面）
 - 管理脚本（`stream_manager.sh`）用于更改配置
-- 当哔哩哔哩直播关闭时可通过弹幕命令更改监听目标频道
+- 当哔哩哔哩未转播时可通过弹幕命令更改监听目标频道
 - 监控英雄联盟游戏内玩家名称，如发现黑名单词汇则停止直播
 - 自动检测并避免转播已被转播的频道
 
@@ -33,8 +33,8 @@
 
    ```bash
    sudo apt update
-   sudo apt install ffmpeg yt-dlp nodejs npm
-   pip install streamlink
+   sudo apt install ffmpeg python3-pip
+   pip install yt-dlp streamlink
    ```
 3. 安装 streamlink-ttvlol 插件：
    按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作

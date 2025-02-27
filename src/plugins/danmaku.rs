@@ -241,6 +241,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
         878
     } else if title.contains("dark and darker") || title.contains("dad") {
         795
+    } else if title.contains("致命公司") || title.contains("lethal company") {
+        858
     } else {
         current_area_id
     }
@@ -261,6 +263,7 @@ fn resolve_area_alias(alias: &str) -> &str {
         "dad" => "Dark and Darker",
         "elden" | "エルデンリング" => "艾尔登法环",
         "zelda" | "ゼルダ" | "塞尔达" => "塞尔达传说",
+        "公司" => "致命公司",
         _ => alias,
     }
 }
@@ -633,6 +636,7 @@ pub fn get_area_name(area_id: u64) -> Option<&'static str> {
         308 => Some("塞尔达传说"),
         878 => Some("三角洲行动"),
         795 => Some("Dark and Darker"),
+        858 => Some("致命公司"),
         _ => {
             tracing::error!("未知的分区ID: {}", area_id);
             None
@@ -665,6 +669,7 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         "塞尔达传说" => Ok(308),
         "三角洲行动" => Ok(878),
         "Dark and Darker" => Ok(795),
+        "致命公司" => Ok(858),
         _ => Err(format!("未知的分区: {}", area_name).into()),
     }
 }

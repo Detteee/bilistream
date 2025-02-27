@@ -4,7 +4,7 @@ AntiCollision: false # 撞车监控
 Proxy:# 代理地址,无需代理可以不填此项或者留空
 HolodexApiKey: # Holodex Api Key from https://holodex.net/login
 RiotApiKey: # Riot API Key from https://developer.riotgames.com/
-LolMonitorInterval: 1 # 监控游戏间隔(秒)
+LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
 BiliLive:
   EnableDanmakuCommand: # true or false
   Room: 直播间号

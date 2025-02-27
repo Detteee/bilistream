@@ -2,7 +2,7 @@
   "channels": [
     {
       "name": "Kamito",
-      "aliases": ["k","kamito","kmt"],
+      "aliases": ["k","kmt","黑白头","kami酱"],
       "platforms": {
         "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
         "twitch": "kamito_jp"
@@ -27,7 +27,7 @@
     },
     {
       "name": "小雀とと",
-      "aliases": ["小雀都都","toto"],
+      "aliases": ["小雀都都","toto","1010"],
       "platforms": {
         "youtube": "UCgTzsBI0DIRopMylJEDqnog"
       },
@@ -35,7 +35,7 @@
     },
     {
       "name": "一ノ瀬うるは",
-      "aliases": ["一之濑丽","uraha","丽姐"],
+      "aliases": ["一之濑丽","uraha"],
       "platforms": {
         "youtube": "UC5LyYg6cCA4yHEYvtUsir3g"
       },
@@ -78,7 +78,7 @@
     },
     {
       "name": "英リサ",
-      "aliases": ["英丽萨","lisa"],
+      "aliases": ["英丽萨","丽萨","lisa"],
       "platforms": {
         "youtube": "UCurEA8YoqFwimJcAuSHU0MQ",
         "twitch": "lisahanabusa"
@@ -86,7 +86,7 @@
     },
     {
       "name": "如月れん",
-      "aliases": ["如月怜","ren"],
+      "aliases": ["如月怜","怜","ren"],
       "platforms": {
         "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
         "twitch": "ren_kisaragi__"
@@ -111,7 +111,7 @@
     },
     {
       "name": "藍沢エマ",
-      "aliases": ["蓝泽艾玛","ema"],
+      "aliases": ["蓝泽艾玛","ema","emts"],
       "platforms": {
         "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng",
         "twitch": "emtsmaru"
@@ -119,7 +119,7 @@
     },
     {
       "name": "紫宮るな",
-      "aliases": ["紫宫露娜","runa","67","紫色小女孩","紫发小女孩"],
+      "aliases": ["紫宫","露娜","runa","67","紫色小女孩","紫发小女孩"],
       "platforms": {
         "youtube": "UCD5W21JqNMv_tV9nfjvF9sw",
         "twitch": "shinomiya_runa"
@@ -152,7 +152,7 @@
     },
     {
       "name": "夢野あかり",
-      "aliases": ["梦野阿卡林","akarin"],
+      "aliases": ["梦野阿卡林","阿卡林","akarin"],
       "platforms": {
         "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ",
         "twitch": "akarindao"
@@ -216,7 +216,7 @@
     },
     {
       "name": "天帝フォルテ",
-      "aliases": ["天帝","forte"],
+      "aliases": ["天帝forte","天帝"],
       "platforms": {
         "youtube": "UC8hwewh9svh92E1gXvgVazg",
         "twitch": "tentei_forte"
@@ -238,6 +238,7 @@
     },
     {
       "name": "とおこ",
+      "aliases": ["toko","1005"],
       "platforms": {
         "twitch": "urs_toko"
       },
@@ -245,15 +246,15 @@
     },
     {
       "name": "夜よいち",
-      "aliases": ["夜一"],
+      "aliases": ["夜一","yo1"],
       "platforms": {
         "twitch": "yoichi_0v0"
       },
       "riot_puuid": "R4RZ8cf1LzWeIixWjRoHHVuPozNI9_Tg9zPz-j0Jv78oxV2SEDnBcmcO1Rr5Ai13tNl1GHtzHyff1g"
     },
     {
-      "name": "甘城なつき",
-      "aliases": ["nacho","nachoneko","なつき"],
+      "name": "Nachoneko",
+      "aliases": ["nacho","甘城なつき","なつき"],
       "platforms": {
         "twitch": "nacho_dayo"
       }
@@ -268,13 +269,14 @@
     },
     {
       "name": "Anzu_o0",
+      "aliases": ["anzu"],
       "platforms": {
         "twitch": "anzu_o0"
       }
     },
     {
       "name": "まふゆ",
-      "aliases": ["mafuyu"],
+      "aliases": ["mafuyu","mafu"],
       "platforms": {
         "twitch": "mmafu_"
       }
