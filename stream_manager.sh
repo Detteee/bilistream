@@ -325,7 +325,7 @@ select_twitch_id() {
     echo " 7) 空澄セナ            8) 藍沢エマ             9) 紫宮るな"
     echo "10) 夢野あかり         11) 白波らむね          12) 千燈ゆうひ"
     echo "13) Narin             14) とおこ              15) 天帝フォルテ"
-    echo "16) 獅子堂あかり       17) 夜よいち            18) 甘城なつき"
+    echo "16) 獅子堂あかり       17) 夜よいち            18) Nachoneko"
     echo "19) 狐白うる          20) Anzu_o0             21) まふゆ"
     echo "22) 白那しずく         23) 絲依とい"
     echo " 0) Custom"
@@ -403,7 +403,7 @@ select_twitch_id() {
         ;;
     18)
         channel_id="nacho_dayo"
-        channel_name="甘城なつき"
+        channel_name="Nachoneko"
         ;;
     19)
         channel_id="kohaku_uru"
