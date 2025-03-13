@@ -8,7 +8,7 @@ pub fn is_ffmpeg_running() -> bool {
         .expect("Failed to execute pgrep");
     if output.status.success() {
         let process_info = String::from_utf8_lossy(&output.stdout);
-        if process_info.contains("ffmpeg -re -thread_queue_size 1024") {
+        if process_info.contains("ffmpeg -re") {
             return true;
         }
     }
@@ -37,9 +37,9 @@ pub fn ffmpeg(
     child
         .arg("-re") // Read input at native frame rate
         .arg("-thread_queue_size")
-        .arg("1024")
-        // .arg("-analyzeduration")
-        // .arg("8000000")
+        .arg("40960k")
+        .arg("-analyzeduration")
+        .arg("4000000")
         // Input file
         .arg("-i")
         .arg(m3u8_url)
@@ -49,23 +49,23 @@ pub fn ffmpeg(
         // Frame and timestamp handling
         .arg("-fflags")
         .arg("+genpts+discardcorrupt")
-        // .arg("-max_delay")
-        // .arg("8000000")
+        .arg("-max_delay")
+        .arg("8000000")
         // Rate control
         .arg("-bufsize")
-        .arg("8192k")
+        .arg("10240k")
         .arg("-maxrate")
-        .arg("8192k")
+        .arg("20480k")
         // Force frame output
-        // .arg("-vsync")
+        // .arg("-vsync") // Important
         // .arg("passthrough") // Pass through timestamps without modification
         // RTMP settings
         .arg("-rtmp_buffer")
-        .arg("8192")
+        .arg("10240k")
         .arg("-rtmp_live")
         .arg("live")
         // .arg("-max_muxing_queue_size")
-        // .arg("1024")
+        // .arg("81920")
         .arg("-f")
         .arg("flv")
         .arg(rtmp_url_key)

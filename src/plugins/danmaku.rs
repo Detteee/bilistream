@@ -24,7 +24,8 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
-const BANNED_KEYWORDS: [&str; 16] = [
+const BANNED_KEYWORDS: [&str; 17] = [
+    "ストグラ",
     "ウォッチパ",
     "watchalong",
     "talk",
@@ -165,7 +166,7 @@ fn update_config(
     channel_name: &str,
     channel_id: &str,
     area_id: u64,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let config_path = Path::new("config.yaml");
 
     // Read the existing config.yaml
@@ -174,6 +175,23 @@ fn update_config(
     // Deserialize YAML into Config struct
     let mut config: Config = serde_yaml::from_str(&config_content)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    // Check if update is needed
+    let needs_update = if platform == "YT" {
+        config.youtube.channel_id != channel_id
+            || config.youtube.channel_name != channel_name
+            || config.youtube.area_v2 != area_id
+    } else if platform == "TW" {
+        config.twitch.channel_id != channel_id
+            || config.twitch.channel_name != channel_name
+            || config.twitch.area_v2 != area_id
+    } else {
+        false
+    };
+
+    if !needs_update {
+        return Ok(false);
+    }
 
     // Update the fields
     if platform == "YT" {
@@ -193,8 +211,7 @@ fn update_config(
     // Write the updated YAML back to config.yaml
     fs::write(config_path, updated_yaml)?;
 
-    // tracing::info!("Updated configuration for {}: {}", platform, channel_name);
-    Ok(())
+    Ok(true)
 }
 
 /// determines the area id based on the live title.
@@ -275,7 +292,7 @@ fn resolve_area_alias(alias: &str) -> &str {
         "mhw" | "猛汉王" | "モンハン" | "monhun" => "怪物猎人",
         "洲" | "三角洲" => "三角洲行动",
         "apex" | "派" => "APEX英雄",
-        "st6" | "街霸" => "格斗游戏",
+        "sf6" | "st6" | "街霸" => "格斗游戏",
         "tkf" | "tarkov" | "塔科夫" | "タルコフ" => "逃离塔科夫",
         "cod" | "使命召唤" => "使命召唤:战区",
         "dad" => "Dark and Darker",
@@ -443,7 +460,11 @@ async fn process_danmaku(command: &str) {
             .find(|keyword| live_topic_title.contains(*keyword))
         {
             tracing::error!("直播标题/分区包含不支持的关键词:\n{}", live_topic_title);
-            let _ = bilibili::send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await;
+            let _ = bilibili::send_danmaku(
+                &cfg,
+                &format!("错误：{} 的标题/分区含:{}", platform, keyword),
+            )
+            .await;
             return;
         }
 
@@ -459,17 +480,6 @@ async fn process_danmaku(command: &str) {
             return;
         }
 
-        if let Err(e) = update_config(
-            &platform,
-            channel_name.as_deref().unwrap(),
-            &channel_id_str,
-            updated_area_id,
-        ) {
-            tracing::error!("更新配置时出错: {}", e);
-            let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
-            return;
-        }
-
         let updated_area_name = match get_area_name(updated_area_id) {
             Some(name) => name,
             None => {
@@ -478,25 +488,58 @@ async fn process_danmaku(command: &str) {
             }
         };
 
-        tracing::info!(
-            "更新 {} 频道: {} 分区: {} (ID: {} )",
-            platform,
+        match update_config(
+            &platform,
             channel_name.as_deref().unwrap(),
-            updated_area_name,
-            updated_area_id
-        );
-
-        // Send success notification
-        let _ = bilibili::send_danmaku(
-            &cfg,
-            &format!(
-                "更新：{} - {} - {}",
-                platform,
-                channel_name.as_deref().unwrap(),
-                updated_area_name
-            ),
-        )
-        .await;
+            &channel_id_str,
+            updated_area_id,
+        ) {
+            Ok(was_updated) => {
+                if !was_updated {
+                    let _ = bilibili::send_danmaku(
+                        &cfg,
+                        &format!(
+                            "{} 监听对象已是：{} - {}",
+                            platform,
+                            channel_name.as_deref().unwrap(),
+                            updated_area_name
+                        ),
+                    )
+                    .await;
+                    tracing::info!(
+                        "{} 监听对象已是：{} - {}",
+                        platform,
+                        channel_name.as_deref().unwrap(),
+                        updated_area_name
+                    );
+                    return;
+                } else {
+                    // Send success notification
+                    let _ = bilibili::send_danmaku(
+                        &cfg,
+                        &format!(
+                            "更新：{} - {} - {}",
+                            platform,
+                            channel_name.as_deref().unwrap(),
+                            updated_area_name
+                        ),
+                    )
+                    .await;
+                    tracing::info!(
+                        "更新 {} 频道: {} 分区: {} (ID: {} )",
+                        platform,
+                        channel_name.as_deref().unwrap(),
+                        updated_area_name,
+                        updated_area_id
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!("更新配置时出错: {}", e);
+                let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
+                return;
+            }
+        };
     } else {
         tracing::error!("指令错误: {}", danmaku_command);
         let _ = bilibili::send_danmaku(&cfg, &format!("错误：不支持的平台 {}", platform)).await;

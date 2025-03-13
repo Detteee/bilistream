@@ -133,7 +133,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
             }
-            if area_v2 == 240 && !channel_id.contains("Kamito") {
+            if area_v2 == 240 && !channel_name.contains("Kamito") {
                 send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await?;
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
                     thread::spawn(move || run_danmaku());
@@ -193,7 +193,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         send_danmaku(
                             &cfg,
-                            &format!("换台：{} -> {}", bili_channel_name, channel_name),
+                            &format!("换台：{} → {}", bili_channel_name, channel_name),
                         )
                         .await?;
                     }
@@ -781,6 +781,7 @@ async fn handle_collisions(
                 thread::spawn(move || run_danmaku());
             }
             if cfg.bililive.enable_danmaku_command {
+                tokio::time::sleep(Duration::from_secs(2)).await;
                 send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await?;
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
