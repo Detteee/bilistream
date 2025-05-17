@@ -1,4 +1,5 @@
 use crate::config::Config;
+use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use qrcode::QrCode;
 use reqwest::cookie::{CookieStore, Jar};
@@ -15,6 +16,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+lazy_static! {
+    static ref BILISTREAM_PATH: std::path::PathBuf = std::env::current_exe().unwrap();
+    static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.yaml");
+}
 enum AppKeyStore {
     BiliTV,
     Android,
@@ -90,7 +95,7 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
 /// # Returns
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
-pub async fn bili_start_live(cfg: &Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
+pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
         cfg.bililive.credentials.sessdata,
@@ -116,7 +121,7 @@ pub async fn bili_start_live(cfg: &Config, area_v2: u64) -> Result<(), Box<dyn E
         .build();
 
     // Make the POST request to start the live stream
-    let _res: Value = client
+    let response: Value = client
         .post("https://api.live.bilibili.com/room/v1/Room/startLive")
         .header("Accept", "application/json, text/plain, */*")
         .header(
@@ -134,9 +139,25 @@ pub async fn bili_start_live(cfg: &Config, area_v2: u64) -> Result<(), Box<dyn E
         .await?
         .json()
         .await?;
-    // tracing::info!("{:#?}", _res);
-    // Optionally, handle the response if needed
-    // println!("{:#?}", res);
+
+    // Extract RTMP information from the response
+    if response["code"].as_i64() == Some(0) {
+        if let Some(rtmp_data) = response["data"]["rtmp"].as_object() {
+            if let (Some(addr), Some(code)) = (rtmp_data.get("addr"), rtmp_data.get("code")) {
+                if let (Some(rtmp_url), Some(rtmp_key)) = (addr.as_str(), code.as_str()) {
+                    // Update config with new RTMP info
+                    cfg.bililive.bili_rtmp_url = rtmp_url.to_string();
+                    cfg.bililive.bili_rtmp_key = rtmp_key.to_string();
+
+                    // Save the updated config to file
+                    let updated_yaml = serde_yaml::to_string(&cfg)?;
+                    std::fs::write(&*CONFIG_PATH, updated_yaml)?;
+
+                    // tracing::info!("Updated RTMP information in config");
+                }
+            }
+        }
+    }
 
     Ok(())
 }

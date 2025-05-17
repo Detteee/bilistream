@@ -65,7 +65,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     }
 
     'outer: loop {
-        let cfg = load_config().await?;
+        let mut cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
         let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start) = yt_live
@@ -162,7 +162,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
-                bili_start_live(&cfg, area_v2).await?;
+                bili_start_live(&mut cfg, area_v2).await?;
                 if bili_title != cfg_title {
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
@@ -564,7 +564,7 @@ async fn get_live_status(
 }
 
 async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config().await?;
+    let mut cfg = load_config().await?;
     let area_v2 = if optional_platform == Some("YT") {
         cfg.youtube.area_v2
     } else if optional_platform == Some("TW") {
@@ -572,7 +572,7 @@ async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::
     } else {
         235 // default area_v2 (其他单机)
     };
-    bili_start_live(&cfg, area_v2).await?;
+    bili_start_live(&mut cfg, area_v2).await?;
     println!("直播开始成功");
     Ok(())
 }
