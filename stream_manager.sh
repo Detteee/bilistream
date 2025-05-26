@@ -326,11 +326,10 @@ select_twitch_id() {
     echo "10) 夢野あかり         11) 白波らむね          12) 千燈ゆうひ"
     echo "13) Narin              14) とおこ              15) 天帝フォルテ"
     echo "16) 獅子堂あかり       17) 夜よいち            18) Nachoneko"
-    echo "19) 狐白うる           20) Anzu_o0             21) まふゆ"
-    echo "22) 白那しずく         23) 絲依とい"
+    echo "19) 狐白うる           20) 白那しずく          21) 絲依とい"
     echo " 0) Custom"
     echo -e "${GREEN}─────────────────────────────────────────────────────────────${RESET}"
-    read -p "Select Channel (0-23): " twitch_choice
+    read -p "Select Channel (0-21): " twitch_choice
 
     case $twitch_choice in
     1)
@@ -410,18 +409,10 @@ select_twitch_id() {
         channel_name="狐白うる"
         ;;
     20)
-        channel_id="anzu_o0"
-        channel_name="Anzu_o0"
-        ;;
-    21)
-        channel_id="mmafu_"
-        channel_name="まふゆ"
-        ;;
-    22)
         channel_id="shirona_shizuku"
         channel_name="白那しずく"
         ;;
-    23)
+    21)
         channel_id="itoitoi_q"
         channel_name="絲依とい"
         ;;
@@ -441,10 +432,10 @@ select_twitch_id() {
             else
                 # Create new channel entry
                 new_channel="{
-                  \"name\": \"$channel_name\",
-                  \"platforms\": {
+                    \"name\": \"$channel_name\",
+                    \"platforms\": {
                     \"twitch\": \"$channel_id\"
-                  }
+                    }
                 }"
                 
                 # Add new channel to JSON file

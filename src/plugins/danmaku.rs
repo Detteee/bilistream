@@ -24,7 +24,7 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
-const BANNED_KEYWORDS: [&str; 19] = [
+const BANNED_KEYWORDS: [&str; 20] = [
     "ストグラ",
     "ウォッチパ",
     "watchalong",
@@ -43,7 +43,8 @@ const BANNED_KEYWORDS: [&str; 19] = [
     "l4d2",
     "left 4 dead 2",
     "mahjong",
-    "雀魂"
+    "雀魂",
+    "じゃんたま",
 ];
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {

@@ -235,13 +235,6 @@
       "riot_puuid": "JGbu7B6ajjntnp3O5A3Hr9EYY2CxwF3njPFN_LWOmrbaUqQwW5pnUgW49nO2D-L35YKFkuzaHG1pFQ"
     },
     {
-      "name": "夜絆ニウ",
-      "aliases": ["niu"],
-      "platforms": {
-        "youtube": "UCZmUoMwjyuQ59sk5_7Tx07A"
-      }
-    },
-    {
       "name": "ぶいすぽっ!【公式】",
       "platforms": {
         "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
@@ -277,20 +270,6 @@
         "twitch": "kohaku_uru"
       },
       "riot_puuid": "H89m2wwV4PSxsmwumtbwbJOgln_LLEoE-pVoeUkiGn_q4KxrepcOuuEGBP9jk_Zrs3u1kwFk05DZow"
-    },
-    {
-      "name": "Anzu_o0",
-      "aliases": ["anzu"],
-      "platforms": {
-        "twitch": "anzu_o0"
-      }
-    },
-    {
-      "name": "まふゆ",
-      "aliases": ["mafuyu","mafu"],
-      "platforms": {
-        "twitch": "mmafu_"
-      }
     },
     {
       "name": "白那しずく",
