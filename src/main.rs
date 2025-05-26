@@ -574,6 +574,8 @@ async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::
     };
     bili_start_live(&mut cfg, area_v2).await?;
     println!("直播开始成功");
+    println!("url：{}", cfg.bililive.bili_rtmp_url);
+    println!("key：{}", cfg.bililive.bili_rtmp_key);
     Ok(())
 }
 
@@ -843,7 +845,7 @@ async fn handle_collisions(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.2.4")
+        .version("0.2.5")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
