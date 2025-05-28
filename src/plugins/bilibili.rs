@@ -1,6 +1,7 @@
 use crate::config::Config;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use qrcode::QrCode;
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::Url;
@@ -9,17 +10,149 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io::Seek;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
 lazy_static! {
     static ref BILISTREAM_PATH: std::path::PathBuf = std::env::current_exe().unwrap();
     static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.yaml");
+    static ref WBI_CACHE_DIR: std::path::PathBuf = {
+        let mut path = BILISTREAM_PATH.clone();
+        path.pop(); // Go up one directory from the executable
+        path.join(".wbi_cache")
+    };
 }
+const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
+
+const MIXIN_KEY_ENC_TAB: [u8; 64] = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
+    28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
+    54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+];
+
+fn gen_mixin_key(raw_wbi_key: impl AsRef<[u8]>) -> String {
+    let raw_wbi_key = raw_wbi_key.as_ref();
+    let mut mixin_key = {
+        let binding = MIXIN_KEY_ENC_TAB
+            .iter()
+            .map(|n| raw_wbi_key[*n as usize])
+            .collect::<Vec<u8>>();
+        unsafe { String::from_utf8_unchecked(binding) }
+    };
+    let _ = mixin_key.split_off(32); // 截取前 32 位字符
+    mixin_key
+}
+
+fn url_encode(s: &str) -> String {
+    utf8_percent_encode(s, NON_ALPHANUMERIC)
+        .to_string()
+        .replace('+', "%20")
+}
+
+fn calculate_w_rid(params: &BTreeMap<&str, String>, mixin_key: &str) -> String {
+    // Sort parameters by key and encode values
+    let encoded_params: Vec<String> = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, url_encode(v)))
+        .collect();
+
+    // Join parameters with &
+    let param_string = encoded_params.join("&");
+
+    // Append mixin_key
+    let string_to_hash = format!("{}{}", param_string, mixin_key);
+
+    // Calculate MD5
+    let mut hasher = Md5::new();
+    hasher.update(string_to_hash.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+async fn get_wbi_keys(agent: &reqwest::Client) -> Result<(String, String), Box<dyn Error>> {
+    // Create cache directory if it doesn't exist
+    fs::create_dir_all(&*WBI_CACHE_DIR)?;
+
+    let img_key_path = WBI_CACHE_DIR.join("img_key");
+    let sub_key_path = WBI_CACHE_DIR.join("sub_key");
+    let timestamp_path = WBI_CACHE_DIR.join("timestamp");
+
+    // Check if we have cached keys and if they're still valid
+    if img_key_path.exists() && sub_key_path.exists() && timestamp_path.exists() {
+        let timestamp = fs::read_to_string(&timestamp_path)?
+            .parse::<u64>()
+            .unwrap_or(0);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if current_time - timestamp < WBI_CACHE_DURATION {
+            // Cache is still valid, read the keys
+            let img_key = fs::read_to_string(&img_key_path)?;
+            let sub_key = fs::read_to_string(&sub_key_path)?;
+            return Ok((img_key, sub_key));
+        }
+    }
+
+    // Cache is invalid or doesn't exist, get new keys
+    let nav_data: Value = agent
+        .get("https://api.bilibili.com/x/web-interface/nav")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
+        .header("Referer", "https://www.bilibili.com/")
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    let wbi_img = nav_data
+        .get("data")
+        .and_then(|d| d.get("wbi_img"))
+        .ok_or_else(|| "Missing wbi_img in nav response")?;
+
+    let img_url = wbi_img
+        .get("img_url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing img_url in wbi_img")?;
+
+    let sub_url = wbi_img
+        .get("sub_url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing sub_url in wbi_img")?;
+
+    let img_key = img_url
+        .split('/')
+        .last()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
+    let sub_key = sub_url
+        .split('/')
+        .last()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
+
+    // Save the new keys and timestamp
+    fs::write(&img_key_path, img_key)?;
+    fs::write(&sub_key_path, sub_key)?;
+    fs::write(
+        &timestamp_path,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string(),
+    )?;
+
+    Ok((img_key.to_string(), sub_key.to_string()))
+}
+
 enum AppKeyStore {
     BiliTV,
     Android,
@@ -66,18 +199,44 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
     let client = ClientBuilder::new(raw_client.clone())
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
+
+    // Get WBI keys
+    let (img_key, sub_key) = get_wbi_keys(&raw_client).await?;
+    let raw_wbi_key = format!("{}{}", img_key, sub_key);
+    let mixin_key = gen_mixin_key(raw_wbi_key.as_bytes());
+
+    // Get wts
+    let wts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+
+    // Create sorted parameters map
+    let mut params = BTreeMap::new();
+    params.insert("room_id", room.to_string());
+    params.insert("wts", wts.clone());
+
+    // Calculate w_rid
+    let w_rid = calculate_w_rid(&params, &mixin_key);
+
+    // Build final query string
+    let query_string = format!("room_id={}&wts={}&w_rid={}", room, wts, w_rid);
+
     // Make the GET request to check the live status
     let res: Value = client
         .get(&format!(
-            "https://api.live.bilibili.com/room/v1/Room/get_info?room_id={}",
-            room
+            "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
+            query_string
         ))
         .send()
         .await?
         .json()
         .await?;
+
     let title = res["data"]["title"].to_string();
     let title = title.trim_matches('"');
+
     // Determine live status based on the response
     Ok((
         res["data"]["live_status"] == 1,

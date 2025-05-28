@@ -23,6 +23,7 @@ static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
 static LAST_COLLISION: Mutex<Option<(String, i32, String)>> = Mutex::new(None);
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
+static DANMAKU_KAMITO_APEX: AtomicBool = AtomicBool::new(true);
 
 #[derive(PartialEq)]
 enum CollisionResult {
@@ -133,8 +134,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
             }
-            if area_v2 == 240 && !channel_name.contains("Kamito") {
+            if area_v2 == 240
+                && !channel_name.contains("Kamito")
+                && DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
+            {
                 send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await?;
+                DANMAKU_KAMITO_APEX.store(false, Ordering::SeqCst);
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
                     thread::spawn(move || run_danmaku());
                     thread::sleep(Duration::from_secs(2));
@@ -142,7 +147,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue;
-            };
+            } else if area_v2 == 240
+                && !channel_name.contains("Kamito")
+                && !DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
+            {
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue;
+            } else {
+                DANMAKU_KAMITO_APEX.store(true, Ordering::SeqCst);
+            }
             if let Some(keyword) = BANNED_KEYWORDS
                 .iter()
                 .find(|k| title.as_ref().unwrap().contains(*k))
