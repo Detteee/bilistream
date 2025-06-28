@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::config::Config;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
@@ -255,6 +257,42 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
+    let secret = "af125a0d5279fd576c1b4418a3e8276d";
+    let appkey = "aae92bc66f3edfab"; // BiliTV appkey
+    let platform = "pc_link";
+    let ts = chrono::Utc::now().timestamp().to_string();
+
+    let area_v2_str = area_v2.to_string();
+    let room_id_str = cfg.bililive.room.to_string();
+    let ts_str = ts.clone();
+
+    let mut params = BTreeMap::new();
+    params.insert("access_key", "".to_string());
+    params.insert("appkey", appkey.to_string());
+    params.insert("area_v2", area_v2_str);
+    params.insert("csrf", cfg.bililive.credentials.bili_jct.clone());
+    params.insert("csrf_token", cfg.bililive.credentials.bili_jct.clone());
+    params.insert("platform", platform.to_string());
+    params.insert("room_id", room_id_str);
+    params.insert("ts", ts_str);
+
+    // Build the query string
+    let query_string = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    // Sign the query string
+    let mut hasher = Md5::new();
+    hasher.update(format!("{}{}", query_string, secret));
+    let sign = format!("{:x}", hasher.finalize());
+
+    // Add the sign to the parameters
+    let mut body = query_string.clone();
+    body.push_str(&format!("&sign={}", sign));
+
+    // Prepare cookies
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
         cfg.bililive.credentials.sessdata,
@@ -266,20 +304,14 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
     let jar = Jar::default();
     jar.add_cookie_str(&cookie, &url);
 
-    // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-
-    // Build the HTTP client with retry middleware
-    let raw_client = reqwest::Client::builder()
+    // Build the HTTP client
+    let client = reqwest::Client::builder()
         .cookie_store(true)
         .cookie_provider(jar.into())
         .timeout(Duration::new(30, 0))
         .build()?;
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
 
-    // Make the POST request to start the live stream
+    // POST to the endpoint
     let response: Value = client
         .post("https://api.live.bilibili.com/room/v1/Room/startLive")
         .header("Accept", "application/json, text/plain, */*")
@@ -287,13 +319,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
             "content-type",
             "application/x-www-form-urlencoded; charset=UTF-8",
         )
-        .body(format!(
-            "room_id={}&platform=android_link&area_v2={}&csrf_token={}&csrf={}",
-            cfg.bililive.room,
-            area_v2,
-            cfg.bililive.credentials.bili_jct,
-            cfg.bililive.credentials.bili_jct
-        ))
+        .body(body)
         .send()
         .await?
         .json()
@@ -714,7 +740,7 @@ impl Credential {
 
     pub async fn get_qrcode(&self) -> Result<Value, Box<dyn Error>> {
         let mut form = json!({
-            "appkey": "4409e2ce8ffd12b8", // BiliTV appkey
+            "appkey": "4409e2ce8ffd12b8",
             "local_id": "0",
             "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
         });
@@ -802,7 +828,7 @@ impl Credential {
             Some("BiliTV") => AppKeyStore::BiliTV,
             Some("Android") => AppKeyStore::Android,
             Some(_) => return Err("Unknown platform".into()),
-            None => return Ok(login_info),
+            None => return Err("Unknown platform".into()),
         };
 
         let mut payload = json!({
