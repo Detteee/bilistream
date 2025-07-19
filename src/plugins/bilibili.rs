@@ -262,19 +262,52 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
     let platform = "pc_link";
     let ts = chrono::Utc::now().timestamp().to_string();
 
-    let area_v2_str = area_v2.to_string();
-    let room_id_str = cfg.bililive.room.to_string();
-    let ts_str = ts.clone();
+    // 获取直播姬版本号和 build
+    let version_api =
+        "https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion";
+    let version_appkey = "aae92bc66f3edfab";
+    let version_ts = chrono::Utc::now().timestamp().to_string();
 
+    let version_query = format!(
+        "system_version=2&ts={}&appKey={}&sign=",
+        version_ts, version_appkey
+    );
+
+    let version_url = format!("{}?{}", version_api, version_query);
+
+    let version_resp: serde_json::Value = reqwest::Client::new()
+        .get(&version_url)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    let (version, build) = if version_resp["code"].as_i64() == Some(0) {
+        let data = &version_resp["data"];
+        (
+            data["curr_version"]
+                .as_str()
+                .unwrap_or("7.19.0.9432")
+                .to_string(),
+            data["build"].as_i64().unwrap_or(9432),
+        )
+    } else {
+        ("7.19.0.9432".to_string(), 9432)
+    };
+
+    // 构造开播参数
     let mut params = BTreeMap::new();
     params.insert("access_key", "".to_string());
     params.insert("appkey", appkey.to_string());
-    params.insert("area_v2", area_v2_str);
+    params.insert("area_v2", area_v2.to_string());
+    params.insert("backup_stream", "0".to_string());
+    params.insert("build", build.to_string());
     params.insert("csrf", cfg.bililive.credentials.bili_jct.clone());
     params.insert("csrf_token", cfg.bililive.credentials.bili_jct.clone());
     params.insert("platform", platform.to_string());
-    params.insert("room_id", room_id_str);
-    params.insert("ts", ts_str);
+    params.insert("room_id", cfg.bililive.room.to_string());
+    params.insert("ts", ts.clone());
+    params.insert("version", version.clone());
 
     // Build the query string
     let query_string = params
