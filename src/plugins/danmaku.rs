@@ -24,7 +24,7 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
-const BANNED_KEYWORDS: [&str; 20] = [
+const BANNED_KEYWORDS: [&str; 22] = [
     "ストグラ",
     "ウォッチパ",
     "watchalong",
@@ -35,6 +35,7 @@ const BANNED_KEYWORDS: [&str; 20] = [
     "morning",
     "freechat",
     "どうぶつの森",
+    "あつ森",
     "animal crossing",
     "just chatting",
     "asmr",
@@ -45,6 +46,7 @@ const BANNED_KEYWORDS: [&str; 20] = [
     "mahjong",
     "雀魂",
     "じゃんたま",
+    "gartic phone",
 ];
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {
@@ -363,6 +365,13 @@ async fn process_danmaku(command: &str) {
     let platform = parts[2].to_uppercase();
     let channel_name = parts[3];
     let area_alias = parts[4];
+
+    if area_alias.is_empty() {
+        tracing::error!("分区不能为空. Skipping...");
+        let _ = bilibili::send_danmaku(&cfg, "错误：分区不能为空").await;
+        return;
+    }
+
     let area_name = resolve_area_alias(area_alias);
     let area_id = match get_area_id(area_name) {
         Ok(id) => id,
@@ -372,6 +381,7 @@ async fn process_danmaku(command: &str) {
             return;
         }
     };
+
     tracing::info!(
         "平台: {}, 频道: {}, 分区: {}",
         platform,
