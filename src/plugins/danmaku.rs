@@ -13,7 +13,6 @@ use std::time::Duration;
 use std::{
     fs,
     io::{self, BufRead},
-    path::Path,
 };
 pub fn is_danmaku_running() -> bool {
     let mut cmd = Command::new("pgrep");
@@ -24,10 +23,13 @@ pub fn is_danmaku_running() -> bool {
     }
     false
 }
-const BANNED_KEYWORDS: [&str; 22] = [
+const BANNED_KEYWORDS: [&str; 25] = [
+    "gta",
+    "mad town",
     "ストグラ",
     "ウォッチパ",
     "watchalong",
+    "watchparty",
     "talk",
     "zatsudan",
     "雑談",
@@ -80,13 +82,16 @@ pub fn get_channel_id(
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let config = load_channels()?;
 
-    for channel in config.channels {
-        // Check both name and aliases
-        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
-        if all_names.iter().any(|n| n == channel_name) {
+    for channel in &config.channels {
+        // Check both name and aliases without cloning whole channel
+        let mut found = channel.name == channel_name;
+        if !found {
+            found = channel.aliases.iter().any(|a| a == channel_name);
+        }
+        if found {
             match platform {
-                "YT" => return Ok(channel.platforms.youtube),
-                "TW" => return Ok(channel.platforms.twitch),
+                "YT" => return Ok(channel.platforms.youtube.clone()),
+                "TW" => return Ok(channel.platforms.twitch.clone()),
                 _ => return Ok(None),
             }
         }
@@ -100,19 +105,19 @@ pub fn get_channel_name(
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let config = load_channels()?;
 
-    for channel in config.channels {
+    for channel in &config.channels {
         match platform {
             "YT" => {
-                if let Some(id) = channel.platforms.youtube {
+                if let Some(id) = &channel.platforms.youtube {
                     if id == channel_id {
-                        return Ok(Some(channel.name));
+                        return Ok(Some(channel.name.clone()));
                     }
                 }
             }
             "TW" => {
-                if let Some(id) = channel.platforms.twitch {
+                if let Some(id) = &channel.platforms.twitch {
                     if id == channel_id {
-                        return Ok(Some(channel.name));
+                        return Ok(Some(channel.name.clone()));
                     }
                 }
             }
@@ -125,12 +130,15 @@ pub fn get_channel_name(
 pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error>> {
     let config = load_channels()?;
 
-    for channel in config.channels {
+    for channel in &config.channels {
         // Check both name and aliases
-        let all_names = [vec![channel.name.clone()], channel.aliases].concat();
-        if all_names.iter().any(|n| n == channel_name) {
-            if let Some(puuid) = channel.riot_puuid {
-                return Ok(puuid);
+        let mut found = channel.name == channel_name;
+        if !found {
+            found = channel.aliases.iter().any(|a| a == channel_name);
+        }
+        if found {
+            if let Some(puuid) = &channel.riot_puuid {
+                return Ok(puuid.clone());
             }
         }
     }
@@ -146,16 +154,16 @@ pub fn get_all_channels(
     let config = load_channels()?;
     let mut channels = Vec::new();
 
-    for channel in config.channels {
+    for channel in &config.channels {
         match platform {
             "YT" => {
-                if let Some(id) = channel.platforms.youtube {
-                    channels.push((channel.name, id));
+                if let Some(id) = &channel.platforms.youtube {
+                    channels.push((channel.name.clone(), id.clone()));
                 }
             }
             "TW" => {
-                if let Some(id) = channel.platforms.twitch {
-                    channels.push((channel.name, id));
+                if let Some(id) = &channel.platforms.twitch {
+                    channels.push((channel.name.clone(), id.clone()));
                 }
             }
             _ => (),
@@ -172,10 +180,12 @@ fn update_config(
     channel_id: &str,
     area_id: u64,
 ) -> io::Result<bool> {
-    let config_path = Path::new("config.yaml");
+    // Use the same config.yaml path as the executable (matches config.rs behavior)
+    let exe_path = std::env::current_exe()?;
+    let config_path = exe_path.with_file_name("config.yaml");
 
     // Read the existing config.yaml
-    let config_content = fs::read_to_string(config_path)?;
+    let config_content = fs::read_to_string(&config_path)?;
 
     // Deserialize YAML into Config struct
     let mut config: Config = serde_yaml::from_str(&config_content)
@@ -213,8 +223,8 @@ fn update_config(
     let updated_yaml =
         serde_yaml::to_string(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Write the updated YAML back to config.yaml
-    fs::write(config_path, updated_yaml)?;
+    // Write the updated YAML back to config.yaml (this also updates file mtime)
+    fs::write(&config_path, updated_yaml)?;
 
     Ok(true)
 }
@@ -603,15 +613,15 @@ pub fn run_danmaku() {
         let stdout = danmaku_cli.stdout.expect("捕获stdout失败");
         let stderr = danmaku_cli.stderr.expect("捕获stderr失败");
 
-        // Handle stdout in a separate thread
+        // Handle stdout in a separate thread - reuse the current runtime handle instead of
+        // creating a new runtime per line which is expensive.
+        let handle = tokio::runtime::Handle::current();
         thread::spawn(move || {
             let reader = io::BufReader::new(stdout);
             for line in reader.lines() {
                 if let Ok(line) = line {
-                    // Process each danmaku command
-                    tokio::runtime::Runtime::new()
-                        .unwrap()
-                        .block_on(process_danmaku(&line));
+                    // Process each danmaku command using the existing runtime
+                    let _ = handle.block_on(process_danmaku(&line));
                 }
             }
         });

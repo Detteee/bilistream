@@ -31,7 +31,7 @@ enum CollisionResult {
     Proceed,
 }
 
-const BANNED_KEYWORDS: [&str; 7] = [
+const BANNED_KEYWORDS: [&str; 11] = [
     "どうぶつの森",
     "animal crossing",
     "asmr",
@@ -39,6 +39,10 @@ const BANNED_KEYWORDS: [&str; 7] = [
     "dead by daylight",
     "l4d2",
     "left 4 dead 2",
+    "gta",
+    "mad town",
+    "watchalong",
+    "watchparty",
 ];
 
 fn init_logger() {
