@@ -28,3 +28,9 @@ textwrap = "0.16"
 unicode-width = "0.1.11"
 lazy_static = "1.4.0"
 percent-encoding = "2.3.1"
+# WebSocket and streaming dependencies for native danmaku client
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+futures-util = "0.3"
+byteorder = "1.5"
+flate2 = "1.0"
+anyhow = "1.0"

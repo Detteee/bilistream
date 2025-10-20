@@ -61,6 +61,7 @@ pub struct Credentials {
     pub bili_jct: String,
     pub dede_user_id: String,
     pub dede_user_id_ckmd5: String,
+    pub buvid3: String,
 }
 
 /// Struct representing Twitch configuration.
@@ -133,11 +134,18 @@ impl Credentials {
             .map(|cookie| cookie.value.clone())
             .ok_or("DedeUserID__ckMd5 cookie not found")?;
 
+        let buvid3 = cookies
+            .iter()
+            .find(|cookie| cookie.name == "buvid3")
+            .map(|cookie| cookie.value.clone())
+            .unwrap_or_default();
+
         Ok(Credentials {
             sessdata,
             bili_jct,
             dede_user_id,
             dede_user_id_ckmd5,
+            buvid3,
         })
     }
 }

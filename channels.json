@@ -2,7 +2,7 @@
   "channels": [
     {
       "name": "Kamito",
-      "aliases": ["黑白头","kami酱"],
+      "aliases": ["黑白头","kami酱","kamito"],
       "platforms": {
         "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
         "twitch": "kamito_jp"
@@ -194,13 +194,14 @@
     },
     {
       "name": "甘結もか",
-      "aliases": ["moka"],
+      "aliases": ["moka","もか"],
       "platforms": {
         "youtube": "UC8vKBjGY2HVfbW9GAmgikWw"
       }
     },
     {
       "name": "Narin",
+      "aliases": ["narinmikure"],
       "platforms": {
         "youtube": "UCKSpM183c85d5V2cW5qaUjA",
         "twitch": "narinmikure"
@@ -236,8 +237,16 @@
     },
     {
       "name": "ぶいすぽっ!【公式】",
+      "aliases": ["vspo"],
       "platforms": {
         "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
+      }
+    },
+    {
+      "name": "夜絆ニウ",
+      "aliases": ["niu"],
+      "platforms": {
+        "youtube": "UCZmUoMwjyuQ59sk5_7Tx07A"
       }
     },
     {
