@@ -2,8 +2,6 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-本项目受 [limitcool/bilistream](https://github.com/limitcool/bilistream) 启发。虽然核心理念相同，但此实现提供了独特的功能和改进，包括用于更轻松管理的综合 `stream_manager.sh` 脚本。
-
 ## 功能特点
 
 - 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
@@ -19,7 +17,6 @@
 - ffmpeg
 - yt-dlp
 - streamlink (需安装 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件)
-- [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (用于弹幕命令功能)
 
 ## 安装步骤
 
@@ -38,8 +35,8 @@
    ```
 3. 安装 streamlink-ttvlol 插件：
    按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
-4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (如需弹幕命令功能)
-5. 构建项目：
+
+4. 构建项目：
 
    对于 Debian 12 和其他使用 glibc 2.36 或更新版本的 Linux 发行版：
 
@@ -52,7 +49,7 @@
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-6. 配置 `config.yaml`：
+5. 配置 `config.yaml`：
 
    ```yaml
    # 复制并编辑示例配置
@@ -67,8 +64,8 @@
    - 代理设置
    - 各种服务的 API 密钥
    - 防撞车设置
-7. 对于弹幕功能，根据 [bilibili-danmaku-client 文档](https://github.com/Isoheptane/bilibili-live-danmaku-cli) 配置 `config.json`
-8. 创建频道配置文件：
+
+6. 创建频道配置文件：
    在根目录创建 `channels.json`，使用以下结构：
 
 ```json
@@ -86,13 +83,7 @@
 }
 ```
 
-9. 创建频道列表文件：
-   在根目录创建 `YT_channels.txt` 和 `TW_channels.txt`，每行格式为：
-
-   ```txt
-   (频道名称) [频道ID]
-   ```
-10. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
+7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
     - 创建名为 `invalid_words.txt` 的文件，每行一个词
     - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
@@ -107,15 +98,12 @@
 
 ```txt
 .
-├── bilistream           # Main executable
-├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
-├── config.json          # Danmaku client configuration
-├── config.yaml          # Main configuration file
-├── cookies.json         # Bilibili login cookies (./bilistream login)
-├── invalid_words.txt    # Filtered words for LOL players ID
-├── live-danmaku-cli     # Danmaku client
-└── stream_manager.sh    # Management script
-
+├── bilistream           # 主程序可执行文件
+├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
+├── config.yaml          # 主配置文件
+├── cookies.json         # 哔哩哔哩登录 cookies（./bilistream login）
+├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词
+└── stream_manager.sh    # 管理脚本
 ```
 
 ## 使用方法
@@ -175,14 +163,6 @@ Bilistream 支持以下命令：
 
 ### 弹幕命令功能
 
-当哔哩哔哩直播关闭时，您可以在直播间聊天中使用弹幕命令来更改监听目标频道。这允许在不重启应用的情况下动态控制转播目标。
-
-使用方法：
-
-1. 确保哔哩哔哩直播处于关闭状态
-2. 在哔哩哔哩直播聊天中发送特定弹幕命令
-3. 系统将处理命令并相应更改监听目标频道
-
 弹幕命令格式：
 
 ```txt
@@ -210,4 +190,4 @@ Bilistream 支持以下命令：
 ## 致谢
 
 - [limitcool/bilistream](https://github.com/limitcool/bilistream)
-- 本项目的所有用户
+- [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)

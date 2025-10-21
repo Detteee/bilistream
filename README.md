@@ -2,8 +2,6 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
-This project is inspired by [limitcool/bilistream](https://github.com/limitcool/bilistream) but has been significantly redesigned and enhanced. While it shares the same core concept, this implementation offers distinct features and improvements, including a comprehensive `stream_manager.sh` script for easier management.
-
 ## Features
 
 - Automated rebroadcasting of Twitch and YouTube streams to Bilibili Live
@@ -19,7 +17,6 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 - ffmpeg
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
-- [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (for danmaku command feature)
 
 ## Setup
 
@@ -38,8 +35,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-4. [Isoheptane/bilibili-danmaku-client](https://github.com/Isoheptane/bilibili-live-danmaku-cli) (if you need danmaku command feature)
-5. Build the project:
+
+4. Build the project:
 
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
 
@@ -52,7 +49,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-6. Configure `config.yaml`:
+5. Configure `config.yaml`:
 
    ```yaml
    # Copy and edit the example config
@@ -67,8 +64,8 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
    - Proxy settings
    - API keys for various services
    - Anti collision settings
-7. For the danmaku feature, configure `config.json` according to the [bilibili-danmaku-client documentation](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-8. Create channels configuration file:
+
+6. Create channels configuration file:
    Create `channels.json` in the root directory with the following structure:
 
 ```json
@@ -86,7 +83,7 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 }
 ```
 
-9. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
 - Create a file named `invalid_words.txt` with one word per line
 - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
@@ -103,11 +100,9 @@ This project is inspired by [limitcool/bilistream](https://github.com/limitcool/
 .
 ├── bilistream           # Main executable
 ├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
-├── config.json          # Danmaku client configuration
 ├── config.yaml          # Main configuration file
 ├── cookies.json         # Bilibili login cookies (./bilistream login)
 ├── invalid_words.txt    # Filtered words for LOL players ID
-├── live-danmaku-cli     # Danmaku client
 └── stream_manager.sh    # Management script
 ```
 
@@ -168,14 +163,6 @@ Bilistream supports the following commands:
 
 ### Danmaku Command Feature
 
-When the Bilibili live stream is off, you can use danmaku commands in the Bilibili live chat to change the listening target channel. This allows for dynamic control of the rebroadcasting target without restarting the application.
-
-To use this feature:
-
-1. Ensure the Bilibili live stream is off.
-2. Send a specific danmaku command in the Bilibili live chat.
-3. The system will process the command and change the listening target channel accordingly.
-
 Danmaku command format:
 
 ```txt
@@ -234,5 +221,6 @@ This project is licensed under the [unlicense](LICENSE).
 
 ## Acknowledgements
 
-- [limitcool/bilistream](https://github.com/limitcool/bilistream)
+- [limitcool/bilistream](https://github.com/limitcool/bilistream) - 
+- [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
 - All users of this project
