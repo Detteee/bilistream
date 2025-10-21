@@ -11,10 +11,16 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+
+use crate::config::Config;
+use crate::plugins::{bili_stop_live, send_danmaku};
+
 // Aknowledgement: Isoheptane/bilibili-live-danmaku-cli
 lazy_static! {
     static ref WBI_CACHE_DIR: PathBuf = {
@@ -71,15 +77,23 @@ pub struct BilibiliDanmakuClient {
     #[allow(dead_code)]
     token: Option<String>, // Kept for potential future use with getDanmuInfo
     host_list: Vec<String>,
+    app_config: Arc<Config>,
+    enable_commands: Arc<AtomicBool>,
 }
 
 impl BilibiliDanmakuClient {
-    pub fn new(config: DanmakuConfig) -> Self {
+    pub fn new(
+        config: DanmakuConfig,
+        app_config: Arc<Config>,
+        enable_commands: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             room_id: config.room_id,
             config,
             token: None,
             host_list: Vec::new(),
+            app_config,
+            enable_commands,
         }
     }
 
@@ -486,29 +500,148 @@ impl BilibiliDanmakuClient {
     async fn process_danmaku_command(&self, message: &DanmakuMessage) {
         match message.cmd.as_str() {
             "DANMU_MSG" => {
-                if let Some(info) = &message.info {
-                    if let Some(info_array) = info.as_array() {
-                        if info_array.len() > 2 {
-                            // Extract danmaku text and user info
-                            let danmaku_text = info_array[1].as_str().unwrap_or("");
-                            let user_info = info_array[2].as_array();
-                            let username = user_info
-                                .and_then(|u| u.get(1))
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("Unknown");
+                if self.enable_commands.load(Ordering::Relaxed) {
+                    if let Some(info) = &message.info {
+                        if let Some(info_array) = info.as_array() {
+                            if info_array.len() > 2 {
+                                // Extract danmaku text and user info
+                                let danmaku_text = info_array[1].as_str().unwrap_or("");
+                                if danmaku_text.contains("%查询") || danmaku_text.contains("%转播%")
+                                {
+                                    let formatted_message = format!(" :{}", danmaku_text);
+                                    crate::plugins::danmaku::process_danmaku(&formatted_message)
+                                        .await;
+                                    let user_info = info_array[2].as_array();
+                                    let username = user_info
+                                        .and_then(|u| u.get(1))
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("Unknown");
 
-                            // Log every danmaku message
-                            info!("💬 [{}]: {}", username, danmaku_text);
-
-                            // Process the danmaku command
-                            let formatted_message = format!(" :{}", danmaku_text);
-                            crate::plugins::danmaku::process_danmaku(&formatted_message).await;
+                                    info!("💬 [{}]: {}", username, danmaku_text);
+                                }
+                            }
                         }
                     }
                 }
             }
-            "WELCOME" => {
-                // info!("👋 Welcome message received");
+            "LIVE" => {
+                // if let Some(data) = &message.data {
+                //     let room_id = data["room_id"].as_u64().unwrap_or(0);
+                //     info!("🔴 Live started - Room ID: {}", room_id);
+                // }
+            }
+            "PREPARING" => {
+                // if let Some(data) = &message.data {
+                //     let room_id = data["roomid"].as_str().unwrap_or("unknown");
+                //     info!("⚫ Live stopped - Room ID: {}", room_id);
+                // }
+            }
+            "WARNING" => {
+                if let Some(data) = &message.data {
+                    let msg = data["msg"].as_str().unwrap_or("No message");
+                    warn!("⚠️ Warning: {}", msg);
+                    let cfg = self.app_config.clone();
+                    tokio::spawn(async move {
+                        // Get current streaming channel from bili title
+                        if let Ok((_, title, _)) =
+                            crate::plugins::get_bili_live_status(cfg.bililive.room).await
+                        {
+                            if title.contains("【转播】") {
+                                let channel_name = title.split("【转播】").last().unwrap_or("");
+                                if !channel_name.is_empty() {
+                                    // Set warning flag to prevent restreaming this channel
+                                    crate::plugins::danmaku::set_warning_stop(
+                                        channel_name.to_string(),
+                                    );
+                                    info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
+                                }
+                            }
+                        }
+
+                        if let Err(e) = bili_stop_live(&cfg).await {
+                            error!("Failed to stop live on warning: {}", e);
+                        }
+                    });
+                }
+            }
+            "CUT_OFF" => {
+                if let Some(data) = &message.data {
+                    let msg = data["msg"].as_str().unwrap_or("Stream cut off");
+                    warn!("✂️ Cut off: {}", msg)
+                };
+                let cfg = self.app_config.clone();
+                tokio::spawn(async move {
+                    // Get current streaming channel from bili title
+                    if let Ok((_, title, _)) =
+                        crate::plugins::get_bili_live_status(cfg.bililive.room).await
+                    {
+                        if title.contains("【转播】") {
+                            let channel_name = title.split("【转播】").last().unwrap_or("");
+                            if !channel_name.is_empty() {
+                                // Set warning flag to prevent restreaming this channel
+                                crate::plugins::danmaku::set_warning_stop(channel_name.to_string());
+                                info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
+                            }
+                        }
+                    }
+
+                    if let Err(e) = bili_stop_live(&cfg).await {
+                        error!("Failed to stop live on warning: {}", e);
+                    }
+                });
+                // if let Some(data) = &message.data {
+                //     let username = data["uname"].as_str().unwrap_or("User");
+                //     info!("👋 {} entered the room", username);
+                // }
+            }
+            "WELCOME_GUARD" => {
+                // if let Some(data) = &message.data {
+                //     let username = data["username"].as_str().unwrap_or("Guard");
+                //     info!("🛡️ Guard {} entered the room", username);
+                // }
+            }
+            "SEND_GIFT" => {
+                if let Some(data) = &message.data {
+                    let username = data["uname"].as_str().unwrap_or("User");
+                    let gift_name = data["giftName"].as_str().unwrap_or("gift");
+                    let num = data["num"].as_u64().unwrap_or(1);
+                    info!("🎁 {} sent {} x{}", username, gift_name, num);
+                    let cfg = self.app_config.clone();
+                    let thank_msg = format!("谢谢{}送的{}", username, gift_name);
+                    tokio::spawn(async move {
+                        if let Err(e) = send_danmaku(&cfg, &thank_msg).await {
+                            error!("Failed to send thank you danmaku: {}", e);
+                        }
+                    });
+                }
+            }
+            "SUPER_CHAT_MESSAGE" | "SUPER_CHAT_MESSAGE_JP" => {
+                // if let Some(data) = &message.data {
+                //     let username = data["user_info"]["uname"].as_str().unwrap_or("User");
+                //     let message_text = data["message"].as_str().unwrap_or("");
+                //     let price = data["price"].as_u64().unwrap_or(0);
+                //     info!(
+                //         "💰 {} sent Super Chat (¥{}): {}",
+                //         username, price, message_text
+                //     );
+                // }
+            }
+            "GUARD_BUY" => {
+                // if let Some(data) = &message.data {
+                //     let username = data["username"].as_str().unwrap_or("User");
+                //     let gift_name = data["gift_name"].as_str().unwrap_or("Guard");
+                //     let num = data["num"].as_u64().unwrap_or(1);
+                //     info!("🛡️ {} purchased {} x{}", username, gift_name, num);
+                // }
+            }
+            "INTERACT_WORD" | "INTERACT_WORD_V2" => {
+                // User interaction (enter room, follow, etc.) - suppress (too frequent)
+            }
+            "NOTICE_MSG" => {
+                // Notice messages - suppress
+            }
+            "GIFT_TOP" => {
+                // Gift ranking - suppress
             }
             "ROOM_REAL_TIME_MESSAGE_UPDATE" => {
                 // Room stats update - suppress (too frequent)
@@ -522,28 +655,20 @@ impl BilibiliDanmakuClient {
             "WATCHED_CHANGE" => {
                 // Watched count change - suppress
             }
-            "SEND_GIFT" => {
-                // info!("🎁 Gift received: {:?}", message.data);
-            }
-            "SUPER_CHAT_MESSAGE" => {
-                // info!("💰 Super Chat received: {:?}", message.data);
-            }
-            "GUARD_BUY" => {
-                // info!("�️ Guard puerchased: {:?}", message.data);
-            }
-            "INTERACT_WORD" => {
-                // User interaction (enter room, follow, etc.) - suppress
-            }
             _ => {
-                // Log unknown message types only in debug mode
+                // Log unknown message types for debugging
                 warn!("📨 Unknown message type: {}", message.cmd);
             }
         }
     }
 }
 
-pub async fn run_native_danmaku_client(config: DanmakuConfig) -> Result<()> {
-    let mut client = BilibiliDanmakuClient::new(config);
+pub async fn run_native_danmaku_client(
+    config: DanmakuConfig,
+    app_config: Arc<Config>,
+    enable_commands: Arc<AtomicBool>,
+) -> Result<()> {
+    let mut client = BilibiliDanmakuClient::new(config, app_config, enable_commands);
 
     loop {
         match client.connect().await {

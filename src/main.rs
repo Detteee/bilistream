@@ -1,9 +1,10 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
-    get_channel_name, get_puuid, get_thumbnail, get_twitch_status, get_youtube_status,
-    is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live, send_danmaku,
+    check_area_id_with_title, clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases,
+    get_area_name, get_bili_live_status, get_channel_name, get_puuid, get_thumbnail,
+    get_twitch_status, get_youtube_status, is_danmaku_commands_enabled, is_danmaku_running,
+    is_ffmpeg_running, run_danmaku, select_live, send_danmaku, should_skip_due_to_warning,
 };
 
 use chrono::{DateTime, Local};
@@ -63,10 +64,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         cmd.arg("ffmpeg");
         cmd.spawn()?;
     }
-    if is_danmaku_running() {
-        let mut cmd = StdCommand::new("pkill");
-        cmd.arg("live-danmaku-cli");
-        cmd.spawn()?;
+
+    // Start danmaku client in background if not already running
+    if !is_danmaku_running() {
+        run_danmaku();
+        // thread::sleep(Duration::from_secs(2)); // Give it time to connect
     }
 
     'outer: loop {
@@ -99,6 +101,38 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         if yt_is_live || tw_is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
+
+            // Check which channel is live
+            let channel_name_check = if yt_is_live {
+                &cfg.youtube.channel_name
+            } else {
+                &cfg.twitch.channel_name
+            };
+
+            // Skip if this channel was stopped due to WARNING/CUT_OFF
+            if should_skip_due_to_warning(channel_name_check) {
+                tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", channel_name_check);
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                    enable_danmaku_commands(true);
+                    send_danmaku(
+                        &cfg,
+                        &format!(
+                            "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
+                            channel_name_check
+                        ),
+                    )
+                    .await?;
+                }
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue;
+            } else {
+                clear_warning_stop();
+            }
+
+            // Disable danmaku commands when streaming
+            if is_danmaku_commands_enabled() {
+                enable_danmaku_commands(false);
+            }
             let (platform, channel_name, channel_id, mut area_v2, cfg_title) = if yt_is_live {
                 (
                     "YT",
@@ -144,8 +178,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             {
                 send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await?;
                 DANMAKU_KAMITO_APEX.store(false, Ordering::SeqCst);
-                if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                    thread::spawn(move || run_danmaku());
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                    enable_danmaku_commands(true);
                     thread::sleep(Duration::from_secs(2));
                     send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
                 }
@@ -166,8 +200,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             {
                 tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
                 send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await?;
-                if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                    thread::spawn(move || run_danmaku());
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                    enable_danmaku_commands(true);
                     thread::sleep(Duration::from_secs(2));
                     send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
                 }
@@ -225,7 +259,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                     if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                         tracing::error!("B站直播间封面替换失败: {}", e);
                     } else {
@@ -244,7 +278,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             );
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
                 if area_v2 == 86 {
                     let puuid = get_puuid(&channel_name)?;
                     if puuid != "" {
@@ -281,9 +315,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             tracing::info!("{} 直播结束", channel_name);
             if cfg.bililive.enable_danmaku_command {
-                if !is_danmaku_running() {
-                    thread::spawn(move || run_danmaku());
-                }
+                enable_danmaku_commands(true);
                 send_danmaku(
                     &cfg,
                     &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
@@ -362,8 +394,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
             }
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                thread::spawn(move || run_danmaku());
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                enable_danmaku_commands(true);
             }
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
         }
@@ -649,9 +681,10 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                                     send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
                                         .await
                                         .unwrap();
-                                    if cfg.bililive.enable_danmaku_command && !is_danmaku_running()
+                                    if cfg.bililive.enable_danmaku_command
+                                        && !is_danmaku_commands_enabled()
                                     {
-                                        thread::spawn(move || run_danmaku());
+                                        enable_danmaku_commands(true);
                                         thread::sleep(Duration::from_secs(2));
                                         send_danmaku(&cfg, "可使用弹幕指令进行换台").await.unwrap();
                                     }
@@ -796,8 +829,8 @@ async fn handle_collisions(
                 .await?;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                thread::spawn(move || run_danmaku());
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                enable_danmaku_commands(true);
             }
             if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -842,10 +875,11 @@ async fn handle_collisions(
             )
             .await?;
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_running() {
-                thread::spawn(move || run_danmaku());
+            if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                enable_danmaku_commands(true);
             }
             if cfg.bililive.enable_danmaku_command {
+                tokio::time::sleep(Duration::from_secs(2)).await;
                 send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await?;
             }
             tokio::time::sleep(Duration::from_secs(30)).await;

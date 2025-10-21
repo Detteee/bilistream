@@ -3,14 +3,20 @@ use super::youtube::get_youtube_status;
 use crate::config::load_config;
 use crate::config::Config;
 use crate::plugins::bilibili;
-use crate::plugins::ffmpeg;
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use std::{fs, io};
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
+
+lazy_static! {
+    static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    static ref WARNING_STOP: AtomicBool = AtomicBool::new(false);
+    static ref LAST_WARNING_CHANNEL: Mutex<Option<String>> = Mutex::new(None);
+}
 
 pub fn is_danmaku_running() -> bool {
     DANMAKU_RUNNING.load(Ordering::Relaxed)
@@ -18,6 +24,14 @@ pub fn is_danmaku_running() -> bool {
 
 pub fn set_danmaku_running(running: bool) {
     DANMAKU_RUNNING.store(running, Ordering::Relaxed);
+}
+
+pub fn is_danmaku_commands_enabled() -> bool {
+    DANMAKU_COMMANDS_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn set_danmaku_commands_enabled(enabled: bool) {
+    DANMAKU_COMMANDS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 const BANNED_KEYWORDS: [&str; 25] = [
     "gta",
@@ -331,7 +345,7 @@ pub async fn process_danmaku(command: &str) {
     let cfg = load_config().await.unwrap();
     // Add check for 查询 command
     if normalized_danmaku.contains("%查询") {
-        tracing::info!("🔍 查询命令收到");
+        // tracing::info!("🔍 查询命令收到");
         let channel_name = cfg.youtube.channel_name.clone();
         let area_name = get_area_name(cfg.youtube.area_v2);
         let _ = bilibili::send_danmaku(
@@ -357,7 +371,7 @@ pub async fn process_danmaku(command: &str) {
         return;
     }
 
-    tracing::info!("📺 转播命令收到: {}", normalized_danmaku);
+    // tracing::info!("📺 转播命令收到: {}", normalized_danmaku);
     let danmaku_command = normalized_danmaku.replace(" :", "");
 
     // Replace full-width ％ with half-width %
@@ -534,6 +548,9 @@ pub async fn process_danmaku(command: &str) {
                     );
                     return;
                 } else {
+                    // Clear warning flag when user manually changes channel
+                    clear_warning_stop();
+
                     // Send success notification
                     let _ = bilibili::send_danmaku(
                         &cfg,
@@ -566,71 +583,95 @@ pub async fn process_danmaku(command: &str) {
     }
 }
 
-/// Main function to execute danmaku processing using native client.
+/// Main function to start the danmaku client in the background.
+/// The client runs continuously and monitors for WARNING/CUT_OFF messages.
+/// Danmaku commands are only processed when enabled via set_danmaku_commands_enabled().
 pub fn run_danmaku() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let cfg = load_config().await.unwrap();
-        let room_id = cfg.bililive.room;
+    if is_danmaku_running() {
+        tracing::warn!("弹幕客户端已在运行");
+        return;
+    }
 
-        // Create danmaku client config
-        let danmaku_config = crate::plugins::danmaku_client::DanmakuConfig {
-            room_id: room_id as u64,
-            sessdata: cfg.bililive.credentials.sessdata.clone(),
-            bili_jct: cfg.bililive.credentials.bili_jct.clone(),
-            dede_user_id: cfg.bililive.credentials.dede_user_id.clone(),
-            dede_user_id_ckmd5: cfg.bililive.credentials.dede_user_id_ckmd5.clone(),
-            buvid3: cfg.bililive.credentials.buvid3.clone(),
-        };
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let cfg = load_config().await.unwrap();
+            let room_id = cfg.bililive.room;
 
-        // Drop cfg to avoid holding non-Send types
-        drop(cfg);
+            // Create danmaku client config
+            let danmaku_config = crate::plugins::danmaku_client::DanmakuConfig {
+                room_id: room_id as u64,
+                sessdata: cfg.bililive.credentials.sessdata.clone(),
+                bili_jct: cfg.bililive.credentials.bili_jct.clone(),
+                dede_user_id: cfg.bililive.credentials.dede_user_id.clone(),
+                dede_user_id_ckmd5: cfg.bililive.credentials.dede_user_id_ckmd5.clone(),
+                buvid3: cfg.bililive.credentials.buvid3.clone(),
+            };
 
-        set_danmaku_running(true);
-        tracing::info!("启动弹幕命令读取");
+            // Wrap config in Arc for sharing across tasks
+            let cfg_arc = Arc::new(cfg);
+            // Use the global DANMAKU_COMMANDS_ENABLED Arc
+            let enable_commands = DANMAKU_COMMANDS_ENABLED.clone();
 
-        // Run danmaku client and monitoring concurrently
-        let client_future = async move {
-            if let Err(e) =
-                crate::plugins::danmaku_client::run_native_danmaku_client(danmaku_config).await
+            set_danmaku_running(true);
+            tracing::info!("🚀 启动弹幕客户端");
+
+            // Run danmaku client - it will keep running
+            if let Err(e) = crate::plugins::danmaku_client::run_native_danmaku_client(
+                danmaku_config,
+                cfg_arc,
+                enable_commands,
+            )
+            .await
             {
                 tracing::error!("弹幕客户端错误: {}", e);
             }
-        };
 
-        let monitor_future = async move {
-            let mut monitor_interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                monitor_interval.tick().await;
-
-                // Check Bilibili live status - convert error to String immediately to make it Send
-                let is_live = match crate::plugins::bilibili::get_bili_live_status(room_id).await {
-                    Ok((is_live, _, _)) => is_live,
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        tracing::error!("检查Bilibili直播间状态时出错: {}", error_msg);
-                        continue;
-                    }
-                };
-
-                if is_live && ffmpeg::is_ffmpeg_running() {
-                    tracing::info!("ffmpeg 正在运行且直播间开播. 停止弹幕命令读取...");
-                    set_danmaku_running(false);
-                    break;
-                }
-            }
-        };
-
-        // Run both futures concurrently, stop when monitor completes
-        tokio::select! {
-            _ = client_future => {
-                tracing::info!("弹幕客户端已停止");
-            }
-            _ = monitor_future => {
-                tracing::info!("监控任务已停止");
-            }
-        }
+            set_danmaku_running(false);
+            tracing::info!("弹幕客户端已停止");
+        });
     });
+}
+
+/// Enable or disable danmaku command processing.
+/// The client continues to monitor for WARNING/CUT_OFF regardless of this setting.
+pub fn enable_danmaku_commands(enabled: bool) {
+    set_danmaku_commands_enabled(enabled);
+    if enabled {
+        tracing::info!("✅ 弹幕命令已启用");
+    } else {
+        tracing::info!("⏸️ 弹幕命令已禁用");
+    }
+}
+
+/// Set the warning stop flag and store the channel that was stopped
+pub fn set_warning_stop(channel_name: String) {
+    WARNING_STOP.store(true, Ordering::SeqCst);
+    if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
+        *last = Some(channel_name);
+    }
+}
+
+/// Check if we should skip streaming due to a recent warning
+pub fn should_skip_due_to_warning(channel_name: &str) -> bool {
+    if !WARNING_STOP.load(Ordering::SeqCst) {
+        return false;
+    }
+
+    if let Ok(last) = LAST_WARNING_CHANNEL.lock() {
+        if let Some(ref last_channel) = *last {
+            return last_channel == channel_name;
+        }
+    }
+    false
+}
+
+/// Clear the warning stop flag (call when user manually changes channel)
+pub fn clear_warning_stop() {
+    WARNING_STOP.store(false, Ordering::SeqCst);
+    if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
+        *last = None;
+    }
 }
 
 pub fn get_area_name(area_id: u64) -> Option<&'static str> {
