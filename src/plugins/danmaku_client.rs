@@ -505,6 +505,8 @@ impl BilibiliDanmakuClient {
                         if info_array.len() > 2 {
                             // Extract danmaku text and user info
                             let danmaku_text = info_array[1].as_str().unwrap_or("");
+                            // replase all ％ with % in danmaku_text
+                            let danmaku_text = danmaku_text.replace("％", "%");
                             let user_info = info_array[2].as_array();
                             let username = user_info
                                 .and_then(|u| u.get(1))
@@ -523,7 +525,7 @@ impl BilibiliDanmakuClient {
 
                             // Process owner-only commands
                             if danmaku_text.contains("%查询")
-                                || danmaku_text.contains("%转播%")
+                                || danmaku_text.contains("%转播")
                                 || danmaku_text.contains("%重连")
                             {
                                 if uid == owner_uid {
@@ -594,23 +596,33 @@ impl BilibiliDanmakuClient {
                     let cfg = self.app_config.clone();
                     tokio::spawn(async move {
                         // Get current streaming channel from bili title
-                        if let Ok((_, title, _)) =
-                            crate::plugins::get_bili_live_status(cfg.bililive.room).await
-                        {
-                            if title.contains("【转播】") {
-                                let channel_name = title.split("【转播】").last().unwrap_or("");
-                                if !channel_name.is_empty() {
-                                    // Set warning flag to prevent restreaming this channel
-                                    crate::plugins::danmaku::set_warning_stop(
-                                        channel_name.to_string(),
-                                    );
-                                    info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
+                        match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
+                            Ok((_, title, _)) => {
+                                if title.contains("【转播】") {
+                                    let channel_name = title.split("【转播】").last().unwrap_or("");
+                                    if !channel_name.is_empty() {
+                                        // Set warning flag to prevent restreaming this channel
+                                        crate::plugins::danmaku::set_warning_stop(
+                                            channel_name.to_string(),
+                                        );
+                                        info!(
+                                            "🚫 已标记频道 {} 为警告状态，将跳过转播",
+                                            channel_name
+                                        );
+                                    }
                                 }
+                            }
+                            Err(e) => {
+                                error!("Failed to get bili live status: {}", e.to_string());
                             }
                         }
 
                         if let Err(e) = bili_stop_live(&cfg).await {
                             error!("Failed to stop live on warning: {}", e);
+                        }
+                        if let Err(e) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                        {
+                            error!("Failed to send warning danmaku: {}", e.to_string());
                         }
                     });
                 }
@@ -623,17 +635,26 @@ impl BilibiliDanmakuClient {
                 let cfg = self.app_config.clone();
                 tokio::spawn(async move {
                     // Get current streaming channel from bili title
-                    if let Ok((_, title, _)) =
-                        crate::plugins::get_bili_live_status(cfg.bililive.room).await
-                    {
-                        if title.contains("【转播】") {
-                            let channel_name = title.split("【转播】").last().unwrap_or("");
-                            if !channel_name.is_empty() {
-                                // Set warning flag to prevent restreaming this channel
-                                crate::plugins::danmaku::set_warning_stop(channel_name.to_string());
-                                info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
+                    match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
+                        Ok((_, title, _)) => {
+                            if title.contains("【转播】") {
+                                let channel_name = title.split("【转播】").last().unwrap_or("");
+                                if !channel_name.is_empty() {
+                                    // Set warning flag to prevent restreaming this channel
+                                    crate::plugins::danmaku::set_warning_stop(
+                                        channel_name.to_string(),
+                                    );
+                                    info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
+                                }
                             }
                         }
+                        Err(e) => {
+                            error!("Failed to get bili live status: {}", e);
+                        }
+                    }
+                    if let Err(e) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                    {
+                        error!("Failed to send warning danmaku: {}", e);
                     }
 
                     if let Err(e) = bili_stop_live(&cfg).await {

@@ -941,7 +941,7 @@ async fn handle_collisions(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.3.0")
+        .version("0.3.1")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
