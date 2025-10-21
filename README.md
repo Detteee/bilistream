@@ -221,6 +221,6 @@ This project is licensed under the [unlicense](LICENSE).
 
 ## Acknowledgements
 
-- [limitcool/bilistream](https://github.com/limitcool/bilistream) - 
+- [limitcool/bilistream](https://github.com/limitcool/bilistream) 
 - [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
 - All users of this project

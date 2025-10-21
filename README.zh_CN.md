@@ -102,7 +102,7 @@
 ├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
 ├── config.yaml          # 主配置文件
 ├── cookies.json         # 哔哩哔哩登录 cookies（./bilistream login）
-├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词
+├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词 (可选)
 └── stream_manager.sh    # 管理脚本
 ```
 
