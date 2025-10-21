@@ -500,24 +500,75 @@ impl BilibiliDanmakuClient {
     async fn process_danmaku_command(&self, message: &DanmakuMessage) {
         match message.cmd.as_str() {
             "DANMU_MSG" => {
-                if self.enable_commands.load(Ordering::Relaxed) {
-                    if let Some(info) = &message.info {
-                        if let Some(info_array) = info.as_array() {
-                            if info_array.len() > 2 {
-                                // Extract danmaku text and user info
-                                let danmaku_text = info_array[1].as_str().unwrap_or("");
-                                if danmaku_text.contains("%查询") || danmaku_text.contains("%转播%")
-                                {
-                                    let formatted_message = format!(" :{}", danmaku_text);
-                                    crate::plugins::danmaku::process_danmaku(&formatted_message)
-                                        .await;
-                                    let user_info = info_array[2].as_array();
-                                    let username = user_info
-                                        .and_then(|u| u.get(1))
-                                        .and_then(|n| n.as_str())
-                                        .unwrap_or("Unknown");
+                if let Some(info) = &message.info {
+                    if let Some(info_array) = info.as_array() {
+                        if info_array.len() > 2 {
+                            // Extract danmaku text and user info
+                            let danmaku_text = info_array[1].as_str().unwrap_or("");
+                            let user_info = info_array[2].as_array();
+                            let username = user_info
+                                .and_then(|u| u.get(1))
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("Unknown");
+                            let uid = user_info
+                                .and_then(|u| u.get(0))
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0);
 
-                                    info!("💬 [{}]: {}", username, danmaku_text);
+                            // Get owner UID from config
+                            let owner_uid = self.config.dede_user_id.parse::<u64>().unwrap_or(0);
+
+                            // Log every danmaku message
+                            // info!("💬 [{}]: {}", username, danmaku_text);
+
+                            // Process owner-only commands
+                            if danmaku_text.contains("%查询")
+                                || danmaku_text.contains("%转播%")
+                                || danmaku_text.contains("%重连")
+                            {
+                                if uid == owner_uid {
+                                    // Owner can always use all commands
+                                    if danmaku_text.contains("%重连") {
+                                        // %换台 command - channel switch
+                                        info!("🔄 主播请求重连换台");
+                                        let cfg = self.app_config.clone();
+                                        tokio::spawn(async move {
+                                            // Set channel switch flag
+                                            crate::plugins::danmaku::request_channel_switch();
+
+                                            // Stop ffmpeg to break the inner loop
+                                            crate::plugins::ffmpeg::stop_ffmpeg();
+
+                                            // Send confirmation
+                                            tokio::time::sleep(tokio::time::Duration::from_secs(2))
+                                                .await;
+                                            if let Err(e) =
+                                                send_danmaku(&cfg, "🔄 正在重连...").await
+                                            {
+                                                error!("Failed to send switch confirmation: {}", e);
+                                            }
+                                        });
+                                    } else {
+                                        // Regular commands (%查询, %转播%) - always work for owner
+                                        let formatted_message = format!(" :{}", danmaku_text);
+                                        crate::plugins::danmaku::process_danmaku_with_owner(
+                                            &formatted_message,
+                                            true, // is_owner = true
+                                        )
+                                        .await;
+                                        info!("🔧 {}", danmaku_text);
+                                    }
+                                } else if self.enable_commands.load(Ordering::Relaxed) {
+                                    // Non-owners can use commands only when enabled
+                                    let formatted_message = format!(" :{}", danmaku_text);
+                                    crate::plugins::danmaku::process_danmaku_with_owner(
+                                        &formatted_message,
+                                        false, // is_owner = false
+                                    )
+                                    .await;
+                                    info!("💬 {} : {}", username, danmaku_text);
+                                } else {
+                                    info!("🚫 Command ignored");
                                 }
                             }
                         }
@@ -646,7 +697,7 @@ impl BilibiliDanmakuClient {
             "ROOM_REAL_TIME_MESSAGE_UPDATE" => {
                 // Room stats update - suppress (too frequent)
             }
-            "ONLINE_RANK_V2" | "ONLINE_RANK_COUNT" | "ONLINE_RANK_V3" => {
+            "ONLINE_RANK_V2" | "ONLINE_RANK_COUNT" | "ONLINE_RANK_V3" | "RANK_REM" => {
                 // Online rank updates - suppress (not important)
             }
             "STOP_LIVE_ROOM_LIST" => {
@@ -655,9 +706,19 @@ impl BilibiliDanmakuClient {
             "WATCHED_CHANGE" => {
                 // Watched count change - suppress
             }
+            "LIKE_INFO_V3_UPDATE"
+            | "LIKE_INFO_V3_CLICK"
+            | "WIGET_BANNER"
+            | "ROOM_CHANGE"
+            | "ANCHOR_LOT_NOTICE"
+            | "ANCHOR_HELPER_DANMU" => {}
+            "VOICE_JOIN_ROOM_COUNT_INFO" | "VOICE_JOIN_LIST" | "RANK_CHANGED" | "ENTRY_EFFECT" => {}
             _ => {
                 // Log unknown message types for debugging
+
                 warn!("📨 Unknown message type: {}", message.cmd);
+
+                println!("message content : {:?}", message);
             }
         }
     }

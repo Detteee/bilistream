@@ -16,6 +16,8 @@ lazy_static! {
     static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref WARNING_STOP: AtomicBool = AtomicBool::new(false);
     static ref LAST_WARNING_CHANNEL: Mutex<Option<String>> = Mutex::new(None);
+    static ref CONFIG_UPDATED: AtomicBool = AtomicBool::new(false);
+    static ref WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 }
 
 pub fn is_danmaku_running() -> bool {
@@ -330,6 +332,11 @@ fn resolve_area_alias(alias: &str) -> &str {
 
 /// Processes a single danmaku command.
 pub async fn process_danmaku(command: &str) {
+    process_danmaku_with_owner(command, false).await;
+}
+
+/// Processes a single danmaku command with owner flag.
+pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     // only line start with : is danmaku
     if command.contains("WARN  [init] Connection closed by server") {
         tracing::info!("B站cookie过期，无法启动弹幕指令，请更新配置文件:./biliup login");
@@ -447,11 +454,19 @@ pub async fn process_danmaku(command: &str) {
                     let t = match title {
                         Some(t) => t,
                         None => {
-                            tracing::error!("获取YT直播标题失败");
-                            let _ = bilibili::send_danmaku(&cfg, "错误：获取YT直播标题失败").await;
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            let _ = bilibili::send_danmaku(&cfg, "请确认是否已开（预告）窗").await;
-                            return;
+                            if is_owner {
+                                // Owner can force switch even without title
+                                tracing::warn!("主播强制切换到无标题的YT频道");
+                                "无标题直播".to_string()
+                            } else {
+                                tracing::error!("获取YT直播标题失败");
+                                let _ =
+                                    bilibili::send_danmaku(&cfg, "错误：获取YT直播标题失败").await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                let _ =
+                                    bilibili::send_danmaku(&cfg, "请确认是否已开（预告）窗").await;
+                                return;
+                            }
                         }
                     };
                     (t, topic.unwrap_or_default())
@@ -471,9 +486,16 @@ pub async fn process_danmaku(command: &str) {
                     let t = match title {
                         Some(t) => t,
                         None => {
-                            tracing::error!("获取TW直播标题失败");
-                            let _ = bilibili::send_danmaku(&cfg, "错误：获取TW直播标题失败").await;
-                            return;
+                            if is_owner {
+                                // Owner can force switch even without title
+                                tracing::warn!("主播强制切换到无标题的TW频道");
+                                "无标题直播".to_string()
+                            } else {
+                                tracing::error!("获取TW直播标题失败");
+                                let _ =
+                                    bilibili::send_danmaku(&cfg, "错误：获取TW直播标题失败").await;
+                                return;
+                            }
                         }
                     };
                     (t, topic.unwrap_or_default())
@@ -550,6 +572,9 @@ pub async fn process_danmaku(command: &str) {
                 } else {
                     // Clear warning flag when user manually changes channel
                     clear_warning_stop();
+
+                    // Set config updated flag to skip waiting interval
+                    set_config_updated();
 
                     // Send success notification
                     let _ = bilibili::send_danmaku(
@@ -647,6 +672,7 @@ pub fn enable_danmaku_commands(enabled: bool) {
 /// Set the warning stop flag and store the channel that was stopped
 pub fn set_warning_stop(channel_name: String) {
     WARNING_STOP.store(true, Ordering::SeqCst);
+    WARNING_LOGGED.store(false, Ordering::SeqCst); // Reset logged flag for new warning
     if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
         *last = Some(channel_name);
     }
@@ -666,12 +692,75 @@ pub fn should_skip_due_to_warning(channel_name: &str) -> bool {
     false
 }
 
+/// Check if we should skip streaming due to a recent warning (returns true only on first check for logging)
+pub fn should_skip_due_to_warned(channel_name: &str) -> bool {
+    if !WARNING_STOP.load(Ordering::SeqCst) {
+        return false;
+    }
+
+    if let Ok(last) = LAST_WARNING_CHANNEL.lock() {
+        if let Some(ref last_channel) = *last {
+            if last_channel == channel_name {
+                // Only return true for logging on first check
+                if !WARNING_LOGGED.load(Ordering::SeqCst) {
+                    WARNING_LOGGED.store(true, Ordering::SeqCst);
+                    return true; // First time - should log
+                }
+                return false; // Subsequent times - don't log
+            }
+        }
+    }
+    false
+}
+
 /// Clear the warning stop flag (call when user manually changes channel)
 pub fn clear_warning_stop() {
     WARNING_STOP.store(false, Ordering::SeqCst);
     if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
         *last = None;
     }
+}
+
+/// Set the channel switch request flag
+pub fn request_channel_switch() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    lazy_static! {
+        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
+    }
+    CHANNEL_SWITCH_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Check if channel switch was requested
+pub fn is_channel_switch_requested() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    lazy_static! {
+        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
+    }
+    CHANNEL_SWITCH_REQUESTED.load(Ordering::SeqCst)
+}
+
+/// Clear the channel switch request flag
+pub fn clear_channel_switch_request() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    lazy_static! {
+        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
+    }
+    CHANNEL_SWITCH_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+/// Set the config updated flag to skip waiting interval
+pub fn set_config_updated() {
+    CONFIG_UPDATED.store(true, Ordering::SeqCst);
+}
+
+/// Check if config was updated (to skip waiting)
+pub fn is_config_updated() -> bool {
+    CONFIG_UPDATED.load(Ordering::SeqCst)
+}
+
+/// Clear the config updated flag
+pub fn clear_config_updated() {
+    CONFIG_UPDATED.store(false, Ordering::SeqCst);
 }
 
 pub fn get_area_name(area_id: u64) -> Option<&'static str> {

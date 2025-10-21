@@ -1,10 +1,12 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases,
-    get_area_name, get_bili_live_status, get_channel_name, get_puuid, get_thumbnail,
-    get_twitch_status, get_youtube_status, is_danmaku_commands_enabled, is_danmaku_running,
-    is_ffmpeg_running, run_danmaku, select_live, send_danmaku, should_skip_due_to_warning,
+    check_area_id_with_title, clear_channel_switch_request, clear_config_updated,
+    clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
+    get_bili_live_status, get_channel_name, get_puuid, get_thumbnail, get_twitch_status,
+    get_youtube_status, is_channel_switch_requested, is_config_updated,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
+    send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning,
 };
 
 use chrono::{DateTime, Local};
@@ -111,17 +113,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Skip if this channel was stopped due to WARNING/CUT_OFF
             if should_skip_due_to_warning(channel_name_check) {
-                tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", channel_name_check);
-                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                    enable_danmaku_commands(true);
-                    send_danmaku(
-                        &cfg,
-                        &format!(
-                            "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                            channel_name_check
-                        ),
-                    )
-                    .await?;
+                // Only log warning message once
+                if should_skip_due_to_warned(channel_name_check) {
+                    tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", channel_name_check);
+                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                        enable_danmaku_commands(true);
+                        send_danmaku(
+                            &cfg,
+                            &format!(
+                                "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
+                                channel_name_check
+                            ),
+                        )
+                        .await?;
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue;
@@ -279,6 +284,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
+
+                // Check if user requested channel switch
+                if is_channel_switch_requested() {
+                    // tracing::info!("🔄 手动重连 检测频道live status");
+                    break;
+                }
+
                 if area_v2 == 86 {
                     let puuid = get_puuid(&channel_name)?;
                     if puuid != "" {
@@ -313,6 +325,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 );
             }
 
+            // Check if this was a manual channel switch request
+            if is_channel_switch_requested() {
+                clear_channel_switch_request();
+                tracing::info!("🔄 手动重连 检测频道live status");
+                // Skip the "stream ended" message and immediately continue to next loop
+                continue 'outer;
+            }
+
             tracing::info!("{} 直播结束", channel_name);
             if cfg.bililive.enable_danmaku_command {
                 enable_danmaku_commands(true);
@@ -321,6 +341,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
                 )
                 .await?;
+                tokio::time::sleep(Duration::from_secs(15)).await;
             } else {
                 send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await?;
             }
@@ -397,7 +418,31 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                 enable_danmaku_commands(true);
             }
-            tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+
+            // Check if config was updated (skip waiting if so)
+            if is_config_updated() {
+                clear_config_updated();
+                tracing::info!("🔄 检测到配置更新，跳过等待间隔");
+                continue 'outer;
+            }
+
+            // Sleep with periodic checks for config updates
+            let sleep_duration = cfg.interval;
+            let check_interval = 2; // Check every 2 seconds
+            let mut elapsed = 0;
+
+            while elapsed < sleep_duration {
+                let sleep_time = std::cmp::min(check_interval, sleep_duration - elapsed);
+                tokio::time::sleep(Duration::from_secs(sleep_time)).await;
+                elapsed += sleep_time;
+
+                // Check if config was updated during sleep
+                if is_config_updated() {
+                    clear_config_updated();
+                    tracing::info!("🔄 等待期间检测到配置更新，立即检查新频道");
+                    continue 'outer;
+                }
+            }
         }
     }
 }

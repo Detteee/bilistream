@@ -1,4 +1,5 @@
 use std::process::Command;
+
 // if ffmpeg is already running
 pub fn is_ffmpeg_running() -> bool {
     let output = Command::new("pgrep")
@@ -13,6 +14,23 @@ pub fn is_ffmpeg_running() -> bool {
         }
     }
     false
+}
+
+/// Stops all running ffmpeg processes
+pub fn stop_ffmpeg() {
+    tracing::info!("🛑 Stopping ffmpeg processes...");
+    match Command::new("pkill").arg("-f").arg("ffmpeg -re").status() {
+        Ok(status) => {
+            if status.success() {
+                tracing::info!("✅ ffmpeg processes stopped successfully");
+            } else {
+                tracing::warn!("⚠️ pkill returned non-zero status (no processes found?)");
+            }
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to stop ffmpeg: {}", e);
+        }
+    }
 }
 /// Executes the ffmpeg command with the provided parameters.
 pub fn ffmpeg(
