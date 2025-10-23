@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
@@ -130,27 +130,49 @@ impl BilibiliDanmakuClient {
         let mut heartbeat_interval = interval(Duration::from_secs(30));
         let heartbeat_packet = self.create_heartbeat_packet();
 
+        // Track last activity for connection health monitoring
+        let mut last_activity = Instant::now();
+        let connection_timeout = Duration::from_secs(120); // 2 minutes without any activity
+
         loop {
             tokio::select! {
-                // Handle incoming messages
-                msg = ws_receiver.next() => {
+                // Handle incoming messages with timeout
+                msg = timeout(Duration::from_secs(60), ws_receiver.next()) => {
                     match msg {
-                        Some(Ok(Message::Binary(data))) => {
+                        Ok(Some(Ok(Message::Binary(data)))) => {
+                            last_activity = Instant::now(); // Update activity timestamp
                             if let Err(e) = self.handle_message(&data).await {
                                 error!("Error handling message: {}", e);
                             }
                         }
-                        Some(Ok(Message::Close(_))) => {
+                        Ok(Some(Ok(Message::Close(_)))) => {
                             warn!("WebSocket connection closed by server");
                             break;
                         }
-                        Some(Err(e)) => {
+                        Ok(Some(Err(e))) => {
                             error!("WebSocket error: {}", e);
                             break;
                         }
-                        None => {
+                        Ok(None) => {
                             warn!("WebSocket stream ended");
                             break;
+                        }
+                        Ok(Some(Ok(Message::Ping(data)))) => {
+                            last_activity = Instant::now();
+                            if let Err(e) = ws_sender.send(Message::Pong(data)).await {
+                                error!("Failed to send pong: {}", e);
+                                break;
+                            }
+                        }
+                        Ok(Some(Ok(Message::Pong(_)))) => {
+                            last_activity = Instant::now();
+                        }
+                        Err(_) => {
+                            // Timeout occurred - check if connection is still alive
+                            if last_activity.elapsed() > connection_timeout {
+                                warn!("Connection timeout - no activity for {:?}", connection_timeout);
+                                break;
+                            }
                         }
                         _ => {}
                     }
@@ -159,6 +181,12 @@ impl BilibiliDanmakuClient {
                 _ = heartbeat_interval.tick() => {
                     if let Err(e) = ws_sender.send(Message::Binary(heartbeat_packet.clone())).await {
                         error!("Failed to send heartbeat: {}", e);
+                        break;
+                    }
+
+                    // Also check for connection timeout during heartbeat
+                    if last_activity.elapsed() > connection_timeout {
+                        warn!("Connection appears stale - forcing reconnection");
                         break;
                     }
                 }
@@ -524,44 +552,21 @@ impl BilibiliDanmakuClient {
                             // info!("💬 [{}]: {}", username, danmaku_text);
 
                             // Process owner-only commands
-                            if danmaku_text.contains("%查询")
-                                || danmaku_text.contains("%转播")
-                                || danmaku_text.contains("%重连")
+                            if danmaku_text.contains("%查询") || danmaku_text.contains("%转播")
                             {
                                 if uid == owner_uid {
                                     // Owner can always use all commands
-                                    if danmaku_text.contains("%重连") {
-                                        // %换台 command - channel switch
-                                        info!("🔄 主播请求重连换台");
-                                        let cfg = self.app_config.clone();
-                                        tokio::spawn(async move {
-                                            // Set channel switch flag
-                                            crate::plugins::danmaku::request_channel_switch();
-
-                                            // Stop ffmpeg to break the inner loop
-                                            crate::plugins::ffmpeg::stop_ffmpeg();
-
-                                            // Send confirmation
-                                            tokio::time::sleep(tokio::time::Duration::from_secs(2))
-                                                .await;
-                                            if let Err(e) =
-                                                send_danmaku(&cfg, "🔄 正在重连...").await
-                                            {
-                                                error!("Failed to send switch confirmation: {}", e);
-                                            }
-                                        });
-                                    } else {
-                                        // Regular commands (%查询, %转播%) - always work for owner
-                                        let formatted_message = format!(" :{}", danmaku_text);
-                                        crate::plugins::danmaku::process_danmaku_with_owner(
-                                            &formatted_message,
-                                            true, // is_owner = true
-                                        )
-                                        .await;
-                                        info!("🔧 {}", danmaku_text);
-                                    }
-                                } else if self.enable_commands.load(Ordering::Relaxed) {
-                                    // Non-owners can use commands only when enabled
+                                    let formatted_message = format!(" :{}", danmaku_text);
+                                    crate::plugins::danmaku::process_danmaku_with_owner(
+                                        &formatted_message,
+                                        true, // is_owner = true
+                                    )
+                                    .await;
+                                    info!("🔧 {}", danmaku_text);
+                                } else if self.enable_commands.load(Ordering::Relaxed)
+                                    && danmaku_text.contains("%转播")
+                                {
+                                    // Non-owners can use commands "%转播" only when enabled
                                     let formatted_message = format!(" :{}", danmaku_text);
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
@@ -569,6 +574,13 @@ impl BilibiliDanmakuClient {
                                     )
                                     .await;
                                     info!("💬 {} : {}", username, danmaku_text);
+                                } else if danmaku_text.contains("%查询") {
+                                    let formatted_message = format!(" :{}", danmaku_text);
+                                    crate::plugins::danmaku::process_danmaku_with_owner(
+                                        &formatted_message,
+                                        false, // is_owner = false
+                                    )
+                                    .await;
                                 } else {
                                     info!("🚫 Command ignored");
                                 }
@@ -673,19 +685,19 @@ impl BilibiliDanmakuClient {
                 // }
             }
             "SEND_GIFT" => {
-                if let Some(data) = &message.data {
-                    let username = data["uname"].as_str().unwrap_or("User");
-                    let gift_name = data["giftName"].as_str().unwrap_or("gift");
-                    let num = data["num"].as_u64().unwrap_or(1);
-                    info!("🎁 {} sent {} x{}", username, gift_name, num);
-                    let cfg = self.app_config.clone();
-                    let thank_msg = format!("谢谢{}送的{}", username, gift_name);
-                    tokio::spawn(async move {
-                        if let Err(e) = send_danmaku(&cfg, &thank_msg).await {
-                            error!("Failed to send thank you danmaku: {}", e);
-                        }
-                    });
-                }
+                // if let Some(data) = &message.data {
+                //     let username = data["uname"].as_str().unwrap_or("User");
+                //     let gift_name = data["giftName"].as_str().unwrap_or("gift");
+                //     let num = data["num"].as_u64().unwrap_or(1);
+                //     info!("🎁 {} sent {} x{}", username, gift_name, num);
+                //     let cfg = self.app_config.clone();
+                //     let thank_msg = format!("谢谢{}送的{}", username, gift_name);
+                //     tokio::spawn(async move {
+                //         if let Err(e) = send_danmaku(&cfg, &thank_msg).await {
+                //             error!("Failed to send thank you danmaku: {}", e);
+                //         }
+                //     });
+                // }
             }
             "SUPER_CHAT_MESSAGE" | "SUPER_CHAT_MESSAGE_JP" => {
                 // if let Some(data) = &message.data {
@@ -718,22 +730,39 @@ impl BilibiliDanmakuClient {
             "ROOM_REAL_TIME_MESSAGE_UPDATE" => {
                 // Room stats update - suppress (too frequent)
             }
-            "ONLINE_RANK_V2" | "ONLINE_RANK_COUNT" | "ONLINE_RANK_V3" | "RANK_REM" => {
-                // Online rank updates - suppress (not important)
-            }
-            "STOP_LIVE_ROOM_LIST" => {
-                // Stop live room list - suppress
-            }
-            "WATCHED_CHANGE" => {
-                // Watched count change - suppress
-            }
-            "LIKE_INFO_V3_UPDATE"
+            "COMMON_NOTICE_DANMAKU"
+            | "master_qn_strategy_chg"
+            | "GUARD_HONOR_THOUSAND"
+            | "DM_INTERACTION"
+            | "ONLINE_RANK_V2"
+            | "ONLINE_RANK_COUNT"
+            | "ONLINE_RANK_V3"
+            | "RANK_REM"
+            | "STOP_LIVE_ROOM_LIST"
+            | "WATCHED_CHANGE"
+            | "LIKE_INFO_V3_UPDATE"
             | "LIKE_INFO_V3_CLICK"
-            | "WIGET_BANNER"
+            | "WIDGET_BANNER"
+            | "POPULARITY_RANK_TAB_CHG"
+            | "ROOM_LIVE_FORBID"
             | "ROOM_CHANGE"
             | "ANCHOR_LOT_NOTICE"
-            | "ANCHOR_HELPER_DANMU" => {}
-            "VOICE_JOIN_ROOM_COUNT_INFO" | "VOICE_JOIN_LIST" | "RANK_CHANGED" | "ENTRY_EFFECT" => {}
+            | "ANCHOR_HELPER_DANMU"
+            | "PLAYTOGETHER_ICON_CHANGE"
+            | "CHG_RANK_REFRESH"
+            | "VOICE_JOIN_ROOM_COUNT_INFO"
+            | "VOICE_JOIN_LIST"
+            | "RANK_CHANGED"
+            | "ENTRY_EFFECT" => {}
+            "ROOM_CONTENT_AUDIT_REPORT" => {
+                if let Some(data) = &message.data {
+                    if let Some(title) = data["audit_title"].as_str() {
+                        info!("标题修改成功：{}", title);
+                    }
+                } else {
+                    println!("Unknown message: {:?}", message);
+                }
+            }
             _ => {
                 // Log unknown message types for debugging
 
@@ -751,17 +780,34 @@ pub async fn run_native_danmaku_client(
     enable_commands: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut client = BilibiliDanmakuClient::new(config, app_config, enable_commands);
+    let mut reconnect_attempts = 0;
+    let max_reconnect_attempts = 10;
 
     loop {
         match client.connect().await {
             Ok(_) => {
                 info!("Danmaku client disconnected normally");
-                break;
+                reconnect_attempts = 0; // Reset counter on successful connection
+                                        // Don't break immediately - try to reconnect in case it was unexpected
+                warn!("Unexpected disconnection, attempting to reconnect...");
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
             Err(e) => {
-                error!("Danmaku client error: {}", e);
-                info!("Reconnecting in 5 seconds...");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                reconnect_attempts += 1;
+                error!(
+                    "Danmaku client error (attempt {}): {}",
+                    reconnect_attempts, e
+                );
+
+                if reconnect_attempts >= max_reconnect_attempts {
+                    error!("Max reconnection attempts reached, giving up");
+                    break;
+                }
+
+                // Exponential backoff with jitter
+                let delay = std::cmp::min(5 * reconnect_attempts, 60);
+                info!("Reconnecting in {} seconds...", delay);
+                tokio::time::sleep(Duration::from_secs(delay as u64)).await;
             }
         }
     }

@@ -1,10 +1,9 @@
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, clear_channel_switch_request, clear_config_updated,
-    clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
-    get_bili_live_status, get_channel_name, get_puuid, get_thumbnail, get_twitch_status,
-    get_youtube_status, is_channel_switch_requested, is_config_updated,
+    check_area_id_with_title, clear_config_updated, clear_warning_stop, enable_danmaku_commands,
+    ffmpeg, get_aliases, get_area_name, get_bili_live_status, get_channel_name, get_puuid,
+    get_thumbnail, get_twitch_status, get_youtube_status, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
     send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning,
 };
@@ -74,6 +73,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     }
 
     'outer: loop {
+        // Log outer loop restart for debugging channel switch issues
+        tracing::debug!("🔄 外层循环开始 - 重新加载配置并检查频道状态");
+
         let mut cfg = load_config().await?;
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
@@ -189,13 +191,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue;
+                continue 'outer;
             } else if area_v2 == 240
                 && !channel_name.contains("Kamito")
                 && !DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
             {
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue;
+                continue 'outer;
             } else {
                 DANMAKU_KAMITO_APEX.store(true, Ordering::SeqCst);
             }
@@ -211,7 +213,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue;
+                continue 'outer;
             }
             let (bili_is_live, bili_title, bili_area_id) =
                 get_bili_live_status(cfg.bililive.room).await?;
@@ -232,10 +234,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
-                    if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                        tracing::error!("B站直播间封面替换失败: {}", e);
+                    if !cover_path.is_empty() {
+                        if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                            tracing::error!("B站直播间封面替换失败: {}", e);
+                        } else {
+                            tracing::info!("B站直播间封面替换成功");
+                        }
                     } else {
-                        tracing::info!("B站直播间封面替换成功");
+                        tracing::warn!("跳过封面更新：缩略图下载失败");
                     }
                 }
             } else {
@@ -264,16 +270,21 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                        tracing::error!("B站直播间封面替换失败: {}", e);
+                    if !cover_path.is_empty() {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                            tracing::error!("B站直播间封面替换失败: {}", e);
+                        } else {
+                            tracing::info!("B站直播间封面替换成功");
+                        }
                     } else {
-                        tracing::info!("B站直播间封面替换成功");
+                        tracing::warn!("跳过封面更新：缩略图下载失败");
                     }
                 }
             }
 
             // Execute ffmpeg with platform-specific locks
+            tracing::info!("🚀 启动ffmpeg流传输到B站");
             ffmpeg(
                 cfg.bililive.bili_rtmp_url.clone(),
                 cfg.bililive.bili_rtmp_key.clone(),
@@ -281,15 +292,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 cfg.proxy.clone(),
                 ffmpeg_log_level,
             );
+
             // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
             loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-
-                // Check if user requested channel switch
-                if is_channel_switch_requested() {
-                    // tracing::info!("🔄 手动重连 检测频道live status");
-                    break;
-                }
+                tokio::time::sleep(Duration::from_secs(7)).await;
 
                 if area_v2 == 86 {
                     let puuid = get_puuid(&channel_name)?;
@@ -312,10 +318,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if !current_is_live || !bili_is_live {
                     break;
                 }
-                // let (is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
-                // if !is_live {
-                //     bili_start_live(&cfg).await?;
-                // }
+                // Restart ffmpeg if needed (e.g., stream URL changed)
+                tracing::debug!("🔄 重启ffmpeg进程以维持流连接");
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -323,14 +327,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     cfg.proxy.clone(),
                     ffmpeg_log_level,
                 );
-            }
 
-            // Check if this was a manual channel switch request
-            if is_channel_switch_requested() {
-                clear_channel_switch_request();
-                tracing::info!("🔄 手动重连 检测频道live status");
-                // Skip the "stream ended" message and immediately continue to next loop
-                continue 'outer;
+                // Verify ffmpeg started successfully
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if !is_ffmpeg_running() {
+                    tracing::error!("❌ ffmpeg重启失败，将在下次循环重试");
+                    send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await?;
+                }
             }
 
             tracing::info!("{} 直播结束", channel_name);
@@ -846,7 +849,13 @@ async fn handle_collisions(
             "双平台".to_string(),
         );
 
-        if last_collision.as_ref() != Some(&current) {
+        // Check if we're already in a dual-platform collision state (regardless of specific room)
+        let already_in_dual_collision = last_collision
+            .as_ref()
+            .map(|(_, _, platform)| platform == "双平台")
+            .unwrap_or(false);
+
+        if !already_in_dual_collision {
             tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
             // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
             // tokio::time::sleep(Duration::from_secs(2)).await;
@@ -898,7 +907,13 @@ async fn handle_collisions(
             ol
         };
 
-        if !other_live && last_collision.as_ref() != Some(&collision) {
+        // Check if we're already in a collision state for this platform
+        let already_in_collision = last_collision
+            .as_ref()
+            .map(|(_, _, platform)| platform == &collision.2)
+            .unwrap_or(false);
+
+        if !other_live && !already_in_collision {
             tracing::warn!(
                 "{}（{}）撞车，{}（{}）未开播",
                 collision.0,

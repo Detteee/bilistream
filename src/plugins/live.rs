@@ -8,6 +8,7 @@ use reqwest_retry::RetryTransientMiddleware;
 use std::error::Error;
 use std::process::Command;
 use std::time::Duration;
+use tracing::warn;
 
 #[async_trait]
 pub trait Live {
@@ -78,26 +79,51 @@ pub async fn get_thumbnail(
         .arg("--output")
         .arg("thumbnail");
 
-    let output = command.output()?;
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(e) => {
+            warn!("Failed to execute yt-dlp for thumbnail: {}", e);
+            return Ok(String::new()); // Return empty string to skip thumbnail
+        }
+    };
+
     if !output.status.success() {
-        return Err("Failed to download thumbnail".into());
+        warn!(
+            "yt-dlp failed to download thumbnail: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(String::new()); // Return empty string to skip thumbnail
     }
 
     // Process the downloaded thumbnail with ImageMagick
-    let convert_output = Command::new("convert")
+    let convert_output = match Command::new("convert")
         .arg("thumbnail.jpg")
         .arg("-resize")
         .arg("640x480") // Force resize to exact dimensions
         .arg("-quality")
         .arg("95")
         .arg("cover.jpg")
-        .output()?;
-
-    // Remove the original thumbnail
-    std::fs::remove_file("thumbnail.jpg")?;
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => {
+            warn!("Failed to execute ImageMagick convert: {}", e);
+            return Ok(String::new()); // Return empty string to skip thumbnail
+        }
+    };
 
     if !convert_output.status.success() {
-        return Err("Failed to convert thumbnail".into());
+        warn!(
+            "ImageMagick failed to convert thumbnail: {}",
+            String::from_utf8_lossy(&convert_output.stderr)
+        );
+        return Ok(String::new()); // Return empty string to skip thumbnail
+    }
+
+    // Remove the original thumbnail
+    if let Err(e) = std::fs::remove_file("thumbnail.jpg") {
+        warn!("Failed to remove original thumbnail file: {}", e);
+        // Continue anyway, not critical
     }
 
     Ok("cover.jpg".to_string())

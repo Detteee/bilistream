@@ -384,13 +384,18 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
     // tracing::info!("弹幕:{:?}", parts);
-    if parts.len() < 4 {
+    if parts.len() < 5 {
         tracing::error!("弹幕命令格式错误. Skipping...");
         let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
         return;
     }
 
     let platform = parts[2].to_uppercase();
+    if platform.to_uppercase() != "YT" && platform.to_uppercase() != "TW" {
+        tracing::error!("平台错误. Skipping... : {}", platform);
+        let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
+        return;
+    }
     let channel_name = parts[3];
     let area_alias = parts[4];
 
@@ -482,7 +487,17 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         } else {
             // TW
             match get_twitch_status(channel_id_str).await {
-                Ok((_, topic, title)) => {
+                Ok((is_live, topic, title)) => {
+                    if !is_live {
+                        tracing::error!("TW频道 {:?} 未在直播", channel_name.clone().unwrap());
+                        let _ = bilibili::send_danmaku(
+                            &cfg,
+                            &format!("错误: {:?} 未在直播", channel_name.unwrap()),
+                        )
+                        .await;
+                        return;
+                    }
+
                     let t = match title {
                         Some(t) => t,
                         None => {
@@ -501,7 +516,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                     (t, topic.unwrap_or_default())
                 }
                 Err(e) => {
-                    tracing::error!("获取TW直播标题时出错: {}", e);
+                    tracing::error!("获取TW状态时出错: {}", e);
                     let _ =
                         bilibili::send_danmaku(&cfg, &format!("错误：获取TW直播标题时出错 {}", e))
                             .await;
@@ -719,33 +734,6 @@ pub fn clear_warning_stop() {
     if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
         *last = None;
     }
-}
-
-/// Set the channel switch request flag
-pub fn request_channel_switch() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    lazy_static! {
-        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
-    }
-    CHANNEL_SWITCH_REQUESTED.store(true, Ordering::SeqCst);
-}
-
-/// Check if channel switch was requested
-pub fn is_channel_switch_requested() -> bool {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    lazy_static! {
-        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
-    }
-    CHANNEL_SWITCH_REQUESTED.load(Ordering::SeqCst)
-}
-
-/// Clear the channel switch request flag
-pub fn clear_channel_switch_request() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    lazy_static! {
-        static ref CHANNEL_SWITCH_REQUESTED: AtomicBool = AtomicBool::new(false);
-    }
-    CHANNEL_SWITCH_REQUESTED.store(false, Ordering::SeqCst);
 }
 
 /// Set the config updated flag to skip waiting interval
