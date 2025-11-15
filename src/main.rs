@@ -164,13 +164,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 "{} 正在 {} 直播, 标题:\n          {}",
                 channel_name,
                 platform,
-                title.clone().unwrap()
+                title.clone().unwrap_or_else(|| "无标题".to_string())
             );
 
-            if yot_area.is_some() {
+            if yot_area.is_some() && title.is_some() {
                 title = Some(format!("{} {}", yot_area.unwrap(), title.unwrap()));
             }
-            area_v2 = check_area_id_with_title(&title.as_ref().unwrap(), area_v2);
+            let default_title = "无标题".to_string();
+            let title_str = title.as_ref().unwrap_or(&default_title);
+            area_v2 = check_area_id_with_title(title_str, area_v2);
             if area_v2 == 86 {
                 let puuid = get_puuid(&channel_name)?;
                 if puuid != "" {
@@ -203,7 +205,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
             if let Some(keyword) = BANNED_KEYWORDS
                 .iter()
-                .find(|k| title.as_ref().unwrap().contains(*k))
+                .find(|k| title.as_ref().map_or(false, |t| t.contains(*k)))
             {
                 tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
                 send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await?;
