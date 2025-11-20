@@ -127,7 +127,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 channel_name_check
                             ),
                         )
-                        .await {
+                        .await
+                        {
                             tracing::error!("Failed to send danmaku: {}", e);
                         }
                     }
@@ -214,7 +215,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 .find(|k| title.as_ref().map_or(false, |t| t.contains(*k)))
             {
                 tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
-                if let Err(e) = send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await {
+                if let Err(e) = send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
@@ -344,7 +346,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 if !is_ffmpeg_running() {
                     tracing::error!("❌ ffmpeg重启失败，将在下次循环重试");
-                    if let Err(e) = send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await {
+                    if let Err(e) = send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await
+                    {
                         tracing::error!("Failed to send danmaku: {}", e);
                     }
                 }
@@ -357,12 +360,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     &cfg,
                     &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
                 )
-                .await {
+                .await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
                 tokio::time::sleep(Duration::from_secs(15)).await;
             } else {
-                if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await {
+                if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
             }
@@ -744,8 +749,10 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                                     let mut cmd = StdCommand::new("pkill");
                                     cmd.arg("ffmpeg");
                                     cmd.spawn().unwrap();
-                                    if let Err(e) = send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
-                                        .await {
+                                    if let Err(e) =
+                                        send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
+                                            .await
+                                    {
                                         tracing::error!("Failed to send danmaku: {}", e);
                                     }
                                     if cfg.bililive.enable_danmaku_command
@@ -753,7 +760,9 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                                     {
                                         enable_danmaku_commands(true);
                                         thread::sleep(Duration::from_secs(2));
-                                        if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
+                                        if let Err(e) =
+                                            send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                                        {
                                             tracing::error!("Failed to send danmaku: {}", e);
                                         }
                                     }
@@ -889,7 +898,8 @@ async fn handle_collisions(
                     yt_collision.as_ref().unwrap().2,
                 ),
             )
-            .await {
+            .await
+            {
                 tracing::error!("Failed to send danmaku: {}", e);
             }
             if yt_collision.as_ref().unwrap().0 != tw_collision.as_ref().unwrap().0 {
@@ -903,7 +913,8 @@ async fn handle_collisions(
                         tw_collision.as_ref().unwrap().2,
                     ),
                 )
-                .await {
+                .await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
             }
@@ -913,7 +924,8 @@ async fn handle_collisions(
             }
             if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await {
+                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
             }
@@ -960,7 +972,8 @@ async fn handle_collisions(
                 &cfg,
                 &format!("{}({})正在转{}", collision.0, collision.1, collision.2,),
             )
-            .await {
+            .await
+            {
                 tracing::error!("Failed to send danmaku: {}", e);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -969,7 +982,8 @@ async fn handle_collisions(
             }
             if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await {
+                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
+                {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
             }
@@ -982,6 +996,358 @@ async fn handle_collisions(
     } else {
         Ok(CollisionResult::Proceed)
     }
+}
+
+async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, Write};
+
+    println!("=== Bilistream 初始化设置向导 ===\n");
+
+    // Step 1: Check if config.yaml already exists
+    let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+    if config_path.exists() {
+        print!("检测到已存在的 config.yaml，是否覆盖? (y/N): ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("已取消设置");
+            return Ok(());
+        }
+    }
+
+    // Step 2: Login to Bilibili
+    println!("\n步骤 1/2: 登录 Bilibili");
+    println!("----------------------------------------");
+    let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
+    if cookies_path.exists() {
+        print!("检测到已存在的 cookies.json，是否重新登录? (y/N): ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if input.trim().eq_ignore_ascii_case("y") {
+            bilibili::login().await?;
+        } else {
+            println!("使用现有登录凭证");
+        }
+    } else {
+        bilibili::login().await?;
+    }
+
+    // Proxy setting (may be needed for YouTube/Twitch access)
+    print!("\n是否需要配置代理? (y/N): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let proxy = if input.trim().eq_ignore_ascii_case("y") {
+        print!("代理地址 (格式: http://host:port): ");
+        io::stdout().flush()?;
+        let mut proxy_input = String::new();
+        io::stdin().read_line(&mut proxy_input)?;
+        proxy_input.trim().to_string()
+    } else {
+        String::new()
+    };
+
+    // Step 3: Configure config.yaml
+    println!("\n步骤 2/2: 配置 config.yaml");
+    println!("----------------------------------------");
+
+    // Get room number
+    print!("请输入你的B站直播间号: ");
+    io::stdout().flush()?;
+    let mut room = String::new();
+    io::stdin().read_line(&mut room)?;
+    let room: i32 = room.trim().parse().unwrap_or(0);
+    if room == 0 {
+        return Err("无效的直播间号".into());
+    }
+
+    // Get YouTube channel info
+    print!("\n是否配置 YouTube 频道? (Y/n): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let configure_youtube = !input.trim().eq_ignore_ascii_case("n");
+
+    let (yt_channel_name, yt_channel_id, yt_area_v2) = if configure_youtube {
+        print!("YouTube 频道名称: ");
+        io::stdout().flush()?;
+        let mut name = String::new();
+        io::stdin().read_line(&mut name)?;
+        let name = name.trim().to_string();
+
+        print!("YouTube 频道ID: ");
+        io::stdout().flush()?;
+        let mut id = String::new();
+        io::stdin().read_line(&mut id)?;
+        let id = id.trim().to_string();
+
+        print!("B站分区ID (默认 235-其他单机): ");
+        io::stdout().flush()?;
+        let mut area = String::new();
+        io::stdin().read_line(&mut area)?;
+        let area: u64 = area.trim().parse().unwrap_or(235);
+
+        (name, id, area)
+    } else {
+        ("".to_string(), "".to_string(), 235)
+    };
+
+    // Get Twitch channel info
+    print!("\n是否配置 Twitch 频道? (Y/n): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let configure_twitch = !input.trim().eq_ignore_ascii_case("n");
+
+    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_oauth, tw_proxy_region) =
+        if configure_twitch {
+            print!("Twitch 频道名称: ");
+            io::stdout().flush()?;
+            let mut name = String::new();
+            io::stdin().read_line(&mut name)?;
+            let name = name.trim().to_string();
+
+            print!("Twitch 频道ID (用户名): ");
+            io::stdout().flush()?;
+            let mut id = String::new();
+            io::stdin().read_line(&mut id)?;
+            let id = id.trim().to_string();
+
+            print!("B站分区ID (默认 235-其他单机): ");
+            io::stdout().flush()?;
+            let mut area = String::new();
+            io::stdin().read_line(&mut area)?;
+            let area: u64 = area.trim().parse().unwrap_or(235);
+
+            println!("Twitch OAuth Token (可选，用于streamlink认证)");
+            println!(
+                "获取方法: https://streamlink.github.io/cli/plugins/twitch.html#authentication"
+            );
+            print!("请输入 (直接回车跳过): ");
+            io::stdout().flush()?;
+            let mut oauth = String::new();
+            io::stdin().read_line(&mut oauth)?;
+            let oauth = oauth.trim().to_string();
+
+            print!("Twitch 代理区域 (默认 as): ");
+            io::stdout().flush()?;
+            let mut region = String::new();
+            io::stdin().read_line(&mut region)?;
+            let region = if region.trim().is_empty() {
+                "as".to_string()
+            } else {
+                region.trim().to_string()
+            };
+
+            (name, id, area, oauth, region)
+        } else {
+            (
+                "".to_string(),
+                "".to_string(),
+                235,
+                "".to_string(),
+                "as".to_string(),
+            )
+        };
+
+    // Optional settings
+    print!("\n是否启用自动封面更换? (Y/n): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let auto_cover = !input.trim().eq_ignore_ascii_case("n");
+
+    print!("是否启用弹幕指令? (Y/n): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let enable_danmaku_command = !input.trim().eq_ignore_ascii_case("n");
+
+    print!("检测间隔 (秒，默认 60): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let interval: u64 = input.trim().parse().unwrap_or(60);
+
+    // Anti-collision settings
+    print!("\n是否启用撞车监控? (y/N): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let anti_collision = input.trim().eq_ignore_ascii_case("y");
+
+    let mut collision_rooms = Vec::new();
+    if anti_collision {
+        println!("\n配置撞车监控直播间");
+        println!("提示: 输入需要监控的B站直播间信息，用于检测是否有其他人在转播相同频道");
+        loop {
+            print!("\n输入监控直播间名称 (直接回车结束添加): ");
+            io::stdout().flush()?;
+            let mut name = String::new();
+            io::stdin().read_line(&mut name)?;
+            let name = name.trim();
+
+            if name.is_empty() {
+                break;
+            }
+
+            print!("输入直播间号: ");
+            io::stdout().flush()?;
+            let mut room_id = String::new();
+            io::stdin().read_line(&mut room_id)?;
+            let room_id: i32 = match room_id.trim().parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    println!("⚠️  无效的直播间号，已跳过");
+                    continue;
+                }
+            };
+
+            collision_rooms.push((name.to_string(), room_id));
+            println!("✅ 已添加: {} ({})", name, room_id);
+        }
+
+        if collision_rooms.is_empty() {
+            println!("⚠️  未添加任何监控直播间，撞车监控将不会生效");
+        }
+    }
+
+    // Advanced optional settings
+    print!("\n是否配置高级选项 (API密钥等)? (y/N): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let configure_advanced = input.trim().eq_ignore_ascii_case("y");
+
+    let (holodex_api_key, riot_api_key) = if configure_advanced {
+        println!("\n高级选项配置");
+        println!("----------------------------------------");
+
+        println!("\nHolodex API Key (用于YouTube直播状态检测)");
+        println!("获取方法: https://holodex.net/login");
+        print!("请输入 (直接回车跳过): ");
+        io::stdout().flush()?;
+        let mut holodex = String::new();
+        io::stdin().read_line(&mut holodex)?;
+        let holodex = holodex.trim().to_string();
+
+        println!("\nRiot API Key (用于英雄联盟玩家ID监控)");
+        println!("获取方法: https://developer.riotgames.com/");
+        print!("请输入 (直接回车跳过): ");
+        io::stdout().flush()?;
+        let mut riot = String::new();
+        io::stdin().read_line(&mut riot)?;
+        let riot = riot.trim().to_string();
+
+        (holodex, riot)
+    } else {
+        (String::new(), String::new())
+    };
+
+    // Create config content
+    let mut collision_list = String::new();
+    if !collision_rooms.is_empty() {
+        for (name, room_id) in &collision_rooms {
+            collision_list.push_str(&format!("  {}: {}  # 监控撞车\n", name, room_id));
+        }
+    } else {
+        collision_list.push_str("  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车\n");
+        collision_list.push_str("  # B站ID2: 房间号2  # 房间号用于检测撞车\n");
+    }
+
+    let proxy_line = if !proxy.is_empty() {
+        proxy.clone()
+    } else {
+        String::new()
+    };
+
+    let holodex_line = if !holodex_api_key.is_empty() {
+        holodex_api_key.clone()
+    } else {
+        String::new()
+    };
+
+    let riot_line = if !riot_api_key.is_empty() {
+        riot_api_key.clone()
+    } else {
+        String::new()
+    };
+
+    let config_content = format!(
+        r#"Interval: {} # 检测直播间隔
+AutoCover: {} # 自动更换封面
+AntiCollision: {} # 撞车监控
+Proxy: {} # 代理地址,无需代理可以不填此项或者留空
+HolodexApiKey: {} # Holodex Api Key from https://holodex.net/login
+RiotApiKey: {} # Riot API Key from https://developer.riotgames.com/
+LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
+BiliLive:
+  EnableDanmakuCommand: {} # true or false
+  Room: {}
+  BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/
+  BiliRtmpKey: ""
+Youtube:
+  ChannelName: {} # 频道名称 (将出现于转播标题)
+  ChannelId: {} # Youtube Channel ID
+  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+Twitch:
+  ChannelName: {} # 频道名称 (将出现于转播标题)
+  ChannelId: {} # the string followed after https://www.twitch.tv/
+  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+  OauthToken: {} # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
+  ProxyRegion: {} # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+
+AntiCollisionList:
+{}"#,
+        interval,
+        auto_cover,
+        anti_collision,
+        proxy_line,
+        holodex_line,
+        riot_line,
+        enable_danmaku_command,
+        room,
+        yt_channel_name,
+        yt_channel_id,
+        yt_area_v2,
+        tw_channel_name,
+        tw_channel_id,
+        tw_area_v2,
+        tw_oauth,
+        tw_proxy_region,
+        collision_list
+    );
+
+    // Write config file
+    std::fs::write(&config_path, config_content)?;
+    println!("\n✅ 配置文件已创建: {}", config_path.display());
+
+    // Try to start live to get RTMP info
+    println!("\n正在获取推流地址...");
+    match load_config().await {
+        Ok(mut cfg) => {
+            if let Err(e) = bili_start_live(&mut cfg, yt_area_v2).await {
+                println!("⚠️  获取推流地址失败: {}", e);
+                println!("你可以稍后手动开播获取推流地址");
+            } else {
+                println!("✅ 推流地址已更新到配置文件");
+                // Stop the live immediately
+                let _ = bili_stop_live(&cfg).await;
+            }
+        }
+        Err(e) => {
+            println!("⚠️  加载配置失败: {}", e);
+        }
+    }
+
+    println!("\n=== 设置完成 ===");
+    println!("你现在可以运行 'bilistream' 开始转播");
+    println!("配置文件位置: {}", config_path.display());
+    println!("登录凭证位置: {}", cookies_path.display());
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -1064,6 +1430,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_parser(["bash", "zsh", "fish"]),
                 ),
         )
+        .subcommand(
+            Command::new("setup")
+                .about("初始化配置：登录Bilibili并配置config.yaml")
+                .long_about("交互式设置向导，帮助你登录Bilibili并创建config.yaml配置文件"),
+        )
         .get_matches();
 
     let ffmpeg_log_level = matches
@@ -1143,6 +1514,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(("renew", _)) => {
             bilibili::renew().await?;
+        }
+        Some(("setup", _)) => {
+            setup_wizard().await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();

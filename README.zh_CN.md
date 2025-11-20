@@ -49,7 +49,31 @@
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-5. 配置 `config.yaml`：
+
+5. **快速设置（推荐）：**
+
+   运行交互式设置向导来配置所有内容：
+
+   ```bash
+   ./bilistream setup
+   ```
+
+   设置向导将引导你完成：
+   - 通过二维码登录哔哩哔哩
+   - 配置代理设置（如需访问 YouTube/Twitch）
+   - 配置你的哔哩哔哩直播间
+   - 设置 YouTube 频道及分区 ID（可选）
+   - 设置 Twitch 频道、OAuth Token 及代理区域（可选）
+   - 启用自动封面更换
+   - 启用弹幕指令
+   - 设置检测间隔
+   - 配置防撞车监控（可迭代添加多个监控直播间，可选）
+   - 高级选项：Holodex API Key、Riot API Key（可选）
+   - 自动获取 RTMP 推流地址
+
+   **或手动设置：**
+
+   手动配置 `config.yaml`：
 
    ```yaml
    # 复制并编辑示例配置
@@ -118,43 +142,67 @@
 
 Bilistream 支持以下命令：
 
-1. 开始直播：
+1. **设置向导（首次使用推荐）：**
+
+   ```bash
+   ./bilistream setup
+   ```
+   
+   交互式设置向导，帮助你：
+   - 通过二维码登录哔哩哔哩（或复用现有凭证）
+   - 配置代理以访问 YouTube/Twitch（可选）
+   - 配置 config.yaml 的所有必要设置
+   - 设置 YouTube 频道，支持 Holodex API（可选）
+   - 设置 Twitch 频道及 OAuth Token（可选）
+     - 获取 OAuth Token：https://streamlink.github.io/cli/plugins/twitch.html#authentication
+   - 配置防撞车监控直播间（可迭代添加多个直播间）
+   - 高级 API 密钥：Holodex (https://holodex.net/login)、Riot Games (https://developer.riotgames.com/)
+   - 自动获取并更新 RTMP 推流地址
+
+2. 开始直播：
 
    ```bash
    ./bilistream
    ```
-2. 登录哔哩哔哩：
+
+3. 登录哔哩哔哩：
 
    ```bash
    ./bilistream login
    ```
-3. 发送弹幕：
+
+4. 发送弹幕：
 
    ```bash
    ./bilistream send-danmaku <弹幕内容>
    ```
-4. 更换直播间封面：
+
+5. 更换直播间封面：
 
    ```bash
    ./bilistream replace-cover <图片路径>
    ```
-5. 更新直播间分区：
+
+6. 更新直播间分区：
 
    ```bash
    ./bilistream update-area <分区ID>
    ```
-6. 更新哔哩哔哩令牌：
+
+7. 更新哔哩哔哩令牌：
 
    ```bash
    ./bilistream renew
    ```
-7. 获取直播状态：
+
+8. 获取直播状态：
 
    ```bash
    ./bilistream get-live-status <平台> [频道ID]
    # 平台: YT, TW, bilibili, all
    ```
-8. 生成命令补全脚本：
+
+9. 生成命令补全脚本：
 
    ```bash
    ./bilistream completion <shell>

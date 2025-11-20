@@ -49,7 +49,31 @@
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-5. Configure `config.yaml`:
+
+5. **Quick Setup (Recommended):**
+
+   Run the interactive setup wizard to configure everything:
+
+   ```bash
+   ./bilistream setup
+   ```
+
+   The setup wizard will guide you through:
+   - Logging into Bilibili via QR code
+   - Configuring proxy settings (if needed for YouTube/Twitch access)
+   - Configuring your Bilibili live room
+   - Setting up YouTube channel with area ID (optional)
+   - Setting up Twitch channel with OAuth token and proxy region (optional)
+   - Enabling auto cover replacement
+   - Enabling danmaku commands
+   - Setting detection interval
+   - Configuring anti-collision monitoring with multiple rooms (optional)
+   - Advanced options: Holodex API Key, Riot API Key (optional)
+   - Automatically retrieving RTMP stream address
+
+   **OR Manual Setup:**
+
+   Configure `config.yaml` manually:
 
    ```yaml
    # Copy and edit the example config
@@ -118,43 +142,67 @@ Run the Bilistream application:
 
 Bilistream supports the following commands:
 
-1. Start streaming:
+1. **Setup wizard (Recommended for first-time users):**
+
+   ```bash
+   ./bilistream setup
+   ```
+   
+   Interactive setup wizard that helps you:
+   - Login to Bilibili via QR code (or reuse existing credentials)
+   - Configure proxy for YouTube/Twitch access (optional)
+   - Configure config.yaml with all necessary settings
+   - Set up YouTube channel with Holodex API support (optional)
+   - Set up Twitch channel with OAuth token (optional)
+     - Get OAuth token: https://streamlink.github.io/cli/plugins/twitch.html#authentication
+   - Configure anti-collision monitoring rooms (iteratively add multiple rooms)
+   - Advanced API keys: Holodex (https://holodex.net/login), Riot Games (https://developer.riotgames.com/)
+   - Automatically retrieve and update RTMP stream address
+
+2. Start streaming:
 
    ```bash
    ./bilistream
    ```
-2. Login to Bilibili:
+
+3. Login to Bilibili:
 
    ```bash
    ./bilistream login
    ```
-3. Send danmaku (chat message):
+
+4. Send danmaku (chat message):
 
    ```bash
    ./bilistream send-danmaku <message>
    ```
-4. Replace stream cover:
+
+5. Replace stream cover:
 
    ```bash
    ./bilistream replace-cover <image_path>
    ```
-5. Update stream area:
+
+6. Update stream area:
 
    ```bash
    ./bilistream update-area <area_id>
    ```
-6. Renew Bilibili tokens:
+
+7. Renew Bilibili tokens:
 
    ```bash
    ./bilistream renew
    ```
-7. Get live status:
+
+8. Get live status:
 
    ```bash
    ./bilistream get-live-status <platform> [channel_id]
    # platform: YT, TW, bilibili, all
    ```
-8. Generate shell completions:
+
+9. Generate shell completions:
 
    ```bash
    ./bilistream completion <shell>
