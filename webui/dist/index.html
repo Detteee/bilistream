@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bilistream 控制面板</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      color: white;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .header p {
+      font-size: 1.1em;
+      opacity: 0.9;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .card h2 {
+      color: #667eea;
+      margin-bottom: 15px;
+      font-size: 1.5em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .status-live {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+
+    .status-offline {
+      background: #ef4444;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .info-row:last-child {
+      border-bottom: none;
+    }
+
+    .info-label {
+      color: #666;
+      font-weight: 500;
+    }
+
+    .info-value {
+      color: #333;
+      font-weight: 600;
+    }
+
+    .controls {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    .controls h2 {
+      color: #667eea;
+      margin-bottom: 20px;
+      font-size: 1.5em;
+    }
+
+    .control-group {
+      margin-bottom: 20px;
+    }
+
+    .control-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 500;
+    }
+
+    .control-group input,
+    .control-group select,
+    .control-group textarea {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.3s ease;
+    }
+
+    .control-group input:focus,
+    .control-group select:focus,
+    .control-group textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .button-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-success {
+      background: #10b981;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #059669;
+      transform: translateY(-2px);
+    }
+
+    .btn-danger {
+      background: #ef4444;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #dc2626;
+      transform: translateY(-2px);
+    }
+
+    .btn-secondary {
+      background: #6b7280;
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: #4b5563;
+      transform: translateY(-2px);
+    }
+
+    .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 15px 20px;
+      border-radius: 8px;
+      color: white;
+      font-weight: 500;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+      animation: slideIn 0.3s ease;
+      z-index: 1000;
+    }
+
+    .notification.success {
+      background: #10b981;
+    }
+
+    .notification.error {
+      background: #ef4444;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255, 255, 255, .3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .header h1 {
+        font-size: 2em;
+      }
+
+      .dashboard {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Setup page styles */
+    .setup-page {
+      display: none;
+    }
+
+    .setup-page.active {
+      display: block;
+    }
+
+    .main-page {
+      display: block;
+    }
+
+    .main-page.hidden {
+      display: none;
+    }
+
+    .setup-card {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 700px;
+      margin: 50px auto;
+    }
+
+    .setup-icon {
+      font-size: 64px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .setup-title {
+      font-size: 2em;
+      color: #667eea;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .setup-description {
+      color: #666;
+      line-height: 1.8;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .missing-files {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 30px;
+    }
+
+    .missing-files h3 {
+      color: #856404;
+      margin-bottom: 10px;
+    }
+
+    .missing-files ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .missing-files li {
+      color: #856404;
+      padding: 5px 0;
+      padding-left: 25px;
+      position: relative;
+    }
+
+    .missing-files li:before {
+      content: "⚠️";
+      position: absolute;
+      left: 0;
+    }
+
+    .setup-steps {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 25px;
+      margin-bottom: 30px;
+    }
+
+    .setup-steps h3 {
+      color: #333;
+      margin-bottom: 15px;
+    }
+
+    .setup-steps ol {
+      padding-left: 20px;
+      color: #555;
+      line-height: 2;
+    }
+
+    .setup-steps code {
+      background: #e9ecef;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      color: #d63384;
+    }
+
+    .command-box {
+      background: #2d3748;
+      color: #48bb78;
+      padding: 20px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .command-box:before {
+      content: "$";
+      color: #48bb78;
+      margin-right: 10px;
+    }
+
+    .refresh-button {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .refresh-button:hover {
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Setup Page -->
+  <div class="setup-page" id="setup-page">
+    <div class="container">
+      <div class="setup-card">
+        <div class="setup-icon">🚀</div>
+        <h1 class="setup-title">欢迎使用 Bilistream</h1>
+        <p class="setup-description">
+          检测到系统尚未完成初始配置。请按照以下步骤完成设置后，即可开始使用 Web 控制面板。
+        </p>
+
+        <div class="missing-files" id="missing-files-box">
+          <h3>缺少以下文件：</h3>
+          <ul id="missing-files-list"></ul>
+        </div>
+
+        <div class="setup-steps">
+          <h3>📋 设置步骤</h3>
+          <ol>
+            <li>打开终端，进入 Bilistream 所在目录</li>
+            <li>运行下方的设置命令</li>
+            <li>按照交互式向导完成配置</li>
+            <li>配置完成后，点击下方按钮刷新页面</li>
+          </ol>
+        </div>
+
+        <div class="command-box" id="setup-command">./bilistream setup</div>
+
+        <button class="refresh-button" onclick="checkSetupAndRefresh()">
+          🔄 我已完成设置，刷新页面
+        </button>
+
+        <p style="text-align: center; color: #999; margin-top: 20px; font-size: 14px;">
+          需要帮助？查看 <a href="https://github.com/your-repo/bilistream" target="_blank" style="color: #667eea;">文档</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Page -->
+  <div class="main-page" id="main-page">
+    <div class="container">
+      <div class="header">
+        <h1>🎬 Bilistream 控制面板</h1>
+        <p>实时监控和控制你的直播转播</p>
+      </div>
+
+      <div class="dashboard">
+        <div class="card">
+          <h2>
+            <span class="status-indicator" id="bili-status"></span>
+            哔哩哔哩
+          </h2>
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value" id="bili-live-status">加载中...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">标题</span>
+            <span class="info-value" id="bili-title">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">分区</span>
+            <span class="info-value" id="bili-area">-</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>
+            <span class="status-indicator" id="yt-status"></span>
+            YouTube
+          </h2>
+          <div class="info-row">
+            <span class="info-label">频道</span>
+            <span class="info-value" id="yt-channel-name">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value" id="yt-live-status">加载中...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">标题</span>
+            <span class="info-value" id="yt-title">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">分区</span>
+            <span class="info-value" id="yt-topic">-</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>
+            <span class="status-indicator" id="tw-status"></span>
+            Twitch
+          </h2>
+          <div class="info-row">
+            <span class="info-label">频道</span>
+            <span class="info-value" id="tw-channel-name">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value" id="tw-live-status">加载中...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">标题</span>
+            <span class="info-value" id="tw-title">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">游戏</span>
+            <span class="info-value" id="tw-game">-</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <h2>⚙️ 控制面板</h2>
+
+        <div class="control-group">
+          <label>发送弹幕</label>
+          <input type="text" id="danmaku-input" placeholder="输入弹幕内容...">
+        </div>
+
+        <div class="control-group">
+          <label>更新分区</label>
+          <select id="area-input">
+            <option value="">选择分区...</option>
+          </select>
+        </div>
+
+        <div class="button-group">
+          <button class="btn-success" onclick="startStream()">开始直播</button>
+          <button class="btn-danger" onclick="stopStream()">停止直播</button>
+          <button class="btn-primary" onclick="sendDanmaku()">发送弹幕</button>
+          <button class="btn-secondary" onclick="updateArea()">更新分区</button>
+          <button class="btn-primary" onclick="refreshStatus()">刷新状态</button>
+        </div>
+      </div>
+
+      <div class="controls" style="margin-top: 20px;">
+        <h2>📺 频道管理</h2>
+
+        <div class="control-group">
+          <label>平台</label>
+          <select id="platform-select" onchange="updateChannelList()">
+            <option value="youtube">YouTube</option>
+            <option value="twitch">Twitch</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label>选择频道</label>
+          <select id="channel-select" onchange="updateChannelInfo()">
+            <option value="">加载中...</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label>频道ID</label>
+          <input type="text" id="channel-id-input" placeholder="频道ID" readonly>
+        </div>
+
+        <div class="control-group">
+          <label>频道名称</label>
+          <input type="text" id="channel-name-input" placeholder="频道名称" readonly>
+        </div>
+
+        <div class="control-group">
+          <label>分区 (可选)</label>
+          <select id="area-select">
+            <option value="">不修改分区</option>
+          </select>
+        </div>
+
+        <div class="button-group">
+          <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
+          <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Global data
+      let channelsData = null;
+      let areasData = null;
+
+      // Auto refresh status every 60 seconds
+      setInterval(refreshStatus, 60000);
+
+      function showNotification(message, type = 'success') {
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+          notification.remove();
+        }, 3000);
+      }
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch('/api/status');
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error:', response.status, errorText);
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const text = await response.text();
+          console.log('API Response Text:', text); // Debug log
+
+          if (!text) {
+            throw new Error('Empty response from server');
+          }
+
+          const data = JSON.parse(text);
+          console.log('Parsed Data:', data); // Debug log
+
+          if (!data.success) {
+            // API returned an error
+            throw new Error(data.message || '服务器返回错误');
+          }
+
+          if (data.success && data.data) {
+            // Update Bilibili status
+            const bili = data.data.bilibili;
+            document.getElementById('bili-status').className =
+              `status-indicator ${bili.is_live ? 'status-live' : 'status-offline'}`;
+            document.getElementById('bili-live-status').textContent =
+              bili.is_live ? '直播中' : '未直播';
+            document.getElementById('bili-title').textContent = bili.title || '-';
+            document.getElementById('bili-area').textContent =
+              bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
+
+            // Update YouTube status
+            if (data.data.youtube) {
+              const yt = data.data.youtube;
+              document.getElementById('yt-status').className =
+                `status-indicator ${yt.is_live ? 'status-live' : 'status-offline'}`;
+              document.getElementById('yt-channel-name').textContent = yt.channel_name || '-';
+              document.getElementById('yt-live-status').textContent =
+                yt.is_live ? '直播中' : '未直播';
+              document.getElementById('yt-title').textContent = yt.title || '-';
+              document.getElementById('yt-topic').textContent = yt.topic || '-';
+            } else {
+              document.getElementById('yt-status').className = 'status-indicator status-offline';
+              document.getElementById('yt-channel-name').textContent = '-';
+              document.getElementById('yt-live-status').textContent = '未配置';
+              document.getElementById('yt-title').textContent = '-';
+              document.getElementById('yt-topic').textContent = '-';
+            }
+
+            // Update Twitch status
+            if (data.data.twitch) {
+              const tw = data.data.twitch;
+              document.getElementById('tw-status').className =
+                `status-indicator ${tw.is_live ? 'status-live' : 'status-offline'}`;
+              document.getElementById('tw-channel-name').textContent = tw.channel_name || '-';
+              document.getElementById('tw-live-status').textContent =
+                tw.is_live ? '直播中' : '未直播';
+              document.getElementById('tw-title').textContent = tw.title || '-';
+              document.getElementById('tw-game').textContent = tw.game || '-';
+            } else {
+              document.getElementById('tw-status').className = 'status-indicator status-offline';
+              document.getElementById('tw-channel-name').textContent = '-';
+              document.getElementById('tw-live-status').textContent = '未配置';
+              document.getElementById('tw-title').textContent = '-';
+              document.getElementById('tw-game').textContent = '-';
+            }
+          } else {
+            console.error('Invalid API response:', data);
+            showNotification('获取状态失败：响应格式错误', 'error');
+            // Show error state
+            document.getElementById('bili-live-status').textContent = '数据错误';
+            document.getElementById('yt-live-status').textContent = '数据错误';
+            document.getElementById('tw-live-status').textContent = '数据错误';
+          }
+        } catch (error) {
+          console.error('Failed to refresh status:', error);
+
+          // Suppress network errors (when server is down)
+          if (error.message && error.message.includes('NetworkError')) {
+            console.log('Server appears to be down, suppressing error notification');
+            return;
+          }
+
+          // Show more helpful error messages for other errors
+          let errorMsg = error.message;
+          if (errorMsg.includes('权限错误') || errorMsg.includes('Permission denied')) {
+            errorMsg = '配置文件权限错误！请在可执行文件所在目录运行程序。';
+          } else if (errorMsg.includes('不存在') || errorMsg.includes('No such file')) {
+            errorMsg = '配置文件不存在！请先运行 "bilistream setup" 创建配置。';
+          } else if (errorMsg.includes('Failed to fetch')) {
+            // Also suppress generic fetch failures
+            console.log('Connection failed, suppressing error notification');
+            return;
+          }
+
+          showNotification(errorMsg, 'error');
+
+          // Show connection error state
+          document.getElementById('bili-live-status').textContent = '配置错误';
+          document.getElementById('yt-live-status').textContent = '配置错误';
+          document.getElementById('tw-live-status').textContent = '配置错误';
+        }
+      }
+
+      async function startStream() {
+        try {
+          const response = await fetch('/api/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const data = await response.json();
+          showNotification(data.message || '直播已开始', 'success');
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('操作失败: ' + error.message, 'error');
+        }
+      }
+
+      async function stopStream() {
+        try {
+          const response = await fetch('/api/stop', {
+            method: 'POST'
+          });
+          const data = await response.json();
+          showNotification(data.message || '直播已停止', 'success');
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('操作失败: ' + error.message, 'error');
+        }
+      }
+
+      async function sendDanmaku() {
+        const message = document.getElementById('danmaku-input').value;
+        if (!message) {
+          showNotification('请输入弹幕内容', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/danmaku', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+          });
+          const data = await response.json();
+          showNotification(data.message || '弹幕已发送', 'success');
+          document.getElementById('danmaku-input').value = '';
+        } catch (error) {
+          showNotification('发送失败: ' + error.message, 'error');
+        }
+      }
+
+      async function updateArea() {
+        const areaId = parseInt(document.getElementById('area-input').value);
+        if (!areaId) {
+          showNotification('请选择分区', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/area', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ area_id: areaId })
+          });
+          const data = await response.json();
+          showNotification(data.message || '分区已更新', 'success');
+          document.getElementById('area-input').value = '';
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
+      }
+
+      // Channel management functions
+      async function loadChannelData() {
+        try {
+          // Load channels
+          const channelsResponse = await fetch('/api/channels');
+          channelsData = await channelsResponse.json();
+          console.log('Channels loaded:', channelsData);
+
+          // Load areas
+          const areasResponse = await fetch('/api/areas');
+          areasData = await areasResponse.json();
+          console.log('Areas loaded:', areasData);
+
+          // Populate area select
+          const areaSelect = document.getElementById('area-select');
+          areaSelect.innerHTML = '<option value="">不修改分区</option>';
+
+          // Handle both array and object responses
+          let areasList = [];
+          if (Array.isArray(areasData)) {
+            areasList = areasData;
+          } else if (areasData && areasData.areas) {
+            areasList = areasData.areas;
+          }
+
+          if (areasList.length > 0) {
+            console.log('Populating areas, count:', areasList.length);
+
+            // Populate channel management area select
+            areasList.forEach(area => {
+              const option = document.createElement('option');
+              option.value = area.id;
+              option.textContent = `${area.name} (${area.id})`;
+              areaSelect.appendChild(option);
+            });
+
+            // Also populate control panel area select
+            const controlAreaSelect = document.getElementById('area-input');
+            if (controlAreaSelect) {
+              controlAreaSelect.innerHTML = '<option value="">选择分区...</option>';
+              areasList.forEach(area => {
+                const option = document.createElement('option');
+                option.value = area.id;
+                option.textContent = `${area.name} (${area.id})`;
+                controlAreaSelect.appendChild(option);
+              });
+            }
+
+            console.log('Successfully populated', areasList.length, 'areas');
+          } else {
+            console.error('No areas data found:', areasData);
+            showNotification('未找到分区数据', 'error');
+          }
+
+          // Update channel list
+          updateChannelList();
+        } catch (error) {
+          console.error('Failed to load channel data:', error);
+          showNotification('加载频道数据失败: ' + error.message, 'error');
+        }
+      }
+
+      function updateChannelList() {
+        if (!channelsData) return;
+
+        const platform = document.getElementById('platform-select').value;
+        const channelSelect = document.getElementById('channel-select');
+
+        channelSelect.innerHTML = '<option value="">选择频道...</option>';
+
+        channelsData.channels.forEach(channel => {
+          if (channel.platforms && channel.platforms[platform]) {
+            const option = document.createElement('option');
+            option.value = JSON.stringify({
+              id: channel.platforms[platform],
+              name: channel.name
+            });
+            option.textContent = channel.name;
+            channelSelect.appendChild(option);
+          }
+        });
+
+        // Clear inputs
+        document.getElementById('channel-id-input').value = '';
+        document.getElementById('channel-name-input').value = '';
+      }
+
+      function updateChannelInfo() {
+        const channelSelect = document.getElementById('channel-select');
+        const selectedValue = channelSelect.value;
+
+        if (!selectedValue) {
+          document.getElementById('channel-id-input').value = '';
+          document.getElementById('channel-name-input').value = '';
+          return;
+        }
+
+        try {
+          const channelInfo = JSON.parse(selectedValue);
+          document.getElementById('channel-id-input').value = channelInfo.id;
+          document.getElementById('channel-name-input').value = channelInfo.name;
+        } catch (error) {
+          console.error('Failed to parse channel info:', error);
+        }
+      }
+
+      async function applyChannelChange() {
+        const platform = document.getElementById('platform-select').value;
+        const channelId = document.getElementById('channel-id-input').value;
+        const channelName = document.getElementById('channel-name-input').value;
+        const areaId = document.getElementById('area-select').value;
+
+        if (!channelId || !channelName) {
+          showNotification('请选择频道', 'error');
+          return;
+        }
+
+        try {
+          const payload = {
+            platform: platform,
+            channel_id: channelId,
+            channel_name: channelName
+          };
+
+          if (areaId) {
+            payload.area_id = parseInt(areaId);
+          }
+
+          const response = await fetch('/api/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          const data = await response.json();
+          showNotification(data.message || '频道已更新', 'success');
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
+      }
+
+      // Setup check functions
+      async function checkSetupStatus() {
+        try {
+          const response = await fetch('/api/setup-status');
+          const data = await response.json();
+
+          if (data.needs_setup) {
+            // Show setup page
+            document.getElementById('setup-page').classList.add('active');
+            document.getElementById('main-page').classList.add('hidden');
+
+            // Populate missing files
+            const missingFilesList = document.getElementById('missing-files-list');
+            missingFilesList.innerHTML = '';
+            data.missing_files.forEach(file => {
+              const li = document.createElement('li');
+              li.textContent = file;
+              missingFilesList.appendChild(li);
+            });
+
+            // Update setup command
+            const setupCommandBox = document.getElementById('setup-command');
+            if (setupCommandBox && data.setup_command) {
+              setupCommandBox.textContent = data.setup_command;
+            }
+          } else {
+            // Show main page
+            document.getElementById('setup-page').classList.remove('active');
+            document.getElementById('main-page').classList.remove('hidden');
+          }
+
+          return data.needs_setup;
+        } catch (error) {
+          console.error('Failed to check setup status:', error);
+          // On error, show main page
+          document.getElementById('setup-page').classList.remove('active');
+          document.getElementById('main-page').classList.remove('hidden');
+          return false;
+        }
+      }
+
+      async function checkSetupAndRefresh() {
+        const needsSetup = await checkSetupStatus();
+        if (!needsSetup) {
+          showNotification('设置完成！正在加载控制面板...', 'success');
+          setTimeout(() => {
+            location.reload();
+          }, 1000);
+        } else {
+          showNotification('请先完成设置步骤', 'error');
+        }
+      }
+
+      // Check setup status on page load
+      checkSetupStatus().then(needsSetup => {
+        if (!needsSetup) {
+          // Only load data if setup is complete
+          refreshStatus();
+          loadChannelData();
+        }
+      });
+    </script>
+  </div> <!-- Close main-page -->
+</body>
+
+</html>

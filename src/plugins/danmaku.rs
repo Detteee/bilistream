@@ -35,33 +35,41 @@ pub fn is_danmaku_commands_enabled() -> bool {
 pub fn set_danmaku_commands_enabled(enabled: bool) {
     DANMAKU_COMMANDS_ENABLED.store(enabled, Ordering::Relaxed);
 }
-const BANNED_KEYWORDS: [&str; 25] = [
-    "gta",
-    "mad town",
-    "ストグラ",
-    "ウォッチパ",
-    "watchalong",
-    "watchparty",
-    "talk",
-    "zatsudan",
-    "雑談",
-    "marshmallow",
-    "morning",
-    "freechat",
-    "どうぶつの森",
-    "あつ森",
-    "animal crossing",
-    "just chatting",
-    "asmr",
-    "dbd",
-    "dead by daylight",
-    "l4d2",
-    "left 4 dead 2",
-    "mahjong",
-    "雀魂",
-    "じゃんたま",
-    "gartic phone",
-];
+fn load_banned_keywords() -> Vec<String> {
+    let areas_path = match std::env::current_exe() {
+        Ok(path) => path.with_file_name("areas.json"),
+        Err(e) => {
+            tracing::error!("无法获取可执行文件路径: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let content = match std::fs::read_to_string(&areas_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("无法读取 areas.json: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let data: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("无法解析 areas.json: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if let Some(keywords) = data["banned_keywords"].as_array() {
+        keywords
+            .iter()
+            .filter_map(|k| k.as_str().map(|s| s.to_string()))
+            .collect()
+    } else {
+        tracing::warn!("areas.json 中未找到 banned_keywords");
+        Vec::new()
+    }
+}
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {
     youtube: Option<String>,
@@ -526,9 +534,10 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         };
         let live_topic_title = format!("{} {}", live_topic, live_title).to_lowercase();
 
-        if let Some(keyword) = BANNED_KEYWORDS
+        let banned_keywords = load_banned_keywords();
+        if let Some(keyword) = banned_keywords
             .iter()
-            .find(|keyword| live_topic_title.contains(*keyword))
+            .find(|keyword| live_topic_title.contains(keyword.as_str()))
         {
             tracing::error!("直播标题/分区包含不支持的关键词:\n{}", live_topic_title);
             let _ = bilibili::send_danmaku(
@@ -751,67 +760,48 @@ pub fn clear_config_updated() {
     CONFIG_UPDATED.store(false, Ordering::SeqCst);
 }
 
-pub fn get_area_name(area_id: u64) -> Option<&'static str> {
-    match area_id {
-        86 => Some("英雄联盟"),
-        329 => Some("无畏契约"),
-        240 => Some("APEX英雄"),
-        87 => Some("守望先锋"),
-        235 => Some("其他单机"),
-        107 => Some("其他网游"),
-        530 => Some("萌宅领域"),
-        236 => Some("主机游戏"),
-        321 => Some("原神"),
-        694 => Some("斯普拉遁3"),
-        407 => Some("游戏王：决斗链接"),
-        433 => Some("格斗游戏"),
-        927 => Some("DeadLock"),
-        216 => Some("我的世界"),
-        646 => Some("UP主日常"),
-        102 => Some("最终幻想14"),
-        252 => Some("逃离塔科夫"),
-        318 => Some("使命召唤:战区"),
-        555 => Some("艾尔登法环"),
-        578 => Some("怪物猎人"),
-        308 => Some("塞尔达传说"),
-        878 => Some("三角洲行动"),
-        795 => Some("Dark and Darker"),
-        858 => Some("致命公司"),
-        _ => {
-            tracing::error!("未知的分区ID: {}", area_id);
-            None
+pub fn get_area_name(area_id: u64) -> Option<String> {
+    let areas_path = std::env::current_exe().ok()?.with_file_name("areas.json");
+
+    let content = std::fs::read_to_string(areas_path).ok()?;
+    let areas: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    if let Some(areas_array) = areas["areas"].as_array() {
+        for area in areas_array {
+            if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
+                if id == area_id {
+                    return Some(name.to_string());
+                }
+            }
         }
     }
+
+    tracing::error!("未知的分区ID: {}", area_id);
+    None
 }
 
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
-    match area_name {
-        "英雄联盟" => Ok(86),
-        "无畏契约" => Ok(329),
-        "APEX英雄" => Ok(240),
-        "守望先锋" => Ok(87),
-        "萌宅领域" => Ok(530),
-        "其他单机" => Ok(235),
-        "其他网游" => Ok(107),
-        "UP主日常" => Ok(646),
-        "最终幻想14" => Ok(102),
-        "格斗游戏" => Ok(433),
-        "我的世界" => Ok(216),
-        "DeadLock" => Ok(927),
-        "主机游戏" => Ok(236),
-        "原神" => Ok(321),
-        "斯普拉遁3" => Ok(694),
-        "游戏王：决斗链接" => Ok(407),
-        "逃离塔科夫" => Ok(252),
-        "使命召唤:战区" => Ok(318),
-        "艾尔登法环" => Ok(555),
-        "怪物猎人" => Ok(578),
-        "塞尔达传说" => Ok(308),
-        "三角洲行动" => Ok(878),
-        "Dark and Darker" => Ok(795),
-        "致命公司" => Ok(858),
-        _ => Err(format!("未知的分区: {}", area_name).into()),
+    let areas_path = std::env::current_exe()
+        .map_err(|e| format!("无法获取可执行文件路径: {}", e))?
+        .with_file_name("areas.json");
+
+    let content =
+        std::fs::read_to_string(&areas_path).map_err(|e| format!("无法读取 areas.json: {}", e))?;
+
+    let areas: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("无法解析 areas.json: {}", e))?;
+
+    if let Some(areas_array) = areas["areas"].as_array() {
+        for area in areas_array {
+            if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
+                if name == area_name {
+                    return Ok(id);
+                }
+            }
+        }
     }
+
+    Err(format!("未知的分区: {}", area_name).into())
 }
 
 pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {

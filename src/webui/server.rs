@@ -1,0 +1,67 @@
+use axum::{
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
+use std::net::SocketAddr;
+use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
+
+use super::api;
+
+async fn health_check() -> impl IntoResponse {
+    (StatusCode::OK, "OK")
+}
+
+pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    // API router
+    let api_router = Router::new()
+        .route("/health", get(health_check))
+        .route("/status", get(api::get_status))
+        .route("/config", get(api::get_config).post(api::update_config))
+        .route("/start", post(api::start_stream))
+        .route("/stop", post(api::stop_stream))
+        .route("/danmaku", post(api::send_danmaku))
+        .route("/cover", post(api::update_cover))
+        .route("/area", post(api::update_area))
+        .route("/channels", get(api::get_channels))
+        .route("/areas", get(api::get_areas))
+        .route("/channel", post(api::update_channel))
+        .route("/setup-status", get(api::check_setup));
+
+    // Main app with API routes and static files
+    let app = Router::new()
+        .nest("/api", api_router)
+        .fallback_service(ServeDir::new("webui/dist"))
+        .layer(CorsLayer::permissive());
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    println!("\n🌐 Web UI 服务已启动");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📍 本地访问:     http://localhost:{}", port);
+    println!("📍 本地访问:     http://127.0.0.1:{}", port);
+
+    // Try to get local network IP
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local_addr) = socket.local_addr() {
+                let ip = local_addr.ip();
+                if !ip.is_loopback() {
+                    println!("📍 局域网访问:   http://{}:{}", ip, port);
+                }
+            }
+        }
+    }
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("💡 提示: 在浏览器中打开上述任一地址访问控制面板\n");
+
+    tracing::info!("Web UI listening on 0.0.0.0:{}", port);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}

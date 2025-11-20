@@ -179,7 +179,7 @@ async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("cookies.json 不存在，请登录");
         bilibili::login().await?;
     } else {
-        // Check if cookies.json is older than 48 hours
+        // Check if cookies.json is older than 3 days
         if COOKIES_PATH.metadata()?.modified()?.elapsed()?.as_secs() > 3600 * 24 * 3 {
             tracing::info!("cookies.json 已超过3天，正在刷新");
             bilibili::renew().await?;

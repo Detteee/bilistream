@@ -34,3 +34,8 @@ futures-util = "0.3"
 byteorder = "1.5"
 flate2 = "1.0"
 anyhow = "1.0"
+# Web UI dependencies
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+mime_guess = "2.0"

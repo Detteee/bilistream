@@ -7,6 +7,8 @@
 - Automated rebroadcasting of Twitch and YouTube streams to Bilibili Live
 - Support for scheduled streams on YouTube
 - Configurable and auto update Bilibili live settings (title, area and thumbnail)
+- **Modern Web UI** - Beautiful control panel for monitoring and managing streams
+- Interactive setup wizard for easy first-time configuration
 - Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 - Danmaku command feature for changing the listening target channel when Bilibili live is off
 - Monitor League of Legends Live game and stops Bilibili live if blacklisted words are found in player names
@@ -50,9 +52,26 @@
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
-5. **Quick Setup (Recommended):**
+5. **Setup Web UI (Optional but Recommended):**
 
-   Run the interactive setup wizard to configure everything:
+   The Web UI files are already included in the `webui/dist/` directory. No additional setup is required!
+   
+   The web interface will be automatically served when you run:
+   ```bash
+   ./bilistream webui
+   ```
+   
+   **Note:** The Web UI is a single-page application with no external dependencies. All assets are bundled in the `webui/dist/index.html` file.
+
+6. **Quick Setup (Recommended):**
+
+   **Automatic Setup:**
+   - Simply run `./bilistream` (or double-click on Windows)
+   - If config files are missing, the setup wizard starts automatically
+   - No need to remember the `setup` command!
+
+   **Manual Setup:**
+   Run the interactive setup wizard anytime:
 
    ```bash
    ./bilistream setup
@@ -89,7 +108,7 @@
    - API keys for various services
    - Anti collision settings
 
-6. Create channels configuration file:
+7. Create channels configuration file:
    Create `channels.json` in the root directory with the following structure:
 
 ```json
@@ -107,7 +126,7 @@
 }
 ```
 
-7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+8. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
 - Create a file named `invalid_words.txt` with one word per line
 - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
@@ -123,6 +142,7 @@
 ```txt
 .
 ├── bilistream           # Main executable
+├── areas.json           # Area (game categories) and banned keywords configuration
 ├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
 ├── config.yaml          # Main configuration file
 ├── cookies.json         # Bilibili login cookies (./bilistream login)
@@ -130,13 +150,89 @@
 └── stream_manager.sh    # Management script
 ```
 
+### Configuration Files
+
+#### areas.json
+Contains area (game category) definitions and banned keywords:
+```json
+{
+  "banned_keywords": [
+    "gta", "watchalong", "just chatting", ...
+  ],
+  "areas": [
+    { "id": 86, "name": "英雄联盟" },
+    { "id": 329, "name": "无畏契约" },
+    ...
+  ]
+}
+```
+
+#### channels.json
+Defines available channels for monitoring:
+```json
+{
+  "channels": [
+    {
+      "name": "Channel Name",
+      "platforms": {
+        "youtube": "YouTube Channel ID",
+        "twitch": "Twitch Channel ID"
+      },
+      "riot_puuid": "League of Legends PUUID"
+    }
+  ]
+}
+```
+
 ## Usage
 
-Run the Bilistream application:
+### Quick Start
 
+**First Time Users:**
+- Just run the program! If config files are missing, the setup wizard will start automatically
+- Follow the interactive prompts to configure everything
+
+**Linux/Mac:**
 ```bash
 ./bilistream 
 ```
+- Missing config? Setup wizard starts automatically
+- Ready to go? Starts monitoring streams
+
+**Windows:**
+- **Double-click `bilistream.exe`** - Automatically starts Web UI with notification
+  - Shows all access URLs (localhost and LAN IP)
+  - Perfect for easy management
+- **CLI mode**: `bilistream.exe --cli` - Runs in command-line mode
+  - Missing config? Setup wizard starts automatically
+- **Any subcommand**: `bilistream.exe setup`, `bilistream.exe webui`, etc.
+
+### Web UI (Recommended)
+
+For easier management, use the Web UI:
+
+```bash
+./bilistream webui
+```
+
+Then open your browser and navigate to http://localhost:3150
+
+**Windows Users:**
+- Double-click `bilistream.exe` to auto-start Web UI
+- A notification will pop up showing all access URLs:
+  - Local: http://localhost:3150
+  - LAN: http://your-ip:3150
+- Click any URL to open in your browser
+
+The Web UI provides:
+- 📊 Real-time status dashboard showing Bilibili, YouTube, and Twitch status
+- 🎮 One-click stream controls (start/stop)
+- 💬 Send danmaku messages directly from the browser
+- 📺 Channel management - easily switch monitoring targets
+- 🎯 Area selection with dropdown (no need to remember area IDs)
+- ⚙️ Update stream settings on the fly
+- 📱 Mobile-friendly responsive interface
+- 🔄 Auto-refresh status every 60 seconds
 
 ### Subcommands
 
@@ -202,7 +298,24 @@ Bilistream supports the following commands:
    # platform: YT, TW, bilibili, all
    ```
 
-9. Generate shell completions:
+9. **Web UI (Control Panel):**
+
+   ```bash
+   ./bilistream webui
+   # Or specify custom port
+   ./bilistream webui --port 3150
+   ```
+   
+   Launch a modern web-based control panel:
+   - Real-time status monitoring for Bilibili, YouTube, and Twitch
+   - Start/stop live streaming with one click
+   - Send danmaku messages
+   - Update stream area
+   - Auto-refresh status every 10 seconds
+   - Responsive design for mobile and desktop
+   - Default access at http://localhost:3150
+
+10. Generate shell completions:
 
    ```bash
    ./bilistream completion <shell>

@@ -7,6 +7,8 @@
 - 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
 - 支持 YouTube 的预定直播
 - 可配置/自动更新的哔哩哔哩直播设置（标题、分区和封面）
+- **现代化 Web UI** - 精美的控制面板，用于监控和管理直播
+- 交互式设置向导，轻松完成首次配置
 - 管理脚本（`stream_manager.sh`）用于更改配置
 - 当哔哩哔哩未转播时可通过弹幕命令更改监听目标频道
 - 监控英雄联盟游戏内玩家名称，如发现黑名单词汇则停止直播
@@ -50,9 +52,26 @@
    cargo build --target x86_64-pc-windows-gnu --release
    ```
 
-5. **快速设置（推荐）：**
+5. **设置 Web UI（可选但推荐）：**
 
-   运行交互式设置向导来配置所有内容：
+   Web UI 文件已包含在 `webui/dist/` 目录中，无需额外设置！
+   
+   运行以下命令即可自动启动 Web 界面：
+   ```bash
+   ./bilistream webui
+   ```
+   
+   **注意：** Web UI 是一个单页应用，没有外部依赖。所有资源都打包在 `webui/dist/index.html` 文件中。
+
+6. **快速设置（推荐）：**
+
+   **自动设置:**
+   - 直接运行 `./bilistream`（或在 Windows 上双击）
+   - 如果缺少配置文件，设置向导会自动启动
+   - 无需记住 `setup` 命令！
+
+   **手动设置:**
+   随时运行交互式设置向导：
 
    ```bash
    ./bilistream setup
@@ -89,7 +108,7 @@
    - 各种服务的 API 密钥
    - 防撞车设置
 
-6. 创建频道配置文件：
+7. 创建频道配置文件：
    在根目录创建 `channels.json`，使用以下结构：
 
 ```json
@@ -107,7 +126,7 @@
 }
 ```
 
-7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
+8. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
     - 创建名为 `invalid_words.txt` 的文件，每行一个词
     - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
@@ -123,6 +142,7 @@
 ```txt
 .
 ├── bilistream           # 主程序可执行文件
+├── areas.json           # 分区（游戏类别）和禁用关键词配置
 ├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
 ├── config.yaml          # 主配置文件
 ├── cookies.json         # 哔哩哔哩登录 cookies（./bilistream login）
@@ -130,13 +150,89 @@
 └── stream_manager.sh    # 管理脚本
 ```
 
+### 配置文件说明
+
+#### areas.json
+包含分区（游戏类别）定义和禁用关键词：
+```json
+{
+  "banned_keywords": [
+    "gta", "watchalong", "just chatting", ...
+  ],
+  "areas": [
+    { "id": 86, "name": "英雄联盟" },
+    { "id": 329, "name": "无畏契约" },
+    ...
+  ]
+}
+```
+
+#### channels.json
+定义可监控的频道：
+```json
+{
+  "channels": [
+    {
+      "name": "频道名称",
+      "platforms": {
+        "youtube": "YouTube频道ID",
+        "twitch": "Twitch频道ID"
+      },
+      "riot_puuid": "英雄联盟PUUID"
+    }
+  ]
+}
+```
+
 ## 使用方法
 
-运行 Bilistream 应用：
+### 快速开始
 
+**首次使用:**
+- 直接运行程序！如果缺少配置文件，设置向导会自动启动
+- 按照交互式提示完成所有配置
+
+**Linux/Mac:**
 ```bash
 ./bilistream 
 ```
+- 缺少配置？设置向导自动启动
+- 配置完成？开始监控直播
+
+**Windows:**
+- **双击 `bilistream.exe`** - 自动启动 Web UI 并显示通知
+  - 显示所有访问地址（本地和局域网 IP）
+  - 便于轻松管理
+- **CLI 模式**: `bilistream.exe --cli` - 命令行模式运行
+  - 缺少配置？设置向导自动启动
+- **任何子命令**: `bilistream.exe setup`, `bilistream.exe webui` 等
+
+### Web UI（推荐）
+
+为了更方便地管理，使用 Web UI：
+
+```bash
+./bilistream webui
+```
+
+然后在浏览器中打开 http://localhost:3150
+
+**Windows 用户:**
+- 双击 `bilistream.exe` 自动启动 Web UI
+- 会弹出通知显示所有访问地址：
+  - 本地: http://localhost:3150
+  - 局域网: http://your-ip:3150
+- 点击任意地址在浏览器中打开
+
+Web UI 提供：
+- 📊 实时状态仪表板，显示 Bilibili、YouTube 和 Twitch 状态
+- 🎮 一键直播控制（开始/停止）
+- 💬 直接从浏览器发送弹幕消息
+- 📺 频道管理 - 轻松切换监控目标
+- 🎯 分区下拉选择（无需记忆分区 ID）
+- ⚙️ 实时更新直播设置
+- 📱 移动端友好的响应式界面
+- 🔄 每 60 秒自动刷新状态
 
 ### 子命令
 
@@ -202,7 +298,27 @@ Bilistream 支持以下命令：
    # 平台: YT, TW, bilibili, all
    ```
 
-9. 生成命令补全脚本：
+9. **Web UI（控制面板）：**
+
+   ```bash
+   ./bilistream webui
+   # 或指定自定义端口
+   ./bilistream webui --port 3150
+   ```
+   
+   启动现代化的 Web 控制面板：
+   - 实时监控 Bilibili、YouTube 和 Twitch 状态
+   - 显示当前监控的频道名称
+   - 一键开始/停止直播
+   - 发送弹幕消息
+   - 更新直播分区（下拉选择，无需记忆 ID）
+   - 频道管理功能 - 从预定义列表中选择监控目标
+   - 每 60 秒自动刷新状态
+   - 响应式设计，支持移动端和桌面端
+   - 默认访问地址：http://localhost:3150
+   - 启动时显示所有可访问的网络地址（本地和局域网）
+
+10. 生成命令补全脚本：
 
    ```bash
    ./bilistream completion <shell>

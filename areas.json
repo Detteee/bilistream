@@ -1,0 +1,127 @@
+{
+  "banned_keywords": [
+    "gta",
+    "mad town",
+    "ストグラ",
+    "ウォッチパ",
+    "watchalong",
+    "watchparty",
+    "talk",
+    "zatsudan",
+    "雑談",
+    "marshmallow",
+    "morning",
+    "freechat",
+    "どうぶつの森",
+    "あつ森",
+    "animal crossing",
+    "just chatting",
+    "asmr",
+    "dbd",
+    "dead by daylight",
+    "l4d2",
+    "left 4 dead 2",
+    "mahjong",
+    "雀魂",
+    "じゃんたま",
+    "gartic phone"
+  ],
+  "areas": [
+    {
+      "id": 86,
+      "name": "英雄联盟"
+    },
+    {
+      "id": 329,
+      "name": "无畏契约"
+    },
+    {
+      "id": 240,
+      "name": "APEX英雄"
+    },
+    {
+      "id": 87,
+      "name": "守望先锋"
+    },
+    {
+      "id": 530,
+      "name": "萌宅领域"
+    },
+    {
+      "id": 235,
+      "name": "其他单机"
+    },
+    {
+      "id": 107,
+      "name": "其他网游"
+    },
+    {
+      "id": 646,
+      "name": "UP主日常"
+    },
+    {
+      "id": 102,
+      "name": "最终幻想14"
+    },
+    {
+      "id": 433,
+      "name": "格斗游戏"
+    },
+    {
+      "id": 216,
+      "name": "我的世界"
+    },
+    {
+      "id": 927,
+      "name": "DeadLock"
+    },
+    {
+      "id": 236,
+      "name": "主机游戏"
+    },
+    {
+      "id": 321,
+      "name": "原神"
+    },
+    {
+      "id": 407,
+      "name": "游戏王"
+    },
+    {
+      "id": 694,
+      "name": "斯普拉遁3"
+    },
+    {
+      "id": 252,
+      "name": "逃离塔科夫"
+    },
+    {
+      "id": 318,
+      "name": "使命召唤:战区"
+    },
+    {
+      "id": 555,
+      "name": "艾尔登法环"
+    },
+    {
+      "id": 578,
+      "name": "怪物猎人"
+    },
+    {
+      "id": 308,
+      "name": "塞尔达传说"
+    },
+    {
+      "id": 878,
+      "name": "三角洲行动"
+    },
+    {
+      "id": 795,
+      "name": "Dark and Darker"
+    },
+    {
+      "id": 858,
+      "name": "致命公司"
+    }
+  ]
+}

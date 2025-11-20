@@ -1435,6 +1435,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("初始化配置：登录Bilibili并配置config.yaml")
                 .long_about("交互式设置向导，帮助你登录Bilibili并创建config.yaml配置文件"),
         )
+        .subcommand(
+            Command::new("webui")
+                .about("启动 Web UI 控制面板")
+                .arg(
+                    Arg::new("port")
+                        .short('p')
+                        .long("port")
+                        .value_name("PORT")
+                        .help("Web UI 端口")
+                        .default_value("3150")
+                        .value_parser(clap::value_parser!(u16)),
+                ),
+        )
         .get_matches();
 
     let ffmpeg_log_level = matches
@@ -1517,6 +1530,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(("setup", _)) => {
             setup_wizard().await?;
+        }
+        Some(("webui", sub_m)) => {
+            let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
+            bilistream::webui::server::start_webui(port).await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
@@ -1612,9 +1629,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => {
-            // Default behavior: run bilistream with the provided config
-            run_bilistream(ffmpeg_log_level).await?;
+            // Check if setup is needed (missing config or cookies)
+            let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+            let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
+            let needs_setup = !config_path.exists() || !cookies_path.exists();
+
+            if needs_setup {
+                println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
+                setup_wizard().await?;
+                return Ok(());
+            }
+
+            // On Windows, if no arguments provided (double-clicked), start webui
+            #[cfg(target_os = "windows")]
+            {
+                use bilistream::webui::start_webui;
+
+                println!("🚀 启动 Web UI...");
+                println!("💡 提示: 使用 'bilistream.exe --cli' 可使用 CLI 模式\n");
+
+                // Show notification about where the service is hosted
+                if let Err(e) = show_windows_notification() {
+                    eprintln!("无法显示通知: {}", e);
+                }
+
+                start_webui(3150).await?;
+            }
+
+            // On other platforms, run normal bilistream
+            #[cfg(not(target_os = "windows"))]
+            {
+                run_bilistream(ffmpeg_log_level).await?;
+            }
         }
     }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn show_windows_notification() -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command as StdCommand;
+
+    // Get local IP address
+    let local_ip = if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local_addr) = socket.local_addr() {
+                let ip = local_addr.ip();
+                if !ip.is_loopback() {
+                    Some(ip.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Build notification message
+    let mut message = String::from("🌐 Web UI 服务已启动\n");
+    message.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    message.push_str("📍 本地访问: http://localhost:3150\n");
+    message.push_str("📍 本地访问: http://127.0.0.1:3150\n");
+    if let Some(ip) = local_ip {
+        message.push_str(&format!("📍 局域网访问: http://{}:3150", ip));
+    }
+
+    // Escape the message for PowerShell
+    let escaped_message = message.replace("`", "``").replace("\"", "`\"");
+
+    // Try to show a Windows notification using PowerShell
+    let script = format!(
+        r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $notification = New-Object System.Windows.Forms.NotifyIcon
+        $notification.Icon = [System.Drawing.SystemIcons]::Information
+        $notification.Visible = $true
+        $notification.ShowBalloonTip(10000, "Bilistream Web UI", "{}", [System.Windows.Forms.ToolTipIcon]::Info)
+        Start-Sleep -Seconds 11
+        $notification.Dispose()
+    "#,
+        escaped_message
+    );
+
+    StdCommand::new("powershell")
+        .args(&["-NoProfile", "-Command", &script])
+        .spawn()?;
+
     Ok(())
 }
