@@ -120,14 +120,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", channel_name_check);
                     if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                         enable_danmaku_commands(true);
-                        send_danmaku(
+                        if let Err(e) = send_danmaku(
                             &cfg,
                             &format!(
                                 "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
                                 channel_name_check
                             ),
                         )
-                        .await?;
+                        .await {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
@@ -185,12 +187,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 && !channel_name.contains("Kamito")
                 && DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
             {
-                send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await?;
+                if let Err(e) = send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
                 DANMAKU_KAMITO_APEX.store(false, Ordering::SeqCst);
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                     enable_danmaku_commands(true);
                     thread::sleep(Duration::from_secs(2));
-                    send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
+                    if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
@@ -208,11 +214,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 .find(|k| title.as_ref().map_or(false, |t| t.contains(*k)))
             {
                 tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
-                send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await?;
+                if let Err(e) = send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                     enable_danmaku_commands(true);
                     thread::sleep(Duration::from_secs(2));
-                    send_danmaku(&cfg, "可使用弹幕指令进行换台").await?;
+                    if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
@@ -334,21 +344,27 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 if !is_ffmpeg_running() {
                     tracing::error!("❌ ffmpeg重启失败，将在下次循环重试");
-                    send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await?;
+                    if let Err(e) = send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
                 }
             }
 
             tracing::info!("{} 直播结束", channel_name);
             if cfg.bililive.enable_danmaku_command {
                 enable_danmaku_commands(true);
-                send_danmaku(
+                if let Err(e) = send_danmaku(
                     &cfg,
                     &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
                 )
-                .await?;
+                .await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
                 tokio::time::sleep(Duration::from_secs(15)).await;
             } else {
-                send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await?;
+                if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
             }
         } else {
             // 计划直播(预告窗)
@@ -728,15 +744,18 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                                     let mut cmd = StdCommand::new("pkill");
                                     cmd.arg("ffmpeg");
                                     cmd.spawn().unwrap();
-                                    send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
-                                        .await
-                                        .unwrap();
+                                    if let Err(e) = send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
+                                        .await {
+                                        tracing::error!("Failed to send danmaku: {}", e);
+                                    }
                                     if cfg.bililive.enable_danmaku_command
                                         && !is_danmaku_commands_enabled()
                                     {
                                         enable_danmaku_commands(true);
                                         thread::sleep(Duration::from_secs(2));
-                                        send_danmaku(&cfg, "可使用弹幕指令进行换台").await.unwrap();
+                                        if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
+                                            tracing::error!("Failed to send danmaku: {}", e);
+                                        }
                                     }
                                     return;
                                 } else {
@@ -861,7 +880,7 @@ async fn handle_collisions(
             tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
             // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
             // tokio::time::sleep(Duration::from_secs(2)).await;
-            send_danmaku(
+            if let Err(e) = send_danmaku(
                 &cfg,
                 &format!(
                     "{}({})正在转{}",
@@ -870,10 +889,12 @@ async fn handle_collisions(
                     yt_collision.as_ref().unwrap().2,
                 ),
             )
-            .await?;
+            .await {
+                tracing::error!("Failed to send danmaku: {}", e);
+            }
             if yt_collision.as_ref().unwrap().0 != tw_collision.as_ref().unwrap().0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                send_danmaku(
+                if let Err(e) = send_danmaku(
                     &cfg,
                     &format!(
                         "{}({})正在转{}",
@@ -882,7 +903,9 @@ async fn handle_collisions(
                         tw_collision.as_ref().unwrap().2,
                     ),
                 )
-                .await?;
+                .await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
             if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
@@ -890,7 +913,9 @@ async fn handle_collisions(
             }
             if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await?;
+                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
             *last_collision = Some(current);
@@ -931,18 +956,22 @@ async fn handle_collisions(
                     cfg.youtube.channel_name.clone()
                 }
             );
-            send_danmaku(
+            if let Err(e) = send_danmaku(
                 &cfg,
                 &format!("{}({})正在转{}", collision.0, collision.1, collision.2,),
             )
-            .await?;
+            .await {
+                tracing::error!("Failed to send danmaku: {}", e);
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
             if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                 enable_danmaku_commands(true);
             }
             if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await?;
+                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await {
+                    tracing::error!("Failed to send danmaku: {}", e);
+                }
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
             *last_collision = Some(collision);
