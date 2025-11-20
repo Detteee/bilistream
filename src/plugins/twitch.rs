@@ -28,30 +28,6 @@ impl Live for Twitch {
         ),
         Box<dyn Error>,
     > {
-        /*         let j = json!(
-            {
-                "operationName":"StreamMetadata",
-                "variables":{
-                    "channelLogin":&self.channel_id,
-                },
-                "extensions":{
-                    "persistedQuery":{
-                        "version":1,
-                        "sha256Hash":"1c719a40e481453e5c48d9bb585d971b8b372f8ebb105b17076722264dfa5b3e"
-                    }
-                }
-            }
-        );
-        let res: serde_json::Value = self
-            .client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
-            .json(&j)
-            .send()
-            .await?
-            .json()
-            .await? */
-        // println!("{:?}", res);
         let (is_live, game_name, title) = get_twitch_status(&self.channel_id).await?;
         if is_live {
             let m3u8_url = self.get_streamlink_url()?;
@@ -66,10 +42,6 @@ impl Live for Twitch {
             return Ok((is_live, None, None, None, None));
         }
     }
-
-    // fn channel_name(&self) -> &str {
-    //     &self.channel_id
-    // }
 }
 
 impl Twitch {
@@ -118,19 +90,29 @@ impl Twitch {
 
     fn try_with_proxy(&self, proxy_region: &str) -> Result<String, Box<dyn Error>> {
         let proxy_url = self.get_proxy_url_for_region(proxy_region)?;
-        let output = Command::new("streamlink")
-            .arg(proxy_url)
+        let mut cmd = Command::new("streamlink");
+        cmd.arg(proxy_url)
             .arg("--stream-url")
             .arg("--stream-type")
             .arg("hls")
             .arg("--twitch-api-header")
-            .arg(format!("Authorization=OAuth {}", self.oauth_token))
-            .arg(format!(
-                "https://www.twitch.tv/{}",
-                self.channel_id.as_str().replace("\"", "")
-            ))
-            .arg("best")
-            .output()?;
+            .arg(format!("Authorization=OAuth {}", self.oauth_token));
+
+        cmd.arg(format!(
+            "https://www.twitch.tv/{}",
+            self.channel_id.as_str().replace("\"", "")
+        ))
+        .arg("best");
+
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return Err("streamlink 未安装或不在 PATH 中。".into());
+                }
+                return Err(e.into());
+            }
+        };
 
         if output.status.success() {
             let url = String::from_utf8(output.stdout)?.trim().to_string();

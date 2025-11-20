@@ -5,12 +5,54 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use crate::config::load_config;
 use crate::plugins::{
     bili_start_live, bili_stop_live, bili_update_area, bilibili, get_bili_live_status,
-    get_twitch_status, get_youtube_status, send_danmaku as send_danmaku_to_bili,
+    send_danmaku as send_danmaku_to_bili,
 };
+
+// Global log buffer
+static LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
+
+// Global status cache updated by main loop
+static STATUS_CACHE: Mutex<Option<StatusData>> = Mutex::new(None);
+
+pub fn init_log_buffer() {
+    let mut buffer = LOG_BUFFER.lock().unwrap();
+    *buffer = Some(VecDeque::with_capacity(500));
+}
+
+pub fn add_log_line(line: String) {
+    let mut buffer = LOG_BUFFER.lock().unwrap();
+    if let Some(ref mut buf) = *buffer {
+        buf.push_back(line);
+        if buf.len() > 500 {
+            buf.pop_front();
+        }
+    }
+}
+
+pub fn get_logs() -> Vec<String> {
+    let buffer = LOG_BUFFER.lock().unwrap();
+    if let Some(ref buf) = *buffer {
+        buf.iter().cloned().collect()
+    } else {
+        Vec::new()
+    }
+}
+
+pub fn update_status_cache(status: StatusData) {
+    let mut cache = STATUS_CACHE.lock().unwrap();
+    *cache = Some(status);
+}
+
+pub fn get_status_cache() -> Option<StatusData> {
+    let cache = STATUS_CACHE.lock().unwrap();
+    cache.clone()
+}
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -25,37 +67,37 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct StatusData {
-    bilibili: BiliStatus,
-    youtube: Option<YtStatus>,
-    twitch: Option<TwStatus>,
+    pub bilibili: BiliStatus,
+    pub youtube: Option<YtStatus>,
+    pub twitch: Option<TwStatus>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct BiliStatus {
-    is_live: bool,
-    title: String,
-    area_id: u64,
-    area_name: String,
+    pub is_live: bool,
+    pub title: String,
+    pub area_id: u64,
+    pub area_name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct YtStatus {
-    is_live: bool,
-    title: Option<String>,
-    topic: Option<String>,
-    channel_name: String,
-    channel_id: String,
+    pub is_live: bool,
+    pub title: Option<String>,
+    pub topic: Option<String>,
+    pub channel_name: String,
+    pub channel_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TwStatus {
-    is_live: bool,
-    title: Option<String>,
-    game: Option<String>,
-    channel_name: String,
-    channel_id: String,
+    pub is_live: bool,
+    pub title: Option<String>,
+    pub game: Option<String>,
+    pub channel_name: String,
+    pub channel_id: String,
 }
 
 fn get_area_name(area_id: u64) -> String {
@@ -88,6 +130,20 @@ fn get_area_name(area_id: u64) -> String {
 }
 
 pub async fn get_status() -> impl IntoResponse {
+    // Use cached status from main loop instead of checking independently
+    if let Some(status) = get_status_cache() {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(status),
+                message: None,
+            }),
+        )
+            .into_response();
+    }
+
+    // Fallback: if cache is empty, check Bilibili status only
     let cfg = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -131,52 +187,25 @@ pub async fn get_status() -> impl IntoResponse {
             }
         };
 
-    let yt_status = if !cfg.youtube.channel_id.is_empty() {
-        match get_youtube_status(&cfg.youtube.channel_id).await {
-            Ok((is_live, topic, title, _, _)) => Some(YtStatus {
-                is_live,
-                title,
-                topic,
-                channel_name: cfg.youtube.channel_name.clone(),
-                channel_id: cfg.youtube.channel_id.clone(),
-            }),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let tw_status = if !cfg.twitch.channel_id.is_empty() {
-        match get_twitch_status(&cfg.twitch.channel_id).await {
-            Ok((is_live, game, title)) => Some(TwStatus {
-                is_live,
-                title,
-                game,
-                channel_name: cfg.twitch.channel_name.clone(),
-                channel_id: cfg.twitch.channel_id.clone(),
-            }),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
     let bili_area_name = get_area_name(bili_area_id);
+
+    // Return minimal status with only Bilibili info
+    let status = StatusData {
+        bilibili: BiliStatus {
+            is_live: bili_is_live,
+            title: bili_title,
+            area_id: bili_area_id,
+            area_name: bili_area_name,
+        },
+        youtube: None,
+        twitch: None,
+    };
 
     (
         StatusCode::OK,
         Json(ApiResponse {
             success: true,
-            data: Some(StatusData {
-                bilibili: BiliStatus {
-                    is_live: bili_is_live,
-                    title: bili_title,
-                    area_id: bili_area_id,
-                    area_name: bili_area_name,
-                },
-                youtube: yt_status,
-                twitch: tw_status,
-            }),
+            data: Some(status),
             message: None,
         }),
     )
@@ -475,5 +504,21 @@ pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
         needs_setup,
         missing_files,
         setup_command,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct LogsResponse {
+    success: bool,
+    logs: String,
+}
+
+pub async fn get_logs_endpoint() -> Result<Json<LogsResponse>, StatusCode> {
+    let logs = get_logs();
+    let logs_text = logs.join("\n");
+
+    Ok(Json(LogsResponse {
+        success: true,
+        logs: logs_text,
     }))
 }

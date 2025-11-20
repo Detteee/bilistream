@@ -2,12 +2,18 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
+**Quick Start for Windows:**
+1. Download and extract the release package
+2. Double-click `bilistream.exe` - Web UI launches automatically!
+3. Dependencies (ffmpeg, yt-dlp) download automatically on first run
+4. Follow the setup wizard to configure your streams
+
 ## Features
 
 - Automated rebroadcasting of Twitch and YouTube streams to Bilibili Live
 - Support for scheduled streams on YouTube
 - Configurable and auto update Bilibili live settings (title, area and thumbnail)
-- **Modern Web UI** - Beautiful control panel for monitoring and managing streams
+- **Web UI** - Beautiful control panel for monitoring and managing streams
 - Interactive setup wizard for easy first-time configuration
 - Comprehensive management script (`stream_manager.sh`) for easy configuration and control
 - Danmaku command feature for changing the listening target channel when Bilibili live is off
@@ -201,30 +207,30 @@ Defines available channels for monitoring:
 - Just run the program! If config files are missing, the setup wizard will start automatically
 - Follow the interactive prompts to configure everything
 
-**Linux/Mac:**
+**Default Behavior (Web UI):**
 ```bash
-./bilistream 
+./bilistream
 ```
-- Missing config? Setup wizard starts automatically
-- Ready to go? Starts monitoring streams
+- **Missing config?** Setup wizard starts automatically
+- **Ready to go?** Launches Web UI at http://localhost:3150
+- **Windows:** Double-click `bilistream.exe` for the same experience with desktop notification
 
-**Windows:**
-- **Double-click `bilistream.exe`** - Automatically starts Web UI with notification
-  - Shows all access URLs (localhost and LAN IP)
-  - Perfect for easy management
-- **CLI mode**: `bilistream.exe --cli` - Runs in command-line mode
-  - Missing config? Setup wizard starts automatically
-- **Any subcommand**: `bilistream.exe setup`, `bilistream.exe webui`, etc.
-
-### Web UI (Recommended)
-
-For easier management, use the Web UI:
-
+**CLI Mode (Optional):**
 ```bash
-./bilistream webui
+./bilistream --cli
 ```
+- Runs in command-line monitoring mode without Web UI
+- Useful for headless servers or terminal-only environments
 
-Then open your browser and navigate to http://localhost:3150
+### Web UI
+
+The Web UI is now the default mode! Simply run `./bilistream` to start.
+
+**Alternative ways to start Web UI:**
+```bash
+./bilistream webui          # Explicit webui command
+./bilistream webui --port 8080  # Custom port
+```
 
 **Windows Users:**
 - **First run**: Core dependencies (ffmpeg, yt-dlp) are automatically downloaded to the program folder

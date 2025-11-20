@@ -7,6 +7,25 @@ use chrono::{DateTime, Local};
 use regex::Regex;
 use std::error::Error; // Ensure this is included
 use std::process::Command;
+
+// Helper function to get yt-dlp command path
+fn get_yt_dlp_command() -> String {
+    if cfg!(target_os = "windows") {
+        // On Windows, check if yt-dlp.exe exists in the executable directory
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_yt_dlp = exe_dir.join("yt-dlp.exe");
+                if local_yt_dlp.exists() {
+                    return local_yt_dlp.to_string_lossy().to_string();
+                }
+            }
+        }
+        "yt-dlp.exe".to_string()
+    } else {
+        "yt-dlp".to_string()
+    }
+}
+
 pub struct Youtube {
     pub channel_name: String,
     pub channel_id: String,
@@ -155,7 +174,7 @@ async fn get_status_with_yt_dlp(
     ),
     Box<dyn Error>,
 > {
-    let mut command = Command::new("yt-dlp");
+    let mut command = Command::new(get_yt_dlp_command());
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);
@@ -275,7 +294,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             Ok(None)
         }
     } else {
-        let mut command = Command::new("yt-dlp");
+        let mut command = Command::new(get_yt_dlp_command());
         if let Some(proxy) = proxy {
             command.arg("--proxy").arg(proxy);
         }

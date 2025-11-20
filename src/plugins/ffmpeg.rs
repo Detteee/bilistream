@@ -1,34 +1,100 @@
 use std::process::Command;
 
+// Helper function to get ffmpeg command path
+fn get_ffmpeg_command() -> String {
+    if cfg!(target_os = "windows") {
+        // On Windows, check if ffmpeg.exe exists in the executable directory
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_ffmpeg = exe_dir.join("ffmpeg.exe");
+                if local_ffmpeg.exists() {
+                    return local_ffmpeg.to_string_lossy().to_string();
+                }
+            }
+        }
+        "ffmpeg.exe".to_string()
+    } else {
+        "ffmpeg".to_string()
+    }
+}
+
 // if ffmpeg is already running
 pub fn is_ffmpeg_running() -> bool {
-    let output = Command::new("pgrep")
-        .arg("-af")
-        .arg("ffmpeg")
-        .output()
-        .expect("Failed to execute pgrep");
-    if output.status.success() {
-        let process_info = String::from_utf8_lossy(&output.stdout);
-        if process_info.contains("ffmpeg -re") {
-            return true;
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, use tasklist
+        let output = match Command::new("tasklist")
+            .arg("/FI")
+            .arg("IMAGENAME eq ffmpeg.exe")
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return false,
+        };
+
+        if output.status.success() {
+            let process_info = String::from_utf8_lossy(&output.stdout);
+            return process_info.contains("ffmpeg.exe");
         }
+        false
     }
-    false
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // On Unix/Linux, use pgrep
+        let output = match Command::new("pgrep").arg("-af").arg("ffmpeg").output() {
+            Ok(output) => output,
+            Err(_) => return false,
+        };
+
+        if output.status.success() {
+            let process_info = String::from_utf8_lossy(&output.stdout);
+            if process_info.contains("ffmpeg -re") {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Stops all running ffmpeg processes
 pub fn stop_ffmpeg() {
     tracing::info!("🛑 Stopping ffmpeg processes...");
-    match Command::new("pkill").arg("-f").arg("ffmpeg -re").status() {
-        Ok(status) => {
-            if status.success() {
-                tracing::info!("✅ ffmpeg processes stopped successfully");
-            } else {
-                tracing::warn!("⚠️ pkill returned non-zero status (no processes found?)");
+
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("taskkill")
+            .arg("/F")
+            .arg("/IM")
+            .arg("ffmpeg.exe")
+            .status()
+        {
+            Ok(status) => {
+                if status.success() {
+                    tracing::info!("✅ ffmpeg processes stopped successfully");
+                } else {
+                    tracing::warn!("⚠️ taskkill returned non-zero status (no processes found?)");
+                }
+            }
+            Err(e) => {
+                tracing::error!("❌ Failed to stop ffmpeg: {}", e);
             }
         }
-        Err(e) => {
-            tracing::error!("❌ Failed to stop ffmpeg: {}", e);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        match Command::new("pkill").arg("-f").arg("ffmpeg -re").status() {
+            Ok(status) => {
+                if status.success() {
+                    tracing::info!("✅ ffmpeg processes stopped successfully");
+                } else {
+                    tracing::warn!("⚠️ pkill returned non-zero status (no processes found?)");
+                }
+            }
+            Err(e) => {
+                tracing::error!("❌ Failed to stop ffmpeg: {}", e);
+            }
         }
     }
 }
@@ -46,7 +112,7 @@ pub fn ffmpeg(
     let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
     // name the ffmpeg process as ffmpeg-platform
 
-    let mut child = Command::new("ffmpeg");
+    let mut child = Command::new(get_ffmpeg_command());
 
     if let Some(proxy) = proxy {
         child.arg("-http_proxy").arg(proxy);

@@ -15,6 +15,9 @@ async fn health_check() -> impl IntoResponse {
 }
 
 pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize log buffer
+    api::init_log_buffer();
+
     // API router
     let api_router = Router::new()
         .route("/health", get(health_check))
@@ -28,7 +31,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/channels", get(api::get_channels))
         .route("/areas", get(api::get_areas))
         .route("/channel", post(api::update_channel))
-        .route("/setup-status", get(api::check_setup));
+        .route("/setup-status", get(api::check_setup))
+        .route("/logs", get(api::get_logs_endpoint));
 
     // Main app with API routes and static files
     let app = Router::new()
@@ -39,7 +43,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     println!("\n🌐 Web UI 服务已启动");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📍 本地访问:     http://localhost:{}", port);
     println!("📍 本地访问:     http://127.0.0.1:{}", port);
 
@@ -55,10 +59,10 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("💡 提示: 在浏览器中打开上述任一地址访问控制面板\n");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("💡 提示: 在浏览器中打开上述任一地址访问\n");
 
-    tracing::info!("Web UI listening on 0.0.0.0:{}", port);
+    // tracing::info!("Web UI listening on 0.0.0.0:{}", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

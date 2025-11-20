@@ -47,17 +47,14 @@ const BANNED_KEYWORDS: [&str; 11] = [
     "watchparty",
 ];
 
-fn init_logger() {
-    tracing_subscriber::fmt()
-        .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
-        .with_target(true)
-        .with_span_events(fmt::format::FmtSpan::NONE)
-        .init();
-}
-
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
-    init_logger();
+    // Only init if not already initialized (webui mode initializes it earlier)
+    if tracing::dispatcher::has_been_set() {
+        // Logger already initialized, skip
+    } else {
+        init_logger();
+    }
 
     if is_ffmpeg_running() {
         //pkill ffmpeg;
@@ -77,6 +74,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         tracing::debug!("🔄 外层循环开始 - 重新加载配置并检查频道状态");
 
         let mut cfg = load_config().await?;
+
+        // Validate YouTube/Twitch configuration
+        if cfg.youtube.channel_id.is_empty() && cfg.twitch.channel_id.is_empty() {
+            tracing::error!("❌ YouTube 和 Twitch 配置均为空");
+            tracing::error!("请在 WebUI 中配置或手动编辑 config.yaml 文件");
+            tracing::info!("💡 提示: 访问 WebUI 进行配置，或参考 config.yaml.example");
+            // Sleep and continue to allow WebUI configuration
+            tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+            continue 'outer;
+        }
+
         // Check YouTube status
         let yt_live = select_live(cfg.clone(), "YT").await?;
         let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start) = yt_live
@@ -94,6 +102,44 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             .get_status()
             .await
             .unwrap_or((false, None, None, None, None));
+
+        // Get Bilibili status
+        let (bili_is_live, bili_title, bili_area_id) =
+            get_bili_live_status(cfg.bililive.room).await?;
+        let bili_area_name = get_area_name(bili_area_id)
+            .unwrap_or_else(|| format!("未知分区 (ID: {})", bili_area_id));
+
+        // Update status cache for WebUI
+        bilistream::update_status_cache(bilistream::StatusData {
+            bilibili: bilistream::BiliStatus {
+                is_live: bili_is_live,
+                title: bili_title.clone(),
+                area_id: bili_area_id,
+                area_name: bili_area_name,
+            },
+            youtube: if !cfg.youtube.channel_id.is_empty() {
+                Some(bilistream::YtStatus {
+                    is_live: yt_is_live,
+                    title: yt_title.clone(),
+                    topic: yt_area.clone(),
+                    channel_name: cfg.youtube.channel_name.clone(),
+                    channel_id: cfg.youtube.channel_id.clone(),
+                })
+            } else {
+                None
+            },
+            twitch: if !cfg.twitch.channel_id.is_empty() {
+                Some(bilistream::TwStatus {
+                    is_live: tw_is_live,
+                    title: tw_title.clone(),
+                    game: tw_area.clone(),
+                    channel_name: cfg.twitch.channel_name.clone(),
+                    channel_id: cfg.twitch.channel_id.clone(),
+                })
+            } else {
+                None
+            },
+        });
 
         // Modified main code section
         if cfg.enable_anti_collision {
@@ -229,8 +275,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
-            let (bili_is_live, bili_title, bili_area_id) =
-                get_bili_live_status(cfg.bililive.room).await?;
+            // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
             if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
@@ -397,7 +442,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                         // Only update if time difference is more than 5 minutes or other content changed
                         if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
-                            tracing::info!("{}", current_message);
+                            print!("{}", current_message);
                             *last = current_message;
                         }
                     }
@@ -424,7 +469,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                         // Only update if time difference is more than 5 minutes or other content changed
                         if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
-                            tracing::info!("{}", current_message);
+                            print!("{}", current_message);
                             *last = current_message;
                         }
                     }
@@ -437,7 +482,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         None, // No title when not streaming
                         &cfg.twitch.channel_name,
                     );
-                    tracing::info!("{}", current_message);
+                    print!("{}", current_message);
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
             }
@@ -517,7 +562,7 @@ fn box_message(
     let padding = width - 2 - tw_line.width();
     message.push_str(&format!(
         "│ {}{} │\n\
-         └{:─<width$}┘\x1b[0m",
+         └{:─<width$}┘\x1b[0m\n",
         tw_line,
         " ".repeat(padding),
         "",
@@ -1353,7 +1398,7 @@ AntiCollisionList:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.3.1")
+        .version("0.3.2")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
@@ -1361,6 +1406,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("设置ffmpeg日志级别 (error, info, debug)")
                 .default_value("error")
                 .value_parser(["error", "info", "debug"]),
+        )
+        .arg(
+            Arg::new("cli")
+                .long("cli")
+                .help("以命令行模式运行（默认启动 Web UI）")
+                .action(clap::ArgAction::SetTrue),
         )
         .subcommand(
             Command::new("get-live-status")
@@ -1532,8 +1583,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             setup_wizard().await?;
         }
         Some(("webui", sub_m)) => {
+            // Initialize logger with capture for webui mode
+            init_logger_with_capture();
+
             let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
-            bilistream::webui::server::start_webui(port).await?;
+            tracing::info!("🚀 启动 Web UI 和自动监控模式");
+            tracing::info!("   监控循环将在后台运行");
+
+            // Clone ffmpeg_log_level for the monitoring task
+            let ffmpeg_log_level_clone = ffmpeg_log_level.to_string();
+
+            // Create a LocalSet to run non-Send futures
+            let local = tokio::task::LocalSet::new();
+
+            // Spawn monitoring loop in background on LocalSet
+            local.spawn_local(async move {
+                if let Err(e) = run_bilistream(&ffmpeg_log_level_clone).await {
+                    tracing::error!("监控循环错误: {}", e);
+                }
+            });
+
+            // Run webui server on LocalSet (this will block)
+            local
+                .run_until(bilistream::webui::server::start_webui(port))
+                .await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
@@ -1649,30 +1722,158 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
 
-            // On Windows, if no arguments provided (double-clicked), start webui
-            #[cfg(target_os = "windows")]
-            {
+            // Check if --cli flag is set
+            let cli_mode = matches.get_flag("cli");
+
+            if cli_mode {
+                // CLI mode: run normal monitoring
+                run_bilistream(ffmpeg_log_level).await?;
+            } else {
+                // Default: Start Web UI (both Windows and Linux)
                 use bilistream::webui::start_webui;
 
-                println!("🚀 启动 Web UI...");
-                println!("💡 提示: 使用 'bilistream.exe --cli' 可使用 CLI 模式\n");
+                // Initialize logger with capture for webui mode
+                init_logger_with_capture();
 
-                // Show notification about where the service is hosted
-                if let Err(e) = show_windows_notification() {
-                    eprintln!("无法显示通知: {}", e);
+                tracing::info!("🚀 启动 Web UI 和自动监控模式");
+
+                #[cfg(target_os = "windows")]
+                {
+                    tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
+                    // Show notification about where the service is hosted
+                    if let Err(e) = show_windows_notification() {
+                        eprintln!("无法显示通知: {}", e);
+                    }
                 }
 
-                start_webui(3150).await?;
-            }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    tracing::info!("📍 访问 Web UI: http://localhost:3150");
+                    tracing::info!("💡 提示: 使用 --cli 标志以命令行模式运行");
+                }
 
-            // On other platforms, run normal bilistream
-            #[cfg(not(target_os = "windows"))]
-            {
-                run_bilistream(ffmpeg_log_level).await?;
+                // Clone ffmpeg_log_level for the monitoring task
+                let ffmpeg_log_level_clone = ffmpeg_log_level.to_string();
+
+                // Create a LocalSet to run non-Send futures
+                let local = tokio::task::LocalSet::new();
+
+                // Spawn monitoring loop in background on LocalSet
+                local.spawn_local(async move {
+                    if let Err(e) = run_bilistream(&ffmpeg_log_level_clone).await {
+                        tracing::error!("监控循环错误: {}", e);
+                    }
+                });
+
+                // Run webui server on LocalSet (this will block)
+                local.run_until(start_webui(3150)).await?;
             }
         }
     }
     Ok(())
+}
+
+fn init_logger() {
+    tracing_subscriber::fmt()
+        .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
+        .with_target(true)
+        .with_span_events(fmt::format::FmtSpan::NONE)
+        .with_writer(std::io::stdout)
+        .with_max_level(tracing::Level::INFO)
+        .init();
+}
+
+fn init_logger_with_capture() {
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    // Create a custom writer that captures logs
+    struct LogCapture;
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if let Ok(s) = std::str::from_utf8(buf) {
+                // Also write to stdout
+                print!("{}", s);
+                // Capture for web UI (strip ANSI codes)
+                // First strip ANSI codes from the entire string
+                let clean_str = strip_ansi_codes(s);
+                // Then split into lines
+                let lines: Vec<&str> = clean_str.lines().collect();
+                for line in lines {
+                    // Skip pure box drawing lines (borders only)
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('┌')
+                        || trimmed.starts_with('├')
+                        || trimmed.starts_with('└')
+                    {
+                        continue;
+                    }
+
+                    // For lines with content, strip the box borders but keep the content
+                    let content = if line.contains('│') {
+                        // Extract content between │ characters
+                        line.split('│')
+                            .filter(|s| !s.trim().is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string()
+                    } else {
+                        line.to_string()
+                    };
+
+                    // Only add non-empty content
+                    if !content.is_empty() {
+                        bilistream::add_log_line(content);
+                    }
+                }
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            std::io::stdout().flush()
+        }
+    }
+
+    // Helper function to strip ANSI escape codes
+    fn strip_ansi_codes(s: &str) -> String {
+        let mut result = String::new();
+        let mut chars = s.chars();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                // Skip escape sequence
+                if chars.next() == Some('[') {
+                    // Skip until we find a letter (end of escape sequence)
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+            } else if ch == '\r' {
+                // Skip carriage return
+                continue;
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
+    }
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
+        .with_target(true)
+        .with_span_events(fmt::format::FmtSpan::NONE)
+        .with_writer(|| LogCapture);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(LevelFilter::INFO);
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 }
 
 #[cfg(target_os = "windows")]

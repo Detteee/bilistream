@@ -584,15 +584,136 @@
           <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
         </div>
       </div>
+
+      <div class="controls" style="margin-top: 20px;">
+        <h2 style="cursor: pointer; user-select: none;" onclick="toggleLogs()">
+          📋 系统日志 <span id="log-toggle">▼</span>
+        </h2>
+        <div id="log-container" style="display: none;">
+          <div
+            style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; font-family: 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace; font-size: 14px; max-height: 400px; overflow-y: auto; line-height: 1.4; white-space: pre; overflow-x: auto;">
+            <div id="log-output">等待日志...</div>
+          </div>
+          <div style="margin-top: 10px; display: flex; gap: 10px;">
+            <button class="btn-secondary" onclick="clearLogs()">清空日志</button>
+            <button class="btn-primary" onclick="refreshLogs()">刷新日志</button>
+            <label style="display: flex; align-items: center; gap: 5px; color: #666;">
+              <input type="checkbox" id="auto-scroll-checkbox" checked> 自动滚动
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
       // Global data
       let channelsData = null;
       let areasData = null;
+      let logLines = [];
+      let maxLogLines = 500;
+      let statusRefreshInterval = 60000; // Default 60 seconds
+      let statusIntervalId = null;
 
-      // Auto refresh status every 60 seconds
-      setInterval(refreshStatus, 60000);
+      // Auto refresh logs every 2 seconds
+      setInterval(refreshLogs, 2000);
+
+      // Load config and set up status refresh interval
+      async function initStatusRefresh() {
+        try {
+          const response = await fetch('/api/config');
+          if (response.ok) {
+            const config = await response.json();
+            if (config.interval) {
+              statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
+              console.log('Status refresh interval set to', config.interval, 'seconds');
+            }
+          }
+        } catch (error) {
+          console.log('Failed to load config, using default interval:', error);
+        }
+
+        // Start status refresh with configured interval
+        if (statusIntervalId) {
+          clearInterval(statusIntervalId);
+        }
+        statusIntervalId = setInterval(refreshStatus, statusRefreshInterval);
+
+        // Initial refresh
+        refreshStatus();
+      }
+
+      function toggleLogs() {
+        const container = document.getElementById('log-container');
+        const toggle = document.getElementById('log-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+          refreshLogs();
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      function clearLogs() {
+        logLines = [];
+        document.getElementById('log-output').innerHTML = '日志已清空';
+      }
+
+      async function refreshLogs() {
+        try {
+          const response = await fetch('/api/logs');
+          if (!response.ok) return;
+
+          const data = await response.json();
+          if (data.success && data.logs) {
+            // Add new logs
+            const newLogs = data.logs.split('\n').filter(line => line.trim());
+            newLogs.forEach(line => {
+              if (!logLines.includes(line)) {
+                logLines.push(line);
+              }
+            });
+
+            // Keep only last maxLogLines
+            if (logLines.length > maxLogLines) {
+              logLines = logLines.slice(-maxLogLines);
+            }
+
+            // Format and display logs
+            const logOutput = document.getElementById('log-output');
+            logOutput.innerHTML = logLines.map(line => {
+              // Escape HTML to prevent XSS
+              const escaped = line
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+              // Don't replace spaces - let white-space: pre handle it
+
+              // Color code log levels
+              let coloredLine = escaped;
+              if (line.includes('ERROR') || line.includes('❌')) {
+                coloredLine = `<span style="color: #f87171;">${escaped}</span>`;
+              } else if (line.includes('WARN') || line.includes('⚠️')) {
+                coloredLine = `<span style="color: #fbbf24;">${escaped}</span>`;
+              } else if (line.includes('INFO') || line.includes('✅') || line.includes('🚀')) {
+                coloredLine = `<span style="color: #60a5fa;">${escaped}</span>`;
+              } else if (line.includes('DEBUG') || line.includes('🔄')) {
+                coloredLine = `<span style="color: #a78bfa;">${escaped}</span>`;
+              }
+              return coloredLine;
+            }).join('\n');
+
+            // Auto scroll if enabled
+            if (document.getElementById('auto-scroll-checkbox').checked) {
+              logOutput.parentElement.scrollTop = logOutput.parentElement.scrollHeight;
+            }
+          }
+        } catch (error) {
+          // Silently fail - logs are optional
+          console.log('Failed to fetch logs:', error);
+        }
+      }
 
       function showNotification(message, type = 'success') {
         const notification = document.createElement('div');
@@ -984,7 +1105,7 @@
       checkSetupStatus().then(needsSetup => {
         if (!needsSetup) {
           // Only load data if setup is complete
-          refreshStatus();
+          initStatusRefresh(); // This will load config and start auto-refresh
           loadChannelData();
         }
       });

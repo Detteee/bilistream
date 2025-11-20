@@ -2,12 +2,30 @@
 
 [English](README.md) | [中文](README.zh_CN.md)
 
+## 下载
+
+**最新版本：v0.3.2**
+
+从 [GitHub Releases](https://github.com/your-username/bilistream/releases) 下载最新版本
+
+**Windows 发行包包含：**
+- `bilistream.exe` - 主程序
+- `webui/dist/index.html` - Web UI（已打包，无需外部依赖）
+- `channels.json` - 频道配置模板
+- `areas.json` - 分区定义和禁用关键词
+
+**Windows 快速开始：**
+1. 下载并解压发行包
+2. 双击 `bilistream.exe` - Web UI 自动启动！
+3. 依赖项（ffmpeg、yt-dlp）首次运行时自动下载
+4. 按照设置向导配置您的直播
+
 ## 功能特点
 
 - 自动将 Twitch 和 YouTube 直播转播到哔哩哔哩直播
 - 支持 YouTube 的预定直播
 - 可配置/自动更新的哔哩哔哩直播设置（标题、分区和封面）
-- **现代化 Web UI** - 精美的控制面板，用于监控和管理直播
+- **Web UI** - 精美的控制面板，用于监控和管理直播
 - 交互式设置向导，轻松完成首次配置
 - 管理脚本（`stream_manager.sh`）用于更改配置
 - 当哔哩哔哩未转播时可通过弹幕命令更改监听目标频道
@@ -201,30 +219,30 @@
 - 直接运行程序！如果缺少配置文件，设置向导会自动启动
 - 按照交互式提示完成所有配置
 
-**Linux/Mac:**
+**默认行为（Web UI）:**
 ```bash
-./bilistream 
+./bilistream
 ```
-- 缺少配置？设置向导自动启动
-- 配置完成？开始监控直播
+- **缺少配置？** 设置向导自动启动
+- **配置完成？** 启动 Web UI，访问 http://localhost:3150
+- **Windows:** 双击 `bilistream.exe` 获得相同体验，并显示桌面通知
 
-**Windows:**
-- **双击 `bilistream.exe`** - 自动启动 Web UI 并显示通知
-  - 显示所有访问地址（本地和局域网 IP）
-  - 便于轻松管理
-- **CLI 模式**: `bilistream.exe --cli` - 命令行模式运行
-  - 缺少配置？设置向导自动启动
-- **任何子命令**: `bilistream.exe setup`, `bilistream.exe webui` 等
-
-### Web UI（推荐）
-
-为了更方便地管理，使用 Web UI：
-
+**CLI 模式（可选）:**
 ```bash
-./bilistream webui
+./bilistream --cli
 ```
+- 以命令行监控模式运行，不启动 Web UI
+- 适用于无头服务器或纯终端环境
 
-然后在浏览器中打开 http://localhost:3150
+### Web UI
+
+Web UI 现在是默认模式！只需运行 `./bilistream` 即可启动。
+
+**启动 Web UI 的其他方式:**
+```bash
+./bilistream webui          # 显式 webui 命令
+./bilistream webui --port 8080  # 自定义端口
+```
 
 **Windows 用户:**
 - **首次运行**: 核心依赖项（ffmpeg、yt-dlp）会自动下载到程序文件夹

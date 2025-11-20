@@ -67,26 +67,26 @@ pub struct Credentials {
 /// Struct representing Twitch configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Twitch {
-    #[serde(rename = "ChannelName")]
+    #[serde(rename = "ChannelName", default)]
     pub channel_name: String,
-    #[serde(rename = "Area_v2")]
+    #[serde(rename = "Area_v2", default)]
     pub area_v2: u64,
-    #[serde(rename = "ChannelId")]
+    #[serde(rename = "ChannelId", default)]
     pub channel_id: String,
-    #[serde(rename = "OauthToken")]
+    #[serde(rename = "OauthToken", default)]
     pub oauth_token: String,
-    #[serde(rename = "ProxyRegion")]
+    #[serde(rename = "ProxyRegion", default)]
     pub proxy_region: String,
 }
 
 /// Struct representing YouTube configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Youtube {
-    #[serde(rename = "ChannelName")]
+    #[serde(rename = "ChannelName", default)]
     pub channel_name: String,
-    #[serde(rename = "ChannelId")]
+    #[serde(rename = "ChannelId", default)]
     pub channel_id: String,
-    #[serde(rename = "Area_v2")]
+    #[serde(rename = "Area_v2", default)]
     pub area_v2: u64,
 }
 

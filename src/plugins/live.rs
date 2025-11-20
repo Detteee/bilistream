@@ -10,6 +10,24 @@ use std::process::Command;
 use std::time::Duration;
 use tracing::warn;
 
+// Helper function to get yt-dlp command path
+fn get_yt_dlp_command() -> String {
+    if cfg!(target_os = "windows") {
+        // On Windows, check if yt-dlp.exe exists in the executable directory
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_yt_dlp = exe_dir.join("yt-dlp.exe");
+                if local_yt_dlp.exists() {
+                    return local_yt_dlp.to_string_lossy().to_string();
+                }
+            }
+        }
+        "yt-dlp.exe".to_string()
+    } else {
+        "yt-dlp".to_string()
+    }
+}
+
 #[async_trait]
 pub trait Live {
     async fn get_status(
@@ -60,7 +78,7 @@ pub async fn get_thumbnail(
     channel_id: &str,
     proxy: Option<String>,
 ) -> Result<String, Box<dyn Error>> {
-    let mut command = Command::new("yt-dlp");
+    let mut command = Command::new(get_yt_dlp_command());
 
     if let Some(proxy_url) = proxy {
         command.arg("--proxy").arg(proxy_url);
