@@ -16,6 +16,15 @@
 
 ## Dependencies
 
+**Windows:**
+- ✨ **Auto-downloaded!** Core dependencies are automatically downloaded on first run:
+  - ffmpeg.exe
+  - yt-dlp.exe
+- **For Twitch support** (optional):
+  - Install streamlink: [Download](https://github.com/streamlink/windows-builds/releases) or `pip install streamlink`
+  - Install ttvlol plugin: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
+
+**Linux/Mac:**
 - ffmpeg
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
@@ -218,11 +227,14 @@ For easier management, use the Web UI:
 Then open your browser and navigate to http://localhost:3150
 
 **Windows Users:**
-- Double-click `bilistream.exe` to auto-start Web UI
+- **First run**: Core dependencies (ffmpeg, yt-dlp) are automatically downloaded to the program folder
+- **Double-click `bilistream.exe`** to auto-start Web UI
 - A notification will pop up showing all access URLs:
   - Local: http://localhost:3150
   - LAN: http://your-ip:3150
 - Click any URL to open in your browser
+- **For YouTube**: Zero setup required!
+- **For Twitch**: Install streamlink separately (see Dependencies section)
 
 The Web UI provides:
 - 📊 Real-time status dashboard showing Bilibili, YouTube, and Twitch status

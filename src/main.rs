@@ -1629,6 +1629,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => {
+            // On Windows, ensure dependencies are downloaded
+            #[cfg(target_os = "windows")]
+            {
+                if let Err(e) = bilistream::windows_deps::ensure_dependencies().await {
+                    eprintln!("⚠️  下载依赖项失败: {}", e);
+                    eprintln!("请手动下载 yt-dlp.exe 和 ffmpeg.exe 到程序目录");
+                }
+            }
+
             // Check if setup is needed (missing config or cookies)
             let config_path = std::env::current_exe()?.with_file_name("config.yaml");
             let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");

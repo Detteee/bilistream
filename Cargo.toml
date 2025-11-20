@@ -39,3 +39,5 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 mime_guess = "2.0"
+# Windows dependencies
+zip = "0.6"

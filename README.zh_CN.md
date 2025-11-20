@@ -16,6 +16,15 @@
 
 ## 依赖
 
+**Windows:**
+- ✨ **自动下载！** 核心依赖项会在首次运行时自动下载：
+  - ffmpeg.exe
+  - yt-dlp.exe
+- **Twitch 支持**（可选）：
+  - 安装 streamlink: [下载](https://github.com/streamlink/windows-builds/releases) 或 `pip install streamlink`
+  - 安装 ttvlol 插件: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
+
+**Linux/Mac:**
 - ffmpeg
 - yt-dlp
 - streamlink (需安装 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件)
@@ -218,11 +227,14 @@
 然后在浏览器中打开 http://localhost:3150
 
 **Windows 用户:**
-- 双击 `bilistream.exe` 自动启动 Web UI
+- **首次运行**: 核心依赖项（ffmpeg、yt-dlp）会自动下载到程序文件夹
+- **双击 `bilistream.exe`** 自动启动 Web UI
 - 会弹出通知显示所有访问地址：
   - 本地: http://localhost:3150
   - 局域网: http://your-ip:3150
 - 点击任意地址在浏览器中打开
+- **YouTube 转播**: 零设置！
+- **Twitch 转播**: 需单独安装 streamlink（见依赖部分）
 
 Web UI 提供：
 - 📊 实时状态仪表板，显示 Bilibili、YouTube 和 Twitch 状态
