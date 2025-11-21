@@ -4,9 +4,9 @@
 
 ## 下载
 
-**最新版本：v0.3.2**
+**最新版本：v0.3.3**
 
-从 [GitHub Releases](https://github.com/your-username/bilistream/releases) 下载最新版本
+从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
 **Windows 发行包包含：**
 
@@ -104,30 +104,31 @@
    - API 密钥（Holodex、Riot Games - 可选）
    - 防撞车监控（可选）
    - 流质量设置（适用于网络受限用户）
-
 6. **流质量配置：**
 
    对于网络带宽受限的用户，可以配置较低质量的流：
 
    **YouTube (yt-dlp):**
+
    - `best` - 最佳质量（推荐）
    - `worst` - 最低质量
    - `720p`、`480p`、`360p` - 指定分辨率
    - 或使用任何 yt-dlp 格式字符串
 
    **Twitch (streamlink):**
+
    - `best` - 最佳质量（推荐）
    - `worst` - 最低质量
    - `720p`、`480p` - 指定分辨率
 
    编辑 `config.yaml`：
+
    ```yaml
    Youtube:
      Quality: "720p"  # 网络受限时使用较低质量
    Twitch:
      Quality: "480p"  # 网络受限时使用较低质量
    ```
-
 7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
    - 创建名为 `invalid_words.txt` 的文件，每行一个词

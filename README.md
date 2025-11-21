@@ -4,19 +4,21 @@
 
 ## Download
 
-**Latest Release: v0.3.2**
+**Latest Release: v0.3.3**
 
-Download from [GitHub Releases](https://github.com/your-username/bilistream/releases)
+Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 **Windows Package includes:**
+
 - `bilistream.exe` - Main executable
 - `webui/dist/index.html` - Web UI (bundled, no external dependencies)
 - `channels.json` - Channel configuration template
 - `areas.json` - Area definitions and banned keywords
 
 **Quick Start:**
+
 1. Download and extract the release package
-2. **Windows:** Run`bilistream.exe` - Web UI launches automatically!
+2. **Windows:** Run `bilistream.exe` - Web UI launches automatically!
 3. **Linux/Mac:** Run `./bilistream` in terminal
 4. Dependencies auto-download on first run (Windows) or follow setup instructions below
 5. Follow the setup wizard to configure your streams
@@ -35,6 +37,7 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
 ## Dependencies
 
 **Windows:**
+
 - ✨ **Auto-downloaded!** Core dependencies are automatically downloaded on first run:
   - ffmpeg.exe
   - yt-dlp.exe
@@ -43,6 +46,7 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
   - Install ttvlol plugin: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 
 **Linux/Mac:**
+
 - ffmpeg
 - yt-dlp
 - streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
@@ -64,7 +68,6 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-
 4. Build the project:
 
    For Debian 12 and other Linux distributions using glibc 2.36 or newer:
@@ -78,10 +81,10 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
-
 5. **Configuration:**
 
    **Automatic Setup (Recommended):**
+
    - Simply run `./bilistream` (or double-click on Windows)
    - If config files are missing, the setup wizard starts automatically
 
@@ -93,6 +96,7 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    ```
 
    The wizard guides you through:
+
    - Bilibili login (QR code)
    - Proxy settings (optional)
    - Live room configuration
@@ -100,30 +104,31 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    - API keys (Holodex, Riot Games - optional)
    - Anti-collision monitoring (optional)
    - Stream quality settings (for network-limited users)
-
 6. **Stream Quality Configuration:**
 
    For users with limited network bandwidth, you can configure lower quality streams:
 
    **YouTube (yt-dlp):**
+
    - `best` or `source` - Best quality (recommended)
    - `worst` - Lowest quality
    - `720p`, `480p`, `360p` - Specific resolutions
    - Or use any yt-dlp format string
 
    **Twitch (streamlink):**
+
    - `best` or `source` - Best quality (recommended)
    - `worst` - Lowest quality
    - `720p`, `480p` - Specific resolutions
 
    Edit `config.yaml`:
+
    ```yaml
    Youtube:
      Quality: "720p"  # Lower quality for bandwidth-limited networks
    Twitch:
      Quality: "480p"  # Lower quality for bandwidth-limited networks
    ```
-
 7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
 - Create a file named `invalid_words.txt` with one word per line
@@ -148,13 +153,12 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
 └── stream_manager.sh    # Management script
 ```
 
-
-
 ## Usage
 
 ### Quick Start
 
 **Run the program:**
+
 ```bash
 ./bilistream                    # Default: Web UI at http://localhost:3150
 ./bilistream --cli              # CLI monitoring mode (no Web UI)
@@ -208,8 +212,6 @@ Example:
 
 The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) for more Area name and ID.
 
-
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -220,6 +222,6 @@ This project is licensed under the [unlicense](LICENSE).
 
 ## Acknowledgements
 
-- [limitcool/bilistream](https://github.com/limitcool/bilistream) 
+- [limitcool/bilistream](https://github.com/limitcool/bilistream)
 - [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
 - All users of this project
