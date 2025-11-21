@@ -114,8 +114,7 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    **Twitch (streamlink):**
    - `best` or `source` - Best quality (recommended)
    - `worst` - Lowest quality
-   - `720p`, `480p`, `360p` - Specific resolutions
-   - Or use any streamlink quality option
+   - `720p`, `480p` - Specific resolutions
 
    Edit `config.yaml`:
    ```yaml

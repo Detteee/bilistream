@@ -1431,7 +1431,7 @@ AntiCollisionList:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.3.2")
+        .version("0.3.3")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")

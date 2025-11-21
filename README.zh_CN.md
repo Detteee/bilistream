@@ -110,16 +110,15 @@
    对于网络带宽受限的用户，可以配置较低质量的流：
 
    **YouTube (yt-dlp):**
-   - `best` 或 `source` - 最佳质量（推荐）
+   - `best` - 最佳质量（推荐）
    - `worst` - 最低质量
    - `720p`、`480p`、`360p` - 指定分辨率
    - 或使用任何 yt-dlp 格式字符串
 
    **Twitch (streamlink):**
-   - `best` 或 `source` - 最佳质量（推荐）
+   - `best` - 最佳质量（推荐）
    - `worst` - 最低质量
-   - `720p`、`480p`、`360p` - 指定分辨率
-   - 或使用任何 streamlink 质量选项
+   - `720p`、`480p` - 指定分辨率
 
    编辑 `config.yaml`：
    ```yaml
