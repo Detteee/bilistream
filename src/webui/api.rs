@@ -89,6 +89,7 @@ pub struct YtStatus {
     pub topic: Option<String>,
     pub channel_name: String,
     pub channel_id: String,
+    pub quality: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -98,6 +99,7 @@ pub struct TwStatus {
     pub game: Option<String>,
     pub channel_name: String,
     pub channel_id: String,
+    pub quality: String,
 }
 
 fn get_area_name(area_id: u64) -> String {
@@ -400,6 +402,7 @@ pub struct UpdateChannelRequest {
     channel_id: String,
     channel_name: String,
     area_id: Option<u64>,
+    quality: Option<String>,
 }
 
 pub async fn update_channel(
@@ -416,12 +419,18 @@ pub async fn update_channel(
             if let Some(area_id) = payload.area_id {
                 cfg.youtube.area_v2 = area_id;
             }
+            if let Some(quality) = payload.quality {
+                cfg.youtube.quality = quality;
+            }
         }
         "twitch" => {
             cfg.twitch.channel_id = payload.channel_id;
             cfg.twitch.channel_name = payload.channel_name;
             if let Some(area_id) = payload.area_id {
                 cfg.twitch.area_v2 = area_id;
+            }
+            if let Some(quality) = payload.quality {
+                cfg.twitch.quality = quality;
             }
         }
         _ => return Err(StatusCode::BAD_REQUEST),

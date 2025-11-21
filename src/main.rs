@@ -124,6 +124,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     topic: yt_area.clone(),
                     channel_name: cfg.youtube.channel_name.clone(),
                     channel_id: cfg.youtube.channel_id.clone(),
+                    quality: cfg.youtube.quality.clone(),
                 })
             } else {
                 None
@@ -135,6 +136,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     game: tw_area.clone(),
                     channel_name: cfg.twitch.channel_name.clone(),
                     channel_id: cfg.twitch.channel_id.clone(),
+                    quality: cfg.twitch.quality.clone(),
                 })
             } else {
                 None

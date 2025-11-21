@@ -579,6 +579,18 @@
           </select>
         </div>
 
+        <div class="control-group">
+          <label>流质量 (可选)</label>
+          <select id="quality-select" onchange="updateQualityOptions()">
+            <option value="">不修改质量</option>
+            <option value="best">best - 最佳质量 (推荐)</option>
+            <option value="720p">720p - 高清</option>
+            <option value="480p">480p - 标清</option>
+            <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
+            <option value="worst">worst - 最低质量</option>
+          </select>
+        </div>
+
         <div class="button-group">
           <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
           <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
@@ -1006,6 +1018,33 @@
         // Clear inputs
         document.getElementById('channel-id-input').value = '';
         document.getElementById('channel-name-input').value = '';
+
+        // Update quality options based on platform
+        updateQualityOptions();
+      }
+
+      function updateQualityOptions() {
+        const platform = document.getElementById('platform-select').value;
+        const qualitySelect = document.getElementById('quality-select');
+        const options = qualitySelect.querySelectorAll('option');
+
+        options.forEach(option => {
+          const platformRestriction = option.getAttribute('data-platform');
+          if (platformRestriction) {
+            // Show/hide 360p option based on platform
+            if (platform === 'youtube' && platformRestriction === 'youtube') {
+              option.style.display = '';
+              option.disabled = false;
+            } else if (platform === 'twitch' && platformRestriction === 'youtube') {
+              option.style.display = 'none';
+              option.disabled = true;
+              // Reset selection if 360p was selected for Twitch
+              if (qualitySelect.value === '360p') {
+                qualitySelect.value = '';
+              }
+            }
+          }
+        });
       }
 
       function updateChannelInfo() {
@@ -1032,6 +1071,7 @@
         const channelId = document.getElementById('channel-id-input').value;
         const channelName = document.getElementById('channel-name-input').value;
         const areaId = document.getElementById('area-select').value;
+        const quality = document.getElementById('quality-select').value;
 
         if (!channelId || !channelName) {
           showNotification('请选择频道', 'error');
@@ -1047,6 +1087,10 @@
 
           if (areaId) {
             payload.area_id = parseInt(areaId);
+          }
+
+          if (quality) {
+            payload.quality = quality;
           }
 
           const response = await fetch('/api/channel', {
