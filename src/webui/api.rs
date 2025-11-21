@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use crate::config::load_config;
 use crate::plugins::{
     bili_start_live, bili_stop_live, bili_update_area, bilibili, get_bili_live_status,
-    send_danmaku as send_danmaku_to_bili,
+    send_danmaku as send_danmaku_to_bili, set_config_updated,
 };
 
 // Global log buffer
@@ -132,20 +132,7 @@ fn get_area_name(area_id: u64) -> String {
 }
 
 pub async fn get_status() -> impl IntoResponse {
-    // Use cached status from main loop instead of checking independently
-    if let Some(status) = get_status_cache() {
-        return (
-            StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(status),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    // Fallback: if cache is empty, check Bilibili status only
+    // Always fetch fresh Bilibili status for accurate real-time updates
     let cfg = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -172,6 +159,7 @@ pub async fn get_status() -> impl IntoResponse {
         }
     };
 
+    // Fetch fresh Bilibili status
     let (bili_is_live, bili_title, bili_area_id) =
         match get_bili_live_status(cfg.bililive.room).await {
             Ok(status) => status,
@@ -191,7 +179,12 @@ pub async fn get_status() -> impl IntoResponse {
 
     let bili_area_name = get_area_name(bili_area_id);
 
-    // Return minimal status with only Bilibili info
+    // Get YouTube/Twitch status from cache (updated by main loop)
+    // This avoids expensive yt-dlp/streamlink calls on every refresh
+    let cached_status = get_status_cache();
+    let youtube_status = cached_status.as_ref().and_then(|c| c.youtube.clone());
+    let twitch_status = cached_status.as_ref().and_then(|c| c.twitch.clone());
+
     let status = StatusData {
         bilibili: BiliStatus {
             is_live: bili_is_live,
@@ -199,8 +192,8 @@ pub async fn get_status() -> impl IntoResponse {
             area_id: bili_area_id,
             area_name: bili_area_name,
         },
-        youtube: None,
-        twitch: None,
+        youtube: youtube_status,
+        twitch: twitch_status,
     };
 
     (
@@ -275,6 +268,9 @@ pub async fn update_config(
         .with_file_name("config.yaml");
     let yaml = serde_yaml::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     std::fs::write(config_path, yaml).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Set config updated flag so main loop can detect the change
+    set_config_updated();
 
     Ok(ApiResponse {
         success: true,
@@ -442,6 +438,9 @@ pub async fn update_channel(
         .with_file_name("config.yaml");
     let yaml = serde_yaml::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     std::fs::write(config_path, yaml).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Set config updated flag so main loop can detect the change
+    set_config_updated();
 
     Ok(ApiResponse {
         success: true,

@@ -1448,7 +1448,7 @@ AntiCollisionList:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.3.3")
+        .version("0.3.4")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
@@ -1638,25 +1638,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
             tracing::info!("🚀 启动 Web UI 和自动监控模式");
-            tracing::info!("   监控循环将在后台运行");
+            tracing::info!("   Web UI 将在后台运行");
+            tracing::info!("   访问 http://localhost:{} 查看控制面板", port);
 
-            // Clone ffmpeg_log_level for the monitoring task
-            let ffmpeg_log_level_clone = ffmpeg_log_level.to_string();
-
-            // Create a LocalSet to run non-Send futures
-            let local = tokio::task::LocalSet::new();
-
-            // Spawn monitoring loop in background on LocalSet
-            local.spawn_local(async move {
-                if let Err(e) = run_bilistream(&ffmpeg_log_level_clone).await {
-                    tracing::error!("监控循环错误: {}", e);
+            // Spawn WebUI server in background
+            tokio::spawn(async move {
+                if let Err(e) = bilistream::webui::server::start_webui(port).await {
+                    tracing::error!("Web UI 服务器错误: {}", e);
                 }
             });
 
-            // Run webui server on LocalSet (this will block)
-            local
-                .run_until(bilistream::webui::server::start_webui(port))
-                .await?;
+            // Give WebUI time to start
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tracing::info!("✅ Web UI 已启动");
+
+            // Run monitoring loop in foreground (this will block)
+            run_bilistream(ffmpeg_log_level).await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
@@ -1786,6 +1783,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 init_logger_with_capture();
 
                 tracing::info!("🚀 启动 Web UI 和自动监控模式");
+                tracing::info!("   Web UI 将在后台运行");
+                tracing::info!("   访问 http://localhost:3150 查看控制面板");
 
                 #[cfg(target_os = "windows")]
                 {
@@ -1798,25 +1797,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    tracing::info!("📍 访问 Web UI: http://localhost:3150");
                     tracing::info!("💡 提示: 使用 --cli 标志以命令行模式运行");
                 }
 
-                // Clone ffmpeg_log_level for the monitoring task
-                let ffmpeg_log_level_clone = ffmpeg_log_level.to_string();
-
-                // Create a LocalSet to run non-Send futures
-                let local = tokio::task::LocalSet::new();
-
-                // Spawn monitoring loop in background on LocalSet
-                local.spawn_local(async move {
-                    if let Err(e) = run_bilistream(&ffmpeg_log_level_clone).await {
-                        tracing::error!("监控循环错误: {}", e);
+                // Spawn WebUI server in background
+                tokio::spawn(async move {
+                    if let Err(e) = start_webui(3150).await {
+                        tracing::error!("Web UI 服务器错误: {}", e);
                     }
                 });
 
-                // Run webui server on LocalSet (this will block)
-                local.run_until(start_webui(3150)).await?;
+                // Give WebUI time to start
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tracing::info!("✅ Web UI 已启动");
+
+                // Run monitoring loop in foreground (this will block)
+                run_bilistream(ffmpeg_log_level).await?;
             }
         }
     }
