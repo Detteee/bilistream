@@ -1115,7 +1115,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_youtube = !input.trim().eq_ignore_ascii_case("n");
 
-    let (yt_channel_name, yt_channel_id, yt_area_v2) = if configure_youtube {
+    let (yt_channel_name, yt_channel_id, yt_area_v2, yt_quality) = if configure_youtube {
         print!("YouTube 频道名称: ");
         io::stdout().flush()?;
         let mut name = String::new();
@@ -1134,9 +1134,23 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         io::stdin().read_line(&mut area)?;
         let area: u64 = area.trim().parse().unwrap_or(235);
 
-        (name, id, area)
+        println!("\n流质量设置 (用于网络受限用户):");
+        println!("  best - 最佳质量 (推荐)");
+        println!("  worst - 最低质量");
+        println!("  720p/480p - 指定分辨率");
+        print!("请选择质量 (默认 best): ");
+        io::stdout().flush()?;
+        let mut quality = String::new();
+        io::stdin().read_line(&mut quality)?;
+        let quality = if quality.trim().is_empty() {
+            "best".to_string()
+        } else {
+            quality.trim().to_string()
+        };
+
+        (name, id, area, quality)
     } else {
-        ("".to_string(), "".to_string(), 235)
+        ("".to_string(), "".to_string(), 235, "best".to_string())
     };
 
     // Get Twitch channel info
@@ -1146,7 +1160,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_twitch = !input.trim().eq_ignore_ascii_case("n");
 
-    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_oauth, tw_proxy_region) =
+    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_oauth, tw_proxy_region, tw_quality) =
         if configure_twitch {
             print!("Twitch 频道名称: ");
             io::stdout().flush()?;
@@ -1186,7 +1200,21 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
                 region.trim().to_string()
             };
 
-            (name, id, area, oauth, region)
+            println!("\n流质量设置 (用于网络受限用户):");
+            println!("  best - 最佳质量 (推荐)");
+            println!("  worst - 最低质量");
+            println!("  720p/480p - 指定分辨率");
+            print!("请选择质量 (默认 best): ");
+            io::stdout().flush()?;
+            let mut quality = String::new();
+            io::stdin().read_line(&mut quality)?;
+            let quality = if quality.trim().is_empty() {
+                "best".to_string()
+            } else {
+                quality.trim().to_string()
+            };
+
+            (name, id, area, oauth, region, quality)
         } else {
             (
                 "".to_string(),
@@ -1194,6 +1222,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
                 235,
                 "".to_string(),
                 "as".to_string(),
+                "best".to_string(),
             )
         };
 
@@ -1337,12 +1366,14 @@ Youtube:
   ChannelName: {} # 频道名称 (将出现于转播标题)
   ChannelId: {} # Youtube Channel ID
   AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 yt-dlp 格式字符串
 Twitch:
   ChannelName: {} # 频道名称 (将出现于转播标题)
   ChannelId: {} # the string followed after https://www.twitch.tv/
   AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
   OauthToken: {} # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: {} # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 streamlink 质量选项
 
 AntiCollisionList:
 {}"#,
@@ -1357,11 +1388,13 @@ AntiCollisionList:
         yt_channel_name,
         yt_channel_id,
         yt_area_v2,
+        yt_quality,
         tw_channel_name,
         tw_channel_id,
         tw_area_v2,
         tw_oauth,
         tw_proxy_region,
+        tw_quality,
         collision_list
     );
 

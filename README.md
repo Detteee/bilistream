@@ -99,8 +99,33 @@ Download from [GitHub Releases](https://github.com/your-username/bilistream/rele
    - YouTube/Twitch channels (optional)
    - API keys (Holodex, Riot Games - optional)
    - Anti-collision monitoring (optional)
+   - Stream quality settings (for network-limited users)
 
-6. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
+6. **Stream Quality Configuration:**
+
+   For users with limited network bandwidth, you can configure lower quality streams:
+
+   **YouTube (yt-dlp):**
+   - `best` or `source` - Best quality (recommended)
+   - `worst` - Lowest quality
+   - `720p`, `480p`, `360p` - Specific resolutions
+   - Or use any yt-dlp format string
+
+   **Twitch (streamlink):**
+   - `best` or `source` - Best quality (recommended)
+   - `worst` - Lowest quality
+   - `720p`, `480p`, `360p` - Specific resolutions
+   - Or use any streamlink quality option
+
+   Edit `config.yaml`:
+   ```yaml
+   Youtube:
+     Quality: "720p"  # Lower quality for bandwidth-limited networks
+   Twitch:
+     Quality: "480p"  # Lower quality for bandwidth-limited networks
+   ```
+
+7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
 - Create a file named `invalid_words.txt` with one word per line
 - Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:

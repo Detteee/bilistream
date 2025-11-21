@@ -103,7 +103,33 @@
    - YouTube/Twitch 频道（可选）
    - API 密钥（Holodex、Riot Games - 可选）
    - 防撞车监控（可选）
-6. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
+   - 流质量设置（适用于网络受限用户）
+
+6. **流质量配置：**
+
+   对于网络带宽受限的用户，可以配置较低质量的流：
+
+   **YouTube (yt-dlp):**
+   - `best` 或 `source` - 最佳质量（推荐）
+   - `worst` - 最低质量
+   - `720p`、`480p`、`360p` - 指定分辨率
+   - 或使用任何 yt-dlp 格式字符串
+
+   **Twitch (streamlink):**
+   - `best` 或 `source` - 最佳质量（推荐）
+   - `worst` - 最低质量
+   - `720p`、`480p`、`360p` - 指定分辨率
+   - 或使用任何 streamlink 质量选项
+
+   编辑 `config.yaml`：
+   ```yaml
+   Youtube:
+     Quality: "720p"  # 网络受限时使用较低质量
+   Twitch:
+     Quality: "480p"  # 网络受限时使用较低质量
+   ```
+
+7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
    - 创建名为 `invalid_words.txt` 的文件，每行一个词
    - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：

@@ -16,12 +16,14 @@ Youtube:
   ChannelName: # 频道名称 (将出现于转播标题)
   ChannelId: # Youtube Channel ID
   AreaV2: # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+  Quality: best # 流质量: best(推荐), worst, 720p, 480p, 或 yt-dlp 格式字符串
 Twitch:
   ChannelName: # 频道名称 (将出现于转播标题)
   ChannelId: # the string followed after https://www.twitch.tv/
   AreaV2: # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
   OauthToken: # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
   ProxyRegion: # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+  Quality: best # 流质量: best(推荐), worst, 720p, 480p, 或 streamlink 质量选项
 
 AntiCollisionList:
   B站ID1: 房间号1  # ID仅用于弹幕提醒撞车

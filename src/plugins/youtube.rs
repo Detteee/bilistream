@@ -74,6 +74,7 @@ pub async fn get_youtube_status(
     let client = reqwest::Client::new();
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
+    let quality = cfg.youtube.quality.clone();
     let channel_name = get_channel_name("YT", channel_id).unwrap();
     let url = format!(
         "https://holodex.net/api/v2/users/live?channels={}",
@@ -87,13 +88,13 @@ pub async fn get_youtube_status(
         .await?;
     if !response.status().is_success() {
         tracing::error!("Holodex获取直播状态失败，使用yt-dlp获取");
-        return get_status_with_yt_dlp(channel_id, proxy, None).await;
+        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
     }
 
     let videos: Vec<serde_json::Value> = response.json().await?;
     // println!("{:?}", videos);
     if videos.is_empty() {
-        return get_status_with_yt_dlp(channel_id, proxy, None).await;
+        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
     }
 
     for video in videos.iter().rev() {
@@ -130,8 +131,13 @@ pub async fn get_youtube_status(
                             return Ok((false, None, None, None, None));
                         }
                     } else {
-                        let (is_live, _, _, m3u8_url, _) =
-                            get_status_with_yt_dlp(channel_id, proxy, title.clone()).await?;
+                        let (is_live, _, _, m3u8_url, _) = get_status_with_yt_dlp(
+                            channel_id,
+                            proxy,
+                            title.clone(),
+                            Some(&quality),
+                        )
+                        .await?;
                         return Ok((is_live, topic, title, m3u8_url, None));
                     }
                 }
@@ -155,7 +161,7 @@ pub async fn get_youtube_status(
     }
     let title = get_youtube_live_title(channel_id).await?;
     let (is_live, _, _, m3u8_url, start_time) =
-        get_status_with_yt_dlp(channel_id, proxy, None).await?;
+        get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
     Ok((is_live, None, title, m3u8_url, start_time))
 }
 
@@ -164,6 +170,7 @@ async fn get_status_with_yt_dlp(
     channel_id: &str,
     proxy: Option<String>,
     title: Option<String>,
+    quality: Option<&str>,
 ) -> Result<
     (
         bool,                    // is_live
@@ -174,11 +181,15 @@ async fn get_status_with_yt_dlp(
     ),
     Box<dyn Error>,
 > {
+    let quality = quality.unwrap_or("best");
+
     let mut command = Command::new(get_yt_dlp_command());
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);
     }
+    command.arg("-f");
+    command.arg(quality);
     command.arg("-g");
 
     command.arg(format!(
@@ -203,24 +214,24 @@ async fn get_status_with_yt_dlp(
         {
             let hours: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::hours(hours);
-            if title.is_some() {
-                return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
+            let title = if title.is_some() {
+                title
             } else {
-                let title = get_youtube_live_title(channel_id).await?;
-                return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
-            }
+                get_youtube_live_title(channel_id).await?
+            };
+            return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
         {
             let days: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::days(days);
-            if title.is_some() {
-                return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
+            let title = if title.is_some() {
+                title
             } else {
-                let title = get_youtube_live_title(channel_id).await?;
-                return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
-            }
+                get_youtube_live_title(channel_id).await?
+            };
+            return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
         }
         return Ok((false, None, None, None, None)); // Channel is not live and no scheduled time
     } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {

@@ -77,6 +77,8 @@ pub struct Twitch {
     pub oauth_token: String,
     #[serde(rename = "ProxyRegion", default)]
     pub proxy_region: String,
+    #[serde(rename = "Quality", default = "default_quality")]
+    pub quality: String,
 }
 
 /// Struct representing YouTube configuration.
@@ -88,6 +90,12 @@ pub struct Youtube {
     pub channel_id: String,
     #[serde(rename = "Area_v2", default)]
     pub area_v2: u64,
+    #[serde(rename = "Quality", default = "default_quality")]
+    pub quality: String,
+}
+
+fn default_quality() -> String {
+    "best".to_string()
 }
 
 /// Structs to mirror the structure of cookies.json
