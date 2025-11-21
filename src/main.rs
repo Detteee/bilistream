@@ -22,8 +22,9 @@ use tracing_subscriber::fmt;
 use unicode_width::UnicodeWidthStr;
 
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
-static LAST_MESSAGE: Mutex<String> = Mutex::new(String::new());
-static LAST_COLLISION: Mutex<Option<(String, i32, String)>> = Mutex::new(None);
+// Use compact representation to reduce memory footprint
+static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
+static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 static DANMAKU_KAMITO_APEX: AtomicBool = AtomicBool::new(true);
 
@@ -430,23 +431,27 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
-                    if *last != current_message {
-                        // Only update if message content changed significantly
-                        let time_diff = if let Some(last_time) = extract_time(&last) {
-                            if let Some(current_time) = extract_time(&current_message) {
-                                (current_time - last_time).num_minutes().abs()
+                    let should_update = match last.as_ref() {
+                        Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
+                        Some(last_msg) => {
+                            // Only update if message content changed significantly
+                            let time_diff = if let Some(last_time) = extract_time(last_msg) {
+                                if let Some(current_time) = extract_time(&current_message) {
+                                    (current_time - last_time).num_minutes().abs()
+                                } else {
+                                    i64::MAX
+                                }
                             } else {
                                 i64::MAX
-                            }
-                        } else {
-                            i64::MAX
-                        };
-
-                        // Only update if time difference is more than 5 minutes or other content changed
-                        if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
-                            print!("{}", current_message);
-                            *last = current_message;
+                            };
+                            time_diff > 5 || remove_time(last_msg) != remove_time(&current_message)
                         }
+                        None => true,
+                    };
+
+                    if should_update {
+                        print!("{}", current_message);
+                        *last = Some(current_message.into_boxed_str());
                     }
                 } else {
                     let current_message = box_message(
@@ -457,23 +462,26 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
-                    if *last != current_message {
-                        // Only update if message content changed significantly
-                        let time_diff = if let Some(last_time) = extract_time(&last) {
-                            if let Some(current_time) = extract_time(&current_message) {
-                                (current_time - last_time).num_minutes().abs()
+                    let should_update = match last.as_ref() {
+                        Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
+                        Some(last_msg) => {
+                            let time_diff = if let Some(last_time) = extract_time(last_msg) {
+                                if let Some(current_time) = extract_time(&current_message) {
+                                    (current_time - last_time).num_minutes().abs()
+                                } else {
+                                    i64::MAX
+                                }
                             } else {
                                 i64::MAX
-                            }
-                        } else {
-                            i64::MAX
-                        };
-
-                        // Only update if time difference is more than 5 minutes or other content changed
-                        if time_diff > 5 || remove_time(&last) != remove_time(&current_message) {
-                            print!("{}", current_message);
-                            *last = current_message;
+                            };
+                            time_diff > 5 || remove_time(last_msg) != remove_time(&current_message)
                         }
+                        None => true,
+                    };
+
+                    if should_update {
+                        print!("{}", current_message);
+                        *last = Some(current_message.into_boxed_str());
                     }
                 }
             } else {
@@ -485,6 +493,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         &cfg.twitch.channel_name,
                     );
                     print!("{}", current_message);
+                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    *last = Some(current_message.into_boxed_str());
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
             }
@@ -920,16 +930,17 @@ async fn handle_collisions(
     // Collision handling logic
     let mut last_collision = LAST_COLLISION.lock().unwrap();
     if yt_collision.is_some() && tw_collision.is_some() {
+        let yt_col = yt_collision.as_ref().unwrap();
         let current = (
-            yt_collision.as_ref().unwrap().0.clone(),
-            yt_collision.as_ref().unwrap().1,
-            "双平台".to_string(),
+            yt_col.0.clone().into_boxed_str(),
+            yt_col.1,
+            "双平台".to_string().into_boxed_str(),
         );
 
         // Check if we're already in a dual-platform collision state (regardless of specific room)
         let already_in_dual_collision = last_collision
             .as_ref()
-            .map(|(_, _, platform)| platform == "双平台")
+            .map(|(_, _, platform)| platform.as_ref() == "双平台")
             .unwrap_or(false);
 
         if !already_in_dual_collision {
@@ -996,7 +1007,7 @@ async fn handle_collisions(
         // Check if we're already in a collision state for this platform
         let already_in_collision = last_collision
             .as_ref()
-            .map(|(_, _, platform)| platform == &collision.2)
+            .map(|(_, _, platform)| platform.as_ref() == collision.2.as_str())
             .unwrap_or(false);
 
         if !other_live && !already_in_collision {
@@ -1035,7 +1046,11 @@ async fn handle_collisions(
                 }
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
-            *last_collision = Some(collision);
+            *last_collision = Some((
+                collision.0.into_boxed_str(),
+                collision.1,
+                collision.2.into_boxed_str(),
+            ));
             Ok(CollisionResult::Continue)
         } else {
             Ok(CollisionResult::Proceed)

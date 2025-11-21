@@ -468,6 +468,15 @@ impl BilibiliDanmakuClient {
             let _sequence = cursor.read_u32::<BigEndian>()?;
 
             let body_length = packet_length - header_length as u32;
+
+            // Limit body size to prevent excessive memory allocation
+            const MAX_BODY_SIZE: u32 = 10 * 1024 * 1024; // 10MB limit
+            if body_length > MAX_BODY_SIZE {
+                warn!("Skipping oversized packet: {} bytes", body_length);
+                cursor.set_position(cursor.position() + body_length as u64);
+                continue;
+            }
+
             let mut body = vec![0u8; body_length as usize];
             cursor.read_exact(&mut body)?;
 
@@ -498,7 +507,7 @@ impl BilibiliDanmakuClient {
         let decompressed_data = match protocol_version {
             PROTOCOL_COMMAND_ZLIB => {
                 let mut decoder = ZlibDecoder::new(body);
-                let mut decompressed = Vec::new();
+                let mut decompressed = Vec::with_capacity(body.len() * 2); // Pre-allocate with estimate
                 decoder.read_to_end(&mut decompressed)?;
                 decompressed
             }
@@ -514,11 +523,9 @@ impl BilibiliDanmakuClient {
         if protocol_version == PROTOCOL_COMMAND_ZLIB {
             Box::pin(self.handle_message(&decompressed_data)).await?;
         } else {
-            // Parse JSON message
-            if let Ok(json_str) = String::from_utf8(decompressed_data) {
-                if let Ok(message) = serde_json::from_str::<DanmakuMessage>(&json_str) {
-                    self.process_danmaku_command(&message).await;
-                }
+            // Parse JSON message - use from_slice to avoid UTF-8 conversion overhead
+            if let Ok(message) = serde_json::from_slice::<DanmakuMessage>(&decompressed_data) {
+                self.process_danmaku_command(&message).await;
             }
         }
 
@@ -533,8 +540,12 @@ impl BilibiliDanmakuClient {
                         if info_array.len() > 2 {
                             // Extract danmaku text and user info
                             let danmaku_text = info_array[1].as_str().unwrap_or("");
-                            // replase all ％ with % in danmaku_text
-                            let danmaku_text = danmaku_text.replace("％", "%");
+                            // Only allocate new string if replacement is needed
+                            let danmaku_text = if danmaku_text.contains("％") {
+                                danmaku_text.replace("％", "%")
+                            } else {
+                                danmaku_text.to_string()
+                            };
                             let user_info = info_array[2].as_array();
                             let username = user_info
                                 .and_then(|u| u.get(1))

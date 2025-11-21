@@ -90,9 +90,30 @@ struct ChannelsConfig {
     channels: Vec<Channel>,
 }
 
+// Cache channels config to avoid repeated file reads and parsing
+lazy_static! {
+    static ref CHANNELS_CACHE: Mutex<Option<(ChannelsConfig, std::time::SystemTime)>> =
+        Mutex::new(None);
+}
+
 fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
+    let mut cache = CHANNELS_CACHE.lock().unwrap();
+
+    // Check if cache is valid (less than 5 minutes old)
+    if let Some((ref config, timestamp)) = *cache {
+        if timestamp
+            .elapsed()
+            .unwrap_or(std::time::Duration::from_secs(301))
+            < std::time::Duration::from_secs(300)
+        {
+            return Ok(config.clone());
+        }
+    }
+
+    // Load fresh data
     let content = fs::read_to_string("channels.json")?;
     let config: ChannelsConfig = serde_json::from_str(&content)?;
+    *cache = Some((config.clone(), std::time::SystemTime::now()));
     Ok(config)
 }
 
@@ -104,16 +125,12 @@ pub fn get_channel_id(
 
     for channel in &config.channels {
         // Check both name and aliases without cloning whole channel
-        let mut found = channel.name == channel_name;
-        if !found {
-            found = channel.aliases.iter().any(|a| a == channel_name);
-        }
-        if found {
-            match platform {
-                "YT" => return Ok(channel.platforms.youtube.clone()),
-                "TW" => return Ok(channel.platforms.twitch.clone()),
-                _ => return Ok(None),
-            }
+        if channel.name == channel_name || channel.aliases.iter().any(|a| a == channel_name) {
+            return Ok(match platform {
+                "YT" => channel.platforms.youtube.as_ref().map(|s| s.to_string()),
+                "TW" => channel.platforms.twitch.as_ref().map(|s| s.to_string()),
+                _ => None,
+            });
         }
     }
     Ok(None)
@@ -152,19 +169,16 @@ pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error
 
     for channel in &config.channels {
         // Check both name and aliases
-        let mut found = channel.name == channel_name;
-        if !found {
-            found = channel.aliases.iter().any(|a| a == channel_name);
-        }
-        if found {
-            if let Some(puuid) = &channel.riot_puuid {
-                return Ok(puuid.clone());
-            }
+        if channel.name == channel_name || channel.aliases.iter().any(|a| a == channel_name) {
+            return Ok(channel
+                .riot_puuid
+                .as_ref()
+                .map(|s| s.to_string())
+                .unwrap_or_default());
         }
     }
-    // Err("PUUID not found for channel".into())
     tracing::error!("PUUID not found for channel: {}", channel_name);
-    Ok("".to_string())
+    Ok(String::new())
 }
 
 // Optional: Helper function to get all channels for a platform
