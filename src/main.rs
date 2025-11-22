@@ -224,7 +224,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let default_title = "无标题".to_string();
             let title_str = title.as_ref().unwrap_or(&default_title);
             area_v2 = check_area_id_with_title(title_str, area_v2);
-            if area_v2 == 86 {
+            if area_v2 == 86 && cfg.enable_lol_monitor {
                 let puuid = get_puuid(&channel_name)?;
                 if puuid != "" {
                     monitor_lol_game(puuid).await?;
@@ -1315,7 +1315,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_advanced = input.trim().eq_ignore_ascii_case("y");
 
-    let (holodex_api_key, riot_api_key) = if configure_advanced {
+    let (holodex_api_key, riot_api_key, enable_lol_monitor) = if configure_advanced {
         println!("\n高级选项配置");
         println!("----------------------------------------");
 
@@ -1327,17 +1327,28 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         io::stdin().read_line(&mut holodex)?;
         let holodex = holodex.trim().to_string();
 
-        println!("\nRiot API Key (用于英雄联盟玩家ID监控)");
-        println!("获取方法: https://developer.riotgames.com/");
-        print!("请输入 (直接回车跳过): ");
+        println!("\n英雄联盟玩家ID监控 (用于检测游戏内违禁词汇)");
+        print!("是否启用? (y/N): ");
         io::stdout().flush()?;
-        let mut riot = String::new();
-        io::stdin().read_line(&mut riot)?;
-        let riot = riot.trim().to_string();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let enable_lol = input.trim().eq_ignore_ascii_case("y");
 
-        (holodex, riot)
+        let riot = if enable_lol {
+            println!("\nRiot API Key (用于英雄联盟玩家ID监控)");
+            println!("获取方法: https://developer.riotgames.com/");
+            print!("请输入 (直接回车跳过): ");
+            io::stdout().flush()?;
+            let mut riot = String::new();
+            io::stdin().read_line(&mut riot)?;
+            riot.trim().to_string()
+        } else {
+            String::new()
+        };
+
+        (holodex, riot, enable_lol)
     } else {
-        (String::new(), String::new())
+        (String::new(), String::new(), false)
     };
 
     // Create config content
@@ -1376,6 +1387,7 @@ AntiCollision: {} # 撞车监控
 Proxy: {} # 代理地址,无需代理可以不填此项或者留空
 HolodexApiKey: {} # Holodex Api Key from https://holodex.net/login
 RiotApiKey: {} # Riot API Key from https://developer.riotgames.com/
+EnableLolMonitor: {} # 启用英雄联盟玩家ID监控 (true/false)
 LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
 BiliLive:
   EnableDanmakuCommand: {} # true or false
@@ -1403,6 +1415,7 @@ AntiCollisionList:
         proxy_line,
         holodex_line,
         riot_line,
+        enable_lol_monitor,
         enable_danmaku_command,
         room,
         yt_channel_name,
@@ -1451,7 +1464,7 @@ AntiCollisionList:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("bilistream")
-        .version("0.3.4")
+        .version("0.3.5")
         .arg(
             Arg::new("ffmpeg-log-level")
                 .long("ffmpeg-log-level")
@@ -1761,33 +1774,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Check if setup is needed (missing config or cookies)
-            let config_path = std::env::current_exe()?.with_file_name("config.yaml");
-            let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-            let needs_setup = !config_path.exists() || !cookies_path.exists();
-
-            if needs_setup {
-                println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
-                setup_wizard().await?;
-                return Ok(());
-            }
-
             // Check if --cli flag is set
             let cli_mode = matches.get_flag("cli");
 
             if cli_mode {
+                // CLI mode: Check if setup is needed
+                let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+                let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
+                let needs_setup = !config_path.exists() || !cookies_path.exists();
+
+                if needs_setup {
+                    println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
+                    setup_wizard().await?;
+                    return Ok(());
+                }
+
                 // CLI mode: run normal monitoring
                 run_bilistream(ffmpeg_log_level).await?;
             } else {
                 // Default: Start Web UI (both Windows and Linux)
+                // Web UI will handle setup check internally
                 use bilistream::webui::start_webui;
+
+                // Check if this is first run
+                let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+                let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
+                let is_first_run = !config_path.exists() || !cookies_path.exists();
 
                 // Initialize logger with capture for webui mode
                 init_logger_with_capture();
 
-                tracing::info!("🚀 启动 Web UI 和自动监控模式");
-                tracing::info!("   Web UI 将在后台运行");
-                tracing::info!("   访问 http://localhost:3150 查看控制面板");
+                if is_first_run {
+                    tracing::info!("🚀 欢迎使用 Bilistream！");
+                    tracing::info!("   检测到首次运行，启动 Web 设置向导...");
+                    tracing::info!("");
+                    tracing::info!("📋 请在浏览器中完成设置：");
+                    tracing::info!("   1. 打开浏览器访问 http://localhost:3150");
+                    tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
+                    tracing::info!("   3. 配置完成后即可开始使用");
+                    tracing::info!("");
+                } else {
+                    tracing::info!("🚀 启动 Web UI 和自动监控模式");
+                    tracing::info!("   Web UI 将在后台运行");
+                    tracing::info!("   访问 http://localhost:3150 查看控制面板");
+                }
 
                 #[cfg(target_os = "windows")]
                 {
@@ -1814,8 +1844,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 tracing::info!("✅ Web UI 已启动");
 
-                // Run monitoring loop in foreground (this will block)
-                run_bilistream(ffmpeg_log_level).await?;
+                // Only run monitoring loop if config exists (not first run)
+                if !is_first_run {
+                    // Run monitoring loop in foreground (this will block)
+                    run_bilistream(ffmpeg_log_level).await?;
+                } else {
+                    // First run: wait for config to be created, then start monitoring
+                    tracing::info!("⏳ 等待配置完成...");
+                    tracing::info!("   配置完成后将自动开始监控");
+
+                    // Poll for config file creation
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                        // Check if config was created
+                        if config_path.exists() && cookies_path.exists() {
+                            tracing::info!("✅ 检测到配置文件已创建！");
+                            tracing::info!("🚀 正在启动监控...");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                            // Start monitoring loop
+                            run_bilistream(ffmpeg_log_level).await?;
+                            break;
+                        }
+                    }
+                }
             }
         }
     }

@@ -793,7 +793,7 @@ impl Credential {
             .await?)
     }
 
-    fn sign(&self, param: &str, app_sec: &str) -> String {
+    pub fn sign(&self, param: &str, app_sec: &str) -> String {
         let mut hasher = Md5::new();
         hasher.update(format!("{}{}", param, app_sec));
         format!("{:x}", hasher.finalize())
@@ -907,6 +907,143 @@ impl Credential {
             _ => Err("Failed to renew tokens".into()),
         }
     }
+}
+
+/// Get QR code for web-based login
+pub async fn get_login_qrcode() -> Result<(String, String), Box<dyn Error>> {
+    let credential = Credential::new();
+    let qrcode_res = credential.get_qrcode().await?;
+
+    let qr_url = qrcode_res["data"]["url"]
+        .as_str()
+        .ok_or("Failed to get QR code URL")?
+        .to_string();
+
+    let auth_code = qrcode_res["data"]["auth_code"]
+        .as_str()
+        .ok_or("Failed to get auth code")?
+        .to_string();
+
+    Ok((qr_url, auth_code))
+}
+
+/// Poll login status for web-based login
+pub async fn poll_login_status(auth_code: &str) -> Result<String, Box<dyn Error>> {
+    let credential = Credential::new();
+
+    let mut form = json!({
+        "appkey": "4409e2ce8ffd12b8",
+        "auth_code": auth_code,
+        "local_id": "0",
+        "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    });
+
+    let urlencoded = serde_urlencoded::to_string(&form)?;
+    let sign = credential.sign(&urlencoded, "59b43e04ad6965f34319062b478f83dd");
+    form["sign"] = Value::from(sign);
+
+    let res: ResponseData<ResponseValue> = credential
+        .0
+        .client
+        .post("http://passport.bilibili.com/x/passport-tv-login/qrcode/poll")
+        .form(&form)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    match res {
+        ResponseData {
+            code: 0,
+            data: Some(ResponseValue::Login(info)),
+            ..
+        } => {
+            // Save login info
+            save_login_info(&credential, info).await?;
+            Ok("success".to_string())
+        }
+        ResponseData { code: 86039, .. } => Ok("waiting".to_string()),
+        ResponseData { code: 86038, .. } => Ok("expired".to_string()),
+        _ => Err(format!("Login failed: {:#?}", res).into()),
+    }
+}
+
+async fn save_login_info(credential: &Credential, info: LoginInfo) -> Result<(), Box<dyn Error>> {
+    // Save cookies from response
+    if let Some(cookies) = info.cookie_info.get("cookies") {
+        let base_url = Url::parse("https://bilibili.com")?;
+        for cookie in cookies.as_array().unwrap_or(&Vec::new()) {
+            let cookie_str = format!(
+                "{}={}",
+                cookie["name"].as_str().unwrap_or(""),
+                cookie["value"].as_str().unwrap_or("")
+            );
+            credential
+                .0
+                .cookie_store
+                .add_cookie_str(&cookie_str, &base_url);
+        }
+    }
+
+    // Create cookie info structure
+    let mut cookies = Vec::new();
+    let base_url = Url::parse("https://bilibili.com")?;
+
+    if let Some(cookie_header) = credential.0.cookie_store.cookies(&base_url) {
+        let cookie_str = cookie_header.to_str().unwrap_or_default();
+        for cookie_part in cookie_str.split("; ") {
+            if let Some((name, value)) = cookie_part.split_once('=') {
+                let expires = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64
+                    + 15552000; // 180 days
+
+                cookies.push(json!({
+                    "name": name,
+                    "value": value,
+                    "expires": expires,
+                    "http_only": 0,
+                    "secure": 0
+                }));
+            }
+        }
+    }
+
+    let cookie_info = json!({
+        "cookies": cookies,
+        "domains": [
+            ".bilibili.com",
+            ".biligame.com",
+            ".bigfun.cn",
+            ".bigfunapp.cn",
+            ".dreamcast.hk"
+        ]
+    });
+
+    // Create final login info structure
+    let final_info = json!({
+        "cookie_info": cookie_info,
+        "sso": [
+            "https://passport.bilibili.com/api/v2/sso",
+            "https://passport.biligame.com/api/v2/sso",
+            "https://passport.bigfunapp.cn/api/v2/sso"
+        ],
+        "token_info": info.token_info,
+        "platform": "BiliTV"
+    });
+
+    // Save to file
+    let bilistream_dir = std::env::var("BILISTREAM_DIR").unwrap_or_else(|_| {
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    });
+    let cookies_path = Path::new(&bilistream_dir).with_file_name("cookies.json");
+    fs::write(cookies_path, serde_json::to_string_pretty(&final_info)?)?;
+
+    Ok(())
 }
 
 /// Login to Bilibili using QR code and save cookies

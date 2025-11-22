@@ -405,6 +405,42 @@
     .refresh-button:hover {
       transform: translateY(-2px);
     }
+
+    /* Setup wizard styles */
+    .step-dot {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      color: #999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+
+    .step-dot.active {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .setup-step {
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
   </style>
 </head>
 
@@ -416,29 +452,218 @@
         <div class="setup-icon">🚀</div>
         <h1 class="setup-title">欢迎使用 Bilistream</h1>
         <p class="setup-description">
-          检测到系统尚未完成初始配置。请按照以下步骤完成设置后，即可开始使用 Web 控制面板。
+          通过 Web 界面完成初始配置，无需使用命令行
         </p>
 
-        <div class="missing-files" id="missing-files-box">
-          <h3>缺少以下文件：</h3>
-          <ul id="missing-files-list"></ul>
+        <!-- Step Indicator -->
+        <div style="display: flex; justify-content: center; gap: 10px; margin-bottom: 30px;">
+          <div class="step-dot active" id="step-dot-1">1</div>
+          <div class="step-dot" id="step-dot-2">2</div>
+          <div class="step-dot" id="step-dot-3">3</div>
         </div>
 
-        <div class="setup-steps">
-          <h3>📋 设置步骤</h3>
-          <ol>
-            <li>打开终端，进入 Bilistream 所在目录</li>
-            <li>运行下方的设置命令</li>
-            <li>按照交互式向导完成配置</li>
-            <li>配置完成后，点击下方按钮刷新页面</li>
-          </ol>
+        <!-- Step 1: Login -->
+        <div class="setup-step" id="setup-step-1">
+          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 1: 登录 Bilibili</h3>
+          <p style="color: #666; margin-bottom: 20px;">
+            使用 Bilibili APP 扫描下方二维码登录
+          </p>
+          <div id="login-status" style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 20px;">
+            <span id="login-status-text">检查登录状态...</span>
+          </div>
+
+          <!-- QR Code Display -->
+          <div id="qr-code-container" style="display: none; text-align: center; margin-bottom: 20px;">
+            <div
+              style="background: white; padding: 20px; border-radius: 8px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+              <div id="qr-code-display"></div>
+              <p style="color: #666; margin-top: 15px; font-size: 14px;">请使用 Bilibili APP 扫码登录</p>
+              <p id="qr-status" style="color: #667eea; margin-top: 10px; font-weight: 600;">等待扫码...</p>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-primary" onclick="showQrCode()" id="show-qr-btn" style="flex: 1;">
+              🔐 显示登录二维码
+            </button>
+            <button class="btn-secondary" onclick="checkLoginStatus()" style="flex: 1;">
+              🔄 刷新状态
+            </button>
+          </div>
+          <button class="btn-success" onclick="goToStep(2)" style="width: 100%; margin-top: 15px;">
+            下一步 →
+          </button>
         </div>
 
-        <div class="command-box" id="setup-command">./bilistream setup</div>
+        <!-- Step 2: Basic Config -->
+        <div class="setup-step" id="setup-step-2" style="display: none;">
+          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 2: 基础配置</h3>
 
-        <button class="refresh-button" onclick="checkSetupAndRefresh()">
-          🔄 我已完成设置，刷新页面
-        </button>
+          <div class="control-group">
+            <label>B站直播间号 *</label>
+            <input type="number" id="setup-room" placeholder="输入你的直播间号" required>
+          </div>
+
+          <div class="control-group">
+            <label>检测间隔 (秒)</label>
+            <input type="number" id="setup-interval" value="60" min="10">
+          </div>
+
+          <div class="control-group">
+            <label style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="setup-auto-cover" checked>
+              <span>自动更换封面</span>
+            </label>
+          </div>
+
+          <div class="control-group">
+            <label style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="setup-danmaku-command" checked>
+              <span>启用弹幕指令</span>
+            </label>
+          </div>
+
+          <div class="control-group">
+            <label style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="setup-anti-collision">
+              <span>启用撞车监控</span>
+            </label>
+          </div>
+
+          <div class="control-group">
+            <label>代理地址 (可选)</label>
+            <input type="text" id="setup-proxy" placeholder="http://host:port">
+            <small style="color: #888;">如需访问 YouTube/Twitch 需要代理，请填写</small>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <button class="btn-secondary" onclick="goToStep(1)" style="flex: 1;">
+              ← 上一步
+            </button>
+            <button class="btn-success" onclick="goToStep(3)" style="flex: 1;">
+              下一步 →
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: Platform Config -->
+        <div class="setup-step" id="setup-step-3" style="display: none;">
+          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 3: 平台配置 (可选)</h3>
+
+          <!-- YouTube Config -->
+          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h4 style="color: #667eea; margin-bottom: 15px;">📺 YouTube</h4>
+
+            <div class="control-group">
+              <label>频道名称</label>
+              <input type="text" id="setup-yt-name" placeholder="留空表示不配置">
+            </div>
+
+            <div class="control-group">
+              <label>频道 ID</label>
+              <input type="text" id="setup-yt-id" placeholder="YouTube Channel ID">
+            </div>
+
+            <div class="control-group">
+              <label>B站分区</label>
+              <select id="setup-yt-area">
+                <option value="235">其他单机 (235)</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>流质量</label>
+              <select id="setup-yt-quality">
+                <option value="best">best - 最佳质量 (推荐)</option>
+                <option value="720p">720p - 高清</option>
+                <option value="480p">480p - 标清</option>
+                <option value="360p">360p - 流畅</option>
+                <option value="worst">worst - 最低质量</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Twitch Config -->
+          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h4 style="color: #9146ff; margin-bottom: 15px;">🎮 Twitch</h4>
+
+            <div class="control-group">
+              <label>频道名称</label>
+              <input type="text" id="setup-tw-name" placeholder="留空表示不配置">
+            </div>
+
+            <div class="control-group">
+              <label>频道 ID (用户名)</label>
+              <input type="text" id="setup-tw-id" placeholder="Twitch 用户名">
+            </div>
+
+            <div class="control-group">
+              <label>B站分区</label>
+              <select id="setup-tw-area">
+                <option value="235">其他单机 (235)</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>OAuth Token (可选)</label>
+              <input type="text" id="setup-tw-oauth" placeholder="用于 streamlink 认证">
+            </div>
+
+            <div class="control-group">
+              <label>代理区域</label>
+              <select id="setup-tw-region">
+                <option value="as">as - 亚洲</option>
+                <option value="na">na - 北美</option>
+                <option value="eu">eu - 欧洲</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>流质量</label>
+              <select id="setup-tw-quality">
+                <option value="best">best - 最佳质量 (推荐)</option>
+                <option value="720p">720p - 高清</option>
+                <option value="480p">480p - 标清</option>
+                <option value="worst">worst - 最低质量</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Advanced Options -->
+          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h4 style="color: #667eea; margin-bottom: 15px;">⚙️ 高级选项</h4>
+
+            <div class="control-group">
+              <label>Holodex API Key (可选)</label>
+              <input type="text" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
+              <small style="color: #888;">获取: <a href="https://holodex.net/login"
+                  target="_blank">holodex.net</a></small>
+            </div>
+
+            <div class="control-group">
+              <label style="display: flex; align-items: center; gap: 10px;">
+                <input type="checkbox" id="setup-lol-monitor" onchange="toggleRiotApiKey()">
+                <span>启用英雄联盟玩家ID监控</span>
+              </label>
+            </div>
+
+            <div class="control-group" id="riot-api-group" style="display: none;">
+              <label>Riot API Key</label>
+              <input type="text" id="setup-riot" placeholder="用于监控游戏内违禁词汇">
+              <small style="color: #888;">获取: <a href="https://developer.riotgames.com/"
+                  target="_blank">developer.riotgames.com</a></small>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <button class="btn-secondary" onclick="goToStep(2)" style="flex: 1;">
+              ← 上一步
+            </button>
+            <button class="btn-success" onclick="saveSetupConfig()" style="flex: 1;">
+              ✅ 完成设置
+            </button>
+          </div>
+        </div>
 
         <p style="text-align: center; color: #999; margin-top: 20px; font-size: 14px;">
           需要帮助？查看 <a href="https://github.com/Detteee/bilistream" target="_blank" style="color: #667eea;">文档</a>
@@ -641,7 +866,7 @@
       </div>
 
       <div style="text-align: center; color: white; margin-top: 40px; padding: 20px; opacity: 0.8;">
-        <p style="margin-bottom: 10px;">Bilistream v0.3.4</p>
+        <p style="margin-bottom: 10px;">Bilistream v0.3.5</p>
         <p>
           <a href="https://github.com/Detteee/bilistream" target="_blank"
             style="color: white; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.5); padding-bottom: 2px;">
@@ -1239,6 +1464,217 @@
         }
       }
 
+      // Setup wizard functions
+      let currentStep = 1;
+
+      function goToStep(step) {
+        // Hide all steps
+        for (let i = 1; i <= 3; i++) {
+          document.getElementById(`setup-step-${i}`).style.display = 'none';
+          document.getElementById(`step-dot-${i}`).classList.remove('active');
+        }
+
+        // Show target step
+        document.getElementById(`setup-step-${step}`).style.display = 'block';
+        document.getElementById(`step-dot-${step}`).classList.add('active');
+        currentStep = step;
+      }
+
+      function toggleRiotApiKey() {
+        const checkbox = document.getElementById('setup-lol-monitor');
+        const group = document.getElementById('riot-api-group');
+        group.style.display = checkbox.checked ? 'block' : 'none';
+      }
+
+      async function checkLoginStatus() {
+        try {
+          const response = await fetch('/api/setup/login-status');
+          const data = await response.json();
+
+          const statusDiv = document.getElementById('login-status');
+          const statusText = document.getElementById('login-status-text');
+
+          if (data.logged_in) {
+            statusDiv.style.background = '#d1fae5';
+            statusDiv.style.color = '#065f46';
+            statusText.textContent = '✅ 已登录 Bilibili';
+          } else {
+            statusDiv.style.background = '#fee2e2';
+            statusDiv.style.color = '#991b1b';
+            statusText.textContent = '❌ 未登录，请点击下方按钮登录';
+          }
+        } catch (error) {
+          console.error('Failed to check login status:', error);
+          showNotification('检查登录状态失败', 'error');
+        }
+      }
+
+      let loginPollInterval = null;
+      let currentAuthCode = null;
+
+      async function showQrCode() {
+        try {
+          // Get QR code from API
+          const response = await fetch('/api/setup/qrcode');
+          const data = await response.json();
+
+          if (!data.success || !data.data) {
+            showNotification(data.message || '获取二维码失败', 'error');
+            return;
+          }
+
+          const { qr_url, auth_code } = data.data;
+          currentAuthCode = auth_code;
+
+          // Generate QR code using external API
+          const qrContainer = document.getElementById('qr-code-display');
+          qrContainer.innerHTML = '';
+
+          // Create QR code using QR Server API
+          const qrImg = document.createElement('img');
+          qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qr_url)}`;
+          qrImg.style.width = '200px';
+          qrImg.style.height = '200px';
+          qrContainer.appendChild(qrImg);
+
+          // Show QR code container
+          document.getElementById('qr-code-container').style.display = 'block';
+          document.getElementById('show-qr-btn').textContent = '🔄 刷新二维码';
+
+          // Start polling for login status
+          startLoginPolling();
+
+          showNotification('请使用 Bilibili APP 扫码登录', 'success');
+        } catch (error) {
+          console.error('Failed to get QR code:', error);
+          showNotification('获取二维码失败: ' + error.message, 'error');
+        }
+      }
+
+      function startLoginPolling() {
+        // Clear existing interval
+        if (loginPollInterval) {
+          clearInterval(loginPollInterval);
+        }
+
+        // Poll every 2 seconds
+        loginPollInterval = setInterval(async () => {
+          if (!currentAuthCode) return;
+
+          try {
+            const response = await fetch('/api/setup/poll-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ auth_code: currentAuthCode })
+            });
+            const data = await response.json();
+
+            if (data.success && data.data) {
+              const { status, message } = data.data;
+              document.getElementById('qr-status').textContent = message;
+
+              if (status === 'success') {
+                clearInterval(loginPollInterval);
+                loginPollInterval = null;
+                showNotification('登录成功！', 'success');
+                document.getElementById('qr-code-container').style.display = 'none';
+                await checkLoginStatus();
+              } else if (status === 'expired') {
+                clearInterval(loginPollInterval);
+                loginPollInterval = null;
+                showNotification('二维码已过期，请重新获取', 'error');
+                document.getElementById('qr-status').textContent = '二维码已过期';
+                document.getElementById('qr-status').style.color = '#ef4444';
+              }
+            }
+          } catch (error) {
+            console.error('Poll login failed:', error);
+          }
+        }, 2000);
+      }
+
+      async function triggerBiliLogin() {
+        showNotification('正在启动登录流程，请在终端查看二维码...', 'success');
+
+        try {
+          const response = await fetch('/api/setup/login', {
+            method: 'POST'
+          });
+          const data = await response.json();
+
+          if (data.success) {
+            showNotification('登录成功！', 'success');
+            await checkLoginStatus();
+          } else {
+            showNotification(data.message || '登录失败', 'error');
+          }
+        } catch (error) {
+          console.error('Login failed:', error);
+          showNotification('登录失败: ' + error.message, 'error');
+        }
+      }
+
+      async function saveSetupConfig() {
+        // Validate required fields
+        const room = document.getElementById('setup-room').value;
+        if (!room || room <= 0) {
+          showNotification('请输入有效的直播间号', 'error');
+          goToStep(2);
+          return;
+        }
+
+        // Collect all configuration
+        const config = {
+          room: parseInt(room),
+          interval: parseInt(document.getElementById('setup-interval').value) || 60,
+          auto_cover: document.getElementById('setup-auto-cover').checked,
+          enable_danmaku_command: document.getElementById('setup-danmaku-command').checked,
+          anti_collision: document.getElementById('setup-anti-collision').checked,
+          proxy: document.getElementById('setup-proxy').value || null,
+
+          // YouTube
+          youtube_channel_name: document.getElementById('setup-yt-name').value || null,
+          youtube_channel_id: document.getElementById('setup-yt-id').value || null,
+          youtube_area_v2: parseInt(document.getElementById('setup-yt-area').value) || null,
+          youtube_quality: document.getElementById('setup-yt-quality').value || null,
+
+          // Twitch
+          twitch_channel_name: document.getElementById('setup-tw-name').value || null,
+          twitch_channel_id: document.getElementById('setup-tw-id').value || null,
+          twitch_area_v2: parseInt(document.getElementById('setup-tw-area').value) || null,
+          twitch_oauth_token: document.getElementById('setup-tw-oauth').value || null,
+          twitch_proxy_region: document.getElementById('setup-tw-region').value || null,
+          twitch_quality: document.getElementById('setup-tw-quality').value || null,
+
+          // Advanced
+          holodex_api_key: document.getElementById('setup-holodex').value || null,
+          riot_api_key: document.getElementById('setup-riot').value || null,
+          enable_lol_monitor: document.getElementById('setup-lol-monitor').checked
+        };
+
+        try {
+          const response = await fetch('/api/setup/save-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            showNotification('配置保存成功！正在加载控制面板...', 'success');
+            setTimeout(() => {
+              location.reload();
+            }, 1500);
+          } else {
+            showNotification(data.message || '保存配置失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to save config:', error);
+          showNotification('保存配置失败: ' + error.message, 'error');
+        }
+      }
+
       // Setup check functions
       async function checkSetupStatus() {
         try {
@@ -1250,20 +1686,11 @@
             document.getElementById('setup-page').classList.add('active');
             document.getElementById('main-page').classList.add('hidden');
 
-            // Populate missing files
-            const missingFilesList = document.getElementById('missing-files-list');
-            missingFilesList.innerHTML = '';
-            data.missing_files.forEach(file => {
-              const li = document.createElement('li');
-              li.textContent = file;
-              missingFilesList.appendChild(li);
-            });
+            // Load areas for dropdowns
+            await loadAreasForSetup();
 
-            // Update setup command
-            const setupCommandBox = document.getElementById('setup-command');
-            if (setupCommandBox && data.setup_command) {
-              setupCommandBox.textContent = data.setup_command;
-            }
+            // Check login status
+            await checkLoginStatus();
           } else {
             // Show main page
             document.getElementById('setup-page').classList.remove('active');
@@ -1277,6 +1704,38 @@
           document.getElementById('setup-page').classList.remove('active');
           document.getElementById('main-page').classList.remove('hidden');
           return false;
+        }
+      }
+
+      async function loadAreasForSetup() {
+        try {
+          const response = await fetch('/api/areas');
+          const areasData = await response.json();
+
+          let areasList = [];
+          if (Array.isArray(areasData)) {
+            areasList = areasData;
+          } else if (areasData && areasData.areas) {
+            areasList = areasData.areas;
+          }
+
+          if (areasList.length > 0) {
+            const ytAreaSelect = document.getElementById('setup-yt-area');
+            const twAreaSelect = document.getElementById('setup-tw-area');
+
+            [ytAreaSelect, twAreaSelect].forEach(select => {
+              select.innerHTML = '';
+              areasList.forEach(area => {
+                const option = document.createElement('option');
+                option.value = area.id;
+                option.textContent = `${area.name} (${area.id})`;
+                if (area.id === 235) option.selected = true;
+                select.appendChild(option);
+              });
+            });
+          }
+        } catch (error) {
+          console.error('Failed to load areas:', error);
         }
       }
 

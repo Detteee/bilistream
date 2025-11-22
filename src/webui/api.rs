@@ -579,3 +579,211 @@ pub async fn get_logs_endpoint() -> Result<Json<LogsResponse>, StatusCode> {
         logs: logs_text,
     }))
 }
+
+#[derive(Deserialize)]
+pub struct SetupConfigRequest {
+    room: i32,
+    proxy: Option<String>,
+    auto_cover: bool,
+    enable_danmaku_command: bool,
+    interval: u64,
+    anti_collision: bool,
+    youtube_channel_name: Option<String>,
+    youtube_channel_id: Option<String>,
+    youtube_area_v2: Option<u64>,
+    youtube_quality: Option<String>,
+    twitch_channel_name: Option<String>,
+    twitch_channel_id: Option<String>,
+    twitch_area_v2: Option<u64>,
+    twitch_oauth_token: Option<String>,
+    twitch_proxy_region: Option<String>,
+    twitch_quality: Option<String>,
+    holodex_api_key: Option<String>,
+    riot_api_key: Option<String>,
+    enable_lol_monitor: bool,
+}
+
+pub async fn save_setup_config(
+    Json(payload): Json<SetupConfigRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let proxy_line = payload.proxy.unwrap_or_default();
+    let holodex_line = payload.holodex_api_key.unwrap_or_default();
+    let riot_line = payload.riot_api_key.unwrap_or_default();
+
+    let yt_channel_name = payload.youtube_channel_name.unwrap_or_default();
+    let yt_channel_id = payload.youtube_channel_id.unwrap_or_default();
+    let yt_area_v2 = payload.youtube_area_v2.unwrap_or(235);
+    let yt_quality = payload
+        .youtube_quality
+        .unwrap_or_else(|| "best".to_string());
+
+    let tw_channel_name = payload.twitch_channel_name.unwrap_or_default();
+    let tw_channel_id = payload.twitch_channel_id.unwrap_or_default();
+    let tw_area_v2 = payload.twitch_area_v2.unwrap_or(235);
+    let tw_oauth = payload.twitch_oauth_token.unwrap_or_default();
+    let tw_proxy_region = payload
+        .twitch_proxy_region
+        .unwrap_or_else(|| "as".to_string());
+    let tw_quality = payload.twitch_quality.unwrap_or_else(|| "best".to_string());
+
+    let config_content = format!(
+        r#"Interval: {} # 检测直播间隔
+AutoCover: {} # 自动更换封面
+AntiCollision: {} # 撞车监控
+Proxy: {} # 代理地址,无需代理可以不填此项或者留空
+HolodexApiKey: {} # Holodex Api Key from https://holodex.net/login
+RiotApiKey: {} # Riot API Key from https://developer.riotgames.com/
+EnableLolMonitor: {} # 启用英雄联盟玩家ID监控 (true/false)
+LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
+BiliLive:
+  EnableDanmakuCommand: {} # true or false
+  Room: {}
+  BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/
+  BiliRtmpKey: ""
+Youtube:
+  ChannelName: {} # 频道名称 (将出现于转播标题)
+  ChannelId: {} # Youtube Channel ID
+  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 yt-dlp 格式字符串
+Twitch:
+  ChannelName: {} # 频道名称 (将出现于转播标题)
+  ChannelId: {} # the string followed after https://www.twitch.tv/
+  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
+  OauthToken: {} # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
+  ProxyRegion: {} # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 streamlink 质量选项
+
+AntiCollisionList:
+  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车
+  # B站ID2: 房间号2  # 房间号用于检测撞车
+"#,
+        payload.interval,
+        payload.auto_cover,
+        payload.anti_collision,
+        proxy_line,
+        holodex_line,
+        riot_line,
+        payload.enable_lol_monitor,
+        payload.enable_danmaku_command,
+        payload.room,
+        yt_channel_name,
+        yt_channel_id,
+        yt_area_v2,
+        yt_quality,
+        tw_channel_name,
+        tw_channel_id,
+        tw_area_v2,
+        tw_oauth,
+        tw_proxy_region,
+        tw_quality,
+    );
+
+    // Write config file
+    let config_path = std::env::current_exe()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .with_file_name("config.yaml");
+    std::fs::write(config_path, config_content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("配置已保存".to_string()),
+    })
+}
+
+#[derive(Serialize)]
+pub struct LoginStatusResponse {
+    logged_in: bool,
+    message: String,
+}
+
+pub async fn check_login_status() -> Result<Json<LoginStatusResponse>, StatusCode> {
+    let cookies_path = std::env::current_exe()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .with_file_name("cookies.json");
+
+    let logged_in = cookies_path.exists();
+    let message = if logged_in {
+        "已登录".to_string()
+    } else {
+        "未登录".to_string()
+    };
+
+    Ok(Json(LoginStatusResponse { logged_in, message }))
+}
+
+pub async fn trigger_login() -> Result<ApiResponse<String>, StatusCode> {
+    // Trigger Bilibili login
+    match bilibili::login().await {
+        Ok(_) => Ok(ApiResponse {
+            success: true,
+            data: Some("登录成功".to_string()),
+            message: Some("Bilibili 登录成功".to_string()),
+        }),
+        Err(e) => Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("登录失败: {}", e)),
+        }),
+    }
+}
+
+#[derive(Serialize)]
+pub struct QrCodeResponse {
+    qr_url: String,
+    auth_code: String,
+}
+
+pub async fn get_qr_code() -> Result<Json<ApiResponse<QrCodeResponse>>, StatusCode> {
+    match bilibili::get_login_qrcode().await {
+        Ok((qr_url, auth_code)) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(QrCodeResponse { qr_url, auth_code }),
+            message: None,
+        })),
+        Err(e) => Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("获取二维码失败: {}", e)),
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PollLoginRequest {
+    auth_code: String,
+}
+
+#[derive(Serialize)]
+pub struct PollLoginResponse {
+    status: String, // "waiting", "success", "expired", "error"
+    message: String,
+}
+
+pub async fn poll_login(
+    Json(payload): Json<PollLoginRequest>,
+) -> Result<Json<ApiResponse<PollLoginResponse>>, StatusCode> {
+    match bilibili::poll_login_status(&payload.auth_code).await {
+        Ok(status) => {
+            let (status_str, message) = match status.as_str() {
+                "success" => ("success", "登录成功"),
+                "waiting" => ("waiting", "等待扫码..."),
+                "expired" => ("expired", "二维码已过期"),
+                _ => ("error", "未知状态"),
+            };
+            Ok(Json(ApiResponse {
+                success: true,
+                data: Some(PollLoginResponse {
+                    status: status_str.to_string(),
+                    message: message.to_string(),
+                }),
+                message: None,
+            }))
+        }
+        Err(e) => Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("轮询登录状态失败: {}", e)),
+        })),
+    }
+}

@@ -4,7 +4,7 @@
 
 ## Download
 
-**Latest Release: v0.3.4**
+**Latest Release: v0.3.5**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
@@ -18,15 +18,20 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 **Quick Start:**
 
 1. Download and extract the release package
-2. **Windows:** Run `bilistream.exe` - Web UI launches automatically!
+2. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
 3. **Linux/Mac:** Run `./bilistream` in terminal
-4. Dependencies auto-download on first run (Windows) or follow setup instructions below
-5. Follow the setup wizard to configure your streams
+4. Open browser to `http://localhost:3150`
+5. **First run:** Complete setup wizard in browser (QR code login, configuration)
+6. **Subsequent runs:** Access control panel directly
+7. Dependencies auto-download on first run (Windows) or follow setup instructions below
 
 ## Features
 
-- **Web UI** - Control panel for monitoring and managing streams
-- **Auto Setup Wizard** - Interactive first-time configuration
+- **Web UI** - Modern control panel for monitoring and managing streams
+- **Web-Based Setup Wizard** - Complete first-run configuration through browser (no CLI needed!)
+  - QR code login displayed in browser
+  - Step-by-step guided setup
+  - Real-time status updates
 - **Auto Rebroadcast** - Twitch and YouTube streams to Bilibili Live
 - **Scheduled Streams** - Support for YouTube scheduled streams
 - **Auto Settings** - Update Bilibili live title, area, and thumbnail automatically
@@ -83,21 +88,27 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    ```
 5. **Configuration:**
 
-   **Automatic Setup (Recommended):**
+   **Web-Based Setup (Recommended):**
 
    - Simply run `./bilistream` (or double-click on Windows)
-   - If config files are missing, the setup wizard starts automatically
+   - Open your browser to `http://localhost:3150`
+   - If config files are missing, the web setup wizard appears automatically
+   - Complete all configuration through the browser interface:
+     - **Step 1**: Bilibili login with QR code displayed in browser
+     - **Step 2**: Basic settings (room number, intervals, features)
+     - **Step 3**: Platform configuration (YouTube, Twitch, API keys)
 
-   **Manual Setup:**
-   Run the setup wizard anytime:
+   **CLI Setup (Alternative):**
+
+   Run the command-line setup wizard:
 
    ```bash
    ./bilistream setup
    ```
 
-   The wizard guides you through:
+   The CLI wizard guides you through:
 
-   - Bilibili login (QR code)
+   - Bilibili login (QR code in terminal)
    - Proxy settings (optional)
    - Live room configuration
    - YouTube/Twitch channels (optional)
@@ -167,16 +178,24 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 **Windows:** Double-click `bilistream.exe` - Web UI launches with desktop notification showing access URLs
 
-**First run:** Setup wizard starts automatically if config is missing
+**First run behavior:**
+
+- **Default mode:** Web UI starts, setup wizard appears in browser
+- **CLI mode (`--cli`):** Terminal-based setup wizard runs first, then monitoring starts
 
 ### Web UI Features
 
+- 🚀 **Web-Based Setup Wizard**
+  - Complete first-run configuration in browser
+  - QR code login displayed directly in web page
+  - No terminal/CLI knowledge required
+  - Step-by-step guided process
 - 📊 Real-time status dashboard (Bilibili, YouTube, Twitch)
 - 🎮 One-click stream controls
 - 💬 Send danmaku messages
 - 📺 Channel management
 - 🎯 Area selection dropdown
-- 📱 Mobile-friendly interface
+- 📱 Mobile-friendly inte
 
 ### Commands
 

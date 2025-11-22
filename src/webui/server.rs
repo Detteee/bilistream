@@ -32,7 +32,12 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/areas", get(api::get_areas))
         .route("/channel", post(api::update_channel))
         .route("/setup-status", get(api::check_setup))
-        .route("/logs", get(api::get_logs_endpoint));
+        .route("/logs", get(api::get_logs_endpoint))
+        .route("/setup/save-config", post(api::save_setup_config))
+        .route("/setup/login-status", get(api::check_login_status))
+        .route("/setup/login", post(api::trigger_login))
+        .route("/setup/qrcode", get(api::get_qr_code))
+        .route("/setup/poll-login", post(api::poll_login));
 
     // Main app with API routes and static files
     let app = Router::new()
