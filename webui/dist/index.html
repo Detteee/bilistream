@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bilistream 控制面板</title>
+  <title>Bilistream</title>
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📺</text></svg>">
   <style>
@@ -676,8 +676,8 @@
   <div class="main-page" id="main-page">
     <div class="container">
       <div class="header">
-        <h1>🎬 Bilistream 控制面板</h1>
-        <p>实时监控和控制你的直播转播</p>
+        <h1>🎬 Bilistream</h1>
+        <p>实时监控和控制你的转播</p>
       </div>
 
       <div class="dashboard">
@@ -866,7 +866,30 @@
       </div>
 
       <div style="text-align: center; color: white; margin-top: 40px; padding: 20px; opacity: 0.8;">
-        <p style="margin-bottom: 10px;">Bilistream v0.3.5</p>
+        <p style="margin-bottom: 10px;">
+          <span id="version-display">Bilistream</span>
+          <button onclick="checkForUpdates()"
+            style="margin-left: 10px; padding: 5px 15px; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.5); border-radius: 5px; cursor: pointer; font-size: 12px;">
+            🔄 检查更新
+          </button>
+        </p>
+        <div id="update-notification"
+          style="display: none; margin: 15px auto; padding: 15px; max-width: 600px; background: rgba(16, 185, 129, 0.9); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+          <p style="margin: 0 0 10px 0; font-weight: 600; font-size: 16px;">🎉 发现新版本！</p>
+          <p id="update-message" style="margin: 0 0 10px 0; font-size: 14px;"></p>
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button id="auto-update-btn" onclick="autoInstallUpdate()"
+              style="flex: 1; padding: 8px 20px; background: white; color: #667eea; border: none; border-radius: 5px; font-weight: 600; cursor: pointer;">
+              🚀 自动更新
+            </button>
+            <a id="update-link" href="#" target="_blank"
+              style="flex: 1; padding: 8px 20px; background: rgba(255,255,255,0.3); color: white; text-decoration: none; border-radius: 5px; font-weight: 600; text-align: center;">
+              📥 手动下载
+            </a>
+          </div>
+          <p id="update-progress"
+            style="margin: 10px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.9); display: none;"></p>
+        </div>
         <p>
           <a href="https://github.com/Detteee/bilistream" target="_blank"
             style="color: white; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.5); padding-bottom: 2px;">
@@ -1751,12 +1774,205 @@
         }
       }
 
+      // Check for updates function
+      let CURRENT_VERSION = null; // Will be fetched from API
+      const GITHUB_REPO = 'Detteee/bilistream';
+      let latestUpdateInfo = null;
+
+      // Fetch current version from API
+      async function loadVersion() {
+        try {
+          const response = await fetch('/api/version');
+          const data = await response.json();
+          if (data.success && data.data) {
+            CURRENT_VERSION = data.data.version;
+            document.getElementById('version-display').textContent = `Bilistream v${CURRENT_VERSION}`;
+          }
+        } catch (error) {
+          console.error('Failed to load version:', error);
+          document.getElementById('version-display').textContent = 'Bilistream';
+        }
+      }
+
+      async function checkForUpdates() {
+        try {
+          showNotification('正在检查更新...', 'success');
+
+          // Use backend API to check for updates
+          const response = await fetch('/api/update/check');
+
+          if (!response.ok) {
+            throw new Error('无法获取版本信息');
+          }
+
+          const data = await response.json();
+
+          if (!data.success) {
+            throw new Error(data.message || '检查更新失败');
+          }
+
+          const updateInfo = data.data;
+          latestUpdateInfo = updateInfo;
+
+          console.log('Update info:', updateInfo);
+
+          // Compare versions
+          if (updateInfo.has_update) {
+            // New version available
+            const updateNotification = document.getElementById('update-notification');
+            const updateMessage = document.getElementById('update-message');
+            const updateLink = document.getElementById('update-link');
+            const autoUpdateBtn = document.getElementById('auto-update-btn');
+
+            let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
+            if (updateInfo.asset_name) {
+              const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
+              message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)`;
+            }
+            updateMessage.textContent = message;
+            updateMessage.style.whiteSpace = 'pre-line';
+
+            // Set manual download link
+            if (updateInfo.download_url) {
+              updateLink.href = updateInfo.download_url;
+              autoUpdateBtn.style.display = 'block';
+            } else {
+              // No direct download available, hide auto-update button
+              autoUpdateBtn.style.display = 'none';
+              updateLink.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
+            }
+
+            updateNotification.style.display = 'block';
+
+            showNotification(`发现新版本 v${updateInfo.latest_version}！`, 'success');
+          } else {
+            showNotification('已是最新版本！', 'success');
+            // Hide update notification if it was shown before
+            document.getElementById('update-notification').style.display = 'none';
+          }
+        } catch (error) {
+          console.error('Failed to check for updates:', error);
+          showNotification('检查更新失败: ' + error.message, 'error');
+        }
+      }
+
+      async function autoInstallUpdate() {
+        if (!latestUpdateInfo || !latestUpdateInfo.download_url) {
+          showNotification('无法获取下载地址', 'error');
+          return;
+        }
+
+        try {
+          const autoUpdateBtn = document.getElementById('auto-update-btn');
+          const updateProgress = document.getElementById('update-progress');
+
+          autoUpdateBtn.disabled = true;
+          autoUpdateBtn.textContent = '⏳ 下载中...';
+          updateProgress.style.display = 'block';
+          updateProgress.textContent = '正在下载更新，请稍候...';
+
+          showNotification('开始下载更新...', 'success');
+
+          const response = await fetch('/api/update/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ download_url: latestUpdateInfo.download_url })
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            updateProgress.textContent = '✅ 更新下载完成！程序将自动重启...';
+            showNotification('更新安装中，程序即将重启...', 'success');
+
+            // Wait a bit then reload the page (program will restart)
+            setTimeout(() => {
+              location.reload();
+            }, 5000);
+          } else {
+            throw new Error(data.message || '下载失败');
+          }
+        } catch (error) {
+          console.error('Failed to download update:', error);
+          showNotification('自动更新失败: ' + error.message, 'error');
+
+          const autoUpdateBtn = document.getElementById('auto-update-btn');
+          const updateProgress = document.getElementById('update-progress');
+          autoUpdateBtn.disabled = false;
+          autoUpdateBtn.textContent = '🚀 自动更新';
+          updateProgress.textContent = '❌ 更新失败，请尝试手动下载';
+        }
+      }
+
+      function compareVersions(v1, v2) {
+        const parts1 = v1.split('.').map(Number);
+        const parts2 = v2.split('.').map(Number);
+
+        for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+          const part1 = parts1[i] || 0;
+          const part2 = parts2[i] || 0;
+
+          if (part1 > part2) return 1;
+          if (part1 < part2) return -1;
+        }
+
+        return 0;
+      }
+
+      // Auto-check for updates on page load (only on main page)
+      function autoCheckUpdates() {
+        const mainPage = document.getElementById('main-page');
+        if (mainPage && !mainPage.classList.contains('hidden')) {
+          // Check for updates silently (without notification)
+          fetch('/api/update/check')
+            .then(response => response.json())
+            .then(data => {
+              if (data.success && data.data && data.data.has_update) {
+                const updateInfo = data.data;
+                latestUpdateInfo = updateInfo;
+
+                const updateNotification = document.getElementById('update-notification');
+                const updateMessage = document.getElementById('update-message');
+                const updateLink = document.getElementById('update-link');
+                const autoUpdateBtn = document.getElementById('auto-update-btn');
+
+                let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
+                if (updateInfo.asset_name) {
+                  const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
+                  message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)`;
+                }
+                updateMessage.textContent = message;
+                updateMessage.style.whiteSpace = 'pre-line';
+
+                if (updateInfo.download_url) {
+                  updateLink.href = updateInfo.download_url;
+                  autoUpdateBtn.style.display = 'block';
+                } else {
+                  autoUpdateBtn.style.display = 'none';
+                  updateLink.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
+                }
+
+                updateNotification.style.display = 'block';
+              }
+            })
+            .catch(error => {
+              console.log('Auto-update check failed (silent):', error);
+            });
+        }
+      }
+
       // Check setup status on page load
       checkSetupStatus().then(needsSetup => {
         if (!needsSetup) {
+          // Load version first
+          loadVersion();
+
           // Only load data if setup is complete
           initStatusRefresh(); // This will load config and start auto-refresh
           loadChannelData();
+
+          // Auto-check for updates after 2 seconds
+          setTimeout(autoCheckUpdates, 2000);
         }
       });
     </script>

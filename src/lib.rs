@@ -1,6 +1,7 @@
 pub mod config;
 pub mod deps;
 pub mod plugins;
+pub mod updater;
 pub mod webui;
 
 // Re-export for convenience

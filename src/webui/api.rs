@@ -13,6 +13,7 @@ use crate::plugins::{
     bili_start_live, bili_stop_live, bili_update_area, bilibili, get_bili_live_status,
     get_ffmpeg_speed, send_danmaku as send_danmaku_to_bili, set_config_updated,
 };
+use crate::updater;
 
 // Global log buffer
 static LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
@@ -788,4 +789,101 @@ pub async fn poll_login(
             message: Some(format!("轮询登录状态失败: {}", e)),
         })),
     }
+}
+
+// Update check endpoint
+pub async fn check_updates() -> Result<Json<ApiResponse<updater::UpdateInfo>>, StatusCode> {
+    match updater::check_for_updates().await {
+        Ok(update_info) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(update_info),
+            message: None,
+        })),
+        Err(e) => Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("检查更新失败: {}", e)),
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DownloadUpdateRequest {
+    download_url: String,
+}
+
+#[derive(Serialize)]
+pub struct DownloadProgress {
+    downloaded: u64,
+    total: u64,
+    percentage: f32,
+    status: String,
+}
+
+// Download and install update endpoint
+pub async fn download_update(
+    Json(payload): Json<DownloadUpdateRequest>,
+) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    let download_url = payload.download_url;
+
+    tracing::info!("开始下载更新: {}", download_url);
+
+    // Spawn update task in background
+    tokio::spawn(async move {
+        match updater::download_and_install_update(&download_url, None).await {
+            Ok(_) => {
+                tracing::info!("✅ 更新安装成功！程序将在 3 秒后重启...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+                // Restart the program
+                #[cfg(target_os = "windows")]
+                {
+                    let exe_dir = std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .to_path_buf();
+                    let restart_script = exe_dir.join("restart_after_update.bat");
+                    if restart_script.exists() {
+                        let _ = std::process::Command::new("cmd")
+                            .args(&["/C", "start", "", restart_script.to_str().unwrap()])
+                            .spawn();
+                    }
+                }
+
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let current_exe = std::env::current_exe().unwrap();
+                    let _ = std::process::Command::new(current_exe).spawn();
+                }
+
+                std::process::exit(0);
+            }
+            Err(e) => {
+                tracing::error!("❌ 更新安装失败: {}", e);
+            }
+        }
+    });
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some("更新下载已开始，请查看日志了解进度".to_string()),
+        message: Some("更新将在后台下载并自动安装".to_string()),
+    }))
+}
+
+// Version endpoint
+#[derive(Serialize)]
+pub struct VersionInfo {
+    version: String,
+}
+
+pub async fn get_version() -> Result<Json<ApiResponse<VersionInfo>>, StatusCode> {
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(VersionInfo {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }),
+        message: None,
+    }))
 }

@@ -4,9 +4,15 @@
 
 ## Download
 
-**Latest Release: v0.3.5**
+**Latest Release: v0.3.6**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
+
+### 🎉 What's New in v0.3.6
+- 🚀 **Auto-Update System** - One-click updates from Web UI
+- 📦 **Smaller Downloads** - 50-70% smaller packages (5-10 MB vs 15-30 MB)
+- 🔧 **Automated Tools** - Version bump and release build scripts
+- 📚 **Complete Documentation** - Comprehensive guides included
 
 **Quick Start:**
 
@@ -23,6 +29,11 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 ## Features
 
+- **Auto-Update** - One-click updates from Web UI (NEW in v0.3.6!)
+  - Automatic update detection on startup
+  - Safe installation with backup
+  - Preserves all configuration and user data
+  - Auto-restart after update
 - **Web UI** - Modern control panel for monitoring and managing streams
 - **Web-Based Setup Wizard** - Complete first-run configuration through browser (no CLI needed!)
   - QR code login displayed in browser
@@ -226,6 +237,40 @@ Example:
 ```
 
 The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) for more Area name and ID.
+
+## Development
+
+### Version Management
+
+Bilistream uses automated version management. To bump the version:
+
+```bash
+# Linux/macOS
+./bump_version.sh 0.4.0
+
+# Windows
+.\bump_version.ps1 0.4.0
+```
+
+See [VERSION_MANAGEMENT.md](VERSION_MANAGEMENT.md) for details.
+
+### Building Releases
+
+To build release archives for distribution:
+
+```bash
+# Linux/macOS
+./build_release.sh
+
+# Windows
+.\build_release.ps1
+```
+
+This creates:
+- `release/bilistream_for_linux.tar.gz`
+- `release/bilistream_for_windows.zip`
+
+See [RELEASE_GUIDE.md](RELEASE_GUIDE.md) for the complete release process.
 
 ## Contributing
 

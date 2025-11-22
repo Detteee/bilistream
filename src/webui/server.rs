@@ -21,6 +21,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     // API router
     let api_router = Router::new()
         .route("/health", get(health_check))
+        .route("/version", get(api::get_version))
         .route("/status", get(api::get_status))
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/start", post(api::start_stream))
@@ -37,7 +38,9 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/setup/login-status", get(api::check_login_status))
         .route("/setup/login", post(api::trigger_login))
         .route("/setup/qrcode", get(api::get_qr_code))
-        .route("/setup/poll-login", post(api::poll_login));
+        .route("/setup/poll-login", post(api::poll_login))
+        .route("/update/check", get(api::check_updates))
+        .route("/update/download", post(api::download_update));
 
     // Main app with API routes and static files
     let app = Router::new()
