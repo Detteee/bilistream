@@ -263,93 +263,72 @@ fn update_config(
     Ok(true)
 }
 
-/// determines the area id based on the live title.
-pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
-    let title = live_title.to_lowercase();
-    let title = title.replace("_", " ");
+/// Load areas configuration from areas.json
+fn load_areas_config() -> Option<serde_json::Value> {
+    let areas_path = std::env::current_exe().ok()?.parent()?.join("areas.json");
 
-    if title.contains("valorant") || title.contains("ヴァロ") {
-        329
-    } else if title.contains("league of legends")
-        || title.contains("lol")
-        || title.contains("ろる")
-        || title.contains("ろ、る")
-        || title.contains("TFT")
-    {
-        86
-    } else if title.contains("minecraft") || title.contains("マイクラ") {
-        216
-    } else if title.contains("overwatch") {
-        87
-    } else if title.contains("deadlock") {
-        927
-    } else if title.contains("final fantasy")
-        || title.contains("漆黒メインクエ")
-        || title.contains("ff14")
-    {
-        102
-    } else if title.contains("apex") {
-        240
-    } else if title.contains("スト６") || title.contains("street fighter") {
-        433
-    } else if title.contains("yu-gi-oh") || title.contains("遊戯王") {
-        407
-    } else if title.contains("splatoon") || title.contains("スプラトゥーン3") {
-        694
-    } else if title.contains("原神") {
-        321
-    } else if title.contains("monhun")
-        || title.contains("モンハン")
-        || title.contains("monster hunter")
-    {
-        578
-    } else if title.contains("pokemon")
-        || title.contains("core keeper")
-        || title.contains("terraria")
-        || title.contains("tgc card shop simulator")
-        || title.contains("stardew valley")
-        || title.contains("gta")
-    {
-        235
-    } else if title.contains("clubhouse") || title.contains("アソビ大全") {
-        236
-    } else if title.contains("tarkov") || title.contains("タルコフ") {
-        252
-    } else if title.contains("call of duty") || title.contains("BO6") {
-        318
-    } else if title.contains("elden ring") || title.contains("エルデンリング") {
-        555
-    } else if title.contains("zelda") || title.contains("ゼルダ") {
-        308
-    } else if title.contains("delta force") {
-        878
-    } else if title.contains("dark and darker") || title.contains("dad") {
-        795
-    } else if title.contains("致命公司") || title.contains("lethal company") {
-        858
-    } else {
-        current_area_id
-    }
+    let content = std::fs::read_to_string(areas_path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
-fn resolve_area_alias(alias: &str) -> &str {
-    match alias.to_lowercase().as_str() {
-        "101" | "lol" | "ろる" | "ろ、る" | "tft" => "英雄联盟",
-        "瓦" | "ヴァロ" => "无畏契约",
-        "mc" | "マイクラ" | "minecraft" => "我的世界",
-        "ff14" => "最终幻想14",
-        "mhw" | "猛汉王" | "モンハン" | "monhun" => "怪物猎人",
-        "洲" | "三角洲" => "三角洲行动",
-        "apex" | "派" => "APEX英雄",
-        "sf6" | "st6" | "街霸" => "格斗游戏",
-        "tkf" | "tarkov" | "塔科夫" | "タルコフ" => "逃离塔科夫",
-        "cod" | "使命召唤" => "使命召唤:战区",
-        "dad" => "Dark and Darker",
-        "elden" | "エルデンリング" => "艾尔登法环",
-        "zelda" | "ゼルダ" | "塞尔达" => "塞尔达传说",
-        "公司" => "致命公司",
-        _ => alias,
+/// Determines the area id based on the live title by checking keywords from areas.json
+pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
+    let title = live_title.to_lowercase().replace("_", " ");
+
+    // Load areas configuration
+    let areas_config = match load_areas_config() {
+        Some(config) => config,
+        None => return current_area_id,
+    };
+
+    // Check each area's title keywords
+    if let Some(areas) = areas_config["areas"].as_array() {
+        for area in areas {
+            if let (Some(id), Some(keywords)) =
+                (area["id"].as_u64(), area["title_keywords"].as_array())
+            {
+                for keyword in keywords {
+                    if let Some(kw) = keyword.as_str() {
+                        if title.contains(&kw.to_lowercase()) {
+                            return id;
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    current_area_id
+}
+
+/// Resolve area alias to area name using areas.json
+fn resolve_area_alias(alias: &str) -> &str {
+    let alias_lower = alias.to_lowercase();
+
+    // Load areas configuration
+    let areas_config = match load_areas_config() {
+        Some(config) => config,
+        None => return alias,
+    };
+
+    // Check each area's aliases
+    if let Some(areas) = areas_config["areas"].as_array() {
+        for area in areas {
+            if let (Some(name), Some(aliases)) = (area["name"].as_str(), area["aliases"].as_array())
+            {
+                for area_alias in aliases {
+                    if let Some(a) = area_alias.as_str() {
+                        if alias_lower == a.to_lowercase() {
+                            // Return a static string by leaking memory (acceptable for small config)
+                            return Box::leak(name.to_string().into_boxed_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    alias
 }
 
 /// Processes a single danmaku command.

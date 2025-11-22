@@ -29,99 +29,274 @@
   "areas": [
     {
       "id": 86,
-      "name": "英雄联盟"
+      "name": "英雄联盟",
+      "title_keywords": [
+        "league of legends",
+        "lol",
+        "ろる",
+        "ろ、る",
+        "tft"
+      ],
+      "aliases": [
+        "101",
+        "lol",
+        "ろる",
+        "ろ、る",
+        "tft"
+      ]
     },
     {
       "id": 329,
-      "name": "无畏契约"
+      "name": "无畏契约",
+      "title_keywords": [
+        "valorant",
+        "ヴァロ"
+      ],
+      "aliases": [
+        "瓦",
+        "ヴァロ"
+      ]
     },
     {
       "id": 240,
-      "name": "APEX英雄"
+      "name": "APEX英雄",
+      "title_keywords": [
+        "apex"
+      ],
+      "aliases": [
+        "apex",
+        "派"
+      ]
     },
     {
       "id": 87,
-      "name": "守望先锋"
+      "name": "守望先锋",
+      "title_keywords": [
+        "overwatch"
+      ],
+      "aliases": []
     },
     {
       "id": 530,
-      "name": "萌宅领域"
+      "name": "萌宅领域",
+      "title_keywords": [],
+      "aliases": []
     },
     {
       "id": 235,
-      "name": "其他单机"
+      "name": "其他单机",
+      "title_keywords": [
+        "pokemon",
+        "core keeper",
+        "terraria",
+        "tgc card shop simulator",
+        "stardew valley",
+        "gta"
+      ],
+      "aliases": []
     },
     {
       "id": 107,
-      "name": "其他网游"
+      "name": "其他网游",
+      "title_keywords": [],
+      "aliases": []
     },
     {
       "id": 646,
-      "name": "UP主日常"
+      "name": "UP主日常",
+      "title_keywords": [],
+      "aliases": []
     },
     {
       "id": 102,
-      "name": "最终幻想14"
+      "name": "最终幻想14",
+      "title_keywords": [
+        "final fantasy",
+        "漆黒メインクエ",
+        "ff14"
+      ],
+      "aliases": [
+        "ff14"
+      ]
     },
     {
       "id": 433,
-      "name": "格斗游戏"
+      "name": "格斗游戏",
+      "title_keywords": [
+        "スト６",
+        "street fighter"
+      ],
+      "aliases": [
+        "sf6",
+        "st6",
+        "街霸"
+      ]
     },
     {
       "id": 216,
-      "name": "我的世界"
+      "name": "我的世界",
+      "title_keywords": [
+        "minecraft",
+        "マイクラ"
+      ],
+      "aliases": [
+        "mc",
+        "マイクラ",
+        "minecraft"
+      ]
     },
     {
       "id": 927,
-      "name": "DeadLock"
+      "name": "DeadLock",
+      "title_keywords": [
+        "deadlock"
+      ],
+      "aliases": []
+    },
+    {
+      "id": 977,
+      "name": "逃离鸭科夫",
+      "title_keywords": [
+        "escape from duckov"
+      ],
+      "aliases": [
+        "鸭科夫"
+      ]
     },
     {
       "id": 236,
-      "name": "主机游戏"
+      "name": "主机游戏",
+      "title_keywords": [
+        "clubhouse",
+        "アソビ大全"
+      ],
+      "aliases": []
     },
     {
       "id": 321,
-      "name": "原神"
+      "name": "原神",
+      "title_keywords": [
+        "原神",
+        "genshin impact"
+      ],
+      "aliases": []
     },
     {
       "id": 407,
-      "name": "游戏王"
+      "name": "游戏王",
+      "title_keywords": [
+        "yu-gi-oh",
+        "遊戯王"
+      ],
+      "aliases": []
     },
     {
       "id": 694,
-      "name": "斯普拉遁3"
+      "name": "斯普拉遁3",
+      "title_keywords": [
+        "splatoon",
+        "スプラトゥーン3"
+      ],
+      "aliases": []
     },
     {
       "id": 252,
-      "name": "逃离塔科夫"
+      "name": "逃离塔科夫",
+      "title_keywords": [
+        "tarkov",
+        "タルコフ"
+      ],
+      "aliases": [
+        "tkf",
+        "tarkov",
+        "塔科夫",
+        "タルコフ"
+      ]
     },
     {
       "id": 318,
-      "name": "使命召唤:战区"
+      "name": "使命召唤:战区",
+      "title_keywords": [
+        "call of duty",
+        "bo6"
+      ],
+      "aliases": [
+        "cod",
+        "使命召唤"
+      ]
     },
     {
       "id": 555,
-      "name": "艾尔登法环"
+      "name": "艾尔登法环",
+      "title_keywords": [
+        "elden ring",
+        "エルデンリング"
+      ],
+      "aliases": [
+        "elden",
+        "エルデンリング"
+      ]
     },
     {
       "id": 578,
-      "name": "怪物猎人"
+      "name": "怪物猎人",
+      "title_keywords": [
+        "monhun",
+        "モンハン",
+        "monster hunter"
+      ],
+      "aliases": [
+        "mhw",
+        "猛汉王",
+        "モンハン",
+        "monhun"
+      ]
     },
     {
       "id": 308,
-      "name": "塞尔达传说"
+      "name": "塞尔达传说",
+      "title_keywords": [
+        "zelda",
+        "ゼルダ"
+      ],
+      "aliases": [
+        "zelda",
+        "ゼルダ",
+        "塞尔达"
+      ]
     },
     {
       "id": 878,
-      "name": "三角洲行动"
+      "name": "三角洲行动",
+      "title_keywords": [
+        "delta force"
+      ],
+      "aliases": [
+        "洲",
+        "三角洲"
+      ]
     },
     {
       "id": 795,
-      "name": "Dark and Darker"
+      "name": "Dark and Darker",
+      "title_keywords": [
+        "dark and darker",
+        "dad"
+      ],
+      "aliases": [
+        "dad"
+      ]
     },
     {
       "id": 858,
-      "name": "致命公司"
+      "name": "致命公司",
+      "title_keywords": [
+        "致命公司",
+        "lethal company"
+      ],
+      "aliases": [
+        "公司"
+      ]
     }
   ]
 }

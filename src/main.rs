@@ -1813,8 +1813,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::info!("");
                 } else {
                     tracing::info!("🚀 启动 Web UI 和自动监控模式");
-                    tracing::info!("   Web UI 将在后台运行");
-                    tracing::info!("   访问 http://localhost:3150 查看控制面板");
                 }
 
                 #[cfg(target_os = "windows")]
@@ -1828,7 +1826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    tracing::info!("💡 提示: 使用 --cli 标志以命令行模式运行");
+                    tracing::info!("💡 提示: 使用 --cli 以命令行模式运行");
                 }
 
                 // Spawn WebUI server in background

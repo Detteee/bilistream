@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -6,7 +7,8 @@ use tokio::sync::Mutex;
 // Global process supervisor
 lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
-    static ref FFMPEG_SPEED: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
+    // Use atomic for lock-free speed updates (stored as f32 bits)
+    static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 }
 
 // Represents a managed ffmpeg process
@@ -53,10 +55,14 @@ pub async fn is_ffmpeg_running() -> bool {
     supervisor.is_some()
 }
 
-// Get current ffmpeg speed
+// Get current ffmpeg speed (lock-free read)
 pub async fn get_ffmpeg_speed() -> Option<f32> {
-    let speed = FFMPEG_SPEED.lock().await;
-    *speed
+    let bits = FFMPEG_SPEED.load(Ordering::Relaxed);
+    if bits == 0 {
+        None
+    } else {
+        Some(f32::from_bits(bits))
+    }
 }
 
 /// Stops the supervised ffmpeg process
@@ -79,9 +85,8 @@ pub async fn stop_ffmpeg() {
         tracing::warn!("⚠️ No ffmpeg process to stop");
     }
 
-    // Clear speed when ffmpeg stops
-    let mut speed = FFMPEG_SPEED.lock().await;
-    *speed = None;
+    // Clear speed when ffmpeg stops (lock-free write)
+    FFMPEG_SPEED.store(0, Ordering::Relaxed);
 }
 /// Extract compact stats from ffmpeg output line
 /// Only shows: time, bitrate, speed (fps removed as it's often empty)
@@ -232,11 +237,9 @@ pub async fn ffmpeg(
                                     {
                                         print!("\r{}", compact);
                                         let _ = std::io::stdout().flush();
-                                        // Update global speed if available (directly, no spawn)
+                                        // Update global speed if available (lock-free atomic write)
                                         if let Some(s) = speed {
-                                            if let Ok(mut speed_lock) = FFMPEG_SPEED.try_lock() {
-                                                *speed_lock = Some(s);
-                                            }
+                                            FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -260,12 +263,9 @@ pub async fn ffmpeg(
                                             extract_compact_stats(&line_buffer)
                                         {
                                             println!("\r{}", compact);
-                                            // Update global speed if available (directly, no spawn)
+                                            // Update global speed if available (lock-free atomic write)
                                             if let Some(s) = speed {
-                                                if let Ok(mut speed_lock) = FFMPEG_SPEED.try_lock()
-                                                {
-                                                    *speed_lock = Some(s);
-                                                }
+                                                FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
                                             }
                                         }
                                     } else if log_level_clone == "debug"
