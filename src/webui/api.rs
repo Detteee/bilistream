@@ -138,14 +138,16 @@ pub async fn get_status() -> impl IntoResponse {
     let cfg = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::error!("Failed to load config: {}", e);
+            // Only log error if it's not a "file not found" error (expected on first run)
+            let is_not_found = e.to_string().contains("No such file");
+            if !is_not_found {
+                tracing::error!("Failed to load config: {}", e);
+            }
+
             let error_msg = if e.to_string().contains("Permission denied") {
                 format!("配置文件权限错误: {}。请确保 config.yaml 文件存在且有读取权限，或在可执行文件所在目录运行程序。", e)
-            } else if e.to_string().contains("No such file") {
-                format!(
-                    "配置文件不存在: {}。请先运行 'bilistream setup' 创建配置文件。",
-                    e
-                )
+            } else if is_not_found {
+                "配置文件不存在，请完成首次设置".to_string()
             } else {
                 format!("配置加载失败: {}", e)
             };

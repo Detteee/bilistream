@@ -20,10 +20,14 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 1. Download and extract the release package
 2. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
 3. **Linux/Mac:** Run `./bilistream` in terminal
-4. Open browser to `http://localhost:3150`
-5. **First run:** Complete setup wizard in browser (QR code login, configuration)
-6. **Subsequent runs:** Access control panel directly
-7. Dependencies auto-download on first run (Windows) or follow setup instructions below
+4. **Auto-download:** Required files download automatically on first run:
+   - `webui/dist/index.html` - Web interface
+   - `areas.json` - Bilibili categories and banned keywords
+   - `channels.json` - Preset channel list
+   - **Windows only:** `yt-dlp.exe` and `ffmpeg.exe`
+5. Open browser to `http://localhost:3150`
+6. **First run:** Complete setup wizard in browser (QR code login, configuration)
+7. **Subsequent runs:** Access control panel directly
 
 ## Features
 

@@ -20,10 +20,14 @@
 1. 下载并解压发行包
 2. **Windows:** 双击 `bilistream.exe` - Web UI 自动启动！
 3. **Linux/Mac:** 终端运行 `./bilistream`
-4. 在浏览器中打开 `http://localhost:3150`
-5. **首次运行:** 在浏览器中完成设置向导（二维码登录、配置）
-6. **后续运行:** 直接访问控制面板
-7. 依赖项首次运行时自动下载（Windows）或按下方说明安装
+4. **自动下载:** 首次运行时自动下载必需文件：
+   - `webui/dist/index.html` - Web 界面
+   - `areas.json` - B站分区和禁用关键词
+   - `channels.json` - 预设频道列表
+   - **仅 Windows:** `yt-dlp.exe` 和 `ffmpeg.exe`
+5. 在浏览器中打开 `http://localhost:3150`
+6. **首次运行:** 在浏览器中完成设置向导（二维码登录、配置）
+7. **后续运行:** 直接访问控制面板
 
 ## 功能特点
 

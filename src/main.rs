@@ -1765,13 +1765,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => {
-            // On Windows, ensure dependencies are downloaded
-            #[cfg(target_os = "windows")]
-            {
-                if let Err(e) = bilistream::windows_deps::ensure_dependencies().await {
-                    eprintln!("⚠️  下载依赖项失败: {}", e);
-                    eprintln!("请手动下载 yt-dlp.exe 和 ffmpeg.exe 到程序目录");
-                }
+            // Ensure all required files and dependencies are present
+            if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
+                eprintln!("⚠️  下载依赖项失败: {}", e);
+                eprintln!("请手动从 GitHub 下载必需文件");
+                eprintln!("下载地址: https://github.com/Detteee/bilistream/releases");
             }
 
             // Check if --cli flag is set
