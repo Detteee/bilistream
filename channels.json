@@ -296,6 +296,15 @@
         "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ",
         "twitch": "itoitoi_q"
       }
+    },
+    {
+      "name": "昏昏アリア",
+      "aliases": ["aria"],
+      "platforms": {
+        "youtube": "UCo6mwsozDGMW0UNGowBJGhg",
+        "twitch": "aria_konkon"
+      }
     }
+
   ]
 } 

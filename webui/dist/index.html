@@ -473,6 +473,10 @@
             <span class="info-label">分区</span>
             <span class="info-value" id="bili-area">-</span>
           </div>
+          <div class="info-row" id="bili-stream-quality-row" style="display: none;">
+            <span class="info-label">流质量</span>
+            <span class="info-value" id="bili-stream-quality">-</span>
+          </div>
         </div>
 
         <div class="card">
@@ -558,20 +562,20 @@
         </div>
 
         <div class="control-group">
-          <label>选择频道</label>
+          <label>选择频道 (可选)</label>
           <select id="channel-select" onchange="updateChannelInfo()">
-            <option value="">加载中...</option>
+            <option value="">选择预设频道或手动输入...</option>
           </select>
         </div>
 
         <div class="control-group">
-          <label>频道ID</label>
-          <input type="text" id="channel-id-input" placeholder="频道ID" readonly>
+          <label>频道ID (必填)</label>
+          <input type="text" id="channel-id-input" placeholder="输入频道ID或从上方选择">
         </div>
 
         <div class="control-group">
-          <label>频道名称</label>
-          <input type="text" id="channel-name-input" placeholder="频道名称" readonly>
+          <label>频道名称 (必填)</label>
+          <input type="text" id="channel-name-input" placeholder="输入频道名称或从上方选择">
         </div>
 
         <div class="control-group">
@@ -582,14 +586,14 @@
         </div>
 
         <div class="control-group">
-          <label>流质量 (可选)</label>
+          <label>画质 (可选)</label>
           <select id="quality-select" onchange="updateQualityOptions()">
-            <option value="">不修改质量</option>
-            <option value="best">best - 最佳质量 (推荐)</option>
+            <option value="">不修改画质</option>
+            <option value="best">best - 最佳画质 (推荐)</option>
             <option value="720p">720p - 高清</option>
             <option value="480p">480p - 标清</option>
             <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
-            <option value="worst">worst - 最低质量</option>
+            <option value="worst">worst - 最低画质</option>
           </select>
         </div>
 
@@ -790,6 +794,26 @@
             document.getElementById('bili-title').textContent = bili.title || '-';
             document.getElementById('bili-area').textContent =
               bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
+
+            // Update stream quality
+            const qualityRow = document.getElementById('bili-stream-quality-row');
+            const qualityElement = document.getElementById('bili-stream-quality');
+            if (bili.is_live && bili.stream_quality) {
+              qualityRow.style.display = '';
+              const speedText = bili.stream_speed ? ` (${bili.stream_speed.toFixed(2)}x)` : '';
+              qualityElement.textContent = bili.stream_quality + speedText;
+
+              // Set color based on quality
+              if (bili.stream_quality === '流畅') {
+                qualityElement.style.color = '#10b981'; // green
+              } else if (bili.stream_quality === '波动') {
+                qualityElement.style.color = '#f59e0b'; // orange
+              } else if (bili.stream_quality === '卡顿') {
+                qualityElement.style.color = '#ef4444'; // red
+              }
+            } else {
+              qualityRow.style.display = 'none';
+            }
 
             // Update YouTube status
             if (data.data.youtube) {
@@ -998,29 +1022,27 @@
       }
 
       function updateChannelList() {
-        if (!channelsData) return;
-
         const platform = document.getElementById('platform-select').value;
         const channelSelect = document.getElementById('channel-select');
 
-        channelSelect.innerHTML = '<option value="">选择频道...</option>';
+        channelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
 
-        channelsData.channels.forEach(channel => {
-          if (channel.platforms && channel.platforms[platform]) {
-            const option = document.createElement('option');
-            option.value = JSON.stringify({
-              id: channel.platforms[platform],
-              name: channel.name
-            });
-            option.textContent = channel.name;
-            channelSelect.appendChild(option);
-          }
-        });
+        // Only populate if channels data is available
+        if (channelsData && channelsData.channels) {
+          channelsData.channels.forEach(channel => {
+            if (channel.platforms && channel.platforms[platform]) {
+              const option = document.createElement('option');
+              option.value = JSON.stringify({
+                id: channel.platforms[platform],
+                name: channel.name
+              });
+              option.textContent = channel.name;
+              channelSelect.appendChild(option);
+            }
+          });
+        }
 
-        // Clear inputs
-        document.getElementById('channel-id-input').value = '';
-        document.getElementById('channel-name-input').value = '';
-
+        // Don't clear inputs - allow manual entry to persist
         // Update quality options based on platform
         updateQualityOptions();
       }
@@ -1070,13 +1092,13 @@
 
       async function applyChannelChange() {
         const platform = document.getElementById('platform-select').value;
-        const channelId = document.getElementById('channel-id-input').value;
-        const channelName = document.getElementById('channel-name-input').value;
+        const channelId = document.getElementById('channel-id-input').value.trim();
+        const channelName = document.getElementById('channel-name-input').value.trim();
         const areaId = document.getElementById('area-select').value;
         const quality = document.getElementById('quality-select').value;
 
         if (!channelId || !channelName) {
-          showNotification('请选择频道', 'error');
+          showNotification('请输入频道ID和频道名称', 'error');
           return;
         }
 

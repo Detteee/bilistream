@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use crate::config::load_config;
 use crate::plugins::{
     bili_start_live, bili_stop_live, bili_update_area, bilibili, get_bili_live_status,
-    send_danmaku as send_danmaku_to_bili, set_config_updated,
+    get_ffmpeg_speed, send_danmaku as send_danmaku_to_bili, set_config_updated,
 };
 
 // Global log buffer
@@ -80,6 +80,8 @@ pub struct BiliStatus {
     pub title: String,
     pub area_id: u64,
     pub area_name: String,
+    pub stream_quality: Option<String>,
+    pub stream_speed: Option<f32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -179,6 +181,22 @@ pub async fn get_status() -> impl IntoResponse {
 
     let bili_area_name = get_area_name(bili_area_id);
 
+    // Get ffmpeg speed and calculate stream quality
+    let stream_speed = get_ffmpeg_speed().await;
+    let stream_quality = if bili_is_live {
+        stream_speed.map(|speed| {
+            if speed > 0.97 {
+                "流畅".to_string()
+            } else if speed > 0.94 {
+                "波动".to_string()
+            } else {
+                "卡顿".to_string()
+            }
+        })
+    } else {
+        None
+    };
+
     // Get YouTube/Twitch status from cache (updated by main loop)
     // This avoids expensive yt-dlp/streamlink calls on every refresh
     let cached_status = get_status_cache();
@@ -191,6 +209,8 @@ pub async fn get_status() -> impl IntoResponse {
             title: bili_title,
             area_id: bili_area_id,
             area_name: bili_area_name,
+            stream_quality,
+            stream_speed,
         },
         youtube: youtube_status,
         twitch: twitch_status,

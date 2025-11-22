@@ -5,7 +5,7 @@ use bilistream::plugins::{
     ffmpeg, get_aliases, get_area_name, get_bili_live_status, get_channel_name, get_puuid,
     get_thumbnail, get_twitch_status, get_youtube_status, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
-    send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning,
+    send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
 };
 
 use chrono::{DateTime, Local};
@@ -13,7 +13,6 @@ use clap::{Arg, Command};
 use regex::Regex;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
-use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::{error::Error, thread, time::Duration};
@@ -57,11 +56,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         init_logger();
     }
 
-    if is_ffmpeg_running() {
-        //pkill ffmpeg;
-        let mut cmd = StdCommand::new("pkill");
-        cmd.arg("ffmpeg");
-        cmd.spawn()?;
+    if is_ffmpeg_running().await {
+        // Stop any existing ffmpeg process
+        stop_ffmpeg().await;
     }
 
     // Start danmaku client in background if not already running
@@ -117,6 +114,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 title: bili_title.clone(),
                 area_id: bili_area_id,
                 area_name: bili_area_name,
+                stream_quality: None,
+                stream_speed: None,
             },
             youtube: if !cfg.youtube.channel_id.is_empty() {
                 Some(bilistream::YtStatus {
@@ -211,7 +210,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             };
             let yot_area = if yt_is_live { yt_area } else { tw_area };
             let mut title = if yt_is_live { yt_title } else { tw_title };
-            let m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
+            let mut m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
             tracing::info!(
                 "{} 正在 {} 直播, 标题:\n          {}",
                 channel_name,
@@ -347,24 +346,34 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Execute ffmpeg with platform-specific locks
             tracing::info!("🚀 启动ffmpeg流传输到B站");
-            ffmpeg(
-                cfg.bililive.bili_rtmp_url.clone(),
-                cfg.bililive.bili_rtmp_key.clone(),
-                m3u8_url.clone().unwrap(),
-                cfg.proxy.clone(),
-                ffmpeg_log_level,
-            );
 
-            // avoid ffmpeg exit errorly and the live is still running, restart ffmpeg
+            // Main ffmpeg monitoring loop - blocks until stream ends
             loop {
-                tokio::time::sleep(Duration::from_secs(7)).await;
+                ffmpeg(
+                    cfg.bililive.bili_rtmp_url.clone(),
+                    cfg.bililive.bili_rtmp_key.clone(),
+                    m3u8_url.clone().unwrap(),
+                    cfg.proxy.clone(),
+                    ffmpeg_log_level.to_string(),
+                )
+                .await;
 
-                if area_v2 == 86 {
-                    let puuid = get_puuid(&channel_name)?;
-                    if puuid != "" {
-                        monitor_lol_game(puuid).await?;
+                // Wait for ffmpeg to exit (blocking)
+                let exit_status = wait_ffmpeg().await;
+
+                if let Some(status) = exit_status {
+                    if status.success() {
+                        tracing::info!("✅ ffmpeg正常退出");
+                    } else {
+                        tracing::warn!("⚠️ ffmpeg异常退出: {:?}", status);
                     }
+                } else {
+                    tracing::warn!("⚠️ ffmpeg进程已停止");
                 }
+
+                // Check if stream is still live before restarting
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
                 let (current_is_live, _, _, new_m3u8_url, _) = if yt_is_live {
                     yt_live
                         .get_status()
@@ -377,28 +386,21 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .unwrap_or((false, None, None, None, None))
                 };
                 let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
+
                 if !current_is_live || !bili_is_live {
+                    tracing::info!("直播已结束，停止ffmpeg监控循环");
                     break;
                 }
-                // Restart ffmpeg if needed (e.g., stream URL changed)
-                tracing::debug!("🔄 重启ffmpeg进程以维持流连接");
-                ffmpeg(
-                    cfg.bililive.bili_rtmp_url.clone(),
-                    cfg.bililive.bili_rtmp_key.clone(),
-                    new_m3u8_url.clone().unwrap(),
-                    cfg.proxy.clone(),
-                    ffmpeg_log_level,
-                );
 
-                // Verify ffmpeg started successfully
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                if !is_ffmpeg_running() {
-                    tracing::error!("❌ ffmpeg重启失败，将在下次循环重试");
-                    if let Err(e) = send_danmaku(&cfg, "⚠️ 流重启失败，正在重试...").await
-                    {
-                        tracing::error!("Failed to send danmaku: {}", e);
-                    }
+                // Update m3u8 URL if it changed
+                if new_m3u8_url.is_some() && new_m3u8_url != m3u8_url {
+                    tracing::info!("🔄 检测到流URL变化，使用新URL重启");
+                    m3u8_url = new_m3u8_url;
                 }
+
+                // Stream is still live but ffmpeg exited, restart it
+                tracing::info!("🔄 流仍在进行，重启ffmpeg...");
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
 
             tracing::info!("{} 直播结束", channel_name);
@@ -803,9 +805,8 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                                 if is_live {
                                     tracing::error!("检测到非法词汇:{}，停止直播", word);
                                     bili_stop_live(&cfg).await.unwrap();
-                                    let mut cmd = StdCommand::new("pkill");
-                                    cmd.arg("ffmpeg");
-                                    cmd.spawn().unwrap();
+                                    // Stop ffmpeg using supervisor
+                                    rt.block_on(stop_ffmpeg());
                                     if let Err(e) =
                                         send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
                                             .await
@@ -833,11 +834,13 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
+
+                // Check if ffmpeg is still running
+                if !rt.block_on(ffmpeg::is_ffmpeg_running()) {
+                    return;
+                }
             });
 
-            if !ffmpeg::is_ffmpeg_running() {
-                return;
-            }
             thread::sleep(Duration::from_secs(interval));
         }
     });
