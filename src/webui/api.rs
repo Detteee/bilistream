@@ -236,6 +236,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "interval": cfg.interval,
         "auto_cover": cfg.auto_cover,
         "anti_collision": cfg.enable_anti_collision,
+        "enable_lol_monitor": cfg.enable_lol_monitor,
+        "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -261,6 +263,8 @@ pub struct UpdateConfigRequest {
     interval: Option<u64>,
     auto_cover: Option<bool>,
     anti_collision: Option<bool>,
+    enable_lol_monitor: Option<bool>,
+    riot_api_key: Option<String>,
 }
 
 pub async fn update_config(
@@ -280,6 +284,14 @@ pub async fn update_config(
     }
     if let Some(anti_collision) = payload.anti_collision {
         cfg.enable_anti_collision = anti_collision;
+    }
+    if let Some(enable_lol_monitor) = payload.enable_lol_monitor {
+        cfg.enable_lol_monitor = enable_lol_monitor;
+    }
+    if let Some(riot_api_key) = payload.riot_api_key {
+        if !riot_api_key.is_empty() {
+            cfg.riot_api_key = Some(riot_api_key);
+        }
     }
 
     // Save config
@@ -419,6 +431,7 @@ pub struct UpdateChannelRequest {
     channel_name: String,
     area_id: Option<u64>,
     quality: Option<String>,
+    riot_api_key: Option<String>,
 }
 
 pub async fn update_channel(
@@ -434,6 +447,14 @@ pub async fn update_channel(
             cfg.youtube.channel_name = payload.channel_name;
             if let Some(area_id) = payload.area_id {
                 cfg.youtube.area_v2 = area_id;
+                // If area is LOL (86) and riot_api_key is provided, update it
+                if area_id == 86 {
+                    if let Some(riot_api_key) = payload.riot_api_key {
+                        if !riot_api_key.is_empty() {
+                            cfg.riot_api_key = Some(riot_api_key);
+                        }
+                    }
+                }
             }
             if let Some(quality) = payload.quality {
                 cfg.youtube.quality = quality;
@@ -444,6 +465,14 @@ pub async fn update_channel(
             cfg.twitch.channel_name = payload.channel_name;
             if let Some(area_id) = payload.area_id {
                 cfg.twitch.area_v2 = area_id;
+                // If area is LOL (86) and riot_api_key is provided, update it
+                if area_id == 86 {
+                    if let Some(riot_api_key) = payload.riot_api_key {
+                        if !riot_api_key.is_empty() {
+                            cfg.riot_api_key = Some(riot_api_key);
+                        }
+                    }
+                }
             }
             if let Some(quality) = payload.quality {
                 cfg.twitch.quality = quality;

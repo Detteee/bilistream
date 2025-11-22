@@ -33,6 +33,8 @@ pub struct Config {
     pub holodex_api_key: Option<String>,
     #[serde(rename = "RiotApiKey")]
     pub riot_api_key: Option<String>,
+    #[serde(rename = "EnableLolMonitor")]
+    pub enable_lol_monitor: bool,
     #[serde(rename = "LolMonitorInterval")]
     pub lol_monitor_interval: Option<u64>,
     #[serde(rename = "AntiCollisionList")]

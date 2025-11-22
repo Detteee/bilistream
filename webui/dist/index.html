@@ -580,9 +580,27 @@
 
         <div class="control-group">
           <label>分区 (可选)</label>
-          <select id="area-select">
+          <select id="area-select" onchange="toggleLolMonitorInputs()">
             <option value="">不修改分区</option>
           </select>
+        </div>
+
+        <div class="control-group" id="lol-monitor-group" style="display: none;">
+          <label style="display: flex; align-items: center; gap: 10px;">
+            <input type="checkbox" id="enable-lol-monitor-inline" onchange="toggleRiotApiKeyInputInline()">
+            <span>启用英雄联盟玩家ID监控</span>
+          </label>
+          <small style="color: #888; display: block; margin-top: 5px;">
+            监控游戏内玩家ID是否包含违禁词汇
+          </small>
+        </div>
+
+        <div class="control-group" id="riot-api-key-group" style="display: none;">
+          <label>Riot API Key</label>
+          <input type="text" id="riot-api-key-input" placeholder="留空表示不修改">
+          <small style="color: #888; display: block; margin-top: 5px;">
+            获取: <a href="https://developer.riotgames.com/" target="_blank">developer.riotgames.com</a>
+          </small>
         </div>
 
         <div class="control-group">
@@ -647,6 +665,12 @@
       let statusRefreshInterval = 60000; // Default 60 seconds
       let statusIntervalId = null;
 
+      // Global config data for access across functions
+      window.configData = {
+        enable_lol_monitor: false,
+        riot_api_key: ''
+      };
+
       // Auto refresh logs every 2 seconds
       setInterval(refreshLogs, 2000);
 
@@ -656,10 +680,19 @@
           const response = await fetch('/api/config');
           if (response.ok) {
             const config = await response.json();
+
+            // Store config globally
+            window.configData = {
+              enable_lol_monitor: config.enable_lol_monitor || false,
+              riot_api_key: config.riot_api_key || ''
+            };
+
             if (config.interval) {
               statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
               console.log('Status refresh interval set to', config.interval, 'seconds');
             }
+
+            console.log('LOL Monitor enabled:', window.configData.enable_lol_monitor);
           }
         } catch (error) {
           console.log('Failed to load config, using default interval:', error);
@@ -1090,12 +1123,53 @@
         }
       }
 
+      function toggleLolMonitorInputs() {
+        const areaId = document.getElementById('area-select').value;
+        const lolMonitorGroup = document.getElementById('lol-monitor-group');
+        const riotApiKeyGroup = document.getElementById('riot-api-key-group');
+        const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
+
+        // Show LOL monitor checkbox if area is 86 (英雄联盟)
+        if (areaId === '86') {
+          lolMonitorGroup.style.display = 'block';
+
+          // Load current enable_lol_monitor state
+          if (window.configData) {
+            enableCheckbox.checked = window.configData.enable_lol_monitor || false;
+          }
+
+          // Show Riot API Key input if checkbox is checked
+          if (enableCheckbox.checked) {
+            riotApiKeyGroup.style.display = 'block';
+          } else {
+            riotApiKeyGroup.style.display = 'none';
+          }
+        } else {
+          lolMonitorGroup.style.display = 'none';
+          riotApiKeyGroup.style.display = 'none';
+        }
+      }
+
+      function toggleRiotApiKeyInputInline() {
+        const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
+        const riotApiKeyGroup = document.getElementById('riot-api-key-group');
+
+        // Show/hide Riot API Key input based on checkbox
+        if (enableCheckbox.checked) {
+          riotApiKeyGroup.style.display = 'block';
+        } else {
+          riotApiKeyGroup.style.display = 'none';
+        }
+      }
+
       async function applyChannelChange() {
         const platform = document.getElementById('platform-select').value;
         const channelId = document.getElementById('channel-id-input').value.trim();
         const channelName = document.getElementById('channel-name-input').value.trim();
         const areaId = document.getElementById('area-select').value;
         const quality = document.getElementById('quality-select').value;
+        const riotApiKey = document.getElementById('riot-api-key-input').value.trim();
+        const enableLolMonitor = document.getElementById('enable-lol-monitor-inline').checked;
 
         if (!channelId || !channelName) {
           showNotification('请输入频道ID和频道名称', 'error');
@@ -1103,28 +1177,62 @@
         }
 
         try {
-          const payload = {
+          // First, update channel info
+          const channelPayload = {
             platform: platform,
             channel_id: channelId,
             channel_name: channelName
           };
 
           if (areaId) {
-            payload.area_id = parseInt(areaId);
+            channelPayload.area_id = parseInt(areaId);
+
+            // Include Riot API Key if area is 86 and key is provided
+            if (areaId === '86' && riotApiKey) {
+              channelPayload.riot_api_key = riotApiKey;
+            }
           }
 
           if (quality) {
-            payload.quality = quality;
+            channelPayload.quality = quality;
           }
 
-          const response = await fetch('/api/channel', {
+          const channelResponse = await fetch('/api/channel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(channelPayload)
           });
 
-          const data = await response.json();
-          showNotification(data.message || '频道已更新', 'success');
+          const channelData = await channelResponse.json();
+
+          // If area is 86, also update enable_lol_monitor setting
+          if (areaId === '86') {
+            const configPayload = {
+              enable_lol_monitor: enableLolMonitor
+            };
+
+            // Include Riot API Key in config update if provided
+            if (riotApiKey) {
+              configPayload.riot_api_key = riotApiKey;
+            }
+
+            await fetch('/api/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(configPayload)
+            });
+
+            // Update global config
+            window.configData.enable_lol_monitor = enableLolMonitor;
+          }
+
+          showNotification(channelData.message || '频道已更新', 'success');
+
+          // Clear Riot API Key input after successful update
+          if (riotApiKey) {
+            document.getElementById('riot-api-key-input').value = '';
+          }
+
           setTimeout(refreshStatus, 2000);
         } catch (error) {
           showNotification('更新失败: ' + error.message, 'error');
