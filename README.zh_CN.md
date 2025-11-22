@@ -8,17 +8,9 @@
 
 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
-**Windows 发行包包含：**
-
-- `bilistream.exe` - 主程序
-- `webui/dist/index.html` - Web UI（已打包，无需外部依赖）
-- `channels.json` - 频道配置模板
-- `areas.json` - 分区定义和禁用关键词
-
 **快速开始：**
 
-1. 下载并解压发行包
-2. **Windows:** 双击 `bilistream.exe` - Web UI 自动启动！
+1. **Windows:** 双击 `bilistream.exe` - Web UI 自动启动！
 3. **Linux/Mac:** 终端运行 `./bilistream`
 4. **自动下载:** 首次运行时自动下载必需文件：
    - `webui/dist/index.html` - Web 界面

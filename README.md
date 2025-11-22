@@ -8,26 +8,18 @@
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
-**Windows Package includes:**
-
-- `bilistream.exe` - Main executable
-- `webui/dist/index.html` - Web UI (bundled, no external dependencies)
-- `channels.json` - Channel configuration template
-- `areas.json` - Area definitions and banned keywords
-
 **Quick Start:**
 
-1. Download and extract the release package
-2. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
-3. **Linux/Mac:** Run `./bilistream` in terminal
-4. **Auto-download:** Required files download automatically on first run:
+1. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
+2. **Linux/Mac:** Run `./bilistream` in terminal
+3. **Auto-download:** Required files download automatically on first run:
    - `webui/dist/index.html` - Web interface
    - `areas.json` - Bilibili categories and banned keywords
    - `channels.json` - Preset channel list
    - **Windows only:** `yt-dlp.exe` and `ffmpeg.exe`
-5. Open browser to `http://localhost:3150`
-6. **First run:** Complete setup wizard in browser (QR code login, configuration)
-7. **Subsequent runs:** Access control panel directly
+4. Open browser to `http://localhost:3150`
+5. **First run:** Complete setup wizard in browser (QR code login, configuration)
+6. **Subsequent runs:** Access control panel directly
 
 ## Features
 
@@ -125,14 +117,14 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
    **YouTube (yt-dlp):**
 
-   - `best` or `source` - Best quality (recommended)
+   - `best` - Best quality (recommended)
    - `worst` - Lowest quality
    - `720p`, `480p`, `360p` - Specific resolutions
    - Or use any yt-dlp format string
 
    **Twitch (streamlink):**
 
-   - `best` or `source` - Best quality (recommended)
+   - `best`` - Best quality (recommended)
    - `worst` - Lowest quality
    - `720p`, `480p` - Specific resolutions
 
