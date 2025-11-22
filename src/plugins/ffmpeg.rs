@@ -49,6 +49,89 @@ fn get_ffmpeg_command() -> String {
     }
 }
 
+// Set high priority for ffmpeg process to ensure stable streaming
+fn set_high_priority(pid: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, use renice to set nice value to -10 (higher priority)
+        // Nice values range from -20 (highest) to 19 (lowest), default is 0
+        let status = std::process::Command::new("renice")
+            .arg("-n")
+            .arg("-10")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {
+                // tracing::info!("✅ Set ffmpeg process priority to high (nice -10)");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
+                tracing::info!(
+                    "💡 Tip: Run with sudo or set CAP_SYS_NICE capability for better performance"
+                );
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Could not set process priority: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, use wmic to set priority to "high priority"
+        // Priority classes: realtime, high, abovenormal, normal, belownormal, low
+        let status = std::process::Command::new("wmic")
+            .arg("process")
+            .arg("where")
+            .arg(format!("ProcessId={}", pid))
+            .arg("CALL")
+            .arg("setpriority")
+            .arg("128") // 128 = High priority
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {
+                // tracing::info!("✅ Set ffmpeg process priority to high");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Could not set process priority: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, use renice similar to Linux
+        let status = std::process::Command::new("renice")
+            .arg("-n")
+            .arg("-10")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {
+                // tracing::info!("✅ Set ffmpeg process priority to high (nice -10)");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
+                tracing::info!("💡 Tip: Run with sudo for better performance");
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Could not set process priority: {}", e);
+            }
+        }
+    }
+}
+
 // Check if ffmpeg is running via supervisor
 pub async fn is_ffmpeg_running() -> bool {
     let supervisor = FFMPEG_SUPERVISOR.lock().await;
@@ -207,6 +290,11 @@ pub async fn ffmpeg(
         Ok(mut child) => {
             let pid = child.id();
             tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
+
+            // Set high priority for stable streaming
+            if let Some(pid_value) = pid {
+                set_high_priority(pid_value);
+            }
 
             // Capture stderr for monitoring
             if let Some(stderr) = child.stderr.take() {
