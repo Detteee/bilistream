@@ -8,12 +8,6 @@
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
-### 🎉 What's New in v0.3.6
-- 🚀 **Auto-Update System** - One-click updates from Web UI
-- 📦 **Smaller Downloads** - 50-70% smaller packages (5-10 MB vs 15-30 MB)
-- 🔧 **Automated Tools** - Version bump and release build scripts
-- 📚 **Complete Documentation** - Comprehensive guides included
-
 **Quick Start:**
 
 1. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
