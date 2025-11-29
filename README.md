@@ -232,40 +232,6 @@ Example:
 
 The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) for more Area name and ID.
 
-## Development
-
-### Version Management
-
-Bilistream uses automated version management. To bump the version:
-
-```bash
-# Linux/macOS
-./bump_version.sh 0.4.0
-
-# Windows
-.\bump_version.ps1 0.4.0
-```
-
-See [VERSION_MANAGEMENT.md](VERSION_MANAGEMENT.md) for details.
-
-### Building Releases
-
-To build release archives for distribution:
-
-```bash
-# Linux/macOS
-./build_release.sh
-
-# Windows
-.\build_release.ps1
-```
-
-This creates:
-- `release/bilistream_for_linux.tar.gz`
-- `release/bilistream_for_windows.zip`
-
-See [RELEASE_GUIDE.md](RELEASE_GUIDE.md) for the complete release process.
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
