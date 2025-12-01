@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(target_os = "windows")]
 use std::io::Write;
@@ -8,6 +9,35 @@ use std::path::PathBuf;
 
 const GITHUB_RAW_BASE: &str = "https://raw.githubusercontent.com/Detteee/bilistream/main";
 
+// Global download progress tracking
+lazy_static::lazy_static! {
+    static ref DOWNLOAD_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    static ref DOWNLOAD_COMPLETE: AtomicBool = AtomicBool::new(false);
+    static ref DOWNLOAD_PROGRESS: AtomicUsize = AtomicUsize::new(0);
+    static ref DOWNLOAD_TOTAL: AtomicUsize = AtomicUsize::new(0);
+    static ref DOWNLOAD_MESSAGE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+}
+
+pub fn is_download_in_progress() -> bool {
+    DOWNLOAD_IN_PROGRESS.load(Ordering::Relaxed)
+}
+
+pub fn is_download_complete() -> bool {
+    DOWNLOAD_COMPLETE.load(Ordering::Relaxed)
+}
+
+pub fn get_download_progress() -> (usize, usize, String) {
+    let progress = DOWNLOAD_PROGRESS.load(Ordering::Relaxed);
+    let total = DOWNLOAD_TOTAL.load(Ordering::Relaxed);
+    let message = DOWNLOAD_MESSAGE.lock().unwrap().clone();
+    (progress, total, message)
+}
+
+fn set_download_message(msg: &str) {
+    *DOWNLOAD_MESSAGE.lock().unwrap() = msg.to_string();
+    tracing::info!("{}", msg);
+}
+
 #[cfg(target_os = "windows")]
 const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 #[cfg(target_os = "windows")]
@@ -15,12 +45,65 @@ const FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/downloa
 
 /// Ensure all required files and dependencies are present
 pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
+    DOWNLOAD_IN_PROGRESS.store(true, Ordering::Relaxed);
+    DOWNLOAD_COMPLETE.store(false, Ordering::Relaxed);
+
+    // Count total items to download
+    let mut total_items = 0;
+
+    // Check what needs to be downloaded
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .ok_or("Failed to get executable directory")?
+        .to_path_buf();
+
+    if !exe_dir.join("areas.json").exists() {
+        total_items += 1;
+    }
+    if !exe_dir.join("channels.json").exists() {
+        total_items += 1;
+    }
+    if !exe_dir
+        .join("webui")
+        .join("dist")
+        .join("index.html")
+        .exists()
+    {
+        total_items += 1;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if !exe_dir.join("yt-dlp.exe").exists() {
+            total_items += 1;
+        }
+        if !exe_dir.join("ffmpeg.exe").exists() {
+            total_items += 1;
+        }
+    }
+
+    DOWNLOAD_TOTAL.store(total_items, Ordering::Relaxed);
+    DOWNLOAD_PROGRESS.store(0, Ordering::Relaxed);
+
+    if total_items == 0 {
+        set_download_message("所有依赖已就绪");
+        DOWNLOAD_COMPLETE.store(true, Ordering::Relaxed);
+        DOWNLOAD_IN_PROGRESS.store(false, Ordering::Relaxed);
+        return Ok(());
+    }
+
+    set_download_message(&format!("开始下载 {} 个文件...", total_items));
+
     // First, ensure required data files (cross-platform)
     ensure_required_files().await?;
 
     // Then, ensure platform-specific dependencies
     #[cfg(target_os = "windows")]
     ensure_windows_dependencies().await?;
+
+    set_download_message("所有依赖下载完成！");
+    DOWNLOAD_COMPLETE.store(true, Ordering::Relaxed);
+    DOWNLOAD_IN_PROGRESS.store(false, Ordering::Relaxed);
 
     Ok(())
 }

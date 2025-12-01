@@ -1,3 +1,9 @@
+// Hide console window on Windows in release mode
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use bilistream::config::load_config;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
@@ -1473,11 +1479,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .default_value("error")
                 .value_parser(["error", "info", "debug"]),
         )
-        .arg(
-            Arg::new("cli")
-                .long("cli")
-                .help("以命令行模式运行（默认启动 Web UI）")
-                .action(clap::ArgAction::SetTrue),
+        .subcommand(
+            Command::new("cli")
+                .about("以命令行模式运行（无 Web UI）"),
         )
         .subcommand(
             Command::new("get-live-status")
@@ -1555,6 +1559,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             Command::new("webui")
                 .about("启动 Web UI 控制面板")
+                .arg(
+                    Arg::new("port")
+                        .short('p')
+                        .long("port")
+                        .value_name("PORT")
+                        .help("Web UI 端口")
+                        .default_value("3150")
+                        .value_parser(clap::value_parser!(u16)),
+                ),
+        )
+        .subcommand(
+            Command::new("tray")
+                .about("启动系统托盘模式")
                 .arg(
                     Arg::new("port")
                         .short('p')
@@ -1671,6 +1688,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Run monitoring loop in foreground (this will block)
             run_bilistream(ffmpeg_log_level).await?;
         }
+        Some(("cli", _)) => {
+            // CLI mode: Check if setup is needed
+            let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+            let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
+            let needs_setup = !config_path.exists() || !cookies_path.exists();
+
+            if needs_setup {
+                println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
+                setup_wizard().await?;
+                return Ok(());
+            }
+
+            // CLI mode: run normal monitoring
+            run_bilistream(ffmpeg_log_level).await?;
+        }
+        Some(("tray", sub_m)) => {
+            // Initialize logger with capture for tray mode
+            init_logger_with_capture();
+
+            let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
+            let log_level = ffmpeg_log_level.to_string(); // Clone to owned String
+
+            tracing::info!("🚀 启动系统托盘模式");
+            tracing::info!("   Web UI 端口: {}", port);
+
+            // Spawn WebUI server in background
+            tokio::spawn(async move {
+                if let Err(e) = bilistream::webui::server::start_webui(port).await {
+                    tracing::error!("Web UI 服务器错误: {}", e);
+                }
+            });
+
+            // Spawn monitoring loop in separate thread with its own runtime
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    if let Err(e) = run_bilistream(&log_level).await {
+                        tracing::error!("监控循环错误: {}", e);
+                    }
+                });
+            });
+
+            // Give WebUI time to start
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tracing::info!("✅ 后台服务已启动");
+
+            // Run system tray (this will block until quit)
+            bilistream::tray::run_tray(port)?;
+        }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
             let mut cmd = Command::new("bilistream")
@@ -1765,35 +1831,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => {
-            // Ensure all required files and dependencies are present
-            if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
-                eprintln!("⚠️  下载依赖项失败: {}", e);
-                eprintln!("请手动从 GitHub 下载必需文件");
-                eprintln!("下载地址: https://github.com/Detteee/bilistream/releases");
-            }
-
-            // Check if --cli flag is set
-            let cli_mode = matches.get_flag("cli");
-
-            if cli_mode {
-                // CLI mode: Check if setup is needed
-                let config_path = std::env::current_exe()?.with_file_name("config.yaml");
-                let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-                let needs_setup = !config_path.exists() || !cookies_path.exists();
-
-                if needs_setup {
-                    println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
-                    setup_wizard().await?;
-                    return Ok(());
-                }
-
-                // CLI mode: run normal monitoring
-                run_bilistream(ffmpeg_log_level).await?;
-            } else {
-                // Default: Start Web UI (both Windows and Linux)
-                // Web UI will handle setup check internally
-                use bilistream::webui::start_webui;
-
+            {
                 // Check if this is first run
                 let config_path = std::env::current_exe()?.with_file_name("config.yaml");
                 let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
@@ -1802,66 +1840,133 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Initialize logger with capture for webui mode
                 init_logger_with_capture();
 
-                if is_first_run {
-                    tracing::info!("🚀 欢迎使用 Bilistream！");
-                    tracing::info!("   检测到首次运行，启动 Web 设置向导...");
-                    tracing::info!("");
-                    tracing::info!("📋 请在浏览器中完成设置：");
-                    tracing::info!("   1. 打开浏览器访问 http://localhost:3150");
-                    tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
-                    tracing::info!("   3. 配置完成后即可开始使用");
-                    tracing::info!("");
-                } else {
-                    tracing::info!("🚀 启动 Web UI 和自动监控模式");
-                }
-
+                // On Windows, default to tray mode
+                // On Linux, default to WebUI mode
                 #[cfg(target_os = "windows")]
-                {
-                    tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
-                    // Show notification about where the service is hosted
-                    if let Err(e) = show_windows_notification() {
-                        eprintln!("无法显示通知: {}", e);
-                    }
-                }
-
+                let use_tray_mode = true;
                 #[cfg(not(target_os = "windows"))]
-                {
-                    tracing::info!("💡 提示: 使用 --cli 以命令行模式运行");
-                }
+                let use_tray_mode = false;
 
-                // Spawn WebUI server in background
-                tokio::spawn(async move {
-                    if let Err(e) = start_webui(3150).await {
-                        tracing::error!("Web UI 服务器错误: {}", e);
+                if use_tray_mode {
+                    // Windows tray mode: system tray + auto-open browser
+                    let port = 3150u16;
+
+                    if is_first_run {
+                        tracing::info!("🚀 欢迎使用 Bilistream！");
+                        tracing::info!("   检测到首次运行，启动设置向导...");
+                    } else {
+                        tracing::info!("🚀 启动 Bilistream 系统托盘模式");
                     }
-                });
 
-                // Give WebUI time to start
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                tracing::info!("✅ Web UI 已启动");
+                    tracing::info!("   Web UI 端口: {}", port);
 
-                // Only run monitoring loop if config exists (not first run)
-                if !is_first_run {
-                    // Run monitoring loop in foreground (this will block)
-                    run_bilistream(ffmpeg_log_level).await?;
+                    // Spawn WebUI server in background
+                    tokio::spawn(async move {
+                        if let Err(e) = bilistream::webui::server::start_webui(port).await {
+                            tracing::error!("Web UI 服务器错误: {}", e);
+                        }
+                    });
+
+                    // Download dependencies in background after WebUI starts
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
+                            tracing::error!("⚠️ 下载依赖项失败: {}", e);
+                            tracing::error!("请手动从 GitHub 下载必需文件");
+                        }
+                    });
+
+                    // Spawn monitoring loop in separate thread with its own runtime
+                    let log_level = ffmpeg_log_level.to_string();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            if let Err(e) = run_bilistream(&log_level).await {
+                                tracing::error!("监控循环错误: {}", e);
+                            }
+                        });
+                    });
+
+                    // Give WebUI time to start
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tracing::info!("✅ 后台服务已启动");
+
+                    // Run system tray (this will block until quit)
+                    bilistream::tray::run_tray(port)?;
                 } else {
-                    // First run: wait for config to be created, then start monitoring
-                    tracing::info!("⏳ 等待配置完成...");
-                    tracing::info!("   配置完成后将自动开始监控");
+                    // Default: Start Web UI (Linux or non-tray build)
+                    use bilistream::webui::start_webui;
 
-                    // Poll for config file creation
-                    loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    if is_first_run {
+                        tracing::info!("🚀 欢迎使用 Bilistream！");
+                        tracing::info!("   检测到首次运行，启动 Web 设置向导...");
+                        tracing::info!("");
+                        tracing::info!("📋 请在浏览器中完成设置：");
+                        tracing::info!("   1. 打开浏览器访问 http://localhost:3150");
+                        tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
+                        tracing::info!("   3. 配置完成后即可开始使用");
+                        tracing::info!("");
+                    } else {
+                        tracing::info!("🚀 启动 Web UI 和自动监控模式");
+                    }
 
-                        // Check if config was created
-                        if config_path.exists() && cookies_path.exists() {
-                            tracing::info!("✅ 检测到配置文件已创建！");
-                            tracing::info!("🚀 正在启动监控...");
-                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    #[cfg(target_os = "windows")]
+                    {
+                        tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
+                        // Show notification about where the service is hosted
+                        if let Err(e) = show_windows_notification() {
+                            eprintln!("无法显示通知: {}", e);
+                        }
+                    }
 
-                            // Start monitoring loop
-                            run_bilistream(ffmpeg_log_level).await?;
-                            break;
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        tracing::info!("💡 提示: 使用 --cli 以命令行模式运行");
+                    }
+
+                    // Spawn WebUI server in background
+                    tokio::spawn(async move {
+                        if let Err(e) = start_webui(3150).await {
+                            tracing::error!("Web UI 服务器错误: {}", e);
+                        }
+                    });
+
+                    // Download dependencies in background after WebUI starts
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
+                            tracing::error!("⚠️ 下载依赖项失败: {}", e);
+                            tracing::error!("请手动从 GitHub 下载必需文件");
+                        }
+                    });
+
+                    // Give WebUI time to start
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tracing::info!("✅ Web UI 已启动");
+
+                    // Only run monitoring loop if config exists (not first run)
+                    if !is_first_run {
+                        // Run monitoring loop in foreground (this will block)
+                        run_bilistream(ffmpeg_log_level).await?;
+                    } else {
+                        // First run: wait for config to be created, then start monitoring
+                        tracing::info!("⏳ 等待配置完成...");
+                        tracing::info!("   配置完成后将自动开始监控");
+
+                        // Poll for config file creation
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                            // Check if config was created
+                            if config_path.exists() && cookies_path.exists() {
+                                tracing::info!("✅ 检测到配置文件已创建！");
+                                tracing::info!("🚀 正在启动监控...");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                                // Start monitoring loop
+                                run_bilistream(ffmpeg_log_level).await?;
+                                break;
+                            }
                         }
                     }
                 }

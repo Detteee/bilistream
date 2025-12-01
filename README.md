@@ -4,13 +4,13 @@
 
 ## Download
 
-**Latest Release: v0.3.6**
+**Latest Release: v0.3.7**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 **Quick Start:**
 
-1. **Windows:** Double-click `bilistream.exe` - Web UI launches automatically!
+1. **Windows:** Double-click `bilistream.exe` - Runs in background, browser opens webui automatically!
 2. **Linux/Mac:** Run `./bilistream` in terminal
 3. **Auto-download:** Required files download automatically on first run:
    - `webui/dist/index.html` - Web interface
@@ -23,7 +23,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 ## Features
 
-- **Auto-Update** - One-click updates from Web UI (NEW in v0.3.6!)
+- **Auto-Update** - One-click updates from Web UI
   - Automatic update detection on startup
   - Safe installation with backup
   - Preserves all configuration and user data
@@ -169,20 +169,28 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 ### Quick Start
 
-**Run the program:**
+**Easiest way - just run it:**
 
 ```bash
-./bilistream                    # Default: Web UI at http://localhost:3150
-./bilistream --cli              # CLI monitoring mode (no Web UI)
-./bilistream webui --port 8080  # Custom port
+./bilistream
 ```
 
-**Windows:** Double-click `bilistream.exe` - Web UI launches with desktop notification showing access URLs
+**What happens:**
+- **Windows:** Runs in background, browser opens webui automatically, tray icon appears
+- **Linux/Mac:** Starts web server, open `http://localhost:3150` in browser
 
-**First run behavior:**
+**Advanced options:**
 
-- **Default mode:** Web UI starts, setup wizard appears in browser
-- **CLI mode (`--cli`):** Terminal-based setup wizard runs first, then monitoring starts
+```bash
+./bilistream tray               # Force background mode (with system tray)
+./bilistream webui              # Force web mode (shows console logs)
+./bilistream cli                # Command-line only (no web interface)
+```
+
+**First run:**
+- Setup wizard appears in your browser
+- Follow the steps to login and configure
+- That's it!
 
 ### Web UI Features
 
@@ -201,17 +209,32 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ### Commands
 
 ```bash
+# Running modes
+./bilistream                                    # Default (tray on Windows, webui on Linux)
+./bilistream tray                               # System tray mode
+./bilistream webui                              # Web UI mode
+./bilistream cli                                # CLI only mode
+
+# Setup and configuration
 ./bilistream setup                              # Setup wizard
 ./bilistream login                              # Login to Bilibili
-./bilistream                                    # Start (Web UI mode)
-./bilistream --cli                              # Start (CLI mode)
-./bilistream webui --port 3150                  # Web UI with custom port
-./bilistream send-danmaku <message>             # Send chat message
-./bilistream replace-cover <image_path>         # Update stream cover
-./bilistream update-area <area_id>              # Update stream area
 ./bilistream renew                              # Renew Bilibili tokens
+
+# Stream control
+./bilistream start-live                         # Start streaming
+./bilistream stop-live                          # Stop streaming
+./bilistream change-live-title <title>          # Change stream title
+./bilistream update-area <area_id>              # Update stream area
+./bilistream replace-cover <image_path>         # Update stream cover
+
+# Status and utilities
 ./bilistream get-live-status <platform>         # Get status (YT/TW/bilibili/all)
+./bilistream send-danmaku <message>             # Send chat message
 ./bilistream completion <shell>                 # Generate completions (bash/zsh/fish)
+
+# Custom ports
+./bilistream webui --port 8080                  # Web UI with custom port
+./bilistream tray --port 8080                   # Tray mode with custom port
 ```
 
 ### Danmaku Command Feature

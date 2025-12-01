@@ -4,15 +4,15 @@
 
 ## 下载
 
-**最新版本：v0.3.6**
+**最新版本：v0.3.7**
 
 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
 **快速开始：**
 
-1. **Windows:** 双击 `bilistream.exe` - Web UI 自动启动！
-3. **Linux/Mac:** 终端运行 `./bilistream`
-4. **自动下载:** 首次运行时自动下载必需文件：
+1. **Windows:** 双击 `bilistream.exe` - 后台运行，浏览器自动打开webui！
+2. **Linux/Mac:** 终端运行 `./bilistream`
+3. **自动下载:** 首次运行时自动下载必需文件：
    - `webui/dist/index.html` - Web 界面
    - `areas.json` - B站分区和禁用关键词
    - `channels.json` - 预设频道列表
@@ -23,6 +23,11 @@
 
 ## 功能特点
 
+- **自动更新** - 从 Web UI 一键更新
+  - 启动时自动检测更新
+  - 安全安装并备份
+  - 保留所有配置和用户数据
+  - 更新后自动重启
 - **Web UI** - 现代化控制面板，用于监控和管理直播
 - **网页版设置向导** - 通过浏览器完成首次配置（无需命令行！）
   - 浏览器中显示二维码登录
@@ -164,20 +169,28 @@
 
 ### 快速开始
 
-**运行程序：**
+**最简单的方式 - 直接运行：**
 
 ```bash
-./bilistream                    # 默认：Web UI 访问 http://localhost:3150
-./bilistream --cli              # CLI 监控模式（无 Web UI）
-./bilistream webui --port 8080  # 自定义端口
+./bilistream
 ```
 
-**Windows:** 双击 `bilistream.exe` - Web UI 启动并显示桌面通知（含访问地址）
+**运行效果：**
+- **Windows:** 后台运行，浏览器自动打开webui，托盘图标出现
+- **Linux/Mac:** 启动 Web 服务器，在浏览器中打开 `http://localhost:3150`
 
-**首次运行行为：**
+**高级选项：**
 
-- **默认模式：** Web UI 启动，设置向导在浏览器中显示
-- **CLI 模式 (`--cli`)：** 终端设置向导先运行，然后开始监控
+```bash
+./bilistream tray               # 强制后台模式（带系统托盘）
+./bilistream webui              # 强制 Web 模式（显示控制台日志）
+./bilistream cli                # 纯命令行模式（无 Web 界面）
+```
+
+**首次运行：**
+- 设置向导在浏览器中显示
+- 按步骤完成登录和配置
+- 就这么简单！
 
 ### Web UI 功能
 
@@ -196,8 +209,32 @@
 ### 命令
 
 ```bash
+# 运行模式
+./bilistream                                    # 默认（Windows 托盘，Linux WebUI）
+./bilistream tray                               # 系统托盘模式
+./bilistream webui                              # Web UI 模式
+./bilistream cli                                # 纯命令行模式
+
+# 设置和配置
 ./bilistream setup                              # 设置向导
 ./bilistream login                              # 登录哔哩哔哩
+./bilistream renew                              # 更新哔哩哔哩令牌
+
+# 直播控制
+./bilistream start-live                         # 开始直播
+./bilistream stop-live                          # 停止直播
+./bilistream change-live-title <标题>          # 更改直播标题
+./bilistream update-area <分区ID>              # 更新直播分区
+./bilistream replace-cover <图片路径>          # 更新直播封面
+
+# 状态和工具
+./bilistream get-live-status <平台>            # 获取状态（YT/TW/bilibili/all）
+./bilistream send-danmaku <消息>               # 发送弹幕消息
+./bilistream completion <shell>                # 生成补全脚本（bash/zsh/fish）
+
+# 自定义端口
+./bilistream webui --port 8080                 # Web UI 自定义端口
+./bilistream tray --port 8080                  # 托盘模式自定义端口
 ./bilistream                                    # 启动（Web UI 模式）
 ./bilistream --cli                              # 启动（CLI 模式）
 ./bilistream webui --port 3150                  # 自定义端口的 Web UI

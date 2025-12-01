@@ -853,8 +853,49 @@ pub async fn download_update(
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let current_exe = std::env::current_exe().unwrap();
-                    let _ = std::process::Command::new(current_exe).spawn();
+                    // Create a restart script that kills old process and starts new one
+                    let exe_dir = std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .to_path_buf();
+                    let restart_script = exe_dir.join("restart_after_update.sh");
+                    let new_exe = exe_dir.join("bilistream");
+                    let old_exe = exe_dir.join("bilistream.old");
+
+                    let script_content = format!(
+                        r#"#!/bin/bash
+# Wait for current process to exit
+sleep 2
+
+# Kill any remaining old process (but keep the file as backup)
+if [ -f "{}" ]; then
+    pkill -f "{}" 2>/dev/null || true
+fi
+
+# Wait for port to be released
+sleep 1
+
+# Start new version
+"{}" &
+
+# Clean up this script
+rm "$0"
+"#,
+                        old_exe.display(),
+                        old_exe.display(),
+                        new_exe.display()
+                    );
+
+                    if let Ok(_) = std::fs::write(&restart_script, script_content) {
+                        let _ = std::process::Command::new("chmod")
+                            .arg("+x")
+                            .arg(&restart_script)
+                            .output();
+                        let _ = std::process::Command::new("sh")
+                            .arg(&restart_script)
+                            .spawn();
+                    }
                 }
 
                 std::process::exit(0);
@@ -885,5 +926,20 @@ pub async fn get_version() -> Result<Json<ApiResponse<VersionInfo>>, StatusCode>
             version: env!("CARGO_PKG_VERSION").to_string(),
         }),
         message: None,
+    }))
+}
+
+// Get dependency download status
+pub async fn get_deps_status() -> impl IntoResponse {
+    let (progress, total, message) = crate::deps::get_download_progress();
+    let in_progress = crate::deps::is_download_in_progress();
+    let complete = crate::deps::is_download_complete();
+
+    Json(json!({
+        "in_progress": in_progress,
+        "complete": complete,
+        "progress": progress,
+        "total": total,
+        "message": message
     }))
 }
