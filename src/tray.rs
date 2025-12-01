@@ -105,8 +105,9 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             let _ = tx_clone.send(*e);
         })
         .icon(icon)
-        .tooltip("Bilistream")
+        .tooltip("Bilistream - 左键打开控制面板，右键显示菜单")
         .on_click(Events::ClickTrayIcon)
+        .on_double_click(Events::OpenPanel)
         .menu(
             MenuBuilder::new()
                 .item("打开控制面板", Events::OpenPanel)
@@ -127,20 +128,33 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("✅ 浏览器已打开");
     }
 
-    tracing::info!("💡 右键托盘图标查看菜单");
+    tracing::info!("💡 点击托盘图标打开控制面板，右键显示菜单");
 
-    // Event loop
-    loop {
+    // Spawn event handler in separate thread
+    std::thread::spawn(move || loop {
         match rx.recv() {
             Ok(Events::ClickTrayIcon) | Ok(Events::OpenPanel) => {
                 let url = format!("http://localhost:{}", port);
                 let _ = open::that(&url);
             }
             Ok(Events::Exit) => {
-                tracing::info!("退出程序");
                 std::process::exit(0);
             }
-            _ => {}
+            Err(_) => break,
+        }
+    });
+
+    // Windows message loop - required for tray icon events
+    use std::ptr;
+    use winapi::um::winuser::{DispatchMessageW, GetMessageW, TranslateMessage, MSG};
+
+    unsafe {
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
     }
+
+    Ok(())
 }
