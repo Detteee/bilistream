@@ -245,39 +245,42 @@ pub async fn ffmpeg(
 
     let mut cmd = Command::new(get_ffmpeg_command());
 
+    // Network optimization
     if let Some(proxy) = proxy {
         cmd.arg("-http_proxy").arg(proxy);
     }
 
-    // Input options
-    cmd.arg("-re") // Read input at native frame rate
+    // Input options - optimized for stability
+    cmd.arg("-multiple_requests")
+        .arg("1") // Use multiple HTTP requests for segments
+        .arg("-re") // Read input at native frame rate
         .arg("-thread_queue_size")
-        .arg("40960k")
+        .arg("1024")
         .arg("-analyzeduration")
-        .arg("4000000")
+        .arg("5000000") // 5 seconds
+        .arg("-probesize")
+        .arg("5000000")
+        .arg("-fflags")
+        .arg("+genpts+discardcorrupt") // Generate PTS and discard corrupt packets
         // Input file
         .arg("-i")
         .arg(m3u8_url)
-        // Output options
+        // Output options - stream copy
         .arg("-c")
-        .arg("copy")
-        // Frame and timestamp handling
-        .arg("-fflags")
-        .arg("+genpts+discardcorrupt")
-        .arg("-max_delay")
-        .arg("8000000")
-        // Rate control
-        .arg("-bufsize")
-        .arg("10240k")
-        .arg("-maxrate")
-        .arg("20480k")
-        // RTMP settings
-        .arg("-rtmp_buffer")
-        .arg("10240k")
-        .arg("-rtmp_live")
-        .arg("live")
+        .arg("copy") // Stream copy without re-encoding
+        .arg("-copyts") // Copy input timestamps
+        .arg("-start_at_zero") // Start timestamps at zero
+        .arg("-avoid_negative_ts")
+        .arg("make_zero") // Shift timestamps to avoid negative values
+        .arg("-max_interleave_delta")
+        .arg("0") // Reduce muxing delay for lower latency
+        .arg("-max_muxing_queue_size")
+        .arg("1024") // Limit muxing queue to prevent memory issues
+        // FLV/RTMP output
         .arg("-f")
         .arg("flv")
+        .arg("-flvflags")
+        .arg("no_duration_filesize") // Skip duration/filesize metadata for live streaming
         .arg(rtmp_url_key)
         .arg("-stats")
         .arg("-loglevel")
