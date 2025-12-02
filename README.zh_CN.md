@@ -1,6 +1,13 @@
-# Bilistream
+<div align="center">
+
+<h1>
+  <img src="icon.svg" alt="Bilistream" width="48" height="48" style="vertical-align: middle;">
+  Bilistream
+</h1>
 
 [English](README.md) | [中文](README.zh_CN.md)
+
+</div>
 
 ## 下载
 
