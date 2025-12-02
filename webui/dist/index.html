@@ -617,8 +617,13 @@
 
           <div class="control-group">
             <label>代理地址 (可选)</label>
-            <input type="text" id="setup-proxy" placeholder="http://host:port">
-            <small style="color: #888;">如需访问 YouTube/Twitch 需要代理，请填写</small>
+            <input type="text" id="setup-proxy" placeholder="http://127.0.0.1:7890">
+            <small style="color: var(--text-muted); display: block; margin-top: 5px;">
+              如需访问 YouTube/Twitch 需要代理，请填写<br>
+              常用默认端口: Clash (7890) | V2Ray (2080)<br>
+              示例: <code
+                style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
+            </small>
           </div>
 
           <div style="display: flex; gap: 10px; margin-top: 20px;">
