@@ -105,35 +105,6 @@ pub struct TwStatus {
     pub quality: String,
 }
 
-fn get_area_name(area_id: u64) -> String {
-    let areas_path = match std::env::current_exe() {
-        Ok(path) => path.with_file_name("areas.json"),
-        Err(_) => return format!("未知分区 (ID: {})", area_id),
-    };
-
-    let content = match std::fs::read_to_string(areas_path) {
-        Ok(c) => c,
-        Err(_) => return format!("未知分区 (ID: {})", area_id),
-    };
-
-    let areas: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(a) => a,
-        Err(_) => return format!("未知分区 (ID: {})", area_id),
-    };
-
-    if let Some(areas_array) = areas["areas"].as_array() {
-        for area in areas_array {
-            if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
-                if id == area_id {
-                    return name.to_string();
-                }
-            }
-        }
-    }
-
-    format!("未知分区 (ID: {})", area_id)
-}
-
 pub async fn get_status() -> impl IntoResponse {
     // Always fetch fresh Bilibili status for accurate real-time updates
     let cfg = match load_config().await {
@@ -182,7 +153,8 @@ pub async fn get_status() -> impl IntoResponse {
             }
         };
 
-    let bili_area_name = get_area_name(bili_area_id);
+    let bili_area_name = crate::plugins::get_area_name(bili_area_id)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", bili_area_id));
 
     // Get ffmpeg speed and calculate stream quality
     let stream_speed = get_ffmpeg_speed().await;
@@ -300,11 +272,9 @@ pub async fn update_config(
     }
 
     // Save config
-    let config_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("config.yaml");
-    let yaml = serde_yaml::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    std::fs::write(config_path, yaml).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Set config updated flag so main loop can detect the change
     set_config_updated();
@@ -504,11 +474,9 @@ pub async fn update_channel(
     }
 
     // Save config
-    let config_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("config.yaml");
-    let yaml = serde_yaml::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    std::fs::write(config_path, yaml).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Set config updated flag so main loop can detect the change
     set_config_updated();
@@ -557,13 +525,15 @@ pub struct SetupStatus {
 
 pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
     let exe_path = std::env::current_exe().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let config_path = exe_path.with_file_name("config.yaml");
+    let config_path = exe_path.with_file_name("config.json");
+    let legacy_config_path = exe_path.with_file_name("config.yaml");
     let cookies_path = exe_path.with_file_name("cookies.json");
 
     let mut missing_files = Vec::new();
 
-    if !config_path.exists() {
-        missing_files.push("config.yaml".to_string());
+    // Check for config.json or config.yaml
+    if !config_path.exists() && !legacy_config_path.exists() {
+        missing_files.push("config.json".to_string());
     }
 
     if !cookies_path.exists() {
@@ -628,102 +598,94 @@ pub struct SetupConfigRequest {
 pub async fn save_setup_config(
     Json(payload): Json<SetupConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
-    // Try to load existing config to preserve AntiCollisionList
-    let existing_anti_collision = if let Ok(existing_cfg) = load_config().await {
-        existing_cfg.anti_collision
+    // Load existing config or create default
+    let mut cfg = if let Ok(existing_cfg) = load_config().await {
+        existing_cfg
     } else {
-        std::collections::HashMap::new()
+        // Create new config with defaults
+        crate::config::Config {
+            auto_cover: true,
+            enable_anti_collision: false,
+            interval: 60,
+            bililive: crate::config::BiliLive {
+                enable_danmaku_command: true,
+                room: 0,
+                bili_rtmp_url: "rtmp://live-push.bilivideo.com/live-bvc/".to_string(),
+                bili_rtmp_key: String::new(),
+                credentials: crate::config::Credentials::default(),
+            },
+            twitch: crate::config::Twitch {
+                channel_name: String::new(),
+                area_v2: 235,
+                channel_id: String::new(),
+                oauth_token: String::new(),
+                proxy_region: "as".to_string(),
+                quality: "best".to_string(),
+            },
+            youtube: crate::config::Youtube {
+                channel_name: String::new(),
+                channel_id: String::new(),
+                area_v2: 235,
+                quality: "best".to_string(),
+            },
+            proxy: None,
+            holodex_api_key: None,
+            riot_api_key: None,
+            enable_lol_monitor: false,
+            lol_monitor_interval: Some(1),
+            anti_collision_list: std::collections::HashMap::new(),
+        }
     };
 
-    let proxy_line = payload.proxy.unwrap_or_default();
-    let holodex_line = payload.holodex_api_key.unwrap_or_default();
-    let riot_line = payload.riot_api_key.unwrap_or_default();
+    // Update only the fields from payload
+    cfg.auto_cover = payload.auto_cover;
+    cfg.enable_anti_collision = payload.anti_collision;
+    cfg.interval = payload.interval;
+    cfg.bililive.enable_danmaku_command = payload.enable_danmaku_command;
+    cfg.bililive.room = payload.room;
+    cfg.proxy = payload.proxy;
+    cfg.holodex_api_key = payload.holodex_api_key;
+    cfg.riot_api_key = payload.riot_api_key;
+    cfg.enable_lol_monitor = payload.enable_lol_monitor;
 
-    let yt_channel_name = payload.youtube_channel_name.unwrap_or_default();
-    let yt_channel_id = payload.youtube_channel_id.unwrap_or_default();
-    let yt_area_v2 = payload.youtube_area_v2.unwrap_or(235);
-    let yt_quality = payload
-        .youtube_quality
-        .unwrap_or_else(|| "best".to_string());
+    // Update YouTube config if provided
+    if let Some(yt_name) = payload.youtube_channel_name {
+        cfg.youtube.channel_name = yt_name;
+    }
+    if let Some(yt_id) = payload.youtube_channel_id {
+        cfg.youtube.channel_id = yt_id;
+    }
+    if let Some(yt_area) = payload.youtube_area_v2 {
+        cfg.youtube.area_v2 = yt_area;
+    }
+    if let Some(yt_quality) = payload.youtube_quality {
+        cfg.youtube.quality = yt_quality;
+    }
 
-    let tw_channel_name = payload.twitch_channel_name.unwrap_or_default();
-    let tw_channel_id = payload.twitch_channel_id.unwrap_or_default();
-    let tw_area_v2 = payload.twitch_area_v2.unwrap_or(235);
-    let tw_oauth = payload.twitch_oauth_token.unwrap_or_default();
-    let tw_proxy_region = payload
-        .twitch_proxy_region
-        .unwrap_or_else(|| "as".to_string());
-    let tw_quality = payload.twitch_quality.unwrap_or_else(|| "best".to_string());
+    // Update Twitch config if provided
+    if let Some(tw_name) = payload.twitch_channel_name {
+        cfg.twitch.channel_name = tw_name;
+    }
+    if let Some(tw_id) = payload.twitch_channel_id {
+        cfg.twitch.channel_id = tw_id;
+    }
+    if let Some(tw_area) = payload.twitch_area_v2 {
+        cfg.twitch.area_v2 = tw_area;
+    }
+    if let Some(tw_oauth) = payload.twitch_oauth_token {
+        cfg.twitch.oauth_token = tw_oauth;
+    }
+    if let Some(tw_region) = payload.twitch_proxy_region {
+        cfg.twitch.proxy_region = tw_region;
+    }
+    if let Some(tw_quality) = payload.twitch_quality {
+        cfg.twitch.quality = tw_quality;
+    }
 
-    // Build AntiCollisionList section
-    let anti_collision_section = if existing_anti_collision.is_empty() {
-        "  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车\n  # B站ID2: 房间号2  # 房间号用于检测撞车"
-            .to_string()
-    } else {
-        existing_anti_collision
-            .iter()
-            .map(|(k, v)| format!("  {}: {}", k, v))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let config_content = format!(
-        r#"Interval: {} # 检测直播间隔
-AutoCover: {} # 自动更换封面
-AntiCollision: {} # 撞车监控
-Proxy: {} # 代理地址,无需代理可以不填此项或者留空
-HolodexApiKey: {} # Holodex Api Key from https://holodex.net/login
-RiotApiKey: {} # Riot API Key from https://developer.riotgames.com/
-EnableLolMonitor: {} # 启用英雄联盟玩家ID监控 (true/false)
-LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
-BiliLive:
-  EnableDanmakuCommand: {} # true or false
-  Room: {}
-  BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/
-  BiliRtmpKey: ""
-Youtube:
-  ChannelName: {} # 频道名称 (将出现于转播标题)
-  ChannelId: {} # Youtube Channel ID
-  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
-  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 yt-dlp 格式字符串
-Twitch:
-  ChannelName: {} # 频道名称 (将出现于转播标题)
-  ChannelId: {} # the string followed after https://www.twitch.tv/
-  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
-  OauthToken: {} # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
-  ProxyRegion: {} # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
-  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 streamlink 质量选项
-
-AntiCollisionList:
-{}
-"#,
-        payload.interval,
-        payload.auto_cover,
-        payload.anti_collision,
-        proxy_line,
-        holodex_line,
-        riot_line,
-        payload.enable_lol_monitor,
-        payload.enable_danmaku_command,
-        payload.room,
-        yt_channel_name,
-        yt_channel_id,
-        yt_area_v2,
-        yt_quality,
-        tw_channel_name,
-        tw_channel_id,
-        tw_area_v2,
-        tw_oauth,
-        tw_proxy_region,
-        tw_quality,
-        anti_collision_section,
-    );
-
-    // Write config file
-    let config_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("config.yaml");
-    std::fs::write(config_path, config_content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Save config
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(ApiResponse {
         success: true,
@@ -1049,28 +1011,35 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
     let mut channel_ids = Vec::new();
 
     // Load channels.json for all channels
-    if let Ok(channels_content) = tokio::fs::read_to_string("channels.json").await {
-        if let Ok(channels_json) = serde_json::from_str::<serde_json::Value>(&channels_content) {
-            // Try new format: channels[].platforms.youtube
-            if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
-                for channel in channels {
-                    if let Some(platforms) = channel.get("platforms") {
-                        if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
-                            if !yt_id.is_empty() && !channel_ids.contains(&yt_id.to_string()) {
-                                channel_ids.push(yt_id.to_string());
+    let channels_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("channels.json")));
+
+    if let Some(path) = channels_path {
+        if let Ok(channels_content) = tokio::fs::read_to_string(path).await {
+            if let Ok(channels_json) = serde_json::from_str::<serde_json::Value>(&channels_content)
+            {
+                // Try new format: channels[].platforms.youtube
+                if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
+                    for channel in channels {
+                        if let Some(platforms) = channel.get("platforms") {
+                            if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
+                                if !yt_id.is_empty() && !channel_ids.contains(&yt_id.to_string()) {
+                                    channel_ids.push(yt_id.to_string());
+                                }
                             }
                         }
                     }
                 }
-            }
-            // Try old format: YT_channels[].channel_id (for backward compatibility)
-            else if let Some(yt_channels) =
-                channels_json.get("YT_channels").and_then(|v| v.as_array())
-            {
-                for channel in yt_channels {
-                    if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
-                        if !id.is_empty() && !channel_ids.contains(&id.to_string()) {
-                            channel_ids.push(id.to_string());
+                // Try old format: YT_channels[].channel_id (for backward compatibility)
+                else if let Some(yt_channels) =
+                    channels_json.get("YT_channels").and_then(|v| v.as_array())
+                {
+                    for channel in yt_channels {
+                        if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
+                            if !id.is_empty() && !channel_ids.contains(&id.to_string()) {
+                                channel_ids.push(id.to_string());
+                            }
                         }
                     }
                 }
@@ -1204,9 +1173,16 @@ pub struct SwitchToHolodexStream {
 pub async fn switch_to_holodex_stream(
     Json(payload): Json<SwitchToHolodexStream>,
 ) -> Result<ApiResponse<()>, StatusCode> {
+    tracing::info!(
+        "Switching to Holodex channel: {} (area: {:?})",
+        payload.channel_id,
+        payload.area_id
+    );
+
     let mut cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
+            tracing::error!("Failed to load config: {}", e);
             return Ok(ApiResponse {
                 success: false,
                 data: None,
@@ -1216,7 +1192,11 @@ pub async fn switch_to_holodex_stream(
     };
 
     // Get channel info from channels.json
-    let channels_content = match tokio::fs::read_to_string("channels.json").await {
+    let channels_path = std::env::current_exe()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .with_file_name("channels.json");
+
+    let channels_content = match tokio::fs::read_to_string(&channels_path).await {
         Ok(c) => c,
         Err(e) => {
             return Ok(ApiResponse {
@@ -1305,25 +1285,21 @@ pub async fn switch_to_holodex_stream(
         cfg.youtube.area_v2 = area_id;
     }
 
-    // Serialize config to YAML to preserve all fields including AntiCollisionList
-    let config_yaml = match serde_yaml::to_string(&cfg) {
-        Ok(yaml) => yaml,
-        Err(e) => {
-            return Ok(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to serialize config: {}", e)),
-            });
-        }
-    };
-
-    if let Err(e) = tokio::fs::write("config.yaml", config_yaml).await {
+    // Save config as JSON
+    if let Err(e) = crate::config::save_config(&cfg).await {
+        tracing::error!("Failed to save config: {}", e);
         return Ok(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to write config: {}", e)),
+            message: Some(format!("Failed to save config: {}", e)),
         });
     }
+
+    tracing::info!(
+        "Successfully switched to channel: {} ({})",
+        cfg.youtube.channel_name,
+        cfg.youtube.channel_id
+    );
 
     // Notify main loop to reload config
     set_config_updated();
@@ -1331,7 +1307,10 @@ pub async fn switch_to_holodex_stream(
     Ok(ApiResponse {
         success: true,
         data: Some(()),
-        message: Some("已切换到选定频道".to_string()),
+        message: Some(format!(
+            "已切换到 {} (分区: {})",
+            cfg.youtube.channel_name, cfg.youtube.area_v2
+        )),
     })
 }
 

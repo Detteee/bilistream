@@ -140,22 +140,28 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    - `worst` - Lowest quality
    - `720p`, `480p` - Specific resolutions
 
-   Edit `config.yaml`:
+   Edit `config.json`:
 
-   ```yaml
-   Youtube:
-     Quality: "720p"  # Lower quality for bandwidth-limited networks
-   Twitch:
-     Quality: "480p"  # Lower quality for bandwidth-limited networks
+   ```json
+   {
+     "youtube": {
+       "quality": "720p"
+     },
+     "twitch": {
+       "quality": "480p"
+     }
+   }
    ```
 7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
 
 - Create a file named `invalid_words.txt` with one word per line
-- Configure `RiotApiKey` and `LolMonitorInterval` in config.yaml:
+- Configure `RiotApiKey` and `LolMonitorInterval` in config.json:
 
-  ```yaml
-  RiotApiKey: "YOUR-RIOT-API-KEY"    # Get from https://developer.riotgames.com/
-  LolMonitorInterval: 1               # Check interval in seconds
+  ```json
+  {
+    "riot_api_key": "YOUR-RIOT-API-KEY",
+    "lol_monitor_interval": 1
+  }
   ```
 - The program will monitor in-game players and stop streaming if any blacklisted words are found
 
@@ -166,7 +172,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ├── bilistream           # Main executable
 ├── areas.json           # Area (game categories) and banned keywords configuration
 ├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
-├── config.yaml          # Main configuration file
+├── config.json          # Main configuration file
 ├── cookies.json         # Bilibili login cookies (./bilistream login)
 ├── invalid_words.txt    # Filtered words for LOL players ID
 └── stream_manager.sh    # Management script

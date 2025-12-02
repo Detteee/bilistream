@@ -5,7 +5,6 @@ use crate::config::Config;
 use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use serde_yaml;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{fs, io};
@@ -111,7 +110,11 @@ fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
     }
 
     // Load fresh data
-    let content = fs::read_to_string("channels.json")?;
+    let channels_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("channels.json")))
+        .ok_or("Failed to get executable path")?;
+    let content = fs::read_to_string(channels_path)?;
     let config: ChannelsConfig = serde_json::from_str(&content)?;
     *cache = Some((config.clone(), std::time::SystemTime::now()));
     Ok(config)
@@ -207,22 +210,22 @@ pub fn get_all_channels(
     Ok(channels)
 }
 
-/// Updates the configuration YAML file with new values.
+/// Updates the configuration JSON file with new values.
 fn update_config(
     platform: &str,
     channel_name: &str,
     channel_id: &str,
     area_id: u64,
 ) -> io::Result<bool> {
-    // Use the same config.yaml path as the executable (matches config.rs behavior)
+    // Use the same config.json path as the executable (matches config.rs behavior)
     let exe_path = std::env::current_exe()?;
-    let config_path = exe_path.with_file_name("config.yaml");
+    let config_path = exe_path.with_file_name("config.json");
 
-    // Read the existing config.yaml
+    // Read the existing config.json
     let config_content = fs::read_to_string(&config_path)?;
 
-    // Deserialize YAML into Config struct
-    let mut config: Config = serde_yaml::from_str(&config_content)
+    // Deserialize JSON into Config struct
+    let mut config: Config = serde_json::from_str(&config_content)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     // Check if update is needed
@@ -253,12 +256,12 @@ fn update_config(
         config.twitch.area_v2 = area_id;
     }
 
-    // Serialize Config struct back to YAML
-    let updated_yaml =
-        serde_yaml::to_string(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    // Serialize Config struct back to JSON
+    let updated_json = serde_json::to_string_pretty(&config)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Write the updated YAML back to config.yaml (this also updates file mtime)
-    fs::write(&config_path, updated_yaml)?;
+    // Write the updated JSON back to config.json (this also updates file mtime)
+    fs::write(&config_path, updated_json)?;
 
     Ok(true)
 }

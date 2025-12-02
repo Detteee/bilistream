@@ -1,0 +1,31 @@
+{
+  "auto_cover": true,
+  "enable_anti_collision": true,
+  "interval": 30,
+  "bililive": {
+    "enable_danmaku_command": true,
+    "room": 370627,
+    "bili_rtmp_url": "rtmp://live-push.bilivideo.com/live-bvc/",
+    "bili_rtmp_key": ""
+  },
+  "twitch": {
+    "channel_name": "",
+    "area_v2": 235,
+    "channel_id": "",
+    "oauth_token": "",
+    "proxy_region": "as",
+    "quality": "best"
+  },
+  "youtube": {
+    "channel_name": "",
+    "channel_id": "",
+    "area_v2": 235,
+    "quality": "best"
+  },
+  "proxy": null,
+  "holodex_api_key": null,
+  "riot_api_key": null,
+  "enable_lol_monitor": false,
+  "lol_monitor_interval": 1,
+  "anti_collision_list": {}
+}

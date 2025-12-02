@@ -140,22 +140,28 @@
    - `worst` - 最低质量
    - `720p`、`480p` - 指定分辨率
 
-   编辑 `config.yaml`：
+   编辑 `config.json`：
 
-   ```yaml
-   Youtube:
-     Quality: "720p"  # 网络受限时使用较低质量
-   Twitch:
-     Quality: "480p"  # 网络受限时使用较低质量
+   ```json
+   {
+     "youtube": {
+       "quality": "720p"
+     },
+     "twitch": {
+       "quality": "480p"
+     }
+   }
    ```
 7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
 
    - 创建名为 `invalid_words.txt` 的文件，每行一个词
-   - 在 config.yaml 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
+   - 在 config.json 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
 
-     ```yaml
-     RiotApiKey: "YOUR-RIOT-API-KEY"    # 从 https://developer.riotgames.com/ 获取
-     LolMonitorInterval: 1               # 检查间隔（秒）
+     ```json
+     {
+       "riot_api_key": "YOUR-RIOT-API-KEY",
+       "lol_monitor_interval": 1
+     }
      ```
    - 程序将监控游戏内玩家，如发现黑名单词汇则停止直播
 
@@ -166,7 +172,7 @@
 ├── bilistream           # 主程序可执行文件
 ├── areas.json           # 分区（游戏类别）和禁用关键词配置
 ├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
-├── config.yaml          # 主配置文件
+├── config.json          # 主配置文件
 ├── cookies.json         # 哔哩哔哩登录 cookies（./bilistream login）
 ├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词 (可选)
 └── stream_manager.sh    # 管理脚本

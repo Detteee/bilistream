@@ -1253,6 +1253,7 @@
 
       async function performSwitch(channelId, areaId) {
         try {
+          console.log('Switching to channel:', channelId, 'area:', areaId);
           const response = await fetch('/api/holodex/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1262,16 +1263,20 @@
             })
           });
 
+          console.log('Response status:', response.status);
           const data = await response.json();
+          console.log('Response data:', data);
 
           if (data.success) {
             showNotification(data.message || '频道切换成功！', 'success');
             setTimeout(() => refreshStatus(), 2000);
           } else {
             showNotification(data.message || '切换失败', 'error');
+            console.error('Switch failed:', data.message);
           }
         } catch (error) {
           showNotification('切换失败: ' + error.message, 'error');
+          console.error('Switch error:', error);
         }
       }
 

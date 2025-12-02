@@ -4,7 +4,7 @@
     windows_subsystem = "windows"
 )]
 
-use bilistream::config::load_config;
+use bilistream::config::{load_config, BiliLive, Config, Credentials, Twitch, Youtube};
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_warning_stop, enable_danmaku_commands,
@@ -801,41 +801,46 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
                             .collect();
                         let ids = format!("{:?}", riot_ids);
                         // tracing::info!("In game players: {}", ids);
-                        if let Ok(invalid_words) = std::fs::read_to_string("invalid_words.txt") {
-                            if let Some(word) =
-                                invalid_words.lines().find(|word| ids.contains(word))
-                            {
-                                INVALID_ID_DETECTED.store(true, Ordering::SeqCst);
-                                let is_live =
-                                    get_bili_live_status(cfg.bililive.room).await.unwrap().0;
-                                if is_live {
-                                    tracing::error!("检测到非法词汇:{}，停止直播", word);
-                                    bili_stop_live(&cfg).await.unwrap();
-                                    // Stop ffmpeg using supervisor
-                                    rt.block_on(stop_ffmpeg());
-                                    if let Err(e) =
-                                        send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
-                                            .await
-                                    {
-                                        tracing::error!("Failed to send danmaku: {}", e);
-                                    }
-                                    if cfg.bililive.enable_danmaku_command
-                                        && !is_danmaku_commands_enabled()
-                                    {
-                                        enable_danmaku_commands(true);
-                                        thread::sleep(Duration::from_secs(2));
+                        let invalid_words_path = std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.parent().map(|p| p.join("invalid_words.txt")));
+                        if let Some(path) = invalid_words_path {
+                            if let Ok(invalid_words) = std::fs::read_to_string(path) {
+                                if let Some(word) =
+                                    invalid_words.lines().find(|word| ids.contains(word))
+                                {
+                                    INVALID_ID_DETECTED.store(true, Ordering::SeqCst);
+                                    let is_live =
+                                        get_bili_live_status(cfg.bililive.room).await.unwrap().0;
+                                    if is_live {
+                                        tracing::error!("检测到非法词汇:{}，停止直播", word);
+                                        bili_stop_live(&cfg).await.unwrap();
+                                        // Stop ffmpeg using supervisor
+                                        rt.block_on(stop_ffmpeg());
                                         if let Err(e) =
-                                            send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                                            send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
+                                                .await
                                         {
                                             tracing::error!("Failed to send danmaku: {}", e);
                                         }
+                                        if cfg.bililive.enable_danmaku_command
+                                            && !is_danmaku_commands_enabled()
+                                        {
+                                            enable_danmaku_commands(true);
+                                            thread::sleep(Duration::from_secs(2));
+                                            if let Err(e) =
+                                                send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                                            {
+                                                tracing::error!("Failed to send danmaku: {}", e);
+                                            }
+                                        }
+                                        return;
+                                    } else {
+                                        tracing::error!("检测到非法词汇:{}，不转播", word);
                                     }
-                                    return;
                                 } else {
-                                    tracing::error!("检测到非法词汇:{}，不转播", word);
+                                    INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
                                 }
-                            } else {
-                                INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
                             }
                         }
                     }
@@ -896,7 +901,7 @@ async fn check_collision(
     Box<dyn std::error::Error>,
 > {
     let cfg = load_config().await?;
-    for (room_name, room_id) in cfg.anti_collision {
+    for (room_name, room_id) in cfg.anti_collision_list {
         match get_bili_live_status(room_id).await {
             Ok((true, title, _)) => {
                 let contains_collision = title.contains(target_name)
@@ -1074,10 +1079,10 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Bilistream 初始化设置向导 ===\n");
 
-    // Step 1: Check if config.yaml already exists
-    let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+    // Step 1: Check if config.json already exists
+    let config_path = std::env::current_exe()?.with_file_name("config.json");
     if config_path.exists() {
-        print!("检测到已存在的 config.yaml，是否覆盖? (y/N): ");
+        print!("检测到已存在的 config.json，是否覆盖? (y/N): ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
@@ -1357,88 +1362,56 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         (String::new(), String::new(), false)
     };
 
-    // Create config content
-    let mut collision_list = String::new();
-    if !collision_rooms.is_empty() {
-        for (name, room_id) in &collision_rooms {
-            collision_list.push_str(&format!("  {}: {}  # 监控撞车\n", name, room_id));
-        }
-    } else {
-        collision_list.push_str("  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车\n");
-        collision_list.push_str("  # B站ID2: 房间号2  # 房间号用于检测撞车\n");
+    // Create config structure
+    let mut collision_map = std::collections::HashMap::new();
+    for (name, room_id) in &collision_rooms {
+        collision_map.insert(name.clone(), *room_id);
     }
 
-    let proxy_line = if !proxy.is_empty() {
-        proxy.clone()
-    } else {
-        String::new()
-    };
-
-    let holodex_line = if !holodex_api_key.is_empty() {
-        holodex_api_key.clone()
-    } else {
-        String::new()
-    };
-
-    let riot_line = if !riot_api_key.is_empty() {
-        riot_api_key.clone()
-    } else {
-        String::new()
-    };
-
-    let config_content = format!(
-        r#"Interval: {} # 检测直播间隔
-AutoCover: {} # 自动更换封面
-AntiCollision: {} # 撞车监控
-Proxy: {} # 代理地址,无需代理可以不填此项或者留空
-HolodexApiKey: {} # Holodex Api Key from https://holodex.net/login
-RiotApiKey: {} # Riot API Key from https://developer.riotgames.com/
-EnableLolMonitor: {} # 启用英雄联盟玩家ID监控 (true/false)
-LolMonitorInterval: 1 # 监控LOL局内玩家ID时间间隔(秒)
-BiliLive:
-  EnableDanmakuCommand: {} # true or false
-  Room: {}
-  BiliRtmpUrl: rtmp://live-push.bilivideo.com/live-bvc/
-  BiliRtmpKey: ""
-Youtube:
-  ChannelName: {} # 频道名称 (将出现于转播标题)
-  ChannelId: {} # Youtube Channel ID
-  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
-  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 yt-dlp 格式字符串
-Twitch:
-  ChannelName: {} # 频道名称 (将出现于转播标题)
-  ChannelId: {} # the string followed after https://www.twitch.tv/
-  AreaV2: {} # B站分区ID https://api.live.bilibili.com/room/v1/Area/getList
-  OauthToken: {} # check https://streamlink.github.io/cli/plugins/twitch.html#authentication
-  ProxyRegion: {} # na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
-  Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 streamlink 质量选项
-
-AntiCollisionList:
-{}"#,
-        interval,
+    let config = Config {
         auto_cover,
-        anti_collision,
-        proxy_line,
-        holodex_line,
-        riot_line,
+        enable_anti_collision: anti_collision,
+        interval,
+        bililive: BiliLive {
+            enable_danmaku_command,
+            room,
+            bili_rtmp_url: "rtmp://live-push.bilivideo.com/live-bvc/".to_string(),
+            bili_rtmp_key: String::new(),
+            credentials: Credentials::default(),
+        },
+        twitch: Twitch {
+            channel_name: tw_channel_name,
+            area_v2: tw_area_v2,
+            channel_id: tw_channel_id,
+            oauth_token: tw_oauth,
+            proxy_region: tw_proxy_region,
+            quality: tw_quality,
+        },
+        youtube: Youtube {
+            channel_name: yt_channel_name,
+            channel_id: yt_channel_id,
+            area_v2: yt_area_v2,
+            quality: yt_quality,
+        },
+        proxy: if proxy.is_empty() { None } else { Some(proxy) },
+        holodex_api_key: if holodex_api_key.is_empty() {
+            None
+        } else {
+            Some(holodex_api_key)
+        },
+        riot_api_key: if riot_api_key.is_empty() {
+            None
+        } else {
+            Some(riot_api_key)
+        },
         enable_lol_monitor,
-        enable_danmaku_command,
-        room,
-        yt_channel_name,
-        yt_channel_id,
-        yt_area_v2,
-        yt_quality,
-        tw_channel_name,
-        tw_channel_id,
-        tw_area_v2,
-        tw_oauth,
-        tw_proxy_region,
-        tw_quality,
-        collision_list
-    );
+        lol_monitor_interval: Some(1),
+        anti_collision_list: collision_map,
+    };
 
-    // Write config file
-    std::fs::write(&config_path, config_content)?;
+    // Write config file as JSON
+    let config_json = serde_json::to_string_pretty(&config)?;
+    std::fs::write(&config_path, config_json)?;
     println!("\n✅ 配置文件已创建: {}", config_path.display());
 
     // Try to start live to get RTMP info
@@ -1690,9 +1663,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(("cli", _)) => {
             // CLI mode: Check if setup is needed
-            let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+            let config_path = std::env::current_exe()?.with_file_name("config.json");
+            let legacy_config_path = std::env::current_exe()?.with_file_name("config.yaml");
             let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-            let needs_setup = !config_path.exists() || !cookies_path.exists();
+            let needs_setup =
+                (!config_path.exists() && !legacy_config_path.exists()) || !cookies_path.exists();
 
             if needs_setup {
                 println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
@@ -1833,9 +1808,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             {
                 // Check if this is first run
-                let config_path = std::env::current_exe()?.with_file_name("config.yaml");
+                let config_path = std::env::current_exe()?.with_file_name("config.json");
+                let legacy_config_path = std::env::current_exe()?.with_file_name("config.yaml");
                 let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-                let is_first_run = !config_path.exists() || !cookies_path.exists();
+                let is_first_run = (!config_path.exists() && !legacy_config_path.exists())
+                    || !cookies_path.exists();
 
                 // Initialize logger with capture for webui mode
                 init_logger_with_capture();
