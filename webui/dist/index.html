@@ -640,6 +640,13 @@
             <h4 style="color: #667eea; margin-bottom: 15px;">📺 YouTube</h4>
 
             <div class="control-group">
+              <label>选择预设频道 (可选)</label>
+              <select id="setup-yt-channel-select" onchange="updateSetupYouTubeChannel()">
+                <option value="">选择预设频道或手动输入...</option>
+              </select>
+            </div>
+
+            <div class="control-group">
               <label>频道名称</label>
               <input type="text" id="setup-yt-name" placeholder="留空表示不配置">
             </div>
@@ -671,6 +678,13 @@
           <!-- Twitch Config -->
           <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
             <h4 style="color: #9146ff; margin-bottom: 15px;">🎮 Twitch</h4>
+
+            <div class="control-group">
+              <label>选择预设频道 (可选)</label>
+              <select id="setup-tw-channel-select" onchange="updateSetupTwitchChannel()">
+                <option value="">选择预设频道或手动输入...</option>
+              </select>
+            </div>
 
             <div class="control-group">
               <label>频道名称</label>
@@ -2234,6 +2248,9 @@
             // Load areas for dropdowns
             await loadAreasForSetup();
 
+            // Load channels for dropdowns
+            await loadChannelsForSetup();
+
             // Check login status
             await checkLoginStatus();
           } else {
@@ -2288,6 +2305,82 @@
           }
         } catch (error) {
           console.error('Failed to load areas:', error);
+        }
+      }
+
+      async function loadChannelsForSetup() {
+        try {
+          const response = await fetch('/api/channels');
+          const channelsData = await response.json();
+
+          if (channelsData && channelsData.channels) {
+            const ytChannelSelect = document.getElementById('setup-yt-channel-select');
+            const twChannelSelect = document.getElementById('setup-tw-channel-select');
+
+            // Populate YouTube channels
+            ytChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
+            channelsData.channels.forEach(channel => {
+              if (channel.platforms && channel.platforms.youtube) {
+                const option = document.createElement('option');
+                option.value = JSON.stringify({
+                  id: channel.platforms.youtube,
+                  name: channel.name
+                });
+                option.textContent = channel.name;
+                ytChannelSelect.appendChild(option);
+              }
+            });
+
+            // Populate Twitch channels
+            twChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
+            channelsData.channels.forEach(channel => {
+              if (channel.platforms && channel.platforms.twitch) {
+                const option = document.createElement('option');
+                option.value = JSON.stringify({
+                  id: channel.platforms.twitch,
+                  name: channel.name
+                });
+                option.textContent = channel.name;
+                twChannelSelect.appendChild(option);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Failed to load channels:', error);
+        }
+      }
+
+      function updateSetupYouTubeChannel() {
+        const select = document.getElementById('setup-yt-channel-select');
+        const selectedValue = select.value;
+
+        if (!selectedValue) {
+          return;
+        }
+
+        try {
+          const channelInfo = JSON.parse(selectedValue);
+          document.getElementById('setup-yt-id').value = channelInfo.id;
+          document.getElementById('setup-yt-name').value = channelInfo.name;
+        } catch (error) {
+          console.error('Failed to parse channel info:', error);
+        }
+      }
+
+      function updateSetupTwitchChannel() {
+        const select = document.getElementById('setup-tw-channel-select');
+        const selectedValue = select.value;
+
+        if (!selectedValue) {
+          return;
+        }
+
+        try {
+          const channelInfo = JSON.parse(selectedValue);
+          document.getElementById('setup-tw-id').value = channelInfo.id;
+          document.getElementById('setup-tw-name').value = channelInfo.name;
+        } catch (error) {
+          console.error('Failed to parse channel info:', error);
         }
       }
 
