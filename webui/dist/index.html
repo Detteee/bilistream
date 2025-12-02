@@ -682,10 +682,16 @@
 
       <div class="dashboard">
         <div class="card">
-          <h2>
-            <span class="status-indicator" id="bili-status"></span>
-            哔哩哔哩
-          </h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin: 0;">
+              <span class="status-indicator" id="bili-status"></span>
+              哔哩哔哩
+            </h2>
+            <button onclick="refreshBilibiliStatus()"
+              style="padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+              🔄
+            </button>
+          </div>
           <div class="info-row">
             <span class="info-label">状态</span>
             <span class="info-value" id="bili-live-status">加载中...</span>
@@ -705,10 +711,16 @@
         </div>
 
         <div class="card">
-          <h2>
-            <span class="status-indicator" id="yt-status"></span>
-            YouTube
-          </h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin: 0;">
+              <span class="status-indicator" id="yt-status"></span>
+              YouTube
+            </h2>
+            <button onclick="refreshYouTubeStatus()"
+              style="padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+              🔄
+            </button>
+          </div>
           <div class="info-row">
             <span class="info-label">频道</span>
             <span class="info-value" id="yt-channel-name">-</span>
@@ -728,10 +740,16 @@
         </div>
 
         <div class="card">
-          <h2>
-            <span class="status-indicator" id="tw-status"></span>
-            Twitch
-          </h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin: 0;">
+              <span class="status-indicator" id="tw-status"></span>
+              Twitch
+            </h2>
+            <button onclick="refreshTwitchStatus()"
+              style="padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+              🔄
+            </button>
+          </div>
           <div class="info-row">
             <span class="info-label">频道</span>
             <span class="info-value" id="tw-channel-name">-</span>
@@ -756,93 +774,142 @@
 
         <div class="control-group">
           <label>发送弹幕</label>
-          <input type="text" id="danmaku-input" placeholder="输入弹幕内容...">
+          <div style="display: flex; gap: 10px;">
+            <input type="text" id="danmaku-input" placeholder="输入弹幕内容..." style="flex: 1;">
+            <button class="btn-primary" onclick="sendDanmaku()">发送</button>
+          </div>
         </div>
 
         <div class="control-group">
           <label>更新分区</label>
-          <select id="area-input">
-            <option value="">选择分区...</option>
-          </select>
+          <div style="display: flex; gap: 10px;">
+            <select id="area-input" style="flex: 1;">
+              <option value="">选择分区...</option>
+            </select>
+            <button class="btn-secondary" onclick="updateArea()">更新</button>
+          </div>
         </div>
 
         <div class="button-group">
           <button class="btn-success" onclick="startStream()">开始直播</button>
           <button class="btn-danger" onclick="stopStream()">停止直播</button>
-          <button class="btn-primary" onclick="sendDanmaku()">发送弹幕</button>
-          <button class="btn-secondary" onclick="updateArea()">更新分区</button>
-          <button class="btn-primary" onclick="refreshStatus()">刷新状态</button>
+          <button class="btn-primary" onclick="restartStream()">🔄 重启流</button>
         </div>
       </div>
 
       <div class="controls" style="margin-top: 20px;">
-        <h2>📺 频道管理</h2>
+        <h2 style="cursor: pointer; user-select: none;" onclick="toggleChannelManagement()">
+          📺 频道管理 <span id="channel-toggle">▼</span>
+        </h2>
 
-        <div class="control-group">
-          <label>平台</label>
-          <select id="platform-select" onchange="updateChannelList()">
-            <option value="youtube">YouTube</option>
-            <option value="twitch">Twitch</option>
-          </select>
+        <div id="channel-management-container" style="display: none;">
+          <div class="control-group">
+            <label>平台</label>
+            <select id="platform-select" onchange="updateChannelList()">
+              <option value="youtube">YouTube</option>
+              <option value="twitch">Twitch</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>选择频道 (可选)</label>
+            <select id="channel-select" onchange="updateChannelInfo()">
+              <option value="">选择预设频道或手动输入...</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>频道ID (必填)</label>
+            <input type="text" id="channel-id-input" placeholder="输入频道ID或从上方选择">
+          </div>
+
+          <div class="control-group">
+            <label>频道名称 (必填)</label>
+            <input type="text" id="channel-name-input" placeholder="输入频道名称或从上方选择">
+          </div>
+
+          <div class="control-group">
+            <label>分区 (可选)</label>
+            <select id="area-select" onchange="toggleLolMonitorInputs()">
+              <option value="">不修改分区</option>
+            </select>
+          </div>
+
+          <div class="control-group" id="lol-monitor-group" style="display: none;">
+            <label style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="enable-lol-monitor-inline" onchange="toggleRiotApiKeyInputInline()">
+              <span>启用英雄联盟玩家ID监控</span>
+            </label>
+            <small style="color: #888; display: block; margin-top: 5px;">
+              监控游戏内玩家ID是否包含违禁词汇
+            </small>
+          </div>
+
+          <div class="control-group" id="riot-api-key-group" style="display: none;">
+            <label>Riot API Key</label>
+            <input type="text" id="riot-api-key-input" placeholder="留空表示不修改">
+            <small style="color: #888; display: block; margin-top: 5px;">
+              获取: <a href="https://developer.riotgames.com/" target="_blank">developer.riotgames.com</a>
+            </small>
+          </div>
+
+          <div class="control-group">
+            <label>画质 (可选)</label>
+            <select id="quality-select" onchange="updateQualityOptions()">
+              <option value="">不修改画质</option>
+              <option value="best">best - 最佳画质 (推荐)</option>
+              <option value="720p">720p - 高清</option>
+              <option value="480p">480p - 标清</option>
+              <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
+              <option value="worst">worst - 最低画质</option>
+            </select>
+          </div>
+
+          <div class="button-group">
+            <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
+            <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
+          </div>
         </div>
+      </div>
 
-        <div class="control-group">
-          <label>选择频道 (可选)</label>
-          <select id="channel-select" onchange="updateChannelInfo()">
-            <option value="">选择预设频道或手动输入...</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <label>频道ID (必填)</label>
-          <input type="text" id="channel-id-input" placeholder="输入频道ID或从上方选择">
-        </div>
-
-        <div class="control-group">
-          <label>频道名称 (必填)</label>
-          <input type="text" id="channel-name-input" placeholder="输入频道名称或从上方选择">
-        </div>
-
-        <div class="control-group">
-          <label>分区 (可选)</label>
-          <select id="area-select" onchange="toggleLolMonitorInputs()">
-            <option value="">不修改分区</option>
-          </select>
-        </div>
-
-        <div class="control-group" id="lol-monitor-group" style="display: none;">
-          <label style="display: flex; align-items: center; gap: 10px;">
-            <input type="checkbox" id="enable-lol-monitor-inline" onchange="toggleRiotApiKeyInputInline()">
-            <span>启用英雄联盟玩家ID监控</span>
-          </label>
-          <small style="color: #888; display: block; margin-top: 5px;">
-            监控游戏内玩家ID是否包含违禁词汇
-          </small>
-        </div>
-
-        <div class="control-group" id="riot-api-key-group" style="display: none;">
-          <label>Riot API Key</label>
-          <input type="text" id="riot-api-key-input" placeholder="留空表示不修改">
-          <small style="color: #888; display: block; margin-top: 5px;">
-            获取: <a href="https://developer.riotgames.com/" target="_blank">developer.riotgames.com</a>
-          </small>
-        </div>
-
-        <div class="control-group">
-          <label>画质 (可选)</label>
-          <select id="quality-select" onchange="updateQualityOptions()">
-            <option value="">不修改画质</option>
-            <option value="best">best - 最佳画质 (推荐)</option>
-            <option value="720p">720p - 高清</option>
-            <option value="480p">480p - 标清</option>
-            <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
-            <option value="worst">worst - 最低画质</option>
-          </select>
-        </div>
-
-        <div class="button-group">
-          <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
-          <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
+      <div class="controls" id="holodex-section" style="margin-top: 20px; display: none;">
+        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
+          onclick="toggleHolodex()">
+          <svg viewBox="0 0 24 24" focusable="false" style="width: 24px; height: 24px;">
+            <g>
+              <path d="M4.5 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z"
+                fill="url(#holodex-a)">
+              </path>
+              <path d="M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z"
+                fill="url(#holodex-b)">
+              </path>
+            </g>
+            <defs>
+              <linearGradient id="holodex-a" x1=".2" y1="2.8" x2="19.3" y2="18.5" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#F06292"></stop>
+                <stop offset="1" stop-color="#FF3A81"></stop>
+              </linearGradient>
+              <linearGradient id="holodex-b" x1="-4.4" y1="2.8" x2="19.5" y2="11.3" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#5DA2F2"></stop>
+                <stop offset="1" stop-color="#715BF7" stop-opacity=".8"></stop>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>Holodex 直播监控</span>
+          <span id="holodex-toggle">▼</span>
+        </h2>
+        <div id="holodex-container" style="display: none;">
+          <div id="holodex-status"
+            style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+            加载中...
+          </div>
+          <div id="holodex-streams"
+            style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 15px; margin-bottom: 15px;">
+            <!-- Streams will be populated here -->
+          </div>
+          <button class="btn-primary" onclick="refreshHolodexStreams()" style="width: 100%;">
+            🔄 刷新直播列表
+          </button>
         </div>
       </div>
 
@@ -904,6 +971,30 @@
       </div>
     </div>
 
+    <!-- Area Selection Modal -->
+    <div id="area-modal"
+      style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+      <div
+        style="background: white; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+        <h3 style="color: #667eea; margin-bottom: 20px;">选择分区</h3>
+        <p style="color: #666; margin-bottom: 20px;">未能自动检测分区，请手动选择：</p>
+        <select id="modal-area-select"
+          style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; margin-bottom: 20px;">
+          <option value="">加载中...</option>
+        </select>
+        <div style="display: flex; gap: 10px;">
+          <button onclick="confirmAreaSelection()"
+            style="flex: 1; padding: 12px; background: #667eea; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+            确认
+          </button>
+          <button onclick="closeAreaModal()"
+            style="flex: 1; padding: 12px; background: #6b7280; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script>
       // Global data
       let channelsData = null;
@@ -932,8 +1023,17 @@
             // Store config globally
             window.configData = {
               enable_lol_monitor: config.enable_lol_monitor || false,
-              riot_api_key: config.riot_api_key || ''
+              riot_api_key: config.riot_api_key || '',
+              holodex_api_key: config.holodex_api_key || ''
             };
+
+            // Show/hide Holodex section based on API key configuration
+            const holodexSection = document.getElementById('holodex-section');
+            if (config.holodex_api_key && config.holodex_api_key.trim() !== '') {
+              holodexSection.style.display = 'block';
+            } else {
+              holodexSection.style.display = 'none';
+            }
 
             if (config.interval) {
               statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
@@ -941,6 +1041,7 @@
             }
 
             console.log('LOL Monitor enabled:', window.configData.enable_lol_monitor);
+            console.log('Holodex API configured:', !!config.holodex_api_key);
           }
         } catch (error) {
           console.log('Failed to load config, using default interval:', error);
@@ -954,6 +1055,224 @@
 
         // Initial refresh
         refreshStatus();
+      }
+
+      function toggleChannelManagement() {
+        const container = document.getElementById('channel-management-container');
+        const toggle = document.getElementById('channel-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      function toggleHolodex() {
+        const container = document.getElementById('holodex-container');
+        const toggle = document.getElementById('holodex-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+          refreshHolodexStreams();
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      async function refreshHolodexStreams() {
+        const statusDiv = document.getElementById('holodex-status');
+        const streamsDiv = document.getElementById('holodex-streams');
+
+        statusDiv.innerHTML = '⏳ 加载中...';
+        statusDiv.style.background = '#e3f2fd';
+        streamsDiv.innerHTML = '';
+
+        try {
+          const response = await fetch('/api/holodex/streams');
+          const data = await response.json();
+
+          if (!data.success) {
+            statusDiv.innerHTML = `⚠️ ${data.message}`;
+            statusDiv.style.background = '#fff3cd';
+            return;
+          }
+
+          const streams = data.data || [];
+
+          if (streams.length === 0) {
+            statusDiv.innerHTML = '✅ 已连接 Holodex API - 当前无直播或预告';
+            statusDiv.style.background = '#d4edda';
+            return;
+          }
+
+          // Separate live and scheduled streams
+          const liveStreams = streams.filter(s => s.status === 'live');
+          const scheduledStreams = streams.filter(s => s.status !== 'live');
+
+          statusDiv.innerHTML = `✅ 找到 ${liveStreams.length} 个直播, ${scheduledStreams.length} 个预告`;
+          statusDiv.style.background = '#d4edda';
+
+          // Render live streams first
+          liveStreams.forEach(stream => {
+            streamsDiv.appendChild(createStreamCard(stream, true));
+          });
+
+          // Add divider if both live and scheduled exist
+          if (liveStreams.length > 0 && scheduledStreams.length > 0) {
+            const divider = document.createElement('div');
+            divider.style.cssText = 'grid-column: 1 / -1; height: 2px; background: linear-gradient(to right, transparent, #667eea, transparent); margin: 10px 0; position: relative;';
+            divider.innerHTML = '<span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: white; padding: 0 15px; color: #667eea; font-size: 12px; font-weight: 600;">预告</span>';
+            streamsDiv.appendChild(divider);
+          }
+
+          // Render scheduled streams
+          scheduledStreams.forEach(stream => {
+            streamsDiv.appendChild(createStreamCard(stream, false));
+          });
+
+        } catch (error) {
+          statusDiv.innerHTML = `❌ 请求失败: ${error.message}`;
+          statusDiv.style.background = '#f8d7da';
+        }
+      }
+
+      function createStreamCard(stream, isLive) {
+        const streamCard = document.createElement('div');
+        streamCard.style.cssText = 'background: white; border: 2px solid #e5e7eb; border-radius: 8px; padding: 15px; transition: all 0.2s; min-width: 0; overflow: hidden;';
+        streamCard.onmouseenter = () => {
+          streamCard.style.transform = 'translateY(-2px)';
+          streamCard.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+        };
+        streamCard.onmouseleave = () => {
+          streamCard.style.transform = 'translateY(0)';
+          streamCard.style.boxShadow = 'none';
+        };
+
+        const statusBadge = isLive
+          ? '<span style="background: #ef4444; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">🔴 直播中</span>'
+          : '<span style="background: #3b82f6; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">📅 预告</span>';
+
+        const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
+        const scheduledTime = stream.start_scheduled ? new Date(stream.start_scheduled).toLocaleString('zh-CN') : '';
+        const actualTime = stream.start_actual ? new Date(stream.start_actual).toLocaleString('zh-CN') : '';
+
+        let areaInfo = '';
+        if (stream.suggested_area_id && stream.suggested_area_name) {
+          areaInfo = `<p style="color: #10b981; font-size: 12px; margin: 5px 0;">🎯 建议分区: ${stream.suggested_area_name}</p>`;
+        }
+
+        streamCard.innerHTML = `
+          <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              ${statusBadge}
+              ${viewers ? `<span style="margin-left: 10px; color: #666; font-size: 14px;">${viewers}</span>` : ''}
+            </div>
+          </div>
+          ${stream.channel_name ? `<p style="color: #999; font-size: 12px; margin: 5px 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">👤 ${stream.channel_name}</p>` : ''}
+          <h4 style="margin: 10px 0; color: #333; font-size: 14px; line-height: 1.4; font-weight: 600; word-wrap: break-word; overflow-wrap: break-word;">${stream.title}</h4>
+          ${stream.topic_id ? `<p style="color: #667eea; font-size: 12px; margin: 5px 0;">🎮 ${stream.topic_id}</p>` : ''}
+          ${areaInfo}
+          ${isLive && actualTime ? `<p style="color: #666; font-size: 12px; margin: 5px 0;">⏰ 开始: ${actualTime}</p>` : ''}
+          ${!isLive && scheduledTime ? `<p style="color: #666; font-size: 12px; margin: 5px 0;">⏰ 预定: ${scheduledTime}</p>` : ''}
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <a href="https://www.youtube.com/watch?v=${stream.id}" target="_blank" 
+               style="flex: 1; padding: 6px 12px; background: #667eea; color: white; text-decoration: none; border-radius: 4px; font-size: 12px; text-align: center;">
+              📺 观看
+            </a>
+            <button onclick="switchToHolodexStream('${stream.channel_id}', ${stream.suggested_area_id || 'null'})" 
+               style="flex: 1; padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; font-weight: 600;">
+              🔄 切换
+            </button>
+          </div>
+        `;
+
+        return streamCard;
+      }
+
+      // Store pending switch data
+      let pendingSwitchData = null;
+
+      async function switchToHolodexStream(channelId, suggestedAreaId) {
+        if (!suggestedAreaId) {
+          // Show modal for area selection
+          pendingSwitchData = { channelId, areaId: null };
+          await showAreaModal();
+        } else {
+          // Direct switch with suggested area
+          await performSwitch(channelId, suggestedAreaId);
+        }
+      }
+
+      async function showAreaModal() {
+        const modal = document.getElementById('area-modal');
+        const select = document.getElementById('modal-area-select');
+
+        // Load areas if not already loaded
+        if (!areasData) {
+          try {
+            const response = await fetch('/api/areas');
+            const data = await response.json();
+            areasData = data;
+          } catch (error) {
+            showNotification('加载分区列表失败', 'error');
+            return;
+          }
+        }
+
+        // Populate select
+        select.innerHTML = '<option value="">选择分区...</option>';
+        if (areasData && areasData.areas) {
+          areasData.areas.forEach(area => {
+            const option = document.createElement('option');
+            option.value = area.id;
+            option.textContent = `${area.name} (${area.id})`;
+            select.appendChild(option);
+          });
+        }
+
+        modal.style.display = 'flex';
+      }
+
+      function closeAreaModal() {
+        document.getElementById('area-modal').style.display = 'none';
+        pendingSwitchData = null;
+      }
+
+      async function confirmAreaSelection() {
+        const select = document.getElementById('modal-area-select');
+        const areaId = parseInt(select.value) || 235;
+
+        if (pendingSwitchData) {
+          closeAreaModal();
+          await performSwitch(pendingSwitchData.channelId, areaId);
+        }
+      }
+
+      async function performSwitch(channelId, areaId) {
+        try {
+          const response = await fetch('/api/holodex/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channel_id: channelId,
+              area_id: areaId
+            })
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            showNotification(data.message || '频道切换成功！', 'success');
+            setTimeout(() => refreshStatus(), 2000);
+          } else {
+            showNotification(data.message || '切换失败', 'error');
+          }
+        } catch (error) {
+          showNotification('切换失败: ' + error.message, 'error');
+        }
       }
 
       function toggleLogs() {
@@ -1038,6 +1357,21 @@
         setTimeout(() => {
           notification.remove();
         }, 3000);
+      }
+
+      async function refreshBilibiliStatus() {
+        // Bilibili status is always fetched fresh, just refresh the display
+        await refreshStatus();
+      }
+
+      async function refreshYouTubeStatus() {
+        // YouTube status comes from cache updated by main loop
+        await refreshStatus();
+      }
+
+      async function refreshTwitchStatus() {
+        // Twitch status comes from cache updated by main loop
+        await refreshStatus();
       }
 
       async function refreshStatus() {
@@ -1191,6 +1525,23 @@
           });
           const data = await response.json();
           showNotification(data.message || '直播已停止', 'success');
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('操作失败: ' + error.message, 'error');
+        }
+      }
+
+      async function restartStream() {
+        if (!confirm('确定要停止当前流并重新加载配置吗？')) {
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/restart', {
+            method: 'POST'
+          });
+          const data = await response.json();
+          showNotification(data.message || '已重启流', 'success');
           setTimeout(refreshStatus, 2000);
         } catch (error) {
           showNotification('操作失败: ' + error.message, 'error');

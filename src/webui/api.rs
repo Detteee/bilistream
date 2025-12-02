@@ -202,6 +202,7 @@ pub async fn get_status() -> impl IntoResponse {
 
     // Get YouTube/Twitch status from cache (updated by main loop)
     // This avoids expensive yt-dlp/streamlink calls on every refresh
+    // Note: Individual platform refresh buttons can trigger fresh fetches if needed
     let cached_status = get_status_cache();
     let youtube_status = cached_status.as_ref().and_then(|c| c.youtube.clone());
     let twitch_status = cached_status.as_ref().and_then(|c| c.twitch.clone());
@@ -241,6 +242,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "anti_collision": cfg.enable_anti_collision,
         "enable_lol_monitor": cfg.enable_lol_monitor,
         "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
+        "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -356,6 +358,23 @@ pub async fn stop_stream() -> Result<ApiResponse<()>, StatusCode> {
         success: true,
         data: None,
         message: Some("直播已停止".to_string()),
+    })
+}
+
+pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
+    // Stop current ffmpeg process
+    crate::plugins::stop_ffmpeg().await;
+
+    // Clear any warning stops to allow restreaming
+    crate::plugins::danmaku::clear_warning_stop();
+
+    // Set config updated flag to trigger main loop reload
+    set_config_updated();
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("已停止当前流并重新加载配置".to_string()),
     })
 }
 
@@ -609,6 +628,13 @@ pub struct SetupConfigRequest {
 pub async fn save_setup_config(
     Json(payload): Json<SetupConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
+    // Try to load existing config to preserve AntiCollisionList
+    let existing_anti_collision = if let Ok(existing_cfg) = load_config().await {
+        existing_cfg.anti_collision
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let proxy_line = payload.proxy.unwrap_or_default();
     let holodex_line = payload.holodex_api_key.unwrap_or_default();
     let riot_line = payload.riot_api_key.unwrap_or_default();
@@ -628,6 +654,18 @@ pub async fn save_setup_config(
         .twitch_proxy_region
         .unwrap_or_else(|| "as".to_string());
     let tw_quality = payload.twitch_quality.unwrap_or_else(|| "best".to_string());
+
+    // Build AntiCollisionList section
+    let anti_collision_section = if existing_anti_collision.is_empty() {
+        "  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车\n  # B站ID2: 房间号2  # 房间号用于检测撞车"
+            .to_string()
+    } else {
+        existing_anti_collision
+            .iter()
+            .map(|(k, v)| format!("  {}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     let config_content = format!(
         r#"Interval: {} # 检测直播间隔
@@ -657,8 +695,7 @@ Twitch:
   Quality: {} # 流质量: best(推荐), worst, 720p, 480p, 360p, 或 streamlink 质量选项
 
 AntiCollisionList:
-  # B站ID1: 房间号1  # ID仅用于弹幕提醒撞车
-  # B站ID2: 房间号2  # 房间号用于检测撞车
+{}
 "#,
         payload.interval,
         payload.auto_cover,
@@ -679,6 +716,7 @@ AntiCollisionList:
         tw_oauth,
         tw_proxy_region,
         tw_quality,
+        anti_collision_section,
     );
 
     // Write config file
@@ -942,4 +980,555 @@ pub async fn get_deps_status() -> impl IntoResponse {
         "total": total,
         "message": message
     }))
+}
+
+// Holodex API - Get live/upcoming streams
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HolodexStream {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub stream_type: String,
+    pub topic_id: Option<String>,
+    pub published_at: Option<String>,
+    pub available_at: Option<String>,
+    pub status: String,
+    pub start_scheduled: Option<String>,
+    pub start_actual: Option<String>,
+    pub live_viewers: Option<i32>,
+    #[serde(default)]
+    pub channel: HolodexChannel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct HolodexChannel {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct HolodexStreamWithArea {
+    pub id: String,
+    pub title: String,
+    pub stream_type: String,
+    pub topic_id: Option<String>,
+    pub status: String,
+    pub start_scheduled: Option<String>,
+    pub start_actual: Option<String>,
+    pub live_viewers: Option<i32>,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub suggested_area_id: Option<u64>,
+    pub suggested_area_name: Option<String>,
+}
+
+pub async fn get_holodex_streams() -> impl IntoResponse {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to load config: {}", e)
+            }));
+        }
+    };
+
+    // Check if Holodex API key is configured
+    let api_key = match cfg.holodex_api_key {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            return Json(json!({
+                "success": false,
+                "message": "Holodex API key not configured"
+            }));
+        }
+    };
+
+    // Collect all channel IDs from channels.json
+    let mut channel_ids = Vec::new();
+
+    // Load channels.json for all channels
+    if let Ok(channels_content) = tokio::fs::read_to_string("channels.json").await {
+        if let Ok(channels_json) = serde_json::from_str::<serde_json::Value>(&channels_content) {
+            // Try new format: channels[].platforms.youtube
+            if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
+                for channel in channels {
+                    if let Some(platforms) = channel.get("platforms") {
+                        if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
+                            if !yt_id.is_empty() && !channel_ids.contains(&yt_id.to_string()) {
+                                channel_ids.push(yt_id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            // Try old format: YT_channels[].channel_id (for backward compatibility)
+            else if let Some(yt_channels) =
+                channels_json.get("YT_channels").and_then(|v| v.as_array())
+            {
+                for channel in yt_channels {
+                    if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
+                        if !id.is_empty() && !channel_ids.contains(&id.to_string()) {
+                            channel_ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also add the currently configured channel if not already in list
+    if !cfg.youtube.channel_id.is_empty() && !channel_ids.contains(&cfg.youtube.channel_id) {
+        channel_ids.push(cfg.youtube.channel_id.clone());
+    }
+
+    if channel_ids.is_empty() {
+        return Json(json!({
+            "success": false,
+            "message": "No YouTube channels configured"
+        }));
+    }
+
+    // Call Holodex API
+    let channels_param = channel_ids.join(",");
+    let url = format!(
+        "https://holodex.net/api/v2/users/live?channels={}",
+        channels_param
+    );
+
+    let client = reqwest::Client::new();
+    let response = match client.get(&url).header("X-APIKEY", api_key).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to fetch from Holodex: {}", e)
+            }));
+        }
+    };
+
+    if !response.status().is_success() {
+        return Json(json!({
+            "success": false,
+            "message": format!("Holodex API error: {}", response.status())
+        }));
+    }
+
+    let streams: Vec<HolodexStream> = match response.json().await {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to parse Holodex response: {}", e)
+            }));
+        }
+    };
+
+    // Filter: if a channel is live, omit its scheduled streams
+    use std::collections::HashSet;
+    let mut live_channels: HashSet<String> = HashSet::new();
+
+    // First pass: collect all channels that are currently live
+    for stream in &streams {
+        if stream.status == "live" {
+            live_channels.insert(stream.channel.id.clone());
+        }
+    }
+
+    // Second pass: filter out scheduled streams for channels that are live
+    let filtered_streams: Vec<_> = streams
+        .into_iter()
+        .filter(|stream| {
+            // Keep live streams
+            if stream.status == "live" {
+                return true;
+            }
+            // Keep scheduled streams only if channel is not currently live
+            !live_channels.contains(&stream.channel.id)
+        })
+        .collect();
+
+    // Add area detection for each stream
+    let streams_with_area: Vec<HolodexStreamWithArea> = filtered_streams
+        .into_iter()
+        .map(|stream| {
+            let title_for_detection = if let Some(ref topic) = stream.topic_id {
+                format!("{} {}", topic, stream.title)
+            } else {
+                stream.title.clone()
+            };
+
+            let suggested_area_id =
+                crate::plugins::check_area_id_with_title(&title_for_detection, 235);
+            let suggested_area_name = if suggested_area_id != 235 {
+                crate::plugins::get_area_name(suggested_area_id)
+            } else {
+                None
+            };
+
+            HolodexStreamWithArea {
+                id: stream.id,
+                title: stream.title,
+                stream_type: stream.stream_type,
+                topic_id: stream.topic_id,
+                status: stream.status,
+                start_scheduled: stream.start_scheduled,
+                start_actual: stream.start_actual,
+                live_viewers: stream.live_viewers,
+                channel_id: stream.channel.id,
+                channel_name: stream.channel.name,
+                suggested_area_id: if suggested_area_id != 235 {
+                    Some(suggested_area_id)
+                } else {
+                    None
+                },
+                suggested_area_name,
+            }
+        })
+        .collect();
+
+    Json(json!({
+        "success": true,
+        "data": streams_with_area
+    }))
+}
+
+// Switch to a Holodex stream
+#[derive(Deserialize)]
+pub struct SwitchToHolodexStream {
+    pub channel_id: String,
+    pub area_id: Option<u64>,
+}
+
+pub async fn switch_to_holodex_stream(
+    Json(payload): Json<SwitchToHolodexStream>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
+        }
+    };
+
+    // Get channel info from channels.json
+    let channels_content = match tokio::fs::read_to_string("channels.json").await {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read channels.json: {}", e)),
+            });
+        }
+    };
+
+    let channels_json: serde_json::Value = match serde_json::from_str(&channels_content) {
+        Ok(j) => j,
+        Err(e) => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to parse channels.json: {}", e)),
+            });
+        }
+    };
+
+    // Find channel name - try both new and old formats
+    let mut channel_name = None;
+
+    // Try new format: channels[].platforms.youtube
+    if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
+        for channel in channels {
+            if let Some(platforms) = channel.get("platforms") {
+                if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
+                    if yt_id == payload.channel_id {
+                        channel_name = channel
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Try old format if not found: YT_channels[].channel_id
+    if channel_name.is_none() {
+        if let Some(yt_channels) = channels_json.get("YT_channels").and_then(|v| v.as_array()) {
+            for channel in yt_channels {
+                if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
+                    if id == payload.channel_id {
+                        channel_name = channel
+                            .get("channel_name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // If channel name not found in channels.json, fetch from Holodex API
+    if channel_name.is_none() {
+        if let Some(ref api_key) = cfg.holodex_api_key {
+            if !api_key.is_empty() {
+                let url = format!("https://holodex.net/api/v2/channels/{}", payload.channel_id);
+                let client = reqwest::Client::new();
+                if let Ok(response) = client.get(&url).header("X-APIKEY", api_key).send().await {
+                    if response.status().is_success() {
+                        if let Ok(channel_data) = response.json::<serde_json::Value>().await {
+                            channel_name = channel_data
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let channel_name = channel_name.unwrap_or_else(|| payload.channel_id.clone());
+
+    // Update config
+    cfg.youtube.channel_id = payload.channel_id.clone();
+    cfg.youtube.channel_name = channel_name;
+
+    if let Some(area_id) = payload.area_id {
+        cfg.youtube.area_v2 = area_id;
+    }
+
+    // Serialize config to YAML to preserve all fields including AntiCollisionList
+    let config_yaml = match serde_yaml::to_string(&cfg) {
+        Ok(yaml) => yaml,
+        Err(e) => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to serialize config: {}", e)),
+            });
+        }
+    };
+
+    if let Err(e) = tokio::fs::write("config.yaml", config_yaml).await {
+        return Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to write config: {}", e)),
+        });
+    }
+
+    // Notify main loop to reload config
+    set_config_updated();
+
+    Ok(ApiResponse {
+        success: true,
+        data: Some(()),
+        message: Some("已切换到选定频道".to_string()),
+    })
+}
+
+// Refresh YouTube status (fetch fresh data and update cache)
+pub async fn refresh_youtube_status() -> Response {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to load config: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if cfg.youtube.channel_id.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                message: Some("YouTube channel not configured".to_string()),
+            }),
+        )
+            .into_response();
+    }
+
+    // Fetch fresh YouTube status
+    let yt_live = match crate::plugins::select_live(cfg.clone(), "YT").await {
+        Ok(live) => live,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to create YouTube live instance: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let (yt_is_live, yt_area, yt_title, _, _) = match yt_live.get_status().await {
+        Ok(status) => status,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to get YouTube status: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Get current cache and update only YouTube part
+    let mut current_cache = get_status_cache().unwrap_or_else(|| {
+        // Create default cache if none exists
+        StatusData {
+            bilibili: BiliStatus {
+                is_live: false,
+                title: String::new(),
+                area_id: 0,
+                area_name: String::new(),
+                stream_quality: None,
+                stream_speed: None,
+            },
+            youtube: None,
+            twitch: None,
+        }
+    });
+
+    current_cache.youtube = Some(YtStatus {
+        is_live: yt_is_live,
+        title: yt_title,
+        topic: yt_area,
+        channel_name: cfg.youtube.channel_name,
+        channel_id: cfg.youtube.channel_id,
+        quality: cfg.youtube.quality,
+    });
+
+    update_status_cache(current_cache);
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("YouTube status refreshed".to_string()),
+        }),
+    )
+        .into_response()
+}
+
+// Refresh Twitch status (fetch fresh data and update cache)
+pub async fn refresh_twitch_status() -> Response {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to load config: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if cfg.twitch.channel_id.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                message: Some("Twitch channel not configured".to_string()),
+            }),
+        )
+            .into_response();
+    }
+
+    // Fetch fresh Twitch status
+    let tw_live = match crate::plugins::select_live(cfg.clone(), "TW").await {
+        Ok(live) => live,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to create Twitch live instance: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let (tw_is_live, tw_area, tw_title, _, _) = match tw_live.get_status().await {
+        Ok(status) => status,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to get Twitch status: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Get current cache and update only Twitch part
+    let mut current_cache = get_status_cache().unwrap_or_else(|| {
+        // Create default cache if none exists
+        StatusData {
+            bilibili: BiliStatus {
+                is_live: false,
+                title: String::new(),
+                area_id: 0,
+                area_name: String::new(),
+                stream_quality: None,
+                stream_speed: None,
+            },
+            youtube: None,
+            twitch: None,
+        }
+    });
+
+    current_cache.twitch = Some(TwStatus {
+        is_live: tw_is_live,
+        title: tw_title,
+        game: tw_area,
+        channel_name: cfg.twitch.channel_name,
+        channel_id: cfg.twitch.channel_id,
+        quality: cfg.twitch.quality,
+    });
+
+    update_status_cache(current_cache);
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("Twitch status refreshed".to_string()),
+        }),
+    )
+        .into_response()
 }

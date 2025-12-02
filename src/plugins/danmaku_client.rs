@@ -650,10 +650,16 @@ impl BilibiliDanmakuClient {
                     });
                 }
             }
-            "CUT_OFF" => {
+            "CUT_OFF" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
                 if let Some(data) = &message.data {
-                    let msg = data["msg"].as_str().unwrap_or("Stream cut off");
-                    warn!("✂️ Cut off: {}", msg)
+                    let msg = if message.cmd == "CUT_OFF" {
+                        data["msg"].as_str().unwrap_or("Stream cut off")
+                    } else if message.cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
+                        data["dialog_title"].as_str().unwrap_or("直播间违规")
+                    } else {
+                        data["title"].as_str().unwrap_or("直播间涉嫌违规")
+                    };
+                    warn!("✂️ Cut off/Warning: {}", msg)
                 };
                 let cfg = self.app_config.clone();
                 tokio::spawn(async move {
@@ -684,10 +690,6 @@ impl BilibiliDanmakuClient {
                         error!("Failed to stop live on warning: {}", e);
                     }
                 });
-                // if let Some(data) = &message.data {
-                //     let username = data["uname"].as_str().unwrap_or("User");
-                //     info!("👋 {} entered the room", username);
-                // }
             }
             "WELCOME_GUARD" => {
                 // if let Some(data) = &message.data {

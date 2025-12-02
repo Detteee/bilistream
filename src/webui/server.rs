@@ -26,6 +26,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/start", post(api::start_stream))
         .route("/stop", post(api::stop_stream))
+        .route("/restart", post(api::restart_stream))
         .route("/danmaku", post(api::send_danmaku))
         .route("/cover", post(api::update_cover))
         .route("/area", post(api::update_area))
@@ -41,7 +42,9 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/setup/poll-login", post(api::poll_login))
         .route("/update/check", get(api::check_updates))
         .route("/update/download", post(api::download_update))
-        .route("/deps/status", get(api::get_deps_status));
+        .route("/deps/status", get(api::get_deps_status))
+        .route("/holodex/streams", get(api::get_holodex_streams))
+        .route("/holodex/switch", post(api::switch_to_holodex_stream));
 
     // Main app with API routes and static files
     let app = Router::new()
