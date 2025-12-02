@@ -1128,8 +1128,24 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
                 stream.title.clone()
             };
 
-            let suggested_area_id =
-                crate::plugins::check_area_id_with_title(&title_for_detection, 235);
+            // Check if topic_id suggests 萌宅领域 (530)
+            let mut suggested_area_id = 235; // Default to 其他单机
+            if let Some(ref topic) = stream.topic_id {
+                let topic_lower = topic.to_lowercase();
+                if topic_lower.contains("freechat")
+                    || topic_lower.contains("talk")
+                    || topic_lower.contains("singing")
+                {
+                    suggested_area_id = 530; // 萌宅领域
+                }
+            }
+
+            // If not matched by topic, check title
+            if suggested_area_id == 235 {
+                suggested_area_id =
+                    crate::plugins::check_area_id_with_title(&title_for_detection, 235);
+            }
+
             let suggested_area_name = if suggested_area_id != 235 {
                 crate::plugins::get_area_name(suggested_area_id)
             } else {

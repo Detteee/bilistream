@@ -744,6 +744,7 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COMMON_NOTICE_DANMAKU"
+            | "LIKE_GUIDE_USER"
             | "PLAYURL_RELOAD"
             | "POPULAR_RANK_CHANGED"
             | "master_qn_strategy_chg"
