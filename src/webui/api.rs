@@ -1331,64 +1331,38 @@ pub async fn switch_to_holodex_stream(
 }
 
 // Refresh YouTube status (fetch fresh data and update cache)
-pub async fn refresh_youtube_status() -> Response {
+pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
     let cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to load config: {}", e)),
-                }),
-            )
-                .into_response();
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
         }
     };
 
     if cfg.youtube.channel_id.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(ApiResponse::<()> {
-                success: false,
-                data: None,
-                message: Some("YouTube channel not configured".to_string()),
-            }),
-        )
-            .into_response();
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("YouTube channel not configured".to_string()),
+        });
     }
 
-    // Fetch fresh YouTube status
-    let yt_live = match crate::plugins::select_live(cfg.clone(), "YT").await {
-        Ok(live) => live,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to create YouTube live instance: {}", e)),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    let (yt_is_live, yt_area, yt_title, _, _) = match yt_live.get_status().await {
-        Ok(status) => status,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
+    // Fetch fresh YouTube status using get_youtube_status
+    let (yt_is_live, yt_area, yt_title, _, _) =
+        match crate::plugins::get_youtube_status(&cfg.youtube.channel_id).await {
+            Ok(status) => status,
+            Err(e) => {
+                return Json(ApiResponse {
                     success: false,
                     data: None,
                     message: Some(format!("Failed to get YouTube status: {}", e)),
-                }),
-            )
-                .into_response();
-        }
-    };
+                });
+            }
+        };
 
     // Get current cache and update only YouTube part
     let mut current_cache = get_status_cache().unwrap_or_else(|| {
@@ -1418,76 +1392,46 @@ pub async fn refresh_youtube_status() -> Response {
 
     update_status_cache(current_cache);
 
-    (
-        StatusCode::OK,
-        Json(ApiResponse {
-            success: true,
-            data: Some(()),
-            message: Some("YouTube status refreshed".to_string()),
-        }),
-    )
-        .into_response()
+    Json(ApiResponse {
+        success: true,
+        data: Some(()),
+        message: Some("YouTube status refreshed".to_string()),
+    })
 }
 
 // Refresh Twitch status (fetch fresh data and update cache)
-pub async fn refresh_twitch_status() -> Response {
+pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
     let cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to load config: {}", e)),
-                }),
-            )
-                .into_response();
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
         }
     };
 
     if cfg.twitch.channel_id.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(ApiResponse::<()> {
-                success: false,
-                data: None,
-                message: Some("Twitch channel not configured".to_string()),
-            }),
-        )
-            .into_response();
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("Twitch channel not configured".to_string()),
+        });
     }
 
-    // Fetch fresh Twitch status
-    let tw_live = match crate::plugins::select_live(cfg.clone(), "TW").await {
-        Ok(live) => live,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to create Twitch live instance: {}", e)),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    let (tw_is_live, tw_area, tw_title, _, _) = match tw_live.get_status().await {
-        Ok(status) => status,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()> {
+    // Fetch fresh Twitch status using get_twitch_status
+    let (tw_is_live, tw_area, tw_title) =
+        match crate::plugins::get_twitch_status(&cfg.twitch.channel_id).await {
+            Ok(status) => status,
+            Err(e) => {
+                return Json(ApiResponse {
                     success: false,
                     data: None,
                     message: Some(format!("Failed to get Twitch status: {}", e)),
-                }),
-            )
-                .into_response();
-        }
-    };
+                });
+            }
+        };
 
     // Get current cache and update only Twitch part
     let mut current_cache = get_status_cache().unwrap_or_else(|| {
@@ -1517,13 +1461,9 @@ pub async fn refresh_twitch_status() -> Response {
 
     update_status_cache(current_cache);
 
-    (
-        StatusCode::OK,
-        Json(ApiResponse {
-            success: true,
-            data: Some(()),
-            message: Some("Twitch status refreshed".to_string()),
-        }),
-    )
-        .into_response()
+    Json(ApiResponse {
+        success: true,
+        data: Some(()),
+        message: Some("Twitch status refreshed".to_string()),
+    })
 }
