@@ -47,6 +47,12 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 - **LoL Monitor** - Stop streaming if blacklisted words found in player names
 - **Anti-Collision** - Avoid rebroadcasting already-streamed content
 
+## Web UI Preview
+
+![Web UI Screenshot](screenshot_of_webui.png)
+
+The modern web interface provides real-time monitoring and control of your streams with an intuitive dashboard.
+
 ## Dependencies
 
 **Windows:**
