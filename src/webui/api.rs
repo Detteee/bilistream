@@ -1106,6 +1106,10 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
     }
 
     // Second pass: filter out scheduled streams for channels that are live
+    // Also filter out scheduled streams more than 30 hours in the future
+    let now = chrono::Utc::now();
+    let thirty_hours_later = now + chrono::Duration::hours(30);
+
     let filtered_streams: Vec<_> = streams
         .into_iter()
         .filter(|stream| {
@@ -1113,8 +1117,26 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
             if stream.status == "live" {
                 return true;
             }
+
             // Keep scheduled streams only if channel is not currently live
-            !live_channels.contains(&stream.channel.id)
+            if live_channels.contains(&stream.channel.id) {
+                return false;
+            }
+
+            // Filter scheduled streams by time (within 30 hours)
+            if stream.status == "upcoming" {
+                if let Some(ref scheduled_time) = stream.start_scheduled {
+                    if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time) {
+                        let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
+                        // Only keep if scheduled within next 30 hours
+                        return scheduled_utc <= thirty_hours_later;
+                    }
+                }
+                // If we can't parse the time, keep it to be safe
+                return true;
+            }
+
+            true
         })
         .collect();
 
