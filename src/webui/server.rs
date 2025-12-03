@@ -45,14 +45,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/deps/status", get(api::get_deps_status))
         .route("/holodex/streams", get(api::get_holodex_streams))
         .route("/holodex/switch", post(api::switch_to_holodex_stream))
-        .route(
-            "/refresh/youtube",
-            get(|| async { api::refresh_youtube_status().await }),
-        )
-        .route(
-            "/refresh/twitch",
-            get(|| async { api::refresh_twitch_status().await }),
-        );
+        .route("/refresh/youtube", get(api::refresh_youtube_status))
+        .route("/refresh/twitch", get(api::refresh_twitch_status));
 
     // Main app with API routes and static files
     let app = Router::new()

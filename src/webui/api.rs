@@ -1098,6 +1098,9 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
     use std::collections::HashSet;
     let mut live_channels: HashSet<String> = HashSet::new();
 
+    // Create a set of queried channel IDs for filtering collab streams
+    let queried_channels: HashSet<String> = channel_ids.iter().cloned().collect();
+
     // First pass: collect all channels that are currently live
     for stream in &streams {
         if stream.status == "live" {
@@ -1107,12 +1110,19 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
 
     // Second pass: filter out scheduled streams for channels that are live
     // Also filter out scheduled streams more than 30 hours in the future
+    // Also filter out collab streams (where the channel is not in our query list)
     let now = chrono::Utc::now();
     let thirty_hours_later = now + chrono::Duration::hours(30);
 
     let filtered_streams: Vec<_> = streams
         .into_iter()
         .filter(|stream| {
+            // Only keep streams from channels we explicitly queried
+            // This filters out collab streams where our channel appears as a guest
+            if !queried_channels.contains(&stream.channel.id) {
+                return false;
+            }
+
             // Keep live streams
             if stream.status == "live" {
                 return true;
