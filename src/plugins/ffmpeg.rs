@@ -9,6 +9,8 @@ lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
     // Use atomic for lock-free speed updates (stored as f32 bits)
     static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    // Track last progress time for timeout detection (stored as Unix timestamp in seconds)
+    static ref LAST_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 }
 
 // Represents a managed ffmpeg process
@@ -148,28 +150,109 @@ pub async fn get_ffmpeg_speed() -> Option<f32> {
     }
 }
 
+// Update last progress time (lock-free write)
+fn update_progress_time() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    LAST_PROGRESS_TIME.store(now, Ordering::Relaxed);
+}
+
+// Check if ffmpeg has made progress recently (within timeout seconds)
+pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
+    let last_progress = LAST_PROGRESS_TIME.load(Ordering::Relaxed);
+    if last_progress == 0 {
+        // No progress recorded yet, not stuck
+        return false;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+
+    let elapsed = now.saturating_sub(last_progress);
+    elapsed > timeout_secs as u32
+}
+
 /// Stops the supervised ffmpeg process
 pub async fn stop_ffmpeg() {
     tracing::info!("🛑 Stopping ffmpeg process...");
 
     let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
     if let Some(mut process) = supervisor.take() {
-        if let Some(pid) = process.pid() {
-            tracing::info!("Terminating ffmpeg process (PID: {})", pid);
+        let pid = process.pid();
+        if let Some(pid_value) = pid {
+            tracing::info!("Terminating ffmpeg process (PID: {})", pid_value);
         }
 
-        // Try graceful shutdown first
-        if let Err(e) = process.kill().await {
-            tracing::error!("❌ Failed to kill ffmpeg: {}", e);
-        } else {
-            tracing::info!("✅ ffmpeg process stopped successfully");
+        // Try tokio kill first
+        match process.kill().await {
+            Ok(_) => {
+                tracing::info!("✅ ffmpeg process killed via tokio");
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Tokio kill failed: {}, trying system kill", e);
+
+                // Fallback to system kill command
+                if let Some(pid_value) = pid {
+                    #[cfg(unix)]
+                    {
+                        let kill_result = std::process::Command::new("kill")
+                            .arg("-9")
+                            .arg(pid_value.to_string())
+                            .output();
+
+                        match kill_result {
+                            Ok(output) if output.status.success() => {
+                                tracing::info!("✅ ffmpeg process killed via system kill -9");
+                            }
+                            Ok(output) => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                tracing::error!("❌ System kill failed: {}", stderr);
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ Failed to execute kill command: {}", e);
+                            }
+                        }
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        let kill_result = std::process::Command::new("taskkill")
+                            .arg("/F")
+                            .arg("/PID")
+                            .arg(pid_value.to_string())
+                            .output();
+
+                        match kill_result {
+                            Ok(output) if output.status.success() => {
+                                tracing::info!("✅ ffmpeg process killed via taskkill");
+                            }
+                            Ok(output) => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                tracing::error!("❌ Taskkill failed: {}", stderr);
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ Failed to execute taskkill: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
         }
+
+        // Wait a bit for process to actually terminate
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        tracing::info!("✅ ffmpeg process stopped successfully");
     } else {
         tracing::warn!("⚠️ No ffmpeg process to stop");
     }
 
-    // Clear speed when ffmpeg stops (lock-free write)
+    // Clear speed and progress time when ffmpeg stops (lock-free write)
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
+    LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
 }
 /// Extract compact stats from ffmpeg output line
 /// Only shows: time, bitrate, speed (fps removed as it's often empty)
@@ -332,6 +415,8 @@ pub async fn ffmpeg(
                                         if let Some(s) = speed {
                                             FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
                                         }
+                                        // Update progress time whenever we get stats
+                                        update_progress_time();
                                     }
                                 }
                                 line_buffer.clear();
@@ -358,6 +443,8 @@ pub async fn ffmpeg(
                                             if let Some(s) = speed {
                                                 FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
                                             }
+                                            // Update progress time whenever we get stats
+                                            update_progress_time();
                                         }
                                     } else if log_level_clone == "debug"
                                         || log_level_clone == "info"
@@ -378,6 +465,14 @@ pub async fn ffmpeg(
             let process = FfmpegProcess { child, pid };
             let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
+
+            // Initialize progress time when ffmpeg starts
+            update_progress_time();
+
+            // Spawn timeout monitoring task (15 secs timeout)
+            tokio::spawn(async {
+                monitor_ffmpeg_timeout(15).await;
+            });
 
             // tracing::info!("✅ ffmpeg process supervision started");
         }
@@ -407,5 +502,29 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
         }
     } else {
         None
+    }
+}
+
+/// Background task to monitor ffmpeg timeout and kill if stuck
+async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
+    loop {
+        // Check if ffmpeg is still running
+        if !is_ffmpeg_running().await {
+            // Process exited, stop monitoring
+            break;
+        }
+
+        // Check if ffmpeg is stuck (no progress for timeout_secs)
+        if is_ffmpeg_stuck(timeout_secs).await {
+            tracing::error!(
+                "⚠️ ffmpeg appears stuck (no progress for {} seconds), killing process",
+                timeout_secs
+            );
+            stop_ffmpeg().await;
+            break;
+        }
+
+        // Check every 5 seconds
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }

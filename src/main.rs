@@ -377,6 +377,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tracing::warn!("⚠️ ffmpeg进程已停止");
                 }
 
+                // Check if config was updated (restart requested)
+                if is_config_updated() {
+                    tracing::info!("🔄 检测到配置更新/重启请求，退出ffmpeg监控循环");
+                    break;
+                }
+
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
