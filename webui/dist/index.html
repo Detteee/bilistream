@@ -259,12 +259,12 @@
     }
 
     .btn-secondary {
-      background: #6c7086;
-      color: #cdd6f4;
+      background: linear-gradient(135deg, #89b4fa 0%, #74c7ec 100%);
+      color: #1e1e2e;
     }
 
     .btn-secondary:hover {
-      background: #585b70;
+      background: linear-gradient(135deg, #74c7ec 0%, #89b4fa 100%);
       transform: translateY(-2px);
     }
 
@@ -816,9 +816,10 @@
               <span class="status-indicator" id="bili-status"></span>
               哔哩哔哩
             </h2>
-            <button onclick="refreshBilibiliStatus()"
+            <button id="refreshBilibiliBtn" onclick="refreshBilibiliStatus()"
               style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-              <svg fill="currentColor" width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <svg id="refreshBilibiliIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
                 <path
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
               </svg>
@@ -848,9 +849,10 @@
               <span class="status-indicator" id="yt-status"></span>
               YouTube
             </h2>
-            <button onclick="refreshYouTubeStatus()"
+            <button id="refreshYouTubeBtn" onclick="refreshYouTubeStatus()"
               style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-              <svg fill="currentColor" width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <svg id="refreshYouTubeIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
                 <path
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
               </svg>
@@ -880,9 +882,10 @@
               <span class="status-indicator" id="tw-status"></span>
               Twitch
             </h2>
-            <button onclick="refreshTwitchStatus()"
+            <button id="refreshTwitchBtn" onclick="refreshTwitchStatus()"
               style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-              <svg fill="currentColor" width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <svg id="refreshTwitchIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
                 <path
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
               </svg>
@@ -931,10 +934,11 @@
         <div class="button-group">
           <button class="btn-success" onclick="startStream()">开始直播</button>
           <button class="btn-danger" onclick="stopStream()">停止直播</button>
-          <button class="btn-primary" onclick="restartStream()"
+          <button id="restartStreamBtn" class="btn-primary" onclick="restartStream()"
             style="display: flex; align-items: center; justify-content: center; gap: 6px;">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg id="restartStreamIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              style="transition: transform 0.6s ease;">
               <path
                 d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8" />
               <path d="m7 17l-4-1l-1 4M17 7l4 1l1-4" />
@@ -1543,18 +1547,93 @@
       }
 
       async function refreshBilibiliStatus() {
-        // Bilibili status is always fetched fresh, just refresh the display
-        await refreshStatus();
+        const btn = document.getElementById('refreshBilibiliBtn');
+        const icon = document.getElementById('refreshBilibiliIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          // Bilibili status is always fetched fresh, just refresh the display
+          await refreshStatus();
+          showNotification('Bilibili status refreshed', 'success');
+        } catch (error) {
+          console.error('Error refreshing Bilibili status:', error);
+          showNotification('Failed to refresh Bilibili status', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
+        }
       }
 
       async function refreshYouTubeStatus() {
-        // YouTube status comes from cache updated by main loop
-        await refreshStatus();
+        const btn = document.getElementById('refreshYouTubeBtn');
+        const icon = document.getElementById('refreshYouTubeIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          const response = await fetch('/api/refresh/youtube');
+          const data = await response.json();
+          if (data.success) {
+            showNotification('YouTube status refreshed', 'success');
+            // Refresh the main status to show updated data
+            await refreshStatus();
+          } else {
+            showNotification(data.message || 'Failed to refresh YouTube status', 'error');
+          }
+        } catch (error) {
+          console.error('Error refreshing YouTube status:', error);
+          showNotification('Failed to refresh YouTube status', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
+        }
       }
 
       async function refreshTwitchStatus() {
-        // Twitch status comes from cache updated by main loop
-        await refreshStatus();
+        const btn = document.getElementById('refreshTwitchBtn');
+        const icon = document.getElementById('refreshTwitchIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          const response = await fetch('/api/refresh/twitch');
+          const data = await response.json();
+          if (data.success) {
+            showNotification('Twitch status refreshed', 'success');
+            // Refresh the main status to show updated data
+            await refreshStatus();
+          } else {
+            showNotification(data.message || 'Failed to refresh Twitch status', 'error');
+          }
+        } catch (error) {
+          console.error('Error refreshing Twitch status:', error);
+          showNotification('Failed to refresh Twitch status', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
+        }
       }
 
       async function refreshStatus() {
@@ -1719,6 +1798,15 @@
           return;
         }
 
+        const btn = document.getElementById('restartStreamBtn');
+        const icon = document.getElementById('restartStreamIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
         try {
           const response = await fetch('/api/restart', {
             method: 'POST'
@@ -1728,6 +1816,14 @@
           setTimeout(refreshStatus, 2000);
         } catch (error) {
           showNotification('操作失败: ' + error.message, 'error');
+        } finally {
+          // Re-enable button and stop spinning after a delay
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+            icon.style.animation = '';
+          }, 2000);
         }
       }
 
