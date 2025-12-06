@@ -355,20 +355,30 @@ pub struct SendDanmakuRequest {
 
 pub async fn send_danmaku(
     Json(payload): Json<SendDanmakuRequest>,
-) -> Result<ApiResponse<()>, StatusCode> {
+) -> Result<ApiResponse<()>, (StatusCode, String)> {
     let cfg = load_config()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    send_danmaku_to_bili(&cfg, &payload.message)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(ApiResponse {
-        success: true,
-        data: None,
-        message: Some("弹幕已发送".to_string()),
-    })
+    match send_danmaku_to_bili(&cfg, &payload.message).await {
+        Ok(_) => Ok(ApiResponse {
+            success: true,
+            data: None,
+            message: Some("弹幕已发送".to_string()),
+        }),
+        Err(e) => {
+            let error_msg = e.to_string();
+            // Check if it's a rate limit error
+            if error_msg.contains("频率过快") {
+                Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "发送频率过快，请稍后再试".to_string(),
+                ))
+            } else {
+                Err((StatusCode::INTERNAL_SERVER_ERROR, error_msg))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]

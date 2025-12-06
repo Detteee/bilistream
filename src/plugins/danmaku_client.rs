@@ -744,8 +744,12 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COMMON_NOTICE_DANMAKU"
+            | "TRADING_SCORE"
+            | "UNIVERSAL_INTERACT_INVITATION"
             | "LIKE_GUIDE_USER"
             | "PLAYURL_RELOAD"
+            | "WIDGET_GIFT_STAR_PROCESS"
+            | "COMBO_END"
             | "POPULAR_RANK_CHANGED"
             | "master_qn_strategy_chg"
             | "GUARD_HONOR_THOUSAND"
@@ -756,6 +760,7 @@ impl BilibiliDanmakuClient {
             | "RANK_REM"
             | "STOP_LIVE_ROOM_LIST"
             | "WATCHED_CHANGE"
+            | "LIKE_INFO_V3_NOTICE"
             | "LIKE_INFO_V3_UPDATE"
             | "LIKE_INFO_V3_CLICK"
             | "WIDGET_BANNER"

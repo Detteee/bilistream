@@ -7,11 +7,12 @@
 use bilistream::config::{load_config, BiliLive, Config, Credentials, Twitch, Youtube};
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, clear_config_updated, clear_warning_stop, enable_danmaku_commands,
-    ffmpeg, get_aliases, get_area_name, get_bili_live_status, get_channel_name, get_puuid,
-    get_thumbnail, get_twitch_status, get_youtube_status, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, select_live,
-    send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
+    check_area_id_with_title, clear_config_updated, clear_manual_stop, clear_warning_stop,
+    enable_danmaku_commands, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
+    get_channel_name, get_puuid, get_thumbnail, get_twitch_status, get_youtube_status,
+    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
+    run_danmaku, select_live, send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning,
+    stop_ffmpeg, wait_ffmpeg, was_manual_stop,
 };
 
 use chrono::{DateTime, Local};
@@ -416,21 +417,37 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             tracing::info!("{} 直播结束", channel_name);
-            if cfg.bililive.enable_danmaku_command {
-                enable_danmaku_commands(true);
-                if let Err(e) = send_danmaku(
-                    &cfg,
-                    &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
-                )
-                .await
-                {
-                    tracing::error!("Failed to send danmaku: {}", e);
+
+            // Check if this was a manual stop (e.g., restart button)
+            let manual_stop = was_manual_stop();
+            if manual_stop {
+                clear_manual_stop();
+                tracing::info!("Stream was stopped manually, skipping end danmaku");
+            }
+
+            // Only send end danmaku if stream wasn't stopped due to warning/cut off or manual stop
+            if !should_skip_due_to_warning(&channel_name) && !manual_stop {
+                if cfg.bililive.enable_danmaku_command {
+                    enable_danmaku_commands(true);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(
+                        &cfg,
+                        &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
+                    )
+                    .await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                } else {
+                    if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
                 }
-                tokio::time::sleep(Duration::from_secs(15)).await;
             } else {
-                if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
-                {
-                    tracing::error!("Failed to send danmaku: {}", e);
+                // Stream was cut off due to warning or manual stop, just enable commands without sending danmaku
+                if cfg.bililive.enable_danmaku_command {
+                    enable_danmaku_commands(true);
                 }
             }
         } else {
@@ -1600,8 +1617,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("send-danmaku", sub_m)) => {
             let message = sub_m.get_one::<String>("message").unwrap();
             let cfg = load_config().await?;
-            bilibili::send_danmaku(&cfg, message).await?;
-            println!("弹幕发送成功");
+            match bilibili::send_danmaku(&cfg, message).await {
+                Ok(_) => println!("弹幕发送成功"),
+                Err(e) => {
+                    // Check if it's a rate limit error
+                    if e.to_string().contains("频率过快") {
+                        eprintln!("⚠️ 弹幕发送失败: 发送频率过快，请稍后再试");
+                    } else {
+                        eprintln!("❌ 弹幕发送失败: {}", e);
+                    }
+                }
+            }
         }
         Some(("replace-cover", sub_m)) => {
             let image_path = sub_m.get_one::<String>("image_path").unwrap();

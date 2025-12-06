@@ -927,7 +927,7 @@
             <select id="area-input" style="flex: 1;">
               <option value="">选择分区...</option>
             </select>
-            <button class="btn-secondary" onclick="updateArea()">更新</button>
+            <button class="btn-primary" onclick="updateArea()">更新</button>
           </div>
         </div>
 
@@ -1018,7 +1018,15 @@
 
           <div class="button-group">
             <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
-            <button class="btn-secondary" onclick="loadChannelData()">刷新频道列表</button>
+            <button class="btn-secondary" onclick="loadChannelData()"
+              style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <svg id="loadChannelIcon" fill="currentColor" width="14" height="14" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                <path
+                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+              </svg>
+              刷新频道列表
+            </button>
           </div>
         </div>
       </div>
@@ -1060,7 +1068,8 @@
           </div>
           <button class="btn-primary" onclick="refreshHolodexStreams()"
             style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
-            <svg fill="currentColor" width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <svg id="refreshHolodexIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
               <path
                 d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
             </svg>
@@ -1249,6 +1258,12 @@
       }
 
       async function refreshHolodexStreams() {
+        // Start continuous spinning animation
+        const icon = document.getElementById('refreshHolodexIcon');
+        if (icon) {
+          icon.style.animation = 'spin 1s linear infinite';
+        }
+
         const statusDiv = document.getElementById('holodex-status');
         const streamsDiv = document.getElementById('holodex-streams');
 
@@ -1307,6 +1322,11 @@
           statusDiv.innerHTML = `❌ 请求失败: ${error.message}`;
           statusDiv.style.background = '#f38ba8';
           statusDiv.style.color = '#1e1e2e';
+        } finally {
+          // Stop spinning animation when complete
+          if (icon) {
+            icon.style.animation = '';
+          }
         }
       }
 
@@ -1872,6 +1892,12 @@
 
       // Channel management functions
       async function loadChannelData() {
+        // Start continuous spinning animation
+        const icon = document.getElementById('loadChannelIcon');
+        if (icon) {
+          icon.style.animation = 'spin 1s linear infinite';
+        }
+
         try {
           // Load channels
           const channelsResponse = await fetch('/api/channels');
@@ -1936,6 +1962,11 @@
         } catch (error) {
           console.error('Failed to load channel data:', error);
           showNotification('加载频道数据失败: ' + error.message, 'error');
+        } finally {
+          // Stop spinning animation when complete
+          if (icon) {
+            icon.style.animation = '';
+          }
         }
       }
 
