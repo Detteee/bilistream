@@ -1600,8 +1600,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("send-danmaku", sub_m)) => {
             let message = sub_m.get_one::<String>("message").unwrap();
             let cfg = load_config().await?;
-            bilibili::send_danmaku(&cfg, message).await?;
-            println!("弹幕发送成功");
+            match bilibili::send_danmaku(&cfg, message).await {
+                Ok(_) => println!("弹幕发送成功"),
+                Err(e) => {
+                    // Check if it's a rate limit error
+                    if e.to_string().contains("频率过快") {
+                        eprintln!("⚠️ 弹幕发送失败: 发送频率过快，请稍后再试");
+                    } else {
+                        eprintln!("❌ 弹幕发送失败: {}", e);
+                    }
+                }
+            }
         }
         Some(("replace-cover", sub_m)) => {
             let image_path = sub_m.get_one::<String>("image_path").unwrap();

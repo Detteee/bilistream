@@ -11,6 +11,10 @@ lazy_static::lazy_static! {
     static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track last progress time for timeout detection (stored as Unix timestamp in seconds)
     static ref LAST_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    // Track last reported stream time from ffmpeg (stored as seconds, converted from HH:MM:SS.ms)
+    static ref LAST_STREAM_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    // Track when stream time last changed (Unix timestamp in seconds)
+    static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 }
 
 // Represents a managed ffmpeg process
@@ -159,7 +163,25 @@ fn update_progress_time() {
     LAST_PROGRESS_TIME.store(now, Ordering::Relaxed);
 }
 
+// Update stream time tracking (lock-free write)
+fn update_stream_time(stream_time_secs: u32) {
+    let last_time = LAST_STREAM_TIME.load(Ordering::Relaxed);
+
+    // Only update if time has actually progressed
+    if stream_time_secs > last_time {
+        LAST_STREAM_TIME.store(stream_time_secs, Ordering::Relaxed);
+
+        // Update the timestamp when stream time last changed
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        LAST_STREAM_TIME_UPDATE.store(now, Ordering::Relaxed);
+    }
+}
+
 // Check if ffmpeg has made progress recently (within timeout seconds)
+// This checks both: 1) if stats are being reported, 2) if stream time is progressing
 pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
     let last_progress = LAST_PROGRESS_TIME.load(Ordering::Relaxed);
     if last_progress == 0 {
@@ -172,8 +194,28 @@ pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
         .unwrap()
         .as_secs() as u32;
 
-    let elapsed = now.saturating_sub(last_progress);
-    elapsed > timeout_secs as u32
+    // Check if we're getting stats updates
+    let stats_elapsed = now.saturating_sub(last_progress);
+    if stats_elapsed > timeout_secs as u32 {
+        return true; // No stats for too long
+    }
+
+    // Check if stream time is progressing (only after initial startup)
+    let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);
+    if last_stream_update > 0 {
+        let stream_time_elapsed = now.saturating_sub(last_stream_update);
+
+        // If stream time hasn't progressed for 10 seconds, stream has likely ended
+        if stream_time_elapsed > 10 {
+            tracing::warn!(
+                "Stream time frozen for {} seconds, stream likely ended",
+                stream_time_elapsed
+            );
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Stops the supervised ffmpeg process
@@ -253,20 +295,38 @@ pub async fn stop_ffmpeg() {
     // Clear speed and progress time when ffmpeg stops (lock-free write)
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
+    LAST_STREAM_TIME.store(0, Ordering::Relaxed);
+    LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
 }
+/// Parse time string (HH:MM:SS.ms) to seconds
+fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let hours: u32 = parts[0].parse().ok()?;
+    let minutes: u32 = parts[1].parse().ok()?;
+    let seconds: f32 = parts[2].parse().ok()?;
+
+    Some(hours * 3600 + minutes * 60 + seconds as u32)
+}
+
 /// Extract compact stats from ffmpeg output line
 /// Only shows: time, bitrate, speed (fps removed as it's often empty)
-/// Returns (formatted_string, parsed_speed)
-fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>)> {
+/// Returns (formatted_string, parsed_speed, parsed_time_in_seconds)
+fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>, Option<u32>)> {
     let mut time = None;
     let mut bitrate = None;
     let mut speed = None;
     let mut speed_value: Option<f32> = None;
+    let mut time_value: Option<u32> = None;
 
     // Parse the line for key=value pairs
     for part in line.split_whitespace() {
         if let Some(value) = part.strip_prefix("time=") {
             time = Some(value.to_string());
+            time_value = parse_time_to_seconds(value);
         } else if let Some(value) = part.strip_prefix("bitrate=") {
             bitrate = Some(value.to_string());
         } else if let Some(value) = part.strip_prefix("speed=") {
@@ -301,7 +361,7 @@ fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>)> {
 
         let trimmed = output.trim_end().to_string();
         if !trimmed.is_empty() {
-            Some((trimmed, speed_value))
+            Some((trimmed, speed_value, time_value))
         } else {
             None
         }
@@ -406,14 +466,18 @@ pub async fn ffmpeg(
                                 if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
                                 {
                                     // Extract only fps, time, bitrate, speed
-                                    if let Some((compact, speed)) =
+                                    if let Some((compact, speed, stream_time)) =
                                         extract_compact_stats(&line_buffer)
                                     {
-                                        print!("\r{}", compact);
-                                        let _ = std::io::stdout().flush();
+                                        eprint!("\r{:<80}", compact);
+                                        let _ = std::io::stderr().flush();
                                         // Update global speed if available (lock-free atomic write)
                                         if let Some(s) = speed {
                                             FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                        }
+                                        // Update stream time tracking
+                                        if let Some(t) = stream_time {
+                                            update_stream_time(t);
                                         }
                                         // Update progress time whenever we get stats
                                         update_progress_time();
@@ -435,13 +499,17 @@ pub async fn ffmpeg(
                                         || line_buffer.contains("fps=")
                                     {
                                         // Final stats line with newline
-                                        if let Some((compact, speed)) =
+                                        if let Some((compact, speed, stream_time)) =
                                             extract_compact_stats(&line_buffer)
                                         {
-                                            println!("\r{}", compact);
+                                            eprintln!("\r{:<80}", compact);
                                             // Update global speed if available (lock-free atomic write)
                                             if let Some(s) = speed {
                                                 FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                            }
+                                            // Update stream time tracking
+                                            if let Some(t) = stream_time {
+                                                update_stream_time(t);
                                             }
                                             // Update progress time whenever we get stats
                                             update_progress_time();
