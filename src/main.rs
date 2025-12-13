@@ -423,17 +423,36 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
 
-            tracing::info!("{} 直播结束", channel_name);
-
-            // Check if this was a manual stop (e.g., restart button)
+            // Check the actual reason for ffmpeg loop exit
             let manual_stop = was_manual_stop();
+            let config_updated = is_config_updated();
+            let warning_skip = should_skip_due_to_warning(&channel_name);
+
+            // Check current live status to determine what actually happened
+            let (current_is_live, _, _, _, _) = if yt_is_live {
+                yt_live
+                    .get_status()
+                    .await
+                    .unwrap_or((false, None, None, None, None))
+            } else {
+                tw_live
+                    .get_status()
+                    .await
+                    .unwrap_or((false, None, None, None, None))
+            };
+            let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
+
+            // Determine what happened and send appropriate message
             if manual_stop {
                 clear_manual_stop();
                 tracing::info!("Stream was stopped manually, skipping end danmaku");
-            }
-
-            // Only send end danmaku if stream wasn't stopped due to warning/cut off or manual stop
-            if !should_skip_due_to_warning(&channel_name) && !manual_stop {
+            } else if config_updated {
+                tracing::info!("Stream stopped due to config update/restart, skipping end danmaku");
+            } else if warning_skip {
+                tracing::info!("Stream was stopped due to warning/cut off");
+            } else if !current_is_live && bili_is_live {
+                // Source stream ended but B站 is still live
+                tracing::info!("{} 直播结束", channel_name);
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -451,8 +470,30 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         tracing::error!("Failed to send danmaku: {}", e);
                     }
                 }
+            } else if !bili_is_live {
+                // B站 stream was stopped
+                tracing::info!("B站直播已停止");
+                if cfg.bililive.enable_danmaku_command {
+                    enable_danmaku_commands(true);
+                }
+            } else if current_is_live && bili_is_live {
+                // Both streams are still live - this was likely a technical issue
+                tracing::info!("流传输中断，但直播仍在进行");
+                if cfg.bililive.enable_danmaku_command {
+                    enable_danmaku_commands(true);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(
+                        &cfg,
+                        &format!("{} 流传输中断，可使用弹幕指令进行换台", channel_name),
+                    )
+                    .await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                }
             } else {
-                // Stream was cut off due to warning or manual stop, just enable commands without sending danmaku
+                // Fallback case
+                tracing::info!("流传输已停止");
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                 }

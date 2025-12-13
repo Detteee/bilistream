@@ -744,6 +744,8 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COMMON_NOTICE_DANMAKU"
+            | "SPREAD_SHOW_FEET"
+            | "SPREAD_SHOW_FEET_V2"
             | "TRADING_SCORE"
             | "UNIVERSAL_INTERACT_INVITATION"
             | "LIKE_GUIDE_USER"

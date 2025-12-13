@@ -426,11 +426,11 @@ pub async fn ffmpeg(
     }
 
     // Input options - optimized for stability
-    cmd.arg("-multiple_requests")
-        .arg("1") // Use multiple HTTP requests for segments
+    // .arg("-multiple_requests")
+    // .arg("1") // Use multiple HTTP requests for segments
+    cmd.arg("-thread_queue_size")
+        .arg("4096")
         .arg("-re") // Read input at native frame rate
-        .arg("-thread_queue_size")
-        .arg("1024")
         .arg("-analyzeduration")
         .arg("5000000") // 5 seconds
         .arg("-probesize")
@@ -443,14 +443,20 @@ pub async fn ffmpeg(
         // Output options - stream copy
         .arg("-c")
         .arg("copy") // Stream copy without re-encoding
-        .arg("-copyts") // Copy input timestamps
+        // .arg("-copyts") // Copy input timestamps
         .arg("-start_at_zero") // Start timestamps at zero
         .arg("-avoid_negative_ts")
         .arg("make_zero") // Shift timestamps to avoid negative values
         .arg("-max_interleave_delta")
         .arg("0") // Reduce muxing delay for lower latency
+        .arg("-rtmp_buffer")
+        .arg("5000k")
+        .arg("-bufsize")
+        .arg("5000k")
         .arg("-max_muxing_queue_size")
-        .arg("1024") // Limit muxing queue to prevent memory issues
+        .arg("8192") // Limit muxing queue to prevent memory issues
+        .arg("-rtmp_live")
+        .arg("1")
         // FLV/RTMP output
         .arg("-f")
         .arg("flv")
