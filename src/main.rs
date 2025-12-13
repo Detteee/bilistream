@@ -27,6 +27,12 @@ use textwrap;
 use tracing_subscriber::fmt;
 use unicode_width::UnicodeWidthStr;
 
+// Graceful shutdown function
+async fn graceful_shutdown() {
+    // Stop ffmpeg process
+    stop_ffmpeg().await;
+}
+
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
 // Use compact representation to reduce memory footprint
 static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
@@ -1646,6 +1652,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(String::as_str)
         .unwrap_or("error");
 
+    // Set up graceful shutdown handler
+    #[cfg(unix)]
+    {
+        use tokio::signal;
+        tokio::spawn(async {
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
+            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
+
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    tracing::info!("收到 SIGTERM 信号");
+                    graceful_shutdown().await;
+                    std::process::exit(0);
+                }
+                _ = sigint.recv() => {
+                    tracing::info!("收到 SIGINT 信号 (Ctrl+C)");
+                    graceful_shutdown().await;
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::signal;
+        tokio::spawn(async {
+            match signal::ctrl_c().await {
+                Ok(_) => {
+                    tracing::info!("收到 Ctrl+C 信号");
+                    graceful_shutdown().await;
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    tracing::error!("设置 Ctrl+C 处理器失败: {}", e);
+                }
+            }
+        });
+    }
+
     match matches.subcommand() {
         Some(("get-live-status", sub_m)) => {
             let platform = sub_m
@@ -2166,17 +2212,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn init_logger() {
-    match tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
         .with_target(true)
         .with_span_events(fmt::format::FmtSpan::NONE)
         .with_writer(std::io::stdout)
         .with_max_level(tracing::Level::INFO)
-        .try_init()
-    {
-        Ok(_) => eprintln!("DEBUG: Logger init successful"),
-        Err(e) => eprintln!("DEBUG: Logger init failed: {}", e),
-    }
+        .init();
 }
 
 fn init_logger_with_capture() {

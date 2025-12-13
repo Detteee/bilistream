@@ -843,6 +843,11 @@ pub async fn download_update(
         match updater::download_and_install_update(&download_url, None).await {
             Ok(_) => {
                 tracing::info!("✅ 更新安装成功！程序将在 3 秒后重启...");
+
+                // Perform graceful shutdown before restarting
+                tracing::info!("🛑 执行优雅关闭...");
+                crate::plugins::stop_ffmpeg().await;
+
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
                 // Restart the program
