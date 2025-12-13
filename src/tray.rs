@@ -116,6 +116,7 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         )
         .build()?;
 
+    tracing::info!("✅ 托盘图标创建成功");
     tracing::info!("✅ 系统托盘已启动");
 
     // Auto-open browser on startup
@@ -143,6 +144,8 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => break,
         }
     });
+
+    tracing::info!("🔄 进入Windows消息循环...");
 
     // Windows message loop - required for tray icon events
     use std::ptr;

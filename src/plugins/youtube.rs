@@ -26,6 +26,23 @@ fn get_yt_dlp_command() -> String {
     }
 }
 
+// Helper function to create a Command with hidden console on Windows
+fn create_hidden_command(program: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new(program);
+        // Hide the console window
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(program)
+    }
+}
+
 pub struct Youtube {
     pub channel_name: String,
     pub channel_id: String,
@@ -76,6 +93,16 @@ pub async fn get_youtube_status(
     let proxy = cfg.proxy.clone();
     let quality = cfg.youtube.quality.clone();
     let channel_name = get_channel_name("YT", channel_id).unwrap();
+
+    // Check if Holodex API key is available
+    let holodex_api_key = match cfg.holodex_api_key.clone() {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            tracing::info!("Holodex API key not configured, using yt-dlp");
+            return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
+        }
+    };
+
     let url = format!(
         "https://holodex.net/api/v2/users/live?channels={}",
         channel_id
@@ -83,7 +110,7 @@ pub async fn get_youtube_status(
 
     let response = client
         .get(&url)
-        .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
+        .header("X-APIKEY", holodex_api_key)
         .send()
         .await?;
     if !response.status().is_success() {
@@ -183,7 +210,7 @@ async fn get_status_with_yt_dlp(
 > {
     let quality = quality.unwrap_or("best");
 
-    let mut command = Command::new(get_yt_dlp_command());
+    let mut command = create_hidden_command(&get_yt_dlp_command());
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);
@@ -246,13 +273,38 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
     let proxy = cfg.proxy.clone();
     let channel_name = get_channel_name("YT", channel_id).unwrap();
     let client = reqwest::Client::new();
+
+    // Check if Holodex API key is available
+    let holodex_api_key = match cfg.holodex_api_key.clone() {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            // Fallback to yt-dlp for title
+            let mut command = create_hidden_command(&get_yt_dlp_command());
+            if let Some(proxy) = proxy {
+                command.arg("--proxy").arg(proxy);
+            }
+            command.arg("-e");
+            command.arg(format!(
+                "https://www.youtube.com/channel/{}/live",
+                channel_id
+            ));
+            let output = command.output()?;
+            let title_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(title) = title_str.split(" 202").next() {
+                return Ok(Some(title.to_string()));
+            } else {
+                return Ok(Some("空".to_string()));
+            }
+        }
+    };
+
     let url = format!(
         "https://holodex.net/api/v2/users/live?channels={}",
         channel_id
     );
     let response = client
         .get(&url)
-        .header("X-APIKEY", cfg.holodex_api_key.clone().unwrap())
+        .header("X-APIKEY", holodex_api_key)
         .send()
         .await?;
     if response.status().is_success() {
@@ -305,7 +357,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             Ok(None)
         }
     } else {
-        let mut command = Command::new(get_yt_dlp_command());
+        let mut command = create_hidden_command(&get_yt_dlp_command());
         if let Some(proxy) = proxy {
             command.arg("--proxy").arg(proxy);
         }

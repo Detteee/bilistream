@@ -412,6 +412,14 @@ pub async fn ffmpeg(
 
     let mut cmd = Command::new(get_ffmpeg_command());
 
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
     // Network optimization
     if let Some(proxy) = proxy {
         cmd.arg("-http_proxy").arg(proxy);

@@ -1,6 +1,6 @@
 [package]
 name = "bilistream"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 
 [profile.release]
@@ -59,4 +59,4 @@ ksni = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 trayicon = "0.1"
-winapi = { version = "0.3", features = ["winuser", "libloaderapi"] }
+winapi = { version = "0.3", features = ["winuser", "libloaderapi", "consoleapi", "processenv", "fileapi", "winnt", "winbase"] }

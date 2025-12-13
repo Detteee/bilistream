@@ -11,7 +11,7 @@
 
 ## Download
 
-**Latest Release: v0.4.0**
+**Latest Release: v0.4.1**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
@@ -50,8 +50,6 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ## Web UI Preview
 
 ![Web UI Screenshot](screenshot_of_webui.png)
-
-The modern web interface provides real-time monitoring and control of your streams with an intuitive dashboard.
 
 ## Dependencies
 
@@ -195,6 +193,7 @@ The modern web interface provides real-time monitoring and control of your strea
 ```
 
 **What happens:**
+
 - **Windows:** Runs in background, browser opens webui automatically, tray icon appears
 - **Linux/Mac:** Starts web server, open `http://localhost:3150` in browser
 
@@ -207,6 +206,7 @@ The modern web interface provides real-time monitoring and control of your strea
 ```
 
 **First run:**
+
 - Setup wizard appears in your browser
 - Follow the steps to login and configure
 - That's it!

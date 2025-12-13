@@ -7,6 +7,23 @@ use serde_json::json;
 use std::error::Error;
 use std::process::Command;
 
+// Helper function to create a Command with hidden console on Windows
+fn create_hidden_command(program: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new(program);
+        // Hide the console window
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(program)
+    }
+}
+
 pub struct Twitch {
     pub channel_id: String,
     pub client: ClientWithMiddleware,
@@ -98,7 +115,7 @@ impl Twitch {
         let proxy_url = self.get_proxy_url_for_region(proxy_region)?;
         let quality = quality.unwrap_or("best");
 
-        let mut cmd = Command::new("streamlink");
+        let mut cmd = create_hidden_command("streamlink");
         cmd.arg(proxy_url)
             .arg("--stream-url")
             .arg("--stream-type")

@@ -10,6 +10,23 @@ use std::process::Command;
 use std::time::Duration;
 use tracing::warn;
 
+// Helper function to create a Command with hidden console on Windows
+fn create_hidden_command(program: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new(program);
+        // Hide the console window
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(program)
+    }
+}
+
 // Helper function to get yt-dlp command path
 fn get_yt_dlp_command() -> String {
     if cfg!(target_os = "windows") {
@@ -78,7 +95,7 @@ pub async fn get_thumbnail(
     channel_id: &str,
     proxy: Option<String>,
 ) -> Result<String, Box<dyn Error>> {
-    let mut command = Command::new(get_yt_dlp_command());
+    let mut command = create_hidden_command(&get_yt_dlp_command());
 
     if let Some(proxy_url) = proxy {
         command.arg("--proxy").arg(proxy_url);
@@ -114,7 +131,7 @@ pub async fn get_thumbnail(
     }
 
     // Process the downloaded thumbnail with ImageMagick
-    let convert_output = match Command::new("convert")
+    let convert_output = match create_hidden_command("convert")
         .arg("thumbnail.jpg")
         .arg("-resize")
         .arg("640x480") // Force resize to exact dimensions

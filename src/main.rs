@@ -57,9 +57,7 @@ const BANNED_KEYWORDS: [&str; 11] = [
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
-    if tracing::dispatcher::has_been_set() {
-        // Logger already initialized, skip
-    } else {
+    if !tracing::dispatcher::has_been_set() {
         init_logger();
     }
 
@@ -70,9 +68,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
     // Start danmaku client in background if not already running
     if !is_danmaku_running() {
+        tracing::info!("🚀 启动弹幕客户端");
         run_danmaku();
         // thread::sleep(Duration::from_secs(2)); // Give it time to connect
     }
+
+    tracing::info!("✅ 所有依赖已就绪");
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -1465,6 +1466,66 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // On Windows, allocate a console for CLI and WebUI modes
+    #[cfg(target_os = "windows")]
+    {
+        // Check if we're running CLI or WebUI mode (or other console commands)
+        let args: Vec<String> = std::env::args().collect();
+        let needs_console = args.len() > 1 && !matches!(args[1].as_str(), "tray");
+
+        if needs_console {
+            unsafe {
+                use std::ffi::CString;
+                use winapi::um::consoleapi::AllocConsole;
+                use winapi::um::fileapi::{CreateFileA, OPEN_EXISTING};
+                use winapi::um::processenv::SetStdHandle;
+                use winapi::um::winbase::{STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+                use winapi::um::winnt::{
+                    FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE,
+                };
+
+                // Allocate a console
+                AllocConsole();
+
+                // Redirect stdout, stdin, stderr to console
+                let stdout_handle = CreateFileA(
+                    CString::new("CONOUT$").unwrap().as_ptr(),
+                    GENERIC_WRITE,
+                    FILE_SHARE_WRITE,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                );
+
+                let stderr_handle = CreateFileA(
+                    CString::new("CONOUT$").unwrap().as_ptr(),
+                    GENERIC_WRITE,
+                    FILE_SHARE_WRITE,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                );
+
+                let stdin_handle = CreateFileA(
+                    CString::new("CONIN$").unwrap().as_ptr(),
+                    GENERIC_READ,
+                    FILE_SHARE_READ,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                );
+
+                // Set the handles
+                SetStdHandle(STD_OUTPUT_HANDLE, stdout_handle);
+                SetStdHandle(STD_ERROR_HANDLE, stderr_handle);
+                SetStdHandle(STD_INPUT_HANDLE, stdin_handle);
+            }
+        }
+    }
+
     let matches = Command::new("bilistream")
         .version(env!("CARGO_PKG_VERSION"))
         .arg(
@@ -1694,6 +1755,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_bilistream(ffmpeg_log_level).await?;
         }
         Some(("cli", _)) => {
+            // Initialize logger for CLI mode
+            init_logger();
+
             // CLI mode: Check if setup is needed
             let config_path = std::env::current_exe()?.with_file_name("config.json");
             let legacy_config_path = std::env::current_exe()?.with_file_name("config.yaml");
@@ -1728,11 +1792,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             // Spawn monitoring loop in separate thread with its own runtime
+            tracing::info!("🔄 监控循环已启动");
             std::thread::spawn(move || {
+                tracing::info!("🚀 启动弹幕客户端");
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async move {
-                    if let Err(e) = run_bilistream(&log_level).await {
-                        tracing::error!("监控循环错误: {}", e);
+                    tracing::info!("🔄 进入监控循环...");
+
+                    // Check if config exists before starting
+                    let config_path = std::env::current_exe()
+                        .unwrap()
+                        .with_file_name("config.json");
+                    let legacy_config_path = std::env::current_exe()
+                        .unwrap()
+                        .with_file_name("config.yaml");
+                    let cookies_path = std::env::current_exe()
+                        .unwrap()
+                        .with_file_name("cookies.json");
+
+                    if !config_path.exists() && !legacy_config_path.exists() {
+                        tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
+                        tracing::info!("💡 请访问 Web UI 进行配置");
+
+                        // Wait for config to be created
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            if config_path.exists() || legacy_config_path.exists() {
+                                tracing::info!("✅ 检测到配置文件，开始监控");
+                                break;
+                            }
+                        }
+                    }
+
+                    if !cookies_path.exists() {
+                        tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
+                        tracing::info!("💡 请访问 Web UI 进行登录");
+
+                        // Wait for cookies to be created
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            if cookies_path.exists() {
+                                tracing::info!("✅ 检测到登录凭证，开始监控");
+                                break;
+                            }
+                        }
+                    }
+
+                    // Now start the actual monitoring loop
+                    loop {
+                        match run_bilistream(&log_level).await {
+                            Ok(_) => {
+                                tracing::info!("监控循环正常结束");
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::error!("监控循环错误: {}", e);
+                                tracing::info!("⏳ 5秒后重试...");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            }
+                        }
                     }
                 });
             });
@@ -1740,6 +1858,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Give WebUI time to start
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             tracing::info!("✅ 后台服务已启动");
+
+            // Download dependencies in background
+            tokio::spawn(async move {
+                if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
+                    tracing::warn!("⚠️ 下载依赖项失败: {}", e);
+                }
+            });
 
             // Run system tray (this will block until quit)
             bilistream::tray::run_tray(port)?;
@@ -1886,12 +2011,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
 
                     // Spawn monitoring loop in separate thread with its own runtime
+                    tracing::info!("🔄 监控循环已启动");
                     let log_level = ffmpeg_log_level.to_string();
                     std::thread::spawn(move || {
+                        tracing::info!("🚀 启动弹幕客户端");
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async move {
-                            if let Err(e) = run_bilistream(&log_level).await {
-                                tracing::error!("监控循环错误: {}", e);
+                            tracing::info!("🔄 进入监控循环...");
+
+                            // Check if config exists before starting
+                            let config_path = std::env::current_exe()
+                                .unwrap()
+                                .with_file_name("config.json");
+                            let legacy_config_path = std::env::current_exe()
+                                .unwrap()
+                                .with_file_name("config.yaml");
+                            let cookies_path = std::env::current_exe()
+                                .unwrap()
+                                .with_file_name("cookies.json");
+
+                            if !config_path.exists() && !legacy_config_path.exists() {
+                                tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
+                                tracing::info!("💡 请访问 Web UI 进行配置");
+
+                                // Wait for config to be created
+                                loop {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                    if config_path.exists() || legacy_config_path.exists() {
+                                        tracing::info!("✅ 检测到配置文件，开始监控");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !cookies_path.exists() {
+                                tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
+                                tracing::info!("💡 请访问 Web UI 进行登录");
+
+                                // Wait for cookies to be created
+                                loop {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                    if cookies_path.exists() {
+                                        tracing::info!("✅ 检测到登录凭证，开始监控");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Now start the actual monitoring loop
+                            loop {
+                                match run_bilistream(&log_level).await {
+                                    Ok(_) => {
+                                        tracing::info!("监控循环正常结束");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("监控循环错误: {}", e);
+                                        tracing::info!("⏳ 5秒后重试...");
+                                        tokio::time::sleep(tokio::time::Duration::from_secs(5))
+                                            .await;
+                                    }
+                                }
                             }
                         });
                     });
@@ -1986,13 +2166,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn init_logger() {
-    tracing_subscriber::fmt()
+    match tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
         .with_target(true)
         .with_span_events(fmt::format::FmtSpan::NONE)
         .with_writer(std::io::stdout)
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init()
+    {
+        Ok(_) => eprintln!("DEBUG: Logger init successful"),
+        Err(e) => eprintln!("DEBUG: Logger init failed: {}", e),
+    }
 }
 
 fn init_logger_with_capture() {
