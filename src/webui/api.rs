@@ -635,6 +635,7 @@ pub async fn save_setup_config(
             youtube: crate::config::Youtube {
                 channel_name: String::new(),
                 channel_id: String::new(),
+                video_id: String::new(),
                 area_v2: 235,
                 quality: "best".to_string(),
             },

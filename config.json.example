@@ -19,6 +19,7 @@
   "youtube": {
     "channel_name": "",
     "channel_id": "",
+    "video_id": "",
     "area_v2": 235,
     "quality": "best"
   },

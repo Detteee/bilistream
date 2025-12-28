@@ -107,7 +107,7 @@ pub async fn get_thumbnail(
         .arg("--convert-thumbnails")
         .arg("jpg")
         .arg(match platform {
-            "YT" => format!("https://www.youtube.com/channel/{}/live", channel_id),
+            "YT" => format!("https://www.youtube.com/watch?v={}", channel_id),
             "TW" => format!("https://www.twitch.tv/{}", channel_id),
             _ => return Err("Unsupported platform".into()),
         })

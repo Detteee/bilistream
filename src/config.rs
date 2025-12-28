@@ -77,6 +77,8 @@ pub struct Youtube {
     #[serde(default)]
     pub channel_id: String,
     #[serde(default)]
+    pub video_id: String,
+    #[serde(default)]
     pub area_v2: u64,
     #[serde(default = "default_quality")]
     pub quality: String,
@@ -228,6 +230,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             channel_name: String,
             #[serde(rename = "ChannelId", default)]
             channel_id: String,
+            #[serde(rename = "VideoId", default)]
+            video_id: String,
             #[serde(rename = "Area_v2", default)]
             area_v2: u64,
             #[serde(rename = "Quality", default = "default_quality")]
@@ -260,6 +264,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             youtube: Youtube {
                 channel_name: legacy.youtube.channel_name,
                 channel_id: legacy.youtube.channel_id,
+                video_id: legacy.youtube.video_id,
                 area_v2: legacy.youtube.area_v2,
                 quality: legacy.youtube.quality,
             },

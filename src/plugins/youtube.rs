@@ -1,7 +1,7 @@
 use super::danmaku::get_channel_name;
 use super::twitch::get_twitch_status;
 use super::Live;
-use crate::config::load_config;
+use crate::config::{load_config, save_config};
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use regex::Regex;
@@ -89,7 +89,7 @@ pub async fn get_youtube_status(
     Box<dyn Error>,
 > {
     let client = reqwest::Client::new();
-    let cfg = load_config().await?;
+    let mut cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let quality = cfg.youtube.quality.clone();
     let channel_name = get_channel_name("YT", channel_id).unwrap();
@@ -149,6 +149,11 @@ pub async fn get_youtube_status(
                     .map(|s| s.to_string());
 
                 if status == "live" {
+                    let video_id = video
+                        .get("id")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+
                     let tw_channel_name =
                         get_channel_name("TW", channel_name.as_deref().unwrap()).unwrap();
                     if tw_channel_name.is_some() {
@@ -159,12 +164,16 @@ pub async fn get_youtube_status(
                         }
                     } else {
                         let (is_live, _, _, m3u8_url, _) = get_status_with_yt_dlp(
-                            channel_id,
+                            video_id,
                             proxy,
                             title.clone(),
                             Some(&quality),
                         )
                         .await?;
+                        if is_live && cfg.youtube.video_id != video_id.to_string() {
+                            cfg.youtube.video_id = video_id.to_string();
+                            save_config(&cfg).await?;
+                        }
                         return Ok((is_live, topic, title, m3u8_url, None));
                     }
                 }
@@ -209,18 +218,27 @@ async fn get_status_with_yt_dlp(
     Box<dyn Error>,
 > {
     let quality = quality.unwrap_or("best");
+    let format_sort = if quality == "best" {
+        "res".to_string()
+    } else if quality == "worst" {
+        "+res".to_string()
+    } else if quality.ends_with("p") && quality[..quality.len() - 1].parse::<u32>().is_ok() {
+        format!("res:{}", &quality[..quality.len() - 1])
+    } else {
+        quality.to_string()
+    };
 
     let mut command = create_hidden_command(&get_yt_dlp_command());
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);
     }
-    command.arg("-f");
-    command.arg(quality);
+    command.arg("-S");
+    command.arg(&format_sort);
     command.arg("-g");
 
     command.arg(format!(
-        "https://www.youtube.com/channel/{}/live",
+        "https://www.youtube.com/watch?v={}",
         channel_id
     ));
     let output = command.output()?;
@@ -262,7 +280,7 @@ async fn get_status_with_yt_dlp(
         }
         return Ok((false, None, None, None, None)); // Channel is not live and no scheduled time
     } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {
-        return Ok((true, None, title, Some(stdout.to_string()), None));
+        return Ok((true, None, title, Some(stdout.trim().to_string()), None));
     }
 
     Err("Unexpected output from yt-dlp".into())
@@ -285,7 +303,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             }
             command.arg("-e");
             command.arg(format!(
-                "https://www.youtube.com/channel/{}/live",
+                "https://www.youtube.com/watch?v={}",
                 channel_id
             ));
             let output = command.output()?;
