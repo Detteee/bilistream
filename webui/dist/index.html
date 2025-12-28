@@ -672,9 +672,10 @@
               <label>流质量</label>
               <select id="setup-yt-quality">
                 <option value="best">best - 最佳质量 (推荐)</option>
-                <option value="720p">720p - 高清</option>
-                <option value="480p">480p - 标清</option>
-                <option value="360p">360p - 流畅</option>
+                <option value="best[height<=1080]">1080p - 超清</option>
+                <option value="best[height<=720]">720p - 高清</option>
+                <option value="best[height<=480]">480p - 标清</option>
+                <option value="best[height<=360]">360p - 流畅</option>
                 <option value="worst">worst - 最低质量</option>
               </select>
             </div>
@@ -729,9 +730,11 @@
             <div class="control-group">
               <label>流质量</label>
               <select id="setup-tw-quality">
-                <option value="best">best - 最佳质量 (推荐)</option>
-                <option value="720p">720p - 高清</option>
-                <option value="480p">480p - 标清</option>
+                <option value="source">source - 原画质量 (推荐)</option>
+                <option value="high">high - 高质量 (≤720p30)</option>
+                <option value="medium">medium - 中等质量 (≤540p30)</option>
+                <option value="low">low - 低质量 (≤360p30)</option>
+                <option value="audio_only">audio_only - 仅音频</option>
                 <option value="worst">worst - 最低质量</option>
               </select>
             </div>
@@ -1035,7 +1038,7 @@
         </div>
       </div>
 
-      <div class="controls" id="holodex-section" style="margin-top: 20px; display: none;">
+      <div class="controls" id="holodex-section" style="margin-top: 20px;">
         <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
           onclick="toggleHolodex()">
           <svg viewBox="0 0 24 24" focusable="false" style="width: 24px; height: 24px;">
@@ -1062,23 +1065,59 @@
           <span id="holodex-toggle">▼</span>
         </h2>
         <div id="holodex-container" style="display: none;">
-          <div id="holodex-status"
-            style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 15px; text-align: center;">
-            加载中...
+          <!-- API Key Configuration Section -->
+          <div id="holodex-api-config"
+            style="display: none; padding: 20px; background: var(--input-bg); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
+            <h3 style="color: var(--heading-color); margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+              🔑 配置 Holodex API Key
+            </h3>
+            <p style="color: var(--text-secondary); margin-bottom: 15px; line-height: 1.6;">
+              Holodex API 用于获取 YouTube 直播状态
+            </p>
+            <div class="control-group" style="margin-bottom: 15px;">
+              <label style="color: var(--text-secondary); font-weight: 500;">API Key</label>
+              <input type="text" id="holodex-api-input" placeholder="输入你的 Holodex API Key"
+                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
+            </div>
+            <div
+              style="background: var(--card-bg); padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid var(--info-border);">
+              <h4 style="color: var(--text-primary); margin-bottom: 10px; font-size: 14px;">📋 如何获取 API Key:</h4>
+              <ol style="color: var(--text-secondary); font-size: 13px; line-height: 1.5; padding-left: 20px;">
+                <li>访问 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
+                    style="color: var(--heading-color);">holodex.net/login</a></li>
+                <li>登录, 复制 API Key 至上方输入框</li>
+              </ol>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button class="btn-success" onclick="saveHolodexApiKey()" style="flex: 1;">
+                💾 保存配置
+              </button>
+              <button class="btn-secondary" onclick="testHolodexApiKey()" style="flex: 1;">
+                🧪 测试连接
+              </button>
+            </div>
           </div>
-          <div id="holodex-streams"
-            style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 15px; margin-bottom: 15px;">
-            <!-- Streams will be populated here -->
+
+          <!-- Streams Display Section -->
+          <div id="holodex-streams-section">
+            <div id="holodex-status"
+              style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+              加载中...
+            </div>
+            <div id="holodex-streams"
+              style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 15px; margin-bottom: 15px;">
+              <!-- Streams will be populated here -->
+            </div>
+            <button class="btn-primary" onclick="refreshHolodexStreams()"
+              style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+              <svg id="refreshHolodexIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                <path
+                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+              </svg>
+              <span>刷新直播列表</span>
+            </button>
           </div>
-          <button class="btn-primary" onclick="refreshHolodexStreams()"
-            style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
-            <svg id="refreshHolodexIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-              <path
-                d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-            </svg>
-            <span>刷新直播列表</span>
-          </button>
         </div>
       </div>
 
@@ -1206,12 +1245,22 @@
               holodex_api_key: config.holodex_api_key || ''
             };
 
-            // Show/hide Holodex section based on API key configuration
+            // Show/hide Holodex sections based on API key configuration
             const holodexSection = document.getElementById('holodex-section');
+            const holodexApiConfig = document.getElementById('holodex-api-config');
+            const holodexStreamsSection = document.getElementById('holodex-streams-section');
+
+            // Always show the Holodex section
+            holodexSection.style.display = 'block';
+
             if (config.holodex_api_key && config.holodex_api_key.trim() !== '') {
-              holodexSection.style.display = 'block';
+              // API key is configured - show streams section, hide config
+              holodexApiConfig.style.display = 'none';
+              holodexStreamsSection.style.display = 'block';
             } else {
-              holodexSection.style.display = 'none';
+              // No API key - show config section, hide streams
+              holodexApiConfig.style.display = 'block';
+              holodexStreamsSection.style.display = 'none';
             }
 
             if (config.interval) {
@@ -1300,6 +1349,13 @@
           const liveStreams = streams.filter(s => s.status === 'live');
           const scheduledStreams = streams.filter(s => s.status !== 'live');
 
+          // Sort scheduled streams by time - nearest first
+          scheduledStreams.sort((a, b) => {
+            const timeA = a.start_scheduled ? new Date(a.start_scheduled).getTime() : Infinity;
+            const timeB = b.start_scheduled ? new Date(b.start_scheduled).getTime() : Infinity;
+            return timeA - timeB;
+          });
+
           statusDiv.innerHTML = `✅ 找到 ${liveStreams.length} 个直播, ${scheduledStreams.length} 个预告`;
           statusDiv.style.background = '#a6e3a1';
           statusDiv.style.color = '#1e1e2e';
@@ -1317,7 +1373,7 @@
             streamsDiv.appendChild(divider);
           }
 
-          // Render scheduled streams
+          // Render scheduled streams (now sorted by time)
           scheduledStreams.forEach(stream => {
             streamsDiv.appendChild(createStreamCard(stream, false));
           });
@@ -1483,6 +1539,40 @@
         } catch (error) {
           showNotification('切换失败: ' + error.message, 'error');
           console.error('Switch error:', error);
+        }
+      }
+
+      // Holodex API Key Management Functions
+      async function saveHolodexApiKey() {
+        const apiKeyInput = document.getElementById('holodex-api-input');
+        const apiKey = apiKeyInput.value.trim();
+
+        if (!apiKey) {
+          showNotification('请输入 API Key', 'error');
+          return;
+        }
+
+        try {
+          // Save the API key to config
+          const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              holodex_api_key: apiKey
+            })
+          });
+
+          const data = await response.json();
+          if (data.success) {
+            showNotification('Holodex API Key 保存成功！', 'success');
+            // Refresh the page to update the UI
+            setTimeout(() => window.location.reload(), 1500);
+          } else {
+            showNotification('保存失败: ' + (data.message || '未知错误'), 'error');
+          }
+        } catch (error) {
+          showNotification('保存失败: ' + error.message, 'error');
+          console.error('Save API key error:', error);
         }
       }
 

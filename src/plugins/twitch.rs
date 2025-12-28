@@ -113,7 +113,7 @@ impl Twitch {
         quality: Option<&str>,
     ) -> Result<String, Box<dyn Error>> {
         let proxy_url = self.get_proxy_url_for_region(proxy_region)?;
-        let quality = quality.unwrap_or("best");
+        let quality = quality.unwrap_or("source");
 
         let mut cmd = create_hidden_command("streamlink");
         cmd.arg(proxy_url)

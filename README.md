@@ -127,32 +127,38 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    - API keys (Holodex, Riot Games - optional)
    - Anti-collision monitoring (optional)
    - Stream quality settings (for network-limited users)
+
 6. **Stream Quality Configuration:**
 
-   For users with limited network bandwidth, you can configure lower quality streams:
+   For users with limited network bandwidth, you can configure stream quality settings:
 
-   **YouTube (yt-dlp):**
+   **YouTube (yt-dlp) Quality Options:**
 
-   - `best` - Best quality (recommended)
-   - `worst` - Lowest quality
-   - `720p`, `480p`, `360p` - Specific resolutions
-   - Or use any yt-dlp format string
+   - `best` - Best available quality (recommended)
+   - `best[height<=1080]` - Best quality up to 1080p
+   - `best[height<=720]` - Best quality up to 720p  
+   - `best[height<=480]` - Best quality up to 480p
+   - `best[height<=360]` - Best quality up to 360p
+   - `worst` - Lowest available quality
 
-   **Twitch (streamlink):**
+   **Twitch (streamlink) Quality Options:**
 
-   - `best`` - Best quality (recommended)
-   - `worst` - Lowest quality
-   - `720p`, `480p` - Specific resolutions
+   - `source` - Original broadcaster quality
+   - `high` - High quality (≤720p30fps, filters out higher resolutions)
+   - `medium` - Medium quality (≤540p30fps, filters out higher resolutions)
+   - `low` - Low quality (≤360p30fps, filters out higher resolutions)
+   - `audio_only` - Audio stream only (no video)
+   - `worst` - Lowest available quality
 
    Edit `config.json`:
 
    ```json
    {
      "youtube": {
-       "quality": "720p"
+       "quality": "best[height<=720]"
      },
      "twitch": {
-       "quality": "480p"
+       "quality": "high"
      }
    }
    ```

@@ -126,33 +126,37 @@
    - YouTube/Twitch 频道（可选）
    - API 密钥（Holodex、Riot Games - 可选）
    - 防撞车监控（可选）
-   - 流质量设置（适用于网络受限用户）
 6. **流质量配置：**
 
-   对于网络带宽受限的用户，可以配置较低质量的流：
+   对于网络带宽受限的用户，可以配置流质量设置：
 
-   **YouTube (yt-dlp):**
+   **YouTube (yt-dlp) 质量选项：**
 
-   - `best` - 最佳质量（推荐）
-   - `worst` - 最低质量
-   - `720p`、`480p`、`360p` - 指定分辨率
-   - 或使用任何 yt-dlp 格式字符串
+   - `best` - 最佳可用质量（推荐）
+   - `best[height<=1080]` - 最佳质量，最高1080p
+   - `best[height<=720]` - 最佳质量，最高720p
+   - `best[height<=480]` - 最佳质量，最高480p
+   - `best[height<=360]` - 最佳质量，最高360p
+   - `worst` - 最低可用质量
 
-   **Twitch (streamlink):**
+   **Twitch (streamlink) 质量选项：**
 
-   - `best` - 最佳质量（推荐）
-   - `worst` - 最低质量
-   - `720p`、`480p` - 指定分辨率
+   - `source` - 原画质量
+   - `high` - 高质量（≤720p30帧，过滤更高分辨率）
+   - `medium` - 中等质量（≤540p30帧，过滤更高分辨率）
+   - `low` - 低质量（≤360p30帧，过滤更高分辨率）
+   - `audio_only` - 仅音频流（无视频）
+   - `worst` - 最低可用质量
 
    编辑 `config.json`：
 
    ```json
    {
      "youtube": {
-       "quality": "720p"
+       "quality": "best[height<=720]"
      },
      "twitch": {
-       "quality": "480p"
+       "quality": "high"
      }
    }
    ```
