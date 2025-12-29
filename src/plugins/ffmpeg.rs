@@ -1,6 +1,7 @@
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::env;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -439,7 +440,7 @@ pub async fn ffmpeg(
         .arg("+genpts+discardcorrupt") // Generate PTS and discard corrupt packets
         // Input file
         .arg("-i")
-        .arg(m3u8_url)
+        .arg(m3u8_url.trim())
         // Output options - stream copy
         .arg("-c")
         .arg("copy") // Stream copy without re-encoding
@@ -462,10 +463,15 @@ pub async fn ffmpeg(
         .arg("flv")
         .arg("-flvflags")
         .arg("no_duration_filesize") // Skip duration/filesize metadata for live streaming
-        .arg(rtmp_url_key)
         .arg("-stats")
         .arg("-loglevel")
         .arg(&log_level);
+    if env::var_os("bili_ffmepg_down").is_some() {
+        cmd.args(&["-t", "5", "output.flv"]);
+        tracing::info!("if generate output.flv successfully, means ffmpeg is working fine. please check bilibili's rtmp link!");
+    } else {
+        cmd.arg(rtmp_url_key);
+    }
 
     // Capture stdout and stderr
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -597,8 +603,8 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
 
         if let Some(process) = supervisor.as_mut() {
             // Check if process has exited without blocking
-            match process.child.try_wait() {
-                Ok(Some(status)) => {
+            match process.child.wait().await {
+                Ok(status) => {
                     // Process has exited, remove it from supervisor
                     drop(supervisor);
                     let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
@@ -610,11 +616,6 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
                         tracing::info!("ffmpeg terminated by signal");
                     }
                     return Some(status);
-                }
-                Ok(None) => {
-                    // Process is still running, release lock and wait a bit
-                    drop(supervisor);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
                 Err(e) => {
                     tracing::error!("Failed to check ffmpeg status: {}", e);

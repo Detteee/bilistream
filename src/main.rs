@@ -22,7 +22,7 @@ use riven::consts::PlatformRoute;
 use riven::RiotApi;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::{error::Error, thread, time::Duration};
+use std::{error::Error, thread, time::Duration, env};
 use textwrap;
 use tracing_subscriber::fmt;
 use unicode_width::UnicodeWidthStr;
@@ -292,7 +292,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             }
             // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
-            if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
+            if env::var_os("bili_ffmepg_down").is_none() && !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
                 tracing::info!("B站未直播");
                 let area_name = get_area_name(area_v2);
                 bili_start_live(&mut cfg, area_v2).await?;
@@ -319,7 +319,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         tracing::warn!("跳过封面更新：缩略图下载失败");
                     }
                 }
-            } else {
+            } else if env::var_os("bili_ffmepg_down").is_none() {
                 // 如果target channel改变，则变更B站直播标题
                 if bili_title != cfg_title {
                     bili_change_live_title(&cfg, &cfg_title).await?;

@@ -99,7 +99,7 @@ pub async fn get_youtube_status(
         Some(key) if !key.is_empty() => key,
         _ => {
             tracing::info!("Holodex API key not configured, using yt-dlp");
-            return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
+            return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality), true).await;
         }
     };
 
@@ -115,13 +115,13 @@ pub async fn get_youtube_status(
         .await?;
     if !response.status().is_success() {
         tracing::error!("Holodex获取直播状态失败，使用yt-dlp获取");
-        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
+        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality), true).await;
     }
 
     let videos: Vec<serde_json::Value> = response.json().await?;
     // println!("{:?}", videos);
     if videos.is_empty() {
-        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
+        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality), true).await;
     }
 
     for video in videos.iter().rev() {
@@ -149,6 +149,11 @@ pub async fn get_youtube_status(
                     .map(|s| s.to_string());
 
                 if status == "live" {
+                    let video_id = video
+                        .get("id")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+
                     let tw_channel_name =
                         get_channel_name("TW", channel_name.as_deref().unwrap()).unwrap();
                     if tw_channel_name.is_some() {
@@ -159,36 +164,36 @@ pub async fn get_youtube_status(
                         }
                     } else {
                         let (is_live, _, _, m3u8_url, _) = get_status_with_yt_dlp(
-                            channel_id,
-                            proxy,
+                            video_id,
+                            proxy.clone(),
                             title.clone(),
                             Some(&quality),
+                            false
                         )
                         .await?;
-                        return Ok((is_live, topic, title, m3u8_url, None));
+                        if is_live { return Ok((true, topic, title, m3u8_url, None)); }
                     }
                 }
 
-                let start_time = if status == "upcoming" {
-                    video
+                if status == "upcoming" {
+                    let start_time = video
                         .get("start_scheduled")
                         .and_then(|v| v.as_str())
                         .map(|t| {
                             DateTime::parse_from_rfc3339(t)
                                 .unwrap()
                                 .with_timezone(&Local)
-                        })
-                } else {
-                    None
+                        });
+                    return Ok((false, topic, title, None, start_time));
                 };
 
-                return Ok((false, topic, title, None, start_time));
+                
             }
         }
     }
-    let title = get_youtube_live_title(channel_id).await?;
+    let title = get_youtube_live_title(channel_id, true).await?;
     let (is_live, _, _, m3u8_url, start_time) =
-        get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
+        get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality), true).await?;
     Ok((is_live, None, title, m3u8_url, start_time))
 }
 
@@ -198,6 +203,7 @@ async fn get_status_with_yt_dlp(
     proxy: Option<String>,
     title: Option<String>,
     quality: Option<&str>,
+    is_channel: bool,
 ) -> Result<
     (
         bool,                    // is_live
@@ -209,20 +215,31 @@ async fn get_status_with_yt_dlp(
     Box<dyn Error>,
 > {
     let quality = quality.unwrap_or("best");
+    let format_sort = if quality == "best" {
+        "res".to_string()
+    } else if quality == "worst" {
+        "+res".to_string()
+    } else if quality.ends_with("p") && quality[..quality.len() - 1].parse::<u32>().is_ok() {
+        format!("res:{}", &quality[..quality.len() - 1])
+    } else {
+        quality.to_string()
+    };
 
     let mut command = create_hidden_command(&get_yt_dlp_command());
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);
     }
-    command.arg("-f");
-    command.arg(quality);
+    command.arg("-S");
+    command.arg(&format_sort);
     command.arg("-g");
 
-    command.arg(format!(
-        "https://www.youtube.com/channel/{}/live",
-        channel_id
-    ));
+    let url = if is_channel {
+        format!("https://www.youtube.com/channel/{}/live", channel_id)
+    } else {
+        format!("https://www.youtube.com/watch?v={}", channel_id)
+    };
+    command.arg(url);
     let output = command.output()?;
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -244,7 +261,7 @@ async fn get_status_with_yt_dlp(
             let title = if title.is_some() {
                 title
             } else {
-                get_youtube_live_title(channel_id).await?
+                get_youtube_live_title(channel_id, is_channel).await?
             };
             return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
         }
@@ -256,24 +273,29 @@ async fn get_status_with_yt_dlp(
             let title = if title.is_some() {
                 title
             } else {
-                get_youtube_live_title(channel_id).await?
+                get_youtube_live_title(channel_id, is_channel).await?
             };
             return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
         }
         return Ok((false, None, None, None, None)); // Channel is not live and no scheduled time
     } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {
-        return Ok((true, None, title, Some(stdout.to_string()), None));
+        return Ok((true, None, title, Some(stdout.trim().to_string()), None));
     }
 
     Err("Unexpected output from yt-dlp".into())
 }
 
-pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
+pub async fn get_youtube_live_title(channel_id: &str, is_channel: bool) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let channel_name = get_channel_name("YT", channel_id).unwrap();
     let client = reqwest::Client::new();
 
+    let yt_url = if is_channel {
+        format!("https://www.youtube.com/channel/{}/live", channel_id)
+    } else {
+        format!("https://www.youtube.com/watch?v={}", channel_id)
+    };
     // Check if Holodex API key is available
     let holodex_api_key = match cfg.holodex_api_key.clone() {
         Some(key) if !key.is_empty() => key,
@@ -284,10 +306,8 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                 command.arg("--proxy").arg(proxy);
             }
             command.arg("-e");
-            command.arg(format!(
-                "https://www.youtube.com/channel/{}/live",
-                channel_id
-            ));
+            
+            command.arg(&yt_url);
             let output = command.output()?;
             let title_str = String::from_utf8_lossy(&output.stdout);
             if let Some(title) = title_str.split(" 202").next() {
@@ -362,10 +382,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             command.arg("--proxy").arg(proxy);
         }
         command.arg("-e");
-        command.arg(format!(
-            "https://www.youtube.com/channel/{}/live",
-            channel_id
-        ));
+        command.arg(&yt_url);
         let output = command.output()?;
         let title_str = String::from_utf8_lossy(&output.stdout);
         if let Some(title) = title_str.split(" 202").next() {
