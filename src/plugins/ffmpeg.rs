@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -178,23 +179,6 @@ fn update_progress_time() {
     LAST_PROGRESS_TIME.store(now, Ordering::Relaxed);
 }
 
-// Update stream time tracking (lock-free write)
-fn update_stream_time(stream_time_secs: u32) {
-    let last_time = LAST_STREAM_TIME.load(Ordering::Relaxed);
-
-    // Only update if time has actually progressed
-    if stream_time_secs > last_time {
-        LAST_STREAM_TIME.store(stream_time_secs, Ordering::Relaxed);
-
-        // Update the timestamp when stream time last changed
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
-        LAST_STREAM_TIME_UPDATE.store(now, Ordering::Relaxed);
-    }
-}
-
 // Check if ffmpeg has made progress recently (within timeout seconds)
 // This checks both: 1) if stats are being reported, 2) if stream time is progressing
 pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
@@ -253,7 +237,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
             tracing::info!("Terminating ffmpeg process (PID: {})", pid_value);
         }
 
-        // Try tokio kill first
+        // Try graceful termination first, then force kill
         match process.kill().await {
             Ok(_) => {
                 tracing::info!("✅ ffmpeg process killed via tokio");
@@ -265,6 +249,24 @@ async fn stop_ffmpeg_internal(manual: bool) {
                 if let Some(pid_value) = pid {
                     #[cfg(unix)]
                     {
+                        // Try SIGTERM first (graceful)
+                        let sigterm_result = std::process::Command::new("kill")
+                            .arg("-TERM")
+                            .arg(pid_value.to_string())
+                            .output();
+
+                        match sigterm_result {
+                            Ok(output) if output.status.success() => {
+                                tracing::info!("✅ Sent SIGTERM to ffmpeg process");
+                                // Wait a bit for graceful shutdown
+                                tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+                            }
+                            _ => {
+                                tracing::warn!("⚠️ SIGTERM failed, trying SIGKILL");
+                            }
+                        }
+
+                        // Force kill with SIGKILL
                         let kill_result = std::process::Command::new("kill")
                             .arg("-9")
                             .arg(pid_value.to_string())
@@ -322,78 +324,6 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
 }
-/// Parse time string (HH:MM:SS.ms) to seconds
-fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
-    let parts: Vec<&str> = time_str.split(':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let hours: u32 = parts[0].parse().ok()?;
-    let minutes: u32 = parts[1].parse().ok()?;
-    let seconds: f32 = parts[2].parse().ok()?;
-
-    Some(hours * 3600 + minutes * 60 + seconds as u32)
-}
-
-/// Extract compact stats from ffmpeg output line
-/// Only shows: time, bitrate, speed (fps removed as it's often empty)
-/// Returns (formatted_string, parsed_speed, parsed_time_in_seconds)
-fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>, Option<u32>)> {
-    let mut time = None;
-    let mut bitrate = None;
-    let mut speed = None;
-    let mut speed_value: Option<f32> = None;
-    let mut time_value: Option<u32> = None;
-
-    // Parse the line for key=value pairs
-    for part in line.split_whitespace() {
-        if let Some(value) = part.strip_prefix("time=") {
-            time = Some(value.to_string());
-            time_value = parse_time_to_seconds(value);
-        } else if let Some(value) = part.strip_prefix("bitrate=") {
-            bitrate = Some(value.to_string());
-        } else if let Some(value) = part.strip_prefix("speed=") {
-            speed = Some(value.to_string());
-            // Parse speed value (remove 'x' suffix if present)
-            let clean_value = value.trim_end_matches('x');
-            if let Ok(parsed) = clean_value.parse::<f32>() {
-                speed_value = Some(parsed);
-            }
-        }
-    }
-
-    // Build compact output
-    if time.is_some() || bitrate.is_some() || speed.is_some() {
-        let mut output = String::new();
-
-        if let Some(t) = time {
-            if !t.is_empty() {
-                output.push_str(&format!("time={} ", t));
-            }
-        }
-        if let Some(b) = bitrate {
-            if !b.is_empty() {
-                output.push_str(&format!("bitrate={} ", b));
-            }
-        }
-        if let Some(s) = speed {
-            if !s.is_empty() {
-                output.push_str(&format!("speed={}", s));
-            }
-        }
-
-        let trimmed = output.trim_end().to_string();
-        if !trimmed.is_empty() {
-            Some((trimmed, speed_value, time_value))
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
 /// Spawns and supervises an ffmpeg process with output monitoring
 pub async fn ffmpeg(
     rtmp_url: String,
@@ -470,10 +400,18 @@ pub async fn ffmpeg(
     // Capture stdout and stderr
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    // Set up process group for proper signal handling on Unix
+    #[cfg(unix)]
+    {
+        #[allow(unused_imports)]
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // Create new process group
+    }
+
     match cmd.spawn() {
         Ok(mut child) => {
             let pid = child.id();
-            tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
+            // tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
 
             // Set high priority for stable streaming
             if let Some(pid_value) = pid {
@@ -484,7 +422,6 @@ pub async fn ffmpeg(
             if let Some(stderr) = child.stderr.take() {
                 let log_level_clone = log_level.clone();
                 tokio::spawn(async move {
-                    use std::io::Write;
                     use tokio::io::AsyncReadExt;
 
                     let mut stderr = stderr;
@@ -503,23 +440,39 @@ pub async fn ffmpeg(
                                 // Carriage return - stats update
                                 if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
                                 {
-                                    // Extract only fps, time, bitrate, speed
-                                    if let Some((compact, speed, stream_time)) =
-                                        extract_compact_stats(&line_buffer)
-                                    {
-                                        eprint!("\r{:<80}", compact);
-                                        let _ = std::io::stderr().flush();
-                                        // Update global speed if available (lock-free atomic write)
-                                        if let Some(s) = speed {
-                                            FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                    // Print the raw ffmpeg stats line
+                                    eprint!("\r{:<70}", line_buffer);
+                                    let _ = std::io::stderr().flush();
+
+                                    // Parse and store speed for web UI
+                                    if let Some(speed_start) = line_buffer.find("speed=") {
+                                        let speed_part = &line_buffer[speed_start + 6..];
+                                        if let Some(speed_end) =
+                                            speed_part.find(|c: char| c.is_whitespace())
+                                        {
+                                            let speed_str = &speed_part[..speed_end];
+                                            let clean_speed = speed_str.trim_end_matches('x');
+                                            if let Ok(speed_value) = clean_speed.parse::<f32>() {
+                                                FFMPEG_SPEED.store(
+                                                    speed_value.to_bits(),
+                                                    Ordering::Relaxed,
+                                                );
+                                            }
+                                        } else {
+                                            // Speed is at the end of the line
+                                            let clean_speed =
+                                                speed_part.trim().trim_end_matches('x');
+                                            if let Ok(speed_value) = clean_speed.parse::<f32>() {
+                                                FFMPEG_SPEED.store(
+                                                    speed_value.to_bits(),
+                                                    Ordering::Relaxed,
+                                                );
+                                            }
                                         }
-                                        // Update stream time tracking
-                                        if let Some(t) = stream_time {
-                                            update_stream_time(t);
-                                        }
-                                        // Update progress time whenever we get stats
-                                        update_progress_time();
                                     }
+
+                                    // Update progress time whenever we get stats
+                                    update_progress_time();
                                 }
                                 line_buffer.clear();
                             } else if ch == '\n' {
@@ -536,22 +489,40 @@ pub async fn ffmpeg(
                                     } else if line_buffer.starts_with("frame=")
                                         || line_buffer.contains("fps=")
                                     {
-                                        // Final stats line with newline
-                                        if let Some((compact, speed, stream_time)) =
-                                            extract_compact_stats(&line_buffer)
-                                        {
-                                            eprintln!("\r{:<80}", compact);
-                                            // Update global speed if available (lock-free atomic write)
-                                            if let Some(s) = speed {
-                                                FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                        // Final stats line with newline - print raw and parse speed
+                                        eprintln!("\r{:<70}", line_buffer);
+
+                                        // Parse and store speed for web UI
+                                        if let Some(speed_start) = line_buffer.find("speed=") {
+                                            let speed_part = &line_buffer[speed_start + 6..];
+                                            if let Some(speed_end) =
+                                                speed_part.find(|c: char| c.is_whitespace())
+                                            {
+                                                let speed_str = &speed_part[..speed_end];
+                                                let clean_speed = speed_str.trim_end_matches('x');
+                                                if let Ok(speed_value) = clean_speed.parse::<f32>()
+                                                {
+                                                    FFMPEG_SPEED.store(
+                                                        speed_value.to_bits(),
+                                                        Ordering::Relaxed,
+                                                    );
+                                                }
+                                            } else {
+                                                // Speed is at the end of the line
+                                                let clean_speed =
+                                                    speed_part.trim().trim_end_matches('x');
+                                                if let Ok(speed_value) = clean_speed.parse::<f32>()
+                                                {
+                                                    FFMPEG_SPEED.store(
+                                                        speed_value.to_bits(),
+                                                        Ordering::Relaxed,
+                                                    );
+                                                }
                                             }
-                                            // Update stream time tracking
-                                            if let Some(t) = stream_time {
-                                                update_stream_time(t);
-                                            }
-                                            // Update progress time whenever we get stats
-                                            update_progress_time();
                                         }
+
+                                        // Update progress time whenever we get stats
+                                        update_progress_time();
                                     } else if log_level_clone == "debug"
                                         || log_level_clone == "info"
                                     {
