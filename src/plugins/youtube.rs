@@ -261,8 +261,20 @@ async fn get_status_with_yt_dlp(
             return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
         }
         return Ok((false, None, None, None, None)); // Channel is not live and no scheduled time
-    } else if Regex::new(r"https://.*\.m3u8").unwrap().is_match(&stdout) {
-        return Ok((true, None, title, Some(stdout.to_string()), None));
+    } else if Regex::new(r"https://.*\.m3u8")?.is_match(&stdout) {
+        let regex = Regex::new(r"(https://.*\.m3u8.*)")?;
+        let matches: Vec<&str> = regex.find_iter(&stdout).map(|m| m.as_str()).collect();
+
+        if matches.len() > 1 {
+            tracing::warn!(
+                "Multiple m3u8 URLs found (likely separate video and audio streams): {} URLs",
+                matches.len()
+            );
+            tracing::warn!("Using first URL: {}", matches[0]);
+        }
+
+        let m3u8_url = matches[0].to_string();
+        return Ok((true, None, title, Some(m3u8_url), None));
     }
 
     Err("Unexpected output from yt-dlp".into())
