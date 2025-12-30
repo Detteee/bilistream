@@ -10,8 +10,9 @@ use std::sync::Mutex;
 
 use crate::config::load_config;
 use crate::plugins::{
-    bili_start_live, bili_stop_live, bili_update_area, bilibili, get_bili_live_status,
-    get_ffmpeg_speed, send_danmaku as send_danmaku_to_bili, set_config_updated,
+    bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
+    get_bili_live_status, get_ffmpeg_speed, send_danmaku as send_danmaku_to_bili,
+    set_config_updated,
 };
 use crate::updater;
 
@@ -426,6 +427,30 @@ pub async fn update_area(
         message: Some("分区已更新".to_string()),
     })
 }
+
+#[derive(Deserialize)]
+pub struct UpdateTitleRequest {
+    title: String,
+}
+
+pub async fn update_title(
+    Json(payload): Json<UpdateTitleRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bili_change_live_title(&cfg, &payload.title)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("直播标题已更新".to_string()),
+    })
+}
+
 #[derive(Deserialize)]
 pub struct UpdateChannelRequest {
     platform: String, // "youtube" or "twitch"

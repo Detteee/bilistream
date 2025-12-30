@@ -30,6 +30,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/danmaku", post(api::send_danmaku))
         .route("/cover", post(api::update_cover))
         .route("/area", post(api::update_area))
+        .route("/title", post(api::update_title))
         .route("/channels", get(api::get_channels))
         .route("/areas", get(api::get_areas))
         .route("/channel", post(api::update_channel))
