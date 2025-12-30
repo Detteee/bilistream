@@ -1,31 +1,45 @@
 {
-  "auto_cover": true,
-  "enable_anti_collision": true,
-  "interval": 30,
+  "auto_cover": true,                    // 自动更换封面
+  "enable_anti_collision": true,         // 撞车监控
+  "interval": 30,                        // 检测直播间隔(秒)
+  
+  // ===== Bilibili 直播配置 =====
   "bililive": {
-    "enable_danmaku_command": true,
-    "room": 370627,
-    "bili_rtmp_url": "rtmp://live-push.bilivideo.com/live-bvc/",
-    "bili_rtmp_key": ""
+    "enable_danmaku_command": true,      // 启用弹幕命令控制
+    "room": 370627,                      // 直播间号
+    "bili_rtmp_url": "rtmp://live-push.bilivideo.com/live-bvc/",  // B站RTMP服务器地址
+    "bili_rtmp_key": ""                  // B站串流密钥 (需加双引号，因为以?开头)
   },
+  
+  // ===== Twitch 配置 =====
   "twitch": {
-    "channel_name": "",
-    "area_v2": 235,
-    "channel_id": "",
-    "oauth_token": "",
-    "proxy_region": "as",
-    "quality": "best"
+    "channel_name": "",                  // 频道名称 (将出现于转播标题)
+    "area_v2": 235,                      // B站分区ID (https://api.live.bilibili.com/room/v1/Area/getList)
+    "channel_id": "",                    // Twitch频道ID (https://www.twitch.tv/ 后面的字符串)
+    "oauth_token": "",                   // OAuth令牌 (参考: https://streamlink.github.io/cli/plugins/twitch.html#authentication)
+    "proxy_region": "asl",               // 代理区域: na, eu, eu2, eu3, eu4, eu5, as, sa, eul, eu2l, asl, all, perf
+    "quality": "best"                    // 画质选择
   },
+  
+  // ===== YouTube 配置 =====
   "youtube": {
-    "channel_name": "",
-    "channel_id": "",
-    "area_v2": 235,
-    "quality": "best"
+    "channel_name": "",                  // 频道名称 (将出现于转播标题)
+    "channel_id": "",                    // YouTube频道ID
+    "area_v2": 235,                      // B站分区ID (https://api.live.bilibili.com/room/v1/Area/getList)
+    "quality": "best"                    // 画质选择
   },
-  "proxy": null,
-  "holodex_api_key": null,
-  "riot_api_key": null,
-  "enable_lol_monitor": false,
-  "lol_monitor_interval": 1,
-  "anti_collision_list": {}
+  
+  // ===== 其他配置 =====
+  "proxy": null,                         // 代理地址 (无需代理可留空)
+  "holodex_api_key": null,               // Holodex API密钥 (https://holodex.net/login)
+  "riot_api_key": null,                  // Riot API密钥 (https://developer.riotgames.com/)
+  "enable_lol_monitor": false,           // 启用LOL监控
+  "lol_monitor_interval": 1,             // LOL监控间隔(秒)
+  
+  // ===== 撞车监控列表 =====
+  "anti_collision_list": {
+    // "主播名1": 房间号1,                // 主播名仅用于弹幕提醒
+    // "主播名2": 房间号2,                // 房间号用于检测撞车
+    // 可添加更多需要监控的直播间...
+  }
 }
