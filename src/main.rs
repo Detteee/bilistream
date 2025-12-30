@@ -74,12 +74,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
     // Start danmaku client in background if not already running
     if !is_danmaku_running() {
-        tracing::info!("🚀 启动弹幕客户端");
         run_danmaku();
         // thread::sleep(Duration::from_secs(2)); // Give it time to connect
     }
-
-    tracing::info!("✅ 所有依赖已就绪");
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -1881,7 +1878,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Spawn monitoring loop in separate thread with its own runtime
             tracing::info!("🔄 监控循环已启动");
             std::thread::spawn(move || {
-                tracing::info!("🚀 启动弹幕客户端");
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async move {
                     tracing::info!("🔄 进入监控循环...");
@@ -2101,7 +2097,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::info!("🔄 监控循环已启动");
                     let log_level = ffmpeg_log_level.to_string();
                     std::thread::spawn(move || {
-                        tracing::info!("🚀 启动弹幕客户端");
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async move {
                             tracing::info!("🔄 进入监控循环...");

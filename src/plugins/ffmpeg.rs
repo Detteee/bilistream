@@ -479,6 +479,62 @@ pub async fn ffmpeg(
                     let mut buffer = vec![0u8; 8192];
                     let mut line_buffer = String::new();
 
+                    // Helper function to parse and store speed from ffmpeg stats
+                    let parse_and_store_speed = |line: &str| {
+                        if let Some(speed_start) = line.find("speed=") {
+                            let speed_part = &line[speed_start + 6..];
+                            let speed_str = if let Some(speed_end) =
+                                speed_part.find(|c: char| c.is_whitespace())
+                            {
+                                &speed_part[..speed_end]
+                            } else {
+                                speed_part.trim()
+                            };
+
+                            let clean_speed = speed_str.trim_end_matches('x');
+                            if let Ok(speed_value) = clean_speed.parse::<f32>() {
+                                FFMPEG_SPEED.store(speed_value.to_bits(), Ordering::Relaxed);
+                            }
+                        }
+                    };
+
+                    // Helper function to parse and store time for stuck detection
+                    let parse_and_store_time = |line: &str| {
+                        if let Some(time_start) = line.find("time=") {
+                            let time_part = &line[time_start + 5..];
+                            if let Some(time_end) = time_part.find(|c: char| c.is_whitespace()) {
+                                let time_str = &time_part[..time_end];
+                                if let Some(time_secs) = parse_time_to_seconds(time_str) {
+                                    let last_time = LAST_STREAM_TIME.load(Ordering::Relaxed);
+                                    if time_secs > last_time {
+                                        LAST_STREAM_TIME.store(time_secs, Ordering::Relaxed);
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_secs()
+                                            as u32;
+                                        LAST_STREAM_TIME_UPDATE.store(now, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    // Helper function to process ffmpeg stats lines
+                    let process_stats_line = |line: &str, use_newline: bool| {
+                        let trimmed_stats = trim_ffmpeg_stats(line);
+                        if use_newline {
+                            eprintln!("\r{:<50}", trimmed_stats);
+                        } else {
+                            eprint!("\r{:<50}", trimmed_stats);
+                            let _ = std::io::stderr().flush();
+                        }
+
+                        parse_and_store_speed(line);
+                        parse_and_store_time(line);
+                        update_progress_time();
+                    };
+
                     while let Ok(n) = stderr.read(&mut buffer).await {
                         if n == 0 {
                             break;
@@ -491,66 +547,7 @@ pub async fn ffmpeg(
                                 // Carriage return - stats update
                                 if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
                                 {
-                                    // Trim and print the essential ffmpeg stats
-                                    let trimmed_stats = trim_ffmpeg_stats(&line_buffer);
-                                    eprint!("\r{:<50}", trimmed_stats);
-                                    let _ = std::io::stderr().flush();
-
-                                    // Parse and store speed for web UI
-                                    if let Some(speed_start) = line_buffer.find("speed=") {
-                                        let speed_part = &line_buffer[speed_start + 6..];
-                                        if let Some(speed_end) =
-                                            speed_part.find(|c: char| c.is_whitespace())
-                                        {
-                                            let speed_str = &speed_part[..speed_end];
-                                            let clean_speed = speed_str.trim_end_matches('x');
-                                            if let Ok(speed_value) = clean_speed.parse::<f32>() {
-                                                FFMPEG_SPEED.store(
-                                                    speed_value.to_bits(),
-                                                    Ordering::Relaxed,
-                                                );
-                                            }
-                                        } else {
-                                            // Speed is at the end of the line
-                                            let clean_speed =
-                                                speed_part.trim().trim_end_matches('x');
-                                            if let Ok(speed_value) = clean_speed.parse::<f32>() {
-                                                FFMPEG_SPEED.store(
-                                                    speed_value.to_bits(),
-                                                    Ordering::Relaxed,
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // Parse and store time for stuck detection
-                                    if let Some(time_start) = line_buffer.find("time=") {
-                                        let time_part = &line_buffer[time_start + 5..];
-                                        if let Some(time_end) =
-                                            time_part.find(|c: char| c.is_whitespace())
-                                        {
-                                            let time_str = &time_part[..time_end];
-                                            if let Some(time_secs) = parse_time_to_seconds(time_str)
-                                            {
-                                                let last_time =
-                                                    LAST_STREAM_TIME.load(Ordering::Relaxed);
-                                                if time_secs > last_time {
-                                                    LAST_STREAM_TIME
-                                                        .store(time_secs, Ordering::Relaxed);
-                                                    let now = std::time::SystemTime::now()
-                                                        .duration_since(std::time::UNIX_EPOCH)
-                                                        .unwrap()
-                                                        .as_secs()
-                                                        as u32;
-                                                    LAST_STREAM_TIME_UPDATE
-                                                        .store(now, Ordering::Relaxed);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Update progress time whenever we get stats
-                                    update_progress_time();
+                                    process_stats_line(&line_buffer, false);
                                 }
                                 line_buffer.clear();
                             } else if ch == '\n' {
@@ -567,41 +564,7 @@ pub async fn ffmpeg(
                                     } else if line_buffer.starts_with("frame=")
                                         || line_buffer.contains("fps=")
                                     {
-                                        // Final stats line with newline - trim and print
-                                        let trimmed_stats = trim_ffmpeg_stats(&line_buffer);
-                                        eprintln!("\r{:<50}", trimmed_stats);
-
-                                        // Parse and store speed for web UI
-                                        if let Some(speed_start) = line_buffer.find("speed=") {
-                                            let speed_part = &line_buffer[speed_start + 6..];
-                                            if let Some(speed_end) =
-                                                speed_part.find(|c: char| c.is_whitespace())
-                                            {
-                                                let speed_str = &speed_part[..speed_end];
-                                                let clean_speed = speed_str.trim_end_matches('x');
-                                                if let Ok(speed_value) = clean_speed.parse::<f32>()
-                                                {
-                                                    FFMPEG_SPEED.store(
-                                                        speed_value.to_bits(),
-                                                        Ordering::Relaxed,
-                                                    );
-                                                }
-                                            } else {
-                                                // Speed is at the end of the line
-                                                let clean_speed =
-                                                    speed_part.trim().trim_end_matches('x');
-                                                if let Ok(speed_value) = clean_speed.parse::<f32>()
-                                                {
-                                                    FFMPEG_SPEED.store(
-                                                        speed_value.to_bits(),
-                                                        Ordering::Relaxed,
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // Update progress time whenever we get stats
-                                        update_progress_time();
+                                        process_stats_line(&line_buffer, true);
                                     } else if log_level_clone == "debug"
                                         || log_level_clone == "info"
                                     {
