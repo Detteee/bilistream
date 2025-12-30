@@ -324,6 +324,57 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
 }
+/// Trim ffmpeg stats line to show only essential info: time, bitrate, speed
+fn trim_ffmpeg_stats(line: &str) -> String {
+    let mut parts = Vec::new();
+
+    // Extract time
+    if let Some(time_start) = line.find("time=") {
+        let time_part = &line[time_start..];
+        if let Some(time_end) = time_part.find(|c: char| c.is_whitespace()) {
+            parts.push(&time_part[..time_end]);
+        } else {
+            parts.push(time_part);
+        }
+    }
+
+    // Extract bitrate
+    if let Some(bitrate_start) = line.find("bitrate=") {
+        let bitrate_part = &line[bitrate_start..];
+        if let Some(bitrate_end) = bitrate_part.find(|c: char| c.is_whitespace()) {
+            parts.push(&bitrate_part[..bitrate_end]);
+        } else {
+            parts.push(bitrate_part);
+        }
+    }
+
+    // Extract speed
+    if let Some(speed_start) = line.find("speed=") {
+        let speed_part = &line[speed_start..];
+        if let Some(speed_end) = speed_part.find(|c: char| c.is_whitespace()) {
+            parts.push(&speed_part[..speed_end]);
+        } else {
+            parts.push(speed_part);
+        }
+    }
+
+    parts.join(" ")
+}
+
+/// Parse time string (HH:MM:SS.ms) to seconds for stuck detection
+fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let hours: u32 = parts[0].parse().ok()?;
+    let minutes: u32 = parts[1].parse().ok()?;
+    let seconds: f32 = parts[2].parse().ok()?;
+
+    Some(hours * 3600 + minutes * 60 + seconds as u32)
+}
+
 /// Spawns and supervises an ffmpeg process with output monitoring
 pub async fn ffmpeg(
     rtmp_url: String,
@@ -440,8 +491,9 @@ pub async fn ffmpeg(
                                 // Carriage return - stats update
                                 if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
                                 {
-                                    // Print the raw ffmpeg stats line
-                                    eprint!("\r{:<70}", line_buffer);
+                                    // Trim and print the essential ffmpeg stats
+                                    let trimmed_stats = trim_ffmpeg_stats(&line_buffer);
+                                    eprint!("\r{:<50}", trimmed_stats);
                                     let _ = std::io::stderr().flush();
 
                                     // Parse and store speed for web UI
@@ -471,6 +523,32 @@ pub async fn ffmpeg(
                                         }
                                     }
 
+                                    // Parse and store time for stuck detection
+                                    if let Some(time_start) = line_buffer.find("time=") {
+                                        let time_part = &line_buffer[time_start + 5..];
+                                        if let Some(time_end) =
+                                            time_part.find(|c: char| c.is_whitespace())
+                                        {
+                                            let time_str = &time_part[..time_end];
+                                            if let Some(time_secs) = parse_time_to_seconds(time_str)
+                                            {
+                                                let last_time =
+                                                    LAST_STREAM_TIME.load(Ordering::Relaxed);
+                                                if time_secs > last_time {
+                                                    LAST_STREAM_TIME
+                                                        .store(time_secs, Ordering::Relaxed);
+                                                    let now = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap()
+                                                        .as_secs()
+                                                        as u32;
+                                                    LAST_STREAM_TIME_UPDATE
+                                                        .store(now, Ordering::Relaxed);
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     // Update progress time whenever we get stats
                                     update_progress_time();
                                 }
@@ -489,8 +567,9 @@ pub async fn ffmpeg(
                                     } else if line_buffer.starts_with("frame=")
                                         || line_buffer.contains("fps=")
                                     {
-                                        // Final stats line with newline - print raw and parse speed
-                                        eprintln!("\r{:<70}", line_buffer);
+                                        // Final stats line with newline - trim and print
+                                        let trimmed_stats = trim_ffmpeg_stats(&line_buffer);
+                                        eprintln!("\r{:<50}", trimmed_stats);
 
                                         // Parse and store speed for web UI
                                         if let Some(speed_start) = line_buffer.find("speed=") {
