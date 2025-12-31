@@ -2,8 +2,34 @@ use super::danmaku::get_channel_name;
 use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::error::Error; // Ensure this is included
 use std::process::Command;
+
+// Holodex API data structures
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HolodexStream {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub stream_type: String,
+    pub topic_id: Option<String>,
+    pub published_at: Option<String>,
+    pub available_at: Option<String>,
+    pub status: String,
+    pub start_scheduled: Option<String>,
+    pub start_actual: Option<String>,
+    pub live_viewers: Option<i32>,
+    #[serde(default)]
+    pub channel: HolodexChannel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct HolodexChannel {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
 
 // Helper function to get yt-dlp command path
 fn get_yt_dlp_command() -> String {
@@ -71,6 +97,40 @@ impl Youtube {
     }
 }
 
+// Get Holodex streams for multiple channels
+pub async fn get_holodex_streams(
+    channel_ids: Vec<String>,
+) -> Result<Vec<HolodexStream>, Box<dyn Error>> {
+    let cfg = load_config().await?;
+
+    // Check if Holodex API key is configured
+    let api_key = match cfg.holodex_api_key {
+        Some(key) if !key.is_empty() => key,
+        _ => return Err("Holodex API key not configured".into()),
+    };
+
+    if channel_ids.is_empty() {
+        return Err("No channel IDs provided".into());
+    }
+
+    // Call Holodex API
+    let channels_param = channel_ids.join(",");
+    let url = format!(
+        "https://holodex.net/api/v2/users/live?channels={}",
+        channels_param
+    );
+
+    let client = reqwest::Client::new();
+    let response = client.get(&url).header("X-APIKEY", api_key).send().await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Holodex API error: {}", response.status()).into());
+    }
+
+    let streams: Vec<HolodexStream> = response.json().await?;
+    Ok(streams)
+}
+
 pub async fn get_youtube_status(
     channel_id: &str,
 ) -> Result<
@@ -84,99 +144,79 @@ pub async fn get_youtube_status(
     ),
     Box<dyn Error>,
 > {
-    let client = reqwest::Client::new();
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let quality = cfg.youtube.quality.clone();
-    let channel_name = get_channel_name("YT", channel_id).unwrap();
 
     // Check if Holodex API key is available
-    let holodex_api_key = match cfg.holodex_api_key.clone() {
-        Some(key) if !key.is_empty() => key,
+    match cfg.holodex_api_key.clone() {
+        Some(_key) if !_key.is_empty() => {}
         _ => {
             tracing::info!("Holodex API key not configured, using yt-dlp");
             return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
         }
     };
 
-    let url = format!(
-        "https://holodex.net/api/v2/users/live?channels={}",
-        channel_id
-    );
-
-    let response = client
-        .get(&url)
-        .header("X-APIKEY", holodex_api_key)
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        tracing::error!("Holodex获取直播状态失败，使用yt-dlp获取");
-        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
-    }
-
-    let videos: Vec<serde_json::Value> = response.json().await?;
-    // println!("{:?}", videos);
-    if videos.is_empty() {
-        return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
-    }
-
-    for video in videos.iter().rev() {
-        if let Some(cname) = video.get("channel") {
-            if cname
-                .get("name")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .replace(" ", "")
-                .contains(channel_name.as_deref().unwrap_or(""))
-            {
-                let status = video
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("none");
-                let topic = video
-                    .get("topic_id")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_string());
-
-                let title = video
-                    .get("title")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_string());
-
-                let video_id = video
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .map(|s| s.to_string());
-
-                if status == "live" {
-                    let (is_live, _, _, m3u8_url, _, _) =
-                        get_status_with_yt_dlp(channel_id, proxy, title.clone(), Some(&quality))
-                            .await?;
-                    return Ok((is_live, topic, title, m3u8_url, None, video_id));
-                }
-
-                let start_time = if status == "upcoming" {
-                    video
-                        .get("start_scheduled")
-                        .and_then(|v| v.as_str())
-                        .map(|t| {
-                            DateTime::parse_from_rfc3339(t)
-                                .unwrap()
-                                .with_timezone(&Local)
-                        })
-                } else {
-                    None
-                };
-
-                return Ok((false, topic, title, None, start_time, video_id));
+    // Use the multi-channel function for single channel
+    match get_holodex_streams(vec![channel_id.to_string()]).await {
+        Ok(streams) => {
+            // If streams is empty, it means the API worked but there are no live/scheduled streams
+            if streams.is_empty() {
+                // tracing::info!(
+                //     "No live or scheduled streams found for channel {} in Holodex",
+                //     channel_id
+                // );
+                return Ok((false, None, None, None, None, None));
             }
+
+            // Find the stream for this specific channel
+            for stream in streams.iter().rev() {
+                if stream.channel.id == channel_id {
+                    let status = &stream.status;
+                    let topic = stream.topic_id.clone();
+                    let title = Some(stream.title.clone());
+                    let video_id = Some(stream.id.clone());
+
+                    if status == "live" {
+                        let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
+                            channel_id,
+                            proxy,
+                            title.clone(),
+                            Some(&quality),
+                        )
+                        .await?;
+                        return Ok((is_live, topic, title, m3u8_url, None, video_id));
+                    }
+
+                    let start_time = if status == "upcoming" {
+                        stream.start_scheduled.as_ref().and_then(|t| {
+                            DateTime::parse_from_rfc3339(t)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&Local))
+                        })
+                    } else {
+                        None
+                    };
+
+                    return Ok((false, topic, title, None, start_time, video_id));
+                }
+            }
+
+            // If streams exist but none match our channel ID, no live/scheduled streams for this channel
+            // tracing::info!(
+            //     "No streams found for channel {} in Holodex response",
+            //     channel_id
+            // );
+            Ok((false, None, None, None, None, None))
+        }
+        Err(e) => {
+            tracing::error!("Holodex API failed: {}, using yt-dlp", e);
+            let title = get_youtube_live_title(channel_id).await?;
+            let (is_live, _, _, m3u8_url, start_time, video_id) =
+                get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
+            Ok((is_live, None, title, m3u8_url, start_time, video_id))
         }
     }
-    let title = get_youtube_live_title(channel_id).await?;
-    let (is_live, _, _, m3u8_url, start_time, video_id) =
-        get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
-    Ok((is_live, None, title, m3u8_url, start_time, video_id))
 }
 
 // Update get_status_with_yt_dlp to match the new order

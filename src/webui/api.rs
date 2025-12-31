@@ -985,29 +985,6 @@ pub async fn get_deps_status() -> impl IntoResponse {
 }
 
 // Holodex API - Get live/upcoming streams
-#[derive(Serialize, Deserialize, Debug)]
-pub struct HolodexStream {
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "type")]
-    pub stream_type: String,
-    pub topic_id: Option<String>,
-    pub published_at: Option<String>,
-    pub available_at: Option<String>,
-    pub status: String,
-    pub start_scheduled: Option<String>,
-    pub start_actual: Option<String>,
-    pub live_viewers: Option<i32>,
-    #[serde(default)]
-    pub channel: HolodexChannel,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct HolodexChannel {
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-}
 
 #[derive(Serialize, Debug)]
 pub struct HolodexStreamWithArea {
@@ -1025,24 +1002,13 @@ pub struct HolodexStreamWithArea {
     pub suggested_area_name: Option<String>,
 }
 
-pub async fn get_holodex_streams() -> impl IntoResponse {
+pub async fn api_get_holodex_streams() -> impl IntoResponse {
     let cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
             return Json(json!({
                 "success": false,
                 "message": format!("Failed to load config: {}", e)
-            }));
-        }
-    };
-
-    // Check if Holodex API key is configured
-    let api_key = match cfg.holodex_api_key {
-        Some(key) if !key.is_empty() => key,
-        _ => {
-            return Json(json!({
-                "success": false,
-                "message": "Holodex API key not configured"
             }));
         }
     };
@@ -1099,37 +1065,13 @@ pub async fn get_holodex_streams() -> impl IntoResponse {
         }));
     }
 
-    // Call Holodex API
-    let channels_param = channel_ids.join(",");
-    let url = format!(
-        "https://holodex.net/api/v2/users/live?channels={}",
-        channels_param
-    );
-
-    let client = reqwest::Client::new();
-    let response = match client.get(&url).header("X-APIKEY", api_key).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            return Json(json!({
-                "success": false,
-                "message": format!("Failed to fetch from Holodex: {}", e)
-            }));
-        }
-    };
-
-    if !response.status().is_success() {
-        return Json(json!({
-            "success": false,
-            "message": format!("Holodex API error: {}", response.status())
-        }));
-    }
-
-    let streams: Vec<HolodexStream> = match response.json().await {
+    // Call the new Holodex function from youtube.rs
+    let streams = match crate::plugins::youtube::get_holodex_streams(channel_ids.clone()).await {
         Ok(s) => s,
         Err(e) => {
             return Json(json!({
                 "success": false,
-                "message": format!("Failed to parse Holodex response: {}", e)
+                "message": format!("Failed to fetch from Holodex: {}", e)
             }));
         }
     };
@@ -1423,10 +1365,12 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         });
     }
 
-    // Fetch fresh YouTube status using get_youtube_status
-    let (yt_is_live, yt_area, yt_title, _, _, _) =
-        match crate::plugins::get_youtube_status(&cfg.youtube.channel_id).await {
-            Ok(status) => status,
+    // Fetch fresh YouTube status using Holodex API directly
+    let streams =
+        match crate::plugins::youtube::get_holodex_streams(vec![cfg.youtube.channel_id.clone()])
+            .await
+        {
+            Ok(s) => s,
             Err(e) => {
                 return Json(ApiResponse {
                     success: false,
@@ -1435,6 +1379,20 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
                 });
             }
         };
+
+    // Find the stream for this channel
+    let (yt_is_live, yt_area, yt_title) = if let Some(stream) = streams
+        .iter()
+        .find(|s| s.channel.id == cfg.youtube.channel_id)
+    {
+        let is_live = stream.status == "live";
+        let topic = stream.topic_id.clone();
+        let title = Some(stream.title.clone());
+        (is_live, topic, title)
+    } else {
+        // No stream found, channel is not live
+        (false, None, None)
+    };
 
     // Get current cache and update only YouTube part
     let mut current_cache = get_status_cache().unwrap_or_else(|| {
