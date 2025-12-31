@@ -1424,7 +1424,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
     }
 
     // Fetch fresh YouTube status using get_youtube_status
-    let (yt_is_live, yt_area, yt_title, _, _) =
+    let (yt_is_live, yt_area, yt_title, _, _, _) =
         match crate::plugins::get_youtube_status(&cfg.youtube.channel_id).await {
             Ok(status) => status,
             Err(e) => {
@@ -1493,7 +1493,7 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
     }
 
     // Fetch fresh Twitch status using get_twitch_status
-    let (tw_is_live, tw_area, tw_title) =
+    let (tw_is_live, tw_area, tw_title, _) =
         match crate::plugins::get_twitch_status(&cfg.twitch.channel_id).await {
             Ok(status) => status,
             Err(e) => {

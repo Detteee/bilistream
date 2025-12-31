@@ -459,7 +459,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
             match get_youtube_status(channel_id_str).await {
-                Ok((_, topic, title, _, _)) => {
+                Ok((_, topic, title, _, _, _)) => {
                     let t = match title {
                         Some(t) => t,
                         None => {
@@ -491,7 +491,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         } else {
             // TW
             match get_twitch_status(channel_id_str).await {
-                Ok((is_live, topic, title)) => {
+                Ok((is_live, topic, title, _)) => {
                     if !is_live {
                         tracing::error!("TW频道 {:?} 未在直播", channel_name.clone().unwrap());
                         let _ = bilibili::send_danmaku(

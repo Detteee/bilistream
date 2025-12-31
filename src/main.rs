@@ -41,6 +41,8 @@ static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
 static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 static DANMAKU_KAMITO_APEX: AtomicBool = AtomicBool::new(true);
+// Track last video/stream ID for cover change detection (works across platforms)
+static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(PartialEq)]
 enum CollisionResult {
@@ -102,10 +104,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             &cfg.youtube.channel_id,
             cfg.proxy.clone(),
         );
-        let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start) = yt_live
-            .get_status()
-            .await
-            .unwrap_or((false, None, None, None, None));
+        let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
+            yt_live
+                .get_status()
+                .await
+                .unwrap_or((false, None, None, None, None, None));
         if scheduled_start.is_some() {
             if scheduled_start.unwrap() > Local::now() + Duration::from_secs(2 * 24 * 60 * 60) {
                 scheduled_start = None;
@@ -117,10 +120,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             cfg.twitch.oauth_token.clone(),
             cfg.twitch.proxy_region.clone(),
         );
-        let (mut tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
+        let (mut tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
             .get_status()
             .await
-            .unwrap_or((false, None, None, None, None));
+            .unwrap_or((false, None, None, None, None, None));
 
         // Get Bilibili status
         let (bili_is_live, bili_title, bili_area_id) =
@@ -232,6 +235,21 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let yot_area = if yt_is_live { yt_area } else { tw_area };
             let mut title = if yt_is_live { yt_title } else { tw_title };
             let mut m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
+            let current_video_id = if yt_is_live {
+                yt_video_id
+            } else {
+                tw_stream_id
+            };
+
+            // Check if video/stream ID has changed
+            let video_id_changed = {
+                let mut last_id = LAST_VIDEO_ID.lock().unwrap();
+                let changed = last_id.as_ref() != current_video_id.as_ref();
+                if changed {
+                    *last_id = current_video_id.clone();
+                }
+                changed
+            };
             tracing::info!(
                 "{} 正在 {} 直播, 标题:\n          {}",
                 channel_name,
@@ -313,7 +331,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_v2
                 );
                 // If auto_cover is enabled, update Bilibili live cover
-                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
+                if cfg.auto_cover
+                    && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
+                {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
                     if !cover_path.is_empty() {
@@ -349,7 +369,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
                 // If auto_cover is enabled, update Bilibili live cover
-                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
+                if cfg.auto_cover
+                    && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
+                {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
                     if !cover_path.is_empty() {
@@ -399,16 +421,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let (current_is_live, _, _, new_m3u8_url, _) = if yt_is_live {
+                let (current_is_live, _, _, new_m3u8_url, _, _) = if yt_is_live {
                     yt_live
                         .get_status()
                         .await
-                        .unwrap_or((false, None, None, None, None))
+                        .unwrap_or((false, None, None, None, None, None))
                 } else {
                     tw_live
                         .get_status()
                         .await
-                        .unwrap_or((false, None, None, None, None))
+                        .unwrap_or((false, None, None, None, None, None))
                 };
                 let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
 
@@ -434,16 +456,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let warning_skip = should_skip_due_to_warning(&channel_name);
 
             // Check current live status to determine what actually happened
-            let (current_is_live, _, _, _, _) = if yt_is_live {
+            let (current_is_live, _, _, _, _, _) = if yt_is_live {
                 yt_live
                     .get_status()
                     .await
-                    .unwrap_or((false, None, None, None, None))
+                    .unwrap_or((false, None, None, None, None, None))
             } else {
                 tw_live
                     .get_status()
                     .await
-                    .unwrap_or((false, None, None, None, None))
+                    .unwrap_or((false, None, None, None, None, None))
             };
             let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
 
@@ -705,7 +727,7 @@ async fn get_live_status(
                 channel_id,
                 cfg.proxy.clone(),
             );
-            let (is_live, topic, title, _, start_time) = yt_client.get_status().await?;
+            let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
@@ -748,7 +770,7 @@ async fn get_live_status(
                 cfg.twitch.oauth_token.clone(),
                 cfg.twitch.proxy_region.clone(),
             );
-            let (is_live, game_name, title, _, _) = tw_client.get_status().await?;
+            let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
@@ -780,7 +802,7 @@ async fn get_live_status(
             let channel_name = cfg.youtube.channel_name;
 
             let yt_client = YoutubeClient::new(&channel_name, &channel_id, cfg.proxy.clone());
-            let (is_live, topic, title, _, start_time) = yt_client.get_status().await?;
+            let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
                 if topic.is_some() {
                     println!(
@@ -820,7 +842,7 @@ async fn get_live_status(
                 cfg.twitch.oauth_token.clone(),
                 cfg.twitch.proxy_region.clone(),
             );
-            let (is_live, game_name, title, _, _) = tw_client.get_status().await?;
+            let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",

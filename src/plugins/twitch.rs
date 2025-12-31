@@ -64,10 +64,11 @@ impl Twitch {
             Option<String>,          // title
             Option<String>,          // m3u8_url
             Option<DateTime<Local>>, // start_time
+            Option<String>,          // stream_id
         ),
         Box<dyn Error>,
     > {
-        let (is_live, game_name, title) = get_twitch_status(&self.channel_id).await?;
+        let (is_live, game_name, title, stream_id) = get_twitch_status(&self.channel_id).await?;
         if is_live {
             let cfg = crate::config::load_config().await?;
             let quality = cfg.twitch.quality.clone();
@@ -78,9 +79,10 @@ impl Twitch {
                 Some(title.unwrap_or_default()),
                 Some(m3u8_url),
                 None,
+                stream_id,
             ))
         } else {
-            Ok((is_live, None, None, None, None))
+            Ok((is_live, None, None, None, None, stream_id))
         }
     }
     fn get_streamlink_url(&self, quality: Option<&str>) -> Result<String, Box<dyn Error>> {
@@ -182,6 +184,7 @@ pub async fn get_twitch_status(
         bool,           // is_live
         Option<String>, // topic
         Option<String>, // title
+        Option<String>, // stream_id
     ),
     Box<dyn std::error::Error>,
 > {
@@ -224,7 +227,7 @@ pub async fn get_twitch_status(
         .await?;
 
     let json_response = response.json::<serde_json::Value>().await?;
-    // status = {is_live, game_name, title}
+    // status = {is_live, game_name, title, stream_id}
     let is_live = json_response["data"]["user"]["stream"]["type"] == "live";
     let game_name = json_response["data"]["user"]["stream"]["game"]["name"]
         .as_str()
@@ -232,6 +235,9 @@ pub async fn get_twitch_status(
     let title = json_response["data"]["user"]["stream"]["title"]
         .as_str()
         .unwrap_or("");
+    let stream_id = json_response["data"]["user"]["stream"]["id"]
+        .as_str()
+        .map(|s| s.to_string());
     // let start_time = json_response["data"]["user"]["stream"]["start_time"].as_str().unwrap_or("");
     // Parse the response to get game name
     // println!("{:?}", json_response);
@@ -240,5 +246,6 @@ pub async fn get_twitch_status(
         is_live,
         Some(game_name.to_string()),
         Some(title.to_string()),
+        stream_id,
     ))
 }

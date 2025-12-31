@@ -1,5 +1,4 @@
 use super::danmaku::get_channel_name;
-use super::twitch::get_twitch_status;
 use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
@@ -64,6 +63,7 @@ impl Youtube {
             Option<String>,          // title
             Option<String>,          // m3u8_url
             Option<DateTime<Local>>, // start_time
+            Option<String>,          // video_id
         ),
         Box<dyn Error>,
     > {
@@ -80,6 +80,7 @@ pub async fn get_youtube_status(
         Option<String>,          // title
         Option<String>,          // m3u8_url
         Option<DateTime<Local>>, // start_time
+        Option<String>,          // video_id
     ),
     Box<dyn Error>,
 > {
@@ -143,25 +144,16 @@ pub async fn get_youtube_status(
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string());
 
+                let video_id = video
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .map(|s| s.to_string());
+
                 if status == "live" {
-                    let tw_channel_name =
-                        get_channel_name("TW", channel_name.as_deref().unwrap()).unwrap();
-                    if tw_channel_name.is_some() {
-                        let (is_tw_live, _, _) =
-                            get_twitch_status(tw_channel_name.as_deref().unwrap()).await?;
-                        if is_tw_live {
-                            return Ok((false, None, None, None, None));
-                        }
-                    } else {
-                        let (is_live, _, _, m3u8_url, _) = get_status_with_yt_dlp(
-                            channel_id,
-                            proxy,
-                            title.clone(),
-                            Some(&quality),
-                        )
-                        .await?;
-                        return Ok((is_live, topic, title, m3u8_url, None));
-                    }
+                    let (is_live, _, _, m3u8_url, _, _) =
+                        get_status_with_yt_dlp(channel_id, proxy, title.clone(), Some(&quality))
+                            .await?;
+                    return Ok((is_live, topic, title, m3u8_url, None, video_id));
                 }
 
                 let start_time = if status == "upcoming" {
@@ -177,14 +169,14 @@ pub async fn get_youtube_status(
                     None
                 };
 
-                return Ok((false, topic, title, None, start_time));
+                return Ok((false, topic, title, None, start_time, video_id));
             }
         }
     }
     let title = get_youtube_live_title(channel_id).await?;
-    let (is_live, _, _, m3u8_url, start_time) =
+    let (is_live, _, _, m3u8_url, start_time, video_id) =
         get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
-    Ok((is_live, None, title, m3u8_url, start_time))
+    Ok((is_live, None, title, m3u8_url, start_time, video_id))
 }
 
 // Update get_status_with_yt_dlp to match the new order
@@ -200,6 +192,7 @@ async fn get_status_with_yt_dlp(
         Option<String>,          // title
         Option<String>,          // m3u8_url
         Option<DateTime<Local>>, // start_time
+        Option<String>,          // video_id
     ),
     Box<dyn Error>,
 > {
@@ -212,6 +205,7 @@ async fn get_status_with_yt_dlp(
     }
     command.arg("-f");
     command.arg(quality);
+    command.arg("--print").arg("id");
     command.arg("-g");
 
     command.arg(format!(
@@ -222,6 +216,15 @@ async fn get_status_with_yt_dlp(
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Extract video ID from stdout (first line when using --print id)
+    let lines: Vec<&str> = stdout.lines().collect();
+    let video_id = if lines.len() >= 2 {
+        Some(lines[0].to_string()) // First line is the video ID
+    } else {
+        None
+    };
+
     if stderr.contains("ERROR: [youtube") {
         // Check for scheduled start time in stderr
         if let Some(captures) =
@@ -229,7 +232,7 @@ async fn get_status_with_yt_dlp(
         {
             let minutes: i64 = captures[1].parse()?;
             let start_time = chrono::Local::now() + chrono::Duration::minutes(minutes);
-            return Ok((false, None, title, None, Some(start_time)));
+            return Ok((false, None, title, None, Some(start_time), video_id));
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) hours")?.captures(&stderr)
@@ -241,7 +244,7 @@ async fn get_status_with_yt_dlp(
             } else {
                 get_youtube_live_title(channel_id).await?
             };
-            return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
+            return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
         }
         if let Some(captures) =
             Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
@@ -253,9 +256,9 @@ async fn get_status_with_yt_dlp(
             } else {
                 get_youtube_live_title(channel_id).await?
             };
-            return Ok((false, None, title, None, Some(start_time))); // Return scheduled start time
+            return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
         }
-        return Ok((false, None, None, None, None)); // Channel is not live and no scheduled time
+        return Ok((false, None, None, None, None, video_id)); // Channel is not live and no scheduled time
     } else if Regex::new(r"https://.*\.m3u8")?.is_match(&stdout) {
         let regex = Regex::new(r"(https://.*\.m3u8.*)")?;
         let matches: Vec<&str> = regex.find_iter(&stdout).map(|m| m.as_str()).collect();
@@ -269,7 +272,7 @@ async fn get_status_with_yt_dlp(
         }
 
         let m3u8_url = matches[0].to_string();
-        return Ok((true, None, title, Some(m3u8_url), None));
+        return Ok((true, None, title, Some(m3u8_url), None, video_id));
     }
 
     Err("Unexpected output from yt-dlp".into())
