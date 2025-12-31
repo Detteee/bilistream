@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 lazy_static! {
     static ref BILISTREAM_PATH: std::path::PathBuf = std::env::current_exe().unwrap();
-    static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.yaml");
+    static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.json");
     static ref WBI_CACHE_DIR: std::path::PathBuf = {
         let mut path = BILISTREAM_PATH.clone();
         path.pop(); // Go up one directory from the executable
@@ -370,8 +370,8 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                     cfg.bililive.bili_rtmp_key = rtmp_key.to_string();
 
                     // Save the updated config to file
-                    let updated_yaml = serde_yaml::to_string(&cfg)?;
-                    std::fs::write(&*CONFIG_PATH, updated_yaml)?;
+                    let updated_json = serde_json::to_string_pretty(&cfg)?;
+                    std::fs::write(&*CONFIG_PATH, updated_json)?;
 
                     // tracing::info!("Updated RTMP information in config");
                 }

@@ -12,10 +12,9 @@ use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_manual_stop, clear_warning_stop,
     enable_danmaku_commands, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
-    get_channel_name, get_puuid, get_twitch_status, get_youtube_status, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
-    was_manual_stop,
+    get_channel_name, get_puuid, is_config_updated, is_danmaku_commands_enabled,
+    is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku, should_skip_due_to_warned,
+    should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg, was_manual_stop,
 };
 
 use chrono::{DateTime, Local};
@@ -90,8 +89,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Validate YouTube/Twitch configuration
         if cfg.youtube.channel_id.is_empty() && cfg.twitch.channel_id.is_empty() {
             tracing::error!("❌ YouTube 和 Twitch 配置均为空");
-            tracing::error!("请在 WebUI 中配置或手动编辑 config.yaml 文件");
-            tracing::info!("💡 提示: 访问 WebUI 进行配置，或参考 config.yaml.example");
+            tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
+            tracing::info!("💡 提示: 访问 WebUI 进行配置，或参考 config.json.example");
             // Sleep and continue to allow WebUI configuration
             tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
             continue 'outer;
@@ -313,8 +312,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_name.unwrap(),
                     area_v2
                 );
-                // If auto_cover is enabled, update Bilibili live cover
-                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
+                // If auto_cover is enabled, update Bilibili live cover for new stream
+                if cfg.auto_cover {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
                     if !cover_path.is_empty() {
@@ -349,7 +348,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
-                // If auto_cover is enabled, update Bilibili live cover
+                // If auto_cover is enabled, update Bilibili live cover when area or channel changes
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
@@ -703,7 +702,12 @@ async fn get_live_status(
             if channel_name.is_none() {
                 channel_name = Some(channel_id.to_string());
             }
-            let (is_live, topic, title, _, start_time) = get_youtube_status(channel_id).await?;
+            let yt_client = YoutubeClient::new(
+                channel_name.as_deref().unwrap_or(channel_id),
+                channel_id,
+                cfg.proxy.clone(),
+            );
+            let (is_live, topic, title, _, start_time) = yt_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
@@ -741,7 +745,12 @@ async fn get_live_status(
             if channel_name.is_none() {
                 channel_name = Some(channel_id.to_string());
             }
-            let (is_live, game_name, title) = get_twitch_status(channel_id).await?;
+            let tw_client = TwitchClient::new(
+                channel_id,
+                cfg.twitch.oauth_token.clone(),
+                cfg.twitch.proxy_region.clone(),
+            );
+            let (is_live, game_name, title, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
@@ -772,7 +781,8 @@ async fn get_live_status(
             let channel_id = cfg.youtube.channel_id;
             let channel_name = cfg.youtube.channel_name;
 
-            let (is_live, topic, title, _, start_time) = get_youtube_status(&channel_id).await?;
+            let yt_client = YoutubeClient::new(&channel_name, &channel_id, cfg.proxy.clone());
+            let (is_live, topic, title, _, start_time) = yt_client.get_status().await?;
             if is_live {
                 if topic.is_some() {
                     println!(
@@ -807,7 +817,12 @@ async fn get_live_status(
             }
             let channel_id = cfg.twitch.channel_id;
             let channel_name = cfg.twitch.channel_name;
-            let (is_live, game_name, title) = get_twitch_status(&channel_id).await?;
+            let tw_client = TwitchClient::new(
+                &channel_id,
+                cfg.twitch.oauth_token.clone(),
+                cfg.twitch.proxy_region.clone(),
+            );
+            let (is_live, game_name, title, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
@@ -1204,8 +1219,8 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         String::new()
     };
 
-    // Step 3: Configure config.yaml
-    println!("\n步骤 2/2: 配置 config.yaml");
+    // Step 3: Configure config.json
+    println!("\n步骤 2/2: 配置 config.json");
     println!("----------------------------------------");
 
     // Get room number
@@ -1665,8 +1680,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .subcommand(
             Command::new("setup")
-                .about("初始化配置：登录Bilibili并配置config.yaml")
-                .long_about("交互式设置向导，帮助你登录Bilibili并创建config.yaml配置文件"),
+                .about("初始化配置：登录Bilibili并配置config.json")
+                .long_about("交互式设置向导，帮助你登录Bilibili并创建config.json配置文件"),
         )
         .subcommand(
             Command::new("webui")
