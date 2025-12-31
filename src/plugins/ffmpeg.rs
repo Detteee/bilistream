@@ -244,19 +244,17 @@ async fn stop_ffmpeg_internal(manual: bool) {
         MANUAL_STOP.store(true, Ordering::SeqCst);
     }
 
-    tracing::info!("🛑 Stopping ffmpeg process...");
-
     let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
     if let Some(mut process) = supervisor.take() {
         let pid = process.pid();
         if let Some(pid_value) = pid {
-            tracing::info!("Terminating ffmpeg process (PID: {})", pid_value);
+            tracing::info!("🛑 Stopping ffmpeg process (PID: {})", pid_value);
         }
 
         // Try tokio kill first
         match process.kill().await {
             Ok(_) => {
-                tracing::info!("✅ ffmpeg process killed via tokio");
+                // Successfully killed via tokio
             }
             Err(e) => {
                 tracing::warn!("⚠️ Tokio kill failed: {}, trying system kill", e);
@@ -272,7 +270,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
 
                         match kill_result {
                             Ok(output) if output.status.success() => {
-                                tracing::info!("✅ ffmpeg process killed via system kill -9");
+                                // Successfully killed via system kill
                             }
                             Ok(output) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -294,7 +292,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
 
                         match kill_result {
                             Ok(output) if output.status.success() => {
-                                tracing::info!("✅ ffmpeg process killed via taskkill");
+                                // Successfully killed via taskkill
                             }
                             Ok(output) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -311,7 +309,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
 
         // Wait a bit for process to actually terminate
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        tracing::info!("✅ ffmpeg process stopped successfully");
+        tracing::info!("✅ ffmpeg process stopped");
     } else {
         tracing::warn!("⚠️ No ffmpeg process to stop");
     }
@@ -607,7 +605,6 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
             }
         } else {
             // Process was removed (killed by stop_ffmpeg)
-            tracing::info!("ffmpeg process was stopped externally");
             return None;
         }
     }

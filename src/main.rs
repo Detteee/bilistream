@@ -312,8 +312,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_name.unwrap(),
                     area_v2
                 );
-                // If auto_cover is enabled, update Bilibili live cover for new stream
-                if cfg.auto_cover {
+                // If auto_cover is enabled, update Bilibili live cover
+                if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
                     if !cover_path.is_empty() {
@@ -348,7 +348,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     bili_change_live_title(&cfg, &cfg_title).await?;
                 }
-                // If auto_cover is enabled, update Bilibili live cover when area or channel changes
+                // If auto_cover is enabled, update Bilibili live cover
                 if cfg.auto_cover && (bili_title != cfg_title || bili_area_id != area_v2) {
                     let cover_path =
                         get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await?;
@@ -366,8 +366,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Execute ffmpeg with platform-specific locks
-            tracing::info!("🚀 启动ffmpeg流传输到B站");
-
             // Main ffmpeg monitoring loop - blocks until stream ends
             loop {
                 ffmpeg(
