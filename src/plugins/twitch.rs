@@ -1,11 +1,13 @@
-use super::Live;
-use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use reqwest::Client;
+use reqwest_middleware::ClientBuilder;
 use reqwest_middleware::ClientWithMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
 use std::process::Command;
+use std::time::Duration;
 
 // Helper function to create a Command with hidden console on Windows
 fn create_hidden_command(program: &str) -> Command {
@@ -31,9 +33,29 @@ pub struct Twitch {
     pub proxy_region: String,
 }
 
-#[async_trait]
-impl Live for Twitch {
-    async fn get_status(
+impl Twitch {
+    pub fn new(channel_id: &str, oauth_token: String, proxy_region: String) -> Self {
+        // 设置最大重试次数为5次
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+        let raw_client = reqwest::Client::builder()
+            .cookie_store(true)
+            // 设置超时时间为30秒
+            .timeout(Duration::new(30, 0))
+            .build()
+            .unwrap();
+        let client = ClientBuilder::new(raw_client.clone())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
+
+        Twitch {
+            channel_id: channel_id.to_string(),
+            client,
+            oauth_token,
+            proxy_region,
+        }
+    }
+
+    pub async fn get_status(
         &self,
     ) -> Result<
         (
@@ -50,31 +72,15 @@ impl Live for Twitch {
             let cfg = crate::config::load_config().await?;
             let quality = cfg.twitch.quality.clone();
             let m3u8_url = self.get_streamlink_url(Some(&quality))?;
-            return Ok((
+            Ok((
                 is_live,
                 Some(game_name.unwrap_or_default()),
                 Some(title.unwrap_or_default()),
                 Some(m3u8_url),
                 None,
-            ));
+            ))
         } else {
-            return Ok((is_live, None, None, None, None));
-        }
-    }
-}
-
-impl Twitch {
-    pub fn new(
-        channel_id: &str,
-        oauth_token: String,
-        client: ClientWithMiddleware,
-        proxy_region: String,
-    ) -> impl Live {
-        Twitch {
-            channel_id: channel_id.to_string(),
-            client,
-            oauth_token,
-            proxy_region,
+            Ok((is_live, None, None, None, None))
         }
     }
     fn get_streamlink_url(&self, quality: Option<&str>) -> Result<String, Box<dyn Error>> {

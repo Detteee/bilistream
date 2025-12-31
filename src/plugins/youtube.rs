@@ -1,8 +1,6 @@
 use super::danmaku::get_channel_name;
 use super::twitch::get_twitch_status;
-use super::Live;
 use crate::config::load_config;
-use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use regex::Regex;
 use std::error::Error; // Ensure this is included
@@ -48,9 +46,16 @@ pub struct Youtube {
     pub channel_id: String,
     pub proxy: Option<String>,
 }
-#[async_trait]
-impl Live for Youtube {
-    async fn get_status(
+impl Youtube {
+    pub fn new(channel_name: &str, channel_id: &str, proxy: Option<String>) -> Self {
+        Youtube {
+            channel_name: channel_name.to_string(),
+            channel_id: channel_id.to_string(),
+            proxy,
+        }
+    }
+
+    pub async fn get_status(
         &self,
     ) -> Result<
         (
@@ -63,16 +68,6 @@ impl Live for Youtube {
         Box<dyn Error>,
     > {
         Ok(get_youtube_status(&self.channel_id).await?)
-    }
-}
-
-impl Youtube {
-    pub fn new(channel_name: &str, channel_id: &str, proxy: Option<String>) -> impl Live {
-        Youtube {
-            channel_name: channel_name.to_string(),
-            channel_id: channel_id.to_string(),
-            proxy,
-        }
     }
 }
 

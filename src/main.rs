@@ -5,14 +5,17 @@
 )]
 
 use bilistream::config::{load_config, BiliLive, Config, Credentials, Twitch, Youtube};
+use bilistream::plugins::bilibili::get_thumbnail;
+use bilistream::plugins::Twitch as TwitchClient;
+use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_manual_stop, clear_warning_stop,
     enable_danmaku_commands, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
-    get_channel_name, get_puuid, get_thumbnail, get_twitch_status, get_youtube_status,
-    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
-    run_danmaku, select_live, send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning,
-    stop_ffmpeg, wait_ffmpeg, was_manual_stop,
+    get_channel_name, get_puuid, get_twitch_status, get_youtube_status, is_config_updated,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
+    was_manual_stop,
 };
 
 use chrono::{DateTime, Local};
@@ -95,7 +98,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         }
 
         // Check YouTube status
-        let yt_live = select_live(cfg.clone(), "YT").await?;
+        let yt_live = YoutubeClient::new(
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            cfg.proxy.clone(),
+        );
         let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start) = yt_live
             .get_status()
             .await
@@ -106,7 +113,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
         }
         // Check Twitch status
-        let tw_live = select_live(cfg.clone(), "TW").await?;
+        let tw_live = TwitchClient::new(
+            &cfg.twitch.channel_id,
+            cfg.twitch.oauth_token.clone(),
+            cfg.twitch.proxy_region.clone(),
+        );
         let (mut tw_is_live, tw_area, tw_title, tw_m3u8_url, _) = tw_live
             .get_status()
             .await
