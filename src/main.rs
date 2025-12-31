@@ -40,7 +40,6 @@ static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
 static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
-static DANMAKU_KAMITO_APEX: AtomicBool = AtomicBool::new(true);
 // Track last video/stream ID for cover change detection (works across platforms)
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
 
@@ -270,32 +269,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             } else {
                 INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
-            }
-            if area_v2 == 240
-                && !channel_name.contains("Kamito")
-                && DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
-            {
-                if let Err(e) = send_danmaku(&cfg, &format!("Apex分区只转播 Kamito")).await {
-                    tracing::error!("Failed to send danmaku: {}", e);
-                }
-                DANMAKU_KAMITO_APEX.store(false, Ordering::SeqCst);
-                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                    enable_danmaku_commands(true);
-                    thread::sleep(Duration::from_secs(2));
-                    if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
-                        tracing::error!("Failed to send danmaku: {}", e);
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
-            } else if area_v2 == 240
-                && !channel_name.contains("Kamito")
-                && !DANMAKU_KAMITO_APEX.load(Ordering::SeqCst)
-            {
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
-            } else {
-                DANMAKU_KAMITO_APEX.store(true, Ordering::SeqCst);
             }
             if let Some(keyword) = BANNED_KEYWORDS
                 .iter()

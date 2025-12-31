@@ -547,14 +547,6 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         // Now you can use channel_id_str where needed without moving channel_id
         // let new_title = format!("【转播】{}", channel_name);
         let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
-        // Additional checks for specific area_ids
-        if (updated_area_id == 240 || updated_area_id == 318)
-            && channel_name.as_deref() != Some("Kamito")
-        {
-            tracing::error!("只有'Kamito'可以使用 Apex, COD 分区. Skipping...");
-            let _ = bilibili::send_danmaku(&cfg, "错误：只有'Kamito'可以使用 Apex, COD 分区").await;
-            return;
-        }
 
         let updated_area_name = match get_area_name(updated_area_id) {
             Some(name) => name,
