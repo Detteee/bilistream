@@ -860,10 +860,7 @@
               </button>
             </div>
           </div>
-          <div class="info-row">
-            <span class="info-label">状态</span>
-            <span class="info-value" id="bili-live-status">加载中...</span>
-          </div>
+
           <div class="info-row">
             <span class="info-label">标题</span>
             <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
@@ -951,19 +948,77 @@
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
-            <span class="info-value" id="yt-channel-name">-</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">状态</span>
-            <span class="info-value" id="yt-live-status">加载中...</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="yt-channel-name" style="flex: 1; text-align: right;">-</span>
+              <button onclick="toggleYtChannelEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="更改频道">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
+            </div>
+            <!-- Hidden edit dropdown -->
+            <div id="yt-channel-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="yt-channel-edit-select"
+                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  <option value="">选择频道...</option>
+                </select>
+                <button onclick="saveYtChannelEdit()"
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✓
+                </button>
+                <button onclick="cancelYtChannelEdit()"
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✕
+                </button>
+              </div>
+            </div>
           </div>
           <div class="info-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="yt-title">-</span>
+            <span class="info-value" id="yt-title" style="text-align: right;">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">分区</span>
-            <span class="info-value" id="yt-topic">-</span>
+            <span class="info-value" id="yt-topic" style="text-align: right;">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">配置分区</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="yt-area" style="flex: 1; text-align: right;">-</span>
+              <button onclick="toggleYtAreaEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="更改配置分区">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
+            </div>
+            <!-- Hidden edit dropdown -->
+            <div id="yt-area-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="yt-area-edit-select"
+                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  <option value="">选择分区...</option>
+                </select>
+                <button onclick="saveYtAreaEdit()"
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✓
+                </button>
+                <button onclick="cancelYtAreaEdit()"
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✕
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -984,105 +1039,77 @@
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
-            <span class="info-value" id="tw-channel-name">-</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">状态</span>
-            <span class="info-value" id="tw-live-status">加载中...</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="tw-channel-name" style="flex: 1; text-align: right;">-</span>
+              <button onclick="toggleTwChannelEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="更改频道">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
+            </div>
+            <!-- Hidden edit dropdown -->
+            <div id="tw-channel-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="tw-channel-edit-select"
+                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  <option value="">选择频道...</option>
+                </select>
+                <button onclick="saveTwChannelEdit()"
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✓
+                </button>
+                <button onclick="cancelTwChannelEdit()"
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✕
+                </button>
+              </div>
+            </div>
           </div>
           <div class="info-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="tw-title">-</span>
+            <span class="info-value" id="tw-title" style="text-align: right;">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">游戏</span>
-            <span class="info-value" id="tw-game">-</span>
+            <span class="info-value" id="tw-game" style="text-align: right;">-</span>
           </div>
-        </div>
-      </div>
-
-      <div class="controls">
-        <h2 style="cursor: pointer; user-select: none;" onclick="toggleChannelManagement()">
-          📺 频道管理 <span id="channel-toggle">▼</span>
-        </h2>
-
-        <div id="channel-management-container" style="display: none;">
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
-            <div class="control-group">
-              <label>平台</label>
-              <select id="platform-select" onchange="updateChannelList()">
-                <option value="youtube">YouTube</option>
-                <option value="twitch">Twitch</option>
-              </select>
+          <div class="info-row">
+            <span class="info-label">配置分区</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="tw-area" style="flex: 1; text-align: right;">-</span>
+              <button onclick="toggleTwAreaEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="更改配置分区">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
             </div>
-
-            <div class="control-group">
-              <label>选择频道 (可选)</label>
-              <select id="channel-select" onchange="updateChannelInfo()">
-                <option value="">选择预设频道或手动输入...</option>
-              </select>
+            <!-- Hidden edit dropdown -->
+            <div id="tw-area-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="tw-area-edit-select"
+                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  <option value="">选择分区...</option>
+                </select>
+                <button onclick="saveTwAreaEdit()"
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✓
+                </button>
+                <button onclick="cancelTwAreaEdit()"
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  ✕
+                </button>
+              </div>
             </div>
-
-            <div class="control-group">
-              <label>频道ID (必填)</label>
-              <input type="text" id="channel-id-input" placeholder="输入频道ID或从上方选择">
-            </div>
-
-            <div class="control-group">
-              <label>频道名称 (必填)</label>
-              <input type="text" id="channel-name-input" placeholder="输入频道名称或从上方选择">
-            </div>
-
-            <div class="control-group">
-              <label>分区 (可选)</label>
-              <select id="area-select" onchange="toggleLolMonitorInputs()">
-                <option value="">不修改分区</option>
-              </select>
-            </div>
-
-            <div class="control-group">
-              <label>画质 (可选)</label>
-              <select id="quality-select" onchange="updateQualityOptions()">
-                <option value="">不修改画质</option>
-                <option value="best">best - 最佳画质 (推荐)</option>
-                <option value="720p">720p - 高清</option>
-                <option value="480p">480p - 标清</option>
-                <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
-                <option value="worst">worst - 最低画质</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Full-width sections that should span both columns -->
-          <div class="control-group" id="lol-monitor-group" style="display: none;">
-            <label style="display: flex; align-items: center; gap: 10px;">
-              <input type="checkbox" id="enable-lol-monitor-inline" onchange="toggleRiotApiKeyInputInline()">
-              <span>启用英雄联盟玩家ID监控</span>
-            </label>
-            <small style="color: #888; display: block; margin-top: 5px;">
-              监控游戏内玩家ID是否包含违禁词汇
-            </small>
-          </div>
-
-          <div class="control-group" id="riot-api-key-group" style="display: none;">
-            <label>Riot API Key</label>
-            <input type="text" id="riot-api-key-input" placeholder="留空表示不修改">
-            <small style="color: #888; display: block; margin-top: 5px;">
-              获取: <a href="https://developer.riotgames.com/" target="_blank">developer.riotgames.com</a>
-            </small>
-          </div>
-
-          <div class="button-group">
-            <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
-            <button class="btn-secondary" onclick="loadChannelData()"
-              style="display: flex; align-items: center; justify-content: center; gap: 6px;">
-              <svg id="loadChannelIcon" fill="currentColor" width="14" height="14" viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-                <path
-                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-              </svg>
-              刷新频道列表
-            </button>
           </div>
         </div>
       </div>
@@ -1165,6 +1192,92 @@
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
               </svg>
               <span>刷新直播列表</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls" style="margin-top: 20px;">
+        <h2 style="cursor: pointer; user-select: none;" onclick="toggleChannelManagement()">
+          📺 频道管理 <span id="channel-toggle">▼</span>
+        </h2>
+
+        <div id="channel-management-container" style="display: none;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+            <div class="control-group">
+              <label>平台</label>
+              <select id="platform-select" onchange="updateChannelList()">
+                <option value="youtube">YouTube</option>
+                <option value="twitch">Twitch</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>选择频道 (可选)</label>
+              <select id="channel-select" onchange="updateChannelInfo()">
+                <option value="">选择预设频道或手动输入...</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>频道ID (必填)</label>
+              <input type="text" id="channel-id-input" placeholder="输入频道ID或从上方选择">
+            </div>
+
+            <div class="control-group">
+              <label>频道名称 (必填)</label>
+              <input type="text" id="channel-name-input" placeholder="输入频道名称或从上方选择">
+            </div>
+
+            <div class="control-group">
+              <label>分区 (可选)</label>
+              <select id="area-select" onchange="toggleLolMonitorInputs()">
+                <option value="">不修改分区</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>画质 (可选)</label>
+              <select id="quality-select" onchange="updateQualityOptions()">
+                <option value="">不修改画质</option>
+                <option value="best">best - 最佳画质 (推荐)</option>
+                <option value="720p">720p - 高清</option>
+                <option value="480p">480p - 标清</option>
+                <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
+                <option value="worst">worst - 最低画质</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Full-width sections that should span both columns -->
+          <div class="control-group" id="lol-monitor-group" style="display: none;">
+            <label style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="enable-lol-monitor-inline" onchange="toggleRiotApiKeyInputInline()">
+              <span>启用英雄联盟玩家ID监控</span>
+            </label>
+            <small style="color: #888; display: block; margin-top: 5px;">
+              监控游戏内玩家ID是否包含违禁词汇
+            </small>
+          </div>
+
+          <div class="control-group" id="riot-api-key-group" style="display: none;">
+            <label>Riot API Key</label>
+            <input type="text" id="riot-api-key-input" placeholder="留空表示不修改">
+            <small style="color: #888; display: block; margin-top: 5px;">
+              获取: <a href="https://developer.riotgames.com/" target="_blank">developer.riotgames.com</a>
+            </small>
+          </div>
+
+          <div class="button-group">
+            <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
+            <button class="btn-secondary" onclick="loadChannelData()"
+              style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <svg id="loadChannelIcon" fill="currentColor" width="14" height="14" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                <path
+                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+              </svg>
+              刷新频道列表
             </button>
           </div>
         </div>
@@ -1829,8 +1942,6 @@
             const bili = data.data.bilibili;
             document.getElementById('bili-status').className =
               `status-indicator ${bili.is_live ? 'status-live' : 'status-offline'}`;
-            document.getElementById('bili-live-status').textContent =
-              bili.is_live ? '直播中' : '未直播';
             document.getElementById('bili-title').textContent = bili.title || '-';
             document.getElementById('bili-area').textContent =
               bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
@@ -1861,16 +1972,16 @@
               document.getElementById('yt-status').className =
                 `status-indicator ${yt.is_live ? 'status-live' : 'status-offline'}`;
               document.getElementById('yt-channel-name').textContent = yt.channel_name || '-';
-              document.getElementById('yt-live-status').textContent =
-                yt.is_live ? '直播中' : '未直播';
               document.getElementById('yt-title').textContent = yt.title || '-';
               document.getElementById('yt-topic').textContent = yt.topic || '-';
+              document.getElementById('yt-area').textContent =
+                yt.area_name ? `${yt.area_name} (${yt.area_id})` : (yt.area_id || '-');
             } else {
               document.getElementById('yt-status').className = 'status-indicator status-offline';
               document.getElementById('yt-channel-name').textContent = '-';
-              document.getElementById('yt-live-status').textContent = '未配置';
               document.getElementById('yt-title').textContent = '-';
               document.getElementById('yt-topic').textContent = '-';
+              document.getElementById('yt-area').textContent = '-';
             }
 
             // Update Twitch status
@@ -1879,24 +1990,24 @@
               document.getElementById('tw-status').className =
                 `status-indicator ${tw.is_live ? 'status-live' : 'status-offline'}`;
               document.getElementById('tw-channel-name').textContent = tw.channel_name || '-';
-              document.getElementById('tw-live-status').textContent =
-                tw.is_live ? '直播中' : '未直播';
               document.getElementById('tw-title').textContent = tw.title || '-';
               document.getElementById('tw-game').textContent = tw.game || '-';
+              document.getElementById('tw-area').textContent =
+                tw.area_name ? `${tw.area_name} (${tw.area_id})` : (tw.area_id || '-');
             } else {
               document.getElementById('tw-status').className = 'status-indicator status-offline';
               document.getElementById('tw-channel-name').textContent = '-';
-              document.getElementById('tw-live-status').textContent = '未配置';
               document.getElementById('tw-title').textContent = '-';
               document.getElementById('tw-game').textContent = '-';
+              document.getElementById('tw-area').textContent = '-';
             }
           } else {
             console.error('Invalid API response:', data);
             showNotification('获取状态失败：响应格式错误', 'error');
             // Show error state
-            document.getElementById('bili-live-status').textContent = '数据错误';
-            document.getElementById('yt-live-status').textContent = '数据错误';
-            document.getElementById('tw-live-status').textContent = '数据错误';
+            document.getElementById('bili-title').textContent = '数据错误';
+            document.getElementById('yt-channel-name').textContent = '数据错误';
+            document.getElementById('tw-channel-name').textContent = '数据错误';
           }
         } catch (error) {
           console.error('Failed to refresh status:', error);
@@ -1922,9 +2033,9 @@
           showNotification(errorMsg, 'error');
 
           // Show connection error state
-          document.getElementById('bili-live-status').textContent = '配置错误';
-          document.getElementById('yt-live-status').textContent = '配置错误';
-          document.getElementById('tw-live-status').textContent = '配置错误';
+          document.getElementById('bili-title').textContent = '配置错误';
+          document.getElementById('yt-channel-name').textContent = '配置错误';
+          document.getElementById('tw-channel-name').textContent = '配置错误';
         }
       }
 
@@ -2048,6 +2159,322 @@
         // Hide edit input and show title span
         editContainer.style.display = 'none';
         titleSpan.style.display = 'block';
+      }
+
+      // YouTube channel editing functions
+      function toggleYtChannelEdit() {
+        const channelSpan = document.getElementById('yt-channel-name');
+        const editContainer = document.getElementById('yt-channel-edit-container');
+        const editSelect = document.getElementById('yt-channel-edit-select');
+
+        // Show edit dropdown and hide channel span
+        channelSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load channels if not already loaded
+        if (!channelsData) {
+          loadChannelData().then(() => {
+            populateYtChannelEditSelect();
+          });
+        } else {
+          populateYtChannelEditSelect();
+        }
+
+        editSelect.focus();
+      }
+
+      function populateYtChannelEditSelect() {
+        const editSelect = document.getElementById('yt-channel-edit-select');
+        editSelect.innerHTML = '<option value="">选择频道...</option>';
+
+        if (channelsData && channelsData.channels) {
+          channelsData.channels.forEach(channel => {
+            if (channel.platforms && channel.platforms.youtube) {
+              const option = document.createElement('option');
+              option.value = JSON.stringify({
+                id: channel.platforms.youtube,
+                name: channel.name
+              });
+              option.textContent = channel.name;
+              editSelect.appendChild(option);
+            }
+          });
+        }
+      }
+
+      function cancelYtChannelEdit() {
+        const channelSpan = document.getElementById('yt-channel-name');
+        const editContainer = document.getElementById('yt-channel-edit-container');
+
+        // Hide edit dropdown and show channel span
+        editContainer.style.display = 'none';
+        channelSpan.style.display = 'block';
+      }
+
+      async function saveYtChannelEdit() {
+        const editSelect = document.getElementById('yt-channel-edit-select');
+        const selectedValue = editSelect.value;
+
+        if (!selectedValue) {
+          showNotification('请选择频道', 'error');
+          return;
+        }
+
+        try {
+          const channelInfo = JSON.parse(selectedValue);
+          const response = await fetch('/api/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: 'youtube',
+              channel_id: channelInfo.id,
+              channel_name: channelInfo.name
+            })
+          });
+          const data = await response.json();
+          showNotification(data.message || 'YouTube频道已更新', 'success');
+          cancelYtChannelEdit();
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
+      }
+
+      // YouTube area editing functions
+      function toggleYtAreaEdit() {
+        const areaSpan = document.getElementById('yt-area');
+        const editContainer = document.getElementById('yt-area-edit-container');
+        const editSelect = document.getElementById('yt-area-edit-select');
+
+        // Show edit dropdown and hide area span
+        areaSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load areas if not already loaded
+        if (!areasData) {
+          loadChannelData().then(() => {
+            populateYtAreaEditSelect();
+          });
+        } else {
+          populateYtAreaEditSelect();
+        }
+
+        editSelect.focus();
+      }
+
+      function populateYtAreaEditSelect() {
+        const editSelect = document.getElementById('yt-area-edit-select');
+        editSelect.innerHTML = '<option value="">选择分区...</option>';
+
+        if (areasData && areasData.areas) {
+          // Sort areas: 其他单机 (235) first, then others
+          const sortedAreas = [...areasData.areas].sort((a, b) => {
+            if (a.id === 235) return -1;
+            if (b.id === 235) return 1;
+            return 0;
+          });
+
+          sortedAreas.forEach(area => {
+            const option = document.createElement('option');
+            option.value = area.id;
+            option.textContent = `${area.name} (${area.id})`;
+            editSelect.appendChild(option);
+          });
+        }
+      }
+
+      function cancelYtAreaEdit() {
+        const areaSpan = document.getElementById('yt-area');
+        const editContainer = document.getElementById('yt-area-edit-container');
+
+        // Hide edit dropdown and show area span
+        editContainer.style.display = 'none';
+        areaSpan.style.display = 'block';
+      }
+
+      async function saveYtAreaEdit() {
+        const editSelect = document.getElementById('yt-area-edit-select');
+        const areaId = parseInt(editSelect.value);
+
+        if (!areaId) {
+          showNotification('请选择分区', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: 'youtube',
+              area_id: areaId
+            })
+          });
+          const data = await response.json();
+          showNotification(data.message || 'YouTube配置分区已更新', 'success');
+          cancelYtAreaEdit();
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
+      }
+
+      // Twitch channel editing functions
+      function toggleTwChannelEdit() {
+        const channelSpan = document.getElementById('tw-channel-name');
+        const editContainer = document.getElementById('tw-channel-edit-container');
+        const editSelect = document.getElementById('tw-channel-edit-select');
+
+        // Show edit dropdown and hide channel span
+        channelSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load channels if not already loaded
+        if (!channelsData) {
+          loadChannelData().then(() => {
+            populateTwChannelEditSelect();
+          });
+        } else {
+          populateTwChannelEditSelect();
+        }
+
+        editSelect.focus();
+      }
+
+      function populateTwChannelEditSelect() {
+        const editSelect = document.getElementById('tw-channel-edit-select');
+        editSelect.innerHTML = '<option value="">选择频道...</option>';
+
+        if (channelsData && channelsData.channels) {
+          channelsData.channels.forEach(channel => {
+            if (channel.platforms && channel.platforms.twitch) {
+              const option = document.createElement('option');
+              option.value = JSON.stringify({
+                id: channel.platforms.twitch,
+                name: channel.name
+              });
+              option.textContent = channel.name;
+              editSelect.appendChild(option);
+            }
+          });
+        }
+      }
+
+      function cancelTwChannelEdit() {
+        const channelSpan = document.getElementById('tw-channel-name');
+        const editContainer = document.getElementById('tw-channel-edit-container');
+
+        // Hide edit dropdown and show channel span
+        editContainer.style.display = 'none';
+        channelSpan.style.display = 'block';
+      }
+
+      async function saveTwChannelEdit() {
+        const editSelect = document.getElementById('tw-channel-edit-select');
+        const selectedValue = editSelect.value;
+
+        if (!selectedValue) {
+          showNotification('请选择频道', 'error');
+          return;
+        }
+
+        try {
+          const channelInfo = JSON.parse(selectedValue);
+          const response = await fetch('/api/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: 'twitch',
+              channel_id: channelInfo.id,
+              channel_name: channelInfo.name
+            })
+          });
+          const data = await response.json();
+          showNotification(data.message || 'Twitch频道已更新', 'success');
+          cancelTwChannelEdit();
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
+      }
+
+      // Twitch area editing functions
+      function toggleTwAreaEdit() {
+        const areaSpan = document.getElementById('tw-area');
+        const editContainer = document.getElementById('tw-area-edit-container');
+        const editSelect = document.getElementById('tw-area-edit-select');
+
+        // Show edit dropdown and hide area span
+        areaSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load areas if not already loaded
+        if (!areasData) {
+          loadChannelData().then(() => {
+            populateTwAreaEditSelect();
+          });
+        } else {
+          populateTwAreaEditSelect();
+        }
+
+        editSelect.focus();
+      }
+
+      function populateTwAreaEditSelect() {
+        const editSelect = document.getElementById('tw-area-edit-select');
+        editSelect.innerHTML = '<option value="">选择分区...</option>';
+
+        if (areasData && areasData.areas) {
+          // Sort areas: 其他单机 (235) first, then others
+          const sortedAreas = [...areasData.areas].sort((a, b) => {
+            if (a.id === 235) return -1;
+            if (b.id === 235) return 1;
+            return 0;
+          });
+
+          sortedAreas.forEach(area => {
+            const option = document.createElement('option');
+            option.value = area.id;
+            option.textContent = `${area.name} (${area.id})`;
+            editSelect.appendChild(option);
+          });
+        }
+      }
+
+      function cancelTwAreaEdit() {
+        const areaSpan = document.getElementById('tw-area');
+        const editContainer = document.getElementById('tw-area-edit-container');
+
+        // Hide edit dropdown and show area span
+        editContainer.style.display = 'none';
+        areaSpan.style.display = 'block';
+      }
+
+      async function saveTwAreaEdit() {
+        const editSelect = document.getElementById('tw-area-edit-select');
+        const areaId = parseInt(editSelect.value);
+
+        if (!areaId) {
+          showNotification('请选择分区', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: 'twitch',
+              area_id: areaId
+            })
+          });
+          const data = await response.json();
+          showNotification(data.message || 'Twitch配置分区已更新', 'success');
+          cancelTwAreaEdit();
+          setTimeout(refreshStatus, 2000);
+        } catch (error) {
+          showNotification('更新失败: ' + error.message, 'error');
+        }
       }
 
       // Area editing functions

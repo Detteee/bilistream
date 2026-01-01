@@ -744,6 +744,7 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COMMON_NOTICE_DANMAKU"
+            | "PK_BATTLE_ENTRANCE"
             | "MESSAGEBOX_USER_MEDAL_CHANGE"
             | "SPREAD_SHOW_FEET"
             | "SPREAD_SHOW_FEET_V2"

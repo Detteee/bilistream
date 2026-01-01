@@ -141,6 +141,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 stream_speed: None,
             },
             youtube: if !cfg.youtube.channel_id.is_empty() {
+                let yt_area_name = get_area_name(cfg.youtube.area_v2)
+                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
                 Some(bilistream::YtStatus {
                     is_live: yt_is_live,
                     title: yt_title.clone(),
@@ -148,11 +150,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     channel_name: cfg.youtube.channel_name.clone(),
                     channel_id: cfg.youtube.channel_id.clone(),
                     quality: cfg.youtube.quality.clone(),
+                    area_id: cfg.youtube.area_v2,
+                    area_name: yt_area_name,
                 })
             } else {
                 None
             },
             twitch: if !cfg.twitch.channel_id.is_empty() {
+                let tw_area_name = get_area_name(cfg.twitch.area_v2)
+                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
                 Some(bilistream::TwStatus {
                     is_live: tw_is_live,
                     title: tw_title.clone(),
@@ -160,6 +166,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     channel_name: cfg.twitch.channel_name.clone(),
                     channel_id: cfg.twitch.channel_id.clone(),
                     quality: cfg.twitch.quality.clone(),
+                    area_id: cfg.twitch.area_v2,
+                    area_name: tw_area_name,
                 })
             } else {
                 None

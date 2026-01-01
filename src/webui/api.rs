@@ -94,6 +94,8 @@ pub struct YtStatus {
     pub channel_name: String,
     pub channel_id: String,
     pub quality: String,
+    pub area_id: u64,
+    pub area_name: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -104,6 +106,8 @@ pub struct TwStatus {
     pub channel_name: String,
     pub channel_id: String,
     pub quality: String,
+    pub area_id: u64,
+    pub area_name: String,
 }
 
 pub async fn get_status() -> impl IntoResponse {
@@ -454,8 +458,8 @@ pub async fn update_title(
 #[derive(Deserialize)]
 pub struct UpdateChannelRequest {
     platform: String, // "youtube" or "twitch"
-    channel_id: String,
-    channel_name: String,
+    channel_id: Option<String>,
+    channel_name: Option<String>,
     area_id: Option<u64>,
     quality: Option<String>,
     riot_api_key: Option<String>,
@@ -470,8 +474,12 @@ pub async fn update_channel(
 
     match payload.platform.as_str() {
         "youtube" => {
-            cfg.youtube.channel_id = payload.channel_id;
-            cfg.youtube.channel_name = payload.channel_name;
+            if let Some(channel_id) = payload.channel_id {
+                cfg.youtube.channel_id = channel_id;
+            }
+            if let Some(channel_name) = payload.channel_name {
+                cfg.youtube.channel_name = channel_name;
+            }
             if let Some(area_id) = payload.area_id {
                 cfg.youtube.area_v2 = area_id;
                 // If area is LOL (86) and riot_api_key is provided, update it
@@ -488,8 +496,12 @@ pub async fn update_channel(
             }
         }
         "twitch" => {
-            cfg.twitch.channel_id = payload.channel_id;
-            cfg.twitch.channel_name = payload.channel_name;
+            if let Some(channel_id) = payload.channel_id {
+                cfg.twitch.channel_id = channel_id;
+            }
+            if let Some(channel_name) = payload.channel_name {
+                cfg.twitch.channel_name = channel_name;
+            }
             if let Some(area_id) = payload.area_id {
                 cfg.twitch.area_v2 = area_id;
                 // If area is LOL (86) and riot_api_key is provided, update it
@@ -1415,9 +1427,12 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         is_live: yt_is_live,
         title: yt_title,
         topic: yt_area,
-        channel_name: cfg.youtube.channel_name,
-        channel_id: cfg.youtube.channel_id,
-        quality: cfg.youtube.quality,
+        channel_name: cfg.youtube.channel_name.clone(),
+        channel_id: cfg.youtube.channel_id.clone(),
+        quality: cfg.youtube.quality.clone(),
+        area_id: cfg.youtube.area_v2,
+        area_name: crate::plugins::get_area_name(cfg.youtube.area_v2)
+            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2)),
     });
 
     update_status_cache(current_cache);
@@ -1484,9 +1499,12 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         is_live: tw_is_live,
         title: tw_title,
         game: tw_area,
-        channel_name: cfg.twitch.channel_name,
-        channel_id: cfg.twitch.channel_id,
-        quality: cfg.twitch.quality,
+        channel_name: cfg.twitch.channel_name.clone(),
+        channel_id: cfg.twitch.channel_id.clone(),
+        quality: cfg.twitch.quality.clone(),
+        area_id: cfg.twitch.area_v2,
+        area_name: crate::plugins::get_area_name(cfg.twitch.area_v2)
+            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2)),
     });
 
     update_status_cache(current_cache);
