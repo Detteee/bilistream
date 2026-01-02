@@ -1323,17 +1323,31 @@
               <div
                 style="background: var(--input-bg); padding: 20px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
                 <h4 id="area-form-title" style="margin-bottom: 15px; color: var(--text-primary);">添加新分区</h4>
+
+                <!-- Bilibili API Hint -->
+                <div
+                  style="background: var(--input-bg); padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 3px solid var(--heading-color);">
+                  <small style="color: var(--text-secondary);">
+                    💡 B站分区ID可从
+                    <a href="https://api.live.bilibili.com/room/v1/Area/getList" target="_blank"
+                      style="color: var(--heading-color); text-decoration: none; font-weight: 500;">
+                      B站直播分区API
+                    </a>
+                    获取，输入对应的分区ID和名称
+                  </small>
+                </div>
+
                 <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; margin-bottom: 15px;">
                   <div>
                     <label
                       style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区ID</label>
-                    <input type="number" id="area-id" placeholder="例: 999"
+                    <input type="number" id="area-id" placeholder=""
                       style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
                   </div>
                   <div>
                     <label
                       style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区名称</label>
-                    <input type="text" id="area-name" placeholder="例: 新游戏"
+                    <input type="text" id="area-name" placeholder=""
                       style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
                   </div>
                 </div>
@@ -1343,7 +1357,7 @@
                     <small
                       style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于自动检测直播分区，匹配YouTube分区/Twitch游戏或直播标题中的关键词</small>
                   </label>
-                  <input type="text" id="area-keywords" placeholder="例: league of legends, lol, 英雄联盟"
+                  <input type="text" id="area-keywords" placeholder="例: league of legends, lol, ろる"
                     style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
                 </div>
                 <div style="margin-bottom: 15px;">
