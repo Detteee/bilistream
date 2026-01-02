@@ -952,7 +952,7 @@
             <div id="title-edit-container" style="display: none; flex: 1;">
               <div style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" id="title-edit-input"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  style="flex: 1; max-width: 150px; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
                 <button onclick="saveTitleEdit()"
                   style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                   ✓
@@ -1111,14 +1111,14 @@
             <div id="yt-quality-edit-container" style="display: none; flex: 1;">
               <div style="display: flex; gap: 8px; align-items: center;">
                 <select id="yt-quality-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
                   <option value="">选择画质...</option>
-                  <option value="best">best - 最佳质量 (推荐)</option>
-                  <option value="best[height<=1080]">1080p - 超清</option>
-                  <option value="best[height<=720]">720p - 高清</option>
-                  <option value="best[height<=480]">480p - 标清</option>
-                  <option value="best[height<=360]">360p - 流畅</option>
-                  <option value="worst">worst - 最低质量</option>
+                  <option value="best">最佳质量</option>
+                  <option value="best[height<=1080]">超清 (1080p)</option>
+                  <option value="best[height<=720]">高清 (720p)</option>
+                  <option value="best[height<=480]">标清 (480p)</option>
+                  <option value="best[height<=360]">流畅 (360p)</option>
+                  <option value="worst">最低质量</option>
                 </select>
                 <button onclick="saveYtQualityEdit()"
                   style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
@@ -1241,14 +1241,14 @@
             <div id="tw-quality-edit-container" style="display: none; flex: 1;">
               <div style="display: flex; gap: 8px; align-items: center;">
                 <select id="tw-quality-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+                  style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
                   <option value="">选择画质...</option>
-                  <option value="source">source - 原画质量 (推荐)</option>
-                  <option value="high">high - 高质量 (≤720p30)</option>
-                  <option value="medium">medium - 中等质量 (≤540p30)</option>
-                  <option value="low">low - 低质量 (≤360p30)</option>
-                  <option value="audio_only">audio_only - 仅音频</option>
-                  <option value="worst">worst - 最低质量</option>
+                  <option value="source">原画质量</option>
+                  <option value="high">高质量 (720p)</option>
+                  <option value="medium">中等质量 (540p)</option>
+                  <option value="low">低质量 (360p)</option>
+                  <option value="audio_only">仅音频</option>
+                  <option value="worst">最低质量</option>
                 </select>
                 <button onclick="saveTwQualityEdit()"
                   style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
@@ -3424,9 +3424,11 @@
         const titleSpan = document.getElementById('bili-title');
         const editContainer = document.getElementById('title-edit-container');
         const editInput = document.getElementById('title-edit-input');
+        const editButton = titleSpan.parentElement.querySelector('button');
 
-        // Show edit input and hide title span
+        // Show edit input and hide title span and edit button
         titleSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Set current title as input value
@@ -3447,10 +3449,12 @@
       function cancelTitleEdit() {
         const titleSpan = document.getElementById('bili-title');
         const editContainer = document.getElementById('title-edit-container');
+        const editButton = titleSpan.parentElement.querySelector('button');
 
-        // Hide edit input and show title span
+        // Hide edit input and show title span and edit button
         editContainer.style.display = 'none';
         titleSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       // YouTube channel editing functions
@@ -3458,9 +3462,11 @@
         const channelSpan = document.getElementById('yt-channel-name');
         const editContainer = document.getElementById('yt-channel-edit-container');
         const editSelect = document.getElementById('yt-channel-edit-select');
+        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide channel span
+        // Show edit dropdown and hide channel span and edit button
         channelSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Load channels if not already loaded
@@ -3497,10 +3503,12 @@
       function cancelYtChannelEdit() {
         const channelSpan = document.getElementById('yt-channel-name');
         const editContainer = document.getElementById('yt-channel-edit-container');
+        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show channel span
+        // Hide edit dropdown and show channel span and edit button
         editContainer.style.display = 'none';
         channelSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveYtChannelEdit() {
@@ -3538,9 +3546,11 @@
         const areaSpan = document.getElementById('yt-area');
         const editContainer = document.getElementById('yt-area-edit-container');
         const editSelect = document.getElementById('yt-area-edit-select');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span
+        // Show edit dropdown and hide area span and edit button
         areaSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Load areas if not already loaded
@@ -3570,7 +3580,7 @@
           sortedAreas.forEach(area => {
             const option = document.createElement('option');
             option.value = area.id;
-            option.textContent = `${area.name} (${area.id})`;
+            option.textContent = area.name; // Removed (${area.id}) for cleaner display
             editSelect.appendChild(option);
           });
         }
@@ -3579,10 +3589,12 @@
       function cancelYtAreaEdit() {
         const areaSpan = document.getElementById('yt-area');
         const editContainer = document.getElementById('yt-area-edit-container');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span
+        // Hide edit dropdown and show area span and edit button
         editContainer.style.display = 'none';
         areaSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveYtAreaEdit() {
@@ -3618,9 +3630,11 @@
         const qualitySpan = document.getElementById('yt-quality');
         const editContainer = document.getElementById('yt-quality-edit-container');
         const editSelect = document.getElementById('yt-quality-edit-select');
+        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide quality span
+        // Show edit dropdown and hide quality span and edit button
         qualitySpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Set current quality as selected
@@ -3635,10 +3649,12 @@
       function cancelYtQualityEdit() {
         const qualitySpan = document.getElementById('yt-quality');
         const editContainer = document.getElementById('yt-quality-edit-container');
+        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show quality span
+        // Hide edit dropdown and show quality span and edit button
         editContainer.style.display = 'none';
         qualitySpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveYtQualityEdit() {
@@ -3676,9 +3692,11 @@
         const qualitySpan = document.getElementById('tw-quality');
         const editContainer = document.getElementById('tw-quality-edit-container');
         const editSelect = document.getElementById('tw-quality-edit-select');
+        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide quality span
+        // Show edit dropdown and hide quality span and edit button
         qualitySpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Set current quality as selected
@@ -3693,10 +3711,12 @@
       function cancelTwQualityEdit() {
         const qualitySpan = document.getElementById('tw-quality');
         const editContainer = document.getElementById('tw-quality-edit-container');
+        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show quality span
+        // Hide edit dropdown and show quality span and edit button
         editContainer.style.display = 'none';
         qualitySpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveTwQualityEdit() {
@@ -3734,9 +3754,11 @@
         const channelSpan = document.getElementById('tw-channel-name');
         const editContainer = document.getElementById('tw-channel-edit-container');
         const editSelect = document.getElementById('tw-channel-edit-select');
+        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide channel span
+        // Show edit dropdown and hide channel span and edit button
         channelSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Load channels if not already loaded
@@ -3773,10 +3795,12 @@
       function cancelTwChannelEdit() {
         const channelSpan = document.getElementById('tw-channel-name');
         const editContainer = document.getElementById('tw-channel-edit-container');
+        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show channel span
+        // Hide edit dropdown and show channel span and edit button
         editContainer.style.display = 'none';
         channelSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveTwChannelEdit() {
@@ -3814,9 +3838,11 @@
         const areaSpan = document.getElementById('tw-area');
         const editContainer = document.getElementById('tw-area-edit-container');
         const editSelect = document.getElementById('tw-area-edit-select');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span
+        // Show edit dropdown and hide area span and edit button
         areaSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Load areas if not already loaded
@@ -3846,7 +3872,7 @@
           sortedAreas.forEach(area => {
             const option = document.createElement('option');
             option.value = area.id;
-            option.textContent = `${area.name} (${area.id})`;
+            option.textContent = area.name; // Removed (${area.id}) for cleaner display
             editSelect.appendChild(option);
           });
         }
@@ -3855,10 +3881,12 @@
       function cancelTwAreaEdit() {
         const areaSpan = document.getElementById('tw-area');
         const editContainer = document.getElementById('tw-area-edit-container');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span
+        // Hide edit dropdown and show area span and edit button
         editContainer.style.display = 'none';
         areaSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveTwAreaEdit() {
@@ -3894,9 +3922,11 @@
         const areaSpan = document.getElementById('bili-area');
         const editContainer = document.getElementById('area-edit-container');
         const editSelect = document.getElementById('area-edit-select');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span
+        // Show edit dropdown and hide area span and edit button
         areaSpan.style.display = 'none';
+        editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
         // Load areas if not already loaded
@@ -3926,7 +3956,7 @@
           sortedAreas.forEach(area => {
             const option = document.createElement('option');
             option.value = area.id;
-            option.textContent = `${area.name} (${area.id})`;
+            option.textContent = area.name; // Removed (${area.id}) for cleaner display
             editSelect.appendChild(option);
           });
         }
@@ -3935,10 +3965,12 @@
       function cancelAreaEdit() {
         const areaSpan = document.getElementById('bili-area');
         const editContainer = document.getElementById('area-edit-container');
+        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span
+        // Hide edit dropdown and show area span and edit button
         editContainer.style.display = 'none';
         areaSpan.style.display = 'block';
+        editButton.style.display = 'flex';
       }
 
       async function saveAreaEdit() {
