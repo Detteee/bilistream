@@ -311,7 +311,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         tracing::info!("✅ ffmpeg process stopped");
     } else {
-        tracing::warn!("⚠️ No ffmpeg process to stop");
+        tracing::info!("No ffmpeg process to stop");
     }
 
     // Clear speed and progress time when ffmpeg stops (lock-free write)
