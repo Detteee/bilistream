@@ -94,7 +94,7 @@
 
     .dashboard {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
       gap: 20px;
       margin-bottom: 30px;
     }
@@ -1213,7 +1213,7 @@
         </h2>
 
         <div id="channel-management-container" style="display: none;">
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
             <div class="control-group">
               <label>平台</label>
               <select id="platform-select" onchange="updateChannelList()">
@@ -1280,15 +1280,6 @@
 
           <div class="button-group">
             <button class="btn-primary" onclick="applyChannelChange()">应用更改</button>
-            <button class="btn-secondary" onclick="loadChannelData()"
-              style="display: flex; align-items: center; justify-content: center; gap: 6px;">
-              <svg id="loadChannelIcon" fill="currentColor" width="14" height="14" viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-                <path
-                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-              </svg>
-              刷新频道列表
-            </button>
           </div>
         </div>
       </div>
@@ -2062,7 +2053,7 @@
               areasContent.innerHTML = '<p style="color: var(--text-secondary);">暂无分区</p>';
             } else {
               areasContent.innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px;">
                   ${result.data.areas.map(area => `
                     <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--text-primary);">
                       <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -2168,7 +2159,7 @@
               channelsContent.innerHTML = '<p style="color: var(--text-secondary);">暂无频道</p>';
             } else {
               channelsContent.innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px;">
                   ${result.data.channels.map(channel => `
                     <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--text-primary); word-wrap: break-word; overflow-wrap: break-word;">
                       <div style="display: flex; align-items: center; justify-content: space-between;">
