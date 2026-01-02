@@ -11,7 +11,7 @@
 
 ## 下载
 
-**最新版本：v0.4.3**
+**最新版本：v0.4.4**
 
 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
