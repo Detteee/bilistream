@@ -2028,7 +2028,7 @@
                style="flex: 1; padding: 6px 12px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; text-decoration: none; border-radius: 4px; font-size: 12px; text-align: center; font-weight: 600;">
               📺 观看
             </a>
-            <button onclick="switchToHolodexStream('${stream.channel_id}', ${stream.suggested_area_id || 'null'})" 
+            <button onclick="switchToHolodexStream('${stream.channel_id}', ${stream.suggested_area_id || 'null'}, '${stream.title.replace(/'/g, "\\'")}', '${stream.topic_id || ""}', '${stream.status}')" 
                style="flex: 1; padding: 6px 12px; background: #a6e3a1; color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 4px;">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8"/><path d="m7 17l-4-1l-1 4M17 7l4 1l1-4"/></svg>
               <span>切换</span>
@@ -2042,14 +2042,14 @@
       // Store pending switch data
       let pendingSwitchData = null;
 
-      async function switchToHolodexStream(channelId, suggestedAreaId) {
+      async function switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status) {
         if (!suggestedAreaId) {
           // Show modal for area selection
-          pendingSwitchData = { channelId, areaId: null };
+          pendingSwitchData = { channelId, areaId: null, title, topicId, status };
           await showAreaModal();
         } else {
           // Direct switch with suggested area
-          await performSwitch(channelId, suggestedAreaId);
+          await performSwitch(channelId, suggestedAreaId, title, topicId, status);
         }
       }
 
@@ -2104,11 +2104,12 @@
         }
 
         const channelId = pendingSwitchData.channelId;
+        const { title, topicId, status } = pendingSwitchData;
         closeAreaModal();
-        await performSwitch(channelId, areaId);
+        await performSwitch(channelId, areaId, title, topicId, status);
       }
 
-      async function performSwitch(channelId, areaId) {
+      async function performSwitch(channelId, areaId, title, topicId, status) {
         try {
           console.log('Switching to channel:', channelId, 'area:', areaId);
           const response = await fetch('/api/holodex/switch', {
@@ -2116,7 +2117,10 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               channel_id: channelId,
-              area_id: areaId
+              area_id: areaId,
+              title: title,
+              topic_id: topicId,
+              status: status
             })
           });
 
@@ -2126,7 +2130,8 @@
 
           if (data.success) {
             showNotification(data.message || '频道切换成功！', 'success');
-            setTimeout(() => refreshStatus(), 2000);
+            // Refresh status immediately to show updated info
+            refreshStatus();
           } else {
             showNotification(data.message || '切换失败', 'error');
             console.error('Switch failed:', data.message);

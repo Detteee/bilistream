@@ -56,6 +56,83 @@ pub fn get_status_cache() -> Option<StatusData> {
     cache.clone()
 }
 
+// Update status cache with fresh configuration data (config fields only)
+pub async fn refresh_status_cache_config() {
+    if let Ok(cfg) = load_config().await {
+        let mut cached_status = get_status_cache().unwrap_or_default();
+
+        // Update YouTube status with fresh config (preserve live status)
+        if !cfg.youtube.channel_id.is_empty() {
+            let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+
+            if let Some(ref mut yt_status) = cached_status.youtube {
+                // Update only configuration fields, preserve live status
+                yt_status.channel_name = cfg.youtube.channel_name.clone();
+                yt_status.channel_id = cfg.youtube.channel_id.clone();
+                yt_status.area_id = cfg.youtube.area_v2;
+                yt_status.area_name = yt_area_name;
+                yt_status.quality = cfg.youtube.quality.clone();
+                // Keep existing: is_live, title, topic
+            } else {
+                // Create new status entry with default live status
+                cached_status.youtube = Some(YtStatus {
+                    is_live: false,
+                    title: Some("-".to_string()),
+                    channel_name: cfg.youtube.channel_name.clone(),
+                    channel_id: cfg.youtube.channel_id.clone(),
+                    area_id: cfg.youtube.area_v2,
+                    area_name: yt_area_name,
+                    topic: Some("-".to_string()),
+                    quality: cfg.youtube.quality.clone(),
+                });
+            }
+        }
+
+        // Update Twitch status with fresh config (preserve live status)
+        if !cfg.twitch.channel_id.is_empty() {
+            let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+
+            if let Some(ref mut tw_status) = cached_status.twitch {
+                // Update only configuration fields, preserve live status
+                tw_status.channel_name = cfg.twitch.channel_name.clone();
+                tw_status.channel_id = cfg.twitch.channel_id.clone();
+                tw_status.area_id = cfg.twitch.area_v2;
+                tw_status.area_name = tw_area_name;
+                tw_status.quality = cfg.twitch.quality.clone();
+                // Keep existing: is_live, title, game
+            } else {
+                // Create new status entry with default live status
+                cached_status.twitch = Some(TwStatus {
+                    is_live: false,
+                    title: Some("-".to_string()),
+                    channel_name: cfg.twitch.channel_name.clone(),
+                    channel_id: cfg.twitch.channel_id.clone(),
+                    area_id: cfg.twitch.area_v2,
+                    area_name: tw_area_name,
+                    game: Some("-".to_string()),
+                    quality: cfg.twitch.quality.clone(),
+                });
+            }
+        }
+
+        update_status_cache(cached_status);
+    }
+}
+
+// Refresh live status in background (like refresh buttons)
+pub async fn refresh_live_status_background() {
+    // Spawn background tasks to refresh live status without blocking
+    tokio::spawn(async {
+        let _ = refresh_youtube_status().await;
+    });
+
+    tokio::spawn(async {
+        let _ = refresh_twitch_status().await;
+    });
+}
+
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
     success: bool,
@@ -69,14 +146,14 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Default)]
 pub struct StatusData {
     pub bilibili: BiliStatus,
     pub youtube: Option<YtStatus>,
     pub twitch: Option<TwStatus>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Default)]
 pub struct BiliStatus {
     pub is_live: bool,
     pub title: String,
@@ -304,6 +381,11 @@ pub async fn update_config(
             cfg.proxy = None;
         }
     }
+
+    // Check if Twitch settings will be updated (before moving values)
+    let twitch_settings_updated =
+        payload.twitch_oauth_token.is_some() || payload.twitch_proxy_region.is_some();
+
     if let Some(anti_collision_list) = payload.anti_collision_list {
         cfg.anti_collision_list = anti_collision_list;
     }
@@ -325,6 +407,16 @@ pub async fn update_config(
 
     // Set config updated flag so main loop can detect the change
     set_config_updated();
+
+    // Refresh status cache with updated configuration (for Twitch settings)
+    refresh_status_cache_config().await;
+
+    // Refresh Twitch live status in background if Twitch settings were updated
+    if twitch_settings_updated {
+        tokio::spawn(async {
+            let _ = refresh_twitch_status().await;
+        });
+    }
 
     Ok(ApiResponse {
         success: true,
@@ -569,6 +661,12 @@ pub async fn update_channel(
 
     // Set config updated flag so main loop can detect the change
     set_config_updated();
+
+    // Refresh status cache with updated configuration
+    refresh_status_cache_config().await;
+
+    // Refresh live status in background (like refresh buttons)
+    refresh_live_status_background().await;
 
     Ok(ApiResponse {
         success: true,
@@ -1252,6 +1350,9 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
 pub struct SwitchToHolodexStream {
     pub channel_id: String,
     pub area_id: Option<u64>,
+    pub title: Option<String>,
+    pub topic_id: Option<String>,
+    pub status: Option<String>,
 }
 
 pub async fn switch_to_holodex_stream(
@@ -1388,12 +1489,42 @@ pub async fn switch_to_holodex_stream(
     // Notify main loop to reload config
     set_config_updated();
 
+    // Use stream data from Holodex monitor (passed from frontend)
+    let is_live = payload
+        .status
+        .as_ref()
+        .map(|s| s == "live")
+        .unwrap_or(false);
+    let stream_title = payload.title.unwrap_or_else(|| "未知标题".to_string());
+    let stream_topic = payload.topic_id.unwrap_or_else(|| "未知".to_string());
+
+    // Update YouTube status cache immediately with stream data from Holodex monitor
+    let mut current_cache = get_status_cache().unwrap_or_default();
+
+    let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+
+    current_cache.youtube = Some(YtStatus {
+        is_live, // From Holodex monitor data
+        title: Some(stream_title.clone()),
+        topic: Some(stream_topic),
+        channel_name: cfg.youtube.channel_name.clone(),
+        channel_id: cfg.youtube.channel_id.clone(),
+        quality: cfg.youtube.quality.clone(),
+        area_id: cfg.youtube.area_v2,
+        area_name: yt_area_name,
+    });
+
+    update_status_cache(current_cache);
+
     Ok(ApiResponse {
         success: true,
         data: Some(()),
         message: Some(format!(
-            "已切换到 {} (分区: {})",
-            cfg.youtube.channel_name, cfg.youtube.area_v2
+            "已切换到 {} (分区: {}) - {}",
+            cfg.youtube.channel_name,
+            cfg.youtube.area_v2,
+            if is_live { "直播中" } else { "预定直播" }
         )),
     })
 }
