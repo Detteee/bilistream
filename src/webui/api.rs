@@ -1392,18 +1392,36 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
             }
         };
 
-    // Find the stream for this channel
-    let (yt_is_live, yt_area, yt_title) = if let Some(stream) = streams
-        .iter()
-        .find(|s| s.channel.id == cfg.youtube.channel_id)
-    {
-        let is_live = stream.status == "live";
-        let topic = stream.topic_id.clone();
-        let title = Some(stream.title.clone());
-        (is_live, topic, title)
-    } else {
-        // No stream found, channel is not live
-        (false, None, None)
+    // Find the stream for this channel, prioritizing live streams over upcoming ones
+    let (yt_is_live, yt_area, yt_title) = {
+        let channel_streams: Vec<_> = streams
+            .iter()
+            .filter(|s| s.channel.id == cfg.youtube.channel_id)
+            .collect();
+
+        if channel_streams.is_empty() {
+            // No streams found for this channel
+            (false, None, None)
+        } else {
+            // First try to find a live stream
+            if let Some(live_stream) = channel_streams.iter().find(|s| s.status == "live") {
+                let topic = live_stream.topic_id.clone();
+                let title = Some(live_stream.title.clone());
+                (true, topic, title)
+            } else {
+                // No live stream, check for upcoming streams
+                if let Some(upcoming_stream) =
+                    channel_streams.iter().find(|s| s.status == "upcoming")
+                {
+                    let topic = upcoming_stream.topic_id.clone();
+                    let title = Some(upcoming_stream.title.clone());
+                    (false, topic, title)
+                } else {
+                    // No live or upcoming streams
+                    (false, None, None)
+                }
+            }
+        }
     };
 
     // Get current cache and update only YouTube part

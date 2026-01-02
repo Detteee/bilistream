@@ -169,44 +169,44 @@ pub async fn get_youtube_status(
                 return Ok((false, None, None, None, None, None));
             }
 
-            // Find the stream for this specific channel
-            for stream in streams.iter().rev() {
-                if stream.channel.id == channel_id {
-                    let status = &stream.status;
-                    let topic = stream.topic_id.clone();
-                    let title = Some(stream.title.clone());
-                    let video_id = Some(stream.id.clone());
+            // Find streams for this specific channel, prioritizing live over upcoming
+            let channel_streams: Vec<_> = streams
+                .iter()
+                .filter(|s| s.channel.id == channel_id)
+                .collect();
 
-                    if status == "live" {
-                        let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
-                            channel_id,
-                            proxy,
-                            title.clone(),
-                            Some(&quality),
-                        )
-                        .await?;
-                        return Ok((is_live, topic, title, m3u8_url, None, video_id));
-                    }
-
-                    let start_time = if status == "upcoming" {
-                        stream.start_scheduled.as_ref().and_then(|t| {
-                            DateTime::parse_from_rfc3339(t)
-                                .ok()
-                                .map(|dt| dt.with_timezone(&Local))
-                        })
-                    } else {
-                        None
-                    };
-
-                    return Ok((false, topic, title, None, start_time, video_id));
-                }
+            if channel_streams.is_empty() {
+                return Ok((false, None, None, None, None, None));
             }
 
-            // If streams exist but none match our channel ID, no live/scheduled streams for this channel
-            // tracing::info!(
-            //     "No streams found for channel {} in Holodex response",
-            //     channel_id
-            // );
+            // First try to find a live stream
+            if let Some(live_stream) = channel_streams.iter().find(|s| s.status == "live") {
+                let topic = live_stream.topic_id.clone();
+                let title = Some(live_stream.title.clone());
+                let video_id = Some(live_stream.id.clone());
+
+                let (is_live, _, _, m3u8_url, _, _) =
+                    get_status_with_yt_dlp(channel_id, proxy, title.clone(), Some(&quality))
+                        .await?;
+                return Ok((is_live, topic, title, m3u8_url, None, video_id));
+            }
+
+            // No live stream found, check for upcoming streams
+            if let Some(upcoming_stream) = channel_streams.iter().find(|s| s.status == "upcoming") {
+                let topic = upcoming_stream.topic_id.clone();
+                let title = Some(upcoming_stream.title.clone());
+                let video_id = Some(upcoming_stream.id.clone());
+
+                let start_time = upcoming_stream.start_scheduled.as_ref().and_then(|t| {
+                    DateTime::parse_from_rfc3339(t)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Local))
+                });
+
+                return Ok((false, topic, title, None, start_time, video_id));
+            }
+
+            // No live or upcoming streams found
             Ok((false, None, None, None, None, None))
         }
         Err(e) => {
