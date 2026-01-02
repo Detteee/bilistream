@@ -244,9 +244,15 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
 pub struct UpdateConfigRequest {
     interval: Option<u64>,
     auto_cover: Option<bool>,
-    anti_collision: Option<bool>,
+    enable_anti_collision: Option<bool>,
     enable_lol_monitor: Option<bool>,
+    lol_monitor_interval: Option<u64>,
     riot_api_key: Option<String>,
+    holodex_api_key: Option<String>,
+    proxy: Option<String>,
+    twitch_oauth_token: Option<String>,
+    twitch_proxy_region: Option<String>,
+    anti_collision_list: Option<HashMap<String, i32>>,
 }
 
 pub async fn update_config(
@@ -264,16 +270,48 @@ pub async fn update_config(
     if let Some(auto_cover) = payload.auto_cover {
         cfg.auto_cover = auto_cover;
     }
-    if let Some(anti_collision) = payload.anti_collision {
-        cfg.enable_anti_collision = anti_collision;
+    if let Some(enable_anti_collision) = payload.enable_anti_collision {
+        cfg.enable_anti_collision = enable_anti_collision;
     }
     if let Some(enable_lol_monitor) = payload.enable_lol_monitor {
         cfg.enable_lol_monitor = enable_lol_monitor;
     }
+    if let Some(lol_monitor_interval) = payload.lol_monitor_interval {
+        cfg.lol_monitor_interval = Some(lol_monitor_interval);
+    }
     if let Some(riot_api_key) = payload.riot_api_key {
         if !riot_api_key.is_empty() {
             cfg.riot_api_key = Some(riot_api_key);
+        } else {
+            cfg.riot_api_key = None;
         }
+    }
+    if let Some(holodex_api_key) = payload.holodex_api_key {
+        if !holodex_api_key.is_empty() {
+            cfg.holodex_api_key = Some(holodex_api_key);
+        } else {
+            cfg.holodex_api_key = None;
+        }
+    }
+    if let Some(proxy) = payload.proxy {
+        if !proxy.is_empty() {
+            cfg.proxy = Some(proxy);
+        } else {
+            cfg.proxy = None;
+        }
+    }
+    if let Some(anti_collision_list) = payload.anti_collision_list {
+        cfg.anti_collision_list = anti_collision_list;
+    }
+    if let Some(twitch_oauth_token) = payload.twitch_oauth_token {
+        if !twitch_oauth_token.is_empty() {
+            cfg.twitch.oauth_token = twitch_oauth_token;
+        } else {
+            cfg.twitch.oauth_token = String::new();
+        }
+    }
+    if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
+        cfg.twitch.proxy_region = twitch_proxy_region;
     }
 
     // Save config

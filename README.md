@@ -224,12 +224,17 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
   - QR code login displayed directly in web page
   - No terminal/CLI knowledge required
   - Step-by-step guided process
+- ⚙️ **Configuration Management**
+  - Edit all settings through web interface
+  - Real-time configuration updates
+  - No need to manually edit JSON files
+  - Manage channels, areas, and platform settings
 - 📊 Real-time status dashboard (Bilibili, YouTube, Twitch)
 - 🎮 One-click stream controls
 - 💬 Send danmaku messages
 - 📺 Channel management
 - 🎯 Area selection dropdown
-- 📱 Mobile-friendly inte
+- 📱 Mobile-friendly interface
 
 ### Commands
 
