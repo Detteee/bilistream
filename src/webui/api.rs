@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use crate::config::load_config;
@@ -1532,4 +1532,431 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         data: Some(()),
         message: Some("Twitch status refreshed".to_string()),
     })
+}
+
+// Data structures for area and channel management
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Area {
+    pub id: u32,
+    pub name: String,
+    pub title_keywords: Vec<String>,
+    pub aliases: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AreasData {
+    pub banned_keywords: Vec<String>,
+    pub areas: Vec<Area>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Channel {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub platforms: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub riot_puuid: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelsData {
+    pub channels: Vec<Channel>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AddAreaRequest {
+    pub id: u32,
+    pub name: String,
+    pub title_keywords: Vec<String>,
+    pub aliases: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AddChannelRequest {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub platforms: HashMap<String, String>,
+    pub riot_puuid: Option<String>,
+}
+
+// Get all areas
+pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
+    match std::fs::read_to_string("areas.json") {
+        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
+            Ok(areas) => Json(ApiResponse {
+                success: true,
+                data: Some(areas),
+                message: None,
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to parse areas.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to read areas.json: {}", e)),
+        }),
+    }
+}
+
+// Add new area
+pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
+    // Read current areas
+    let mut areas_data = match std::fs::read_to_string("areas.json") {
+        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
+            Ok(areas) => areas,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse areas.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read areas.json: {}", e)),
+            });
+        }
+    };
+
+    // Check if area ID already exists
+    if areas_data.areas.iter().any(|a| a.id == payload.id) {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Area with ID {} already exists", payload.id)),
+        });
+    }
+
+    // Add new area
+    areas_data.areas.push(Area {
+        id: payload.id,
+        name: payload.name,
+        title_keywords: payload.title_keywords,
+        aliases: payload.aliases,
+    });
+
+    // Sort areas by ID
+    areas_data.areas.sort_by_key(|a| a.id);
+
+    // Write back to file
+    match serde_json::to_string_pretty(&areas_data) {
+        Ok(json_str) => match std::fs::write("areas.json", json_str) {
+            Ok(_) => Json(ApiResponse {
+                success: true,
+                data: Some(()),
+                message: Some("Area added successfully".to_string()),
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to write areas.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to serialize areas data: {}", e)),
+        }),
+    }
+}
+
+// Get all channels
+pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
+    match std::fs::read_to_string("channels.json") {
+        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
+            Ok(channels) => Json(ApiResponse {
+                success: true,
+                data: Some(channels),
+                message: None,
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to parse channels.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to read channels.json: {}", e)),
+        }),
+    }
+}
+
+// Add new channel
+pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
+    // Validate that at least one platform is provided
+    if payload.platforms.is_empty() {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(
+                "At least one platform (YouTube or Twitch) must be specified".to_string(),
+            ),
+        });
+    }
+
+    // Read current channels
+    let mut channels_data = match std::fs::read_to_string("channels.json") {
+        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
+            Ok(channels) => channels,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse channels.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read channels.json: {}", e)),
+            });
+        }
+    };
+
+    // Check if channel name already exists
+    if channels_data
+        .channels
+        .iter()
+        .any(|c| c.name == payload.name)
+    {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Channel '{}' already exists", payload.name)),
+        });
+    }
+
+    // Add new channel
+    channels_data.channels.push(Channel {
+        name: payload.name,
+        aliases: payload.aliases,
+        platforms: payload.platforms,
+        riot_puuid: payload.riot_puuid,
+    });
+
+    // Write back to file
+    match serde_json::to_string_pretty(&channels_data) {
+        Ok(json_str) => match std::fs::write("channels.json", json_str) {
+            Ok(_) => Json(ApiResponse {
+                success: true,
+                data: Some(()),
+                message: Some("Channel added successfully".to_string()),
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to write channels.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to serialize channels data: {}", e)),
+        }),
+    }
+}
+
+// Update existing channel
+pub async fn update_channel_manage(
+    Json(payload): Json<AddChannelRequest>,
+) -> Json<ApiResponse<()>> {
+    // Validate that at least one platform is provided
+    if payload.platforms.is_empty() {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(
+                "At least one platform (YouTube or Twitch) must be specified".to_string(),
+            ),
+        });
+    }
+
+    // Read current channels
+    let mut channels_data = match std::fs::read_to_string("channels.json") {
+        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
+            Ok(channels) => channels,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse channels.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read channels.json: {}", e)),
+            });
+        }
+    };
+
+    // Find and update the channel
+    if let Some(channel) = channels_data
+        .channels
+        .iter_mut()
+        .find(|c| c.name == payload.name)
+    {
+        channel.aliases = payload.aliases;
+        channel.platforms = payload.platforms;
+        channel.riot_puuid = payload.riot_puuid;
+
+        // Write back to file
+        match serde_json::to_string_pretty(&channels_data) {
+            Ok(json_str) => match std::fs::write("channels.json", json_str) {
+                Ok(_) => Json(ApiResponse {
+                    success: true,
+                    data: Some(()),
+                    message: Some("Channel updated successfully".to_string()),
+                }),
+                Err(e) => Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to write channels.json: {}", e)),
+                }),
+            },
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to serialize channels data: {}", e)),
+            }),
+        }
+    } else {
+        Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Channel '{}' not found", payload.name)),
+        })
+    }
+}
+// Delete area by ID
+pub async fn delete_area(
+    axum::extract::Path(id): axum::extract::Path<u32>,
+) -> Json<ApiResponse<()>> {
+    // Read current areas
+    let mut areas_data = match std::fs::read_to_string("areas.json") {
+        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
+            Ok(areas) => areas,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse areas.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read areas.json: {}", e)),
+            });
+        }
+    };
+
+    // Find and remove the area
+    let initial_len = areas_data.areas.len();
+    areas_data.areas.retain(|area| area.id != id);
+
+    if areas_data.areas.len() == initial_len {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Area with ID {} not found", id)),
+        });
+    }
+
+    // Write back to file
+    match serde_json::to_string_pretty(&areas_data) {
+        Ok(json_str) => match std::fs::write("areas.json", json_str) {
+            Ok(_) => Json(ApiResponse {
+                success: true,
+                data: Some(()),
+                message: Some("Area deleted successfully".to_string()),
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to write areas.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to serialize areas data: {}", e)),
+        }),
+    }
+}
+
+// Delete channel by name
+pub async fn delete_channel(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<ApiResponse<()>> {
+    // Read current channels
+    let mut channels_data = match std::fs::read_to_string("channels.json") {
+        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
+            Ok(channels) => channels,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse channels.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read channels.json: {}", e)),
+            });
+        }
+    };
+
+    // Find and remove the channel
+    let initial_len = channels_data.channels.len();
+    channels_data
+        .channels
+        .retain(|channel| channel.name != name);
+
+    if channels_data.channels.len() == initial_len {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Channel '{}' not found", name)),
+        });
+    }
+
+    // Write back to file
+    match serde_json::to_string_pretty(&channels_data) {
+        Ok(json_str) => match std::fs::write("channels.json", json_str) {
+            Ok(_) => Json(ApiResponse {
+                success: true,
+                data: Some(()),
+                message: Some("Channel deleted successfully".to_string()),
+            }),
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to write channels.json: {}", e)),
+            }),
+        },
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to serialize channels data: {}", e)),
+        }),
+    }
 }

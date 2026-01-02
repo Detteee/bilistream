@@ -721,9 +721,19 @@
             <div class="control-group">
               <label>代理区域</label>
               <select id="setup-tw-region">
-                <option value="as">as - 亚洲</option>
-                <option value="na">na - 北美</option>
-                <option value="eu">eu - 欧洲</option>
+                <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
+                <option value="eul">eul - 欧洲 (luminous, 推荐)</option>
+                <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
+                <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
+                <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
+                <option value="eu2">eu2 - 欧洲 2 (TTV-LOL-PRO)</option>
+                <option value="eu3">eu3 - 欧洲 3 (TTV-LOL-PRO)</option>
+                <option value="eu4">eu4 - 欧洲 4 (TTV-LOL-PRO)</option>
+                <option value="eu5">eu5 - 欧洲 5 (TTV-LOL-PRO)</option>
+                <option value="na">na - 北美 (TTV-LOL-PRO)</option>
+                <option value="sa">sa - 南美 (TTV-LOL-PRO)</option>
+                <option value="all">all - 全部代理</option>
+                <option value="perf">perf - TTV-LOL-PRO 全部</option>
               </select>
             </div>
 
@@ -821,7 +831,7 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h2 style="margin: 0;">
               <span class="status-indicator" id="bili-status"></span>
-              哔哩哔哩
+              Bilibili
             </h2>
             <div style="display: flex; gap: 8px; align-items: center;">
               <button id="startLiveBtn" onclick="startStream()" title="开始直播"
@@ -1279,6 +1289,197 @@
               </svg>
               刷新频道列表
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Area and Channel Management Section -->
+      <div class="controls" style="margin-top: 20px;">
+        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
+          onclick="toggleManagement()">
+          🗃️ 配置管理 <span id="management-toggle">▼</span>
+        </h2>
+        <div id="management-container" style="display: none;">
+
+          <!-- Area Management -->
+          <div style="margin-bottom: 30px;">
+            <h3
+              style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary); margin-bottom: 15px; font-size: 1.2em; font-weight: 600; padding: 12px 0; border-bottom: 1px solid var(--card-border);"
+              onclick="toggleAreaManagement()">
+              <svg viewBox="0 0 24 24" focusable="false" style="width: 20px; height: 20px;">
+                <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" fill="url(#area-gradient)" />
+                <defs>
+                  <linearGradient id="area-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#f38ba8;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#fab387;stop-opacity:1" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              分区管理 <span id="area-management-toggle">▼</span>
+            </h3>
+            <div id="area-management-content" style="display: none;">
+
+              <!-- Add Area Form -->
+              <div
+                style="background: var(--input-bg); padding: 20px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
+                <h4 id="area-form-title" style="margin-bottom: 15px; color: var(--text-primary);">添加新分区</h4>
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; margin-bottom: 15px;">
+                  <div>
+                    <label
+                      style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区ID</label>
+                    <input type="number" id="area-id" placeholder="例: 999"
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                  <div>
+                    <label
+                      style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区名称</label>
+                    <input type="text" id="area-name" placeholder="例: 新游戏"
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    标题关键词 (用逗号分隔)
+                    <small
+                      style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于自动检测直播分区，匹配YouTube分区/Twitch游戏或直播标题中的关键词</small>
+                  </label>
+                  <input type="text" id="area-keywords" placeholder="例: league of legends, lol, 英雄联盟"
+                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                </div>
+                <div style="margin-bottom: 15px;">
+                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    别名 (用逗号分隔)
+                    <small
+                      style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于弹幕指令识别，观众可以通过这些别名切换到此分区</small>
+                  </label>
+                  <input type="text" id="area-aliases" placeholder="例: lol, 瓦"
+                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <button id="area-submit-btn" class="btn-primary" onclick="addArea()">添加分区</button>
+                  <button class="btn-secondary" onclick="clearAreaForm()">清空表单</button>
+                </div>
+              </div>
+
+              <!-- Areas List -->
+              <div id="areas-list"
+                style="background: var(--input-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--card-border);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <h4
+                    style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary);"
+                    onclick="toggleAreasList()">
+                    现有分区 <span id="areas-list-toggle">▼</span>
+                  </h4>
+                  <button id="refreshAreasBtn" onclick="refreshAreas()" title="刷新分区列表"
+                    style="display: none; padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; align-items: center; justify-content: center;">
+                    <svg id="refreshAreasIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                      <path
+                        d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                    </svg>
+                  </button>
+                </div>
+                <div id="areas-content" style="display: none;">加载中...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Channel Management -->
+          <div>
+            <h3
+              style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary); margin-bottom: 15px; font-size: 1.2em; font-weight: 600; padding: 12px 0; border-bottom: 1px solid var(--card-border);"
+              onclick="toggleChannelConfig()">
+              <svg viewBox="0 0 24 24" focusable="false" style="width: 20px; height: 20px;">
+                <path
+                  d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h11c.55 0 1-.45 1-1z"
+                  fill="url(#channel-gradient)" />
+                <defs>
+                  <linearGradient id="channel-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#a6e3a1;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#94e2d5;stop-opacity:1" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              频道配置管理 <span id="channel-management-toggle">▼</span>
+            </h3>
+            <div id="channel-management-content" style="display: none;">
+
+              <!-- Add Channel Form -->
+              <div
+                style="background: var(--input-bg); padding: 20px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
+                <h4 id="channel-form-title" style="margin-bottom: 15px; color: var(--text-primary);">添加频道</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                  <div>
+                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                      频道名称
+                      <small style="color: #888; font-weight: normal; display: block; margin-top: 2px;">将出现于转播标题</small>
+                    </label>
+
+                    <input type="text" id="channel-name" placeholder=""
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                  <div>
+                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                      别名 (用逗号分隔)
+                      <small style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于弹幕指令识别</small>
+                    </label>
+                    <input type="text" id="channel-aliases" placeholder="例: 昵称1, 昵称2"
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                  <div>
+                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                      YouTube 频道ID (可选)
+                    </label>
+                    <input type="text" id="channel-youtube" placeholder="UC开头的频道ID"
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                  <div>
+                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                      Twitch 频道ID (可选)
+                    </label>
+                    <input type="text" id="channel-twitch" placeholder="ID in Twitch url"
+                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  </div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                  <div
+                    style="background: var(--input-bg); padding: 10px; border-radius: 6px; margin-bottom: 10px; border-left: 3px solid var(--heading-color);">
+                    <small style="color: var(--text-secondary);">💡 至少填写一个平台的频道ID</small>
+                  </div>
+                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">Riot
+                    PUUID (可选)</label>
+                  <input type="text" id="channel-riot" placeholder="英雄联盟PUUID"
+                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <button id="channel-submit-btn" class="btn-primary" onclick="addChannel()">添加频道</button>
+                  <button class="btn-secondary" onclick="clearChannelForm()">清空表单</button>
+                </div>
+              </div>
+
+              <!-- Channels List -->
+              <div id="channels-list"
+                style="background: var(--input-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--card-border);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <h4
+                    style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary);"
+                    onclick="toggleChannelsList()">
+                    现有频道 <span id="channels-list-toggle">▼</span>
+                  </h4>
+                  <button id="refreshChannelsBtn" onclick="refreshChannels()" title="刷新频道列表"
+                    style="display: none; padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; align-items: center; justify-content: center;">
+                    <svg id="refreshChannelsIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                      <path
+                        d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                    </svg>
+                  </button>
+                </div>
+                <div id="channels-content" style="display: none;">加载中...</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1748,6 +1949,551 @@
         } else {
           container.style.display = 'none';
           toggle.textContent = '▼';
+        }
+      }
+
+      function toggleManagement() {
+        const container = document.getElementById('management-container');
+        const toggle = document.getElementById('management-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+          // Don't auto-load since subsections are collapsed by default
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      function toggleAreaManagement() {
+        const container = document.getElementById('area-management-content');
+        const toggle = document.getElementById('area-management-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      function toggleChannelConfig() {
+        const container = document.getElementById('channel-management-content');
+        const toggle = document.getElementById('channel-management-toggle');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+        }
+      }
+
+      function toggleAreasList() {
+        const container = document.getElementById('areas-content');
+        const toggle = document.getElementById('areas-list-toggle');
+        const refreshBtn = document.getElementById('refreshAreasBtn');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+          refreshBtn.style.display = 'flex';
+          if (container.innerHTML === '加载中...') {
+            loadAreas();
+          }
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+          refreshBtn.style.display = 'none';
+        }
+      }
+
+      function toggleChannelsList() {
+        const container = document.getElementById('channels-content');
+        const toggle = document.getElementById('channels-list-toggle');
+        const refreshBtn = document.getElementById('refreshChannelsBtn');
+        if (container.style.display === 'none') {
+          container.style.display = 'block';
+          toggle.textContent = '▲';
+          refreshBtn.style.display = 'flex';
+          if (container.innerHTML === '加载中...') {
+            loadChannels();
+          }
+        } else {
+          container.style.display = 'none';
+          toggle.textContent = '▼';
+          refreshBtn.style.display = 'none';
+        }
+      }
+
+      // Area management functions
+      async function loadAreas() {
+        try {
+          const response = await fetch('/api/manage/areas');
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+          }
+
+          const result = await response.json();
+
+          if (result.success) {
+            const areasContent = document.getElementById('areas-content');
+            if (result.data.areas.length === 0) {
+              areasContent.innerHTML = '<p style="color: var(--text-secondary);">暂无分区</p>';
+            } else {
+              areasContent.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px;">
+                  ${result.data.areas.map(area => `
+                    <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 4px; background: var(--card-bg); color: var(--text-primary);">
+                      <strong>ID: ${area.id}</strong> - ${area.name}
+                      <br><small style="color: var(--text-secondary);">关键词: ${area.title_keywords.join(', ') || '无'}</small>
+                      <br><small style="color: var(--text-secondary);">别名: ${area.aliases.join(', ') || '无'}</small>
+                      <div style="margin-top: 8px; display: flex; gap: 5px;">
+                        <button class="btn-secondary" style="font-size: 12px;" onclick="editArea(${area.id})">编辑</button>
+                        <button class="btn-secondary" style="font-size: 12px; background: #e74c3c; border-color: #e74c3c; color: white;" onclick="deleteArea(${area.id})">删除</button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              `;
+            }
+          } else {
+            document.getElementById('areas-content').innerHTML = `<p style="color: red;">加载失败: ${result.message}</p>`;
+          }
+        } catch (error) {
+          console.error('Load areas error:', error);
+          document.getElementById('areas-content').innerHTML = `<p style="color: red;">加载失败: ${error.message}</p>`;
+        }
+      }
+
+      async function addArea() {
+        const id = parseInt(document.getElementById('area-id').value);
+        const name = document.getElementById('area-name').value.trim();
+        const keywords = document.getElementById('area-keywords').value.split(',').map(k => k.trim()).filter(k => k);
+        const aliases = document.getElementById('area-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+
+        if (!id || !name) {
+          alert('请填写分区ID和名称');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/manage/areas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: id,
+              name: name,
+              title_keywords: keywords,
+              aliases: aliases
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+          }
+
+          const result = await response.json();
+          if (result.success) {
+            alert('分区添加成功');
+            // Clear form
+            document.getElementById('area-id').value = '';
+            document.getElementById('area-name').value = '';
+            document.getElementById('area-keywords').value = '';
+            document.getElementById('area-aliases').value = '';
+            loadAreas();
+          } else {
+            alert(`添加失败: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('Add area error:', error);
+          alert(`添加失败: ${error.message}`);
+        }
+      }
+
+      // Channel management functions
+      async function loadChannels() {
+        try {
+          const response = await fetch('/api/manage/channels');
+          const result = await response.json();
+
+          if (result.success) {
+            const channelsContent = document.getElementById('channels-content');
+            if (result.data.channels.length === 0) {
+              channelsContent.innerHTML = '<p style="color: var(--text-secondary);">暂无频道</p>';
+            } else {
+              channelsContent.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px;">
+                  ${result.data.channels.map(channel => `
+                    <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 4px; background: var(--card-bg); color: var(--text-primary); word-wrap: break-word; overflow-wrap: break-word;">
+                      <strong>${channel.name}</strong>
+                      <br><small style="color: var(--text-secondary);">别名: ${channel.aliases.join(', ') || '无'}</small>
+                      <br><small style="color: var(--text-secondary); word-break: break-all;">YouTube: ${channel.platforms.youtube || '无'}</small>
+                      <br><small style="color: var(--text-secondary);">Twitch: ${channel.platforms.twitch || '无'}</small>
+                      ${channel.riot_puuid ? `<br><small style="color: var(--text-secondary); word-break: break-all; line-height: 1.3;">Riot PUUID: ${channel.riot_puuid}</small>` : ''}
+                      <div style="margin-top: 8px; display: flex; gap: 5px;">
+                        <button class="btn-secondary" style="font-size: 12px;" onclick="editChannel('${channel.name}')">编辑</button>
+                        <button class="btn-secondary" style="font-size: 12px; background: #e74c3c; border-color: #e74c3c; color: white;" onclick="deleteChannel('${channel.name}')">删除</button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              `;
+            }
+          } else {
+            document.getElementById('channels-content').innerHTML = `<p style="color: red;">加载失败: ${result.message}</p>`;
+          }
+        } catch (error) {
+          document.getElementById('channels-content').innerHTML = `<p style="color: red;">加载失败: ${error.message}</p>`;
+        }
+      }
+
+      async function addChannel() {
+        const name = document.getElementById('channel-name').value.trim();
+        const aliases = document.getElementById('channel-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+        const youtube = document.getElementById('channel-youtube').value.trim();
+        const twitch = document.getElementById('channel-twitch').value.trim();
+        const riot = document.getElementById('channel-riot').value.trim();
+
+        if (!name) {
+          alert('请填写频道名称');
+          return;
+        }
+
+        const platforms = {};
+        if (youtube) platforms.youtube = youtube;
+        if (twitch) platforms.twitch = twitch;
+
+        // Validate that at least one platform is provided
+        if (Object.keys(platforms).length === 0) {
+          alert('请至少填写一个平台的频道ID（YouTube或Twitch）');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/manage/channels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name,
+              aliases: aliases,
+              platforms: platforms,
+              riot_puuid: riot || null
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+          }
+
+          const result = await response.json();
+          if (result.success) {
+            alert('频道添加成功');
+            clearChannelForm();
+            loadChannels();
+          } else {
+            alert(`添加失败: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('Add channel error:', error);
+          alert(`添加失败: ${error.message}`);
+        }
+      }
+
+      async function updateChannel() {
+        const name = document.getElementById('channel-name').value.trim();
+        const aliases = document.getElementById('channel-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+        const youtube = document.getElementById('channel-youtube').value.trim();
+        const twitch = document.getElementById('channel-twitch').value.trim();
+        const riot = document.getElementById('channel-riot').value.trim();
+
+        if (!name) {
+          alert('请填写频道名称');
+          return;
+        }
+
+        const platforms = {};
+        if (youtube) platforms.youtube = youtube;
+        if (twitch) platforms.twitch = twitch;
+
+        // Validate that at least one platform is provided
+        if (Object.keys(platforms).length === 0) {
+          alert('请至少填写一个平台的频道ID（YouTube或Twitch）');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/manage/channels', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name,
+              aliases: aliases,
+              platforms: platforms,
+              riot_puuid: riot || null
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert('频道更新成功');
+            clearChannelForm();
+            loadChannels();
+          } else {
+            alert(`更新失败: ${result.message}`);
+          }
+        } catch (error) {
+          alert(`更新失败: ${error.message}`);
+        }
+      }
+
+      function editChannel(channelName) {
+        // Load channel data into form for editing
+        fetch('/api/manage/channels')
+          .then(response => response.json())
+          .then(result => {
+            if (result.success) {
+              const channel = result.data.channels.find(c => c.name === channelName);
+              if (channel) {
+                document.getElementById('channel-name').value = channel.name;
+                document.getElementById('channel-aliases').value = channel.aliases.join(', ');
+                document.getElementById('channel-youtube').value = channel.platforms.youtube || '';
+                document.getElementById('channel-twitch').value = channel.platforms.twitch || '';
+                document.getElementById('channel-riot').value = channel.riot_puuid || '';
+
+                // Change form to edit mode
+                document.getElementById('channel-form-title').textContent = '编辑频道';
+                document.getElementById('channel-submit-btn').textContent = '更新频道';
+                document.getElementById('channel-submit-btn').onclick = () => updateChannel();
+
+                // Scroll to form
+                document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
+              }
+            }
+          });
+      }
+
+      function clearChannelForm() {
+        document.getElementById('channel-name').value = '';
+        document.getElementById('channel-aliases').value = '';
+        document.getElementById('channel-youtube').value = '';
+        document.getElementById('channel-twitch').value = '';
+        document.getElementById('channel-riot').value = '';
+
+        // Reset form to add mode
+        document.getElementById('channel-form-title').textContent = '添加频道';
+        document.getElementById('channel-submit-btn').textContent = '添加频道';
+        document.getElementById('channel-submit-btn').onclick = addChannel;
+      }
+
+      function editArea(areaId) {
+        // Load area data into form for editing
+        fetch('/api/manage/areas')
+          .then(response => response.json())
+          .then(result => {
+            if (result.success) {
+              const area = result.data.areas.find(a => a.id === areaId);
+              if (area) {
+                document.getElementById('area-id').value = area.id;
+                document.getElementById('area-name').value = area.name;
+                document.getElementById('area-keywords').value = area.title_keywords.join(', ');
+                document.getElementById('area-aliases').value = area.aliases.join(', ');
+
+                // Change form to edit mode
+                document.getElementById('area-form-title').textContent = '编辑分区';
+                document.getElementById('area-submit-btn').textContent = '更新分区';
+                document.getElementById('area-submit-btn').onclick = () => updateArea(areaId);
+
+                // Scroll to form
+                document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
+              }
+            }
+          });
+      }
+
+      function clearAreaForm() {
+        document.getElementById('area-id').value = '';
+        document.getElementById('area-name').value = '';
+        document.getElementById('area-keywords').value = '';
+        document.getElementById('area-aliases').value = '';
+
+        // Reset form to add mode
+        document.getElementById('area-form-title').textContent = '添加新分区';
+        document.getElementById('area-submit-btn').textContent = '添加分区';
+        document.getElementById('area-submit-btn').onclick = addArea;
+      }
+
+      async function updateArea(originalId) {
+        const id = parseInt(document.getElementById('area-id').value);
+        const name = document.getElementById('area-name').value.trim();
+        const keywords = document.getElementById('area-keywords').value.split(',').map(k => k.trim()).filter(k => k);
+        const aliases = document.getElementById('area-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+
+        if (!id || !name) {
+          alert('请填写分区ID和名称');
+          return;
+        }
+
+        try {
+          // If ID changed, we need to delete the old one and add the new one
+          if (originalId !== id) {
+            // Delete old area
+            const deleteResponse = await fetch(`/api/manage/areas/${originalId}`, {
+              method: 'DELETE'
+            });
+
+            if (!deleteResponse.ok) {
+              throw new Error(`删除原分区失败: ${deleteResponse.status}`);
+            }
+          }
+
+          // Add/update area (since there's no PUT endpoint, we use POST)
+          const response = await fetch('/api/manage/areas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: id,
+              name: name,
+              title_keywords: keywords,
+              aliases: aliases
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+          }
+
+          const result = await response.json();
+          if (result.success) {
+            alert('分区更新成功');
+            clearAreaForm();
+            loadAreas();
+          } else {
+            alert(`更新失败: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('Update area error:', error);
+          alert(`更新失败: ${error.message}`);
+        }
+      }
+
+      // Delete functions
+      async function deleteArea(areaId) {
+        if (!confirm(`确定要删除分区 ID ${areaId} 吗？此操作不可撤销。`)) {
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/manage/areas/${areaId}`, {
+            method: 'DELETE'
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert('分区删除成功');
+            loadAreas();
+          } else {
+            alert(`删除失败: ${result.message}`);
+          }
+        } catch (error) {
+          alert(`删除失败: ${error.message}`);
+        }
+      }
+
+      async function deleteChannel(channelName) {
+        if (!confirm(`确定要删除频道 "${channelName}" 吗？此操作不可撤销。`)) {
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/manage/channels/${encodeURIComponent(channelName)}`, {
+            method: 'DELETE'
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert('频道删除成功');
+            loadChannels();
+          } else {
+            alert(`删除失败: ${result.message}`);
+          }
+        } catch (error) {
+          alert(`删除失败: ${error.message}`);
+        }
+      }
+
+      // Animated refresh functions
+      async function refreshAreas() {
+        const btn = document.getElementById('refreshAreasBtn');
+        const icon = document.getElementById('refreshAreasIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          await loadAreas();
+          showNotification('分区列表已刷新', 'success');
+        } catch (error) {
+          console.error('Error refreshing areas:', error);
+          showNotification('刷新分区列表失败', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
+        }
+      }
+
+      async function refreshChannels() {
+        const btn = document.getElementById('refreshChannelsBtn');
+        const icon = document.getElementById('refreshChannelsIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          await loadChannels();
+          showNotification('频道列表已刷新', 'success');
+        } catch (error) {
+          console.error('Error refreshing channels:', error);
+          showNotification('刷新频道列表失败', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
         }
       }
 

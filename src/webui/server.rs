@@ -1,7 +1,7 @@
 use axum::{
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use std::net::SocketAddr;
@@ -47,7 +47,14 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/holodex/streams", get(api::api_get_holodex_streams))
         .route("/holodex/switch", post(api::switch_to_holodex_stream))
         .route("/refresh/youtube", get(api::refresh_youtube_status))
-        .route("/refresh/twitch", get(api::refresh_twitch_status));
+        .route("/refresh/twitch", get(api::refresh_twitch_status))
+        .route("/manage/areas", get(api::get_areas_manage))
+        .route("/manage/areas", post(api::add_area))
+        .route("/manage/areas/:id", delete(api::delete_area))
+        .route("/manage/channels", get(api::get_channels_manage))
+        .route("/manage/channels", post(api::add_channel))
+        .route("/manage/channels", put(api::update_channel_manage))
+        .route("/manage/channels/:name", delete(api::delete_channel));
 
     // Main app with API routes and static files
     let app = Router::new()
