@@ -665,8 +665,19 @@ pub async fn update_channel(
     // Refresh status cache with updated configuration
     refresh_status_cache_config().await;
 
-    // Refresh live status in background (like refresh buttons)
-    refresh_live_status_background().await;
+    // Refresh live status in background for the specific platform only
+    let platform = payload.platform.clone();
+    tokio::spawn(async move {
+        match platform.as_str() {
+            "youtube" => {
+                let _ = refresh_youtube_status().await;
+            }
+            "twitch" => {
+                let _ = refresh_twitch_status().await;
+            }
+            _ => {}
+        }
+    });
 
     Ok(ApiResponse {
         success: true,
@@ -835,6 +846,19 @@ pub async fn save_setup_config(
     cfg.riot_api_key = payload.riot_api_key;
     cfg.enable_lol_monitor = payload.enable_lol_monitor;
 
+    // Track which platforms were updated
+    let youtube_updated = payload.youtube_channel_name.is_some()
+        || payload.youtube_channel_id.is_some()
+        || payload.youtube_area_v2.is_some()
+        || payload.youtube_quality.is_some();
+
+    let twitch_updated = payload.twitch_channel_name.is_some()
+        || payload.twitch_channel_id.is_some()
+        || payload.twitch_area_v2.is_some()
+        || payload.twitch_oauth_token.is_some()
+        || payload.twitch_proxy_region.is_some()
+        || payload.twitch_quality.is_some();
+
     // Update YouTube config if provided
     if let Some(yt_name) = payload.youtube_channel_name {
         cfg.youtube.channel_name = yt_name;
@@ -873,6 +897,22 @@ pub async fn save_setup_config(
     crate::config::save_config(&cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Set config updated flag so main loop can detect the change
+    set_config_updated();
+
+    // Refresh status cache with updated configuration
+    refresh_status_cache_config().await;
+
+    // Refresh live status in background for only the updated platforms
+    tokio::spawn(async move {
+        if youtube_updated {
+            let _ = refresh_youtube_status().await;
+        }
+        if twitch_updated {
+            let _ = refresh_twitch_status().await;
+        }
+    });
 
     Ok(ApiResponse {
         success: true,

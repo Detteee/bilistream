@@ -3444,7 +3444,8 @@
           const data = await response.json();
           showNotification(data.message || 'YouTube频道已更新', 'success');
           cancelYtChannelEdit();
-          setTimeout(refreshStatus, 2000);
+          // Refresh status immediately to show updated info
+          refreshStatus();
         } catch (error) {
           showNotification('更新失败: ' + error.message, 'error');
         }
@@ -3523,7 +3524,8 @@
           const data = await response.json();
           showNotification(data.message || 'YouTube配置分区已更新', 'success');
           cancelYtAreaEdit();
-          setTimeout(refreshStatus, 2000);
+          // Refresh status immediately to show updated info
+          refreshStatus();
         } catch (error) {
           showNotification('更新失败: ' + error.message, 'error');
         }
@@ -3602,7 +3604,8 @@
           const data = await response.json();
           showNotification(data.message || 'Twitch频道已更新', 'success');
           cancelTwChannelEdit();
-          setTimeout(refreshStatus, 2000);
+          // Refresh status immediately to show updated info
+          refreshStatus();
         } catch (error) {
           showNotification('更新失败: ' + error.message, 'error');
         }
@@ -3681,7 +3684,8 @@
           const data = await response.json();
           showNotification(data.message || 'Twitch配置分区已更新', 'success');
           cancelTwAreaEdit();
-          setTimeout(refreshStatus, 2000);
+          // Refresh status immediately to show updated info
+          refreshStatus();
         } catch (error) {
           showNotification('更新失败: ' + error.message, 'error');
         }
