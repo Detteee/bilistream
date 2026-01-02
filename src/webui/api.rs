@@ -216,10 +216,13 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     let config_json = json!({
         "interval": cfg.interval,
         "auto_cover": cfg.auto_cover,
-        "anti_collision": cfg.enable_anti_collision,
+        "enable_anti_collision": cfg.enable_anti_collision,
         "enable_lol_monitor": cfg.enable_lol_monitor,
+        "lol_monitor_interval": cfg.lol_monitor_interval,
         "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
         "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
+        "proxy": cfg.proxy.clone(),
+        "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -233,6 +236,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "channel_name": cfg.twitch.channel_name,
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
+            "oauth_token": cfg.twitch.oauth_token,
             "proxy_region": cfg.twitch.proxy_region,
         }
     });
