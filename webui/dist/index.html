@@ -1112,13 +1112,6 @@
               <div style="display: flex; gap: 8px; align-items: center;">
                 <select id="yt-quality-edit-select"
                   style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-                  <option value="">选择画质...</option>
-                  <option value="best">最佳质量</option>
-                  <option value="best[height<=1080]">超清 (1080p)</option>
-                  <option value="best[height<=720]">高清 (720p)</option>
-                  <option value="best[height<=480]">标清 (480p)</option>
-                  <option value="best[height<=360]">流畅 (360p)</option>
-                  <option value="worst">最低质量</option>
                 </select>
                 <button onclick="saveYtQualityEdit()"
                   style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
@@ -1242,13 +1235,6 @@
               <div style="display: flex; gap: 8px; align-items: center;">
                 <select id="tw-quality-edit-select"
                   style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-                  <option value="">选择画质...</option>
-                  <option value="best">原画质量</option>
-                  <option value="high">高质量 (720p)</option>
-                  <option value="medium">中等质量 (540p)</option>
-                  <option value="low">低质量 (360p)</option>
-                  <option value="audio_only">仅音频</option>
-                  <option value="worst">最低质量</option>
                 </select>
                 <button onclick="saveTwQualityEdit()"
                   style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
@@ -1390,11 +1376,6 @@
               <label>画质 (可选)</label>
               <select id="quality-select" onchange="updateQualityOptions()">
                 <option value="">不修改画质</option>
-                <option value="best">best - 最佳画质 (推荐)</option>
-                <option value="720p">720p - 高清</option>
-                <option value="480p">480p - 标清</option>
-                <option value="360p" data-platform="youtube">360p - 流畅 (仅YouTube)</option>
-                <option value="worst">worst - 最低画质</option>
               </select>
             </div>
           </div>
@@ -3637,6 +3618,9 @@
         editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
+        // Populate quality options for YouTube
+        populateQualityOptions(editSelect, 'youtube');
+
         // Set current quality as selected - convert display text back to technical value
         const currentDisplayText = qualitySpan.textContent;
         if (currentDisplayText && currentDisplayText !== '-') {
@@ -3699,6 +3683,9 @@
         qualitySpan.style.display = 'none';
         editButton.style.display = 'none';
         editContainer.style.display = 'flex';
+
+        // Populate quality options for Twitch
+        populateQualityOptions(editSelect, 'twitch');
 
         // Set current quality as selected - convert display text back to technical value
         const currentDisplayText = qualitySpan.textContent;
@@ -4124,25 +4111,26 @@
       function updateQualityOptions() {
         const platform = document.getElementById('platform-select').value;
         const qualitySelect = document.getElementById('quality-select');
-        const options = qualitySelect.querySelectorAll('option');
 
-        options.forEach(option => {
-          const platformRestriction = option.getAttribute('data-platform');
-          if (platformRestriction) {
-            // Show/hide 360p option based on platform
-            if (platform === 'youtube' && platformRestriction === 'youtube') {
-              option.style.display = '';
-              option.disabled = false;
-            } else if (platform === 'twitch' && platformRestriction === 'youtube') {
-              option.style.display = 'none';
-              option.disabled = true;
-              // Reset selection if 360p was selected for Twitch
-              if (qualitySelect.value === '360p') {
-                qualitySelect.value = '';
-              }
-            }
-          }
-        });
+        // Store current value
+        const currentValue = qualitySelect.value;
+
+        // Clear all options except the first "不修改画质" option
+        const firstOption = qualitySelect.querySelector('option[value=""]');
+        qualitySelect.innerHTML = '';
+        if (firstOption) {
+          qualitySelect.appendChild(firstOption);
+        }
+
+        // Add platform-specific quality options if platform is selected
+        if (platform) {
+          populateQualityOptions(qualitySelect, platform, false); // false = don't add empty option
+        }
+
+        // Try to restore previous value if it's still valid
+        if (currentValue && qualitySelect.querySelector(`option[value="${currentValue}"]`)) {
+          qualitySelect.value = currentValue;
+        }
       }
 
       function updateChannelInfo() {
@@ -4248,6 +4236,53 @@
         };
 
         return reverseMappings[platform][displayText] || displayText;
+      }
+
+      // Unified function to populate quality options for any select element
+      function populateQualityOptions(selectElement, platform, includeEmpty = true) {
+        if (!selectElement) return;
+
+        // Clear existing options
+        selectElement.innerHTML = '';
+
+        // Add empty option if requested
+        if (includeEmpty) {
+          const emptyOption = document.createElement('option');
+          emptyOption.value = '';
+          emptyOption.textContent = '选择画质...';
+          selectElement.appendChild(emptyOption);
+        }
+
+        // Get quality mappings for the platform
+        const qualityMappings = {
+          youtube: {
+            'best': '最佳质量',
+            'best[height<=1080]': '超清 (1080p)',
+            'best[height<=720]': '高清 (720p)',
+            'best[height<=480]': '标清 (480p)',
+            'best[height<=360]': '流畅 (360p)',
+            'worst': '最低质量'
+          },
+          twitch: {
+            'best': '原画质量',
+            'high': '高质量 (720p)',
+            'medium': '中等质量 (540p)',
+            'low': '低质量 (360p)',
+            'audio_only': '仅音频',
+            'worst': '最低质量'
+          }
+        };
+
+        // Add options for the specified platform
+        const platformQualities = qualityMappings[platform];
+        if (platformQualities) {
+          Object.entries(platformQualities).forEach(([value, text]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            selectElement.appendChild(option);
+          });
+        }
       }
 
       async function applyChannelChange() {
