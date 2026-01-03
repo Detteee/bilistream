@@ -143,7 +143,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
    **Twitch (streamlink) Quality Options:**
 
-   - `source` - Original broadcaster quality
+   - `best` - Original broadcaster quality
    - `high` - High quality (≤720p30fps, filters out higher resolutions)
    - `medium` - Medium quality (≤540p30fps, filters out higher resolutions)
    - `low` - Low quality (≤360p30fps, filters out higher resolutions)
