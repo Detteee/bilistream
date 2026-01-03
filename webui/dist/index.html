@@ -730,12 +730,12 @@
             <div class="control-group">
               <label>画质</label>
               <select id="setup-yt-quality">
-                <option value="best">best - 最佳质量 (推荐)</option>
-                <option value="best[height<=1080]">1080p - 超清</option>
-                <option value="best[height<=720]">720p - 高清</option>
-                <option value="best[height<=480]">480p - 标清</option>
-                <option value="best[height<=360]">360p - 流畅</option>
-                <option value="worst">worst - 最低质量</option>
+                <option value="best">最佳质量 (推荐)</option>
+                <option value="best[height<=1080]">超清 (1080o)</option>
+                <option value="best[height<=720]">高清 (720p)</option>
+                <option value="best[height<=480]">标清 (480p)</option>
+                <option value="best[height<=360]">流畅 (360p)</option>
+                <option value="worst">最低质量</option>
               </select>
             </div>
           </div>
@@ -3264,7 +3264,7 @@
               document.getElementById('yt-topic').textContent = yt.topic || '-';
               document.getElementById('yt-area').textContent =
                 yt.area_name ? `${yt.area_name} (${yt.area_id})` : (yt.area_id || '-');
-              document.getElementById('yt-quality').textContent = yt.quality || '-';
+              document.getElementById('yt-quality').textContent = yt.quality ? getQualityDisplayText(yt.quality, 'youtube') : '-';
             } else {
               document.getElementById('yt-status').className = 'status-indicator status-offline';
               document.getElementById('yt-channel-name').textContent = '-';
@@ -3284,7 +3284,7 @@
               document.getElementById('tw-game').textContent = tw.game || '-';
               document.getElementById('tw-area').textContent =
                 tw.area_name ? `${tw.area_name} (${tw.area_id})` : (tw.area_id || '-');
-              document.getElementById('tw-quality').textContent = tw.quality || '-';
+              document.getElementById('tw-quality').textContent = tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-';
             } else {
               document.getElementById('tw-status').className = 'status-indicator status-offline';
               document.getElementById('tw-channel-name').textContent = '-';
@@ -3637,10 +3637,11 @@
         editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
-        // Set current quality as selected
-        const currentQuality = qualitySpan.textContent;
-        if (currentQuality && currentQuality !== '-') {
-          editSelect.value = currentQuality;
+        // Set current quality as selected - convert display text back to technical value
+        const currentDisplayText = qualitySpan.textContent;
+        if (currentDisplayText && currentDisplayText !== '-') {
+          const technicalValue = getTechnicalQualityValue(currentDisplayText, 'youtube');
+          editSelect.value = technicalValue;
         }
 
         editSelect.focus();
@@ -3672,14 +3673,14 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               platform: 'youtube',
-              quality: quality
+              quality: quality // Send technical value to server
             })
           });
           const data = await response.json();
           showNotification(data.message || 'YouTube画质已更新', 'success');
           cancelYtQualityEdit();
-          // Update the display immediately
-          document.getElementById('yt-quality').textContent = quality;
+          // Update the display immediately with display text
+          document.getElementById('yt-quality').textContent = getQualityDisplayText(quality, 'youtube');
           // Refresh status to get updated info
           refreshStatus();
         } catch (error) {
@@ -3699,10 +3700,11 @@
         editButton.style.display = 'none';
         editContainer.style.display = 'flex';
 
-        // Set current quality as selected
-        const currentQuality = qualitySpan.textContent;
-        if (currentQuality && currentQuality !== '-') {
-          editSelect.value = currentQuality;
+        // Set current quality as selected - convert display text back to technical value
+        const currentDisplayText = qualitySpan.textContent;
+        if (currentDisplayText && currentDisplayText !== '-') {
+          const technicalValue = getTechnicalQualityValue(currentDisplayText, 'twitch');
+          editSelect.value = technicalValue;
         }
 
         editSelect.focus();
@@ -3734,14 +3736,14 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               platform: 'twitch',
-              quality: quality
+              quality: quality // Send technical value to server
             })
           });
           const data = await response.json();
           showNotification(data.message || 'Twitch画质已更新', 'success');
           cancelTwQualityEdit();
-          // Update the display immediately
-          document.getElementById('tw-quality').textContent = quality;
+          // Update the display immediately with display text
+          document.getElementById('tw-quality').textContent = getQualityDisplayText(quality, 'twitch');
           // Refresh status to get updated info
           refreshStatus();
         } catch (error) {
@@ -4199,6 +4201,53 @@
         } else {
           riotApiKeyGroup.style.display = 'none';
         }
+      }
+
+      // Quality mapping functions for display vs technical values
+      function getQualityDisplayText(technicalValue, platform = 'youtube') {
+        const qualityMappings = {
+          youtube: {
+            'best': '最佳质量',
+            'best[height<=1080]': '超清 (1080p)',
+            'best[height<=720]': '高清 (720p)',
+            'best[height<=480]': '标清 (480p)',
+            'best[height<=360]': '流畅 (360p)',
+            'worst': '最低质量'
+          },
+          twitch: {
+            'source': '原画质量',
+            'high': '高质量 (720p)',
+            'medium': '中等质量 (540p)',
+            'low': '低质量 (360p)',
+            'audio_only': '仅音频',
+            'worst': '最低质量'
+          }
+        };
+
+        return qualityMappings[platform][technicalValue] || technicalValue;
+      }
+
+      function getTechnicalQualityValue(displayText, platform = 'youtube') {
+        const reverseMappings = {
+          youtube: {
+            '最佳质量': 'best',
+            '超清 (1080p)': 'best[height<=1080]',
+            '高清 (720p)': 'best[height<=720]',
+            '标清 (480p)': 'best[height<=480]',
+            '流畅 (360p)': 'best[height<=360]',
+            '最低质量': 'worst'
+          },
+          twitch: {
+            '原画质量': 'source',
+            '高质量 (720p)': 'high',
+            '中等质量 (540p)': 'medium',
+            '低质量 (360p)': 'low',
+            '仅音频': 'audio_only',
+            '最低质量': 'worst'
+          }
+        };
+
+        return reverseMappings[platform][displayText] || displayText;
       }
 
       async function applyChannelChange() {
