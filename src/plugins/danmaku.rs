@@ -127,8 +127,13 @@ pub fn get_channel_id(
     let config = load_channels()?;
 
     for channel in &config.channels {
-        // Check both name and aliases without cloning whole channel
-        if channel.name == channel_name || channel.aliases.iter().any(|a| a == channel_name) {
+        // Check both name and aliases without cloning whole channel (case-insensitive)
+        if channel.name.to_lowercase() == channel_name.to_lowercase()
+            || channel
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase() == channel_name.to_lowercase())
+        {
             return Ok(match platform {
                 "YT" => channel.platforms.youtube.as_ref().map(|s| s.to_string()),
                 "TW" => channel.platforms.twitch.as_ref().map(|s| s.to_string()),
@@ -171,8 +176,13 @@ pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error
     let config = load_channels()?;
 
     for channel in &config.channels {
-        // Check both name and aliases
-        if channel.name == channel_name || channel.aliases.iter().any(|a| a == channel_name) {
+        // Check both name and aliases (case-insensitive)
+        if channel.name.to_lowercase() == channel_name.to_lowercase()
+            || channel
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase() == channel_name.to_lowercase())
+        {
             return Ok(channel
                 .riot_puuid
                 .as_ref()
