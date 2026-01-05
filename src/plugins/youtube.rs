@@ -192,7 +192,23 @@ pub async fn get_youtube_status(
             }
 
             // No live stream found, check for upcoming streams
-            if let Some(upcoming_stream) = channel_streams.iter().find(|s| s.status == "upcoming") {
+            // Sort upcoming streams by scheduled time (earliest first)
+            let mut upcoming_streams: Vec<_> = channel_streams
+                .iter()
+                .filter(|s| s.status == "upcoming")
+                .collect();
+
+            if !upcoming_streams.is_empty() {
+                // Sort by scheduled time (earliest first)
+                upcoming_streams.sort_by(|a, b| match (&a.start_scheduled, &b.start_scheduled) {
+                    (Some(time_a), Some(time_b)) => time_a.cmp(time_b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                });
+
+                // Pick the earliest scheduled stream
+                let upcoming_stream = upcoming_streams[0];
                 let topic = upcoming_stream.topic_id.clone();
                 let title = Some(upcoming_stream.title.clone());
                 let video_id = Some(upcoming_stream.id.clone());
