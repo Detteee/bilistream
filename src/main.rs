@@ -592,7 +592,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Check if config was updated (skip waiting if so)
             if is_config_updated() {
                 clear_config_updated();
-                tracing::info!("🔄 检测到配置更新，跳过等待间隔");
+                tracing::info!("🔄 检测到配置更新，重新加载配置并检查频道状态");
                 continue 'outer;
             }
 
@@ -609,7 +609,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if config was updated during sleep
                 if is_config_updated() {
                     clear_config_updated();
-                    tracing::info!("🔄 等待期间检测到配置更新，立即检查新频道");
+                    tracing::info!("🔄 等待期间检测到配置更新，重新加载配置并检查频道状态");
                     continue 'outer;
                 }
             }
