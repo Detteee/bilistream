@@ -868,9 +868,26 @@ async fn stop_live() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn change_live_title(new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_config().await?;
-    bili_change_live_title(&cfg, new_title).await?;
-    println!("直播标题改变成功");
-    Ok(())
+
+    match bili_change_live_title(&cfg, new_title).await {
+        Ok(_) => {
+            println!("✅ 直播标题改变成功");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("❌ 直播标题改变失败: {}", e);
+
+            // Provide helpful suggestions for common issues
+            if e.to_string().contains("审核") {
+                eprintln!("💡 建议:");
+                eprintln!("   - 尝试使用更通用的标题，如 '【转播】游戏直播'");
+                eprintln!("   - 避免使用特定的VTuber名称");
+                eprintln!("   - 使用英文或数字代替敏感词汇");
+            }
+
+            Err(e)
+        }
+    }
 }
 
 async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {

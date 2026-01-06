@@ -436,7 +436,29 @@ pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box
         .json()
         .await?;
 
-    // Optionally, handle the response if needed
+    // Check if the API call was successful
+    if let Some(code) = _res.get("code").and_then(|v| v.as_i64()) {
+        if code != 0 {
+            let message = _res
+                .get("message")
+                .or_else(|| _res.get("msg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("未知错误");
+
+            // Check for content moderation failure
+            if message.contains("未能通过审核") {
+                return Err(format!(
+                    "⚠️ 标题审核失败: {} - 可能包含敏感词汇，请尝试其他标题",
+                    message
+                )
+                .into());
+            }
+
+            return Err(format!("API调用失败 (code: {}): {}", code, message).into());
+        }
+    }
+
+    // Optionally, print the response for debugging
     // println!("{:#?}", res);
 
     Ok(())
