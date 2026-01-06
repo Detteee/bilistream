@@ -999,10 +999,30 @@ async fn check_collision(
     for (room_name, room_id) in cfg.anti_collision_list {
         match get_bili_live_status(room_id).await {
             Ok((true, title, _)) => {
-                let contains_collision = title.contains(target_name)
+                // Check if title contains the target name or aliases
+                let contains_target = title.contains(target_name)
                     || aliases.iter().any(|alias| title.contains(alias));
 
-                if contains_collision {
+                if contains_target {
+                    // Check if this is a multi-channel stream (contains multiple channels)
+                    let is_multi_channel = is_multi_channel_stream(&title);
+
+                    if is_multi_channel {
+                        tracing::debug!(
+                            "📺 检测到多频道转播，跳过撞车检测: {} - {}",
+                            room_name,
+                            title
+                        );
+                        continue; // Skip collision detection for multi-channel streams
+                    }
+
+                    // This appears to be a single-channel stream, flag as collision
+                    tracing::debug!(
+                        "🚨 检测到撞车: {} ({}) 正在转播 {}",
+                        room_name,
+                        room_id,
+                        target_name
+                    );
                     return Ok(Some((room_name.clone(), room_id, target_name.to_string())));
                 }
             }
@@ -1011,6 +1031,109 @@ async fn check_collision(
         }
     }
     Ok(None)
+}
+
+/// Check if a stream title indicates multiple channels (not exclusive to target)
+fn is_multi_channel_stream(title: &str) -> bool {
+    // Common separators for multi-channel streams
+    let channel_separators = ["/", "×", " x ", " X ", "&", "+", "with", "w/", "、"];
+
+    // Check for explicit channel separators first (quick check)
+    if channel_separators.iter().any(|sep| title.contains(sep)) {
+        return true;
+    }
+
+    // Load channels.json and check if multiple channels appear in the title
+    if let Ok(is_multi) = has_multiple_channels_in_title(title) {
+        return is_multi;
+    }
+
+    false
+}
+
+/// Check if multiple channel names from channels.json appear in the title
+fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    // Get channels.json path
+    let channels_path = std::env::current_exe()?.with_file_name("channels.json");
+
+    if !channels_path.exists() {
+        return Ok(false);
+    }
+
+    let channels_content = std::fs::read_to_string(&channels_path)?;
+    let channels_json: serde_json::Value = serde_json::from_str(&channels_content)?;
+
+    let mut found_channels = 0;
+    let title_lower = title.to_lowercase();
+
+    // Check current format: channels[].name and channels[].aliases
+    if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
+        for channel in channels {
+            let mut channel_found = false;
+
+            // Check main channel name
+            if let Some(name) = channel.get("name").and_then(|v| v.as_str()) {
+                if title_lower.contains(&name.to_lowercase()) {
+                    channel_found = true;
+                }
+            }
+
+            // Check aliases if main name not found
+            if !channel_found {
+                if let Some(aliases) = channel.get("aliases").and_then(|v| v.as_array()) {
+                    for alias in aliases {
+                        if let Some(alias_str) = alias.as_str() {
+                            if title_lower.contains(&alias_str.to_lowercase()) {
+                                channel_found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if channel_found {
+                found_channels += 1;
+                // Early return: if we found 2+ channels, it's definitely multi-channel
+                if found_channels >= 2 {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    // Legacy support: Check old format YT_channels[].channel_name
+    if let Some(yt_channels) = channels_json.get("YT_channels").and_then(|v| v.as_array()) {
+        for channel in yt_channels {
+            if let Some(name) = channel.get("channel_name").and_then(|v| v.as_str()) {
+                if title_lower.contains(&name.to_lowercase()) {
+                    found_channels += 1;
+                    // Early return for legacy format too
+                    if found_channels >= 2 {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    // Legacy support: Check old format TW_channels[].channel_name
+    if let Some(tw_channels) = channels_json.get("TW_channels").and_then(|v| v.as_array()) {
+        for channel in tw_channels {
+            if let Some(name) = channel.get("channel_name").and_then(|v| v.as_str()) {
+                if title_lower.contains(&name.to_lowercase()) {
+                    found_channels += 1;
+                    // Early return for legacy format too
+                    if found_channels >= 2 {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    // Return false if we found 0 or 1 channels
+    Ok(false)
 }
 
 async fn handle_collisions(
