@@ -220,6 +220,40 @@ pub fn get_all_channels(
     Ok(channels)
 }
 
+/// Check if configuration update is needed without modifying the config
+fn is_config_update_needed(
+    platform: &str,
+    channel_name: &str,
+    channel_id: &str,
+    area_id: u64,
+) -> io::Result<bool> {
+    // Use the same config.json path as the executable (matches config.rs behavior)
+    let exe_path = std::env::current_exe()?;
+    let config_path = exe_path.with_file_name("config.json");
+
+    // Read the existing config.json
+    let config_content = fs::read_to_string(&config_path)?;
+
+    // Deserialize JSON into Config struct
+    let config: Config = serde_json::from_str(&config_content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    // Check if update is needed
+    let needs_update = if platform == "YT" {
+        config.youtube.channel_id != channel_id
+            || config.youtube.channel_name != channel_name
+            || config.youtube.area_v2 != area_id
+    } else if platform == "TW" {
+        config.twitch.channel_id != channel_id
+            || config.twitch.channel_name != channel_name
+            || config.twitch.area_v2 != area_id
+    } else {
+        false
+    };
+
+    Ok(needs_update)
+}
+
 /// Updates the configuration JSON file with new values.
 fn update_config(
     platform: &str,
@@ -465,6 +499,49 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 return;
             }
         };
+
+        // Check if configuration update is needed before expensive live status check
+        match is_config_update_needed(
+            &platform,
+            channel_name.as_deref().unwrap(),
+            channel_id_str,
+            area_id,
+        ) {
+            Ok(needs_update) => {
+                if !needs_update {
+                    let area_name = match get_area_name(area_id) {
+                        Some(name) => name,
+                        None => {
+                            // let _ = bilibili::send_danmaku(&cfg, "错误：无法获取分区名称").await;
+                            return;
+                        }
+                    };
+                    let _ = bilibili::send_danmaku(
+                        &cfg,
+                        &format!(
+                            "{} 监听对象已是：{} - {}",
+                            platform,
+                            channel_name.as_deref().unwrap(),
+                            area_name
+                        ),
+                    )
+                    .await;
+                    tracing::info!(
+                        "{} 监听对象已是：{} - {}",
+                        platform,
+                        channel_name.as_deref().unwrap(),
+                        area_name
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::error!("检查配置更新时出错: {}", e);
+                let _ =
+                    bilibili::send_danmaku(&cfg, &format!("错误：检查配置更新时出错 {}", e)).await;
+                return;
+            }
+        }
 
         let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
