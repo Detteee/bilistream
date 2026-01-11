@@ -121,7 +121,6 @@ pub async fn get_holodex_streams(
     );
 
     let client = reqwest::Client::new();
-    tracing::debug!("🌐 调用 Holodex API: {}", url);
     let response = client.get(&url).header("X-APIKEY", api_key).send().await?;
 
     if !response.status().is_success() {
@@ -129,16 +128,6 @@ pub async fn get_holodex_streams(
     }
 
     let streams: Vec<HolodexStream> = response.json().await?;
-    tracing::debug!("📡 Holodex API 返回 {} 个流", streams.len());
-    for stream in &streams {
-        tracing::debug!(
-            "  - {} ({}): {} [{}]",
-            stream.channel.name,
-            stream.channel.id,
-            stream.title,
-            stream.status
-        );
-    }
     Ok(streams)
 }
 
@@ -155,7 +144,6 @@ pub async fn get_youtube_status(
     ),
     Box<dyn Error>,
 > {
-    tracing::debug!("🔍 获取 YouTube 状态 - 频道ID: {}", channel_id);
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let quality = cfg.youtube.quality.clone();
@@ -193,12 +181,6 @@ pub async fn get_youtube_status(
 
             // First try to find a live stream
             if let Some(live_stream) = channel_streams.iter().find(|s| s.status == "live") {
-                tracing::debug!(
-                    "🔴 发现直播 - 频道: {} ({}), 标题: {}",
-                    live_stream.channel.name,
-                    live_stream.channel.id,
-                    live_stream.title
-                );
                 let topic = live_stream.topic_id.clone();
                 let title = Some(live_stream.title.clone());
                 let video_id = Some(live_stream.id.clone());
@@ -210,10 +192,30 @@ pub async fn get_youtube_status(
             }
 
             // No live stream found, check for upcoming streams
-            // Sort upcoming streams by scheduled time (earliest first)
+            // Filter and sort upcoming streams by scheduled time (earliest first)
+            // Also filter out scheduled streams more than 30 hours in the future
+            let now = chrono::Utc::now();
+            let thirty_hours_later = now + chrono::Duration::hours(30);
+
             let mut upcoming_streams: Vec<_> = channel_streams
                 .iter()
-                .filter(|s| s.status == "upcoming")
+                .filter(|s| {
+                    if s.status != "upcoming" {
+                        return false;
+                    }
+
+                    // Filter by time (within 30 hours)
+                    if let Some(ref scheduled_time) = s.start_scheduled {
+                        if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time)
+                        {
+                            let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
+                            // Only keep if scheduled within next 30 hours
+                            return scheduled_utc <= thirty_hours_later;
+                        }
+                    }
+                    // If we can't parse the time, keep it to be safe
+                    true
+                })
                 .collect();
 
             if !upcoming_streams.is_empty() {
