@@ -1530,11 +1530,33 @@ pub async fn switch_to_holodex_stream(
     set_config_updated();
 
     // Use stream data from Holodex monitor (passed from frontend)
+    tracing::info!(
+        "Received payload - channel_id: {}, status: {:?}, title: {:?}",
+        payload.channel_id,
+        payload.status,
+        payload.title
+    );
+
     let is_live = payload
         .status
         .as_ref()
-        .map(|s| s == "live")
-        .unwrap_or(false);
+        .map(|s| {
+            let status_lower = s.to_lowercase();
+            let is_live_result = status_lower == "live";
+            tracing::info!(
+                "Status comparison: '{}' (lowercase: '{}') == 'live' -> {}",
+                s,
+                status_lower,
+                is_live_result
+            );
+            is_live_result
+        })
+        .unwrap_or_else(|| {
+            tracing::warn!("Status field is None, defaulting to false");
+            false
+        });
+
+    tracing::info!("Final is_live value: {}", is_live);
     let stream_title = payload.title.unwrap_or_else(|| "未知标题".to_string());
     let stream_topic = payload.topic_id.unwrap_or_else(|| "未知".to_string());
 
