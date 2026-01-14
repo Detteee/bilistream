@@ -1052,14 +1052,6 @@ async fn check_collision(
 
 /// Check if a stream title indicates multiple channels (not exclusive to target)
 fn is_multi_channel_stream(title: &str) -> bool {
-    // Common separators for multi-channel streams
-    let channel_separators = ["/", "×", " x ", " X ", "&", "+", "with", "w/", "、"];
-
-    // Check for explicit channel separators first (quick check)
-    if channel_separators.iter().any(|sep| title.contains(sep)) {
-        return true;
-    }
-
     // Load channels.json and check if multiple channels appear in the title
     if let Ok(is_multi) = has_multiple_channels_in_title(title) {
         return is_multi;

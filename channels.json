@@ -7,8 +7,8 @@
         "kami酱"
       ],
       "platforms": {
-        "youtube": "UCgYCMluaLpERsyNXlPOvBtA",
-        "twitch": "kamito_jp"
+        "twitch": "kamito_jp",
+        "youtube": "UCgYCMluaLpERsyNXlPOvBtA"
       },
       "riot_puuid": "WT5ZsJaUGr5JkgjcDbtBEXgTPT-p7edPxlrHDYZ4sNlX85Ob_vCTB9XYNrLr1sdj62JVWhBgwL7MIw"
     },
@@ -133,8 +133,8 @@
         "ren"
       ],
       "platforms": {
-        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
-        "twitch": "ren_kisaragi__"
+        "twitch": "ren_kisaragi__",
+        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg"
       },
       "riot_puuid": "KjyMzB8x5HCJYygy8AlxE-YEvejsBSEoY04ZAsdiqj_2blcS9LnkyvGpV6JsQkxwdDoJrH9_IeC0MA"
     },
@@ -168,8 +168,8 @@
         "emts"
       ],
       "platforms": {
-        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng",
-        "twitch": "emtsmaru"
+        "twitch": "emtsmaru",
+        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng"
       }
     },
     {
@@ -183,8 +183,8 @@
         "紫发小女孩"
       ],
       "platforms": {
-        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw",
-        "twitch": "shinomiya_runa"
+        "twitch": "shinomiya_runa",
+        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw"
       },
       "riot_puuid": "EkYVJYRQAJheLNbvnG_hE5QR0LmRU-Gq-IdL8wHfRtOfQyYpVWk8ngWcA_JwLfRswPmhV4hrNkxTmQ"
     },
@@ -220,8 +220,8 @@
         "拉姆"
       ],
       "platforms": {
-        "youtube": "UC61OwuYOVuKkpKnid-43Twg",
-        "twitch": "ramuneshiranami"
+        "twitch": "ramuneshiranami",
+        "youtube": "UC61OwuYOVuKkpKnid-43Twg"
       },
       "riot_puuid": "feCDrVqSMb8pUkh-P7gaYNrP07EIdU2iFRsy0u8m1dYPDDFa3EkvFL-rSoy7cM9PhJEn-RPfkS5P9g"
     },
@@ -233,8 +233,8 @@
         "akarin"
       ],
       "platforms": {
-        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ",
-        "twitch": "akarindao"
+        "twitch": "akarindao",
+        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ"
       },
       "riot_puuid": "rHYfGMspqOBz2pCoHprVG_xIJGP_i3nEGm41Q2-fveg4VIVZXvcb0I37BJP5KfwXF5iLXBaZXXNjbQ"
     },
@@ -274,8 +274,8 @@
         "千灯"
       ],
       "platforms": {
-        "youtube": "UCuDY3ibSP2MFRgf7eo3cojg",
-        "twitch": "sendo_yuuhi"
+        "twitch": "sendo_yuuhi",
+        "youtube": "UCuDY3ibSP2MFRgf7eo3cojg"
       },
       "riot_puuid": "HKELuBV0wznS9CYlX8r8L3ZlVSCXEHr5PwJkcBkAaIe6RrcrrBLlaZEsHxffi9W7Cah9m8PX-ipfoA"
     },
@@ -299,6 +299,37 @@
       }
     },
     {
+      "name": "銀城サイネ",
+      "aliases": [
+        "銀城",
+        "サイネ",
+        "saine"
+      ],
+      "platforms": {
+        "youtube": "UC2xXx1m1jeL0W84_0jTg-Yw"
+      }
+    },
+    {
+      "name": "龍巻ちせ",
+      "aliases": [
+        "龍巻",
+        "ちせ",
+        "chise"
+      ],
+      "platforms": {
+        "youtube": "UCoW8qQy80mKH0RJTKAK-nNA"
+      }
+    },
+    {
+      "name": "ぶいすぽっ!【公式】",
+      "aliases": [
+        "vspo"
+      ],
+      "platforms": {
+        "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
+      }
+    },
+    {
       "name": "Narin",
       "aliases": [
         "narinmikure"
@@ -316,22 +347,10 @@
         "狮子堂"
       ],
       "platforms": {
-        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ",
-        "twitch": "shishidoakari"
+        "twitch": "shishidoakari",
+        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ"
       },
       "riot_puuid": "jQAWeon-dvYiFQdrAOMNQRzWLAX_Ee79FujTYJHTHu-x5Pu2Pm1R-NUAZtPZiY1A6-cXoadLnpyHOw"
-    },
-    {
-      "name": "小清水透",
-      "aliases": [
-        "吸酱",
-        "toru"
-      ],
-      "platforms": {
-        "youtube": "UCUP8TmlO7NNra88AMqGU_vQ",
-        "twitch": "toru_2434"
-      },
-      "riot_puuid": "fEdPS61QDYU0bE3jFsrwrAnv4jgEbChZ2n9c0KW8XXQQVSzXcyoe87L7KPxH75yKN_4oPRHD_Z4P1"
     },
     {
       "name": "天帝フォルテ",
@@ -340,19 +359,10 @@
         "天帝"
       ],
       "platforms": {
-        "youtube": "UC8hwewh9svh92E1gXvgVazg",
-        "twitch": "tentei_forte"
+        "twitch": "tentei_forte",
+        "youtube": "UC8hwewh9svh92E1gXvgVazg"
       },
       "riot_puuid": "JGbu7B6ajjntnp3O5A3Hr9EYY2CxwF3njPFN_LWOmrbaUqQwW5pnUgW49nO2D-L35YKFkuzaHG1pFQ"
-    },
-    {
-      "name": "ぶいすぽっ!【公式】",
-      "aliases": [
-        "vspo"
-      ],
-      "platforms": {
-        "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
-      }
     },
     {
       "name": "夜絆ニウ",
@@ -427,8 +437,8 @@
         "toitoi"
       ],
       "platforms": {
-        "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ",
-        "twitch": "itoitoi_q"
+        "twitch": "itoitoi_q",
+        "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ"
       }
     }
   ]
