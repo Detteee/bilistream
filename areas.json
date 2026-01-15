@@ -297,6 +297,26 @@
       "aliases": [
         "公司"
       ]
+    },
+    {
+      "id": 89,
+      "name": "CS:GO",
+      "title_keywords": [
+        "cs:go",
+        "counter-strike",
+        "cs2"
+      ],
+      "aliases": [
+        "csgo",
+        "cs2"
+      ]
+    },
+    {
+      "id": 1023,
+      "name": "ARC Raiders",
+      "title_keywords": [
+        "arc raiders"
+      ]
     }
   ]
 }
