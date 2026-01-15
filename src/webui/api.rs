@@ -1540,6 +1540,7 @@ pub async fn switch_to_holodex_stream(
     let is_live = payload
         .status
         .as_ref()
+        .filter(|s| !s.is_empty()) // Filter out empty strings
         .map(|s| {
             let status_lower = s.to_lowercase();
             let is_live_result = status_lower == "live";
@@ -1552,7 +1553,7 @@ pub async fn switch_to_holodex_stream(
             is_live_result
         })
         .unwrap_or_else(|| {
-            tracing::warn!("Status field is None, defaulting to false");
+            tracing::warn!("Status field is None or empty, defaulting to false");
             false
         });
 
