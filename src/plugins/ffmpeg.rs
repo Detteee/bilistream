@@ -22,6 +22,9 @@ use std::sync::atomic::AtomicBool;
 // Track if ffmpeg was stopped manually (e.g., via restart button)
 static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 
+// Track if a manual restart was requested (force immediate restart even if stream is live)
+static MANUAL_RESTART: AtomicBool = AtomicBool::new(false);
+
 // Represents a managed ffmpeg process
 pub struct FfmpegProcess {
     child: Child,
@@ -157,6 +160,21 @@ pub fn was_manual_stop() -> bool {
 // Clear manual stop flag
 pub fn clear_manual_stop() {
     MANUAL_STOP.store(false, Ordering::SeqCst);
+}
+
+// Set manual restart flag (force immediate restart)
+pub fn set_manual_restart() {
+    MANUAL_RESTART.store(true, Ordering::SeqCst);
+}
+
+// Check if manual restart was requested
+pub fn was_manual_restart() -> bool {
+    MANUAL_RESTART.load(Ordering::SeqCst)
+}
+
+// Clear manual restart flag
+pub fn clear_manual_restart() {
+    MANUAL_RESTART.store(false, Ordering::SeqCst);
 }
 
 // Get current ffmpeg speed (lock-free read)

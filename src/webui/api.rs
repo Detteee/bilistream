@@ -477,6 +477,9 @@ pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
     // Clear any warning stops to allow restreaming
     crate::plugins::danmaku::clear_warning_stop();
 
+    // Set manual restart flag to force immediate restart
+    crate::plugins::set_manual_restart();
+
     // Set config updated flag to trigger main loop reload
     set_config_updated();
 

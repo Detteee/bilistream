@@ -10,11 +10,12 @@ use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, clear_config_updated, clear_manual_stop, clear_warning_stop,
-    enable_danmaku_commands, ffmpeg, get_aliases, get_area_name, get_bili_live_status,
-    get_channel_name, get_puuid, is_config_updated, is_danmaku_commands_enabled,
-    is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku, should_skip_due_to_warned,
-    should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg, was_manual_stop,
+    check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
+    clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
+    get_bili_live_status, get_channel_name, get_puuid, is_config_updated,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
+    was_manual_restart, was_manual_stop,
 };
 
 use chrono::{DateTime, Local};
@@ -444,12 +445,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tracing::warn!("⚠️ ffmpeg进程已停止");
                 }
 
-                // Check if config was updated (restart requested)
-                if is_config_updated() {
-                    tracing::info!("🔄 检测到配置更新/重启请求，退出ffmpeg监控循环");
-                    break;
-                }
-
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -469,6 +464,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if !current_is_live || !bili_is_live {
                     tracing::info!("直播已结束，停止ffmpeg监控循环");
                     break;
+                }
+
+                // Check if manual restart was requested (force immediate restart)
+                if was_manual_restart() {
+                    tracing::info!("🔄 检测到手动重启请求，立即退出ffmpeg监控循环");
+                    clear_manual_restart();
+                    break;
+                }
+
+                // Check if config was updated (channel switch)
+                // Only break if stream has ended, otherwise continue streaming current channel
+                if is_config_updated() {
+                    tracing::info!("🔄 检测到配置更新请求，但当前流仍在进行，继续转播直到流结束");
+                    // Don't break, let the stream continue until it naturally ends
                 }
 
                 // Update m3u8 URL if it changed
