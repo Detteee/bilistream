@@ -42,6 +42,8 @@ static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(Non
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 // Track last video/stream ID for cover change detection (works across platforms)
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
+// Track last banned keyword warning to prevent spam
+static LAST_BANNED_KEYWORD_WARNING: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(PartialEq)]
 enum CollisionResult {
@@ -282,16 +284,32 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 .iter()
                 .find(|k| title.as_ref().map_or(false, |t| t.contains(*k)))
             {
-                tracing::error!("直播标题/分区包含不支持的关键词:\n{}", keyword);
-                if let Err(e) = send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await
-                {
-                    tracing::error!("Failed to send danmaku: {}", e);
-                }
-                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                    enable_danmaku_commands(true);
-                    thread::sleep(Duration::from_secs(2));
-                    if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await {
+                // Check if we already warned about this keyword for this stream
+                let should_warn = {
+                    let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
+                    let current_warning = format!("{}:{}", keyword, title_str);
+                    if last_warning.as_ref() != Some(&current_warning) {
+                        *last_warning = Some(current_warning);
+                        true
+                    } else {
+                        false
+                    }
+                };
+
+                if should_warn {
+                    tracing::error!("直播标题/分区包含不支持的关键词: {}", keyword);
+                    if let Err(e) =
+                        send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await
+                    {
                         tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                        enable_danmaku_commands(true);
+                        thread::sleep(Duration::from_secs(2));
+                        if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                        {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
@@ -311,6 +329,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_name.unwrap(),
                     area_v2
                 );
+                // Clear banned keyword warning when successfully starting a new stream
+                *LAST_BANNED_KEYWORD_WARNING.lock().unwrap() = None;
                 // If auto_cover is enabled, update Bilibili live cover
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
