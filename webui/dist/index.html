@@ -1768,6 +1768,40 @@
             </div>
           </div>
 
+          <!-- Banned Keywords Settings Section -->
+          <div style="margin-bottom: 30px;">
+            <h3
+              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+              禁用关键词设置
+            </h3>
+
+            <!-- Streaming Banned Keywords -->
+            <div class="control-group" style="margin-bottom: 25px;">
+              <label style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px; display: block;">
+                转播禁用关键词
+                <small style="color: var(--text-secondary); font-weight: normal; display: block; margin-top: 5px;">
+                  包含这些关键词的直播将不会被转播（每行一个关键词）
+                </small>
+              </label>
+              <textarea id="streaming-banned-keywords" rows="6"
+                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); font-family: monospace; resize: vertical;"
+                placeholder="watchalong&#10;watchparty&#10;asmr"></textarea>
+            </div>
+
+            <!-- Danmaku Banned Keywords -->
+            <div class="control-group">
+              <label style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px; display: block;">
+                弹幕命令禁用关键词
+                <small style="color: var(--text-secondary); font-weight: normal; display: block; margin-top: 5px;">
+                  包含这些关键词的直播将禁用弹幕命令（每行一个关键词）
+                </small>
+              </label>
+              <textarea id="danmaku-banned-keywords" rows="8"
+                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); font-family: monospace; resize: vertical;"
+                placeholder="watchalong&#10;talk&#10;freechat"></textarea>
+            </div>
+          </div>
+
           <div class="button-group" style="margin-top: 20px;">
             <button class="btn-primary" onclick="saveSystemConfig()">保存配置</button>
             <button class="btn-secondary" onclick="loadSystemConfig()">重新加载</button>
@@ -2318,9 +2352,26 @@
           window.currentAntiCollisionList = config.anti_collision_list || {};
           loadAntiCollisionList(window.currentAntiCollisionList);
 
+          // Load banned keywords
+          await loadBannedKeywords();
+
         } catch (error) {
           console.error('Failed to load system config:', error);
           showNotification('加载配置失败', 'error');
+        }
+      }
+
+      async function loadBannedKeywords() {
+        try {
+          const response = await fetch('/api/banned-keywords');
+          const data = await response.json();
+
+          document.getElementById('streaming-banned-keywords').value =
+            (data.streaming_banned_keywords || []).join('\n');
+          document.getElementById('danmaku-banned-keywords').value =
+            (data.danmaku_banned_keywords || []).join('\n');
+        } catch (error) {
+          console.error('Failed to load banned keywords:', error);
         }
       }
 
@@ -2427,6 +2478,8 @@
           const result = await response.json();
 
           if (result.success) {
+            // Save banned keywords separately
+            await saveBannedKeywords();
             showNotification('配置保存成功', 'success');
           } else {
             showNotification('配置保存失败: ' + (result.error || '未知错误'), 'error');
@@ -2434,6 +2487,36 @@
         } catch (error) {
           console.error('Failed to save system config:', error);
           showNotification('配置保存失败', 'error');
+        }
+      }
+
+      async function saveBannedKeywords() {
+        try {
+          const streamingKeywords = document.getElementById('streaming-banned-keywords').value
+            .split('\n')
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+
+          const danmakuKeywords = document.getElementById('danmaku-banned-keywords').value
+            .split('\n')
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+
+          const response = await fetch('/api/banned-keywords', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              streaming_banned_keywords: streamingKeywords,
+              danmaku_banned_keywords: danmakuKeywords
+            })
+          });
+
+          const result = await response.json();
+          if (!result.success) {
+            console.error('Failed to save banned keywords:', result.message);
+          }
+        } catch (error) {
+          console.error('Failed to save banned keywords:', error);
         }
       }
 

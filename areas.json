@@ -26,6 +26,19 @@
     "じゃんたま",
     "gartic phone"
   ],
+  "streaming_banned_keywords": [
+    "どうぶつの森",
+    "animal crossing",
+    "asmr",
+    "dbd",
+    "dead by daylight",
+    "l4d2",
+    "left 4 dead 2",
+    "gta",
+    "mad town",
+    "watchalong",
+    "watchparty"
+  ],
   "areas": [
     {
       "id": 86,

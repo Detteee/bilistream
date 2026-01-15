@@ -51,19 +51,50 @@ enum CollisionResult {
     Proceed,
 }
 
-const BANNED_KEYWORDS: [&str; 11] = [
-    "どうぶつの森",
-    "animal crossing",
-    "asmr",
-    "dbd",
-    "dead by daylight",
-    "l4d2",
-    "left 4 dead 2",
-    "gta",
-    "mad town",
-    "watchalong",
-    "watchparty",
-];
+fn load_streaming_banned_keywords() -> Vec<String> {
+    let areas_path = match std::env::current_exe() {
+        Ok(path) => path.with_file_name("areas.json"),
+        Err(e) => {
+            tracing::error!("Failed to get executable path: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let content = match std::fs::read_to_string(&areas_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to read areas.json: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let data: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("Failed to parse areas.json: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if let Some(keywords) = data["streaming_banned_keywords"].as_array() {
+        keywords
+            .iter()
+            .filter_map(|k| k.as_str().map(|s| s.to_string()))
+            .collect()
+    } else {
+        tracing::warn!("areas.json 中未找到 streaming_banned_keywords，使用默认值");
+        vec![
+            "どうぶつの森".to_string(),
+            "animal crossing".to_string(),
+            "asmr".to_string(),
+            "dbd".to_string(),
+            "dead by daylight".to_string(),
+            "l4d2".to_string(),
+            "left 4 dead 2".to_string(),
+            "gta".to_string(),
+        ]
+    }
+}
 
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
@@ -280,9 +311,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
             }
-            if let Some(keyword) = BANNED_KEYWORDS
+            if let Some(keyword) = load_streaming_banned_keywords()
                 .iter()
-                .find(|k| title.as_ref().map_or(false, |t| t.contains(*k)))
+                .find(|k| title.as_ref().map_or(false, |t| t.contains(k.as_str())))
             {
                 // Check if we already warned about this keyword for this stream
                 let should_warn = {

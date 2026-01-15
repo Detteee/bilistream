@@ -48,6 +48,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/holodex/switch", post(api::switch_to_holodex_stream))
         .route("/refresh/youtube", get(api::refresh_youtube_status))
         .route("/refresh/twitch", get(api::refresh_twitch_status))
+        .route("/banned-keywords", get(api::get_banned_keywords))
+        .route("/banned-keywords", post(api::update_banned_keywords))
         .route("/manage/areas", get(api::get_areas_manage))
         .route("/manage/areas", post(api::add_area))
         .route("/manage/areas/:id", delete(api::delete_area))

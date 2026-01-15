@@ -715,6 +715,86 @@ pub async fn get_areas() -> Result<Json<serde_json::Value>, StatusCode> {
 }
 
 #[derive(Serialize)]
+pub struct BannedKeywordsResponse {
+    danmaku_banned_keywords: Vec<String>,
+    streaming_banned_keywords: Vec<String>,
+}
+
+pub async fn get_banned_keywords() -> Result<Json<BannedKeywordsResponse>, StatusCode> {
+    let areas_path = std::env::current_exe()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .with_file_name("areas.json");
+
+    let content =
+        std::fs::read_to_string(areas_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let data: serde_json::Value =
+        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let danmaku_banned = data["banned_keywords"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let streaming_banned = data["streaming_banned_keywords"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(BannedKeywordsResponse {
+        danmaku_banned_keywords: danmaku_banned,
+        streaming_banned_keywords: streaming_banned,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateBannedKeywordsRequest {
+    danmaku_banned_keywords: Option<Vec<String>>,
+    streaming_banned_keywords: Option<Vec<String>>,
+}
+
+pub async fn update_banned_keywords(
+    Json(payload): Json<UpdateBannedKeywordsRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let areas_path = std::env::current_exe()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .with_file_name("areas.json");
+
+    let content =
+        std::fs::read_to_string(&areas_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut data: serde_json::Value =
+        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if let Some(danmaku_keywords) = payload.danmaku_banned_keywords {
+        data["banned_keywords"] = serde_json::json!(danmaku_keywords);
+    }
+
+    if let Some(streaming_keywords) = payload.streaming_banned_keywords {
+        data["streaming_banned_keywords"] = serde_json::json!(streaming_keywords);
+    }
+
+    let updated_content =
+        serde_json::to_string_pretty(&data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    std::fs::write(&areas_path, updated_content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("禁用关键词已更新".to_string()),
+    })
+}
+
+#[derive(Serialize)]
 pub struct SetupStatus {
     needs_setup: bool,
     missing_files: Vec<String>,
