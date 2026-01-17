@@ -300,6 +300,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
         "proxy": cfg.proxy.clone(),
         "anti_collision_list": cfg.anti_collision_list.clone(),
+        "enable_youtube_monitor": cfg.enable_youtube_monitor,
+        "enable_twitch_monitor": cfg.enable_twitch_monitor,
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -334,6 +336,8 @@ pub struct UpdateConfigRequest {
     twitch_oauth_token: Option<String>,
     twitch_proxy_region: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
+    enable_youtube_monitor: Option<bool>,
+    enable_twitch_monitor: Option<bool>,
 }
 
 pub async fn update_config(
@@ -398,6 +402,12 @@ pub async fn update_config(
     }
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
+    }
+    if let Some(enable_youtube_monitor) = payload.enable_youtube_monitor {
+        cfg.enable_youtube_monitor = enable_youtube_monitor;
+    }
+    if let Some(enable_twitch_monitor) = payload.enable_twitch_monitor {
+        cfg.enable_twitch_monitor = enable_twitch_monitor;
     }
 
     // Save config
@@ -797,6 +807,61 @@ pub async fn update_banned_keywords(
     })
 }
 
+#[derive(Deserialize)]
+pub struct ToggleMonitorRequest {
+    enabled: bool,
+}
+
+pub async fn toggle_youtube_monitor(
+    Json(payload): Json<ToggleMonitorRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    cfg.enable_youtube_monitor = payload.enabled;
+
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    set_config_updated();
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some(format!(
+            "YouTube监控已{}",
+            if payload.enabled { "启用" } else { "禁用" }
+        )),
+    })
+}
+
+pub async fn toggle_twitch_monitor(
+    Json(payload): Json<ToggleMonitorRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    cfg.enable_twitch_monitor = payload.enabled;
+
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    set_config_updated();
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some(format!(
+            "Twitch监控已{}",
+            if payload.enabled { "启用" } else { "禁用" }
+        )),
+    })
+}
+
 #[derive(Serialize)]
 pub struct SetupStatus {
     needs_setup: bool,
@@ -915,6 +980,8 @@ pub async fn save_setup_config(
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
+            enable_youtube_monitor: true,
+            enable_twitch_monitor: true,
         }
     };
 

@@ -131,32 +131,62 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        // Check YouTube status
-        let yt_live = YoutubeClient::new(
-            &cfg.youtube.channel_name,
-            &cfg.youtube.channel_id,
-            cfg.proxy.clone(),
-        );
-        let (mut yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
-            yt_live
-                .get_status()
-                .await
-                .unwrap_or((false, None, None, None, None, None));
-        if scheduled_start.is_some() {
-            if scheduled_start.unwrap() > Local::now() + Duration::from_secs(2 * 24 * 60 * 60) {
-                scheduled_start = None;
-            }
-        }
-        // Check Twitch status
-        let tw_live = TwitchClient::new(
-            &cfg.twitch.channel_id,
-            cfg.twitch.oauth_token.clone(),
-            cfg.twitch.proxy_region.clone(),
-        );
-        let (mut tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
-            .get_status()
-            .await
-            .unwrap_or((false, None, None, None, None, None));
+        // Check YouTube status (only if enabled)
+        let (yt_live, mut yt_is_live, yt_area, yt_title, yt_m3u8_url, scheduled_start, yt_video_id) =
+            if cfg.enable_youtube_monitor && !cfg.youtube.channel_id.is_empty() {
+                let yt_live = YoutubeClient::new(
+                    &cfg.youtube.channel_name,
+                    &cfg.youtube.channel_id,
+                    cfg.proxy.clone(),
+                );
+                let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
+                    yt_live
+                        .get_status()
+                        .await
+                        .unwrap_or((false, None, None, None, None, None));
+                if scheduled_start.is_some() {
+                    if scheduled_start.unwrap()
+                        > Local::now() + Duration::from_secs(2 * 24 * 60 * 60)
+                    {
+                        scheduled_start = None;
+                    }
+                }
+                (
+                    Some(yt_live),
+                    yt_is_live,
+                    yt_area,
+                    yt_title,
+                    yt_m3u8_url,
+                    scheduled_start,
+                    yt_video_id,
+                )
+            } else {
+                (None, false, None, None, None, None, None)
+            };
+
+        // Check Twitch status (only if enabled)
+        let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
+            if cfg.enable_twitch_monitor && !cfg.twitch.channel_id.is_empty() {
+                let tw_live = TwitchClient::new(
+                    &cfg.twitch.channel_id,
+                    cfg.twitch.oauth_token.clone(),
+                    cfg.twitch.proxy_region.clone(),
+                );
+                let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
+                    .get_status()
+                    .await
+                    .unwrap_or((false, None, None, None, None, None));
+                (
+                    Some(tw_live),
+                    tw_is_live,
+                    tw_area,
+                    tw_title,
+                    tw_m3u8_url,
+                    tw_stream_id,
+                )
+            } else {
+                (None, false, None, None, None, None)
+            };
 
         // Get Bilibili status
         let (bili_is_live, bili_title, bili_area_id) =
@@ -174,7 +204,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 stream_quality: None,
                 stream_speed: None,
             },
-            youtube: if !cfg.youtube.channel_id.is_empty() {
+            youtube: if cfg.enable_youtube_monitor && !cfg.youtube.channel_id.is_empty() {
                 let yt_area_name = get_area_name(cfg.youtube.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
                 Some(bilistream::YtStatus {
@@ -190,7 +220,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 None
             },
-            twitch: if !cfg.twitch.channel_id.is_empty() {
+            twitch: if cfg.enable_twitch_monitor && !cfg.twitch.channel_id.is_empty() {
                 let tw_area_name = get_area_name(cfg.twitch.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
                 Some(bilistream::TwStatus {
@@ -449,15 +479,23 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
                 let (current_is_live, _, _, new_m3u8_url, _, _) = if yt_is_live {
-                    yt_live
-                        .get_status()
-                        .await
-                        .unwrap_or((false, None, None, None, None, None))
+                    if let Some(ref client) = yt_live {
+                        client
+                            .get_status()
+                            .await
+                            .unwrap_or((false, None, None, None, None, None))
+                    } else {
+                        (false, None, None, None, None, None)
+                    }
                 } else {
-                    tw_live
-                        .get_status()
-                        .await
-                        .unwrap_or((false, None, None, None, None, None))
+                    if let Some(ref client) = tw_live {
+                        client
+                            .get_status()
+                            .await
+                            .unwrap_or((false, None, None, None, None, None))
+                    } else {
+                        (false, None, None, None, None, None)
+                    }
                 };
                 let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
 
@@ -498,15 +536,23 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Check current live status to determine what actually happened
             let (current_is_live, _, _, _, _, _) = if yt_is_live {
-                yt_live
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None, None))
+                if let Some(ref client) = yt_live {
+                    client
+                        .get_status()
+                        .await
+                        .unwrap_or((false, None, None, None, None, None))
+                } else {
+                    (false, None, None, None, None, None)
+                }
             } else {
-                tw_live
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None, None))
+                if let Some(ref client) = tw_live {
+                    client
+                        .get_status()
+                        .await
+                        .unwrap_or((false, None, None, None, None, None))
+                } else {
+                    (false, None, None, None, None, None)
+                }
             };
             let (bili_is_live, _, _) = get_bili_live_status(cfg.bililive.room).await?;
 
@@ -1694,6 +1740,8 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         enable_lol_monitor,
         lol_monitor_interval: Some(1),
         anti_collision_list: collision_map,
+        enable_youtube_monitor: true,
+        enable_twitch_monitor: true,
     };
 
     // Write config file as JSON

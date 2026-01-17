@@ -2,6 +2,8 @@
   "auto_cover": true,                    // 自动更换封面
   "enable_anti_collision": true,         // 撞车监控
   "interval": 30,                        // 检测直播间隔(秒)
+  "enable_youtube_monitor": true,        // 启用YouTube监控转播
+  "enable_twitch_monitor": true,         // 启用Twitch监控转播
   
   // ===== Bilibili 直播配置 =====
   "bililive": {

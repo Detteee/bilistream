@@ -555,7 +555,7 @@
       height: 18px;
       width: 18px;
       left: 3px;
-      bottom: 3px;
+      top: 3px;
       background-color: white;
       transition: 0.3s;
       border-radius: 50%;
@@ -1009,14 +1009,23 @@
               <span class="status-indicator" id="yt-status"></span>
               YouTube
             </h2>
-            <button id="refreshYouTubeBtn" onclick="refreshYouTubeStatus()" title="刷新状态"
-              style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-              <svg id="refreshYouTubeIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-                <path
-                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-              </svg>
-            </button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <!-- Toggle Switch -->
+              <label class="toggle-label">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="youtube-monitor-toggle" onchange="toggleYouTubeMonitor()">
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+              <button id="refreshYouTubeBtn" onclick="refreshYouTubeStatus()" title="刷新状态"
+                style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+                <svg id="refreshYouTubeIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                  <path
+                    d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
@@ -1132,14 +1141,23 @@
               <span class="status-indicator" id="tw-status"></span>
               Twitch
             </h2>
-            <button id="refreshTwitchBtn" onclick="refreshTwitchStatus()" title="刷新状态"
-              style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-              <svg id="refreshTwitchIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-                <path
-                  d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-              </svg>
-            </button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <!-- Toggle Switch -->
+              <label class="toggle-label">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="twitch-monitor-toggle" onchange="toggleTwitchMonitor()">
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+              <button id="refreshTwitchBtn" onclick="refreshTwitchStatus()" title="刷新状态"
+                style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+                <svg id="refreshTwitchIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                  <path
+                    d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
@@ -1971,6 +1989,9 @@
 
         // Initial refresh
         refreshStatus();
+
+        // Load monitor toggle states
+        loadMonitorToggleStates();
       }
 
       function toggleChannelManagement() {
@@ -2355,9 +2376,25 @@
           // Load banned keywords
           await loadBannedKeywords();
 
+          // Load monitor toggle states
+          await loadMonitorToggleStates();
+
         } catch (error) {
           console.error('Failed to load system config:', error);
           showNotification('加载配置失败', 'error');
+        }
+      }
+
+      async function loadMonitorToggleStates() {
+        try {
+          const response = await fetch('/api/config');
+          const config = await response.json();
+
+          // Set toggle states
+          document.getElementById('youtube-monitor-toggle').checked = config.enable_youtube_monitor !== false;
+          document.getElementById('twitch-monitor-toggle').checked = config.enable_twitch_monitor !== false;
+        } catch (error) {
+          console.error('Failed to load monitor toggle states:', error);
         }
       }
 
@@ -3197,6 +3234,66 @@
           btn.style.opacity = '1';
           btn.style.cursor = 'pointer';
           icon.style.animation = '';
+        }
+      }
+
+      // YouTube Monitor Toggle
+      async function toggleYouTubeMonitor() {
+        const toggle = document.getElementById('youtube-monitor-toggle');
+        const enabled = toggle.checked;
+
+        try {
+          const response = await fetch('/api/toggle-youtube-monitor', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification(result.message, 'success');
+            // Refresh status to show updated state
+            await refreshStatus();
+          } else {
+            // Revert toggle if save failed
+            toggle.checked = !enabled;
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to toggle YouTube monitor:', error);
+          // Revert toggle if save failed
+          toggle.checked = !enabled;
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      // Twitch Monitor Toggle
+      async function toggleTwitchMonitor() {
+        const toggle = document.getElementById('twitch-monitor-toggle');
+        const enabled = toggle.checked;
+
+        try {
+          const response = await fetch('/api/toggle-twitch-monitor', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification(result.message, 'success');
+            // Refresh status to show updated state
+            await refreshStatus();
+          } else {
+            // Revert toggle if save failed
+            toggle.checked = !enabled;
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to toggle Twitch monitor:', error);
+          // Revert toggle if save failed
+          toggle.checked = !enabled;
+          showNotification('保存失败: ' + error.message, 'error');
         }
       }
 

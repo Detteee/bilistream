@@ -50,6 +50,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/refresh/twitch", get(api::refresh_twitch_status))
         .route("/banned-keywords", get(api::get_banned_keywords))
         .route("/banned-keywords", post(api::update_banned_keywords))
+        .route("/toggle-youtube-monitor", post(api::toggle_youtube_monitor))
+        .route("/toggle-twitch-monitor", post(api::toggle_twitch_monitor))
         .route("/manage/areas", get(api::get_areas_manage))
         .route("/manage/areas", post(api::add_area))
         .route("/manage/areas/:id", delete(api::delete_area))

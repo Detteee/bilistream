@@ -29,6 +29,10 @@ pub struct Config {
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
     pub anti_collision_list: HashMap<String, i32>,
+    #[serde(default = "default_true")]
+    pub enable_youtube_monitor: bool,
+    #[serde(default = "default_true")]
+    pub enable_twitch_monitor: bool,
 }
 
 /// Struct representing BiliLive-specific configuration.
@@ -84,6 +88,10 @@ pub struct Youtube {
 
 fn default_quality() -> String {
     "best".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Structs to mirror the structure of cookies.json
@@ -269,6 +277,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,
             anti_collision_list: legacy.anti_collision_list,
+            enable_youtube_monitor: true, // Default to enabled for migration
+            enable_twitch_monitor: true,  // Default to enabled for migration
         };
 
         // Save as JSON
