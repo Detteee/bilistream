@@ -337,6 +337,8 @@ pub struct UpdateConfigRequest {
     twitch_proxy_region: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
     enable_danmaku_command: Option<bool>,
+    youtube_enable_monitor: Option<bool>,
+    twitch_enable_monitor: Option<bool>,
 }
 
 pub async fn update_config(
@@ -404,6 +406,12 @@ pub async fn update_config(
     }
     if let Some(enable_danmaku_command) = payload.enable_danmaku_command {
         cfg.bililive.enable_danmaku_command = enable_danmaku_command;
+    }
+    if let Some(youtube_enable_monitor) = payload.youtube_enable_monitor {
+        cfg.youtube.enable_monitor = youtube_enable_monitor;
+    }
+    if let Some(twitch_enable_monitor) = payload.twitch_enable_monitor {
+        cfg.twitch.enable_monitor = twitch_enable_monitor;
     }
 
     // Save config
