@@ -135,6 +135,12 @@ impl BilibiliDanmakuClient {
         let connection_timeout = Duration::from_secs(120); // 2 minutes without any activity
 
         loop {
+            // Check for stop signal
+            if crate::plugins::danmaku::should_stop_danmaku() {
+                info!("🛑 收到停止信号，断开弹幕连接");
+                break;
+            }
+
             tokio::select! {
                 // Handle incoming messages with timeout
                 msg = timeout(Duration::from_secs(60), ws_receiver.next()) => {
@@ -810,6 +816,12 @@ pub async fn run_native_danmaku_client(
     let max_reconnect_attempts = 10;
 
     loop {
+        // Check for stop signal
+        if crate::plugins::danmaku::should_stop_danmaku() {
+            info!("🛑 收到停止信号，退出弹幕客户端");
+            break;
+        }
+
         match client.connect().await {
             Ok(_) => {
                 info!("Danmaku client disconnected normally");

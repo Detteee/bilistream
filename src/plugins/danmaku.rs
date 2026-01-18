@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, io};
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
+static DANMAKU_STOP_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 lazy_static! {
     static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -33,6 +34,14 @@ pub fn is_danmaku_commands_enabled() -> bool {
 
 pub fn set_danmaku_commands_enabled(enabled: bool) {
     DANMAKU_COMMANDS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn set_danmaku_stop_signal(stop: bool) {
+    DANMAKU_STOP_SIGNAL.store(stop, Ordering::Relaxed);
+}
+
+pub fn should_stop_danmaku() -> bool {
+    DANMAKU_STOP_SIGNAL.load(Ordering::Relaxed)
 }
 fn load_banned_keywords() -> Vec<String> {
     let areas_path = match std::env::current_exe() {
@@ -766,6 +775,23 @@ pub fn enable_danmaku_commands(enabled: bool) {
     } else {
         tracing::info!("⏸️ 弹幕命令已禁用");
     }
+}
+
+/// Stop the danmaku client
+pub fn stop_danmaku() {
+    if !is_danmaku_running() {
+        tracing::warn!("弹幕客户端未在运行");
+        return;
+    }
+
+    tracing::info!("🛑 停止弹幕客户端");
+    set_danmaku_stop_signal(true);
+
+    // Wait a bit for the client to stop gracefully
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Reset the stop signal for next time
+    set_danmaku_stop_signal(false);
 }
 
 /// Set the warning stop flag and store the channel that was stopped

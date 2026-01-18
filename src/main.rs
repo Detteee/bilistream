@@ -14,7 +14,7 @@ use bilistream::plugins::{
     clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
     get_bili_live_status, get_channel_name, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_ffmpeg, wait_ffmpeg,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
     was_manual_restart, was_manual_stop,
 };
 
@@ -109,8 +109,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         stop_ffmpeg().await;
     }
 
-    // Start danmaku client in background if not already running
-    if !is_danmaku_running() {
+    // Load config to check danmaku command setting
+    let initial_cfg = load_config().await?;
+
+    // Start danmaku client in background if not already running and if danmaku commands are enabled
+    if !is_danmaku_running() && initial_cfg.bililive.enable_danmaku_command {
         run_danmaku();
         // thread::sleep(Duration::from_secs(2)); // Give it time to connect
     }
@@ -120,6 +123,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         tracing::debug!("🔄 外层循环开始 - 重新加载配置并检查频道状态");
 
         let mut cfg = load_config().await?;
+
+        // Handle danmaku client based on enable_danmaku_command setting
+        if cfg.bililive.enable_danmaku_command {
+            // Start danmaku client if not running and commands are enabled
+            if !is_danmaku_running() {
+                run_danmaku();
+            }
+        } else {
+            // Stop danmaku client if running and commands are disabled
+            if is_danmaku_running() {
+                tracing::info!("⏸️ 弹幕命令已禁用，停止弹幕客户端");
+                stop_danmaku();
+            }
+        }
 
         // Validate YouTube/Twitch configuration
         if cfg.youtube.channel_id.is_empty() && cfg.twitch.channel_id.is_empty() {
