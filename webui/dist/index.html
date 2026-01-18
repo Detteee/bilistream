@@ -997,6 +997,17 @@
               </div>
             </div>
           </div>
+          <div class="info-row">
+            <span class="info-label">弹幕指令</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: flex-end;">
+              <label class="toggle-label" style="margin: 0;">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="bili-danmaku-command-toggle" onchange="toggleDanmakuCommand()">
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+            </div>
+          </div>
           <div class="info-row" id="bili-stream-quality-row" style="display: none;">
             <span class="info-label">流质量</span>
             <span class="info-value" id="bili-stream-quality">-</span>
@@ -1653,6 +1664,15 @@
                     <span class="toggle-slider"></span>
                   </div>
                   <span>自动更换封面</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="config-danmaku-command-checkbox">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <span>启用弹幕指令</span>
                 </label>
               </div>
               <div class="control-group">
@@ -2349,6 +2369,7 @@
           // Load basic settings
           document.getElementById('config-interval').value = config.interval || 30;
           document.getElementById('config-auto-cover-checkbox').checked = config.auto_cover || false;
+          document.getElementById('config-danmaku-command-checkbox').checked = config.bilibili?.enable_danmaku_command !== false;
           document.getElementById('config-anti-collision-checkbox').checked = config.enable_anti_collision || false;
           toggleAntiCollisionList(); // Show/hide anti-collision section based on checkbox
 
@@ -2409,6 +2430,50 @@
             (data.danmaku_banned_keywords || []).join('\n');
         } catch (error) {
           console.error('Failed to load banned keywords:', error);
+        }
+      }
+
+      // Danmaku Command Toggle Functions
+      async function loadDanmakuCommandState() {
+        try {
+          const response = await fetch('/api/config');
+          const config = await response.json();
+
+          const toggle = document.getElementById('bili-danmaku-command-toggle');
+          if (toggle) {
+            toggle.checked = config.bilibili?.enable_danmaku_command !== false;
+          }
+        } catch (error) {
+          console.error('Failed to load danmaku command state:', error);
+        }
+      }
+
+      async function toggleDanmakuCommand() {
+        const toggle = document.getElementById('bili-danmaku-command-toggle');
+        const enabled = toggle.checked;
+
+        try {
+          const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              enable_danmaku_command: enabled
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification(enabled ? '弹幕指令已启用' : '弹幕指令已禁用', 'success');
+          } else {
+            // Revert toggle if save failed
+            toggle.checked = !enabled;
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to toggle danmaku command:', error);
+          // Revert toggle if save failed
+          toggle.checked = !enabled;
+          showNotification('保存失败: ' + error.message, 'error');
         }
       }
 
@@ -2490,6 +2555,7 @@
         return {
           interval: parseInt(document.getElementById('config-interval').value) || 30,
           auto_cover: document.getElementById('config-auto-cover-checkbox').checked,
+          enable_danmaku_command: document.getElementById('config-danmaku-command-checkbox').checked,
           enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
           holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
           riot_api_key: document.getElementById('config-riot-key').value.trim(),
@@ -3414,6 +3480,9 @@
             } else {
               qualityRow.style.display = 'none';
             }
+
+            // Load danmaku command state
+            loadDanmakuCommandState();
 
             // Update YouTube status
             if (data.data.youtube) {

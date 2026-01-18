@@ -336,6 +336,7 @@ pub struct UpdateConfigRequest {
     twitch_oauth_token: Option<String>,
     twitch_proxy_region: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
+    enable_danmaku_command: Option<bool>,
 }
 
 pub async fn update_config(
@@ -400,6 +401,9 @@ pub async fn update_config(
     }
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
+    }
+    if let Some(enable_danmaku_command) = payload.enable_danmaku_command {
+        cfg.bililive.enable_danmaku_command = enable_danmaku_command;
     }
 
     // Save config
