@@ -29,10 +29,6 @@ pub struct Config {
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
     pub anti_collision_list: HashMap<String, i32>,
-    #[serde(default = "default_true")]
-    pub enable_youtube_monitor: bool,
-    #[serde(default = "default_true")]
-    pub enable_twitch_monitor: bool,
 }
 
 /// Struct representing BiliLive-specific configuration.
@@ -59,6 +55,8 @@ pub struct Credentials {
 /// Struct representing Twitch configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Twitch {
+    #[serde(default = "default_true")]
+    pub enable_monitor: bool,
     #[serde(default)]
     pub channel_name: String,
     #[serde(default)]
@@ -76,6 +74,8 @@ pub struct Twitch {
 /// Struct representing YouTube configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Youtube {
+    #[serde(default = "default_true")]
+    pub enable_monitor: bool,
     #[serde(default)]
     pub channel_name: String,
     #[serde(default)]
@@ -258,6 +258,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 credentials: Credentials::default(),
             },
             twitch: Twitch {
+                enable_monitor: true, // Default to enabled for migration
                 channel_name: legacy.twitch.channel_name,
                 area_v2: legacy.twitch.area_v2,
                 channel_id: legacy.twitch.channel_id,
@@ -266,6 +267,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 quality: legacy.twitch.quality,
             },
             youtube: Youtube {
+                enable_monitor: true, // Default to enabled for migration
                 channel_name: legacy.youtube.channel_name,
                 channel_id: legacy.youtube.channel_id,
                 area_v2: legacy.youtube.area_v2,
@@ -277,8 +279,6 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,
             anti_collision_list: legacy.anti_collision_list,
-            enable_youtube_monitor: true, // Default to enabled for migration
-            enable_twitch_monitor: true,  // Default to enabled for migration
         };
 
         // Save as JSON

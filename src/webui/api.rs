@@ -300,18 +300,18 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
         "proxy": cfg.proxy.clone(),
         "anti_collision_list": cfg.anti_collision_list.clone(),
-        "enable_youtube_monitor": cfg.enable_youtube_monitor,
-        "enable_twitch_monitor": cfg.enable_twitch_monitor,
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
         },
         "youtube": {
+            "enable_monitor": cfg.youtube.enable_monitor,
             "channel_name": cfg.youtube.channel_name,
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
         },
         "twitch": {
+            "enable_monitor": cfg.twitch.enable_monitor,
             "channel_name": cfg.twitch.channel_name,
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
@@ -336,8 +336,6 @@ pub struct UpdateConfigRequest {
     twitch_oauth_token: Option<String>,
     twitch_proxy_region: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
-    enable_youtube_monitor: Option<bool>,
-    enable_twitch_monitor: Option<bool>,
 }
 
 pub async fn update_config(
@@ -402,12 +400,6 @@ pub async fn update_config(
     }
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
-    }
-    if let Some(enable_youtube_monitor) = payload.enable_youtube_monitor {
-        cfg.enable_youtube_monitor = enable_youtube_monitor;
-    }
-    if let Some(enable_twitch_monitor) = payload.enable_twitch_monitor {
-        cfg.enable_twitch_monitor = enable_twitch_monitor;
     }
 
     // Save config
@@ -819,7 +811,7 @@ pub async fn toggle_youtube_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    cfg.enable_youtube_monitor = payload.enabled;
+    cfg.youtube.enable_monitor = payload.enabled;
 
     crate::config::save_config(&cfg)
         .await
@@ -844,7 +836,7 @@ pub async fn toggle_twitch_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    cfg.enable_twitch_monitor = payload.enabled;
+    cfg.twitch.enable_monitor = payload.enabled;
 
     crate::config::save_config(&cfg)
         .await
@@ -961,6 +953,7 @@ pub async fn save_setup_config(
                 credentials: crate::config::Credentials::default(),
             },
             twitch: crate::config::Twitch {
+                enable_monitor: true,
                 channel_name: String::new(),
                 area_v2: 235,
                 channel_id: String::new(),
@@ -969,6 +962,7 @@ pub async fn save_setup_config(
                 quality: "best".to_string(),
             },
             youtube: crate::config::Youtube {
+                enable_monitor: true,
                 channel_name: String::new(),
                 channel_id: String::new(),
                 area_v2: 235,
@@ -980,8 +974,6 @@ pub async fn save_setup_config(
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
-            enable_youtube_monitor: true,
-            enable_twitch_monitor: true,
         }
     };
 

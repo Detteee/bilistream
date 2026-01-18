@@ -2,8 +2,6 @@
   "auto_cover": true,                    // 自动更换封面
   "enable_anti_collision": true,         // 撞车监控
   "interval": 30,                        // 检测直播间隔(秒)
-  "enable_youtube_monitor": true,        // 启用YouTube监控转播
-  "enable_twitch_monitor": true,         // 启用Twitch监控转播
   
   // ===== Bilibili 直播配置 =====
   "bililive": {
@@ -15,6 +13,7 @@
   
   // ===== Twitch 配置 =====
   "twitch": {
+    "enable_monitor": true,              // 启用Twitch监控转播
     "channel_name": "",                  // 频道名称 (将出现于转播标题)
     "area_v2": 235,                      // B站分区ID (https://api.live.bilibili.com/room/v1/Area/getList)
     "channel_id": "",                    // Twitch频道ID (https://www.twitch.tv/ 后面的字符串)
@@ -25,6 +24,7 @@
   
   // ===== YouTube 配置 =====
   "youtube": {
+    "enable_monitor": true,              // 启用YouTube监控转播
     "channel_name": "",                  // 频道名称 (将出现于转播标题)
     "channel_id": "",                    // YouTube频道ID
     "area_v2": 235,                      // B站分区ID (https://api.live.bilibili.com/room/v1/Area/getList)

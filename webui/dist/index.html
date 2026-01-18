@@ -2391,8 +2391,8 @@
           const config = await response.json();
 
           // Set toggle states
-          document.getElementById('youtube-monitor-toggle').checked = config.enable_youtube_monitor !== false;
-          document.getElementById('twitch-monitor-toggle').checked = config.enable_twitch_monitor !== false;
+          document.getElementById('youtube-monitor-toggle').checked = config.youtube?.enable_monitor !== false;
+          document.getElementById('twitch-monitor-toggle').checked = config.twitch?.enable_monitor !== false;
         } catch (error) {
           console.error('Failed to load monitor toggle states:', error);
         }

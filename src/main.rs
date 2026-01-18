@@ -133,7 +133,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         // Check YouTube status (only if enabled)
         let (yt_live, mut yt_is_live, yt_area, yt_title, yt_m3u8_url, scheduled_start, yt_video_id) =
-            if cfg.enable_youtube_monitor && !cfg.youtube.channel_id.is_empty() {
+            if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
                 let yt_live = YoutubeClient::new(
                     &cfg.youtube.channel_name,
                     &cfg.youtube.channel_id,
@@ -166,7 +166,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         // Check Twitch status (only if enabled)
         let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
-            if cfg.enable_twitch_monitor && !cfg.twitch.channel_id.is_empty() {
+            if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
                 let tw_live = TwitchClient::new(
                     &cfg.twitch.channel_id,
                     cfg.twitch.oauth_token.clone(),
@@ -204,7 +204,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 stream_quality: None,
                 stream_speed: None,
             },
-            youtube: if cfg.enable_youtube_monitor && !cfg.youtube.channel_id.is_empty() {
+            youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
                 let yt_area_name = get_area_name(cfg.youtube.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
                 Some(bilistream::YtStatus {
@@ -220,7 +220,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 None
             },
-            twitch: if cfg.enable_twitch_monitor && !cfg.twitch.channel_id.is_empty() {
+            twitch: if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
                 let tw_area_name = get_area_name(cfg.twitch.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
                 Some(bilistream::TwStatus {
@@ -1713,6 +1713,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             credentials: Credentials::default(),
         },
         twitch: Twitch {
+            enable_monitor: true,
             channel_name: tw_channel_name,
             area_v2: tw_area_v2,
             channel_id: tw_channel_id,
@@ -1721,6 +1722,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             quality: tw_quality,
         },
         youtube: Youtube {
+            enable_monitor: true,
             channel_name: yt_channel_name,
             channel_id: yt_channel_id,
             area_v2: yt_area_v2,
@@ -1740,8 +1742,6 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         enable_lol_monitor,
         lol_monitor_interval: Some(1),
         anti_collision_list: collision_map,
-        enable_youtube_monitor: true,
-        enable_twitch_monitor: true,
     };
 
     // Write config file as JSON
