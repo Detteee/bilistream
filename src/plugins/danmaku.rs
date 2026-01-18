@@ -725,6 +725,10 @@ pub fn run_danmaku() {
         return;
     }
 
+    // Set running flag immediately to prevent race conditions
+    set_danmaku_running(true);
+    tracing::info!("🚀 启动弹幕客户端");
+
     std::thread::spawn(|| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -745,9 +749,6 @@ pub fn run_danmaku() {
             let cfg_arc = Arc::new(cfg);
             // Use the global DANMAKU_COMMANDS_ENABLED Arc
             let enable_commands = DANMAKU_COMMANDS_ENABLED.clone();
-
-            set_danmaku_running(true);
-            tracing::info!("🚀 启动弹幕客户端");
 
             // Run danmaku client - it will keep running
             if let Err(e) = crate::plugins::danmaku_client::run_native_danmaku_client(
