@@ -826,7 +826,14 @@ pub async fn run_native_danmaku_client(
             Ok(_) => {
                 info!("Danmaku client disconnected normally");
                 reconnect_attempts = 0; // Reset counter on successful connection
-                                        // Don't break immediately - try to reconnect in case it was unexpected
+
+                // Check if this was an intentional stop
+                if crate::plugins::danmaku::should_stop_danmaku() {
+                    info!("🛑 停止信号已确认，退出弹幕客户端");
+                    break;
+                }
+
+                // Otherwise it was unexpected - try to reconnect
                 warn!("Unexpected disconnection, attempting to reconnect...");
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }

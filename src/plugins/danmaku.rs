@@ -725,13 +725,13 @@ pub fn run_danmaku() {
         return;
     }
 
-    // Set running flag immediately to prevent race conditions
-    set_danmaku_running(true);
-    tracing::info!("🚀 启动弹幕客户端");
-
     std::thread::spawn(|| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
+            // Set running flag inside the async task to avoid race conditions
+            set_danmaku_running(true);
+            tracing::info!("🚀 启动弹幕客户端");
+
             let cfg = load_config().await.unwrap();
             let room_id = cfg.bililive.room;
 
@@ -788,8 +788,18 @@ pub fn stop_danmaku() {
     tracing::info!("🛑 停止弹幕客户端");
     set_danmaku_stop_signal(true);
 
-    // Wait a bit for the client to stop gracefully
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Wait for the client to stop gracefully (check status periodically)
+    let mut attempts = 0;
+    while is_danmaku_running() && attempts < 20 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        attempts += 1;
+    }
+
+    if is_danmaku_running() {
+        tracing::warn!("弹幕客户端停止超时，但继续执行");
+    } else {
+        tracing::info!("✅ 弹幕客户端已成功停止");
+    }
 
     // Reset the stop signal for next time
     set_danmaku_stop_signal(false);
