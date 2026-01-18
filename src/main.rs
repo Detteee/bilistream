@@ -115,7 +115,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     // Start danmaku client in background if not already running and if danmaku commands are enabled
     if !is_danmaku_running() && initial_cfg.bililive.enable_danmaku_command {
         run_danmaku();
-        // thread::sleep(Duration::from_secs(2)); // Give it time to connect
+        // Give the client a moment to start
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     'outer: loop {
@@ -635,9 +636,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if yt_title.is_some() {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
+                        cfg.youtube.enable_monitor,
                         Some(scheduled_start.unwrap()),
                         Some(&yt_title.unwrap()),
                         &cfg.twitch.channel_name,
+                        cfg.twitch.enable_monitor,
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
@@ -666,9 +669,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 } else {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
+                        cfg.youtube.enable_monitor,
                         None,
                         None,
                         &cfg.twitch.channel_name,
+                        cfg.twitch.enable_monitor,
                     );
 
                     let mut last = LAST_MESSAGE.lock().unwrap();
@@ -698,9 +703,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if !NO_LIVE.load(Ordering::SeqCst) {
                     let current_message = box_message(
                         &cfg.youtube.channel_name,
+                        cfg.youtube.enable_monitor,
                         None,
                         None, // No title when not streaming
                         &cfg.twitch.channel_name,
+                        cfg.twitch.enable_monitor,
                     );
                     print!("{}", current_message);
                     let mut last = LAST_MESSAGE.lock().unwrap();
@@ -742,12 +749,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
 fn box_message(
     yt_channel: &str,
+    yt_monitor_enabled: bool,
     scheduled_time: Option<DateTime<Local>>,
     title: Option<&str>,
     tw_channel: &str,
+    tw_monitor_enabled: bool,
 ) -> String {
     // Initialize variables first
-    let (yt_line, width) = if scheduled_time.is_some() {
+    let (yt_line, width) = if !yt_monitor_enabled {
+        let line = format!("YT: 监听已关闭");
+        (line.clone(), line.width() + 2)
+    } else if scheduled_time.is_some() {
         let line = format!(
             "YT: {} 未直播，计划于 {} 开始，",
             yt_channel,
@@ -780,7 +792,11 @@ fn box_message(
 
     message.push_str(&format!("├{:─<width$}┤\n", "", width = width));
 
-    let tw_line = format!("TW: {} 未直播", tw_channel);
+    let tw_line = if !tw_monitor_enabled {
+        format!("TW: 监听已关闭")
+    } else {
+        format!("TW: {} 未直播", tw_channel)
+    };
     let padding = width - 2 - tw_line.width();
     message.push_str(&format!(
         "│ {}{} │\n\
