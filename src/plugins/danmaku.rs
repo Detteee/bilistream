@@ -229,40 +229,6 @@ pub fn get_all_channels(
     Ok(channels)
 }
 
-/// Check if configuration update is needed without modifying the config
-fn is_config_update_needed(
-    platform: &str,
-    channel_name: &str,
-    channel_id: &str,
-    area_id: u64,
-) -> io::Result<bool> {
-    // Use the same config.json path as the executable (matches config.rs behavior)
-    let exe_path = std::env::current_exe()?;
-    let config_path = exe_path.with_file_name("config.json");
-
-    // Read the existing config.json
-    let config_content = fs::read_to_string(&config_path)?;
-
-    // Deserialize JSON into Config struct
-    let config: Config = serde_json::from_str(&config_content)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    // Check if update is needed
-    let needs_update = if platform == "YT" {
-        config.youtube.channel_id != channel_id
-            || config.youtube.channel_name != channel_name
-            || config.youtube.area_v2 != area_id
-    } else if platform == "TW" {
-        config.twitch.channel_id != channel_id
-            || config.twitch.channel_name != channel_name
-            || config.twitch.area_v2 != area_id
-    } else {
-        false
-    };
-
-    Ok(needs_update)
-}
-
 /// Updates the configuration JSON file with new values.
 fn update_config(
     platform: &str,
@@ -281,24 +247,7 @@ fn update_config(
     let mut config: Config = serde_json::from_str(&config_content)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    // Check if update is needed
-    let needs_update = if platform == "YT" {
-        config.youtube.channel_id != channel_id
-            || config.youtube.channel_name != channel_name
-            || config.youtube.area_v2 != area_id
-    } else if platform == "TW" {
-        config.twitch.channel_id != channel_id
-            || config.twitch.channel_name != channel_name
-            || config.twitch.area_v2 != area_id
-    } else {
-        false
-    };
-
-    if !needs_update {
-        return Ok(false);
-    }
-
-    // Update the fields
+    // Update the fields directly (no need to check again since we already checked earlier)
     if platform == "YT" {
         config.youtube.channel_id = channel_id.to_string();
         config.youtube.channel_name = channel_name.to_string();
@@ -509,46 +458,57 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             }
         };
 
-        // Check if configuration update is needed before expensive live status check
-        match is_config_update_needed(
-            &platform,
-            channel_name.as_deref().unwrap(),
-            channel_id_str,
-            area_id,
-        ) {
-            Ok(needs_update) => {
-                if !needs_update {
-                    let area_name = match get_area_name(area_id) {
-                        Some(name) => name,
-                        None => {
-                            // let _ = bilibili::send_danmaku(&cfg, "错误：无法获取分区名称").await;
-                            return;
-                        }
+        // Early config check to avoid expensive live status API calls
+        let exe_path = std::env::current_exe().map_err(|e| {
+            tracing::error!("无法获取可执行文件路径: {}", e);
+        });
+        if let Ok(exe_path) = exe_path {
+            let config_path = exe_path.with_file_name("config.json");
+
+            // Read the existing config.json
+            if let Ok(config_content) = fs::read_to_string(&config_path) {
+                // Deserialize JSON into Config struct
+                if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
+                    // Check if update is needed
+                    let needs_update = if platform == "YT" {
+                        &config.youtube.channel_id != channel_id_str
+                            || &config.youtube.channel_name != channel_name.as_deref().unwrap()
+                            || config.youtube.area_v2 != area_id
+                    } else if platform == "TW" {
+                        &config.twitch.channel_id != channel_id_str
+                            || &config.twitch.channel_name != channel_name.as_deref().unwrap()
+                            || config.twitch.area_v2 != area_id
+                    } else {
+                        false
                     };
-                    let _ = bilibili::send_danmaku(
-                        &cfg,
-                        &format!(
+
+                    if !needs_update {
+                        let area_name = match get_area_name(area_id) {
+                            Some(name) => name,
+                            None => {
+                                tracing::error!("无法获取分区名称");
+                                return;
+                            }
+                        };
+                        let _ = bilibili::send_danmaku(
+                            &cfg,
+                            &format!(
+                                "{} 监听对象已是：{} - {}",
+                                platform,
+                                channel_name.as_deref().unwrap(),
+                                area_name
+                            ),
+                        )
+                        .await;
+                        tracing::info!(
                             "{} 监听对象已是：{} - {}",
                             platform,
                             channel_name.as_deref().unwrap(),
                             area_name
-                        ),
-                    )
-                    .await;
-                    tracing::info!(
-                        "{} 监听对象已是：{} - {}",
-                        platform,
-                        channel_name.as_deref().unwrap(),
-                        area_name
-                    );
-                    return;
+                        );
+                        return;
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::error!("检查配置更新时出错: {}", e);
-                let _ =
-                    bilibili::send_danmaku(&cfg, &format!("错误：检查配置更新时出错 {}", e)).await;
-                return;
             }
         }
 
@@ -658,51 +618,31 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             &channel_id_str,
             updated_area_id,
         ) {
-            Ok(was_updated) => {
-                if !was_updated {
-                    let _ = bilibili::send_danmaku(
-                        &cfg,
-                        &format!(
-                            "{} 监听对象已是：{} - {}",
-                            platform,
-                            channel_name.as_deref().unwrap(),
-                            updated_area_name
-                        ),
-                    )
-                    .await;
-                    tracing::info!(
-                        "{} 监听对象已是：{} - {}",
+            Ok(_) => {
+                // Clear warning flag when user manually changes channel
+                clear_warning_stop();
+
+                // Set config updated flag to skip waiting interval
+                set_config_updated();
+
+                // Send success notification
+                let _ = bilibili::send_danmaku(
+                    &cfg,
+                    &format!(
+                        "更新：{} - {} - {}",
                         platform,
                         channel_name.as_deref().unwrap(),
                         updated_area_name
-                    );
-                    return;
-                } else {
-                    // Clear warning flag when user manually changes channel
-                    clear_warning_stop();
-
-                    // Set config updated flag to skip waiting interval
-                    set_config_updated();
-
-                    // Send success notification
-                    let _ = bilibili::send_danmaku(
-                        &cfg,
-                        &format!(
-                            "更新：{} - {} - {}",
-                            platform,
-                            channel_name.as_deref().unwrap(),
-                            updated_area_name
-                        ),
-                    )
-                    .await;
-                    tracing::info!(
-                        "✅ 更新成功 {} 频道: {} 分区: {} (ID: {} )",
-                        platform,
-                        channel_name.as_deref().unwrap(),
-                        updated_area_name,
-                        updated_area_id
-                    );
-                }
+                    ),
+                )
+                .await;
+                tracing::info!(
+                    "✅ 更新成功 {} 频道: {} 分区: {} (ID: {} )",
+                    platform,
+                    channel_name.as_deref().unwrap(),
+                    updated_area_name,
+                    updated_area_id
+                );
             }
             Err(e) => {
                 tracing::error!("更新配置时出错: {}", e);
