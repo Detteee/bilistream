@@ -267,25 +267,21 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         if yt_is_live || tw_is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
 
-            // Check which channel is live
-            let channel_name_check = if yt_is_live {
-                &cfg.youtube.channel_name
-            } else {
-                &cfg.twitch.channel_name
-            };
-
-            // Skip if this channel was stopped due to WARNING/CUT_OFF
-            if should_skip_due_to_warning(channel_name_check) {
+            // Check if YouTube channel should be skipped due to warning
+            if yt_is_live && should_skip_due_to_warning(&cfg.youtube.channel_name) {
                 // Only log warning message once
-                if should_skip_due_to_warned(channel_name_check) {
-                    tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", channel_name_check);
+                if should_skip_due_to_warned(&cfg.youtube.channel_name) {
+                    tracing::warn!(
+                        "⚠️ 跳过频道 {} - 之前因警告/切断停止",
+                        &cfg.youtube.channel_name
+                    );
                     if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                         enable_danmaku_commands(true);
                         if let Err(e) = send_danmaku(
                             &cfg,
                             &format!(
                                 "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                                channel_name_check
+                                &cfg.youtube.channel_name
                             ),
                         )
                         .await
@@ -294,11 +290,45 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         }
                     }
                 }
+                // Set YouTube as not live so Twitch can be used if available
+                yt_is_live = false;
+            }
+
+            // Check if Twitch channel should be skipped due to warning
+            if tw_is_live && should_skip_due_to_warning(&cfg.twitch.channel_name) {
+                // Only log warning message once
+                if should_skip_due_to_warned(&cfg.twitch.channel_name) {
+                    tracing::warn!(
+                        "⚠️ 跳过频道 {} - 之前因警告/切断停止",
+                        &cfg.twitch.channel_name
+                    );
+                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                        enable_danmaku_commands(true);
+                        if let Err(e) = send_danmaku(
+                            &cfg,
+                            &format!(
+                                "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
+                                &cfg.twitch.channel_name
+                            ),
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
+                    }
+                }
+                // Set Twitch as not live
+                tw_is_live = false;
+            }
+
+            // If both channels are skipped after filtering, continue to next iteration
+            if !yt_is_live && !tw_is_live {
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue;
-            } else {
-                clear_warning_stop();
             }
+
+            // Clear warning stop since we have a valid channel to stream
+            clear_warning_stop();
 
             // Disable danmaku commands when streaming
             if is_danmaku_commands_enabled() {
