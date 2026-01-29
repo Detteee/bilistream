@@ -307,13 +307,13 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
 }
 
 /// Resolve area alias to area name using areas.json
-fn resolve_area_alias(alias: &str) -> &str {
+fn resolve_area_alias(alias: &str) -> String {
     let alias_lower = alias.to_lowercase();
 
     // Load areas configuration
     let areas_config = match load_areas_config() {
         Some(config) => config,
-        None => return alias,
+        None => return alias.to_string(),
     };
 
     // Check each area's aliases
@@ -324,8 +324,7 @@ fn resolve_area_alias(alias: &str) -> &str {
                 for area_alias in aliases {
                     if let Some(a) = area_alias.as_str() {
                         if alias_lower == a.to_lowercase() {
-                            // Return a static string by leaking memory (acceptable for small config)
-                            return Box::leak(name.to_string().into_boxed_str());
+                            return name.to_string();
                         }
                     }
                 }
@@ -333,7 +332,7 @@ fn resolve_area_alias(alias: &str) -> &str {
         }
     }
 
-    alias
+    alias.to_string()
 }
 
 /// Processes a single danmaku command.
@@ -412,7 +411,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     }
 
     let area_name = resolve_area_alias(area_alias);
-    let area_id = match get_area_id(area_name) {
+    let area_id = match get_area_id(&area_name) {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("{}", e);
@@ -843,10 +842,12 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let areas: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("无法解析 areas.json: {}", e))?;
 
+    let area_name_lower = area_name.to_lowercase();
+
     if let Some(areas_array) = areas["areas"].as_array() {
         for area in areas_array {
             if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
-                if name == area_name {
+                if name.to_lowercase() == area_name_lower {
                     return Ok(id);
                 }
             }
