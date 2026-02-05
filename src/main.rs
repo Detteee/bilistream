@@ -321,10 +321,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tw_is_live = false;
             }
 
+            // Check if config was updated by danmaku command after warning filtering
+            if is_config_updated() {
+                clear_config_updated();
+                tracing::info!("🔄 检测到配置更新（弹幕指令），重新加载配置并检查频道状态");
+                continue 'outer;
+            }
+
             // If both channels are skipped after filtering, continue to next iteration
             if !yt_is_live && !tw_is_live {
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue;
+                continue 'outer;
             }
 
             // Clear warning stop since we have a valid channel to stream
