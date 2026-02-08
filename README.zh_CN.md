@@ -11,7 +11,7 @@
 
 ## 下载
 
-**最新版本：v0.4.6**
+**最新版本：v0.4.7**
 
 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
@@ -59,7 +59,7 @@
   - ffmpeg.exe
   - yt-dlp.exe
 - **Twitch 支持**（可选）：
-  - 安装 streamlink: [下载](https://github.com/streamlink/windows-builds/releases) 或 `pip install streamlink`
+  - 安装 streamlink: `pip install streamlink`
   - 安装 ttvlol 插件: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 
 **Linux/Mac:**

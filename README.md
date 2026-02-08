@@ -11,7 +11,7 @@
 
 ## Download
 
-**Latest Release: v0.4.6**
+**Latest Release: v0.4.7**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
@@ -59,7 +59,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
   - ffmpeg.exe
   - yt-dlp.exe
 - **For Twitch support** (optional):
-  - Install streamlink: [Download](https://github.com/streamlink/windows-builds/releases) or `pip install streamlink`
+  - Install streamlink:  `pip install streamlink`
   - Install ttvlol plugin: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 
 **Linux/Mac:**
@@ -127,7 +127,6 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    - API keys (Holodex, Riot Games - optional)
    - Anti-collision monitoring (optional)
    - Stream quality settings (for network-limited users)
-
 6. **Stream Quality Configuration:**
 
    For users with limited network bandwidth, you can configure stream quality settings:
@@ -136,7 +135,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
    - `best` - Best available quality (recommended)
    - `best[height<=1080]` - Best quality up to 1080p
-   - `best[height<=720]` - Best quality up to 720p  
+   - `best[height<=720]` - Best quality up to 720p
    - `best[height<=480]` - Best quality up to 480p
    - `best[height<=360]` - Best quality up to 360p
    - `worst` - Lowest available quality
