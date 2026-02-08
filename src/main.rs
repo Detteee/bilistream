@@ -1852,6 +1852,8 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             channel_id: yt_channel_id,
             area_v2: yt_area_v2,
             quality: yt_quality,
+            cookies_file: None,
+            cookies_from_browser: None,
         },
         proxy: if proxy.is_empty() { None } else { Some(proxy) },
         holodex_api_key: if holodex_api_key.is_empty() {

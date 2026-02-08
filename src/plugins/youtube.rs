@@ -66,6 +66,28 @@ fn create_hidden_command(program: &str) -> Command {
     }
 }
 
+// Helper function to add cookies arguments to yt-dlp command
+fn add_cookies_args(
+    command: &mut Command,
+    cookies_file: &Option<String>,
+    cookies_from_browser: &Option<String>,
+) {
+    if let Some(browser) = cookies_from_browser {
+        if !browser.is_empty() {
+            command.arg("--cookies-from-browser");
+            command.arg(browser);
+            return;
+        }
+    }
+
+    if let Some(file_path) = cookies_file {
+        if !file_path.is_empty() {
+            command.arg("--cookies");
+            command.arg(file_path);
+        }
+    }
+}
+
 pub struct Youtube {
     pub channel_name: String,
     pub channel_id: String,
@@ -147,13 +169,23 @@ pub async fn get_youtube_status(
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
     let quality = cfg.youtube.quality.clone();
+    let cookies_file = &cfg.youtube.cookies_file;
+    let cookies_from_browser = &cfg.youtube.cookies_from_browser;
 
     // Check if Holodex API key is available
     match cfg.holodex_api_key.clone() {
         Some(_key) if !_key.is_empty() => {}
         _ => {
             tracing::info!("Holodex API key not configured, using yt-dlp");
-            return get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await;
+            return get_status_with_yt_dlp(
+                channel_id,
+                proxy,
+                None,
+                Some(&quality),
+                cookies_file,
+                cookies_from_browser,
+            )
+            .await;
         }
     };
 
@@ -185,9 +217,15 @@ pub async fn get_youtube_status(
                 let title = Some(live_stream.title.clone());
                 let video_id = Some(live_stream.id.clone());
 
-                let (is_live, _, _, m3u8_url, _, _) =
-                    get_status_with_yt_dlp(channel_id, proxy, title.clone(), Some(&quality))
-                        .await?;
+                let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
+                    channel_id,
+                    proxy.clone(),
+                    title.clone(),
+                    Some(&quality),
+                    cookies_file,
+                    cookies_from_browser,
+                )
+                .await?;
                 return Ok((is_live, topic, title, m3u8_url, None, video_id));
             }
 
@@ -248,8 +286,15 @@ pub async fn get_youtube_status(
         Err(e) => {
             tracing::error!("Holodex API failed: {}, using yt-dlp", e);
             let title = get_youtube_live_title(channel_id).await?;
-            let (is_live, _, _, m3u8_url, start_time, video_id) =
-                get_status_with_yt_dlp(channel_id, proxy, None, Some(&quality)).await?;
+            let (is_live, _, _, m3u8_url, start_time, video_id) = get_status_with_yt_dlp(
+                channel_id,
+                proxy,
+                None,
+                Some(&quality),
+                cookies_file,
+                cookies_from_browser,
+            )
+            .await?;
             Ok((is_live, None, title, m3u8_url, start_time, video_id))
         }
     }
@@ -261,6 +306,8 @@ async fn get_status_with_yt_dlp(
     proxy: Option<String>,
     title: Option<String>,
     quality: Option<&str>,
+    cookies_file: &Option<String>,
+    cookies_from_browser: &Option<String>,
 ) -> Result<
     (
         bool,                    // is_live
@@ -279,6 +326,10 @@ async fn get_status_with_yt_dlp(
         command.arg("--proxy");
         command.arg(proxy);
     }
+
+    // Add cookies arguments
+    add_cookies_args(&mut command, cookies_file, cookies_from_browser);
+
     command.arg("-f");
     command.arg(quality);
     command.arg("--print").arg("id");
@@ -357,6 +408,8 @@ async fn get_status_with_yt_dlp(
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.proxy.clone();
+    let cookies_file = &cfg.youtube.cookies_file;
+    let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let channel_name = get_channel_name("YT", channel_id).unwrap();
     let client = reqwest::Client::new();
 
@@ -369,6 +422,10 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             if let Some(proxy) = proxy {
                 command.arg("--proxy").arg(proxy);
             }
+
+            // Add cookies arguments
+            add_cookies_args(&mut command, cookies_file, cookies_from_browser);
+
             command.arg("-e");
             command.arg(format!(
                 "https://www.youtube.com/channel/{}/live",

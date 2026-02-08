@@ -84,6 +84,10 @@ pub struct Youtube {
     pub area_v2: u64,
     #[serde(default = "default_quality")]
     pub quality: String,
+    #[serde(default)]
+    pub cookies_file: Option<String>,
+    #[serde(default)]
+    pub cookies_from_browser: Option<String>,
 }
 
 fn default_quality() -> String {
@@ -240,6 +244,10 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             area_v2: u64,
             #[serde(rename = "Quality", default = "default_quality")]
             quality: String,
+            #[serde(default)]
+            cookies_file: Option<String>,
+            #[serde(default)]
+            cookies_from_browser: Option<String>,
         }
 
         let legacy: LegacyConfig = serde_yaml::from_str(&config_content)
@@ -272,6 +280,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 channel_id: legacy.youtube.channel_id,
                 area_v2: legacy.youtube.area_v2,
                 quality: legacy.youtube.quality,
+                cookies_file: legacy.youtube.cookies_file,
+                cookies_from_browser: legacy.youtube.cookies_from_browser,
             },
             proxy: legacy.proxy,
             holodex_api_key: legacy.holodex_api_key,

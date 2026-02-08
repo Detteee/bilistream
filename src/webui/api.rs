@@ -339,6 +339,8 @@ pub struct UpdateConfigRequest {
     enable_danmaku_command: Option<bool>,
     youtube_enable_monitor: Option<bool>,
     twitch_enable_monitor: Option<bool>,
+    youtube_cookies_from_browser: Option<String>,
+    youtube_cookies_file: Option<String>,
 }
 
 pub async fn update_config(
@@ -412,6 +414,20 @@ pub async fn update_config(
     }
     if let Some(twitch_enable_monitor) = payload.twitch_enable_monitor {
         cfg.twitch.enable_monitor = twitch_enable_monitor;
+    }
+    if let Some(youtube_cookies_from_browser) = payload.youtube_cookies_from_browser {
+        cfg.youtube.cookies_from_browser = if youtube_cookies_from_browser.is_empty() {
+            None
+        } else {
+            Some(youtube_cookies_from_browser)
+        };
+    }
+    if let Some(youtube_cookies_file) = payload.youtube_cookies_file {
+        cfg.youtube.cookies_file = if youtube_cookies_file.is_empty() {
+            None
+        } else {
+            Some(youtube_cookies_file)
+        };
     }
 
     // Save config
@@ -629,6 +645,8 @@ pub struct UpdateChannelRequest {
     area_id: Option<u64>,
     quality: Option<String>,
     riot_api_key: Option<String>,
+    cookies_file: Option<String>,
+    cookies_from_browser: Option<String>,
 }
 
 pub async fn update_channel(
@@ -659,6 +677,20 @@ pub async fn update_channel(
             }
             if let Some(quality) = payload.quality {
                 cfg.youtube.quality = quality;
+            }
+            if let Some(cookies_file) = payload.cookies_file {
+                cfg.youtube.cookies_file = if cookies_file.is_empty() {
+                    None
+                } else {
+                    Some(cookies_file)
+                };
+            }
+            if let Some(cookies_from_browser) = payload.cookies_from_browser {
+                cfg.youtube.cookies_from_browser = if cookies_from_browser.is_empty() {
+                    None
+                } else {
+                    Some(cookies_from_browser)
+                };
             }
         }
         "twitch" => {
@@ -994,6 +1026,8 @@ pub async fn save_setup_config(
                 channel_id: String::new(),
                 area_v2: 235,
                 quality: "best".to_string(),
+                cookies_file: None,
+                cookies_from_browser: None,
             },
             proxy: None,
             holodex_api_key: None,
