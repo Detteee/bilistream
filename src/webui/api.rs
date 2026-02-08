@@ -315,7 +315,6 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "channel_name": cfg.twitch.channel_name,
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
-            "oauth_token": cfg.twitch.oauth_token,
             "proxy_region": cfg.twitch.proxy_region,
         }
     });
@@ -333,7 +332,6 @@ pub struct UpdateConfigRequest {
     riot_api_key: Option<String>,
     holodex_api_key: Option<String>,
     proxy: Option<String>,
-    twitch_oauth_token: Option<String>,
     twitch_proxy_region: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
     enable_danmaku_command: Option<bool>,
@@ -390,18 +388,10 @@ pub async fn update_config(
     }
 
     // Check if Twitch settings will be updated (before moving values)
-    let twitch_settings_updated =
-        payload.twitch_oauth_token.is_some() || payload.twitch_proxy_region.is_some();
+    let twitch_settings_updated = payload.twitch_proxy_region.is_some();
 
     if let Some(anti_collision_list) = payload.anti_collision_list {
         cfg.anti_collision_list = anti_collision_list;
-    }
-    if let Some(twitch_oauth_token) = payload.twitch_oauth_token {
-        if !twitch_oauth_token.is_empty() {
-            cfg.twitch.oauth_token = twitch_oauth_token;
-        } else {
-            cfg.twitch.oauth_token = String::new();
-        }
     }
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
@@ -984,7 +974,6 @@ pub struct SetupConfigRequest {
     twitch_channel_name: Option<String>,
     twitch_channel_id: Option<String>,
     twitch_area_v2: Option<u64>,
-    twitch_oauth_token: Option<String>,
     twitch_proxy_region: Option<String>,
     twitch_quality: Option<String>,
     holodex_api_key: Option<String>,
@@ -1016,7 +1005,6 @@ pub async fn save_setup_config(
                 channel_name: String::new(),
                 area_v2: 235,
                 channel_id: String::new(),
-                oauth_token: String::new(),
                 proxy_region: "as".to_string(),
                 quality: "best".to_string(),
             },
@@ -1058,7 +1046,6 @@ pub async fn save_setup_config(
     let twitch_updated = payload.twitch_channel_name.is_some()
         || payload.twitch_channel_id.is_some()
         || payload.twitch_area_v2.is_some()
-        || payload.twitch_oauth_token.is_some()
         || payload.twitch_proxy_region.is_some()
         || payload.twitch_quality.is_some();
 
@@ -1085,9 +1072,6 @@ pub async fn save_setup_config(
     }
     if let Some(tw_area) = payload.twitch_area_v2 {
         cfg.twitch.area_v2 = tw_area;
-    }
-    if let Some(tw_oauth) = payload.twitch_oauth_token {
-        cfg.twitch.oauth_token = tw_oauth;
     }
     if let Some(tw_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = tw_region;

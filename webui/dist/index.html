@@ -2478,7 +2478,6 @@
           toggleConfigRiotApiKey(); // Show/hide riot API fields based on checkbox
 
           // Load Twitch settings
-          document.getElementById('config-tw-oauth').value = (config.twitch && config.twitch.oauth_token) || '';
           document.getElementById('config-tw-region').value = (config.twitch && config.twitch.proxy_region) || 'asl';
 
           // Load YouTube cookies settings
@@ -2660,7 +2659,6 @@
           enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
           lol_monitor_interval: parseInt(document.getElementById('config-lol-interval').value) || 1,
           proxy: document.getElementById('config-proxy').value.trim(),
-          twitch_oauth_token: document.getElementById('config-tw-oauth').value.trim(),
           twitch_proxy_region: document.getElementById('config-tw-region').value,
           anti_collision_list: window.currentAntiCollisionList || {},
           youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
@@ -4903,7 +4901,6 @@
           twitch_channel_name: document.getElementById('setup-tw-name').value || null,
           twitch_channel_id: document.getElementById('setup-tw-id').value || null,
           twitch_area_v2: parseInt(document.getElementById('setup-tw-area').value) || null,
-          twitch_oauth_token: document.getElementById('setup-tw-oauth').value || null,
           twitch_proxy_region: document.getElementById('setup-tw-region').value || null,
           twitch_quality: document.getElementById('setup-tw-quality').value || null,
 

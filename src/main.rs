@@ -185,11 +185,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Check Twitch status (only if enabled)
         let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
             if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-                let tw_live = TwitchClient::new(
-                    &cfg.twitch.channel_id,
-                    cfg.twitch.oauth_token.clone(),
-                    cfg.twitch.proxy_region.clone(),
-                );
+                let tw_live =
+                    TwitchClient::new(&cfg.twitch.channel_id, cfg.twitch.proxy_region.clone());
                 let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
                     .get_status()
                     .await
@@ -977,11 +974,7 @@ async fn get_live_status(
             if channel_name.is_none() {
                 channel_name = Some(channel_id.to_string());
             }
-            let tw_client = TwitchClient::new(
-                channel_id,
-                cfg.twitch.oauth_token.clone(),
-                cfg.twitch.proxy_region.clone(),
-            );
+            let tw_client = TwitchClient::new(channel_id, cfg.twitch.proxy_region.clone());
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
@@ -1049,11 +1042,7 @@ async fn get_live_status(
             }
             let channel_id = cfg.twitch.channel_id;
             let channel_name = cfg.twitch.channel_name;
-            let tw_client = TwitchClient::new(
-                &channel_id,
-                cfg.twitch.oauth_token.clone(),
-                cfg.twitch.proxy_region.clone(),
-            );
+            let tw_client = TwitchClient::new(&channel_id, cfg.twitch.proxy_region.clone());
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
@@ -1649,7 +1638,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_twitch = !input.trim().eq_ignore_ascii_case("n");
 
-    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_oauth, tw_proxy_region, tw_quality) =
+    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_proxy_region, tw_quality) =
         if configure_twitch {
             print!("Twitch 频道名称: ");
             io::stdout().flush()?;
@@ -1668,16 +1657,6 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             let mut area = String::new();
             io::stdin().read_line(&mut area)?;
             let area: u64 = area.trim().parse().unwrap_or(235);
-
-            println!("Twitch OAuth Token (可选，用于streamlink认证)");
-            println!(
-                "获取方法: https://streamlink.github.io/cli/plugins/twitch.html#authentication"
-            );
-            print!("请输入 (直接回车跳过): ");
-            io::stdout().flush()?;
-            let mut oauth = String::new();
-            io::stdin().read_line(&mut oauth)?;
-            let oauth = oauth.trim().to_string();
 
             print!("Twitch 代理区域 (默认 as): ");
             io::stdout().flush()?;
@@ -1703,13 +1682,12 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
                 quality.trim().to_string()
             };
 
-            (name, id, area, oauth, region, quality)
+            (name, id, area, region, quality)
         } else {
             (
                 "".to_string(),
                 "".to_string(),
                 235,
-                "".to_string(),
                 "as".to_string(),
                 "best".to_string(),
             )
@@ -1842,7 +1820,6 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             channel_name: tw_channel_name,
             area_v2: tw_area_v2,
             channel_id: tw_channel_id,
-            oauth_token: tw_oauth,
             proxy_region: tw_proxy_region,
             quality: tw_quality,
         },

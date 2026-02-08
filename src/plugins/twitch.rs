@@ -29,12 +29,11 @@ fn create_hidden_command(program: &str) -> Command {
 pub struct Twitch {
     pub channel_id: String,
     pub client: ClientWithMiddleware,
-    pub oauth_token: String,
     pub proxy_region: String,
 }
 
 impl Twitch {
-    pub fn new(channel_id: &str, oauth_token: String, proxy_region: String) -> Self {
+    pub fn new(channel_id: &str, proxy_region: String) -> Self {
         // 设置最大重试次数为5次
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
         let raw_client = reqwest::Client::builder()
@@ -50,7 +49,6 @@ impl Twitch {
         Twitch {
             channel_id: channel_id.to_string(),
             client,
-            oauth_token,
             proxy_region,
         }
     }
@@ -127,9 +125,7 @@ impl Twitch {
         cmd.arg(proxy_url)
             .arg("--stream-url")
             .arg("--stream-type")
-            .arg("hls")
-            .arg("--twitch-api-header")
-            .arg(format!("Authorization=OAuth {}", self.oauth_token));
+            .arg("hls");
 
         cmd.arg(format!(
             "https://www.twitch.tv/{}",

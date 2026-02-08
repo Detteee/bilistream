@@ -64,8 +64,6 @@ pub struct Twitch {
     #[serde(default)]
     pub channel_id: String,
     #[serde(default)]
-    pub oauth_token: String,
-    #[serde(default)]
     pub proxy_region: String,
     #[serde(default = "default_quality")]
     pub quality: String,
@@ -226,8 +224,6 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             area_v2: u64,
             #[serde(rename = "ChannelId", default)]
             channel_id: String,
-            #[serde(rename = "OauthToken", default)]
-            oauth_token: String,
             #[serde(rename = "ProxyRegion", default)]
             proxy_region: String,
             #[serde(rename = "Quality", default = "default_quality")]
@@ -270,7 +266,6 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 channel_name: legacy.twitch.channel_name,
                 area_v2: legacy.twitch.area_v2,
                 channel_id: legacy.twitch.channel_id,
-                oauth_token: legacy.twitch.oauth_token,
                 proxy_region: legacy.twitch.proxy_region,
                 quality: legacy.twitch.quality,
             },
