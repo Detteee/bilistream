@@ -299,7 +299,6 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
 
     // 构造开播参数
     let mut params = BTreeMap::new();
-    params.insert("access_key", "".to_string());
     params.insert("appkey", appkey.to_string());
     params.insert("area_v2", area_v2.to_string());
     params.insert("backup_stream", "0".to_string());
@@ -311,21 +310,28 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
     params.insert("ts", ts.clone());
     params.insert("version", version.clone());
 
-    // Build the query string
+    // Build the query string (sorted by key)
     let query_string = params
         .iter()
         .map(|(k, v)| format!("{}={}", k, v))
         .collect::<Vec<_>>()
         .join("&");
 
-    // Sign the query string
+    // Sign the query string with appsec
     let mut hasher = Md5::new();
     hasher.update(format!("{}{}", query_string, secret));
     let sign = format!("{:x}", hasher.finalize());
 
-    // Add the sign to the parameters
-    let mut body = query_string.clone();
-    body.push_str(&format!("&sign={}", sign));
+    // Add sign to params
+    params.insert("sign", sign.clone());
+    tracing::info!("Params: {:#?}", params);
+
+    // Build the final query string with all parameters including sign
+    let query_string = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&");
 
     // Prepare cookies
     let cookie = format!(
@@ -346,19 +352,25 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         .timeout(Duration::new(30, 0))
         .build()?;
 
-    // POST to the endpoint
+    // POST to the endpoint with query parameters in URL
     let response: Value = client
-        .post("https://api.live.bilibili.com/room/v1/Room/startLive")
+        .post(format!(
+            "https://api.live.bilibili.com/room/v1/Room/startLive?{}",
+            query_string
+        ))
         .header("Accept", "application/json, text/plain, */*")
-        .header(
-            "content-type",
-            "application/x-www-form-urlencoded; charset=UTF-8",
-        )
-        .body(body)
         .send()
         .await?
         .json()
         .await?;
+    // tracing::info!("{:#?}", response);
+
+    // Check for face verification requirement (code 60024)
+    if response["code"].as_i64() == Some(60024) {
+        if let Some(qr_url) = response["data"]["qr"].as_str() {
+            return Err(format!("FACE_AUTH_REQUIRED:{}", qr_url).into());
+        }
+    }
 
     // Extract RTMP information from the response
     if response["code"].as_i64() == Some(0) {

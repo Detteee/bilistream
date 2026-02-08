@@ -1939,6 +1939,38 @@
       </div>
     </div>
 
+    <!-- Face Auth Modal -->
+    <div id="face-auth-modal"
+      style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1001; align-items: center; justify-content: center;">
+      <div
+        style="background: var(--card-bg); border-radius: 16px; padding: 40px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5); text-align: center; border: 2px solid var(--card-border);">
+        <div style="font-size: 48px; margin-bottom: 20px;">🔐</div>
+        <h3 style="color: var(--heading-color); margin-bottom: 15px; font-size: 1.8em;">需要人脸验证</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 25px; line-height: 1.6;">
+          本次开播需要身份验证<br>
+          请使用 Bilibili APP 扫描下方二维码完成人脸认证
+        </p>
+        <!-- QR Code Display -->
+        <div id="face-auth-qr-container"
+          style="background: white; padding: 20px; border-radius: 12px; display: inline-block; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+          <!-- QR code will be inserted here -->
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <button onclick="retryStartStream()"
+            style="padding: 15px; background: linear-gradient(135deg, #a6e3a1 0%, #94e2d5 100%); color: #1e1e2e; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 16px; transition: all 0.3s ease;">
+            ✅ 完成验证，重新开播
+          </button>
+          <button onclick="closeFaceAuthModal()"
+            style="padding: 12px; background: var(--button-hover-bg); color: var(--text-primary); border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- QR Code Library -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+
     <script>
       // Global data
       let channelsData = null;
@@ -1947,6 +1979,7 @@
       let maxLogLines = 500;
       let statusRefreshInterval = 60000; // Default 60 seconds
       let statusIntervalId = null;
+      let faceAuthUrl = null;
 
       // Global config data for access across functions
       window.configData = {
@@ -2225,6 +2258,38 @@
       function closeAreaModal() {
         document.getElementById('area-modal').style.display = 'none';
         pendingSwitchData = null;
+      }
+
+      function showFaceAuthModal(qrUrl) {
+        faceAuthUrl = qrUrl;
+        const modal = document.getElementById('face-auth-modal');
+        const container = document.getElementById('face-auth-qr-container');
+
+        // Clear previous content and generate QR code using QR Server API (same as login)
+        container.innerHTML = '';
+
+        const qrImg = document.createElement('img');
+        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrUrl)}`;
+        qrImg.style.width = '256px';
+        qrImg.style.height = '256px';
+        qrImg.style.display = 'block';
+        qrImg.onerror = function () {
+          // Fallback if QR API fails
+          container.innerHTML = `<p style="color: var(--text-secondary); margin-bottom: 10px;">无法生成二维码，请点击下方链接：</p><a href="${qrUrl}" target="_blank" style="color: #89b4fa; word-break: break-all; text-decoration: underline; padding: 10px;">${qrUrl}</a>`;
+        };
+
+        container.appendChild(qrImg);
+        modal.style.display = 'flex';
+      }
+
+      function closeFaceAuthModal() {
+        document.getElementById('face-auth-modal').style.display = 'none';
+        faceAuthUrl = null;
+      }
+
+      function retryStartStream() {
+        closeFaceAuthModal();
+        startStream();
       }
 
       async function confirmAreaSelection() {
@@ -3574,6 +3639,14 @@
             body: JSON.stringify({})
           });
           const data = await response.json();
+
+          // Check if face verification is required
+          if (data.data && data.data.requires_face_auth) {
+            showFaceAuthModal(data.data.qr_url);
+            showNotification(data.message || '需要人脸验证', 'error');
+            return;
+          }
+
           showNotification(data.message || '直播已开始', 'success');
           setTimeout(refreshStatus, 2000);
         } catch (error) {

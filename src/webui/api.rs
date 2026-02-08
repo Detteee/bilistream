@@ -446,7 +446,7 @@ pub struct StartStreamRequest {
 
 pub async fn start_stream(
     Json(payload): Json<StartStreamRequest>,
-) -> Result<ApiResponse<()>, StatusCode> {
+) -> Result<ApiResponse<serde_json::Value>, StatusCode> {
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -457,15 +457,30 @@ pub async fn start_stream(
         _ => 235,
     };
 
-    bili_start_live(&mut cfg, area_v2)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(ApiResponse {
-        success: true,
-        data: None,
-        message: Some("直播已开始".to_string()),
-    })
+    match bili_start_live(&mut cfg, area_v2).await {
+        Ok(_) => Ok(ApiResponse {
+            success: true,
+            data: Some(json!({})),
+            message: Some("直播已开始".to_string()),
+        }),
+        Err(e) => {
+            let error_msg = e.to_string();
+            // Check if it's a face verification error
+            if error_msg.starts_with("FACE_AUTH_REQUIRED:") {
+                let qr_url = error_msg.strip_prefix("FACE_AUTH_REQUIRED:").unwrap_or("");
+                Ok(ApiResponse {
+                    success: false,
+                    data: Some(json!({
+                        "requires_face_auth": true,
+                        "qr_url": qr_url
+                    })),
+                    message: Some("需要人脸验证，请扫描二维码完成验证后重试".to_string()),
+                })
+            } else {
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    }
 }
 
 pub async fn stop_stream() -> Result<ApiResponse<()>, StatusCode> {
