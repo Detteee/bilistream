@@ -59,4 +59,13 @@ ksni = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 trayicon = "0.1"
-winapi = { version = "0.3", features = ["winuser", "libloaderapi", "consoleapi", "processenv", "fileapi", "winnt", "winbase"] }
+winapi = { version = "0.3", features = [
+  "winuser",
+  "libloaderapi",
+  "consoleapi",
+  "processenv",
+  "fileapi",
+  "winnt",
+  "winbase",
+] }
+sevenz-rust = "0.6"

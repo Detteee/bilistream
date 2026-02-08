@@ -324,7 +324,6 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
 
     // Add sign to params
     params.insert("sign", sign.clone());
-    tracing::info!("Params: {:#?}", params);
 
     // Build the final query string with all parameters including sign
     let query_string = params
@@ -1228,6 +1227,26 @@ fn get_yt_dlp_command() -> String {
     }
 }
 
+// Helper function to get ImageMagick command
+fn get_imagemagick_command() -> String {
+    if cfg!(target_os = "windows") {
+        // On Windows, use convert.exe (renamed from ImageMagick installer)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_convert = exe_dir.join("convert.exe");
+                if local_convert.exists() {
+                    return local_convert.to_string_lossy().to_string();
+                }
+            }
+        }
+        // Try system-installed convert
+        "convert".to_string()
+    } else {
+        // On Linux/macOS, use convert
+        "convert".to_string()
+    }
+}
+
 /// Downloads and processes thumbnail for live streams
 pub async fn get_thumbnail(
     platform: &str,
@@ -1270,10 +1289,12 @@ pub async fn get_thumbnail(
     }
 
     // Process the downloaded thumbnail with ImageMagick
-    let convert_output = match create_hidden_command("convert")
+    let convert_cmd = get_imagemagick_command();
+
+    let convert_output = match create_hidden_command(&convert_cmd)
         .arg("thumbnail.jpg")
         .arg("-resize")
-        .arg("640x480") // Force resize to exact dimensions
+        .arg("640x480")
         .arg("-quality")
         .arg("95")
         .arg("cover.jpg")
@@ -1281,7 +1302,7 @@ pub async fn get_thumbnail(
     {
         Ok(output) => output,
         Err(e) => {
-            warn!("Failed to execute ImageMagick convert: {}", e);
+            warn!("Failed to execute ImageMagick: {}", e);
             return Ok(String::new()); // Return empty string to skip thumbnail
         }
     };
