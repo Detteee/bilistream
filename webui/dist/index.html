@@ -1144,58 +1144,6 @@
               </div>
             </div>
           </div>
-          <div class="info-row">
-            <span class="info-label">Cookies</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-              <span class="info-value" id="yt-cookies-status"
-                style="flex: 1; text-align: right; font-size: 12px;">未配置</span>
-              <button onclick="toggleYtCookiesEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置 Cookies">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <path
-                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                </svg>
-              </button>
-            </div>
-            <!-- Hidden edit form -->
-            <div id="yt-cookies-edit-container" style="display: none; flex-direction: column; gap: 8px; flex: 1;">
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 12px; color: var(--text-secondary);">从浏览器导入:</label>
-                <select id="yt-cookies-browser-select"
-                  style="padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-                  <option value="">不使用</option>
-                  <option value="chrome">Chrome</option>
-                  <option value="firefox">Firefox</option>
-                  <option value="edge">Edge</option>
-                  <option value="safari">Safari</option>
-                  <option value="brave">Brave</option>
-                  <option value="opera">Opera</option>
-                  <option value="vivaldi">Vivaldi</option>
-                </select>
-              </div>
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 12px; color: var(--text-secondary);">或使用文件路径:</label>
-                <input type="text" id="yt-cookies-file-input" placeholder="cookies.txt 文件路径"
-                  style="padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-              </div>
-              <div style="display: flex; gap: 8px;">
-                <button onclick="saveYtCookiesEdit()"
-                  style="flex: 1; background: var(--accent-green); color: #1e1e2e; border: none; padding: 6px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                  ✓ 保存
-                </button>
-                <button onclick="cancelYtCookiesEdit()"
-                  style="flex: 1; background: var(--accent-red); color: #1e1e2e; border: none; padding: 6px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                  ✕ 取消
-                </button>
-              </div>
-              <small style="color: var(--text-muted); font-size: 11px;">
-                浏览器导入优先级高于文件路径。留空表示不使用 cookies。
-              </small>
-            </div>
-          </div>
         </div>
 
         <div class="card">
@@ -2711,7 +2659,7 @@
           riot_api_key: document.getElementById('config-riot-key').value.trim(),
           enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
           lol_monitor_interval: parseInt(document.getElementById('config-lol-interval').value) || 1,
-          proxy: document.getElementById('config-proxy').value.trim() || null,
+          proxy: document.getElementById('config-proxy').value.trim(),
           twitch_oauth_token: document.getElementById('config-tw-oauth').value.trim(),
           twitch_proxy_region: document.getElementById('config-tw-region').value,
           anti_collision_list: window.currentAntiCollisionList || {},
@@ -4785,6 +4733,12 @@
         document.getElementById(`setup-step-${step}`).style.display = 'block';
         document.getElementById(`step-dot-${step}`).classList.add('active');
         currentStep = step;
+
+        // Reload channels and areas when entering step 3
+        if (step === 3) {
+          loadAreasForSetup();
+          loadChannelsForSetup();
+        }
       }
 
       function toggleRiotApiKey() {
@@ -5061,9 +5015,13 @@
           const response = await fetch('/api/channels');
           const channelsData = await response.json();
 
+          console.log('Loaded channels data:', channelsData);
+
           if (channelsData && channelsData.channels) {
             const ytChannelSelect = document.getElementById('setup-yt-channel-select');
             const twChannelSelect = document.getElementById('setup-tw-channel-select');
+
+            console.log('Found', channelsData.channels.length, 'channels');
 
             // Populate YouTube channels
             ytChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
@@ -5078,6 +5036,7 @@
                 ytChannelSelect.appendChild(option);
               }
             });
+            console.log('Populated YouTube channels:', ytChannelSelect.options.length - 1);
 
             // Populate Twitch channels
             twChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
@@ -5092,6 +5051,9 @@
                 twChannelSelect.appendChild(option);
               }
             });
+            console.log('Populated Twitch channels:', twChannelSelect.options.length - 1);
+          } else {
+            console.warn('No channels data found or invalid format');
           }
         } catch (error) {
           console.error('Failed to load channels:', error);
