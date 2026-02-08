@@ -177,10 +177,11 @@ pub async fn get_youtube_status(
         Some(_key) if !_key.is_empty() => {}
         _ => {
             tracing::info!("Holodex API key not configured, using yt-dlp");
+            let title = get_youtube_live_title(channel_id).await?;
             return get_status_with_yt_dlp(
                 channel_id,
                 proxy,
-                None,
+                title,
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
@@ -411,110 +412,88 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
     let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let channel_name = get_channel_name("YT", channel_id).unwrap();
-    let client = reqwest::Client::new();
 
-    // Check if Holodex API key is available
-    let holodex_api_key = match cfg.holodex_api_key.clone() {
-        Some(key) if !key.is_empty() => key,
-        _ => {
-            // Fallback to yt-dlp for title
-            let mut command = create_hidden_command(&get_yt_dlp_command());
-            if let Some(proxy) = proxy {
-                command.arg("--proxy").arg(proxy);
-            }
-
-            // Add cookies arguments
-            add_cookies_args(&mut command, cookies_file, cookies_from_browser);
-
-            command.arg("-e");
-            command.arg(format!(
-                "https://www.youtube.com/channel/{}/live",
-                channel_id
-            ));
-            let output = command.output()?;
-            let title_str = String::from_utf8_lossy(&output.stdout);
-            if let Some(title) = title_str.split(" 202").next() {
-                return Ok(Some(title.to_string()));
-            } else {
-                return Ok(Some("空".to_string()));
-            }
-        }
-    };
-
-    let url = format!(
-        "https://holodex.net/api/v2/users/live?channels={}",
-        channel_id
-    );
-    let response = client
-        .get(&url)
-        .header("X-APIKEY", holodex_api_key)
-        .send()
-        .await?;
-    if response.status().is_success() {
-        let videos: Vec<serde_json::Value> = response.json().await?;
-        if !videos.is_empty() {
-            let mut vid = videos.last().unwrap();
-            let mut flag = false;
-            for video in videos.iter().rev() {
-                let cname = video.get("channel");
-                if cname
-                    .unwrap()
-                    .get("name")
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .replace(" ", "")
-                    .contains(channel_name.as_deref().unwrap_or(""))
-                {
-                    if let Some(topic_id) = video.get("topic_id") {
-                        if topic_id.as_str().unwrap().contains("membersonly") {
-                            // tracing::info!("频道 {} 正在进行会限直播", channel_name);
-                        } else {
-                            vid = video;
-                            flag = true;
-                            break;
-                        }
-                    } else {
-                        vid = video;
-                        flag = true;
-                        break;
-                    }
-                    // let live_topic = video.get("topic_id").unwrap();
-                    // if !live_topic.as_str().unwrap().contains("membersonly") {
-                    //     vid = video;
-                    //     flag = true;
-                    //     break;
-                    // }
-                }
-            }
-            if flag {
-                let title = vid
-                    .get("title")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.split(" 202").next().unwrap_or(s).to_string());
-                return Ok(title);
-            } else {
-                return Ok(None);
-            }
-        } else {
-            Ok(None)
-        }
-    } else {
+    // Helper function to get title using yt-dlp
+    let get_title_with_ytdlp = || -> Result<Option<String>, Box<dyn Error>> {
         let mut command = create_hidden_command(&get_yt_dlp_command());
-        if let Some(proxy) = proxy {
-            command.arg("--proxy").arg(proxy);
+        if let Some(ref p) = proxy {
+            command.arg("--proxy").arg(p);
         }
-        command.arg("-e");
-        command.arg(format!(
+        add_cookies_args(&mut command, cookies_file, cookies_from_browser);
+        command.arg("-e").arg(format!(
             "https://www.youtube.com/channel/{}/live",
             channel_id
         ));
+
         let output = command.output()?;
         let title_str = String::from_utf8_lossy(&output.stdout);
-        if let Some(title) = title_str.split(" 202").next() {
-            Ok(Some(title.to_string()))
-        } else {
-            Ok(Some("空".to_string()))
+
+        let title = title_str
+            .lines()
+            .filter(|line| {
+                !line.trim().is_empty()
+                    && !line.starts_with("WARNING")
+                    && !line.starts_with("ERROR")
+            })
+            .last()
+            .map(|line| {
+                let re = regex::Regex::new(r"\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$").unwrap();
+                re.replace(line, "").trim().to_string()
+            })
+            .filter(|s| !s.is_empty());
+
+        Ok(title)
+    };
+
+    // Try Holodex API if key is configured
+    if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
+        let client = reqwest::Client::new();
+        let url = format!(
+            "https://holodex.net/api/v2/users/live?channels={}",
+            channel_id
+        );
+
+        match client.get(&url).header("X-APIKEY", key).send().await {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(videos) = response.json::<Vec<serde_json::Value>>().await {
+                    if !videos.is_empty() {
+                        for video in videos.iter().rev() {
+                            if let Some(cname) = video
+                                .get("channel")
+                                .and_then(|c| c.get("name"))
+                                .and_then(|n| n.as_str())
+                            {
+                                if cname
+                                    .replace(" ", "")
+                                    .contains(channel_name.as_deref().unwrap_or(""))
+                                {
+                                    if let Some(topic_id) =
+                                        video.get("topic_id").and_then(|t| t.as_str())
+                                    {
+                                        if topic_id.contains("membersonly") {
+                                            continue;
+                                        }
+                                    }
+                                    let title = video
+                                        .get("title")
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string());
+                                    return Ok(title);
+                                }
+                            }
+                        }
+                    }
+                }
+                return Ok(None);
+            }
+            _ => {
+                tracing::warn!("Holodex API failed, falling back to yt-dlp");
+            }
         }
+    } else {
+        tracing::info!("Holodex API key not configured, using yt-dlp");
     }
+
+    // Fallback to yt-dlp
+    get_title_with_ytdlp()
 }
