@@ -155,7 +155,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let yt_live = YoutubeClient::new(
                     &cfg.youtube.channel_name,
                     &cfg.youtube.channel_id,
-                    cfg.proxy.clone(),
+                    cfg.youtube.proxy.clone(),
                 );
                 let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
                     yt_live
@@ -188,7 +188,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let tw_live = TwitchClient::new(
                     &cfg.twitch.channel_id,
                     cfg.twitch.proxy_region.clone(),
-                    cfg.proxy.clone(),
+                    cfg.twitch.proxy.clone(),
                 );
                 let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
                     .get_status()
@@ -474,7 +474,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    match get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await {
+                    let proxy = if platform == "YT" {
+                        cfg.youtube.proxy.clone()
+                    } else {
+                        cfg.twitch.proxy.clone()
+                    };
+                    match get_thumbnail(platform, &channel_id, proxy).await {
                         Ok(cover_path) if !cover_path.is_empty() => {
                             if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                                 tracing::error!("B站直播间封面替换失败: {}", e);
@@ -527,7 +532,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    match get_thumbnail(platform, &channel_id, cfg.proxy.clone()).await {
+                    let proxy = if platform == "YT" {
+                        cfg.youtube.proxy.clone()
+                    } else {
+                        cfg.twitch.proxy.clone()
+                    };
+                    match get_thumbnail(platform, &channel_id, proxy).await {
                         Ok(cover_path) if !cover_path.is_empty() => {
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
@@ -549,11 +559,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Execute ffmpeg with platform-specific locks
             // Main ffmpeg monitoring loop - blocks until stream ends
             loop {
+                let proxy = if platform == "YT" {
+                    cfg.youtube.proxy.clone()
+                } else {
+                    cfg.twitch.proxy.clone()
+                };
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
                     m3u8_url.clone().unwrap(),
-                    cfg.proxy.clone(),
+                    proxy,
                     ffmpeg_log_level.to_string(),
                 )
                 .await;
@@ -937,7 +952,7 @@ async fn get_live_status(
             let yt_client = YoutubeClient::new(
                 channel_name.as_deref().unwrap_or(channel_id),
                 channel_id,
-                cfg.proxy.clone(),
+                cfg.youtube.proxy.clone(),
             );
             let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
@@ -980,7 +995,7 @@ async fn get_live_status(
             let tw_client = TwitchClient::new(
                 channel_id,
                 cfg.twitch.proxy_region.clone(),
-                cfg.proxy.clone(),
+                cfg.twitch.proxy.clone(),
             );
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
@@ -1013,7 +1028,8 @@ async fn get_live_status(
             let channel_id = cfg.youtube.channel_id;
             let channel_name = cfg.youtube.channel_name;
 
-            let yt_client = YoutubeClient::new(&channel_name, &channel_id, cfg.proxy.clone());
+            let yt_client =
+                YoutubeClient::new(&channel_name, &channel_id, cfg.youtube.proxy.clone());
             let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
                 if topic.is_some() {
@@ -1052,7 +1068,7 @@ async fn get_live_status(
             let tw_client = TwitchClient::new(
                 &channel_id,
                 cfg.twitch.proxy_region.clone(),
-                cfg.proxy.clone(),
+                cfg.twitch.proxy.clone(),
             );
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
@@ -1568,21 +1584,6 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         bilibili::login().await?;
     }
 
-    // Proxy setting (may be needed for YouTube/Twitch access)
-    print!("\n是否需要配置代理? (y/N): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let proxy = if input.trim().eq_ignore_ascii_case("y") {
-        print!("代理地址 (格式: http://host:port): ");
-        io::stdout().flush()?;
-        let mut proxy_input = String::new();
-        io::stdin().read_line(&mut proxy_input)?;
-        proxy_input.trim().to_string()
-    } else {
-        String::new()
-    };
-
     // Step 3: Configure config.json
     println!("\n步骤 2/2: 配置 config.json");
     println!("----------------------------------------");
@@ -1604,7 +1605,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_youtube = !input.trim().eq_ignore_ascii_case("n");
 
-    let (yt_channel_name, yt_channel_id, yt_area_v2, yt_quality) = if configure_youtube {
+    let (yt_channel_name, yt_channel_id, yt_area_v2, yt_quality, yt_proxy) = if configure_youtube {
         print!("YouTube 频道名称: ");
         io::stdout().flush()?;
         let mut name = String::new();
@@ -1637,9 +1638,34 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             quality.trim().to_string()
         };
 
-        (name, id, area, quality)
+        print!("\n是否需要为 YouTube 配置代理? (y/N): ");
+        io::stdout().flush()?;
+        let mut proxy_input = String::new();
+        io::stdin().read_line(&mut proxy_input)?;
+        let yt_proxy = if proxy_input.trim().eq_ignore_ascii_case("y") {
+            print!("YouTube 代理: ");
+            io::stdout().flush()?;
+            let mut proxy = String::new();
+            io::stdin().read_line(&mut proxy)?;
+            let proxy_str = proxy.trim().to_string();
+            if proxy_str.is_empty() {
+                None
+            } else {
+                Some(proxy_str)
+            }
+        } else {
+            None
+        };
+
+        (name, id, area, quality, yt_proxy)
     } else {
-        ("".to_string(), "".to_string(), 235, "best".to_string())
+        (
+            "".to_string(),
+            "".to_string(),
+            235,
+            "best".to_string(),
+            None,
+        )
     };
 
     // Get Twitch channel info
@@ -1649,7 +1675,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_twitch = !input.trim().eq_ignore_ascii_case("n");
 
-    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_proxy_region, tw_quality) =
+    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_proxy_region, tw_quality, tw_proxy) =
         if configure_twitch {
             print!("Twitch 频道名称: ");
             io::stdout().flush()?;
@@ -1693,7 +1719,26 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
                 quality.trim().to_string()
             };
 
-            (name, id, area, region, quality)
+            print!("\n是否需要为 Twitch 配置代理? (y/N): ");
+            io::stdout().flush()?;
+            let mut proxy_input = String::new();
+            io::stdin().read_line(&mut proxy_input)?;
+            let tw_proxy = if proxy_input.trim().eq_ignore_ascii_case("y") {
+                print!("Twitch 代理: ");
+                io::stdout().flush()?;
+                let mut proxy = String::new();
+                io::stdin().read_line(&mut proxy)?;
+                let proxy_str = proxy.trim().to_string();
+                if proxy_str.is_empty() {
+                    None
+                } else {
+                    Some(proxy_str)
+                }
+            } else {
+                None
+            };
+
+            (name, id, area, region, quality, tw_proxy)
         } else {
             (
                 "".to_string(),
@@ -1701,6 +1746,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
                 235,
                 "as".to_string(),
                 "best".to_string(),
+                None,
             )
         };
 
@@ -1833,6 +1879,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             channel_id: tw_channel_id,
             proxy_region: tw_proxy_region,
             quality: tw_quality,
+            proxy: tw_proxy,
         },
         youtube: Youtube {
             enable_monitor: true,
@@ -1842,8 +1889,8 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             quality: yt_quality,
             cookies_file: None,
             cookies_from_browser: None,
+            proxy: yt_proxy,
         },
-        proxy: if proxy.is_empty() { None } else { Some(proxy) },
         holodex_api_key: if holodex_api_key.is_empty() {
             None
         } else {

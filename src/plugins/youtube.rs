@@ -167,7 +167,7 @@ pub async fn get_youtube_status(
     Box<dyn Error>,
 > {
     let cfg = load_config().await?;
-    let proxy = cfg.proxy.clone();
+    let proxy = cfg.youtube.proxy.clone();
     let quality = cfg.youtube.quality.clone();
     let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
@@ -408,7 +408,7 @@ async fn get_status_with_yt_dlp(
 
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config().await?;
-    let proxy = cfg.proxy.clone();
+    let proxy = cfg.youtube.proxy.clone();
     let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let channel_name = get_channel_name("YT", channel_id).unwrap();

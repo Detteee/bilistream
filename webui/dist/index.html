@@ -674,17 +674,6 @@
             </label>
           </div>
 
-          <div class="control-group">
-            <label>代理地址 (可选)</label>
-            <input type="text" id="setup-proxy" placeholder="http://127.0.0.1:7890">
-            <small style="color: var(--text-muted); display: block; margin-top: 5px;">
-              如需访问 YouTube/Twitch 需要代理，请填写<br>
-              常用默认端口: Clash (7890) | V2Ray (2080)<br>
-              示例: <code
-                style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
-            </small>
-          </div>
-
           <div style="display: flex; gap: 10px; margin-top: 20px;">
             <button class="btn-secondary" onclick="goToStep(1)" style="flex: 1;">
               ← 上一步
@@ -738,6 +727,17 @@
                 <option value="worst">最低质量</option>
               </select>
             </div>
+
+            <div class="control-group">
+              <label>YouTube 代理地址 (可选)</label>
+              <input type="text" id="setup-yt-proxy" placeholder="http://127.0.0.1:7890">
+              <small style="color: var(--text-muted); display: block; margin-top: 5px;">
+                YouTube 专用代理，留空则不使用代理<br>
+                常用默认端口: Clash (7890) | V2Ray (10808)<br>
+                示例: <code
+                  style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
+              </small>
+            </div>
           </div>
 
           <!-- Twitch Config -->
@@ -769,15 +769,6 @@
             </div>
 
             <div class="control-group">
-              <label>OAuth Token (可选)</label>
-              <input type="text" id="setup-tw-oauth" placeholder="用于 streamlink 认证">
-              <small style="color: var(--text-muted); display: block; margin-top: 5px;">
-                获取方法: <a href="https://streamlink.github.io/cli/plugins/twitch.html#authentication" target="_blank"
-                  rel="noopener noreferrer" style="color: var(--accent-pink);">Streamlink Twitch 认证文档</a>
-              </small>
-            </div>
-
-            <div class="control-group">
               <label>代理区域</label>
               <select id="setup-tw-region">
                 <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
@@ -806,6 +797,17 @@
                 <option value="audio_only">audio_only - 仅音频</option>
                 <option value="worst">worst - 最低质量</option>
               </select>
+            </div>
+
+            <div class="control-group">
+              <label>Twitch 代理地址 (可选)</label>
+              <input type="text" id="setup-tw-proxy" placeholder="http://127.0.0.1:7890">
+              <small style="color: var(--text-muted); display: block; margin-top: 5px;">
+                Twitch 专用代理，留空则不使用代理<br>
+                常用默认端口: Clash (7890) | V2Ray (10808)<br>
+                示例: <code
+                  style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
+              </small>
             </div>
           </div>
 
@@ -1675,10 +1677,6 @@
                   <span>启用弹幕指令</span>
                 </label>
               </div>
-              <div class="control-group">
-                <label>HTTP 代理设置 (可选)</label>
-                <input type="text" id="config-proxy" placeholder="http://proxy:port">
-              </div>
             </div>
           </div>
 
@@ -1753,11 +1751,19 @@
                 </small>
               </div>
               <div class="control-group">
-                <label>Twitch OAuth Token (可选)</label>
-                <input type="text" id="config-tw-oauth" placeholder="用于 streamlink 认证">
+                <label>YouTube 代理地址 (可选)</label>
+                <input type="text" id="config-yt-proxy" placeholder="http://127.0.0.1:7890">
                 <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
-                  获取方法: <a href="https://streamlink.github.io/cli/plugins/twitch.html#authentication" target="_blank"
-                    rel="noopener noreferrer" style="color: var(--accent-pink);">Streamlink Twitch 认证文档</a>
+                  YouTube 专用代理，留空则不使用代理<br>
+                  常用默认端口: Clash (7890) | V2Ray (10808)
+                </small>
+              </div>
+              <div class="control-group">
+                <label>Twitch 代理地址 (可选)</label>
+                <input type="text" id="config-tw-proxy" placeholder="http://127.0.0.1:7890">
+                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                  Twitch 专用代理，留空则不使用代理<br>
+                  常用默认端口: Clash (7890) | V2Ray (10808)
                 </small>
               </div>
               <div class="control-group">
@@ -2484,8 +2490,9 @@
           document.getElementById('config-yt-cookies-browser').value = (config.youtube && config.youtube.cookies_from_browser) || '';
           document.getElementById('config-yt-cookies-file').value = (config.youtube && config.youtube.cookies_file) || '';
 
-          // Load proxy
-          document.getElementById('config-proxy').value = config.proxy || '';
+          // Load proxy settings
+          document.getElementById('config-yt-proxy').value = (config.youtube && config.youtube.proxy) || '';
+          document.getElementById('config-tw-proxy').value = (config.twitch && config.twitch.proxy) || '';
 
           // Load anti-collision list
           window.currentAntiCollisionList = config.anti_collision_list || {};
@@ -2658,7 +2665,8 @@
           riot_api_key: document.getElementById('config-riot-key').value.trim(),
           enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
           lol_monitor_interval: parseInt(document.getElementById('config-lol-interval').value) || 1,
-          proxy: document.getElementById('config-proxy').value.trim(),
+          youtube_proxy: document.getElementById('config-yt-proxy').value.trim(),
+          twitch_proxy: document.getElementById('config-tw-proxy').value.trim(),
           twitch_proxy_region: document.getElementById('config-tw-region').value,
           anti_collision_list: window.currentAntiCollisionList || {},
           youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
@@ -4889,13 +4897,13 @@
           auto_cover: document.getElementById('setup-auto-cover').checked,
           enable_danmaku_command: document.getElementById('setup-danmaku-command').checked,
           anti_collision: document.getElementById('setup-anti-collision').checked,
-          proxy: document.getElementById('setup-proxy').value || null,
 
           // YouTube
           youtube_channel_name: document.getElementById('setup-yt-name').value || null,
           youtube_channel_id: document.getElementById('setup-yt-id').value || null,
           youtube_area_v2: parseInt(document.getElementById('setup-yt-area').value) || null,
           youtube_quality: document.getElementById('setup-yt-quality').value || null,
+          youtube_proxy: document.getElementById('setup-yt-proxy').value || null,
 
           // Twitch
           twitch_channel_name: document.getElementById('setup-tw-name').value || null,
@@ -4903,6 +4911,7 @@
           twitch_area_v2: parseInt(document.getElementById('setup-tw-area').value) || null,
           twitch_proxy_region: document.getElementById('setup-tw-region').value || null,
           twitch_quality: document.getElementById('setup-tw-quality').value || null,
+          twitch_proxy: document.getElementById('setup-tw-proxy').value || null,
 
           // Advanced
           holodex_api_key: document.getElementById('setup-holodex').value || null,

@@ -298,7 +298,6 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "lol_monitor_interval": cfg.lol_monitor_interval,
         "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
         "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
-        "proxy": cfg.proxy.clone(),
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
@@ -309,6 +308,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "channel_name": cfg.youtube.channel_name,
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
+            "proxy": cfg.youtube.proxy,
         },
         "twitch": {
             "enable_monitor": cfg.twitch.enable_monitor,
@@ -316,6 +316,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
+            "proxy": cfg.twitch.proxy,
         }
     });
 
@@ -331,8 +332,9 @@ pub struct UpdateConfigRequest {
     lol_monitor_interval: Option<u64>,
     riot_api_key: Option<String>,
     holodex_api_key: Option<String>,
-    proxy: Option<String>,
     twitch_proxy_region: Option<String>,
+    twitch_proxy: Option<String>,
+    youtube_proxy: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
     enable_danmaku_command: Option<bool>,
     youtube_enable_monitor: Option<bool>,
@@ -379,22 +381,31 @@ pub async fn update_config(
             cfg.holodex_api_key = None;
         }
     }
-    if let Some(proxy) = payload.proxy {
-        if !proxy.is_empty() {
-            cfg.proxy = Some(proxy);
-        } else {
-            cfg.proxy = None;
-        }
-    }
 
     // Check if Twitch settings will be updated (before moving values)
-    let twitch_settings_updated = payload.twitch_proxy_region.is_some();
+    let twitch_settings_updated =
+        payload.twitch_proxy_region.is_some() || payload.twitch_proxy.is_some();
+    let youtube_settings_updated = payload.youtube_proxy.is_some();
 
     if let Some(anti_collision_list) = payload.anti_collision_list {
         cfg.anti_collision_list = anti_collision_list;
     }
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
+    }
+    if let Some(twitch_proxy) = payload.twitch_proxy {
+        cfg.twitch.proxy = if twitch_proxy.is_empty() {
+            None
+        } else {
+            Some(twitch_proxy)
+        };
+    }
+    if let Some(youtube_proxy) = payload.youtube_proxy {
+        cfg.youtube.proxy = if youtube_proxy.is_empty() {
+            None
+        } else {
+            Some(youtube_proxy)
+        };
     }
     if let Some(enable_danmaku_command) = payload.enable_danmaku_command {
         cfg.bililive.enable_danmaku_command = enable_danmaku_command;
@@ -431,10 +442,15 @@ pub async fn update_config(
     // Refresh status cache with updated configuration (for Twitch settings)
     refresh_status_cache_config().await;
 
-    // Refresh Twitch live status in background if Twitch settings were updated
+    // Refresh live status in background if settings were updated
     if twitch_settings_updated {
         tokio::spawn(async {
             let _ = refresh_twitch_status().await;
+        });
+    }
+    if youtube_settings_updated {
+        tokio::spawn(async {
+            let _ = refresh_youtube_status().await;
         });
     }
 
@@ -962,7 +978,6 @@ pub async fn get_logs_endpoint() -> Result<Json<LogsResponse>, StatusCode> {
 #[derive(Deserialize)]
 pub struct SetupConfigRequest {
     room: i32,
-    proxy: Option<String>,
     auto_cover: bool,
     enable_danmaku_command: bool,
     interval: u64,
@@ -971,11 +986,13 @@ pub struct SetupConfigRequest {
     youtube_channel_id: Option<String>,
     youtube_area_v2: Option<u64>,
     youtube_quality: Option<String>,
+    youtube_proxy: Option<String>,
     twitch_channel_name: Option<String>,
     twitch_channel_id: Option<String>,
     twitch_area_v2: Option<u64>,
     twitch_proxy_region: Option<String>,
     twitch_quality: Option<String>,
+    twitch_proxy: Option<String>,
     holodex_api_key: Option<String>,
     riot_api_key: Option<String>,
     enable_lol_monitor: bool,
@@ -1007,6 +1024,7 @@ pub async fn save_setup_config(
                 channel_id: String::new(),
                 proxy_region: "as".to_string(),
                 quality: "best".to_string(),
+                proxy: None,
             },
             youtube: crate::config::Youtube {
                 enable_monitor: true,
@@ -1016,8 +1034,8 @@ pub async fn save_setup_config(
                 quality: "best".to_string(),
                 cookies_file: None,
                 cookies_from_browser: None,
+                proxy: None,
             },
-            proxy: None,
             holodex_api_key: None,
             riot_api_key: None,
             enable_lol_monitor: false,
@@ -1032,7 +1050,6 @@ pub async fn save_setup_config(
     cfg.interval = payload.interval;
     cfg.bililive.enable_danmaku_command = payload.enable_danmaku_command;
     cfg.bililive.room = payload.room;
-    cfg.proxy = payload.proxy;
     cfg.holodex_api_key = payload.holodex_api_key;
     cfg.riot_api_key = payload.riot_api_key;
     cfg.enable_lol_monitor = payload.enable_lol_monitor;
@@ -1041,13 +1058,15 @@ pub async fn save_setup_config(
     let youtube_updated = payload.youtube_channel_name.is_some()
         || payload.youtube_channel_id.is_some()
         || payload.youtube_area_v2.is_some()
-        || payload.youtube_quality.is_some();
+        || payload.youtube_quality.is_some()
+        || payload.youtube_proxy.is_some();
 
     let twitch_updated = payload.twitch_channel_name.is_some()
         || payload.twitch_channel_id.is_some()
         || payload.twitch_area_v2.is_some()
         || payload.twitch_proxy_region.is_some()
-        || payload.twitch_quality.is_some();
+        || payload.twitch_quality.is_some()
+        || payload.twitch_proxy.is_some();
 
     // Update YouTube config if provided
     if let Some(yt_name) = payload.youtube_channel_name {
@@ -1061,6 +1080,13 @@ pub async fn save_setup_config(
     }
     if let Some(yt_quality) = payload.youtube_quality {
         cfg.youtube.quality = yt_quality;
+    }
+    if let Some(yt_proxy) = payload.youtube_proxy {
+        cfg.youtube.proxy = if yt_proxy.is_empty() {
+            None
+        } else {
+            Some(yt_proxy)
+        };
     }
 
     // Update Twitch config if provided
@@ -1078,6 +1104,13 @@ pub async fn save_setup_config(
     }
     if let Some(tw_quality) = payload.twitch_quality {
         cfg.twitch.quality = tw_quality;
+    }
+    if let Some(tw_proxy) = payload.twitch_proxy {
+        cfg.twitch.proxy = if tw_proxy.is_empty() {
+            None
+        } else {
+            Some(tw_proxy)
+        };
     }
 
     // Save config

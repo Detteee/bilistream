@@ -23,7 +23,6 @@ pub struct Config {
     pub bililive: BiliLive,
     pub twitch: Twitch,
     pub youtube: Youtube,
-    pub proxy: Option<String>,
     pub holodex_api_key: Option<String>,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
@@ -67,6 +66,8 @@ pub struct Twitch {
     pub proxy_region: String,
     #[serde(default = "default_quality")]
     pub quality: String,
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 /// Struct representing YouTube configuration.
@@ -86,6 +87,8 @@ pub struct Youtube {
     pub cookies_file: Option<String>,
     #[serde(default)]
     pub cookies_from_browser: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 fn default_quality() -> String {
@@ -268,6 +271,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 channel_id: legacy.twitch.channel_id,
                 proxy_region: legacy.twitch.proxy_region,
                 quality: legacy.twitch.quality,
+                proxy: None,
             },
             youtube: Youtube {
                 enable_monitor: true, // Default to enabled for migration
@@ -277,8 +281,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 quality: legacy.youtube.quality,
                 cookies_file: legacy.youtube.cookies_file,
                 cookies_from_browser: legacy.youtube.cookies_from_browser,
+                proxy: legacy.proxy,
             },
-            proxy: legacy.proxy,
             holodex_api_key: legacy.holodex_api_key,
             riot_api_key: legacy.riot_api_key,
             enable_lol_monitor: legacy.enable_lol_monitor,
