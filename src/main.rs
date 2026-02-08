@@ -185,8 +185,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Check Twitch status (only if enabled)
         let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
             if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-                let tw_live =
-                    TwitchClient::new(&cfg.twitch.channel_id, cfg.twitch.proxy_region.clone());
+                let tw_live = TwitchClient::new(
+                    &cfg.twitch.channel_id,
+                    cfg.twitch.proxy_region.clone(),
+                    cfg.proxy.clone(),
+                );
                 let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
                     .get_status()
                     .await
@@ -974,7 +977,11 @@ async fn get_live_status(
             if channel_name.is_none() {
                 channel_name = Some(channel_id.to_string());
             }
-            let tw_client = TwitchClient::new(channel_id, cfg.twitch.proxy_region.clone());
+            let tw_client = TwitchClient::new(
+                channel_id,
+                cfg.twitch.proxy_region.clone(),
+                cfg.proxy.clone(),
+            );
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
@@ -1042,7 +1049,11 @@ async fn get_live_status(
             }
             let channel_id = cfg.twitch.channel_id;
             let channel_name = cfg.twitch.channel_name;
-            let tw_client = TwitchClient::new(&channel_id, cfg.twitch.proxy_region.clone());
+            let tw_client = TwitchClient::new(
+                &channel_id,
+                cfg.twitch.proxy_region.clone(),
+                cfg.proxy.clone(),
+            );
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(

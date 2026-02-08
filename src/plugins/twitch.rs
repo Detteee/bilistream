@@ -30,10 +30,11 @@ pub struct Twitch {
     pub channel_id: String,
     pub client: ClientWithMiddleware,
     pub proxy_region: String,
+    pub proxy: Option<String>,
 }
 
 impl Twitch {
-    pub fn new(channel_id: &str, proxy_region: String) -> Self {
+    pub fn new(channel_id: &str, proxy_region: String, proxy: Option<String>) -> Self {
         // 设置最大重试次数为5次
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
         let raw_client = reqwest::Client::builder()
@@ -50,6 +51,7 @@ impl Twitch {
             channel_id: channel_id.to_string(),
             client,
             proxy_region,
+            proxy,
         }
     }
 
@@ -126,6 +128,13 @@ impl Twitch {
             .arg("--stream-url")
             .arg("--stream-type")
             .arg("hls");
+
+        // Add HTTP proxy if configured
+        if let Some(ref proxy) = self.proxy {
+            if !proxy.is_empty() {
+                cmd.arg("--http-proxy").arg(proxy);
+            }
+        }
 
         cmd.arg(format!(
             "https://www.twitch.tv/{}",
