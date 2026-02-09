@@ -362,12 +362,34 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         .await?
         .json()
         .await?;
-    // tracing::info!("{:#?}", response);
 
-    // Check for face verification requirement (code 60024)
-    if response["code"].as_i64() == Some(60024) {
-        if let Some(qr_url) = response["data"]["qr"].as_str() {
-            return Err(format!("FACE_AUTH_REQUIRED:{}", qr_url).into());
+    // Check response code and provide clear error messages
+    let code = response["code"].as_i64().unwrap_or(-1);
+
+    if code != 0 {
+        let message = response["message"]
+            .as_str()
+            .or_else(|| response["msg"].as_str())
+            .unwrap_or("Unknown error");
+
+        match code {
+            60024 => {
+                // Face verification required
+                if let Some(qr_url) = response["data"]["qr"].as_str() {
+                    return Err(format!("FACE_AUTH_REQUIRED:{}", qr_url).into());
+                }
+            }
+            60031 => {
+                // Abnormal streaming behavior - temporary ban
+                tracing::error!("❌ Bilibili 开播失败 (错误码: {})", code);
+                tracing::error!("📛 {}", message);
+                return Err(format!("Bilibili 暂时无法开播: {}", message).into());
+            }
+            _ => {
+                tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
+                tracing::debug!("完整响应: {:#?}", response);
+                return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
+            }
         }
     }
 
