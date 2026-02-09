@@ -1113,7 +1113,7 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
     // Generate and display QR code
     let qr_url = qrcode_res["data"]["url"]
         .as_str()
-        .ok_or("Failed to get QR code URL")?;
+        .ok_or("获取二维码 URL 失败")?;
 
     let qr = QrCode::new(qr_url)?;
     let qr_string = qr
@@ -1121,7 +1121,7 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
         .quiet_zone(false)
         .module_dimensions(2, 1)
         .build();
-    println!("Please scan the QR code to login:\n{}", qr_string);
+    println!("请扫描二维码登录:\n{}", qr_string);
 
     // Wait for scan and get login info
     let login_info = credential.login_by_qrcode(qrcode_res).await?;
@@ -1183,7 +1183,7 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
     });
     let cookies_path = Path::new(&bilistream_dir).with_file_name("cookies.json");
     fs::write(cookies_path, serde_json::to_string_pretty(&final_info)?)?;
-    println!("Login successful! Cookies saved to cookies.json");
+    println!("登录成功! Cookies saved to cookies.json");
 
     Ok(())
 }
@@ -1297,14 +1297,14 @@ pub async fn get_thumbnail(
     let output = match command.output() {
         Ok(output) => output,
         Err(e) => {
-            warn!("Failed to execute yt-dlp for thumbnail: {}", e);
+            warn!("yt-dlp 下载封面失败: {}", e);
             return Ok(String::new()); // Return empty string to skip thumbnail
         }
     };
 
     if !output.status.success() {
         warn!(
-            "yt-dlp failed to download thumbnail: {}",
+            "yt-dlp 下载封面失败: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         return Ok(String::new()); // Return empty string to skip thumbnail
@@ -1324,14 +1324,14 @@ pub async fn get_thumbnail(
     {
         Ok(output) => output,
         Err(e) => {
-            warn!("Failed to execute ImageMagick: {}", e);
+            warn!("ImageMagick 失败: {}", e);
             return Ok(String::new()); // Return empty string to skip thumbnail
         }
     };
 
     if !convert_output.status.success() {
         warn!(
-            "ImageMagick failed to convert thumbnail: {}",
+            "ImageMagick 转换封面失败: {}",
             String::from_utf8_lossy(&convert_output.stderr)
         );
         return Ok(String::new()); // Return empty string to skip thumbnail
@@ -1339,7 +1339,7 @@ pub async fn get_thumbnail(
 
     // Remove the original thumbnail
     if let Err(e) = std::fs::remove_file("thumbnail.jpg") {
-        warn!("Failed to remove original thumbnail file: {}", e);
+        warn!("删除原始封面文件失败: {}", e);
         // Continue anyway, not critical
     }
 

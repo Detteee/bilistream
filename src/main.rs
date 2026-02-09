@@ -17,6 +17,7 @@ use bilistream::plugins::{
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
     was_manual_restart, was_manual_stop,
 };
+use qrcode::QrCode;
 
 use chrono::{DateTime, Local};
 use clap::{Arg, Command};
@@ -1099,11 +1100,36 @@ async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::
     } else {
         235 // default area_v2 (其他单机)
     };
-    bili_start_live(&mut cfg, area_v2).await?;
-    println!("直播开始成功");
-    println!("url：{}", cfg.bililive.bili_rtmp_url);
-    println!("key：{}", cfg.bililive.bili_rtmp_key);
-    Ok(())
+
+    match bili_start_live(&mut cfg, area_v2).await {
+        Ok(_) => {
+            println!("直播开始成功");
+            println!("url：{}", cfg.bililive.bili_rtmp_url);
+            println!("key：{}", cfg.bililive.bili_rtmp_key);
+            Ok(())
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.starts_with("FACE_AUTH_REQUIRED:") {
+                let qr_url = error_msg.strip_prefix("FACE_AUTH_REQUIRED:").unwrap_or("");
+                eprintln!("❌ 需要人脸认证");
+
+                if let Ok(qr) = QrCode::new(qr_url) {
+                    let qr_string = qr
+                        .render::<char>()
+                        .quiet_zone(false)
+                        .module_dimensions(2, 1)
+                        .build();
+                    eprintln!("📱 请扫描二维码完成认证:\n{}", qr_string);
+                } else {
+                    eprintln!("📱 请访问以下链接完成认证: {}", qr_url);
+                }
+            } else {
+                eprintln!("❌ 开播失败: {}", error_msg);
+            }
+            Err(e)
+        }
+    }
 }
 
 async fn stop_live() -> Result<(), Box<dyn std::error::Error>> {
