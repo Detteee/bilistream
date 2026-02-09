@@ -1890,6 +1890,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             cookies_file: None,
             cookies_from_browser: None,
             proxy: yt_proxy,
+            deno_path: None,
         },
         holodex_api_key: if holodex_api_key.is_empty() {
             None

@@ -311,6 +311,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "proxy": cfg.youtube.proxy,
             "cookies_file": cfg.youtube.cookies_file,
             "cookies_from_browser": cfg.youtube.cookies_from_browser,
+            "deno_path": cfg.youtube.deno_path,
         },
         "twitch": {
             "enable_monitor": cfg.twitch.enable_monitor,
@@ -337,6 +338,7 @@ pub struct UpdateConfigRequest {
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
     youtube_proxy: Option<String>,
+    youtube_deno_path: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
     enable_danmaku_command: Option<bool>,
     youtube_enable_monitor: Option<bool>,
@@ -425,6 +427,13 @@ pub async fn update_config(
             None
         } else {
             Some(youtube_cookies_file)
+        };
+    }
+    if let Some(youtube_deno_path) = payload.youtube_deno_path {
+        cfg.youtube.deno_path = if youtube_deno_path.is_empty() {
+            None
+        } else {
+            Some(youtube_deno_path)
         };
     }
 
@@ -1027,6 +1036,7 @@ pub async fn save_setup_config(
                 cookies_file: None,
                 cookies_from_browser: None,
                 proxy: None,
+                deno_path: None,
             },
             holodex_api_key: None,
             riot_api_key: None,

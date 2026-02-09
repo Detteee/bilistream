@@ -171,6 +171,7 @@ pub async fn get_youtube_status(
     let quality = cfg.youtube.quality.clone();
     let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
+    let deno_path = &cfg.youtube.deno_path;
 
     // Check if Holodex API key is available
     match cfg.holodex_api_key.clone() {
@@ -185,6 +186,7 @@ pub async fn get_youtube_status(
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
+                deno_path,
             )
             .await;
         }
@@ -225,6 +227,7 @@ pub async fn get_youtube_status(
                     Some(&quality),
                     cookies_file,
                     cookies_from_browser,
+                    deno_path,
                 )
                 .await?;
                 return Ok((is_live, topic, title, m3u8_url, None, video_id));
@@ -294,6 +297,7 @@ pub async fn get_youtube_status(
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
+                deno_path,
             )
             .await?;
             Ok((is_live, None, title, m3u8_url, start_time, video_id))
@@ -309,6 +313,7 @@ async fn get_status_with_yt_dlp(
     quality: Option<&str>,
     cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
+    deno_path: &Option<String>,
 ) -> Result<
     (
         bool,                    // is_live
@@ -323,6 +328,15 @@ async fn get_status_with_yt_dlp(
     let quality = quality.unwrap_or("best");
 
     let mut command = create_hidden_command(&get_yt_dlp_command());
+
+    // Add deno runtime if path is configured
+    if let Some(deno) = deno_path {
+        if !deno.is_empty() {
+            command.arg("--js-runtimes");
+            command.arg(format!("deno:{}", deno));
+        }
+    }
+
     if let Some(proxy) = proxy.clone() {
         command.arg("--proxy");
         command.arg(proxy);

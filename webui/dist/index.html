@@ -1754,6 +1754,13 @@
                 </small>
               </div>
               <div class="control-group">
+                <label>YouTube Deno 路径 (可选)</label>
+                <input type="text" id="config-yt-deno-path" placeholder="Windows默认路径可留空">
+                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                  用于解决 YouTube n challenge 的 Deno 路径
+                </small>
+              </div>
+              <div class="control-group">
                 <label>YouTube 代理地址 (可选)</label>
                 <input type="text" id="config-yt-proxy" placeholder="http://127.0.0.1:7890">
                 <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
@@ -2492,6 +2499,7 @@
           // Load YouTube cookies settings
           document.getElementById('config-yt-cookies-browser').value = (config.youtube && config.youtube.cookies_from_browser) || '';
           document.getElementById('config-yt-cookies-file').value = (config.youtube && config.youtube.cookies_file) || '';
+          document.getElementById('config-yt-deno-path').value = (config.youtube && config.youtube.deno_path) || '';
 
           // Load proxy settings
           document.getElementById('config-yt-proxy').value = (config.youtube && config.youtube.proxy) || '';
@@ -2673,7 +2681,8 @@
           twitch_proxy_region: document.getElementById('config-tw-region').value,
           anti_collision_list: window.currentAntiCollisionList || {},
           youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
-          youtube_cookies_file: document.getElementById('config-yt-cookies-file').value.trim()
+          youtube_cookies_file: document.getElementById('config-yt-cookies-file').value.trim(),
+          youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim()
         };
       }
 

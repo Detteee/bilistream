@@ -89,6 +89,8 @@ pub struct Youtube {
     pub cookies_from_browser: Option<String>,
     #[serde(default)]
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub deno_path: Option<String>,
 }
 
 fn default_quality() -> String {
@@ -282,6 +284,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 cookies_file: legacy.youtube.cookies_file,
                 cookies_from_browser: legacy.youtube.cookies_from_browser,
                 proxy: legacy.proxy,
+                deno_path: None,
             },
             holodex_api_key: legacy.holodex_api_key,
             riot_api_key: legacy.riot_api_key,
