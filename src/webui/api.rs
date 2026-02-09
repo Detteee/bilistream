@@ -309,6 +309,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
             "proxy": cfg.youtube.proxy,
+            "cookies_file": cfg.youtube.cookies_file,
+            "cookies_from_browser": cfg.youtube.cookies_from_browser,
         },
         "twitch": {
             "enable_monitor": cfg.twitch.enable_monitor,
@@ -382,11 +384,6 @@ pub async fn update_config(
         }
     }
 
-    // Check if Twitch settings will be updated (before moving values)
-    let twitch_settings_updated =
-        payload.twitch_proxy_region.is_some() || payload.twitch_proxy.is_some();
-    let youtube_settings_updated = payload.youtube_proxy.is_some();
-
     if let Some(anti_collision_list) = payload.anti_collision_list {
         cfg.anti_collision_list = anti_collision_list;
     }
@@ -439,20 +436,10 @@ pub async fn update_config(
     // Set config updated flag so main loop can detect the change
     set_config_updated();
 
-    // Refresh status cache with updated configuration (for Twitch settings)
-    refresh_status_cache_config().await;
-
-    // Refresh live status in background if settings were updated
-    if twitch_settings_updated {
-        tokio::spawn(async {
-            let _ = refresh_twitch_status().await;
-        });
-    }
-    if youtube_settings_updated {
-        tokio::spawn(async {
-            let _ = refresh_youtube_status().await;
-        });
-    }
+    // Spawn status cache refresh in background (lightweight operation)
+    tokio::spawn(async {
+        refresh_status_cache_config().await;
+    });
 
     Ok(ApiResponse {
         success: true,
