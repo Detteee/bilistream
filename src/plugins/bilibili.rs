@@ -383,7 +383,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                 // Abnormal streaming behavior - temporary ban
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {})", code);
                 tracing::error!("📛 {}", message);
-                return Err(format!("Bilibili 暂时无法开播: {}", message).into());
+                return Err(message.into());
             }
             _ => {
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);

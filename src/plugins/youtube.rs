@@ -491,7 +491,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             }
         }
     } else {
-        tracing::info!("Holodex API key not configured, using yt-dlp");
+        // Holodex API key not configured, silently fall back to yt-dlp
     }
 
     // Fallback to yt-dlp

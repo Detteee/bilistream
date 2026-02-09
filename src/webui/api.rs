@@ -486,7 +486,12 @@ pub async fn start_stream(
                     message: Some("需要人脸验证，请扫描二维码完成验证后重试".to_string()),
                 })
             } else {
-                Err(StatusCode::INTERNAL_SERVER_ERROR)
+                // Return proper JSON error response instead of HTTP error
+                Ok(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(error_msg),
+                })
             }
         }
     }
