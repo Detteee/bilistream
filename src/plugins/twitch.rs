@@ -124,17 +124,16 @@ impl Twitch {
         let quality = quality.unwrap_or("best");
 
         let mut cmd = create_hidden_command("streamlink");
-        cmd.arg(proxy_url)
-            .arg("--stream-url")
-            .arg("--stream-type")
-            .arg("hls");
-
         // Add HTTP proxy if configured
         if let Some(ref proxy) = self.proxy {
             if !proxy.is_empty() {
                 cmd.arg("--http-proxy").arg(proxy);
             }
         }
+        cmd.arg(proxy_url)
+            .arg("--stream-url")
+            .arg("--stream-type")
+            .arg("hls");
 
         cmd.arg(format!(
             "https://www.twitch.tv/{}",
