@@ -156,6 +156,10 @@ impl Twitch {
             Ok(url)
         } else {
             let error = String::from_utf8(output.stderr)?;
+            // Check if the error is a usage message, which indicates missing streamlink-ttvlol plugin
+            if error.contains("usage: streamlink [OPTIONS] <URL> [STREAM]") {
+                return Err("Streamlink plugin (streamlink-ttvlol) 未安装。".into());
+            }
             Err(error.into())
         }
     }
