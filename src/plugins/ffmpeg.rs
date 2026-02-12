@@ -443,9 +443,9 @@ pub async fn ffmpeg(
         cmd.arg("-vf")
             .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
             .arg("-c:v")
-            // .arg("libx264") // Re-encode video when cropping
-            // .arg("-preset")
-            // .arg("veryfast") // Fast encoding preset
+            .arg("libx264") // Re-encode video when cropping
+            .arg("-preset")
+            .arg("veryfast") // Fast encoding preset
             .arg("-c:a")
             .arg("copy"); // Keep audio as-is
     } else {

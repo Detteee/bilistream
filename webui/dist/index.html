@@ -5604,6 +5604,8 @@
       let dragStartY = 0;
       let boxStartX = 0;
       let boxStartY = 0;
+      let boxStartWidth = 0;
+      let boxStartHeight = 0;
 
       function applyAspectRatio() {
         currentAspectRatio = document.getElementById('cropAspectRatio').value;
@@ -5712,6 +5714,8 @@
               cropStartY = mouseY;
               boxStartX = x;
               boxStartY = y;
+              boxStartWidth = width;
+              boxStartHeight = height;
               return;
             }
           }
@@ -5785,27 +5789,27 @@
             updateCropBox();
           } else if (isDrawing && resizeEdge) {
             // Resize the box by edge
-            let newX = x;
-            let newY = y;
-            let newWidth = width;
-            let newHeight = height;
+            let newX = boxStartX;
+            let newY = boxStartY;
+            let newWidth = boxStartWidth;
+            let newHeight = boxStartHeight;
 
             const deltaX = currentX - cropStartX;
             const deltaY = currentY - cropStartY;
 
             if (resizeEdge.includes('n')) {
               newY = boxStartY + deltaY;
-              newHeight = height - deltaY;
+              newHeight = boxStartHeight - deltaY;
             }
             if (resizeEdge.includes('s')) {
-              newHeight = height + deltaY;
+              newHeight = boxStartHeight + deltaY;
             }
             if (resizeEdge.includes('w')) {
               newX = boxStartX + deltaX;
-              newWidth = width - deltaX;
+              newWidth = boxStartWidth - deltaX;
             }
             if (resizeEdge.includes('e')) {
-              newWidth = width + deltaX;
+              newWidth = boxStartWidth + deltaX;
             }
 
             // Constrain to canvas and minimum size
