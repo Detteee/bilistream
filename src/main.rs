@@ -4,7 +4,9 @@
     windows_subsystem = "windows"
 )]
 
-use bilistream::config::{load_config, BiliLive, Config, Credentials, Twitch, Youtube};
+use bilistream::config::{
+    load_config, save_config, BiliLive, Config, Credentials, Twitch, Youtube,
+};
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
@@ -568,12 +570,27 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 } else {
                     cfg.twitch.proxy.clone()
                 };
+
+                // Get crop configuration if enabled
+                let crop = if platform == "YT" {
+                    cfg.youtube
+                        .crop
+                        .as_ref()
+                        .map(|c| (c.width, c.height, c.x, c.y))
+                } else {
+                    cfg.twitch
+                        .crop
+                        .as_ref()
+                        .map(|c| (c.width, c.height, c.x, c.y))
+                };
+
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
                     m3u8_url.clone().unwrap(),
                     proxy,
                     ffmpeg_log_level.to_string(),
+                    crop,
                 )
                 .await;
 
@@ -649,6 +666,25 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Stream is still live but ffmpeg exited, restart it
                 tracing::info!("🔄 流仍在进行，重启ffmpeg...");
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+
+            // Clear crop settings when stream ends
+            if yt_is_live {
+                if cfg.youtube.crop.is_some() {
+                    tracing::info!("🔄 清除YouTube裁剪设置");
+                    cfg.youtube.crop = None;
+                    if let Err(e) = save_config(&cfg).await {
+                        tracing::error!("保存配置失败: {}", e);
+                    }
+                }
+            } else {
+                if cfg.twitch.crop.is_some() {
+                    tracing::info!("🔄 清除Twitch裁剪设置");
+                    cfg.twitch.crop = None;
+                    if let Err(e) = save_config(&cfg).await {
+                        tracing::error!("保存配置失败: {}", e);
+                    }
+                }
             }
 
             // Check the actual reason for ffmpeg loop exit
@@ -1909,6 +1945,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             proxy_region: tw_proxy_region,
             quality: tw_quality,
             proxy: tw_proxy,
+            crop: None,
         },
         youtube: Youtube {
             enable_monitor: true,
@@ -1920,6 +1957,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             cookies_from_browser: None,
             proxy: yt_proxy,
             deno_path: None,
+            crop: None,
         },
         holodex_api_key: if holodex_api_key.is_empty() {
             None

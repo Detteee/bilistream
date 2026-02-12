@@ -396,6 +396,7 @@ pub async fn ffmpeg(
     m3u8_url: String,
     proxy: Option<String>,
     log_level: String,
+    crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
 ) {
     // Check if already running
     if is_ffmpeg_running().await {
@@ -434,10 +435,25 @@ pub async fn ffmpeg(
         .arg("+genpts+discardcorrupt") // Generate PTS and discard corrupt packets
         // Input file
         .arg("-i")
-        .arg(m3u8_url)
-        // Output options - stream copy
-        .arg("-c")
-        .arg("copy") // Stream copy without re-encoding
+        .arg(m3u8_url);
+
+    // Apply crop filter if configured
+    if let Some((width, height, x, y)) = crop {
+        tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
+        cmd.arg("-vf")
+            .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
+            .arg("-c:v")
+            // .arg("libx264") // Re-encode video when cropping
+            // .arg("-preset")
+            // .arg("veryfast") // Fast encoding preset
+            .arg("-c:a")
+            .arg("copy"); // Keep audio as-is
+    } else {
+        // Output options - stream copy (no re-encoding)
+        cmd.arg("-c").arg("copy"); // Stream copy without re-encoding
+    }
+
+    cmd
         // .arg("-copyts") // Copy input timestamps
         .arg("-start_at_zero") // Start timestamps at zero
         .arg("-avoid_negative_ts")

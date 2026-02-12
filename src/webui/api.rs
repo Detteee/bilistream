@@ -1026,6 +1026,7 @@ pub async fn save_setup_config(
                 proxy_region: "as".to_string(),
                 quality: "best".to_string(),
                 proxy: None,
+                crop: None,
             },
             youtube: crate::config::Youtube {
                 enable_monitor: true,
@@ -1037,6 +1038,7 @@ pub async fn save_setup_config(
                 cookies_from_browser: None,
                 proxy: None,
                 deno_path: None,
+                crop: None,
             },
             holodex_api_key: None,
             riot_api_key: None,
@@ -2395,4 +2397,321 @@ pub async fn delete_channel(
             message: Some(format!("Failed to serialize channels data: {}", e)),
         }),
     }
+}
+
+// Capture frame from stream for crop selection
+#[derive(Deserialize)]
+pub struct CaptureFrameRequest {
+    pub platform: String, // "youtube" or "twitch"
+}
+
+pub async fn capture_frame(
+    axum::extract::Path(platform): axum::extract::Path<String>,
+) -> Json<ApiResponse<()>> {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
+        }
+    };
+
+    // Get m3u8 URL based on platform
+    let m3u8_url: String;
+    let proxy: Option<String>;
+
+    match platform.as_str() {
+        "youtube" => {
+            // Use yt-dlp to get m3u8 URL
+            let channel_url = format!(
+                "https://www.youtube.com/channel/{}/live",
+                cfg.youtube.channel_id
+            );
+
+            // Get yt-dlp command (handles Windows .exe)
+            let yt_dlp_cmd = if cfg!(target_os = "windows") {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Some(exe_dir) = exe_path.parent() {
+                        let local_yt_dlp = exe_dir.join("yt-dlp.exe");
+                        if local_yt_dlp.exists() {
+                            local_yt_dlp.to_string_lossy().to_string()
+                        } else {
+                            "yt-dlp".to_string()
+                        }
+                    } else {
+                        "yt-dlp".to_string()
+                    }
+                } else {
+                    "yt-dlp".to_string()
+                }
+            } else {
+                "yt-dlp".to_string()
+            };
+
+            let mut cmd = tokio::process::Command::new(yt_dlp_cmd);
+            cmd.arg("-g").arg(&channel_url);
+
+            if let Some(ref proxy_url) = cfg.youtube.proxy {
+                cmd.arg("--proxy").arg(proxy_url);
+            }
+
+            match cmd.output().await {
+                Ok(output) if output.status.success() => {
+                    m3u8_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if m3u8_url.is_empty() {
+                        return Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "YouTube stream is not live or URL not found".to_string(),
+                            ),
+                        });
+                    }
+                    proxy = cfg.youtube.proxy.clone();
+                }
+                _ => {
+                    return Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        message: Some(
+                            "Failed to get YouTube stream URL. Make sure yt-dlp is installed."
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+        "twitch" => {
+            // Use streamlink with proxy URL like in twitch.rs
+            let proxy_region = &cfg.twitch.proxy_region;
+            let proxy_url = match proxy_region.as_str() {
+                "na" => "--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com",
+                "eu" => "--twitch-proxy-playlist=https://lb-eu.cdn-perfprod.com",
+                "eu2" => "--twitch-proxy-playlist=https://lb-eu2.cdn-perfprod.com",
+                "eu3" => "--twitch-proxy-playlist=https://lb-eu3.cdn-perfprod.com",
+                "eu4" => "--twitch-proxy-playlist=https://lb-eu4.cdn-perfprod.com",
+                "eu5" => "--twitch-proxy-playlist=https://lb-eu5.cdn-perfprod.com",
+                "as" => "--twitch-proxy-playlist=https://lb-as.cdn-perfprod.com",
+                "sa" => "--twitch-proxy-playlist=https://lb-sa.cdn-perfprod.com",
+                "eul" => "--twitch-proxy-playlist=https://eu.luminous.dev",
+                "eu2l" => "--twitch-proxy-playlist=https://eu2.luminous.dev",
+                "asl" => "--twitch-proxy-playlist=https://as.luminous.dev",
+                "" => "",
+                _ => "asl", // Default to asl if invalid
+            };
+
+            let channel_url = format!("https://twitch.tv/{}", cfg.twitch.channel_id);
+
+            let mut cmd = tokio::process::Command::new("streamlink");
+
+            // Add proxy URL if not empty
+            if !proxy_url.is_empty() {
+                cmd.arg(proxy_url);
+            }
+
+            cmd.arg("--stream-url").arg(&channel_url).arg("best");
+
+            if let Some(ref http_proxy) = cfg.twitch.proxy {
+                cmd.arg("--http-proxy").arg(http_proxy);
+            }
+
+            match cmd.output().await {
+                Ok(output) if output.status.success() => {
+                    m3u8_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if m3u8_url.is_empty() {
+                        return Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            message: Some("Twitch stream is not live or URL not found".to_string()),
+                        });
+                    }
+                    proxy = cfg.twitch.proxy.clone();
+                }
+                _ => {
+                    return Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        message: Some(
+                            "Failed to get Twitch stream URL. Make sure streamlink and streamlink-ttvlol plugin are installed."
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+        _ => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Invalid platform".to_string()),
+            });
+        }
+    }
+
+    // Capture frame using ffmpeg
+    let output_path = match std::env::current_exe() {
+        Ok(path) => path.with_file_name("pic_for_crop.jpg"),
+        Err(_) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Failed to get executable path".to_string()),
+            });
+        }
+    };
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.arg("-y")
+        .arg("-live_start_index")
+        .arg("-1")
+        .arg("-i")
+        .arg(&m3u8_url)
+        .arg("-vframes")
+        .arg("1")
+        .arg(&output_path);
+
+    if let Some(proxy_url) = proxy {
+        cmd.arg("-http_proxy").arg(proxy_url);
+    }
+
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to execute ffmpeg: {}", e)),
+            });
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("FFmpeg failed: {}", stderr)),
+        });
+    }
+
+    // Read the image and convert to base64
+    let image_data = match tokio::fs::read(&output_path).await {
+        Ok(data) => data,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read captured image: {}", e)),
+            });
+        }
+    };
+
+    let base64_image =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+
+    // Return base64 image in message field since data field must be ()
+    Json(ApiResponse {
+        success: true,
+        data: Some(()),
+        message: Some(format!("data:image/jpeg;base64,{}", base64_image)),
+    })
+}
+
+// Update crop configuration
+#[derive(Deserialize)]
+pub struct UpdateCropRequest {
+    pub platform: String, // "youtube" or "twitch"
+    pub enabled: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
+}
+
+pub async fn update_crop(
+    Json(payload): Json<UpdateCropRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let crop_config = if payload.enabled {
+        if payload.width.is_none()
+            || payload.height.is_none()
+            || payload.x.is_none()
+            || payload.y.is_none()
+        {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Crop dimensions required when enabled".to_string()),
+            });
+        }
+        Some(crate::config::CropConfig {
+            width: payload.width.unwrap(),
+            height: payload.height.unwrap(),
+            x: payload.x.unwrap(),
+            y: payload.y.unwrap(),
+        })
+    } else {
+        None
+    };
+
+    match payload.platform.as_str() {
+        "youtube" => {
+            cfg.youtube.crop = crop_config;
+        }
+        "twitch" => {
+            cfg.twitch.crop = crop_config;
+        }
+        _ => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Invalid platform".to_string()),
+            });
+        }
+    }
+
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    set_config_updated();
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("Crop configuration updated".to_string()),
+    })
+}
+
+// Get current crop configuration
+pub async fn get_crop(
+    platform: String,
+) -> Result<Json<ApiResponse<Option<crate::config::CropConfig>>>, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let crop = match platform.as_str() {
+        "youtube" => cfg.youtube.crop,
+        "twitch" => cfg.twitch.crop,
+        _ => {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Invalid platform".to_string()),
+            }));
+        }
+    };
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(crop),
+        message: None,
+    }))
 }

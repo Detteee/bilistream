@@ -1041,6 +1041,14 @@
                     d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
                 </svg>
               </button>
+              <button onclick="openCropConfig('youtube')" title="视频裁剪配置"
+                style="padding: 8px; background: var(--accent-mauve); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path>
+                  <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path>
+                </svg>
+              </button>
             </div>
           </div>
           <div class="info-row">
@@ -1171,6 +1179,14 @@
                   xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
                   <path
                     d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                </svg>
+              </button>
+              <button onclick="openCropConfig('twitch')" title="视频裁剪配置"
+                style="padding: 8px; background: var(--accent-mauve); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path>
+                  <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path>
                 </svg>
               </button>
             </div>
@@ -5463,7 +5479,610 @@
           statusSpan.textContent = '未配置';
         }
       }
+
+      // Crop Configuration Functions
+      let cropImage = null;
+      let cropStartX = 0;
+      let cropStartY = 0;
+      let isDrawing = false;
+      let cropCanvas = null;
+      let cropCtx = null;
+
+      function openCropConfig(platform) {
+        document.getElementById('cropModal').classList.add('active');
+        if (platform) {
+          document.getElementById('cropPlatform').value = platform;
+        }
+        loadCurrentCropSettings();
+        // Auto-capture frame when opening from platform cards
+        if (platform) {
+          setTimeout(() => autoCaptureFrame(), 300);
+        }
+      }
+
+      function closeCropModal() {
+        document.getElementById('cropModal').classList.remove('active');
+        // Reset canvas
+        const container = document.getElementById('cropCanvasContainer');
+        if (container) container.style.display = 'none';
+        cropImage = null;
+      }
+
+      async function autoCaptureFrame() {
+        const platform = document.getElementById('cropPlatform').value;
+
+        showNotification('正在捕获直播帧...', 'info');
+
+        try {
+          const response = await fetch(`/api/crop/capture/${platform}`, {
+            method: 'POST'
+          });
+
+          const result = await response.json();
+
+          if (result.success && result.message) {
+            // Load the captured image (base64 is in message field)
+            cropImage = new Image();
+            cropImage.onload = function () {
+              cropCanvas = document.getElementById('cropCanvas');
+              cropCtx = cropCanvas.getContext('2d');
+
+              // Set canvas size to image size
+              cropCanvas.width = cropImage.width;
+              cropCanvas.height = cropImage.height;
+
+              // Draw image
+              cropCtx.drawImage(cropImage, 0, 0);
+
+              // Show container
+              document.getElementById('cropCanvasContainer').style.display = 'block';
+
+              // Setup canvas interaction
+              setupCanvasInteraction();
+
+              showNotification('直播帧已捕获，请在图片上选择裁剪区域', 'success');
+            };
+            cropImage.src = result.message;
+          } else {
+            showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
+          }
+        } catch (error) {
+          showNotification('捕获失败: ' + error.message, 'error');
+        }
+      }
+
+      async function loadCurrentCropSettings() {
+        const platform = document.getElementById('cropPlatform').value;
+        try {
+          const response = await fetch(`/api/crop/${platform}`);
+          const result = await response.json();
+          if (result.success && result.data && result.data.enabled) {
+            document.getElementById('cropX').value = result.data.x;
+            document.getElementById('cropY').value = result.data.y;
+            document.getElementById('cropWidth').value = result.data.width;
+            document.getElementById('cropHeight').value = result.data.height;
+          }
+        } catch (error) {
+          console.error('Failed to load crop settings:', error);
+        }
+      }
+
+      function loadCropImage(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          cropImage = new Image();
+          cropImage.onload = function () {
+            cropCanvas = document.getElementById('cropCanvas');
+            cropCtx = cropCanvas.getContext('2d');
+
+            // Set canvas size to image size
+            cropCanvas.width = cropImage.width;
+            cropCanvas.height = cropImage.height;
+
+            // Draw image
+            cropCtx.drawImage(cropImage, 0, 0);
+
+            // Show container
+            document.getElementById('cropCanvasContainer').style.display = 'block';
+
+            // Setup canvas interaction
+            setupCanvasInteraction();
+
+            showNotification('图片已加载，请在图片上拖动鼠标选择裁剪区域', 'success');
+          };
+          cropImage.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      }
+
+      let currentAspectRatio = 'free';
+      let isDragging = false;
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let boxStartX = 0;
+      let boxStartY = 0;
+
+      function applyAspectRatio() {
+        currentAspectRatio = document.getElementById('cropAspectRatio').value;
+
+        if (!cropCanvas || currentAspectRatio === 'free') return;
+
+        // Generate centered box with selected aspect ratio
+        const canvasWidth = cropCanvas.width;
+        const canvasHeight = cropCanvas.height;
+
+        let width, height;
+        const ratio = currentAspectRatio === '1:1' ? 1 :
+          currentAspectRatio === '16:9' ? 16 / 9 : 9 / 16;
+
+        // Calculate size to fit 60% of canvas
+        if (ratio >= 1) {
+          width = canvasWidth * 0.6;
+          height = width / ratio;
+          if (height > canvasHeight * 0.6) {
+            height = canvasHeight * 0.6;
+            width = height * ratio;
+          }
+        } else {
+          height = canvasHeight * 0.6;
+          width = height * ratio;
+          if (width > canvasWidth * 0.6) {
+            width = canvasWidth * 0.6;
+            height = width / ratio;
+          }
+        }
+
+        const x = (canvasWidth - width) / 2;
+        const y = (canvasHeight - height) / 2;
+
+        document.getElementById('cropX').value = Math.round(x);
+        document.getElementById('cropY').value = Math.round(y);
+        document.getElementById('cropWidth').value = Math.round(width);
+        document.getElementById('cropHeight').value = Math.round(height);
+
+        updateCropBox();
+        showNotification(`已应用 ${currentAspectRatio} 比例`, 'success');
+      }
+
+      function setupCanvasInteraction() {
+        const canvas = document.getElementById('cropCanvas');
+        const cropBox = document.getElementById('cropBox');
+
+        // Remove old listeners
+        const newCanvas = canvas.cloneNode(true);
+        canvas.parentNode.replaceChild(newCanvas, canvas);
+        cropCanvas = newCanvas;
+
+        let resizeEdge = null; // 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'
+        const edgeThreshold = 10; // pixels from edge to trigger resize
+
+        function getResizeEdge(mouseX, mouseY, x, y, width, height) {
+          const threshold = edgeThreshold;
+          let edge = '';
+
+          // Check vertical edges
+          if (Math.abs(mouseY - y) < threshold) edge += 'n';
+          else if (Math.abs(mouseY - (y + height)) < threshold) edge += 's';
+
+          // Check horizontal edges
+          if (Math.abs(mouseX - x) < threshold) edge += 'w';
+          else if (Math.abs(mouseX - (x + width)) < threshold) edge += 'e';
+
+          return edge || null;
+        }
+
+        function getCursorForEdge(edge) {
+          if (!edge) return 'crosshair';
+          const cursors = {
+            'n': 'ns-resize',
+            's': 'ns-resize',
+            'e': 'ew-resize',
+            'w': 'ew-resize',
+            'ne': 'nesw-resize',
+            'nw': 'nwsw-resize',
+            'se': 'nwsw-resize',
+            'sw': 'nesw-resize'
+          };
+          return cursors[edge] || 'crosshair';
+        }
+
+        newCanvas.addEventListener('mousedown', (e) => {
+          const rect = newCanvas.getBoundingClientRect();
+          const scaleX = newCanvas.width / rect.width;
+          const scaleY = newCanvas.height / rect.height;
+
+          const mouseX = (e.clientX - rect.left) * scaleX;
+          const mouseY = (e.clientY - rect.top) * scaleY;
+
+          const x = parseInt(document.getElementById('cropX').value) || 0;
+          const y = parseInt(document.getElementById('cropY').value) || 0;
+          const width = parseInt(document.getElementById('cropWidth').value) || 0;
+          const height = parseInt(document.getElementById('cropHeight').value) || 0;
+
+          // Check if clicking on edge for resizing (only for free ratio)
+          if (currentAspectRatio === 'free' && mouseX >= x - edgeThreshold && mouseX <= x + width + edgeThreshold &&
+            mouseY >= y - edgeThreshold && mouseY <= y + height + edgeThreshold) {
+            resizeEdge = getResizeEdge(mouseX, mouseY, x, y, width, height);
+            if (resizeEdge) {
+              isDrawing = true;
+              cropStartX = mouseX;
+              cropStartY = mouseY;
+              boxStartX = x;
+              boxStartY = y;
+              return;
+            }
+          }
+
+          // Check if clicking inside existing box for dragging
+          if (mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height) {
+            isDragging = true;
+            dragStartX = mouseX;
+            dragStartY = mouseY;
+            boxStartX = x;
+            boxStartY = y;
+            newCanvas.style.cursor = 'move';
+          } else {
+            // Start new selection
+            cropStartX = mouseX;
+            cropStartY = mouseY;
+            isDrawing = true;
+            resizeEdge = null;
+
+            cropBox.style.display = 'block';
+            cropBox.style.left = (mouseX / scaleX) + 'px';
+            cropBox.style.top = (mouseY / scaleY) + 'px';
+            cropBox.style.width = '0px';
+            cropBox.style.height = '0px';
+          }
+        });
+
+        newCanvas.addEventListener('mousemove', (e) => {
+          const rect = newCanvas.getBoundingClientRect();
+          const scaleX = newCanvas.width / rect.width;
+          const scaleY = newCanvas.height / rect.height;
+
+          const currentX = (e.clientX - rect.left) * scaleX;
+          const currentY = (e.clientY - rect.top) * scaleY;
+
+          const x = parseInt(document.getElementById('cropX').value) || 0;
+          const y = parseInt(document.getElementById('cropY').value) || 0;
+          const width = parseInt(document.getElementById('cropWidth').value) || 0;
+          const height = parseInt(document.getElementById('cropHeight').value) || 0;
+
+          // Update cursor based on position
+          if (!isDrawing && !isDragging && currentAspectRatio === 'free') {
+            if (currentX >= x - edgeThreshold && currentX <= x + width + edgeThreshold &&
+              currentY >= y - edgeThreshold && currentY <= y + height + edgeThreshold) {
+              const edge = getResizeEdge(currentX, currentY, x, y, width, height);
+              if (edge) {
+                newCanvas.style.cursor = getCursorForEdge(edge);
+                return;
+              } else if (currentX >= x && currentX <= x + width && currentY >= y && currentY <= y + height) {
+                newCanvas.style.cursor = 'move';
+                return;
+              }
+            }
+            newCanvas.style.cursor = 'crosshair';
+          }
+
+          if (isDragging) {
+            // Move the box
+            const deltaX = currentX - dragStartX;
+            const deltaY = currentY - dragStartY;
+
+            let newX = boxStartX + deltaX;
+            let newY = boxStartY + deltaY;
+
+            // Constrain to canvas
+            newX = Math.max(0, Math.min(newX, newCanvas.width - width));
+            newY = Math.max(0, Math.min(newY, newCanvas.height - height));
+
+            document.getElementById('cropX').value = Math.round(newX);
+            document.getElementById('cropY').value = Math.round(newY);
+            updateCropBox();
+          } else if (isDrawing && resizeEdge) {
+            // Resize the box by edge
+            let newX = x;
+            let newY = y;
+            let newWidth = width;
+            let newHeight = height;
+
+            const deltaX = currentX - cropStartX;
+            const deltaY = currentY - cropStartY;
+
+            if (resizeEdge.includes('n')) {
+              newY = boxStartY + deltaY;
+              newHeight = height - deltaY;
+            }
+            if (resizeEdge.includes('s')) {
+              newHeight = height + deltaY;
+            }
+            if (resizeEdge.includes('w')) {
+              newX = boxStartX + deltaX;
+              newWidth = width - deltaX;
+            }
+            if (resizeEdge.includes('e')) {
+              newWidth = width + deltaX;
+            }
+
+            // Constrain to canvas and minimum size
+            if (newWidth < 10) newWidth = 10;
+            if (newHeight < 10) newHeight = 10;
+            if (newX < 0) { newWidth += newX; newX = 0; }
+            if (newY < 0) { newHeight += newY; newY = 0; }
+            if (newX + newWidth > newCanvas.width) newWidth = newCanvas.width - newX;
+            if (newY + newHeight > newCanvas.height) newHeight = newCanvas.height - newY;
+
+            document.getElementById('cropX').value = Math.round(newX);
+            document.getElementById('cropY').value = Math.round(newY);
+            document.getElementById('cropWidth').value = Math.round(newWidth);
+            document.getElementById('cropHeight').value = Math.round(newHeight);
+            updateCropBox();
+          } else if (isDrawing) {
+            // Draw new box
+            let width = Math.abs(currentX - cropStartX);
+            let height = Math.abs(currentY - cropStartY);
+
+            // Apply aspect ratio if selected
+            if (currentAspectRatio !== 'free') {
+              const ratio = currentAspectRatio === '1:1' ? 1 :
+                currentAspectRatio === '16:9' ? 16 / 9 : 9 / 16;
+              if (width / height > ratio) {
+                width = height * ratio;
+              } else {
+                height = width / ratio;
+              }
+            }
+
+            const x = currentX > cropStartX ? cropStartX : cropStartX - width;
+            const y = currentY > cropStartY ? cropStartY : cropStartY - height;
+
+            cropBox.style.left = (x / scaleX) + 'px';
+            cropBox.style.top = (y / scaleY) + 'px';
+            cropBox.style.width = (width / scaleX) + 'px';
+            cropBox.style.height = (height / scaleY) + 'px';
+
+            document.getElementById('cropX').value = Math.round(x);
+            document.getElementById('cropY').value = Math.round(y);
+            document.getElementById('cropWidth').value = Math.round(width);
+            document.getElementById('cropHeight').value = Math.round(height);
+          }
+        });
+
+        newCanvas.addEventListener('mouseup', () => {
+          isDrawing = false;
+          isDragging = false;
+          resizeEdge = null;
+          newCanvas.style.cursor = 'crosshair';
+        });
+
+        newCanvas.addEventListener('mouseleave', () => {
+          isDrawing = false;
+          isDragging = false;
+          resizeEdge = null;
+          newCanvas.style.cursor = 'crosshair';
+        });
+
+        // Update crop box when inputs change
+        ['cropX', 'cropY', 'cropWidth', 'cropHeight'].forEach(id => {
+          const input = document.getElementById(id);
+          input.removeEventListener('input', updateCropBox);
+          input.addEventListener('input', updateCropBox);
+        });
+      }
+
+      function updateCropBox() {
+        if (!cropCanvas) return;
+        const rect = cropCanvas.getBoundingClientRect();
+        const scaleX = cropCanvas.width / rect.width;
+        const scaleY = cropCanvas.height / rect.height;
+
+        const x = parseInt(document.getElementById('cropX').value) || 0;
+        const y = parseInt(document.getElementById('cropY').value) || 0;
+        const width = parseInt(document.getElementById('cropWidth').value) || 0;
+        const height = parseInt(document.getElementById('cropHeight').value) || 0;
+
+        const cropBox = document.getElementById('cropBox');
+        cropBox.style.display = 'block';
+        cropBox.style.left = (x / scaleX) + 'px';
+        cropBox.style.top = (y / scaleY) + 'px';
+        cropBox.style.width = (width / scaleX) + 'px';
+        cropBox.style.height = (height / scaleY) + 'px';
+      }
+
+      async function applyCrop() {
+        const platform = document.getElementById('cropPlatform').value;
+        const x = parseInt(document.getElementById('cropX').value) || 0;
+        const y = parseInt(document.getElementById('cropY').value) || 0;
+        const width = parseInt(document.getElementById('cropWidth').value) || 0;
+        const height = parseInt(document.getElementById('cropHeight').value) || 0;
+
+        if (width === 0 || height === 0) {
+          showNotification('请先输入裁剪区域尺寸', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/crop/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform,
+              enabled: true,
+              x,
+              y,
+              width,
+              height
+            })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            showNotification('裁剪配置已保存，请重启流使其生效', 'success');
+            closeCropModal();
+          } else {
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      async function disableCrop() {
+        const platform = document.getElementById('cropPlatform').value;
+
+        try {
+          const response = await fetch('/api/crop/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform,
+              enabled: false
+            })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            showNotification('裁剪已禁用，请重启流使其生效', 'success');
+            closeCropModal();
+          } else {
+            showNotification(result.message || '禁用失败', 'error');
+          }
+        } catch (error) {
+          showNotification('禁用失败: ' + error.message, 'error');
+        }
+      }
     </script>
+
+    <!-- Crop Configuration Modal -->
+    <div id="cropModal" class="crop-modal">
+      <div class="crop-modal-content">
+        <h2 style="color: var(--heading-color); margin-bottom: 20px;">🎬 视频裁剪配置</h2>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+            <span style="color: var(--text-secondary);">平台:</span>
+            <select id="cropPlatform" onchange="loadCurrentCropSettings()"
+              style="padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <option value="youtube">YouTube</option>
+              <option value="twitch">Twitch</option>
+            </select>
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+            <span style="color: var(--text-secondary);">裁剪比例:</span>
+            <select id="cropAspectRatio" onchange="applyAspectRatio()"
+              style="padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <option value="free">自由选择</option>
+              <option value="1:1">正方形 (1:1)</option>
+              <option value="16:9">横屏 (16:9)</option>
+              <option value="9:16">竖屏 (9:16)</option>
+            </select>
+          </label>
+
+          <div style="background: var(--input-bg); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+            <p style="color: var(--text-secondary); margin-bottom: 10px; line-height: 1.6;">
+              📸 自动捕获直播帧中...
+            </p>
+            <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+              系统将自动捕获当前直播画面。如果自动捕获失败，可以手动上传图片:
+            </p>
+            <input type="file" id="cropImageUpload" accept="image/*" onchange="loadCropImage(event)"
+              style="width: 100%; padding: 8px; border-radius: 6px; background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--input-border); cursor: pointer;">
+          </div>
+        </div>
+
+        <!-- Image Canvas for Bbox Selection -->
+        <div id="cropCanvasContainer" style="display: none; margin-bottom: 20px;">
+          <p style="color: var(--text-secondary); margin-bottom: 10px;">
+            🖱️ 选择裁剪区域 (拖动角点调整大小，点击内部移动):
+          </p>
+          <div
+            style="position: relative; display: inline-block; max-width: 100%; border: 2px solid var(--card-border); border-radius: 8px; overflow: hidden;">
+            <canvas id="cropCanvas" style="max-width: 100%; display: block; cursor: crosshair;"></canvas>
+            <div id="cropBox"
+              style="position: absolute; border: 2px solid #89b4fa; background: rgba(137, 180, 250, 0.2); pointer-events: none; display: none;">
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+            <div>
+              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">X 坐标:</label>
+              <input type="number" id="cropX" value="0" min="0"
+                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+            </div>
+            <div>
+              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">Y 坐标:</label>
+              <input type="number" id="cropY" value="0" min="0"
+                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+            </div>
+            <div>
+              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">宽度:</label>
+              <input type="number" id="cropWidth" value="0" min="0"
+                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+            </div>
+            <div>
+              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">高度:</label>
+              <input type="number" id="cropHeight" value="0" min="0"
+                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+            </div>
+          </div>
+
+          <div style="margin-top: 15px; display: flex; gap: 10px;">
+            <button onclick="applyCrop()" class="btn-success" style="flex: 1;">
+              ✅ 应用裁剪
+            </button>
+            <button onclick="disableCrop()" class="btn-danger" style="flex: 1;">
+              ❌ 禁用裁剪
+            </button>
+          </div>
+        </div>
+
+        <button onclick="closeCropModal()" class="btn-secondary" style="width: 100%; margin-top: 15px;">
+          关闭
+        </button>
+      </div>
+    </div>
+
+    <style>
+      .crop-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 9999;
+        overflow: auto;
+        padding: 20px;
+      }
+
+      .crop-modal.active {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .crop-modal-content {
+        background: var(--card-bg);
+        border-radius: 12px;
+        padding: 30px;
+        max-width: 900px;
+        width: 100%;
+        max-height: 90vh;
+        overflow: auto;
+        border: 1px solid var(--card-border);
+      }
+    </style>
+
   </div> <!-- Close main-page -->
 </body>
 

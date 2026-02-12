@@ -68,6 +68,8 @@ pub struct Twitch {
     pub quality: String,
     #[serde(default)]
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub crop: Option<CropConfig>,
 }
 
 /// Struct representing YouTube configuration.
@@ -91,6 +93,17 @@ pub struct Youtube {
     pub proxy: Option<String>,
     #[serde(default)]
     pub deno_path: Option<String>,
+    #[serde(default)]
+    pub crop: Option<CropConfig>,
+}
+
+/// Struct representing crop configuration for video filtering
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CropConfig {
+    pub width: u32,
+    pub height: u32,
+    pub x: u32,
+    pub y: u32,
 }
 
 fn default_quality() -> String {
@@ -274,6 +287,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 proxy_region: legacy.twitch.proxy_region,
                 quality: legacy.twitch.quality,
                 proxy: None,
+                crop: None,
             },
             youtube: Youtube {
                 enable_monitor: true, // Default to enabled for migration
@@ -285,6 +299,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 cookies_from_browser: legacy.youtube.cookies_from_browser,
                 proxy: legacy.proxy,
                 deno_path: None,
+                crop: None,
             },
             holodex_api_key: legacy.holodex_api_key,
             riot_api_key: legacy.riot_api_key,
