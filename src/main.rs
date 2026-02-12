@@ -248,6 +248,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     quality: cfg.youtube.quality.clone(),
                     area_id: cfg.youtube.area_v2,
                     area_name: yt_area_name,
+                    crop_enabled: cfg.youtube.crop.is_some(),
                 })
             } else {
                 None
@@ -264,6 +265,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     quality: cfg.twitch.quality.clone(),
                     area_id: cfg.twitch.area_v2,
                     area_name: tw_area_name,
+                    crop_enabled: cfg.twitch.crop.is_some(),
                 })
             } else {
                 None

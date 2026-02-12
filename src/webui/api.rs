@@ -85,6 +85,7 @@ pub async fn refresh_status_cache_config() {
                     area_name: yt_area_name,
                     topic: Some("-".to_string()),
                     quality: cfg.youtube.quality.clone(),
+                    crop_enabled: cfg.youtube.crop.is_some(),
                 });
             }
         }
@@ -113,6 +114,7 @@ pub async fn refresh_status_cache_config() {
                     area_name: tw_area_name,
                     game: Some("-".to_string()),
                     quality: cfg.twitch.quality.clone(),
+                    crop_enabled: cfg.twitch.crop.is_some(),
                 });
             }
         }
@@ -173,6 +175,7 @@ pub struct YtStatus {
     pub quality: String,
     pub area_id: u64,
     pub area_name: String,
+    pub crop_enabled: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -185,6 +188,7 @@ pub struct TwStatus {
     pub quality: String,
     pub area_id: u64,
     pub area_name: String,
+    pub crop_enabled: bool,
 }
 
 pub async fn get_status() -> impl IntoResponse {
@@ -1778,6 +1782,7 @@ pub async fn switch_to_holodex_stream(
         quality: cfg.youtube.quality.clone(),
         area_id: cfg.youtube.area_v2,
         area_name: yt_area_name,
+        crop_enabled: cfg.youtube.crop.is_some(),
     });
 
     update_status_cache(current_cache);
@@ -1889,6 +1894,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         area_id: cfg.youtube.area_v2,
         area_name: crate::plugins::get_area_name(cfg.youtube.area_v2)
             .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2)),
+        crop_enabled: cfg.youtube.crop.is_some(),
     });
 
     update_status_cache(current_cache);
@@ -1961,6 +1967,7 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         area_id: cfg.twitch.area_v2,
         area_name: crate::plugins::get_area_name(cfg.twitch.area_v2)
             .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2)),
+        crop_enabled: cfg.twitch.crop.is_some(),
     });
 
     update_status_cache(current_cache);
@@ -2407,6 +2414,7 @@ pub struct CaptureFrameRequest {
 
 pub async fn capture_frame(
     axum::extract::Path(platform): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<ApiResponse<()>> {
     let cfg = match load_config().await {
         Ok(c) => c,
@@ -2425,11 +2433,14 @@ pub async fn capture_frame(
 
     match platform.as_str() {
         "youtube" => {
+            // Use channel_id from query params if provided, otherwise use config
+            let channel_id = params
+                .get("channel_id")
+                .map(|s| s.as_str())
+                .unwrap_or(&cfg.youtube.channel_id);
+
             // Use yt-dlp to get m3u8 URL
-            let channel_url = format!(
-                "https://www.youtube.com/channel/{}/live",
-                cfg.youtube.channel_id
-            );
+            let channel_url = format!("https://www.youtube.com/channel/{}/live", channel_id);
 
             // Get yt-dlp command (handles Windows .exe)
             let yt_dlp_cmd = if cfg!(target_os = "windows") {
@@ -2472,14 +2483,38 @@ pub async fn capture_frame(
                     }
                     proxy = cfg.youtube.proxy.clone();
                 }
-                _ => {
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    tracing::error!("yt-dlp failed: {}", stderr);
+
+                    // Check if it's a "not live" error
+                    let message = if stderr.contains("will begin in")
+                        || stderr.contains("not live")
+                        || stderr.contains("Premieres in")
+                    {
+                        "该频道未在直播".to_string()
+                    } else {
+                        format!(
+                            "获取直播流失败: {}",
+                            stderr.lines().next().unwrap_or("未知错误")
+                        )
+                    };
+
                     return Json(ApiResponse {
                         success: false,
                         data: None,
-                        message: Some(
-                            "Failed to get YouTube stream URL. Make sure yt-dlp is installed."
-                                .to_string(),
-                        ),
+                        message: Some(message),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to execute yt-dlp: {}", e);
+                    return Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        message: Some(format!(
+                            "Failed to execute yt-dlp: {}. Make sure yt-dlp is installed and in PATH.",
+                            e
+                        )),
                     });
                 }
             }

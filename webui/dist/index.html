@@ -1041,14 +1041,6 @@
                     d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
                 </svg>
               </button>
-              <button onclick="openCropConfig('youtube')" title="视频裁剪配置"
-                style="padding: 8px; background: var(--accent-mauve); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path>
-                  <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path>
-                </svg>
-              </button>
             </div>
           </div>
           <div class="info-row">
@@ -1157,6 +1149,32 @@
               </div>
             </div>
           </div>
+          <div class="info-row">
+            <span class="info-label">裁剪</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="yt-crop-status" style="flex: 1; text-align: right;">关闭</span>
+              <button onclick="openCropConfig('youtube')"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="配置裁剪">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
+              <button onclick="clearCropConfig('youtube')"
+                style="background: none; border: none; color: var(--accent-red); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="清除裁剪设置">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -1179,14 +1197,6 @@
                   xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
                   <path
                     d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-                </svg>
-              </button>
-              <button onclick="openCropConfig('twitch')" title="视频裁剪配置"
-                style="padding: 8px; background: var(--accent-mauve); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path>
-                  <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path>
                 </svg>
               </button>
             </div>
@@ -1295,6 +1305,32 @@
                   ✕
                 </button>
               </div>
+            </div>
+          </div>
+          <div class="info-row">
+            <span class="info-label">裁剪</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="tw-crop-status" style="flex: 1; text-align: right;">关闭</span>
+              <button onclick="openCropConfig('twitch')"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="配置裁剪">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+              </button>
+              <button onclick="clearCropConfig('twitch')"
+                style="background: none; border: none; color: var(--accent-red); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="清除裁剪设置">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -2259,6 +2295,16 @@
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8"/><path d="m7 17l-4-1l-1 4M17 7l4 1l1-4"/></svg>
               <span>切换</span>
             </button>
+            ${isLive ? `<button class="crop-switch-button" 
+               data-channel-id="${stream.channel_id}" 
+               data-suggested-area-id="${stream.suggested_area_id || ''}" 
+               data-title="${stream.title}" 
+               data-topic-id="${stream.topic_id || ''}" 
+               data-status="${stream.status || ''}"
+               style="flex: 1; padding: 6px 12px; background: #f9e2af; color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path><path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path></svg>
+              <span>裁剪并切换</span>
+            </button>` : ''}
           </div>
         `;
 
@@ -2397,6 +2443,69 @@
         } catch (error) {
           showNotification('切换失败: ' + error.message, 'error');
           console.error('Switch error:', error);
+        }
+      }
+
+      async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, topicId, status) {
+        // First, open crop modal and auto-capture
+        document.getElementById('cropModal').classList.add('active');
+        document.getElementById('cropPlatform').value = 'youtube';
+
+        showNotification('正在捕获直播帧...', 'info');
+
+        try {
+          // Auto-capture the frame with the target channel_id
+          const response = await fetch(`/api/crop/capture/youtube?channel_id=${encodeURIComponent(channelId)}`, {
+            method: 'POST'
+          });
+
+          const result = await response.json();
+
+          if (result.success && result.message) {
+            // Load the captured image
+            cropImage = new Image();
+            cropImage.onload = function () {
+              cropCanvas = document.getElementById('cropCanvas');
+              cropCtx = cropCanvas.getContext('2d');
+
+              // Show container FIRST so canvas has dimensions
+              document.getElementById('cropCanvasContainer').style.display = 'block';
+
+              // Set canvas size to image size
+              cropCanvas.width = cropImage.width;
+              cropCanvas.height = cropImage.height;
+
+              // Fill with white background first
+              cropCtx.fillStyle = 'white';
+              cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
+              // Draw image
+              cropCtx.drawImage(cropImage, 0, 0);
+
+              // Setup canvas interaction
+              setupCanvasInteraction();
+
+              showNotification('直播帧已捕获，请选择裁剪区域后点击"应用裁剪"，然后会自动切换频道', 'success');
+
+              // Store the switch data for later use
+              window.pendingHolodexSwitch = {
+                channelId,
+                suggestedAreaId,
+                title,
+                topicId,
+                status
+              };
+            };
+            cropImage.onerror = function (e) {
+              console.error('Image load error:', e);
+              showNotification('图片加载失败', 'error');
+            };
+            cropImage.src = result.message;
+          } else {
+            showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
+          }
+        } catch (error) {
+          showNotification('捕获失败: ' + error.message, 'error');
         }
       }
 
@@ -3634,6 +3743,8 @@
               document.getElementById('yt-area').textContent =
                 yt.area_name ? `${yt.area_name} (${yt.area_id})` : (yt.area_id || '-');
               document.getElementById('yt-quality').textContent = yt.quality ? getQualityDisplayText(yt.quality, 'youtube') : '-';
+              // Update crop status
+              document.getElementById('yt-crop-status').textContent = yt.crop_enabled ? '开启' : '关闭';
             } else {
               document.getElementById('yt-status').className = 'status-indicator status-offline';
               document.getElementById('yt-channel-name').textContent = '-';
@@ -3641,6 +3752,7 @@
               document.getElementById('yt-topic').textContent = '-';
               document.getElementById('yt-area').textContent = '-';
               document.getElementById('yt-quality').textContent = '-';
+              document.getElementById('yt-crop-status').textContent = '关闭';
             }
 
             // Update Twitch status
@@ -3654,6 +3766,8 @@
               document.getElementById('tw-area').textContent =
                 tw.area_name ? `${tw.area_name} (${tw.area_id})` : (tw.area_id || '-');
               document.getElementById('tw-quality').textContent = tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-';
+              // Update crop status
+              document.getElementById('tw-crop-status').textContent = tw.crop_enabled ? '开启' : '关闭';
             } else {
               document.getElementById('tw-status').className = 'status-indicator status-offline';
               document.getElementById('tw-channel-name').textContent = '-';
@@ -3661,6 +3775,7 @@
               document.getElementById('tw-game').textContent = '-';
               document.getElementById('tw-area').textContent = '-';
               document.getElementById('tw-quality').textContent = '-';
+              document.getElementById('tw-crop-status').textContent = '关闭';
             }
           } else {
             console.error('Invalid API response:', data);
@@ -5414,6 +5529,17 @@
 
           switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status);
         }
+
+        if (e.target.closest('.crop-switch-button')) {
+          const button = e.target.closest('.crop-switch-button');
+          const channelId = button.dataset.channelId;
+          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInt(button.dataset.suggestedAreaId) : null;
+          const title = button.dataset.title;
+          const topicId = button.dataset.topicId;
+          const status = button.dataset.status;
+
+          cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, topicId, status);
+        }
       });
 
       // YouTube cookies editing functions
@@ -5508,6 +5634,36 @@
         cropImage = null;
       }
 
+      async function clearCropConfig(platform) {
+        if (!confirm(`确定要清除${platform === 'youtube' ? 'YouTube' : 'Twitch'}的裁剪设置吗？`)) {
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/crop/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform,
+              enabled: false
+            })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            showNotification('裁剪设置已清除', 'success');
+            // Update status display
+            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
+            document.getElementById(statusId).textContent = '关闭';
+          } else {
+            showNotification(result.message || '清除失败', 'error');
+          }
+        } catch (error) {
+          showNotification('清除失败: ' + error.message, 'error');
+        }
+      }
+
       async function autoCaptureFrame() {
         const platform = document.getElementById('cropPlatform').value;
 
@@ -5520,33 +5676,46 @@
 
           const result = await response.json();
 
+          console.log('Capture result:', result); // Debug log
+
           if (result.success && result.message) {
             // Load the captured image (base64 is in message field)
             cropImage = new Image();
             cropImage.onload = function () {
+              console.log('Image loaded:', cropImage.width, 'x', cropImage.height); // Debug log
               cropCanvas = document.getElementById('cropCanvas');
               cropCtx = cropCanvas.getContext('2d');
+
+              // Show container FIRST so canvas has dimensions
+              document.getElementById('cropCanvasContainer').style.display = 'block';
 
               // Set canvas size to image size
               cropCanvas.width = cropImage.width;
               cropCanvas.height = cropImage.height;
 
+              // Fill with white background first (for debugging)
+              cropCtx.fillStyle = 'white';
+              cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
               // Draw image
               cropCtx.drawImage(cropImage, 0, 0);
-
-              // Show container
-              document.getElementById('cropCanvasContainer').style.display = 'block';
 
               // Setup canvas interaction
               setupCanvasInteraction();
 
               showNotification('直播帧已捕获，请在图片上选择裁剪区域', 'success');
             };
+            cropImage.onerror = function (e) {
+              console.error('Image load error:', e); // Debug log
+              showNotification('图片加载失败', 'error');
+            };
             cropImage.src = result.message;
           } else {
+            console.error('Capture failed:', result); // Debug log
             showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
           }
         } catch (error) {
+          console.error('Capture error:', error); // Debug log
           showNotification('捕获失败: ' + error.message, 'error');
         }
       }
@@ -5571,29 +5740,54 @@
         const file = event.target.files[0];
         if (!file) return;
 
+        console.log('Loading image file:', file.name, file.size); // Debug log
+
         const reader = new FileReader();
         reader.onload = function (e) {
+          console.log('FileReader loaded, data length:', e.target.result.length); // Debug log
           cropImage = new Image();
           cropImage.onload = function () {
+            console.log('Image loaded:', cropImage.width, 'x', cropImage.height); // Debug log
             cropCanvas = document.getElementById('cropCanvas');
             cropCtx = cropCanvas.getContext('2d');
+
+            // Show container FIRST so canvas has dimensions
+            document.getElementById('cropCanvasContainer').style.display = 'block';
 
             // Set canvas size to image size
             cropCanvas.width = cropImage.width;
             cropCanvas.height = cropImage.height;
 
+            console.log('Canvas size set:', cropCanvas.width, 'x', cropCanvas.height); // Debug log
+
+            // Fill with white background first (for debugging)
+            cropCtx.fillStyle = 'white';
+            cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
             // Draw image
             cropCtx.drawImage(cropImage, 0, 0);
 
-            // Show container
-            document.getElementById('cropCanvasContainer').style.display = 'block';
+            console.log('Image drawn to canvas'); // Debug log
+
+            // Check if canvas is visible
+            const rect = cropCanvas.getBoundingClientRect();
+            console.log('Canvas display size:', rect.width, 'x', rect.height); // Debug log
+            console.log('Canvas style:', window.getComputedStyle(cropCanvas).display); // Debug log
 
             // Setup canvas interaction
             setupCanvasInteraction();
 
             showNotification('图片已加载，请在图片上拖动鼠标选择裁剪区域', 'success');
           };
+          cropImage.onerror = function (err) {
+            console.error('Image load error:', err); // Debug log
+            showNotification('图片加载失败', 'error');
+          };
           cropImage.src = e.target.result;
+        };
+        reader.onerror = function (err) {
+          console.error('FileReader error:', err); // Debug log
+          showNotification('文件读取失败', 'error');
         };
         reader.readAsDataURL(file);
       }
@@ -5618,7 +5812,10 @@
 
         let width, height;
         const ratio = currentAspectRatio === '1:1' ? 1 :
-          currentAspectRatio === '16:9' ? 16 / 9 : 9 / 16;
+          currentAspectRatio === '16:9' ? 16 / 9 :
+            currentAspectRatio === '16:10' ? 16 / 10 :
+              currentAspectRatio === '9:16' ? 9 / 16 :
+                currentAspectRatio === '10:16' ? 10 / 16 : 1;
 
         // Calculate size to fit 60% of canvas
         if (ratio >= 1) {
@@ -5653,10 +5850,18 @@
         const canvas = document.getElementById('cropCanvas');
         const cropBox = document.getElementById('cropBox');
 
-        // Remove old listeners
+        // Remove old listeners by cloning
         const newCanvas = canvas.cloneNode(true);
         canvas.parentNode.replaceChild(newCanvas, canvas);
         cropCanvas = newCanvas;
+
+        // Redraw the image on the new canvas
+        if (cropImage) {
+          cropCtx = cropCanvas.getContext('2d');
+          cropCtx.fillStyle = 'white';
+          cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+          cropCtx.drawImage(cropImage, 0, 0);
+        }
 
         let resizeEdge = null; // 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'
         const edgeThreshold = 10; // pixels from edge to trigger resize
@@ -5704,8 +5909,8 @@
           const width = parseInt(document.getElementById('cropWidth').value) || 0;
           const height = parseInt(document.getElementById('cropHeight').value) || 0;
 
-          // Check if clicking on edge for resizing (only for free ratio)
-          if (currentAspectRatio === 'free' && mouseX >= x - edgeThreshold && mouseX <= x + width + edgeThreshold &&
+          // Check if clicking on edge for resizing
+          if (mouseX >= x - edgeThreshold && mouseX <= x + width + edgeThreshold &&
             mouseY >= y - edgeThreshold && mouseY <= y + height + edgeThreshold) {
             resizeEdge = getResizeEdge(mouseX, mouseY, x, y, width, height);
             if (resizeEdge) {
@@ -5757,7 +5962,7 @@
           const height = parseInt(document.getElementById('cropHeight').value) || 0;
 
           // Update cursor based on position
-          if (!isDrawing && !isDragging && currentAspectRatio === 'free') {
+          if (!isDrawing && !isDragging) {
             if (currentX >= x - edgeThreshold && currentX <= x + width + edgeThreshold &&
               currentY >= y - edgeThreshold && currentY <= y + height + edgeThreshold) {
               const edge = getResizeEdge(currentX, currentY, x, y, width, height);
@@ -5797,28 +6002,116 @@
             const deltaX = currentX - cropStartX;
             const deltaY = currentY - cropStartY;
 
-            if (resizeEdge.includes('n')) {
-              newY = boxStartY + deltaY;
-              newHeight = boxStartHeight - deltaY;
-            }
-            if (resizeEdge.includes('s')) {
-              newHeight = boxStartHeight + deltaY;
-            }
-            if (resizeEdge.includes('w')) {
-              newX = boxStartX + deltaX;
-              newWidth = boxStartWidth - deltaX;
-            }
-            if (resizeEdge.includes('e')) {
-              newWidth = boxStartWidth + deltaX;
-            }
+            if (currentAspectRatio === 'free') {
+              // Free resize - no aspect ratio constraint
+              if (resizeEdge.includes('n')) {
+                newY = boxStartY + deltaY;
+                newHeight = boxStartHeight - deltaY;
+              }
+              if (resizeEdge.includes('s')) {
+                newHeight = boxStartHeight + deltaY;
+              }
+              if (resizeEdge.includes('w')) {
+                newX = boxStartX + deltaX;
+                newWidth = boxStartWidth - deltaX;
+              }
+              if (resizeEdge.includes('e')) {
+                newWidth = boxStartWidth + deltaX;
+              }
 
-            // Constrain to canvas and minimum size
-            if (newWidth < 10) newWidth = 10;
-            if (newHeight < 10) newHeight = 10;
-            if (newX < 0) { newWidth += newX; newX = 0; }
-            if (newY < 0) { newHeight += newY; newY = 0; }
-            if (newX + newWidth > newCanvas.width) newWidth = newCanvas.width - newX;
-            if (newY + newHeight > newCanvas.height) newHeight = newCanvas.height - newY;
+              // Constrain to canvas and minimum size
+              if (newWidth < 10) newWidth = 10;
+              if (newHeight < 10) newHeight = 10;
+              if (newX < 0) { newWidth += newX; newX = 0; }
+              if (newY < 0) { newHeight += newY; newY = 0; }
+              if (newX + newWidth > newCanvas.width) newWidth = newCanvas.width - newX;
+              if (newY + newHeight > newCanvas.height) newHeight = newCanvas.height - newY;
+            } else {
+              // Locked aspect ratio - resize proportionally
+              const ratio = currentAspectRatio === '1:1' ? 1 :
+                currentAspectRatio === '16:9' ? 16 / 9 :
+                  currentAspectRatio === '16:10' ? 16 / 10 :
+                    currentAspectRatio === '9:16' ? 9 / 16 :
+                      currentAspectRatio === '10:16' ? 10 / 16 : 1;
+
+              if (resizeEdge.includes('e') || resizeEdge.includes('w')) {
+                // Horizontal resize
+                newWidth = boxStartWidth + deltaX;
+                newHeight = newWidth / ratio;
+                if (resizeEdge.includes('w')) {
+                  newX = boxStartX + boxStartWidth - newWidth;
+                }
+                if (resizeEdge.includes('n')) {
+                  newY = boxStartY + boxStartHeight - newHeight;
+                }
+              } else {
+                // Vertical resize
+                newHeight = boxStartHeight + deltaY;
+                newWidth = newHeight * ratio;
+                if (resizeEdge.includes('n')) {
+                  newY = boxStartY + boxStartHeight - newHeight;
+                }
+              }
+
+              // Constrain to minimum size first
+              if (newWidth < 10) {
+                newWidth = 10;
+                newHeight = newWidth / ratio;
+              }
+              if (newHeight < 10) {
+                newHeight = 10;
+                newWidth = newHeight * ratio;
+              }
+
+              // Constrain to canvas bounds while maintaining aspect ratio
+              // Check if box exceeds canvas bounds
+              if (newX < 0) {
+                newX = 0;
+                newWidth = boxStartX + boxStartWidth;
+                newHeight = newWidth / ratio;
+                // Adjust Y position if resizing from top
+                if (resizeEdge.includes('n')) {
+                  newY = boxStartY + boxStartHeight - newHeight;
+                }
+              }
+              if (newY < 0) {
+                newY = 0;
+                newHeight = boxStartY + boxStartHeight;
+                newWidth = newHeight * ratio;
+                // Adjust X position if resizing from left
+                if (resizeEdge.includes('w')) {
+                  newX = boxStartX + boxStartWidth - newWidth;
+                }
+              }
+              if (newX + newWidth > newCanvas.width) {
+                newWidth = newCanvas.width - newX;
+                newHeight = newWidth / ratio;
+                // Adjust Y position if resizing from top
+                if (resizeEdge.includes('n')) {
+                  newY = boxStartY + boxStartHeight - newHeight;
+                }
+              }
+              if (newY + newHeight > newCanvas.height) {
+                newHeight = newCanvas.height - newY;
+                newWidth = newHeight * ratio;
+                // Adjust X position if resizing from left
+                if (resizeEdge.includes('w')) {
+                  newX = boxStartX + boxStartWidth - newWidth;
+                }
+              }
+
+              // Final check: if still out of bounds after adjustment, clamp to fit
+              if (newX < 0) newX = 0;
+              if (newY < 0) newY = 0;
+              if (newX + newWidth > newCanvas.width) {
+                newWidth = newCanvas.width - newX;
+                newHeight = newWidth / ratio;
+              }
+              if (newY + newHeight > newCanvas.height) {
+                newHeight = newCanvas.height - newY;
+                newWidth = newHeight * ratio;
+              }
+            }
 
             document.getElementById('cropX').value = Math.round(newX);
             document.getElementById('cropY').value = Math.round(newY);
@@ -5833,7 +6126,10 @@
             // Apply aspect ratio if selected
             if (currentAspectRatio !== 'free') {
               const ratio = currentAspectRatio === '1:1' ? 1 :
-                currentAspectRatio === '16:9' ? 16 / 9 : 9 / 16;
+                currentAspectRatio === '16:9' ? 16 / 9 :
+                  currentAspectRatio === '16:10' ? 16 / 10 :
+                    currentAspectRatio === '9:16' ? 9 / 16 :
+                      currentAspectRatio === '10:16' ? 10 / 16 : 1;
               if (width / height > ratio) {
                 width = height * ratio;
               } else {
@@ -5926,13 +6222,87 @@
           const result = await response.json();
 
           if (result.success) {
-            showNotification('裁剪配置已保存，请重启流使其生效', 'success');
-            closeCropModal();
+            showNotification('裁剪配置已保存', 'success');
+            // Update status display
+            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
+            document.getElementById(statusId).textContent = '开启';
+
+            // Check if there's a pending Holodex switch
+            if (window.pendingHolodexSwitch) {
+              const { channelId, suggestedAreaId, title, topicId, status } = window.pendingHolodexSwitch;
+              window.pendingHolodexSwitch = null; // Clear the pending switch
+
+              closeCropModal();
+
+              // Now switch to the Holodex stream
+              showNotification('裁剪已保存，正在切换频道...', 'info');
+              await switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status);
+            } else {
+              showNotification('裁剪配置已保存，请重启流使其生效', 'success');
+              closeCropModal();
+            }
           } else {
             showNotification(result.message || '保存失败', 'error');
           }
         } catch (error) {
           showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      async function applyCropAndRestart() {
+        const platform = document.getElementById('cropPlatform').value;
+        const x = parseInt(document.getElementById('cropX').value) || 0;
+        const y = parseInt(document.getElementById('cropY').value) || 0;
+        const width = parseInt(document.getElementById('cropWidth').value) || 0;
+        const height = parseInt(document.getElementById('cropHeight').value) || 0;
+
+        if (width === 0 || height === 0) {
+          showNotification('请先输入裁剪区域尺寸', 'error');
+          return;
+        }
+
+        try {
+          // First, apply the crop
+          const cropResponse = await fetch('/api/crop/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform,
+              enabled: true,
+              x,
+              y,
+              width,
+              height
+            })
+          });
+
+          const cropResult = await cropResponse.json();
+
+          if (cropResult.success) {
+            showNotification('裁剪配置已保存，正在重启流...', 'success');
+            // Update status display
+            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
+            document.getElementById(statusId).textContent = '开启';
+
+            closeCropModal();
+
+            // Then restart the stream
+            const restartResponse = await fetch('/api/restart', {
+              method: 'POST'
+            });
+
+            const restartResult = await restartResponse.json();
+
+            if (restartResult.success) {
+              showNotification('裁剪已应用并重启流', 'success');
+            } else {
+              showNotification('裁剪已保存，但重启失败: ' + (restartResult.message || ''), 'error');
+            }
+          } else {
+            showNotification(cropResult.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          showNotification('操作失败: ' + error.message, 'error');
         }
       }
 
@@ -5961,6 +6331,68 @@
           showNotification('禁用失败: ' + error.message, 'error');
         }
       }
+
+      function selectAspectRatio(ratio) {
+        // Update currentAspectRatio
+        currentAspectRatio = ratio;
+
+        // Update button styles - reset all buttons
+        document.querySelectorAll('.ratio-button').forEach(btn => {
+          btn.classList.remove('active');
+          btn.style.background = 'var(--input-bg)';
+          btn.style.color = 'var(--text-primary)';
+          btn.style.border = '2px solid var(--input-border)';
+          btn.style.boxShadow = 'none';
+        });
+
+        // Highlight the selected button with a border
+        const activeBtn = document.getElementById(`ratio-${ratio.replace(':', '-')}`);
+        if (activeBtn) {
+          activeBtn.classList.add('active');
+          activeBtn.style.border = '2px solid #89b4fa';
+          activeBtn.style.boxShadow = '0 0 0 2px rgba(137, 180, 250, 0.2)';
+        }
+
+        // If canvas is loaded, apply the aspect ratio
+        if (cropCanvas && ratio !== 'free') {
+          const canvasWidth = cropCanvas.width;
+          const canvasHeight = cropCanvas.height;
+
+          let width, height;
+          const ratioValue = ratio === '1:1' ? 1 :
+            ratio === '16:9' ? 16 / 9 :
+              ratio === '16:10' ? 16 / 10 :
+                ratio === '9:16' ? 9 / 16 :
+                  ratio === '10:16' ? 10 / 16 : 1;
+
+          // Calculate size to fit 60% of canvas
+          if (ratioValue >= 1) {
+            width = canvasWidth * 0.6;
+            height = width / ratioValue;
+            if (height > canvasHeight * 0.6) {
+              height = canvasHeight * 0.6;
+              width = height * ratioValue;
+            }
+          } else {
+            height = canvasHeight * 0.6;
+            width = height * ratioValue;
+            if (width > canvasWidth * 0.6) {
+              width = canvasWidth * 0.6;
+              height = width / ratioValue;
+            }
+          }
+
+          const x = (canvasWidth - width) / 2;
+          const y = (canvasHeight - height) / 2;
+
+          document.getElementById('cropX').value = Math.round(x);
+          document.getElementById('cropY').value = Math.round(y);
+          document.getElementById('cropWidth').value = Math.round(width);
+          document.getElementById('cropHeight').value = Math.round(height);
+
+          updateCropBox();
+        }
+      }
     </script>
 
     <!-- Crop Configuration Modal -->
@@ -5975,17 +6407,6 @@
               style="padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
               <option value="youtube">YouTube</option>
               <option value="twitch">Twitch</option>
-            </select>
-          </label>
-
-          <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-            <span style="color: var(--text-secondary);">裁剪比例:</span>
-            <select id="cropAspectRatio" onchange="applyAspectRatio()"
-              style="padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
-              <option value="free">自由选择</option>
-              <option value="1:1">正方形 (1:1)</option>
-              <option value="16:9">横屏 (16:9)</option>
-              <option value="9:16">竖屏 (9:16)</option>
             </select>
           </label>
 
@@ -6004,11 +6425,53 @@
         <!-- Image Canvas for Bbox Selection -->
         <div id="cropCanvasContainer" style="display: none; margin-bottom: 20px;">
           <p style="color: var(--text-secondary); margin-bottom: 10px;">
-            🖱️ 选择裁剪区域 (拖动角点调整大小，点击内部移动):
+            🖱️ 选择裁剪区域 (拖动角点或边调整大小，点击内部拖动):
           </p>
+
+          <div style="display: flex; gap: 6px; justify-content: center; margin-bottom: 15px;">
+            <button onclick="selectAspectRatio('free')" id="ratio-free" class="ratio-button active" title="自由比例"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid #89b4fa; box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                <path d="M9 3v18M15 3v18M3 9h18M3 15h18"></path>
+              </svg>
+            </button>
+            <button onclick="selectAspectRatio('1:1')" id="ratio-1-1" class="ratio-button" title="1:1"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+              </svg>
+            </button>
+            <button onclick="selectAspectRatio('16:9')" id="ratio-16-9" class="ratio-button" title="16:9"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="10" rx="2"></rect>
+              </svg>
+            </button>
+            <button onclick="selectAspectRatio('16:10')" id="ratio-16-10" class="ratio-button" title="16:10"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+              </svg>
+            </button>
+            <button onclick="selectAspectRatio('9:16')" id="ratio-9-16" class="ratio-button" title="9:16"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="7" y="2" width="10" height="20" rx="2"></rect>
+              </svg>
+            </button>
+            <button onclick="selectAspectRatio('10:16')" id="ratio-10-16" class="ratio-button" title="10:16"
+              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="6" y="2" width="12" height="20" rx="2"></rect>
+              </svg>
+            </button>
+          </div>
+
           <div
             style="position: relative; display: inline-block; max-width: 100%; border: 2px solid var(--card-border); border-radius: 8px; overflow: hidden;">
-            <canvas id="cropCanvas" style="max-width: 100%; display: block; cursor: crosshair;"></canvas>
+            <canvas id="cropCanvas"
+              style="max-width: 100%; display: block; cursor: crosshair; background: #ff0000;"></canvas>
             <div id="cropBox"
               style="position: absolute; border: 2px solid #89b4fa; background: rgba(137, 180, 250, 0.2); pointer-events: none; display: none;">
             </div>
@@ -6040,11 +6503,32 @@
           </div>
 
           <div style="margin-top: 15px; display: flex; gap: 10px;">
-            <button onclick="applyCrop()" class="btn-success" style="flex: 1;">
-              ✅ 应用裁剪
+            <button onclick="applyCrop()" class="btn-success"
+              style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              应用裁剪
             </button>
-            <button onclick="disableCrop()" class="btn-danger" style="flex: 1;">
-              ❌ 禁用裁剪
+            <button onclick="applyCropAndRestart()" class="btn-success"
+              style="flex: 1; background: #f9e2af; color: #1e1e2e; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path
+                  d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8" />
+                <path d="m7 17l-4-1l-1 4M17 7l4 1l1-4" />
+              </svg>
+              应用并重启流
+            </button>
+            <button onclick="disableCrop()" class="btn-danger"
+              style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+              禁用裁剪
             </button>
           </div>
         </div>
