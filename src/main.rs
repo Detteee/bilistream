@@ -668,29 +668,35 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
 
-            // Clear crop settings when stream ends
-            if yt_is_live {
+            // Check the actual reason for ffmpeg loop exit
+            let manual_stop = was_manual_stop();
+            let manual_restart = was_manual_restart();
+            let config_updated = is_config_updated();
+            let warning_skip = should_skip_due_to_warning(&channel_name);
+
+            // Clear crop settings for both platforms when stream ends
+            // Don't clear on manual restart - let it apply for the restarted stream
+            if !manual_restart {
+                let mut config_changed = false;
+
                 if cfg.youtube.crop.is_some() {
                     tracing::info!("🔄 清除YouTube裁剪设置");
                     cfg.youtube.crop = None;
-                    if let Err(e) = save_config(&cfg).await {
-                        tracing::error!("保存配置失败: {}", e);
-                    }
+                    config_changed = true;
                 }
-            } else {
+
                 if cfg.twitch.crop.is_some() {
                     tracing::info!("🔄 清除Twitch裁剪设置");
                     cfg.twitch.crop = None;
+                    config_changed = true;
+                }
+
+                if config_changed {
                     if let Err(e) = save_config(&cfg).await {
                         tracing::error!("保存配置失败: {}", e);
                     }
                 }
             }
-
-            // Check the actual reason for ffmpeg loop exit
-            let manual_stop = was_manual_stop();
-            let config_updated = is_config_updated();
-            let warning_skip = should_skip_due_to_warning(&channel_name);
 
             // Check current live status to determine what actually happened
             let (current_is_live, _, _, _, _, _) = if yt_is_live {
