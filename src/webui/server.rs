@@ -54,15 +54,15 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/toggle-twitch-monitor", post(api::toggle_twitch_monitor))
         .route("/manage/areas", get(api::get_areas_manage))
         .route("/manage/areas", post(api::add_area))
-        .route("/manage/areas/:id", delete(api::delete_area))
+        .route("/manage/areas/{id}", delete(api::delete_area))
         .route("/manage/channels", get(api::get_channels_manage))
         .route("/manage/channels", post(api::add_channel))
         .route("/manage/channels", put(api::update_channel_manage))
-        .route("/manage/channels/:name", delete(api::delete_channel))
-        .route("/crop/capture/:platform", post(api::capture_frame))
+        .route("/manage/channels/{name}", delete(api::delete_channel))
+        .route("/crop/capture/{platform}", post(api::capture_frame))
         .route("/crop/update", post(api::update_crop))
         .route(
-            "/crop/:platform",
+            "/crop/{platform}",
             get(
                 |axum::extract::Path(platform): axum::extract::Path<String>| async move {
                     match api::get_crop(platform).await {
