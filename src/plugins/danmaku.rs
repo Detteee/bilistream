@@ -342,11 +342,6 @@ pub async fn process_danmaku(command: &str) {
 
 /// Processes a single danmaku command with owner flag.
 pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
-    // only line start with : is danmaku
-    if command.contains("WARN  [init] Connection closed by server") {
-        tracing::info!("B站cookie过期，无法启动弹幕指令，请更新配置文件:./biliup login");
-        return;
-    }
     if !command.starts_with(" :") {
         return;
     }

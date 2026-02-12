@@ -126,6 +126,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         let mut cfg = load_config().await?;
 
+        // clear config updated
+        clear_config_updated();
+
         // Handle danmaku client based on enable_danmaku_command setting
         if cfg.bililive.enable_danmaku_command {
             // Start danmaku client if not running and commands are enabled
