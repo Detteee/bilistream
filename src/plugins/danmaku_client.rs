@@ -585,12 +585,12 @@ impl BilibiliDanmakuClient {
                                 {
                                     // Non-owners can use commands "%转播" only when enabled
                                     let formatted_message = format!(" :{}", danmaku_text);
+                                    info!("💬 {} : {}", username, danmaku_text);
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         false, // is_owner = false
                                     )
                                     .await;
-                                    info!("💬 {} : {}", username, danmaku_text);
                                 } else if danmaku_text.contains("%查询") {
                                     let formatted_message = format!(" :{}", danmaku_text);
                                     crate::plugins::danmaku::process_danmaku_with_owner(
