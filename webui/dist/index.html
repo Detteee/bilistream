@@ -6262,7 +6262,20 @@
         }
 
         try {
-          // First, apply the crop
+          // Check if there's a pending Holodex switch
+          if (window.pendingHolodexSwitch) {
+            const { channelId, suggestedAreaId, title, topicId, status } = window.pendingHolodexSwitch;
+            window.pendingHolodexSwitch = null; // Clear the pending switch
+
+            // Step 1: Switch to the new channel
+            showNotification('正在切换频道...', 'info');
+            await switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status);
+
+            // Wait a bit for the switch to complete
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+
+          // Step 2: Apply the crop
           const cropResponse = await fetch('/api/crop/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6286,7 +6299,7 @@
 
             closeCropModal();
 
-            // Then restart the stream
+            // Step 3: Restart the stream
             const restartResponse = await fetch('/api/restart', {
               method: 'POST'
             });
