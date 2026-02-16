@@ -656,9 +656,9 @@ impl BilibiliDanmakuClient {
                     });
                 }
             }
-            "CUT_OFF" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
+            "CUT_OFF" | "CUT_OFF_V2" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
                 if let Some(data) = &message.data {
-                    let msg = if message.cmd == "CUT_OFF" {
+                    let msg = if message.cmd == "CUT_OFF" || message.cmd == "CUT_OFF_V2" {
                         data["msg"].as_str().unwrap_or("Stream cut off")
                     } else if message.cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
                         data["dialog_title"].as_str().unwrap_or("直播间违规")
