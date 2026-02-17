@@ -241,12 +241,12 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
     let title = res["data"]["title"].to_string();
     let title = title.trim_matches('"');
 
+    let area_id = res["data"]["area_id"]
+        .as_u64()
+        .ok_or("Missing or invalid area_id in API response")?;
+
     // Determine live status based on the response
-    Ok((
-        res["data"]["live_status"] == 1,
-        title.to_string(),
-        res["data"]["area_id"].as_u64().unwrap(),
-    ))
+    Ok((res["data"]["live_status"] == 1, title.to_string(), area_id))
 }
 
 /// Starts a Bilibili live stream.
