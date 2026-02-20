@@ -3313,11 +3313,43 @@
             if (!deleteResponse.ok) {
               throw new Error(`删除原分区失败: ${deleteResponse.status}`);
             }
+
+            // Add new area with new ID
+            const response = await fetch('/api/manage/areas', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: id,
+                name: name,
+                title_keywords: keywords,
+                aliases: aliases
+              })
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+              const text = await response.text();
+              throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+            }
+
+            const result = await response.json();
+            if (result.success) {
+              alert('分区更新成功');
+              clearAreaForm();
+              loadAreas();
+            } else {
+              alert(`更新失败: ${result.message}`);
+            }
+            return;
           }
 
-          // Add/update area (since there's no PUT endpoint, we use POST)
+          // Update existing area (ID unchanged)
           const response = await fetch('/api/manage/areas', {
-            method: 'POST',
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               id: id,

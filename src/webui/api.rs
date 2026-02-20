@@ -2286,6 +2286,64 @@ pub async fn update_channel_manage(
         })
     }
 }
+// Update existing area
+pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
+    // Read current areas
+    let mut areas_data = match std::fs::read_to_string("areas.json") {
+        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
+            Ok(areas) => areas,
+            Err(e) => {
+                return Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to parse areas.json: {}", e)),
+                });
+            }
+        },
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to read areas.json: {}", e)),
+            });
+        }
+    };
+
+    // Find and update the area
+    if let Some(area) = areas_data.areas.iter_mut().find(|a| a.id == payload.id) {
+        area.name = payload.name;
+        area.title_keywords = payload.title_keywords;
+        area.aliases = payload.aliases;
+
+        // Write back to file
+        match serde_json::to_string_pretty(&areas_data) {
+            Ok(json_str) => match std::fs::write("areas.json", json_str) {
+                Ok(_) => Json(ApiResponse {
+                    success: true,
+                    data: Some(()),
+                    message: Some("Area updated successfully".to_string()),
+                }),
+                Err(e) => Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to write areas.json: {}", e)),
+                }),
+            },
+            Err(e) => Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to serialize areas data: {}", e)),
+            }),
+        }
+    } else {
+        Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Area with ID {} not found", payload.id)),
+        })
+    }
+}
+
 // Delete area by ID
 pub async fn delete_area(
     axum::extract::Path(id): axum::extract::Path<u32>,

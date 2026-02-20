@@ -54,6 +54,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/toggle-twitch-monitor", post(api::toggle_twitch_monitor))
         .route("/manage/areas", get(api::get_areas_manage))
         .route("/manage/areas", post(api::add_area))
+        .route("/manage/areas", put(api::update_area_manage))
         .route("/manage/areas/{id}", delete(api::delete_area))
         .route("/manage/channels", get(api::get_channels_manage))
         .route("/manage/channels", post(api::add_channel))
