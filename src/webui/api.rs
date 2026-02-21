@@ -2497,7 +2497,7 @@ pub async fn capture_frame(
                 .map(|s| s.as_str())
                 .unwrap_or(&cfg.youtube.channel_id);
 
-            // Use yt-dlp to get m3u8 URL
+            // Use yt-dlp to get m3u8 URL with specific quality
             let channel_url = format!("https://www.youtube.com/channel/{}/live", channel_id);
 
             // Get yt-dlp command (handles Windows .exe)
@@ -2521,7 +2521,11 @@ pub async fn capture_frame(
             };
 
             let mut cmd = tokio::process::Command::new(yt_dlp_cmd);
-            cmd.arg("-g").arg(&channel_url);
+            // Use -f to specify quality format, then -g to get URL
+            cmd.arg("-f")
+                .arg(&cfg.youtube.quality)
+                .arg("-g")
+                .arg(&channel_url);
 
             if let Some(ref proxy_url) = cfg.youtube.proxy {
                 cmd.arg("--proxy").arg(proxy_url);
@@ -2605,7 +2609,10 @@ pub async fn capture_frame(
                 cmd.arg(proxy_url);
             }
 
-            cmd.arg("--stream-url").arg(&channel_url).arg("best");
+            // Use configured quality instead of "best"
+            cmd.arg("--stream-url")
+                .arg(&channel_url)
+                .arg(&cfg.twitch.quality);
 
             if let Some(ref http_proxy) = cfg.twitch.proxy {
                 cmd.arg("--http-proxy").arg(http_proxy);

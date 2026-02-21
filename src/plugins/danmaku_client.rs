@@ -785,6 +785,7 @@ impl BilibiliDanmakuClient {
             | "VOICE_JOIN_ROOM_COUNT_INFO"
             | "VOICE_JOIN_LIST"
             | "RANK_CHANGED"
+            | "RANK_CHANGED_V2"
             | "ENTRY_EFFECT" => {}
             "ROOM_CONTENT_AUDIT_REPORT" => {
                 if let Some(data) = &message.data {
