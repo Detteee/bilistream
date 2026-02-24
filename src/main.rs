@@ -910,24 +910,33 @@ fn box_message(
     tw_channel: &str,
     tw_monitor_enabled: bool,
 ) -> String {
-    // Initialize variables first
-    let (yt_line, width) = if !yt_monitor_enabled {
-        let line = format!("YT: 监听已关闭");
-        (line.clone(), line.width() + 2)
+    // Calculate YouTube line
+    let yt_line = if !yt_monitor_enabled {
+        format!("YT: 监听已关闭")
     } else if scheduled_time.is_some() {
-        let line = format!(
+        format!(
             "YT: {} 未直播，计划于 {} 开始，",
             yt_channel,
             scheduled_time.unwrap().format("%Y-%m-%d %H:%M:%S")
-        );
-        (line.clone(), line.width() + 2)
+        )
     } else {
-        let line = format!(
+        format!(
             "YT: {} 未直播                                   ",
             yt_channel
-        );
-        (line.clone(), line.width() + 2)
+        )
     };
+
+    // Calculate Twitch line
+    let tw_line = if !tw_monitor_enabled {
+        format!("TW: 监听已关闭")
+    } else {
+        format!("TW: {} 未直播", tw_channel)
+    };
+
+    // Calculate width based on the longer line
+    let yt_width = yt_line.width() + 2;
+    let tw_width = tw_line.width() + 2;
+    let width = std::cmp::max(yt_width, tw_width);
 
     let mut message = format!(
         "\r\x1b[K\x1b[1m┌{:─<width$}┐\n\
@@ -937,27 +946,36 @@ fn box_message(
         width = width
     );
 
+    // Add padding for YouTube line if needed
+    let yt_padding = width - 2 - yt_line.width();
+    if yt_padding > 0 {
+        // Remove the line we just added and re-add with proper padding
+        message = format!(
+            "\r\x1b[K\x1b[1m┌{:─<width$}┐\n\
+             │ {}{} │\n",
+            "",
+            yt_line,
+            " ".repeat(yt_padding),
+            width = width
+        );
+    }
+
     if let Some(title_text) = title {
-        let wrapped_title = textwrap::fill(title_text, width - 6);
+        let wrapped_title = textwrap::fill(title_text, width.saturating_sub(6).max(10));
         for line in wrapped_title.lines() {
-            let padding = width - 6 - line.width();
+            let padding = width.saturating_sub(6).saturating_sub(line.width());
             message.push_str(&format!("│     {}{} │\n", line, " ".repeat(padding)));
         }
     }
 
     message.push_str(&format!("├{:─<width$}┤\n", "", width = width));
 
-    let tw_line = if !tw_monitor_enabled {
-        format!("TW: 监听已关闭")
-    } else {
-        format!("TW: {} 未直播", tw_channel)
-    };
-    let padding = width - 2 - tw_line.width();
+    let tw_padding = width.saturating_sub(2).saturating_sub(tw_line.width());
     message.push_str(&format!(
         "│ {}{} │\n\
          └{:─<width$}┘\x1b[0m\n",
         tw_line,
-        " ".repeat(padding),
+        " ".repeat(tw_padding),
         "",
         width = width
     ));
