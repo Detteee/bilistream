@@ -2663,7 +2663,27 @@ pub async fn capture_frame(
         }
     };
 
-    let mut cmd = tokio::process::Command::new("ffmpeg");
+    // Get ffmpeg command (handles Windows .exe)
+    let ffmpeg_cmd = if cfg!(target_os = "windows") {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_ffmpeg = exe_dir.join("ffmpeg.exe");
+                if local_ffmpeg.exists() {
+                    local_ffmpeg.to_string_lossy().to_string()
+                } else {
+                    "ffmpeg".to_string()
+                }
+            } else {
+                "ffmpeg".to_string()
+            }
+        } else {
+            "ffmpeg".to_string()
+        }
+    } else {
+        "ffmpeg".to_string()
+    };
+
+    let mut cmd = tokio::process::Command::new(ffmpeg_cmd);
     cmd.arg("-y")
         .arg("-live_start_index")
         .arg("-1")
