@@ -321,6 +321,12 @@ fn resolve_area_alias(alias: &str) -> String {
         for area in areas {
             if let (Some(name), Some(aliases)) = (area["name"].as_str(), area["aliases"].as_array())
             {
+                // First check if the input matches the area name itself
+                if alias_lower == name.to_lowercase() {
+                    return name.to_string();
+                }
+
+                // Then check aliases
                 for area_alias in aliases {
                     if let Some(a) = area_alias.as_str() {
                         if alias_lower == a.to_lowercase() {
