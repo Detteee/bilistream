@@ -585,8 +585,11 @@ pub async fn ffmpeg(
             let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
 
-            // Initialize progress time when ffmpeg starts
+            // Reset all tracking state when ffmpeg starts
             update_progress_time();
+            LAST_STREAM_TIME.store(0, Ordering::Relaxed);
+            LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
+            FFMPEG_SPEED.store(0, Ordering::Relaxed);
 
             // Spawn timeout monitoring task (15 secs timeout)
             tokio::spawn(async {
