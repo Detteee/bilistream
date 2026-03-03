@@ -308,29 +308,43 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
 
 /// Resolve area alias to area name using areas.json
 fn resolve_area_alias(alias: &str) -> String {
-    let alias_lower = alias.to_lowercase();
+    let alias_trimmed = alias.trim();
+    let alias_lower = alias_trimmed.to_lowercase();
 
     // Load areas configuration
     let areas_config = match load_areas_config() {
         Some(config) => config,
-        None => return alias.to_string(),
+        None => {
+            tracing::warn!("无法加载 areas.json 配置");
+            return alias_trimmed.to_string();
+        }
     };
 
     // Check each area's aliases
     if let Some(areas) = areas_config["areas"].as_array() {
         for area in areas {
-            if let (Some(name), Some(aliases)) = (area["name"].as_str(), area["aliases"].as_array())
-            {
+            if let Some(name) = area["name"].as_str() {
+                let name_lower = name.to_lowercase();
+
                 // First check if the input matches the area name itself
-                if alias_lower == name.to_lowercase() {
+                if alias_lower == name_lower {
+                    tracing::debug!("分区别名 '{}' 匹配到分区名称: {}", alias_trimmed, name);
                     return name.to_string();
                 }
 
                 // Then check aliases
-                for area_alias in aliases {
-                    if let Some(a) = area_alias.as_str() {
-                        if alias_lower == a.to_lowercase() {
-                            return name.to_string();
+                if let Some(aliases) = area["aliases"].as_array() {
+                    for area_alias in aliases {
+                        if let Some(a) = area_alias.as_str() {
+                            if alias_lower == a.to_lowercase() {
+                                tracing::debug!(
+                                    "分区别名 '{}' 匹配到别名 '{}', 返回分区: {}",
+                                    alias_trimmed,
+                                    a,
+                                    name
+                                );
+                                return name.to_string();
+                            }
                         }
                     }
                 }
@@ -338,7 +352,8 @@ fn resolve_area_alias(alias: &str) -> String {
         }
     }
 
-    alias.to_string()
+    tracing::warn!("未找到分区别名 '{}' 的匹配项", alias_trimmed);
+    alias_trimmed.to_string()
 }
 
 /// Processes a single danmaku command.
@@ -411,7 +426,10 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         return;
     }
 
+    tracing::info!("原始分区输入: '{}'", area_alias);
     let area_name = resolve_area_alias(area_alias);
+    tracing::info!("解析后的分区名称: '{}'", area_name);
+
     let area_id = match get_area_id(&area_name) {
         Ok(id) => id,
         Err(e) => {
@@ -833,6 +851,7 @@ pub fn get_area_name(area_id: u64) -> Option<String> {
 }
 
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let area_name_trimmed = area_name.trim();
     let areas_path = std::env::current_exe()
         .map_err(|e| format!("无法获取可执行文件路径: {}", e))?
         .with_file_name("areas.json");
@@ -843,19 +862,21 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let areas: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("无法解析 areas.json: {}", e))?;
 
-    let area_name_lower = area_name.to_lowercase();
+    let area_name_lower = area_name_trimmed.to_lowercase();
 
     if let Some(areas_array) = areas["areas"].as_array() {
         for area in areas_array {
             if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
                 if name.to_lowercase() == area_name_lower {
+                    tracing::debug!("找到分区 '{}' 的ID: {}", area_name_trimmed, id);
                     return Ok(id);
                 }
             }
         }
     }
 
-    Err(format!("未知的分区: {}", area_name).into())
+    tracing::error!("未知的分区: '{}' (已尝试匹配)", area_name_trimmed);
+    Err(format!("未知的分区: {}", area_name_trimmed).into())
 }
 
 pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
