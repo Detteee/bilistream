@@ -482,12 +482,24 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let proxy = if platform == "YT" {
-                        cfg.youtube.proxy.clone()
+                    let (proxy, cookies_file, cookies_from_browser) = if platform == "YT" {
+                        (
+                            cfg.youtube.proxy.clone(),
+                            &cfg.youtube.cookies_file,
+                            &cfg.youtube.cookies_from_browser,
+                        )
                     } else {
-                        cfg.twitch.proxy.clone()
+                        (cfg.twitch.proxy.clone(), &None, &None)
                     };
-                    match get_thumbnail(platform, &channel_id, proxy).await {
+                    match get_thumbnail(
+                        platform,
+                        &channel_id,
+                        proxy,
+                        cookies_file,
+                        cookies_from_browser,
+                    )
+                    .await
+                    {
                         Ok(cover_path) if !cover_path.is_empty() => {
                             if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
                                 tracing::error!("B站直播间封面替换失败: {}", e);
@@ -540,12 +552,24 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let proxy = if platform == "YT" {
-                        cfg.youtube.proxy.clone()
+                    let (proxy, cookies_file, cookies_from_browser) = if platform == "YT" {
+                        (
+                            cfg.youtube.proxy.clone(),
+                            &cfg.youtube.cookies_file,
+                            &cfg.youtube.cookies_from_browser,
+                        )
                     } else {
-                        cfg.twitch.proxy.clone()
+                        (cfg.twitch.proxy.clone(), &None, &None)
                     };
-                    match get_thumbnail(platform, &channel_id, proxy).await {
+                    match get_thumbnail(
+                        platform,
+                        &channel_id,
+                        proxy,
+                        cookies_file,
+                        cookies_from_browser,
+                    )
+                    .await
+                    {
                         Ok(cover_path) if !cover_path.is_empty() => {
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {

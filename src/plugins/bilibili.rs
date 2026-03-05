@@ -1274,11 +1274,26 @@ pub async fn get_thumbnail(
     platform: &str,
     channel_id: &str,
     proxy: Option<String>,
+    cookies_file: &Option<String>,
+    cookies_from_browser: &Option<String>,
 ) -> Result<String, Box<dyn Error>> {
     let mut command = create_hidden_command(&get_yt_dlp_command());
 
     if let Some(proxy_url) = proxy {
         command.arg("--proxy").arg(proxy_url);
+    }
+
+    // Add cookies support for YouTube authentication
+    if let Some(browser) = cookies_from_browser {
+        if !browser.is_empty() {
+            command.arg("--cookies-from-browser");
+            command.arg(browser);
+        }
+    } else if let Some(file_path) = cookies_file {
+        if !file_path.is_empty() {
+            command.arg("--cookies");
+            command.arg(file_path);
+        }
     }
 
     command
