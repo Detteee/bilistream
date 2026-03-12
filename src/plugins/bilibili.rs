@@ -1276,7 +1276,7 @@ pub async fn get_thumbnail(
     proxy: Option<String>,
     cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String, anyhow::Error> {
     let mut command = create_hidden_command(&get_yt_dlp_command());
 
     if let Some(proxy_url) = proxy {
@@ -1304,7 +1304,7 @@ pub async fn get_thumbnail(
         .arg(match platform {
             "YT" => format!("https://www.youtube.com/channel/{}/live", channel_id),
             "TW" => format!("https://www.twitch.tv/{}", channel_id),
-            _ => return Err("Unsupported platform".into()),
+            _ => return Err(anyhow::anyhow!("Unsupported platform")),
         })
         .arg("--output")
         .arg("thumbnail");

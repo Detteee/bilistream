@@ -478,42 +478,51 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     }
                 }
 
-                // If auto_cover is enabled, update Bilibili live cover
+                // If auto_cover is enabled, update Bilibili live cover in background
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let (proxy, cookies_file, cookies_from_browser) = if platform == "YT" {
-                        (
-                            cfg.youtube.proxy.clone(),
-                            &cfg.youtube.cookies_file,
-                            &cfg.youtube.cookies_from_browser,
+                    let cfg_clone = cfg.clone();
+                    let platform_clone = platform.to_string();
+                    let channel_id_clone = channel_id.clone();
+
+                    tokio::spawn(async move {
+                        let (proxy, cookies_file, cookies_from_browser) = if platform_clone == "YT"
+                        {
+                            (
+                                cfg_clone.youtube.proxy.clone(),
+                                cfg_clone.youtube.cookies_file.clone(),
+                                cfg_clone.youtube.cookies_from_browser.clone(),
+                            )
+                        } else {
+                            (cfg_clone.twitch.proxy.clone(), None, None)
+                        };
+                        match get_thumbnail(
+                            &platform_clone,
+                            &channel_id_clone,
+                            proxy,
+                            &cookies_file,
+                            &cookies_from_browser,
                         )
-                    } else {
-                        (cfg.twitch.proxy.clone(), &None, &None)
-                    };
-                    match get_thumbnail(
-                        platform,
-                        &channel_id,
-                        proxy,
-                        cookies_file,
-                        cookies_from_browser,
-                    )
-                    .await
-                    {
-                        Ok(cover_path) if !cover_path.is_empty() => {
-                            if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                                tracing::error!("B站直播间封面替换失败: {}", e);
-                            } else {
-                                tracing::info!("B站直播间封面替换成功");
+                        .await
+                        {
+                            Ok(cover_path) if !cover_path.is_empty() => {
+                                if let Err(e) =
+                                    bilibili::bili_change_cover(&cfg_clone, &cover_path).await
+                                {
+                                    tracing::error!("B站直播间封面替换失败: {}", e);
+                                } else {
+                                    tracing::info!("B站直播间封面替换成功");
+                                }
+                            }
+                            Ok(_) => {
+                                tracing::warn!("跳过封面更新：缩略图下载失败");
+                            }
+                            Err(e) => {
+                                tracing::error!("获取缩略图失败: {}", e);
                             }
                         }
-                        Ok(_) => {
-                            tracing::warn!("跳过封面更新：缩略图下载失败");
-                        }
-                        Err(e) => {
-                            tracing::error!("获取缩略图失败: {}", e);
-                        }
-                    }
+                    });
                 }
             } else {
                 // 如果target channel改变，则变更B站直播标题
@@ -552,39 +561,47 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let (proxy, cookies_file, cookies_from_browser) = if platform == "YT" {
-                        (
-                            cfg.youtube.proxy.clone(),
-                            &cfg.youtube.cookies_file,
-                            &cfg.youtube.cookies_from_browser,
+                    let cfg_clone = cfg.clone();
+                    let platform_clone = platform.to_string();
+                    let channel_id_clone = channel_id.clone();
+
+                    tokio::spawn(async move {
+                        let (proxy, cookies_file, cookies_from_browser) = if platform_clone == "YT"
+                        {
+                            (
+                                cfg_clone.youtube.proxy.clone(),
+                                cfg_clone.youtube.cookies_file.clone(),
+                                cfg_clone.youtube.cookies_from_browser.clone(),
+                            )
+                        } else {
+                            (cfg_clone.twitch.proxy.clone(), None, None)
+                        };
+                        match get_thumbnail(
+                            &platform_clone,
+                            &channel_id_clone,
+                            proxy,
+                            &cookies_file,
+                            &cookies_from_browser,
                         )
-                    } else {
-                        (cfg.twitch.proxy.clone(), &None, &None)
-                    };
-                    match get_thumbnail(
-                        platform,
-                        &channel_id,
-                        proxy,
-                        cookies_file,
-                        cookies_from_browser,
-                    )
-                    .await
-                    {
-                        Ok(cover_path) if !cover_path.is_empty() => {
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                            if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                                tracing::error!("B站直播间封面替换失败: {}", e);
-                            } else {
-                                tracing::info!("B站直播间封面替换成功");
+                        .await
+                        {
+                            Ok(cover_path) if !cover_path.is_empty() => {
+                                if let Err(e) =
+                                    bilibili::bili_change_cover(&cfg_clone, &cover_path).await
+                                {
+                                    tracing::error!("B站直播间封面替换失败: {}", e);
+                                } else {
+                                    tracing::info!("B站直播间封面替换成功");
+                                }
+                            }
+                            Ok(_) => {
+                                tracing::warn!("跳过封面更新：缩略图下载失败");
+                            }
+                            Err(e) => {
+                                tracing::error!("获取缩略图失败: {}", e);
                             }
                         }
-                        Ok(_) => {
-                            tracing::warn!("跳过封面更新：缩略图下载失败");
-                        }
-                        Err(e) => {
-                            tracing::error!("获取缩略图失败: {}", e);
-                        }
-                    }
+                    });
                 }
             }
 
