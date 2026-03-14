@@ -10,20 +10,13 @@ use std::process::Command;
 use std::time::Duration;
 
 // Helper function to create a Command with hidden console on Windows
-fn create_hidden_command(program: &str) -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new(program);
-        // Hide the console window
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        command
-    }
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(program)
-    }
+#[cfg(target_os = "windows")]
+fn configure_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 pub struct Twitch {
@@ -123,7 +116,9 @@ impl Twitch {
         let proxy_url = self.get_proxy_url_for_region(proxy_region)?;
         let quality = quality.unwrap_or("best");
 
-        let mut cmd = create_hidden_command("streamlink");
+        let mut cmd = Command::new("streamlink");
+        #[cfg(target_os = "windows")]
+        configure_no_window(&mut cmd);
         // Add HTTP proxy if configured
         if let Some(ref proxy) = self.proxy {
             if !proxy.is_empty() {

@@ -1215,20 +1215,13 @@ pub async fn renew() -> Result<(), Box<dyn Error>> {
 }
 
 // Helper function to create a Command with hidden console on Windows
-fn create_hidden_command(program: &str) -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new(program);
-        // Hide the console window
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        command
-    }
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(program)
-    }
+#[cfg(target_os = "windows")]
+fn configure_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 // Helper function to get yt-dlp command path
@@ -1277,7 +1270,9 @@ pub async fn get_thumbnail(
     cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
 ) -> Result<String, anyhow::Error> {
-    let mut command = create_hidden_command(&get_yt_dlp_command());
+    let mut command = Command::new(get_yt_dlp_command());
+    #[cfg(target_os = "windows")]
+    configure_no_window(&mut command);
 
     if let Some(proxy_url) = proxy {
         command.arg("--proxy").arg(proxy_url);
@@ -1328,7 +1323,10 @@ pub async fn get_thumbnail(
     // Process the downloaded thumbnail with ImageMagick
     let convert_cmd = get_imagemagick_command();
 
-    let convert_output = match create_hidden_command(&convert_cmd)
+    let mut convert_command = Command::new(&convert_cmd);
+    #[cfg(target_os = "windows")]
+    configure_no_window(&mut convert_command);
+    let convert_output = match convert_command
         .arg("thumbnail.jpg")
         .arg("-resize")
         .arg("640x480")

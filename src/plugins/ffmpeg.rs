@@ -4,6 +4,15 @@ use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
 // Global process supervisor
 lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
@@ -442,11 +451,7 @@ pub async fn ffmpeg(
 
     // Hide console window on Windows
     #[cfg(target_os = "windows")]
-    {
-        #[allow(unused_imports)]
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    configure_no_window(&mut cmd);
 
     // Network optimization
     if let Some(proxy) = proxy {

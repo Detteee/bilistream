@@ -49,21 +49,13 @@ fn get_yt_dlp_command() -> String {
     }
 }
 
-// Helper function to create a Command with hidden console on Windows
-fn create_hidden_command(program: &str) -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new(program);
-        // Hide the console window
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        command
-    }
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(program)
-    }
+#[cfg(target_os = "windows")]
+fn configure_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 // Helper function to add cookies arguments to yt-dlp command
@@ -327,7 +319,9 @@ async fn get_status_with_yt_dlp(
 > {
     let quality = quality.unwrap_or("best");
 
-    let mut command = create_hidden_command(&get_yt_dlp_command());
+    let mut command = Command::new(get_yt_dlp_command());
+    #[cfg(target_os = "windows")]
+    configure_no_window(&mut command);
 
     // Add deno runtime if path is configured
     if let Some(deno) = deno_path {
@@ -429,7 +423,9 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 
     // Helper function to get title using yt-dlp
     let get_title_with_ytdlp = || -> Result<Option<String>, Box<dyn Error>> {
-        let mut command = create_hidden_command(&get_yt_dlp_command());
+        let mut command = Command::new(get_yt_dlp_command());
+        #[cfg(target_os = "windows")]
+        configure_no_window(&mut command);
         if let Some(ref p) = proxy {
             command.arg("--proxy").arg(p);
         }
