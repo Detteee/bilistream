@@ -15,6 +15,8 @@ lazy_static::lazy_static! {
     static ref LAST_STREAM_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when stream time last changed (Unix timestamp in seconds)
     static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    // Track when speed first dropped below 0.98 (Unix timestamp in seconds, 0 = speed is OK)
+    static ref LOW_SPEED_SINCE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 }
 
 use std::sync::atomic::AtomicBool;
@@ -213,6 +215,22 @@ fn update_stream_time(stream_time_secs: u32) {
     }
 }
 
+// Update low-speed tracking: record when speed first drops below 0.98, clear when it recovers
+fn update_speed_tracking(speed: f32) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    if speed < 0.98 {
+        // Only set the timestamp if not already tracking a low-speed period
+        LOW_SPEED_SINCE
+            .compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed)
+            .ok();
+    } else {
+        LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
+    }
+}
+
 // Check if ffmpeg has made progress recently (within timeout seconds)
 // This checks both: 1) if stats are being reported, 2) if stream time is progressing
 pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
@@ -243,6 +261,19 @@ pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
             tracing::warn!(
                 "Stream time frozen for {} seconds, stream likely ended",
                 stream_time_elapsed
+            );
+            return true;
+        }
+    }
+
+    // Check if speed has been below 0.98 for more than 30 seconds
+    let low_speed_since = LOW_SPEED_SINCE.load(Ordering::Relaxed);
+    if low_speed_since > 0 {
+        let low_speed_elapsed = now.saturating_sub(low_speed_since);
+        if low_speed_elapsed > 30 {
+            tracing::warn!(
+                "ffmpeg speed below 0.98 for {} seconds, deemed stuck",
+                low_speed_elapsed
             );
             return true;
         }
@@ -337,6 +368,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
+    LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
 /// Parse time string (HH:MM:SS.ms) to seconds
 fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
@@ -524,6 +556,7 @@ pub async fn ffmpeg(
                                         // Update global speed if available (lock-free atomic write)
                                         if let Some(s) = speed {
                                             FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                            update_speed_tracking(s);
                                         }
                                         // Update stream time tracking
                                         if let Some(t) = stream_time {
@@ -557,6 +590,7 @@ pub async fn ffmpeg(
                                             // Update global speed if available (lock-free atomic write)
                                             if let Some(s) = speed {
                                                 FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                                update_speed_tracking(s);
                                             }
                                             // Update stream time tracking
                                             if let Some(t) = stream_time {
@@ -590,6 +624,7 @@ pub async fn ffmpeg(
             LAST_STREAM_TIME.store(0, Ordering::Relaxed);
             LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
             FFMPEG_SPEED.store(0, Ordering::Relaxed);
+            LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 
             // Spawn timeout monitoring task (15 secs timeout)
             tokio::spawn(async {
