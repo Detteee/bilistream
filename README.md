@@ -19,7 +19,8 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
 1. **Windows:** Double-click `bilistream.exe` - Runs in background, browser opens webui automatically!
 2. **Linux/Mac:** Run `./bilistream` in terminal
-3. **Auto-download:** Required files download automatically on first run:
+3. **Desktop App (optional):** Use `bilistream-tauri` for a native window with system tray — browser access still works at `http://localhost:3150`
+4. **Auto-download:** Required files download automatically on first run:
    - `webui/dist/index.html` - Web interface
    - `areas.json` - Bilibili categories and banned keywords
    - `channels.json` - Preset channel list
@@ -208,6 +209,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ./bilistream tray               # Force background mode (with system tray)
 ./bilistream webui              # Force web mode (shows console logs)
 ./bilistream cli                # Command-line only (no web interface)
+./bilistream-tauri              # Desktop app mode (native window + tray)
 ```
 
 **First run:**
@@ -262,8 +264,8 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ./bilistream completion <shell>                 # Generate completions (bash/zsh/fish)
 
 # Custom ports
-./bilistream webui --port 8080                  # Web UI with custom port
-./bilistream tray --port 8080                   # Tray mode with custom port
+./bilistream webui --port <custom port>                  # Web UI with custom port
+./bilistream tray --port <custom port>                   # Tray mode with custom port
 ```
 
 ### Danmaku Command Feature
@@ -272,7 +274,7 @@ Danmaku command format:
 
 ```txt
 %转播%YT/TW%channel_name%area_name
-channel_name must in YT/TW_channels.txt
+channel_name must in channels.json
 ```
 
 Example:

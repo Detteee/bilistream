@@ -1,7 +1,14 @@
+[workspace]
+members = [".", "src-tauri"]
+resolver = "2"
+
 [package]
 name = "bilistream"
 version = "0.4.8"
 edition = "2021"
+
+[features]
+tauri-build = []
 
 [profile.release]
 opt-level = "z"   # Optimize for size (also reduces memory usage)

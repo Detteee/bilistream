@@ -1,0 +1,28 @@
+{
+  "productName": "bilistream",
+  "version": "0.4.8",
+  "identifier": "com.bilistream.desktop",
+  "build": {
+    "frontendDist": "../webui/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": [],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.svg"
+    ]
+  }
+}

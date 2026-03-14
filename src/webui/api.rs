@@ -1377,6 +1377,7 @@ rm "$0"
 #[derive(Serialize)]
 pub struct VersionInfo {
     version: String,
+    is_tauri: bool,
 }
 
 pub async fn get_version() -> Result<Json<ApiResponse<VersionInfo>>, StatusCode> {
@@ -1384,6 +1385,7 @@ pub async fn get_version() -> Result<Json<ApiResponse<VersionInfo>>, StatusCode>
         success: true,
         data: Some(VersionInfo {
             version: env!("CARGO_PKG_VERSION").to_string(),
+            is_tauri: cfg!(feature = "tauri-build"),
         }),
         message: None,
     }))

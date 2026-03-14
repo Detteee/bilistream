@@ -19,7 +19,8 @@
 
 1. **Windows:** 双击 `bilistream.exe` - 后台运行，浏览器自动打开webui！
 2. **Linux/Mac:** 终端运行 `./bilistream`
-3. **自动下载:** 首次运行时自动下载必需文件：
+3. **桌面应用（可选）：** 使用 `bilistream-tauri` 获得原生窗口和系统托盘 — 浏览器仍可通过 `http://localhost:3150` 访问
+4. **自动下载:** 首次运行时自动下载必需文件：
    - `webui/dist/index.html` - Web 界面
    - `areas.json` - B站分区和禁用关键词
    - `channels.json` - 预设频道列表
@@ -98,6 +99,7 @@
    ```bash
    cargo build --target x86_64-pc-windows-gnu --release
    ```
+
 5. **配置：**
 
    **网页版设置（推荐）:**
@@ -207,6 +209,7 @@
 ./bilistream tray               # 强制后台模式（带系统托盘）
 ./bilistream webui              # 强制 Web 模式（显示控制台日志）
 ./bilistream cli                # 纯命令行模式（无 Web 界面）
+./bilistream-tauri              # 桌面应用模式（原生窗口 + 托盘）
 ```
 
 **首次运行：**
@@ -261,11 +264,10 @@
 ./bilistream completion <shell>                # 生成补全脚本（bash/zsh/fish）
 
 # 自定义端口
-./bilistream webui --port 8080                 # Web UI 自定义端口
-./bilistream tray --port 8080                  # 托盘模式自定义端口
+./bilistream webui --port <自定义端口>                 # Web UI 自定义端口
+./bilistream tray --port <自定义端口>                  # 托盘模式自定义端口
 ./bilistream                                    # 启动（Web UI 模式）
 ./bilistream --cli                              # 启动（CLI 模式）
-./bilistream webui --port 3150                  # 自定义端口的 Web UI
 ./bilistream send-danmaku <弹幕内容>             # 发送弹幕
 ./bilistream replace-cover <图片路径>            # 更新直播封面
 ./bilistream update-area <分区ID>               # 更新直播分区
@@ -280,7 +282,7 @@
 
 ```txt
 %转播%YT/TW%频道名称%分区名称
-频道名称必须在 YT/TW_channels.txt 中
+频道名称必须在 channels.json 中
 ```
 
 示例：

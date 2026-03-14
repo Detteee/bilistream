@@ -58,7 +58,6 @@ pub async fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error + Send + Sy
     } else {
         (None, None, None)
     };
-
     Ok(UpdateInfo {
         current_version: CURRENT_VERSION.to_string(),
         latest_version: latest_version.to_string(),
@@ -74,7 +73,14 @@ pub async fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error + Send + Sy
 fn get_platform_asset(
     assets: &[ReleaseAsset],
 ) -> Result<(Option<String>, Option<String>, Option<u64>), Box<dyn Error + Send + Sync>> {
-    let platform_suffix = if cfg!(target_os = "windows") {
+    // Tauri build gets the tauri-specific archive; regular build gets the standard one
+    let platform_suffix = if cfg!(feature = "tauri-build") {
+        if cfg!(target_os = "windows") {
+            "_tauri_windows.zip"
+        } else {
+            "_tauri_linux.tar.gz"
+        }
+    } else if cfg!(target_os = "windows") {
         "_for_windows.zip"
     } else if cfg!(target_os = "linux") {
         "_for_linux.tar.gz"
@@ -115,6 +121,21 @@ fn get_platform_asset(
     }
 
     Ok((None, None, None))
+}
+
+// Only update the binary and webui — never overwrite user config/data files
+fn should_update_file(relative_path: &str) -> bool {
+    let name = relative_path.replace('\\', "/");
+    // Allow: binary, webui frontend
+    if name == "bilistream"
+        || name == "bilistream.exe"
+        || name == "bilistream-tauri"
+        || name == "bilistream-tauri.exe"
+        || name == "webui/dist/index.html"
+    {
+        return true;
+    }
+    false
 }
 
 /// Download and install an update
@@ -244,6 +265,11 @@ fn install_windows_update(
             continue;
         }
 
+        // Skip config/data files — only update binary and webui
+        if !should_update_file(&relative_path) {
+            continue;
+        }
+
         let dest_path = install_dir.join(&relative_path);
 
         // Create parent directories if needed
@@ -316,10 +342,14 @@ fn install_unix_update(
     //   ├── README.zh_CN.md
     //   └── webui/dist/index.html
 
-    copy_dir_recursive(&extracted_dir, install_dir)?;
+    copy_dir_recursive(&extracted_dir, install_dir, "")?;
 
     // Make executable
-    let new_exe = install_dir.join("bilistream");
+    let new_exe = install_dir.join(if cfg!(feature = "tauri-build") {
+        "bilistream-tauri"
+    } else {
+        "bilistream"
+    });
     Command::new("chmod").arg("+x").arg(&new_exe).output()?;
 
     // Clean up temp directory
@@ -330,24 +360,32 @@ fn install_unix_update(
     Ok(())
 }
 
-// Helper function to recursively copy directory contents
+// Helper function to recursively copy directory contents (only whitelisted files)
 #[cfg(not(target_os = "windows"))]
 fn copy_dir_recursive(
     src: &std::path::Path,
     dst: &std::path::Path,
+    prefix: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
+        let relative = if prefix.is_empty() {
+            entry.file_name().to_string_lossy().to_string()
+        } else {
+            format!("{}/{}", prefix, entry.file_name().to_string_lossy())
+        };
 
         if file_type.is_dir() {
             fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
+            copy_dir_recursive(&src_path, &dst_path, &relative)?;
+        } else if should_update_file(&relative) {
             fs::copy(&src_path, &dst_path)?;
-            tracing::info!("✅ 已更新: {}", entry.file_name().to_string_lossy());
+            tracing::info!("✅ 已更新: {}", relative);
+        } else {
+            tracing::debug!("⏭️  跳过: {}", relative);
         }
     }
     Ok(())

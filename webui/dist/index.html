@@ -5313,6 +5313,7 @@
 
       // Check for updates function
       let CURRENT_VERSION = null; // Will be fetched from API
+      let IS_TAURI = false; // Will be fetched from API
       const GITHUB_REPO = 'Detteee/bilistream';
       let latestUpdateInfo = null;
 
@@ -5323,7 +5324,8 @@
           const data = await response.json();
           if (data.success && data.data) {
             CURRENT_VERSION = data.data.version;
-            document.getElementById('version-display').textContent = `Bilistream v${CURRENT_VERSION}`;
+            IS_TAURI = data.data.is_tauri === true;
+            document.getElementById('version-display').textContent = `Bilistream v${CURRENT_VERSION}${IS_TAURI ? ' (Desktop)' : ''}`;
           }
         } catch (error) {
           console.error('Failed to load version:', error);
@@ -5364,7 +5366,8 @@
             let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
             if (updateInfo.asset_name) {
               const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
-              message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)`;
+              const buildType = IS_TAURI ? '桌面版 (Tauri)' : '标准版';
+              message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB) — ${buildType}`;
             }
             updateMessage.textContent = message;
             updateMessage.style.whiteSpace = 'pre-line';

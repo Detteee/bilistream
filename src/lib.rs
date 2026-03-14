@@ -4,6 +4,7 @@ pub mod plugins;
 pub mod tray;
 pub mod updater;
 pub mod webui;
+pub use webui::server::start_webui;
 
 // Re-export for convenience
 pub use webui::api::{
