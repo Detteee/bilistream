@@ -76,14 +76,14 @@ fn get_platform_asset(
     // Tauri build gets the tauri-specific archive; regular build gets the standard one
     let platform_suffix = if cfg!(feature = "tauri-build") {
         if cfg!(target_os = "windows") {
-            "_tauri_windows.zip"
+            "_windows.zip"
         } else {
-            "_tauri_linux.tar.gz"
+            "_linux.tar.gz"
         }
     } else if cfg!(target_os = "windows") {
-        "_for_windows.zip"
+        "_windows.zip"
     } else if cfg!(target_os = "linux") {
-        "_for_linux.tar.gz"
+        "_linux.tar.gz"
     } else if cfg!(target_os = "macos") {
         "_for_macos.tar.gz"
     } else {
