@@ -38,6 +38,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide window instead of closing — exit only via tray menu
+                window.hide().unwrap();
+                api.prevent_close();
+            }
+        })
         .setup(|app| {
             // Start axum server in background
             tauri::async_runtime::spawn(async {
