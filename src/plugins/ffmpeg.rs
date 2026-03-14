@@ -8,9 +8,12 @@ use tokio::sync::Mutex;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(target_os = "windows")]
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+#[cfg(target_os = "windows")]
 fn configure_no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
 }
 
 // Global process supervisor
