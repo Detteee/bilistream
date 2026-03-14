@@ -1,7 +1,14 @@
 // System tray module - Opens WebUI in browser
+// When compiled with tauri-build feature, tray is handled by Tauri instead
+
+// No-op when built as Tauri app — Tauri manages its own tray
+#[cfg(feature = "tauri-build")]
+pub fn run_tray(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
 
 // Linux/macOS implementation using ksni
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "tauri-build")))]
 pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     use ksni;
 
@@ -81,7 +88,7 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Windows implementation - system tray with native Windows API
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(feature = "tauri-build")))]
 pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::mpsc;
     use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
