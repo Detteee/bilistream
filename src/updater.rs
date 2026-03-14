@@ -123,10 +123,11 @@ fn get_platform_asset(
     Ok((None, None, None))
 }
 
-// Only update the binary and webui — never overwrite user config/data files
-fn should_update_file(relative_path: &str) -> bool {
+// Only update the binary and webui — never overwrite user config/data files.
+// For first-install files (areas.json, channels.json), only extract if not already present.
+fn should_update_file(relative_path: &str, install_dir: &std::path::Path) -> bool {
     let name = relative_path.replace('\\', "/");
-    // Allow: binary, webui frontend
+    // Always update: binary and webui frontend
     if name == "bilistream"
         || name == "bilistream.exe"
         || name == "bilistream-tauri"
@@ -134,6 +135,10 @@ fn should_update_file(relative_path: &str) -> bool {
         || name == "webui/dist/index.html"
     {
         return true;
+    }
+    // First-install only: extract if the file doesn't exist yet on disk
+    if name == "areas.json" || name == "channels.json" {
+        return !install_dir.join(&name).exists();
     }
     false
 }
@@ -266,7 +271,7 @@ fn install_windows_update(
         }
 
         // Skip config/data files — only update binary and webui
-        if !should_update_file(&relative_path) {
+        if !should_update_file(&relative_path, install_dir) {
             continue;
         }
 
@@ -342,7 +347,7 @@ fn install_unix_update(
     //   ├── README.zh_CN.md
     //   └── webui/dist/index.html
 
-    copy_dir_recursive(&extracted_dir, install_dir, "")?;
+    copy_dir_recursive(&extracted_dir, install_dir, "", install_dir)?;
 
     // Make executable
     let new_exe = install_dir.join(if cfg!(feature = "tauri-build") {
@@ -366,6 +371,7 @@ fn copy_dir_recursive(
     src: &std::path::Path,
     dst: &std::path::Path,
     prefix: &str,
+    install_dir: &std::path::Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -380,8 +386,8 @@ fn copy_dir_recursive(
 
         if file_type.is_dir() {
             fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path, &relative)?;
-        } else if should_update_file(&relative) {
+            copy_dir_recursive(&src_path, &dst_path, &relative, install_dir)?;
+        } else if should_update_file(&relative, install_dir) {
             fs::copy(&src_path, &dst_path)?;
             tracing::info!("✅ 已更新: {}", relative);
         } else {

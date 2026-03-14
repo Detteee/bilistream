@@ -23,6 +23,11 @@
       "icons/icon.png",
       "icons/icon.ico",
       "icons/icon.svg"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
   }
 }
