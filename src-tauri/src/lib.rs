@@ -7,6 +7,17 @@ use tauri::{
 
 const PORT: u16 = 3150;
 
+// Force XWayland backend to avoid Wayland protocol errors with WebKitGTK
+#[cfg(target_os = "linux")]
+fn init_display_backend() {
+    if std::env::var("GDK_BACKEND").is_err() {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+    // Disable GPU/hardware acceleration to avoid GBM buffer errors
+    std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+}
+
 fn open_window(app: &AppHandle) {
     let url = format!("http://localhost:{}", PORT);
     if let Some(win) = app.get_webview_window("main") {
@@ -22,6 +33,9 @@ fn open_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    init_display_backend();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
