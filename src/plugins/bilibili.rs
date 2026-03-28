@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::config::Config;
+use chrono::TimeZone;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -247,6 +248,61 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
 
     // Determine live status based on the response
     Ok((res["data"]["live_status"] == 1, title.to_string(), area_id))
+}
+
+/// Gets the live start time of a Bilibili room from the API.
+/// Returns None if the room is not live or live_time is invalid/zero.
+pub async fn get_bili_live_time(
+    room: i32,
+) -> Result<Option<chrono::DateTime<chrono::Local>>, Box<dyn Error>> {
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+    let raw_client = reqwest::Client::builder()
+        .cookie_store(true)
+        .timeout(Duration::new(30, 0))
+        .build()?;
+    let client = ClientBuilder::new(raw_client.clone())
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build();
+
+    let (img_key, sub_key) = get_wbi_keys(&raw_client).await?;
+    let mixin_key = gen_mixin_key(format!("{}{}", img_key, sub_key).as_bytes());
+    let wts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+    let mut params = BTreeMap::new();
+    params.insert("room_id", room.to_string());
+    params.insert("wts", wts.clone());
+    let w_rid = calculate_w_rid(&params, &mixin_key);
+    let query_string = format!("room_id={}&wts={}&w_rid={}", room, wts, w_rid);
+
+    let res: Value = client
+        .get(&format!(
+            "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
+            query_string
+        ))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    let live_time_str = res["data"]["live_time"]
+        .as_str()
+        .unwrap_or("0000-00-00 00:00:00");
+
+    // "0000-00-00 00:00:00" means not live
+    if live_time_str.starts_with("0000") || live_time_str == "0" {
+        return Ok(None);
+    }
+
+    let naive = chrono::NaiveDateTime::parse_from_str(live_time_str, "%Y-%m-%d %H:%M:%S")
+        .map_err(|e| format!("Failed to parse live_time '{}': {}", live_time_str, e))?;
+    let dt = chrono::Local
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or_else(|| format!("Ambiguous or invalid local datetime: {}", naive))?;
+    Ok(Some(dt))
 }
 
 /// Starts a Bilibili live stream.

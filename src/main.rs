@@ -14,7 +14,7 @@ use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
-    get_bili_live_status, get_channel_name, get_puuid, is_config_updated,
+    get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
     was_manual_restart, was_manual_stop,
@@ -781,6 +781,27 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else if !current_is_live && bili_is_live {
                 // Source stream ended but B站 is still live
                 tracing::info!("{} 直播结束", channel_name);
+
+                // Check if B站 has been live for more than 8 hours; if so, stop it
+                match get_bili_live_time(cfg.bililive.room).await {
+                    Ok(Some(live_start)) => {
+                        let duration = chrono::Local::now().signed_duration_since(live_start);
+                        if duration.num_hours() >= 8 {
+                            tracing::info!(
+                                "B站直播已超过8小时（{}小时），自动停播",
+                                duration.num_hours()
+                            );
+                            if let Err(e) = bili_stop_live(&cfg).await {
+                                tracing::error!("自动停播失败: {}", e);
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!("获取B站直播时间失败: {}", e);
+                    }
+                }
+
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                     tokio::time::sleep(Duration::from_secs(2)).await;
