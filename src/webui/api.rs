@@ -527,17 +527,15 @@ pub async fn stop_stream() -> Result<ApiResponse<()>, StatusCode> {
 }
 
 pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
-    // Stop current ffmpeg process
-    crate::plugins::stop_ffmpeg().await;
-
     // Clear any warning stops to allow restreaming
     crate::plugins::danmaku::clear_warning_stop();
 
-    // Set manual restart flag to force immediate restart
+    // Publish the restart reason before stopping ffmpeg so the main loop sees a complete state.
     crate::plugins::set_manual_restart();
-
-    // Set config updated flag to trigger main loop reload
     set_config_updated();
+
+    // Stop current ffmpeg process
+    crate::plugins::stop_ffmpeg().await;
 
     Ok(ApiResponse {
         success: true,

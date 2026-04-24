@@ -126,10 +126,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Log outer loop restart for debugging channel switch issues
         tracing::debug!("🔄 外层循环开始 - 重新加载配置并检查频道状态");
 
-        let mut cfg = load_config().await?;
-
-        // clear config updated
+        // Consume the previous reload signal before loading; updates that arrive during
+        // load_config() remain set and will be picked up by the checks below.
         clear_config_updated();
+        let mut cfg = load_config().await?;
 
         // Handle danmaku client based on enable_danmaku_command setting
         if cfg.bililive.enable_danmaku_command {
@@ -715,7 +715,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if manual restart was requested (force immediate restart)
                 if was_manual_restart() {
                     tracing::info!("🔄 检测到手动重启请求，立即退出ffmpeg监控循环");
-                    clear_manual_restart();
                     break;
                 }
 
@@ -742,6 +741,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let manual_restart = was_manual_restart();
             let config_updated = is_config_updated();
             let warning_skip = should_skip_due_to_warning(&channel_name);
+
+            if manual_restart {
+                clear_manual_restart();
+            }
 
             // Clear crop settings for both platforms when stream ends
             // Don't clear on manual restart - let it apply for the restarted stream
@@ -797,11 +800,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             };
 
             // Determine what happened and send appropriate message
-            if manual_stop {
+            if manual_restart {
+                if manual_stop {
+                    clear_manual_stop();
+                }
+                tracing::info!("Stream was manually restarted, skipping end danmaku");
+            } else if config_updated {
+                if manual_stop {
+                    clear_manual_stop();
+                }
+                tracing::info!("Stream stopped due to config update/restart, skipping end danmaku");
+            } else if manual_stop {
                 clear_manual_stop();
                 tracing::info!("Stream was stopped manually, skipping end danmaku");
-            } else if config_updated {
-                tracing::info!("Stream stopped due to config update/restart, skipping end danmaku");
             } else if warning_skip {
                 tracing::info!("Stream was stopped due to warning/cut off");
             } else if !current_is_live && bili_is_live {

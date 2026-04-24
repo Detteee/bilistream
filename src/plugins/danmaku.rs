@@ -765,11 +765,11 @@ pub fn stop_danmaku() {
 
 /// Set the warning stop flag and store the channel that was stopped
 pub fn set_warning_stop(channel_name: String) {
-    WARNING_STOP.store(true, Ordering::SeqCst);
-    WARNING_LOGGED.store(false, Ordering::SeqCst); // Reset logged flag for new warning
     if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
         *last = Some(channel_name);
     }
+    WARNING_LOGGED.store(false, Ordering::SeqCst); // Reset logged flag for new warning
+    WARNING_STOP.store(true, Ordering::SeqCst);
 }
 
 /// Check if we should skip streaming due to a recent warning
