@@ -32,6 +32,7 @@ lazy_static! {
     };
 }
 const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
+pub const BILI_START_TEMP_BAN_PREFIX: &str = "BILI_START_TEMP_BAN:";
 
 const MIXIN_KEY_ENC_TAB: [u8; 64] = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
@@ -439,7 +440,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                 // Abnormal streaming behavior - temporary ban
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {})", code);
                 tracing::error!("📛 {}", message);
-                return Err(message.into());
+                return Err(format!("{}{}", BILI_START_TEMP_BAN_PREFIX, message).into());
             }
             _ => {
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);

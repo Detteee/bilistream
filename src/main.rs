@@ -17,7 +17,7 @@ use bilistream::plugins::{
     get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
-    was_manual_restart, was_manual_stop,
+    was_manual_restart, was_manual_stop, BILI_START_TEMP_BAN_PREFIX,
 };
 use qrcode::QrCode;
 
@@ -471,7 +471,33 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         *LAST_BANNED_KEYWORD_WARNING.lock().unwrap() = None;
                     }
                     Err(e) => {
-                        tracing::error!("B站开播失败: {}", e);
+                        let error = e.to_string();
+                        let message = error
+                            .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
+                            .unwrap_or(&error);
+                        tracing::error!("B站开播失败: {}", message);
+                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX) {
+                            let mut config_changed = false;
+
+                            if cfg.youtube.enable_monitor {
+                                cfg.youtube.enable_monitor = false;
+                                config_changed = true;
+                            }
+
+                            if cfg.twitch.enable_monitor {
+                                cfg.twitch.enable_monitor = false;
+                                config_changed = true;
+                            }
+
+                            if config_changed {
+                                tracing::warn!(
+                                    "检测到B站异常开播限制，已关闭 YouTube 和 Twitch 监控"
+                                );
+                                if let Err(save_err) = save_config(&cfg).await {
+                                    tracing::error!("保存配置失败: {}", save_err);
+                                }
+                            }
+                        }
                         tracing::warn!("⚠️ 将在下次循环重试");
                         tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                         continue 'outer;
