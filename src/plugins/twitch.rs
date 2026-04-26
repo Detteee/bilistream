@@ -6,8 +6,9 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 // Helper function to create a Command with hidden console on Windows
 #[cfg(target_os = "windows")]
@@ -20,6 +21,32 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 fn configure_no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+}
+
+const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<Output, Box<dyn Error>> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("streamlink timed out after {} seconds", timeout.as_secs()).into());
+        }
+
+        thread::sleep(Duration::from_millis(200));
+    }
 }
 
 pub struct Twitch {
@@ -139,13 +166,15 @@ impl Twitch {
         ))
         .arg(quality);
 
-        let output = match cmd.output() {
+        let output = match command_output_with_timeout(&mut cmd, STREAMLINK_TIMEOUT) {
             Ok(output) => output,
             Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
+                if e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                {
                     return Err("streamlink 未安装或不在 PATH 中。".into());
                 }
-                return Err(e.into());
+                return Err(e);
             }
         };
 
@@ -194,7 +223,7 @@ pub async fn get_twitch_status(
     ),
     Box<dyn std::error::Error>,
 > {
-    let client = Client::new();
+    let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
 
     let query = r#"
     query GetStreamInfo($login: String!) {

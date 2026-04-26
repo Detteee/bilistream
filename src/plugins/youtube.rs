@@ -4,7 +4,9 @@ use chrono::{DateTime, Local};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::error::Error; // Ensure this is included
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 // Holodex API data structures
 #[derive(Serialize, Deserialize, Debug)]
@@ -59,6 +61,32 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 fn configure_no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+}
+
+const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<Output, Box<dyn Error>> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("yt-dlp timed out after {} seconds", timeout.as_secs()).into());
+        }
+
+        thread::sleep(Duration::from_millis(200));
+    }
 }
 
 // Helper function to add cookies arguments to yt-dlp command
@@ -137,7 +165,9 @@ pub async fn get_holodex_streams(
         channels_param
     );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
     let response = client.get(&url).header("X-APIKEY", api_key).send().await?;
 
     if !response.status().is_success() {
@@ -351,7 +381,7 @@ async fn get_status_with_yt_dlp(
         "https://www.youtube.com/channel/{}/live",
         channel_id
     ));
-    let output = command.output()?;
+    let output = command_output_with_timeout(&mut command, YT_DLP_TIMEOUT)?;
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -438,7 +468,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             channel_id
         ));
 
-        let output = command.output()?;
+        let output = command_output_with_timeout(&mut command, YT_DLP_TIMEOUT)?;
         let title_str = String::from_utf8_lossy(&output.stdout);
 
         let title = title_str
@@ -460,7 +490,9 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 
     // Try Holodex API if key is configured
     if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()?;
         let url = format!(
             "https://holodex.net/api/v2/users/live?channels={}",
             channel_id
