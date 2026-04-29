@@ -430,11 +430,40 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
             .unwrap_or("Unknown error");
 
         match code {
-            60024 => {
+            60024 | 60043 => {
                 // Face verification required
-                if let Some(qr_url) = response["data"]["qr"].as_str() {
-                    return Err(format!("FACE_AUTH_REQUIRED:{}", qr_url).into());
+                let face_auth_url = response["data"]["qr"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        if code == 60043 {
+                            let mid = cfg.bililive.credentials.dede_user_id.trim();
+                            if !mid.is_empty() {
+                                Some(format!(
+                                    "https://www.bilibili.com/blackboard/live/face-auth-middle.html?source_event=400&mid={}",
+                                    mid
+                                ))
+                            } else {
+                                Some(
+                                    "https://www.bilibili.com/blackboard/live/face-auth-middle.html?source_event=400"
+                                        .to_string(),
+                                )
+                            }
+                        } else {
+                            None
+                        }
+                    });
+
+                tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
+                tracing::error!("FACE_AUTH_REQUIRED 完整响应: {:#?}", response);
+
+                if let Some(face_auth_url) = face_auth_url {
+                    return Err(format!("FACE_AUTH_REQUIRED:{}", face_auth_url).into());
                 }
+
+                return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
             }
             60031 => {
                 // Abnormal streaming behavior - temporary ban
