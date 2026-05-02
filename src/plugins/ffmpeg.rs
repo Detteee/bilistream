@@ -279,13 +279,13 @@ pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
         }
     }
 
-    // Check if speed has been below 0.998 for more than 30 seconds
+    // Check if speed has been below 0.995 for more than 30 seconds
     let low_speed_since = LOW_SPEED_SINCE.load(Ordering::Relaxed);
     if low_speed_since > 0 {
         let low_speed_elapsed = now.saturating_sub(low_speed_since);
         if low_speed_elapsed > 30 {
             tracing::warn!(
-                "ffmpeg speed below 0.998 for {} seconds, deemed stuck",
+                "ffmpeg speed below 0.995 for {} seconds, deemed stuck",
                 low_speed_elapsed
             );
             return true;
