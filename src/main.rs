@@ -371,10 +371,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Clear warning stop since we have a valid channel to stream
             clear_warning_stop();
 
-            // Disable danmaku commands when streaming
-            if is_danmaku_commands_enabled() {
-                enable_danmaku_commands(false);
-            }
             let (platform, channel_name, channel_id, mut area_v2, cfg_title) = if yt_is_live {
                 (
                     "YT",
@@ -454,8 +450,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     {
                         tracing::error!("Failed to send danmaku: {}", e);
                     }
-                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                        enable_danmaku_commands(true);
+                    if cfg.bililive.enable_danmaku_command {
+                        if !is_danmaku_commands_enabled() {
+                            enable_danmaku_commands(true);
+                        }
                         thread::sleep(Duration::from_secs(2));
                         if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
                         {
@@ -465,6 +463,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
+            }
+
+            // Disable danmaku commands only once we are committed to this stream (past skip paths).
+            if is_danmaku_commands_enabled() {
+                enable_danmaku_commands(false);
             }
             // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
             if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
