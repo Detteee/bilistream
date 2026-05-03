@@ -368,6 +368,107 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             }
 
+            let streaming_banned_keywords = load_streaming_banned_keywords();
+
+            if yt_is_live {
+                let yt_stream_title = match (&yt_area, &yt_title) {
+                    (Some(area), Some(title)) => Some(format!("{} {}", area, title)),
+                    _ => yt_title.clone(),
+                };
+                let default_title = "无标题".to_string();
+                let title_str = yt_stream_title.as_ref().unwrap_or(&default_title);
+
+                if let Some(keyword) = streaming_banned_keywords.iter().find(|k| {
+                    yt_stream_title
+                        .as_ref()
+                        .map_or(false, |t| t.contains(k.as_str()))
+                }) {
+                    let should_warn = {
+                        let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
+                        let current_warning = format!("YT:{}:{}", keyword, title_str);
+                        if last_warning.as_ref() != Some(&current_warning) {
+                            *last_warning = Some(current_warning);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if should_warn {
+                        tracing::error!("YT直播标题/分区包含不支持的关键词: {}", keyword);
+                        if let Err(e) =
+                            send_danmaku(&cfg, &format!("错误：YT标题/分区含:{}", keyword)).await
+                        {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
+                        if cfg.bililive.enable_danmaku_command {
+                            if !is_danmaku_commands_enabled() {
+                                enable_danmaku_commands(true);
+                            }
+                            thread::sleep(Duration::from_secs(2));
+                            if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                            {
+                                tracing::error!("Failed to send danmaku: {}", e);
+                            }
+                        }
+                    }
+
+                    yt_is_live = false;
+                }
+            }
+
+            if tw_is_live {
+                let tw_stream_title = match (&tw_area, &tw_title) {
+                    (Some(area), Some(title)) => Some(format!("{} {}", area, title)),
+                    _ => tw_title.clone(),
+                };
+                let default_title = "无标题".to_string();
+                let title_str = tw_stream_title.as_ref().unwrap_or(&default_title);
+
+                if let Some(keyword) = streaming_banned_keywords.iter().find(|k| {
+                    tw_stream_title
+                        .as_ref()
+                        .map_or(false, |t| t.contains(k.as_str()))
+                }) {
+                    let should_warn = {
+                        let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
+                        let current_warning = format!("TW:{}:{}", keyword, title_str);
+                        if last_warning.as_ref() != Some(&current_warning) {
+                            *last_warning = Some(current_warning);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if should_warn {
+                        tracing::error!("TW直播标题/分区包含不支持的关键词: {}", keyword);
+                        if let Err(e) =
+                            send_danmaku(&cfg, &format!("错误：TW标题/分区含:{}", keyword)).await
+                        {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
+                        if cfg.bililive.enable_danmaku_command {
+                            if !is_danmaku_commands_enabled() {
+                                enable_danmaku_commands(true);
+                            }
+                            thread::sleep(Duration::from_secs(2));
+                            if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
+                            {
+                                tracing::error!("Failed to send danmaku: {}", e);
+                            }
+                        }
+                    }
+
+                    tw_is_live = false;
+                }
+            }
+
+            if !yt_is_live && !tw_is_live {
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue 'outer;
+            }
+
             // Clear warning stop since we have a valid channel to stream
             clear_warning_stop();
 
@@ -426,43 +527,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             } else {
                 INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
-            }
-            if let Some(keyword) = load_streaming_banned_keywords()
-                .iter()
-                .find(|k| title.as_ref().map_or(false, |t| t.contains(k.as_str())))
-            {
-                // Check if we already warned about this keyword for this stream
-                let should_warn = {
-                    let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
-                    let current_warning = format!("{}:{}", keyword, title_str);
-                    if last_warning.as_ref() != Some(&current_warning) {
-                        *last_warning = Some(current_warning);
-                        true
-                    } else {
-                        false
-                    }
-                };
-
-                if should_warn {
-                    tracing::error!("直播标题/分区包含不支持的关键词: {}", keyword);
-                    if let Err(e) =
-                        send_danmaku(&cfg, &format!("错误：标题/分区含:{}", keyword)).await
-                    {
-                        tracing::error!("Failed to send danmaku: {}", e);
-                    }
-                    if cfg.bililive.enable_danmaku_command {
-                        if !is_danmaku_commands_enabled() {
-                            enable_danmaku_commands(true);
-                        }
-                        thread::sleep(Duration::from_secs(2));
-                        if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
-                        {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        }
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
             }
 
             // Disable danmaku commands only once we are committed to this stream (past skip paths).
