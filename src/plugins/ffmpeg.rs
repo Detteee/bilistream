@@ -407,14 +407,22 @@ fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>, Option<u32>
 
         let mut speed_value: Option<f32> = None;
         let mut time_value: Option<u32> = None;
+        let parts: Vec<&str> = stats_from_time.split_whitespace().collect();
 
         // Quick parse for speed and time values (for stuck detection)
-        for part in stats_from_time.split_whitespace() {
+        for (idx, part) in parts.iter().enumerate() {
             if let Some(value) = part.strip_prefix("time=") {
                 time_value = parse_time_to_seconds(value);
             } else if let Some(value) = part.strip_prefix("speed=") {
-                // Parse speed value (remove 'x' suffix if present)
-                let clean_value = value.trim_end_matches('x');
+                // Handle both formats:
+                // - "speed=0.99x" (single token)
+                // - "speed=   1x" (value is in next token because of padding)
+                let speed_token = if value.is_empty() {
+                    parts.get(idx + 1).copied().unwrap_or("")
+                } else {
+                    value
+                };
+                let clean_value = speed_token.trim_end_matches('x');
                 if let Ok(parsed) = clean_value.parse::<f32>() {
                     speed_value = Some(parsed);
                 }
