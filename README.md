@@ -11,7 +11,7 @@
 
 ## Download
 
-**Latest Release: v0.5.0**
+**Latest Release: v0.5.1**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
