@@ -208,6 +208,7 @@ pub async fn get_youtube_status(
                 channel_id,
                 proxy,
                 title,
+                None,
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
@@ -249,6 +250,7 @@ pub async fn get_youtube_status(
                     channel_id,
                     proxy.clone(),
                     title.clone(),
+                    video_id.as_deref(),
                     Some(&quality),
                     cookies_file,
                     cookies_from_browser,
@@ -319,6 +321,7 @@ pub async fn get_youtube_status(
                 channel_id,
                 proxy,
                 None,
+                None,
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
@@ -335,6 +338,7 @@ async fn get_status_with_yt_dlp(
     channel_id: &str,
     proxy: Option<String>,
     title: Option<String>,
+    preferred_video_id: Option<&str>,
     quality: Option<&str>,
     cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
@@ -377,10 +381,12 @@ async fn get_status_with_yt_dlp(
     command.arg("--print").arg("id");
     command.arg("-g");
 
-    command.arg(format!(
-        "https://www.youtube.com/channel/{}/live",
-        channel_id
-    ));
+    let target_url = if let Some(video_id) = preferred_video_id {
+        format!("https://www.youtube.com/watch?v={}", video_id)
+    } else {
+        format!("https://www.youtube.com/channel/{}/live", channel_id)
+    };
+    command.arg(target_url);
     let output = command_output_with_timeout(&mut command, YT_DLP_TIMEOUT)?;
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
