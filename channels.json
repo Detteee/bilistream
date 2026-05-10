@@ -35,8 +35,8 @@
         "su酱"
       ],
       "platforms": {
-        "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA",
-        "twitch": "kagasumire"
+        "twitch": "kagasumire",
+        "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA"
       },
       "riot_puuid": "83YSmCVmDvYK46p3GmS0AdprnZQ7ckQzgWY4R1ogOB-GvbOqzhIBGvpU65wv3HvvIeVtqcKv5W-suA"
     },
@@ -71,8 +71,8 @@
         "诺宝"
       ],
       "platforms": {
-        "youtube": "UCIcAj6WkJ8vZ7DeJVgmeqKw",
-        "twitch": "963noah"
+        "twitch": "963noah",
+        "youtube": "UCIcAj6WkJ8vZ7DeJVgmeqKw"
       },
       "riot_puuid": "MDiBt0ywb8_Iiz4w_QVO2j2ugAu9IMd14ttTLyDC4eXvYCfy6feGb38biExOIyC0U8XzncX-xDi4_g"
     },
@@ -108,8 +108,8 @@
         "hnn"
       ],
       "platforms": {
-        "youtube": "UCvUc0m317LWTTPZoBQV479A",
-        "twitch": "hinanotachiba7"
+        "twitch": "hinanotachiba7",
+        "youtube": "UCvUc0m317LWTTPZoBQV479A"
       },
       "riot_puuid": "VBRP9g9wNrvyV6i1lSwwSVEnobRRJOa24Y1vyHnnk1pJJhaVO6EU8Yf1CBdX8gPPmbrXQ5Cl9fIg7A"
     },
@@ -121,8 +121,8 @@
         "lisa"
       ],
       "platforms": {
-        "youtube": "UCurEA8YoqFwimJcAuSHU0MQ",
-        "twitch": "lisahanabusa"
+        "twitch": "lisahanabusa",
+        "youtube": "UCurEA8YoqFwimJcAuSHU0MQ"
       }
     },
     {
@@ -133,8 +133,8 @@
         "ren"
       ],
       "platforms": {
-        "twitch": "ren_kisaragi__",
-        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg"
+        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
+        "twitch": "ren_kisaragi__"
       },
       "riot_puuid": "KjyMzB8x5HCJYygy8AlxE-YEvejsBSEoY04ZAsdiqj_2blcS9LnkyvGpV6JsQkxwdDoJrH9_IeC0MA"
     },
@@ -168,8 +168,8 @@
         "emts"
       ],
       "platforms": {
-        "twitch": "emtsmaru",
-        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng"
+        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng",
+        "twitch": "emtsmaru"
       }
     },
     {
@@ -183,8 +183,8 @@
         "紫发小女孩"
       ],
       "platforms": {
-        "twitch": "shinomiya_runa",
-        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw"
+        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw",
+        "twitch": "shinomiya_runa"
       },
       "riot_puuid": "EkYVJYRQAJheLNbvnG_hE5QR0LmRU-Gq-IdL8wHfRtOfQyYpVWk8ngWcA_JwLfRswPmhV4hrNkxTmQ"
     },
@@ -220,8 +220,8 @@
         "拉姆"
       ],
       "platforms": {
-        "twitch": "ramuneshiranami",
-        "youtube": "UC61OwuYOVuKkpKnid-43Twg"
+        "youtube": "UC61OwuYOVuKkpKnid-43Twg",
+        "twitch": "ramuneshiranami"
       },
       "riot_puuid": "feCDrVqSMb8pUkh-P7gaYNrP07EIdU2iFRsy0u8m1dYPDDFa3EkvFL-rSoy7cM9PhJEn-RPfkS5P9g"
     },
@@ -233,8 +233,8 @@
         "akarin"
       ],
       "platforms": {
-        "twitch": "akarindao",
-        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ"
+        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ",
+        "twitch": "akarindao"
       },
       "riot_puuid": "rHYfGMspqOBz2pCoHprVG_xIJGP_i3nEGm41Q2-fveg4VIVZXvcb0I37BJP5KfwXF5iLXBaZXXNjbQ"
     },
@@ -261,8 +261,8 @@
         "kkg"
       ],
       "platforms": {
-        "youtube": "UC-WX1CXssCtCtc2TNIRnJzg",
-        "twitch": "kokagetsumugi"
+        "twitch": "kokagetsumugi",
+        "youtube": "UC-WX1CXssCtCtc2TNIRnJzg"
       },
       "riot_puuid": "GPqAiRgoxCPMLLg_iigy5tNJ7o7HXw6LBiLAz-i_8YAWfhGdshQoaldXhVC2BrJJAxe33la7IdfXHQ"
     },
@@ -306,6 +306,7 @@
         "saine"
       ],
       "platforms": {
+        "twitch": "saineginjo",
         "youtube": "UC2xXx1m1jeL0W84_0jTg-Yw"
       }
     },
@@ -321,10 +322,12 @@
       }
     },
     {
-      "name": "ぶいすぽっ!【公式】",
+      "name": "ぶいすぽっ!",
       "aliases": [
+        "vspo"
       ],
       "platforms": {
+        "twitch": "vspo_official",
         "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
       }
     },
@@ -334,8 +337,8 @@
         "narinmikure"
       ],
       "platforms": {
-        "youtube": "UCKSpM183c85d5V2cW5qaUjA",
-        "twitch": "narinmikure"
+        "twitch": "narinmikure",
+        "youtube": "UCKSpM183c85d5V2cW5qaUjA"
       },
       "riot_puuid": "pwvdeGmgJ-s-tFOux3Pt7vbgy6mA4DhhyHVWKdzV0GWCATmhPhsMpIMlvqI1bxPZMUxUn3T52pRsiw"
     },
@@ -346,8 +349,8 @@
         "狮子堂"
       ],
       "platforms": {
-        "twitch": "shishidoakari",
-        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ"
+        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ",
+        "twitch": "shishidoakari"
       },
       "riot_puuid": "jQAWeon-dvYiFQdrAOMNQRzWLAX_Ee79FujTYJHTHu-x5Pu2Pm1R-NUAZtPZiY1A6-cXoadLnpyHOw"
     },
