@@ -1990,7 +1990,10 @@ pub struct Area {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AreasData {
+    #[serde(default)]
     pub banned_keywords: Vec<String>,
+    #[serde(default)]
+    pub streaming_banned_keywords: Vec<String>,
     pub areas: Vec<Area>,
 }
 
