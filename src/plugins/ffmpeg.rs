@@ -470,10 +470,9 @@ pub async fn ffmpeg(
         cmd.arg("-http_proxy").arg(proxy);
     }
 
-    // Input options - optimized for stability
-    // .arg("-multiple_requests")
-    // .arg("1") // Use multiple HTTP requests for segments
-    cmd.arg("-thread_queue_size")
+    cmd.arg("-multiple_requests")
+        .arg("1") // Use multiple HTTP requests for segments
+        .arg("-thread_queue_size")
         .arg("4096")
         .arg("-re") // Read input at native frame rate
         .arg("-analyzeduration")
@@ -481,7 +480,7 @@ pub async fn ffmpeg(
         .arg("-probesize")
         .arg("5000000")
         .arg("-fflags")
-        .arg("+genpts+discardcorrupt") // Generate PTS and discard corrupt packets
+        .arg("+genpts") // Regenerate PTS at HLS segment boundaries
         // Input file
         .arg("-i")
         .arg(m3u8_url);
@@ -503,10 +502,10 @@ pub async fn ffmpeg(
     }
 
     cmd
-        // .arg("-copyts") // Copy input timestamps
+        .arg("-copyts") // Don't copy raw HLS timestamps — genpts handles pacing
         .arg("-start_at_zero") // Start timestamps at zero
         .arg("-avoid_negative_ts")
-        .arg("make_zero") // Shift timestamps to avoid negative values
+        .arg("make_zero") // Shift timestamps to avoid negative values at segment joins
         .arg("-max_interleave_delta")
         .arg("0") // Reduce muxing delay for lower latency
         .arg("-rtmp_buffer")

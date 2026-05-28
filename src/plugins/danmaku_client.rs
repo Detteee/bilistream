@@ -749,7 +749,9 @@ impl BilibiliDanmakuClient {
             "ROOM_REAL_TIME_MESSAGE_UPDATE" => {
                 // Room stats update - suppress (too frequent)
             }
-            "COMMON_NOTICE_DANMAKU"
+            "COVER_AUDIT_STATUS_CHANGED"
+            | "FLOW_REWARD_CARD"
+            | "COMMON_NOTICE_DANMAKU"
             | "LIVE_ANI_RES_UPDATE"
             | "PK_BATTLE_ENTRANCE"
             | "MESSAGEBOX_USER_MEDAL_CHANGE"

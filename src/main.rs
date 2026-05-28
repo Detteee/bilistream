@@ -908,9 +908,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 match get_bili_live_time(cfg.bililive.room).await {
                     Ok(Some(live_start)) => {
                         let duration = chrono::Local::now().signed_duration_since(live_start);
-                        if duration.num_hours() >= 4 {
+                        if duration.num_hours() >= 3 {
                             tracing::info!(
-                                "B站直播已超过4小时（{}小时），自动停播",
+                                "B站直播已超过3小时（{}小时），自动停播",
                                 duration.num_hours()
                             );
                             if let Err(e) = bili_stop_live(&cfg).await {
