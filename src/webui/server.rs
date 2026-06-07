@@ -1,12 +1,15 @@
 use axum::{
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post, put},
     Router,
 };
 use std::net::SocketAddr;
+use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 use super::api;
 
@@ -74,11 +77,22 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             ),
         );
 
+    let static_files =
+        ServeDir::new("webui/dist").not_found_service(ServeFile::new("webui/dist/index.html"));
+
+    let response_layers = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+        ))
+        .layer(CompressionLayer::new())
+        .layer(CorsLayer::permissive());
+
     // Main app with API routes and static files
     let app = Router::new()
         .nest("/api", api_router)
-        .fallback_service(ServeDir::new("webui/dist"))
-        .layer(CorsLayer::permissive());
+        .fallback_service(static_files)
+        .layer(response_layers);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 

@@ -31,8 +31,6 @@
       --input-bg: #313244;
       --input-border: #45475a;
       --input-focus: #89b4fa;
-      --shadow: rgba(0, 0, 0, 0.4);
-      --shadow-hover: rgba(0, 0, 0, 0.6);
       --info-border: #313244;
       --heading-color: #89b4fa;
       --button-hover-bg: #45475a;
@@ -42,6 +40,12 @@
       --accent-green: #a6e3a1;
       --accent-yellow: #f9e2af;
       --accent-teal: #94e2d5;
+      --radius: 8px;
+      --radius-lg: 10px;
+      --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+      --shadow-hover: 0 16px 34px rgba(0, 0, 0, 0.34);
+      --focus-ring: 0 0 0 3px rgba(137, 180, 250, 0.28);
+      color-scheme: dark;
     }
 
     body.light-theme {
@@ -58,19 +62,26 @@
       --input-bg: #ffffff;
       --input-border: #e5e7eb;
       --input-focus: #667eea;
-      --shadow: rgba(0, 0, 0, 0.2);
-      --shadow-hover: rgba(0, 0, 0, 0.3);
       --info-border: #f0f0f0;
       --heading-color: #667eea;
       --button-hover-bg: #e5e7eb;
+      --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
+      --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
+      --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
+      color-scheme: light;
     }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      background: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 50%, var(--bg-gradient-end) 100%);
+      background:
+        linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 52%, var(--bg-gradient-end) 100%);
+      color: var(--text-primary);
+      line-height: 1.5;
       min-height: 100vh;
-      padding: 20px;
-      transition: background 0.3s ease;
+      padding: 24px;
+      transition: background 0.2s ease, color 0.2s ease;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
 
     .container {
@@ -80,49 +91,56 @@
 
     .header {
       text-align: center;
-      color: white;
-      margin-bottom: 30px;
+      color: var(--header-text);
+      margin-bottom: 28px;
     }
 
     .header h1 {
-      font-size: 2.5em;
-      margin-bottom: 10px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+      font-size: 2.5rem;
+      line-height: 1.15;
+      margin-bottom: 8px;
+      letter-spacing: 0;
+      text-shadow: 0 2px 18px rgba(0, 0, 0, 0.22);
     }
 
     .header p {
-      font-size: 1.1em;
+      color: var(--header-text);
+      font-size: 1.05rem;
       opacity: 0.9;
     }
 
     .dashboard {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
-      gap: 20px;
-      margin-bottom: 30px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
     }
 
     .card {
       background: var(--card-bg);
-      border-radius: 12px;
-      padding: 25px;
-      box-shadow: 0 10px 30px var(--shadow);
-      transition: transform 0.3s ease, box-shadow 0.3s ease, background 0.3s ease;
+      border-radius: var(--radius);
+      padding: 22px;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
       border: 1px solid var(--card-border);
+      content-visibility: auto;
+      contain-intrinsic-size: 260px;
     }
 
     .card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 15px 40px var(--shadow-hover);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-hover);
     }
 
     .card h2 {
       color: var(--heading-color);
-      margin-bottom: 15px;
-      font-size: 1.5em;
+      margin-bottom: 14px;
+      font-size: 1.35rem;
+      line-height: 1.25;
       display: flex;
       align-items: center;
       gap: 10px;
+      letter-spacing: 0;
     }
 
     .status-indicator {
@@ -134,7 +152,7 @@
 
     .status-live {
       background: #a6e3a1;
-      box-shadow: 0 0 10px #a6e3a1;
+      box-shadow: 0 0 0 4px rgba(166, 227, 161, 0.14);
     }
 
     .status-offline {
@@ -144,6 +162,8 @@
     .info-row {
       display: flex;
       justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
       padding: 10px 0;
       border-bottom: 1px solid var(--info-border);
     }
@@ -155,30 +175,38 @@
     .info-label {
       color: var(--text-secondary);
       font-weight: 500;
+      flex-shrink: 0;
     }
 
     .info-value {
       color: var(--text-primary);
       font-weight: 600;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      text-align: right;
     }
 
     .controls {
       background: var(--card-bg);
-      border-radius: 12px;
-      padding: 25px;
-      box-shadow: 0 10px 30px var(--shadow);
+      border-radius: var(--radius);
+      padding: 22px;
+      box-shadow: var(--shadow);
       border: 1px solid var(--card-border);
-      transition: background 0.3s ease;
+      transition: background 0.2s ease, border-color 0.2s ease;
+      content-visibility: auto;
+      contain-intrinsic-size: 520px;
     }
 
     .controls h2 {
       color: var(--heading-color);
-      margin-bottom: 20px;
-      font-size: 1.5em;
+      margin-bottom: 18px;
+      font-size: 1.35rem;
+      line-height: 1.25;
+      letter-spacing: 0;
     }
 
     .control-group {
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
 
     .control-group label {
@@ -193,10 +221,11 @@
     .control-group textarea {
       width: 100%;
       padding: 12px;
-      border: 2px solid var(--input-border);
-      border-radius: 8px;
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius);
       font-size: 14px;
-      transition: border-color 0.3s ease, background 0.3s ease;
+      line-height: 1.4;
+      transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
       background: var(--input-bg);
       color: var(--text-primary);
     }
@@ -206,29 +235,46 @@
     .control-group textarea:focus {
       outline: none;
       border-color: var(--input-focus);
+      box-shadow: var(--focus-ring);
     }
 
     .button-group {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
       gap: 10px;
       margin-top: 20px;
     }
 
     button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
       padding: 12px 24px;
       border: none;
-      border-radius: 8px;
+      border-radius: var(--radius);
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.3s ease;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+      transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      letter-spacing: 0;
     }
 
     button:hover:not(:disabled) {
       filter: brightness(1.1);
+    }
+
+    button:focus-visible,
+    a:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      filter: saturate(0.7);
+      opacity: 0.65;
     }
 
     .btn-primary {
@@ -276,12 +322,14 @@
       top: 20px;
       right: 20px;
       padding: 15px 20px;
-      border-radius: 8px;
+      border-radius: var(--radius);
       color: white;
       font-weight: 500;
-      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+      box-shadow: var(--shadow-hover);
       animation: slideIn 0.3s ease;
       z-index: 1000;
+      max-width: min(420px, calc(100vw - 32px));
+      overflow-wrap: anywhere;
     }
 
     .notification.success {
@@ -328,7 +376,7 @@
 
     a {
       color: var(--heading-color);
-      transition: opacity 0.3s ease;
+      transition: opacity 0.2s ease;
     }
 
     a:hover {
@@ -336,12 +384,45 @@
     }
 
     @media (max-width: 768px) {
+      body {
+        padding: 12px;
+      }
+
       .header h1 {
-        font-size: 2em;
+        font-size: 2rem;
       }
 
       .dashboard {
         grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .card,
+      .controls {
+        padding: 18px;
+      }
+
+      .info-row {
+        flex-wrap: wrap;
+      }
+
+      .info-value {
+        text-align: left;
+      }
+
+      .button-group {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
       }
     }
 
@@ -364,13 +445,15 @@
 
     .setup-card {
       background: var(--card-bg);
-      border-radius: 16px;
-      padding: 40px;
-      box-shadow: 0 20px 60px var(--shadow);
+      border-radius: var(--radius-lg);
+      padding: 36px;
+      box-shadow: var(--shadow-hover);
       max-width: 700px;
       margin: 50px auto;
       border: 1px solid var(--card-border);
-      transition: background 0.3s ease;
+      transition: background 0.2s ease;
+      content-visibility: auto;
+      contain-intrinsic-size: 680px;
     }
 
     .setup-icon {
@@ -380,10 +463,11 @@
     }
 
     .setup-title {
-      font-size: 2em;
+      font-size: 2rem;
       color: var(--heading-color);
       text-align: center;
       margin-bottom: 20px;
+      letter-spacing: 0;
     }
 
     .setup-description {
@@ -396,7 +480,7 @@
     .missing-files {
       background: #fff3cd;
       border: 2px solid #ffc107;
-      border-radius: 8px;
+      border-radius: var(--radius);
       padding: 20px;
       margin-bottom: 30px;
     }
@@ -426,7 +510,7 @@
 
     .setup-steps {
       background: var(--input-bg);
-      border-radius: 8px;
+      border-radius: var(--radius);
       padding: 25px;
       margin-bottom: 30px;
       border: 1px solid var(--card-border);
@@ -455,7 +539,7 @@
       background: #181825;
       color: #a6e3a1;
       padding: 20px;
-      border-radius: 8px;
+      border-radius: var(--radius);
       font-family: 'Courier New', monospace;
       font-size: 16px;
       margin-bottom: 20px;
@@ -475,7 +559,7 @@
       background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%);
       color: #1e1e2e;
       border: none;
-      border-radius: 8px;
+      border-radius: var(--radius);
       font-size: 16px;
       font-weight: 600;
       cursor: pointer;
@@ -498,7 +582,7 @@
       align-items: center;
       justify-content: center;
       font-weight: 600;
-      transition: all 0.3s ease;
+      transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
       border: 2px solid #45475a;
     }
 
@@ -548,7 +632,7 @@
       right: 0;
       bottom: 0;
       background-color: var(--input-border);
-      transition: 0.3s;
+      transition: background-color 0.2s ease;
       border-radius: 24px;
     }
 
@@ -560,7 +644,7 @@
       left: 3px;
       top: 3px;
       background-color: white;
-      transition: 0.3s;
+      transition: transform 0.2s ease;
       border-radius: 50%;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     }
@@ -2058,9 +2142,6 @@
       </div>
     </div>
 
-    <!-- QR Code Library -->
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-
     <script>
       // Global data
       let channelsData = null;
@@ -2069,16 +2150,79 @@
       let maxLogLines = 500;
       let statusRefreshInterval = 60000; // Default 60 seconds
       let statusIntervalId = null;
+      let logRefreshIntervalId = null;
+      let statusRefreshInFlight = false;
       let faceAuthUrl = null;
 
       // Global config data for access across functions
       window.configData = {
         enable_lol_monitor: false,
-        riot_api_key: ''
+        riot_api_key: '',
+        holodex_api_key: '',
+        bilibili: {},
+        youtube: {},
+        twitch: {}
       };
 
-      // Auto refresh logs every 2 seconds
-      setInterval(refreshLogs, 2000);
+      function mergeConfigData(config) {
+        window.configData = {
+          ...window.configData,
+          ...config,
+          enable_lol_monitor: config.enable_lol_monitor || false,
+          riot_api_key: config.riot_api_key || '',
+          holodex_api_key: config.holodex_api_key || '',
+          bilibili: config.bilibili || window.configData.bilibili || {},
+          youtube: config.youtube || window.configData.youtube || {},
+          twitch: config.twitch || window.configData.twitch || {}
+        };
+        return window.configData;
+      }
+
+      function updateMonitorToggleStates(config = window.configData) {
+        const youtubeToggle = document.getElementById('youtube-monitor-toggle');
+        const twitchToggle = document.getElementById('twitch-monitor-toggle');
+
+        if (youtubeToggle) {
+          youtubeToggle.checked = config.youtube?.enable_monitor !== false;
+        }
+        if (twitchToggle) {
+          twitchToggle.checked = config.twitch?.enable_monitor !== false;
+        }
+      }
+
+      function updateDanmakuCommandToggle(enabled) {
+        const toggle = document.getElementById('bili-danmaku-command-toggle');
+        if (toggle && typeof enabled === 'boolean') {
+          toggle.checked = enabled;
+        }
+      }
+
+      function isDashboardVisible() {
+        const mainPage = document.getElementById('main-page');
+        return document.visibilityState === 'visible' && mainPage && !mainPage.classList.contains('hidden');
+      }
+
+      function startLogRefresh() {
+        if (logRefreshIntervalId) {
+          clearInterval(logRefreshIntervalId);
+        }
+
+        logRefreshIntervalId = setInterval(() => {
+          if (isDashboardVisible()) {
+            refreshLogs();
+          }
+        }, 5000);
+      }
+
+      // Refresh logs only while the dashboard is visible.
+      startLogRefresh();
+
+      document.addEventListener('visibilitychange', () => {
+        if (isDashboardVisible()) {
+          refreshLogs();
+          refreshStatus();
+        }
+      });
 
       // Load config and set up status refresh interval
       async function initStatusRefresh() {
@@ -2087,12 +2231,10 @@
           if (response.ok) {
             const config = await response.json();
 
-            // Store config globally
-            window.configData = {
-              enable_lol_monitor: config.enable_lol_monitor || false,
-              riot_api_key: config.riot_api_key || '',
-              holodex_api_key: config.holodex_api_key || ''
-            };
+            // Store config globally and apply config-driven controls once.
+            mergeConfigData(config);
+            updateMonitorToggleStates(config);
+            updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
             // Show/hide Holodex sections based on API key configuration
             const holodexSection = document.getElementById('holodex-section');
@@ -2117,7 +2259,7 @@
               console.log('Status refresh interval set to', config.interval, 'seconds');
             }
 
-            console.log('LOL Monitor enabled:', window.configData.enable_lol_monitor);
+            console.log('LOL Monitor enabled:', config.enable_lol_monitor || false);
             console.log('Holodex API configured:', !!config.holodex_api_key);
           }
         } catch (error) {
@@ -2128,13 +2270,15 @@
         if (statusIntervalId) {
           clearInterval(statusIntervalId);
         }
-        statusIntervalId = setInterval(refreshStatus, statusRefreshInterval);
+        statusIntervalId = setInterval(() => {
+          if (isDashboardVisible()) {
+            refreshStatus();
+          }
+        }, statusRefreshInterval);
 
         // Initial refresh
         refreshStatus();
 
-        // Load monitor toggle states
-        loadMonitorToggleStates();
       }
 
       function toggleChannelManagement() {
@@ -2601,6 +2745,7 @@
         try {
           const response = await fetch('/api/config');
           const config = await response.json();
+          mergeConfigData(config);
 
           // Load basic settings
           document.getElementById('config-interval').value = config.interval || 30;
@@ -2638,8 +2783,8 @@
           // Load banned keywords
           await loadBannedKeywords();
 
-          // Load monitor toggle states
-          await loadMonitorToggleStates();
+          // Load monitor toggle states from the config payload already fetched above.
+          updateMonitorToggleStates(config);
 
         } catch (error) {
           console.error('Failed to load system config:', error);
@@ -2647,14 +2792,14 @@
         }
       }
 
-      async function loadMonitorToggleStates() {
+      async function loadMonitorToggleStates(config = window.configData) {
         try {
-          const response = await fetch('/api/config');
-          const config = await response.json();
+          if (typeof config.youtube?.enable_monitor !== 'boolean' || typeof config.twitch?.enable_monitor !== 'boolean') {
+            const response = await fetch('/api/config');
+            config = mergeConfigData(await response.json());
+          }
 
-          // Set toggle states
-          document.getElementById('youtube-monitor-toggle').checked = config.youtube?.enable_monitor !== false;
-          document.getElementById('twitch-monitor-toggle').checked = config.twitch?.enable_monitor !== false;
+          updateMonitorToggleStates(config);
         } catch (error) {
           console.error('Failed to load monitor toggle states:', error);
         }
@@ -2675,15 +2820,14 @@
       }
 
       // Danmaku Command Toggle Functions
-      async function loadDanmakuCommandState() {
+      async function loadDanmakuCommandState(config = window.configData) {
         try {
-          const response = await fetch('/api/config');
-          const config = await response.json();
-
-          const toggle = document.getElementById('bili-danmaku-command-toggle');
-          if (toggle) {
-            toggle.checked = config.bilibili?.enable_danmaku_command !== false;
+          if (!config.bilibili || typeof config.bilibili.enable_danmaku_command !== 'boolean') {
+            const response = await fetch('/api/config');
+            config = mergeConfigData(await response.json());
           }
+
+          updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
         } catch (error) {
           console.error('Failed to load danmaku command state:', error);
         }
@@ -2704,6 +2848,10 @@
 
           const result = await response.json();
           if (result.success) {
+            window.configData.bilibili = {
+              ...(window.configData.bilibili || {}),
+              enable_danmaku_command: enabled
+            };
             showNotification(enabled ? '弹幕指令已启用' : '弹幕指令已禁用', 'success');
           } else {
             // Revert toggle if save failed
@@ -2825,6 +2973,26 @@
           const result = await response.json();
 
           if (result.success) {
+            mergeConfigData({
+              ...config,
+              bilibili: {
+                ...(window.configData.bilibili || {}),
+                enable_danmaku_command: config.enable_danmaku_command
+              },
+              youtube: {
+                ...(window.configData.youtube || {}),
+                proxy: config.youtube_proxy,
+                cookies_from_browser: config.youtube_cookies_from_browser,
+                cookies_file: config.youtube_cookies_file,
+                deno_path: config.youtube_deno_path
+              },
+              twitch: {
+                ...(window.configData.twitch || {}),
+                proxy: config.twitch_proxy,
+                proxy_region: config.twitch_proxy_region
+              }
+            });
+            updateDanmakuCommandToggle(config.enable_danmaku_command);
             // Save banned keywords separately
             await saveBannedKeywords();
             showNotification('配置保存成功', 'success');
@@ -3600,6 +3768,10 @@
 
           const result = await response.json();
           if (result.success) {
+            window.configData.youtube = {
+              ...(window.configData.youtube || {}),
+              enable_monitor: enabled
+            };
             showNotification(result.message, 'success');
             // Refresh status to show updated state
             await refreshStatus();
@@ -3630,6 +3802,10 @@
 
           const result = await response.json();
           if (result.success) {
+            window.configData.twitch = {
+              ...(window.configData.twitch || {}),
+              enable_monitor: enabled
+            };
             showNotification(result.message, 'success');
             // Refresh status to show updated state
             await refreshStatus();
@@ -3711,6 +3887,12 @@
       }
 
       async function refreshStatus() {
+        if (statusRefreshInFlight) {
+          return;
+        }
+
+        statusRefreshInFlight = true;
+
         try {
           const response = await fetch('/api/status');
 
@@ -3720,15 +3902,7 @@
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
 
-          const text = await response.text();
-          console.log('API Response Text:', text); // Debug log
-
-          if (!text) {
-            throw new Error('Empty response from server');
-          }
-
-          const data = JSON.parse(text);
-          console.log('Parsed Data:', data); // Debug log
+          const data = await response.json();
 
           if (!data.success) {
             // API returned an error
@@ -3764,8 +3938,7 @@
               qualityRow.style.display = 'none';
             }
 
-            // Load danmaku command state
-            loadDanmakuCommandState();
+            updateDanmakuCommandToggle(bili.enable_danmaku_command);
 
             // Update YouTube status
             if (data.data.youtube) {
@@ -3847,6 +4020,8 @@
           document.getElementById('bili-title').textContent = '配置错误';
           document.getElementById('yt-channel-name').textContent = '配置错误';
           document.getElementById('tw-channel-name').textContent = '配置错误';
+        } finally {
+          statusRefreshInFlight = false;
         }
       }
 
@@ -4588,15 +4763,15 @@
         }
 
         try {
-          // Load channels
-          const channelsResponse = await fetch('/api/channels');
-          channelsData = await channelsResponse.json();
-          console.log('Channels loaded:', channelsData);
+          const [channelsResponse, areasResponse] = await Promise.all([
+            fetch('/api/channels'),
+            fetch('/api/areas')
+          ]);
 
-          // Load areas
-          const areasResponse = await fetch('/api/areas');
-          areasData = await areasResponse.json();
-          console.log('Areas loaded:', areasData);
+          [channelsData, areasData] = await Promise.all([
+            channelsResponse.json(),
+            areasResponse.json()
+          ]);
 
           // Populate area select
           const areaSelect = document.getElementById('area-select');
@@ -4611,8 +4786,6 @@
           }
 
           if (areasList.length > 0) {
-            console.log('Populating areas, count:', areasList.length);
-
             // Sort areas: 其他单机 (235) first, then others
             const sortedAreas = [...areasList].sort((a, b) => {
               if (a.id === 235) return -1;
@@ -6612,7 +6785,7 @@
 
       .crop-modal-content {
         background: var(--card-bg);
-        border-radius: 12px;
+        border-radius: var(--radius);
         padding: 30px;
         max-width: 900px;
         width: 100%;

@@ -54,7 +54,13 @@ anyhow = "1.0"
 # Web UI dependencies
 axum = "0.8"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["fs", "cors"] }
+tower-http = { version = "0.5", features = [
+  "compression-br",
+  "compression-gzip",
+  "cors",
+  "fs",
+  "set-header",
+] }
 mime_guess = "2.0"
 base64 = "0.22"
 # Windows dependencies

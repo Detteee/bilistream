@@ -60,6 +60,7 @@ pub fn get_status_cache() -> Option<StatusData> {
 pub async fn refresh_status_cache_config() {
     if let Ok(cfg) = load_config().await {
         let mut cached_status = get_status_cache().unwrap_or_default();
+        cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
         // Update YouTube status with fresh config (preserve live status)
         if !cfg.youtube.channel_id.is_empty() {
@@ -163,6 +164,7 @@ pub struct BiliStatus {
     pub area_name: String,
     pub stream_quality: Option<String>,
     pub stream_speed: Option<f32>,
+    pub enable_danmaku_command: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -262,8 +264,16 @@ pub async fn get_status() -> impl IntoResponse {
     // This avoids expensive yt-dlp/streamlink calls on every refresh
     // Note: Individual platform refresh buttons can trigger fresh fetches if needed
     let cached_status = get_status_cache();
-    let youtube_status = cached_status.as_ref().and_then(|c| c.youtube.clone());
-    let twitch_status = cached_status.as_ref().and_then(|c| c.twitch.clone());
+    let youtube_status = if cfg.youtube.enable_monitor {
+        cached_status.as_ref().and_then(|c| c.youtube.clone())
+    } else {
+        None
+    };
+    let twitch_status = if cfg.twitch.enable_monitor {
+        cached_status.as_ref().and_then(|c| c.twitch.clone())
+    } else {
+        None
+    };
 
     let status = StatusData {
         bilibili: BiliStatus {
@@ -273,6 +283,7 @@ pub async fn get_status() -> impl IntoResponse {
             area_name: bili_area_name,
             stream_quality,
             stream_speed,
+            enable_danmaku_command: cfg.bililive.enable_danmaku_command,
         },
         youtube: youtube_status,
         twitch: twitch_status,
@@ -1878,6 +1889,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
                 area_name: String::new(),
                 stream_quality: None,
                 stream_speed: None,
+                enable_danmaku_command: cfg.bililive.enable_danmaku_command,
             },
             youtube: None,
             twitch: None,
@@ -1951,6 +1963,7 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
                 area_name: String::new(),
                 stream_quality: None,
                 stream_speed: None,
+                enable_danmaku_command: cfg.bililive.enable_danmaku_command,
             },
             youtube: None,
             twitch: None,
