@@ -17,6 +17,18 @@ fn configure_no_window(cmd: &mut Command) {
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
 }
 
+// Stuck-detection thresholds for live HLS restreaming.
+const LOW_SPEED_THRESHOLD: f32 = 0.98;
+const LOW_SPEED_TIMEOUT_SECS: u32 = 60;
+const STREAM_TIME_FROZEN_SECS: u32 = 10;
+
+#[derive(Debug)]
+enum StuckReason {
+    NoStats { elapsed_secs: u32 },
+    StreamTimeFrozen { elapsed_secs: u32 },
+    LowSpeed { elapsed_secs: u32 },
+}
+
 // Global process supervisor
 lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
@@ -28,7 +40,7 @@ lazy_static::lazy_static! {
     static ref LAST_STREAM_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when stream time last changed (Unix timestamp in seconds)
     static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    // Track when speed first dropped below 0.998 (Unix timestamp in seconds, 0 = speed is OK)
+    // Track when speed first dropped below LOW_SPEED_THRESHOLD (0 = speed is OK)
     static ref LOW_SPEED_SINCE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 }
 
@@ -228,13 +240,13 @@ fn update_stream_time(stream_time_secs: u32) {
     }
 }
 
-// Update low-speed tracking: record when speed first drops below 0.998, clear when it recovers
+// Update low-speed tracking: record when speed first drops below threshold, clear when it recovers
 fn update_speed_tracking(speed: f32) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as u32;
-    if speed < 0.998 {
+    if speed < LOW_SPEED_THRESHOLD {
         // Only set the timestamp if not already tracking a low-speed period
         LOW_SPEED_SINCE
             .compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed)
@@ -245,12 +257,12 @@ fn update_speed_tracking(speed: f32) {
 }
 
 // Check if ffmpeg has made progress recently (within timeout seconds)
-// This checks both: 1) if stats are being reported, 2) if stream time is progressing
-pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
+// This checks: 1) stats updates, 2) stream time progression, 3) sustained low speed
+fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
     let last_progress = LAST_PROGRESS_TIME.load(Ordering::Relaxed);
     if last_progress == 0 {
         // No progress recorded yet, not stuck
-        return false;
+        return None;
     }
 
     let now = std::time::SystemTime::now()
@@ -261,7 +273,9 @@ pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
     // Check if we're getting stats updates
     let stats_elapsed = now.saturating_sub(last_progress);
     if stats_elapsed > timeout_secs as u32 {
-        return true; // No stats for too long
+        return Some(StuckReason::NoStats {
+            elapsed_secs: stats_elapsed,
+        });
     }
 
     // Check if stream time is progressing (only after initial startup)
@@ -269,30 +283,28 @@ pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
     if last_stream_update > 0 {
         let stream_time_elapsed = now.saturating_sub(last_stream_update);
 
-        // If stream time hasn't progressed for 10 seconds, stream has likely ended
-        if stream_time_elapsed > 10 {
-            tracing::warn!(
-                "Stream time frozen for {} seconds, stream likely ended",
-                stream_time_elapsed
-            );
-            return true;
+        if stream_time_elapsed > STREAM_TIME_FROZEN_SECS {
+            return Some(StuckReason::StreamTimeFrozen {
+                elapsed_secs: stream_time_elapsed,
+            });
         }
     }
 
-    // Check if speed has been below 0.995 for more than 30 seconds
     let low_speed_since = LOW_SPEED_SINCE.load(Ordering::Relaxed);
     if low_speed_since > 0 {
         let low_speed_elapsed = now.saturating_sub(low_speed_since);
-        if low_speed_elapsed > 30 {
-            tracing::warn!(
-                "ffmpeg speed below 0.995 for {} seconds, deemed stuck",
-                low_speed_elapsed
-            );
-            return true;
+        if low_speed_elapsed > LOW_SPEED_TIMEOUT_SECS {
+            return Some(StuckReason::LowSpeed {
+                elapsed_secs: low_speed_elapsed,
+            });
         }
     }
 
-    false
+    None
+}
+
+pub async fn is_ffmpeg_stuck(timeout_secs: u64) -> bool {
+    check_ffmpeg_stuck(timeout_secs).is_some()
 }
 
 /// Stops the supervised ffmpeg process
@@ -473,12 +485,12 @@ pub async fn ffmpeg(
     cmd.arg("-multiple_requests")
         .arg("1") // Use multiple HTTP requests for segments
         .arg("-thread_queue_size")
-        .arg("4096")
+        .arg("2048")
         .arg("-re") // Read input at native frame rate
-        .arg("-analyzeduration")
-        .arg("5000000") // 5 seconds
-        .arg("-probesize")
-        .arg("5000000")
+        // .arg("-analyzeduration")
+        // .arg("4000000") // 4 seconds
+        // .arg("-probesize")
+        // .arg("4000000")
         .arg("-fflags")
         .arg("+genpts") // Regenerate PTS at HLS segment boundaries
         // Input file
@@ -502,25 +514,25 @@ pub async fn ffmpeg(
     }
 
     cmd
-        .arg("-copyts") // Don't copy raw HLS timestamps — genpts handles pacing
-        .arg("-start_at_zero") // Start timestamps at zero
-        .arg("-avoid_negative_ts")
-        .arg("make_zero") // Shift timestamps to avoid negative values at segment joins
-        .arg("-max_interleave_delta")
-        .arg("0") // Reduce muxing delay for lower latency
-        .arg("-rtmp_buffer")
-        .arg("5000k")
-        .arg("-bufsize")
-        .arg("5000k")
-        .arg("-max_muxing_queue_size")
-        .arg("8192") // Limit muxing queue to prevent memory issues
-        .arg("-rtmp_live")
-        .arg("1")
+        // .arg("-copyts") // Don't copy raw HLS timestamps — genpts handles pacing
+        // .arg("-start_at_zero") // Start timestamps at zero
+        // .arg("-avoid_negative_ts")
+        // .arg("make_zero") // Shift timestamps to avoid negative values at segment joins
+        // .arg("-max_interleave_delta")
+        // .arg("0") // Reduce muxing delay for lower latency
+        // .arg("-rtmp_buffer")
+        // .arg("5000k")
+        // .arg("-bufsize")
+        // .arg("5000k")
+        // .arg("-max_muxing_queue_size")
+        // .arg("8192") // Limit muxing queue to prevent memory issues
+        // .arg("-rtmp_live")
+        // .arg("1")
         // FLV/RTMP output
         .arg("-f")
         .arg("flv")
-        .arg("-flvflags")
-        .arg("no_duration_filesize") // Skip duration/filesize metadata for live streaming
+        // .arg("-flvflags")
+        // .arg("no_duration_filesize") // Skip duration/filesize metadata for live streaming
         .arg(rtmp_url_key)
         .arg("-stats")
         .arg("-loglevel")
@@ -707,12 +719,28 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
             break;
         }
 
-        // Check if ffmpeg is stuck (no progress for timeout_secs)
-        if is_ffmpeg_stuck(timeout_secs).await {
-            tracing::error!(
-                "⚠️ ffmpeg appears stuck (no progress for {} seconds), killing process",
-                timeout_secs
-            );
+        if let Some(reason) = check_ffmpeg_stuck(timeout_secs) {
+            match reason {
+                StuckReason::NoStats { elapsed_secs } => {
+                    tracing::error!(
+                        "⚠️ ffmpeg appears stuck (no stats for {} seconds), killing process",
+                        elapsed_secs
+                    );
+                }
+                StuckReason::StreamTimeFrozen { elapsed_secs } => {
+                    tracing::error!(
+                        "⚠️ ffmpeg appears stuck (stream time frozen for {} seconds), killing process",
+                        elapsed_secs
+                    );
+                }
+                StuckReason::LowSpeed { elapsed_secs } => {
+                    tracing::error!(
+                        "⚠️ ffmpeg appears stuck (speed below {} for {} seconds), killing process",
+                        LOW_SPEED_THRESHOLD,
+                        elapsed_secs
+                    );
+                }
+            }
             stop_ffmpeg_internal(false).await;
             break;
         }
