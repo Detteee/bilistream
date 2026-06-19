@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -21,6 +22,12 @@ fn configure_no_window(cmd: &mut Command) {
 const LOW_SPEED_THRESHOLD: f32 = 0.98;
 const LOW_SPEED_TIMEOUT_SECS: u32 = 60;
 const STREAM_TIME_FROZEN_SECS: u32 = 10;
+const STARTUP_NO_STATS_TIMEOUT_SECS: u64 = 30;
+
+// Real input-to-output timeshift cache for bursty 2s HLS segments.
+const HLS_CACHE_LATENCY_SECS: u64 = 8;
+const HLS_CACHE_SEGMENT_SECS: u32 = 2;
+const HLS_CACHE_LIST_SIZE: u32 = 30;
 
 #[derive(Debug)]
 enum StuckReason {
@@ -54,8 +61,9 @@ static MANUAL_RESTART: AtomicBool = AtomicBool::new(false);
 
 // Represents a managed ffmpeg process
 pub struct FfmpegProcess {
-    child: Child,
+    children: Vec<Child>,
     pid: Option<u32>,
+    cache_dir: Option<PathBuf>,
 }
 
 impl FfmpegProcess {
@@ -64,11 +72,24 @@ impl FfmpegProcess {
     }
 
     pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.child.wait().await
+        if let Some(child) = self.children.first_mut() {
+            child.wait().await
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no ffmpeg child process",
+            ))
+        }
     }
 
     pub async fn kill(&mut self) -> std::io::Result<()> {
-        self.child.kill().await
+        let mut result = Ok(());
+        for child in &mut self.children {
+            if let Err(e) = child.kill().await {
+                result = Err(e);
+            }
+        }
+        result
     }
 }
 
@@ -322,8 +343,9 @@ async fn stop_ffmpeg_internal(manual: bool) {
     if let Some(mut process) = supervisor.take() {
         let pid = process.pid();
         if let Some(pid_value) = pid {
-            tracing::info!("🛑 Stopping ffmpeg process (PID: {})", pid_value);
+            tracing::info!("🛑 Stopping ffmpeg process group (main PID: {})", pid_value);
         }
+        let cache_dir = process.cache_dir.clone();
 
         // Try tokio kill first
         match process.kill().await {
@@ -383,6 +405,15 @@ async fn stop_ffmpeg_internal(manual: bool) {
 
         // Wait a bit for process to actually terminate
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        if let Some(cache_dir) = cache_dir {
+            if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
+                tracing::warn!(
+                    "⚠️ Failed to remove HLS cache directory {}: {}",
+                    cache_dir.display(),
+                    e
+                );
+            }
+        }
         tracing::info!("✅ ffmpeg process stopped");
     } else {
         tracing::info!("No ffmpeg process to stop");
@@ -454,6 +485,106 @@ pub fn extract_stats_from_time(line: &str) -> Option<String> {
     line.find("time=").map(|pos| line[pos..].to_string())
 }
 
+fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let cache_dir = std::env::temp_dir().join(format!(
+        "bilistream-hls-cache-{}-{}",
+        std::process::id(),
+        now_ms
+    ));
+    std::fs::create_dir_all(&cache_dir)?;
+    Ok(cache_dir)
+}
+
+fn spawn_ffmpeg_stderr_monitor(
+    stderr: tokio::process::ChildStderr,
+    log_level: String,
+    process_name: &'static str,
+) {
+    tokio::spawn(async move {
+        use std::io::Write;
+        use tokio::io::AsyncReadExt;
+
+        let mut stderr = stderr;
+        let mut buffer = vec![0u8; 8192];
+        let mut line_buffer = String::new();
+
+        while let Ok(n) = stderr.read(&mut buffer).await {
+            if n == 0 {
+                break;
+            }
+
+            let chunk = String::from_utf8_lossy(&buffer[..n]);
+
+            for ch in chunk.chars() {
+                if ch == '\r' {
+                    // Carriage return - stats update
+                    if line_buffer.starts_with("frame=") || line_buffer.contains("fps=") {
+                        // Extract only fps, time, bitrate, speed
+                        if let Some((compact, speed, stream_time)) =
+                            extract_compact_stats(&line_buffer)
+                        {
+                            eprint!("\r{:<50}", compact);
+                            let _ = std::io::stderr().flush();
+
+                            // Update global speed if available (lock-free atomic write)
+                            if let Some(s) = speed {
+                                FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                update_speed_tracking(s);
+                            }
+                            // Update stream time tracking
+                            if let Some(t) = stream_time {
+                                update_stream_time(t);
+                            }
+                            // Update progress time whenever we get stats
+                            update_progress_time();
+                        }
+                    }
+                    line_buffer.clear();
+                } else if ch == '\n' {
+                    // Newline - complete message
+                    if !line_buffer.is_empty() {
+                        if line_buffer.contains("error") || line_buffer.contains("Error") {
+                            tracing::error!("{}: {}", process_name, line_buffer);
+                        } else if line_buffer.contains("warning") || line_buffer.contains("Warning")
+                        {
+                            tracing::warn!("{}: {}", process_name, line_buffer);
+                        } else if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
+                        {
+                            // Final stats line with newline
+                            if let Some((compact, speed, stream_time)) =
+                                extract_compact_stats(&line_buffer)
+                            {
+                                eprintln!("\r{:<50}", compact);
+
+                                // Update global speed if available (lock-free atomic write)
+                                if let Some(s) = speed {
+                                    FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                    update_speed_tracking(s);
+                                }
+                                // Update stream time tracking
+                                if let Some(t) = stream_time {
+                                    update_stream_time(t);
+                                }
+                                // Update progress time whenever we get stats
+                                update_progress_time();
+                            }
+                        } else if log_level == "debug" || log_level == "info" {
+                            tracing::debug!("{}: {}", process_name, line_buffer);
+                        }
+                    }
+                    line_buffer.clear();
+                } else {
+                    line_buffer.push(ch);
+                }
+            }
+        }
+    });
+}
+
 /// Spawns and supervises an ffmpeg process with output monitoring
 pub async fn ffmpeg(
     rtmp_url: String,
@@ -469,183 +600,183 @@ pub async fn ffmpeg(
         return;
     }
 
+    let cache_dir = match create_hls_cache_dir() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!("❌ Failed to create HLS cache directory: {}", e);
+            return;
+        }
+    };
+    let playlist_path = cache_dir.join("index.m3u8");
+    let segment_pattern = cache_dir.join("segment_%06d.ts");
     let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
+    let ffmpeg_cmd = get_ffmpeg_command();
 
-    let mut cmd = Command::new(get_ffmpeg_command());
+    tracing::info!(
+        "⏱️ HLS cache: {}s input-to-output latency ({})",
+        HLS_CACHE_LATENCY_SECS,
+        playlist_path.display()
+    );
 
-    // Hide console window on Windows
+    let mut cache_cmd = Command::new(&ffmpeg_cmd);
     #[cfg(target_os = "windows")]
-    configure_no_window(&mut cmd);
+    configure_no_window(&mut cache_cmd);
 
-    // Network optimization
-    if let Some(proxy) = proxy {
-        cmd.arg("-http_proxy").arg(proxy);
+    if let Some(proxy_url) = proxy.clone() {
+        cache_cmd.arg("-http_proxy").arg(proxy_url);
     }
 
-    cmd.arg("-multiple_requests")
+    cache_cmd
+        .arg("-nostdin")
+        .arg("-stats")
+        .arg("-loglevel")
+        .arg("warning")
+        .arg("-multiple_requests")
         .arg("1") // Use multiple HTTP requests for segments
         .arg("-thread_queue_size")
         .arg("2048")
-        .arg("-re") // Read input at native frame rate
-        // .arg("-analyzeduration")
-        // .arg("4000000") // 4 seconds
-        // .arg("-probesize")
-        // .arg("4000000")
+        .arg("-rtbufsize")
+        .arg("100M") // Larger realtime input buffer for segment bursts
         .arg("-fflags")
         .arg("+genpts") // Regenerate PTS at HLS segment boundaries
-        // Input file
         .arg("-i")
-        .arg(m3u8_url);
-
-    // Apply crop filter if configured
-    if let Some((width, height, x, y)) = crop {
-        tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
-        cmd.arg("-vf")
-            .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
-            .arg("-c:v")
-            .arg("libx264") // Re-encode video when cropping
-            .arg("-preset")
-            .arg("veryfast") // Fast encoding preset
-            .arg("-c:a")
-            .arg("copy"); // Keep audio as-is
-    } else {
-        // Output options - stream copy (no re-encoding)
-        cmd.arg("-c").arg("copy"); // Stream copy without re-encoding
-    }
-
-    cmd
-        // .arg("-copyts") // Don't copy raw HLS timestamps — genpts handles pacing
-        // .arg("-start_at_zero") // Start timestamps at zero
-        // .arg("-avoid_negative_ts")
-        // .arg("make_zero") // Shift timestamps to avoid negative values at segment joins
-        // .arg("-max_interleave_delta")
-        // .arg("0") // Reduce muxing delay for lower latency
-        // .arg("-rtmp_buffer")
-        // .arg("5000k")
-        // .arg("-bufsize")
-        // .arg("5000k")
-        // .arg("-max_muxing_queue_size")
-        // .arg("8192") // Limit muxing queue to prevent memory issues
-        // .arg("-rtmp_live")
-        // .arg("1")
-        // FLV/RTMP output
+        .arg(m3u8_url)
+        .arg("-c")
+        .arg("copy")
         .arg("-f")
-        .arg("flv")
-        // .arg("-flvflags")
-        // .arg("no_duration_filesize") // Skip duration/filesize metadata for live streaming
-        .arg(rtmp_url_key)
-        .arg("-stats")
-        .arg("-loglevel")
-        .arg(&log_level);
+        .arg("hls")
+        .arg("-hls_time")
+        .arg(HLS_CACHE_SEGMENT_SECS.to_string())
+        .arg("-hls_list_size")
+        .arg(HLS_CACHE_LIST_SIZE.to_string())
+        .arg("-hls_delete_threshold")
+        .arg("10")
+        .arg("-hls_flags")
+        .arg("delete_segments+append_list+omit_endlist")
+        .arg("-hls_segment_filename")
+        .arg(segment_pattern)
+        .arg(&playlist_path);
 
-    // Capture stdout and stderr
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cache_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    match cmd.spawn() {
-        Ok(mut child) => {
-            let pid = child.id();
-            tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
+    match cache_cmd.spawn() {
+        Ok(mut cache_child) => {
+            let cache_pid = cache_child.id();
+            tracing::info!("🚀 ffmpeg HLS cache writer started (PID: {:?})", cache_pid);
 
-            // Set high priority for stable streaming
-            if let Some(pid_value) = pid {
+            if let Some(pid_value) = cache_pid {
                 set_high_priority(pid_value);
             }
 
-            // Capture stderr for monitoring
-            if let Some(stderr) = child.stderr.take() {
-                let log_level_clone = log_level.clone();
-                tokio::spawn(async move {
-                    use std::io::Write;
-                    use tokio::io::AsyncReadExt;
-
-                    let mut stderr = stderr;
-                    let mut buffer = vec![0u8; 8192];
-                    let mut line_buffer = String::new();
-
-                    while let Ok(n) = stderr.read(&mut buffer).await {
-                        if n == 0 {
-                            break;
-                        }
-
-                        let chunk = String::from_utf8_lossy(&buffer[..n]);
-
-                        for ch in chunk.chars() {
-                            if ch == '\r' {
-                                // Carriage return - stats update
-                                if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
-                                {
-                                    // Extract only fps, time, bitrate, speed
-                                    if let Some((compact, speed, stream_time)) =
-                                        extract_compact_stats(&line_buffer)
-                                    {
-                                        eprint!("\r{:<50}", compact);
-                                        let _ = std::io::stderr().flush();
-
-                                        // Update global speed if available (lock-free atomic write)
-                                        if let Some(s) = speed {
-                                            FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                            update_speed_tracking(s);
-                                        }
-                                        // Update stream time tracking
-                                        if let Some(t) = stream_time {
-                                            update_stream_time(t);
-                                        }
-                                        // Update progress time whenever we get stats
-                                        update_progress_time();
-                                    }
-                                }
-                                line_buffer.clear();
-                            } else if ch == '\n' {
-                                // Newline - complete message
-                                if !line_buffer.is_empty() {
-                                    if line_buffer.contains("error")
-                                        || line_buffer.contains("Error")
-                                    {
-                                        tracing::error!("ffmpeg: {}", line_buffer);
-                                    } else if line_buffer.contains("warning")
-                                        || line_buffer.contains("Warning")
-                                    {
-                                        tracing::warn!("ffmpeg: {}", line_buffer);
-                                    } else if line_buffer.starts_with("frame=")
-                                        || line_buffer.contains("fps=")
-                                    {
-                                        // Final stats line with newline
-                                        if let Some((compact, speed, stream_time)) =
-                                            extract_compact_stats(&line_buffer)
-                                        {
-                                            eprintln!("\r{:<50}", compact);
-
-                                            // Update global speed if available (lock-free atomic write)
-                                            if let Some(s) = speed {
-                                                FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                                update_speed_tracking(s);
-                                            }
-                                            // Update stream time tracking
-                                            if let Some(t) = stream_time {
-                                                update_stream_time(t);
-                                            }
-                                            // Update progress time whenever we get stats
-                                            update_progress_time();
-                                        }
-                                    } else if log_level_clone == "debug"
-                                        || log_level_clone == "info"
-                                    {
-                                        tracing::debug!("ffmpeg: {}", line_buffer);
-                                    }
-                                }
-                                line_buffer.clear();
-                            } else {
-                                line_buffer.push(ch);
-                            }
-                        }
-                    }
-                });
+            if let Some(stderr) = cache_child.stderr.take() {
+                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg cache writer");
             }
 
-            // Store the process in supervisor
-            let process = FfmpegProcess { child, pid };
+            let process = FfmpegProcess {
+                children: vec![cache_child],
+                pid: cache_pid,
+                cache_dir: Some(cache_dir.clone()),
+            };
             let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
+            drop(supervisor);
+
+            let reader_playlist_path = playlist_path.clone();
+            let reader_ffmpeg_cmd = ffmpeg_cmd.clone();
+            let reader_log_level = log_level.clone();
+            let reader_crop = crop;
+            let reader_rtmp_url_key = rtmp_url_key.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(HLS_CACHE_LATENCY_SECS)).await;
+
+                let mut waited_ms = 0;
+                while tokio::fs::metadata(&reader_playlist_path).await.is_err() && waited_ms < 30000
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    waited_ms += 500;
+                }
+
+                if tokio::fs::metadata(&reader_playlist_path).await.is_err() {
+                    tracing::error!(
+                        "❌ HLS cache playlist was not created after {}s: {}",
+                        HLS_CACHE_LATENCY_SECS + 30,
+                        reader_playlist_path.display()
+                    );
+                    stop_ffmpeg_internal(false).await;
+                    return;
+                }
+
+                let mut reader_cmd = Command::new(reader_ffmpeg_cmd);
+                #[cfg(target_os = "windows")]
+                configure_no_window(&mut reader_cmd);
+
+                reader_cmd
+                    .arg("-nostdin")
+                    .arg("-stats")
+                    .arg("-loglevel")
+                    .arg(&reader_log_level)
+                    .arg("-re") // Pace RTMP output from the delayed local HLS cache
+                    .arg("-fflags")
+                    .arg("+genpts")
+                    // This is the local cache playlist, not the remote source.
+                    .arg("-live_start_index")
+                    .arg("0")
+                    .arg("-i")
+                    .arg(&reader_playlist_path);
+
+                if let Some((width, height, x, y)) = reader_crop {
+                    tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
+                    reader_cmd
+                        .arg("-vf")
+                        .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
+                        .arg("-c:v")
+                        .arg("libx264")
+                        .arg("-preset")
+                        .arg("veryfast")
+                        .arg("-c:a")
+                        .arg("copy");
+                } else {
+                    reader_cmd.arg("-c").arg("copy");
+                }
+
+                reader_cmd
+                    .arg("-max_muxing_queue_size")
+                    .arg("8192")
+                    .arg("-f")
+                    .arg("flv")
+                    .arg(reader_rtmp_url_key)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                match reader_cmd.spawn() {
+                    Ok(mut reader_child) => {
+                        let reader_pid = reader_child.id();
+                        tracing::info!(
+                            "🚀 ffmpeg delayed RTMP reader started (PID: {:?})",
+                            reader_pid
+                        );
+                        if let Some(pid_value) = reader_pid {
+                            set_high_priority(pid_value);
+                        }
+                        if let Some(stderr) = reader_child.stderr.take() {
+                            spawn_ffmpeg_stderr_monitor(
+                                stderr,
+                                reader_log_level,
+                                "ffmpeg delayed reader",
+                            );
+                        }
+
+                        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+                        if let Some(process) = supervisor.as_mut() {
+                            process.children.push(reader_child);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("❌ Failed to spawn delayed RTMP ffmpeg: {}", e);
+                        stop_ffmpeg_internal(false).await;
+                    }
+                }
+            });
 
             // Reset all tracking state when ffmpeg starts
             update_progress_time();
@@ -654,9 +785,9 @@ pub async fn ffmpeg(
             FFMPEG_SPEED.store(0, Ordering::Relaxed);
             LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 
-            // Spawn timeout monitoring task (15 secs timeout)
+            // Allow delayed HLS startup/probing before treating missing stats as stuck.
             tokio::spawn(async {
-                monitor_ffmpeg_timeout(15).await;
+                monitor_ffmpeg_timeout(STARTUP_NO_STATS_TIMEOUT_SECS).await;
             });
 
             // tracing::info!("✅ ffmpeg process supervision started");
@@ -676,33 +807,32 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
 
         if let Some(process) = supervisor.as_mut() {
             // Check if process has exited without blocking
-            match process.child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process has exited, remove it from supervisor
-                    drop(supervisor);
-                    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-                    supervisor.take();
+            for child in &mut process.children {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        if let Some(code) = status.code() {
+                            tracing::info!("ffmpeg exited with status code: {}", code);
+                        } else {
+                            tracing::info!("ffmpeg terminated by signal");
+                        }
 
-                    if let Some(code) = status.code() {
-                        tracing::info!("ffmpeg exited with status code: {}", code);
-                    } else {
-                        tracing::info!("ffmpeg terminated by signal");
+                        drop(supervisor);
+                        stop_ffmpeg_internal(false).await;
+                        return Some(status);
                     }
-                    return Some(status);
-                }
-                Ok(None) => {
-                    // Process is still running, release lock and wait a bit
-                    drop(supervisor);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to check ffmpeg status: {}", e);
-                    drop(supervisor);
-                    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-                    supervisor.take();
-                    return None;
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::error!("Failed to check ffmpeg status: {}", e);
+                        drop(supervisor);
+                        stop_ffmpeg_internal(false).await;
+                        return None;
+                    }
                 }
             }
+
+            // Process is still running, release lock and wait a bit
+            drop(supervisor);
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         } else {
             // Process was removed (killed by stop_ffmpeg)
             return None;
