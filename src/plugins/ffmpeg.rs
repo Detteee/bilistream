@@ -145,13 +145,13 @@ fn set_high_priority(pid: u32) {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
+                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
                 tracing::info!(
-                    "💡 Tip: Run with sudo or set CAP_SYS_NICE capability for better performance"
+                    "💡 提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能"
                 );
             }
             Err(e) => {
-                tracing::warn!("⚠️ Could not set process priority: {}", e);
+                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
             }
         }
     }
@@ -175,10 +175,10 @@ fn set_high_priority(pid: u32) {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
+                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
             }
             Err(e) => {
-                tracing::warn!("⚠️ Could not set process priority: {}", e);
+                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
             }
         }
     }
@@ -199,11 +199,11 @@ fn set_high_priority(pid: u32) {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ Failed to set process priority: {}", stderr.trim());
-                tracing::info!("💡 Tip: Run with sudo for better performance");
+                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
+                tracing::info!("💡 提示: 使用 sudo 运行以获得更好性能");
             }
             Err(e) => {
-                tracing::warn!("⚠️ Could not set process priority: {}", e);
+                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
             }
         }
     }
@@ -358,7 +358,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
     if let Some(mut process) = supervisor.take() {
         let pid = process.pid();
         if let Some(pid_value) = pid {
-            tracing::info!("🛑 Stopping ffmpeg process group (main PID: {})", pid_value);
+            tracing::info!("🛑 正在停止 ffmpeg 进程组 (主 PID: {})", pid_value);
         }
         let cache_dir = process.cache_dir.clone();
 
@@ -368,7 +368,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
                 // Successfully killed via tokio
             }
             Err(e) => {
-                tracing::warn!("⚠️ Tokio kill failed: {}, trying system kill", e);
+                tracing::warn!("⚠️ Tokio 终止失败: {}，尝试系统 kill", e);
 
                 // Fallback to system kill command
                 if let Some(pid_value) = pid {
@@ -385,10 +385,10 @@ async fn stop_ffmpeg_internal(manual: bool) {
                             }
                             Ok(output) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                tracing::error!("❌ System kill failed: {}", stderr);
+                                tracing::error!("❌ 系统 kill 失败: {}", stderr);
                             }
                             Err(e) => {
-                                tracing::error!("❌ Failed to execute kill command: {}", e);
+                                tracing::error!("❌ 执行 kill 命令失败: {}", e);
                             }
                         }
                     }
@@ -407,10 +407,10 @@ async fn stop_ffmpeg_internal(manual: bool) {
                             }
                             Ok(output) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                tracing::error!("❌ Taskkill failed: {}", stderr);
+                                tracing::error!("❌ taskkill 失败: {}", stderr);
                             }
                             Err(e) => {
-                                tracing::error!("❌ Failed to execute taskkill: {}", e);
+                                tracing::error!("❌ 执行 taskkill 失败: {}", e);
                             }
                         }
                     }
@@ -423,15 +423,15 @@ async fn stop_ffmpeg_internal(manual: bool) {
         if let Some(cache_dir) = cache_dir {
             if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
                 tracing::warn!(
-                    "⚠️ Failed to remove HLS cache directory {}: {}",
+                    "⚠️ 删除 HLS 缓存目录失败 {}: {}",
                     cache_dir.display(),
                     e
                 );
             }
         }
-        tracing::info!("✅ ffmpeg process stopped");
+        tracing::info!("✅ ffmpeg 进程已停止");
     } else {
-        tracing::info!("No ffmpeg process to stop");
+        tracing::info!("没有需要停止的 ffmpeg 进程");
     }
 
     // Clear speed and progress time when ffmpeg stops (lock-free write)
@@ -602,7 +602,7 @@ fn spawn_ffmpeg_stderr_monitor(
 
 fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
     if let Some((width, height, x, y)) = crop {
-        tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
+        tracing::info!("🎬 应用裁剪滤镜: {}:{}:{}:{}", width, height, x, y);
         cmd.arg("-vf")
             .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
             .arg("-c:v")
@@ -638,7 +638,7 @@ async fn spawn_direct_ffmpeg(
     crop: Option<(u32, u32, u32, u32)>,
 ) {
     let ffmpeg_cmd = get_ffmpeg_command();
-    tracing::info!("⏱️ HLS cache disabled: direct restream");
+    tracing::info!("⏱️ HLS 缓存已关闭: 直接转播");
 
     let mut cmd = Command::new(&ffmpeg_cmd);
     #[cfg(target_os = "windows")]
@@ -675,7 +675,7 @@ async fn spawn_direct_ffmpeg(
     match cmd.spawn() {
         Ok(mut child) => {
             let pid = child.id();
-            tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
+            tracing::info!("🚀 ffmpeg 进程已启动 (PID: {:?})", pid);
 
             if let Some(pid_value) = pid {
                 set_high_priority(pid_value);
@@ -697,7 +697,7 @@ async fn spawn_direct_ffmpeg(
             start_ffmpeg_timeout_monitor(STARTUP_NO_STATS_TIMEOUT_SECS);
         }
         Err(e) => {
-            tracing::error!("❌ Failed to spawn ffmpeg: {}", e);
+            tracing::error!("❌ 启动 ffmpeg 失败: {}", e);
         }
     }
 }
@@ -713,7 +713,7 @@ async fn spawn_cached_ffmpeg(
     let cache_dir = match create_hls_cache_dir() {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!("❌ Failed to create HLS cache directory: {}", e);
+            tracing::error!("❌ 创建 HLS 缓存目录失败: {}", e);
             return;
         }
     };
@@ -722,7 +722,7 @@ async fn spawn_cached_ffmpeg(
     let ffmpeg_cmd = get_ffmpeg_command();
 
     tracing::info!(
-        "⏱️ HLS cache enabled: {}s input-to-output latency ({})",
+        "⏱️ HLS 缓存已启用: {} 秒输入到输出延迟 ({})",
         latency_secs,
         playlist_path.display()
     );
@@ -771,14 +771,14 @@ async fn spawn_cached_ffmpeg(
     match cache_cmd.spawn() {
         Ok(mut cache_child) => {
             let cache_pid = cache_child.id();
-            tracing::info!("🚀 ffmpeg HLS cache writer started (PID: {:?})", cache_pid);
+            tracing::info!("🚀 ffmpeg HLS 缓存写入进程已启动 (PID: {:?})", cache_pid);
 
             if let Some(pid_value) = cache_pid {
                 set_high_priority(pid_value);
             }
 
             if let Some(stderr) = cache_child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg cache writer");
+                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg 缓存写入");
             }
 
             let process = FfmpegProcess {
@@ -809,7 +809,7 @@ async fn spawn_cached_ffmpeg(
 
                 if tokio::fs::metadata(&reader_playlist_path).await.is_err() {
                     tracing::error!(
-                        "❌ HLS cache playlist was not created after {}s: {}",
+                        "❌ 等待 {} 秒后仍未创建 HLS 缓存播放列表: {}",
                         latency_secs + CACHE_PLAYLIST_WAIT_SECS,
                         reader_playlist_path.display()
                     );
@@ -849,7 +849,7 @@ async fn spawn_cached_ffmpeg(
                     Ok(mut reader_child) => {
                         let reader_pid = reader_child.id();
                         tracing::info!(
-                            "🚀 ffmpeg delayed RTMP reader started (PID: {:?})",
+                            "🚀 ffmpeg 延迟推流进程已启动 (PID: {:?})",
                             reader_pid
                         );
                         if let Some(pid_value) = reader_pid {
@@ -859,7 +859,7 @@ async fn spawn_cached_ffmpeg(
                             spawn_ffmpeg_stderr_monitor(
                                 stderr,
                                 reader_log_level,
-                                "ffmpeg delayed reader",
+                                "ffmpeg 延迟推流",
                             );
                         }
 
@@ -869,7 +869,7 @@ async fn spawn_cached_ffmpeg(
                         }
                     }
                     Err(e) => {
-                        tracing::error!("❌ Failed to spawn delayed RTMP ffmpeg: {}", e);
+                        tracing::error!("❌ 启动延迟 RTMP ffmpeg 失败: {}", e);
                         stop_ffmpeg_internal(false).await;
                     }
                 }
@@ -879,7 +879,7 @@ async fn spawn_cached_ffmpeg(
             start_ffmpeg_timeout_monitor(cache_startup_timeout_secs(latency_secs));
         }
         Err(e) => {
-            tracing::error!("❌ Failed to spawn ffmpeg cache writer: {}", e);
+            tracing::error!("❌ 启动 ffmpeg 缓存写入进程失败: {}", e);
         }
     }
 }
@@ -922,9 +922,9 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         if let Some(code) = status.code() {
-                            tracing::info!("ffmpeg exited with status code: {}", code);
+                            tracing::info!("ffmpeg 已退出，状态码: {}", code);
                         } else {
-                            tracing::info!("ffmpeg terminated by signal");
+                            tracing::info!("ffmpeg 已被信号终止");
                         }
 
                         drop(supervisor);
@@ -933,7 +933,7 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        tracing::error!("Failed to check ffmpeg status: {}", e);
+                        tracing::error!("检查 ffmpeg 状态失败: {}", e);
                         drop(supervisor);
                         stop_ffmpeg_internal(false).await;
                         return None;
@@ -964,19 +964,19 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
             match reason {
                 StuckReason::NoStats { elapsed_secs } => {
                     tracing::error!(
-                        "⚠️ ffmpeg appears stuck (no stats for {} seconds), killing process",
+                        "⚠️ ffmpeg 似乎卡住（{} 秒无 stats 输出），正在终止进程",
                         elapsed_secs
                     );
                 }
                 StuckReason::StreamTimeFrozen { elapsed_secs } => {
                     tracing::error!(
-                        "⚠️ ffmpeg appears stuck (stream time frozen for {} seconds), killing process",
+                        "⚠️ ffmpeg 似乎卡住（流时间冻结 {} 秒），正在终止进程",
                         elapsed_secs
                     );
                 }
                 StuckReason::LowSpeed { elapsed_secs } => {
                     tracing::error!(
-                        "⚠️ ffmpeg appears stuck (speed below {} for {} seconds), killing process",
+                        "⚠️ ffmpeg 似乎卡住（速度低于 {} 持续 {} 秒），正在终止进程",
                         LOW_SPEED_THRESHOLD,
                         elapsed_secs
                     );

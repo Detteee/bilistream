@@ -207,31 +207,12 @@ fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Erro
     Credentials::from_cookies(&cookies_file.cookie_info.cookies)
 }
 
-fn migrate_legacy_ffmpeg_cache(value: &mut serde_json::Value) {
-    let Some(obj) = value.as_object_mut() else {
-        return;
-    };
-    let Some(legacy_cache) = obj.remove("ffmpeg_cache") else {
-        return;
-    };
-    for key in ["youtube", "twitch"] {
-        if let Some(platform) = obj.get_mut(key).and_then(|v| v.as_object_mut()) {
-            if !platform.contains_key("ffmpeg_cache") {
-                platform.insert("ffmpeg_cache".to_string(), legacy_cache.clone());
-            }
-        }
-    }
-}
-
 /// Loads the configuration along with credentials from cookies.json.
 pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     // Try to load config.json first
     let mut config = if CONFIG_PATH.exists() {
         let config_content = fs::read_to_string(&*CONFIG_PATH)?;
-        let mut value: serde_json::Value = serde_json::from_str(&config_content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        migrate_legacy_ffmpeg_cache(&mut value);
-        serde_json::from_value(value)
+        serde_json::from_str(&config_content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
     } else if LEGACY_CONFIG_PATH.exists() {
         // Migrate from config.yaml to config.json
