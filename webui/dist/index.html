@@ -1213,9 +1213,9 @@
               </div>
             </div>
           </div>
-          <div class="info-row">
+          <div class="info-row" id="yt-title-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="yt-title" style="text-align: right;">-</span>
+            <span class="info-value" id="yt-title" style="flex: 1; text-align: right;">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">分区</span>
@@ -1410,9 +1410,9 @@
               </div>
             </div>
           </div>
-          <div class="info-row">
+          <div class="info-row" id="tw-title-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="tw-title" style="text-align: right;">-</span>
+            <span class="info-value" id="tw-title" style="flex: 1; text-align: right;">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">游戏</span>
@@ -2409,6 +2409,12 @@
 
         // Initial refresh
         refreshStatus();
+
+        let titleRowCenterTimer;
+        window.addEventListener('resize', () => {
+          clearTimeout(titleRowCenterTimer);
+          titleRowCenterTimer = setTimeout(schedulePlatformTitleRowCenters, 100);
+        });
 
       }
 
@@ -4160,6 +4166,35 @@
         }
       }
 
+      function syncInfoRowLabelCenter(rowElement, valueElement) {
+        if (!rowElement || !valueElement) {
+          return;
+        }
+
+        const lineHeight = parseFloat(getComputedStyle(valueElement).lineHeight);
+        const isMultiLine = Number.isFinite(lineHeight)
+          && lineHeight > 0
+          && valueElement.offsetHeight > lineHeight * 1.5;
+        rowElement.classList.toggle('info-row-label-center', isMultiLine);
+      }
+
+      function syncPlatformTitleRowCenters() {
+        syncInfoRowLabelCenter(
+          document.getElementById('yt-title-row'),
+          document.getElementById('yt-title')
+        );
+        syncInfoRowLabelCenter(
+          document.getElementById('tw-title-row'),
+          document.getElementById('tw-title')
+        );
+      }
+
+      function schedulePlatformTitleRowCenters() {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(syncPlatformTitleRowCenters);
+        });
+      }
+
       async function refreshStatus() {
         if (statusRefreshInFlight) {
           return;
@@ -4325,6 +4360,7 @@
           document.getElementById('tw-channel-name').textContent = '配置错误';
         } finally {
           statusRefreshInFlight = false;
+          schedulePlatformTitleRowCenters();
         }
       }
 
