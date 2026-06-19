@@ -1286,22 +1286,24 @@
               </button>
             </div>
             <div id="yt-hls-cache-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                <label class="toggle-label" style="margin: 0;">
+              <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: nowrap;">
+                <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
                   <div class="toggle-switch" style="transform: scale(0.85);">
                     <input type="checkbox" id="yt-hls-cache-enabled">
                     <span class="toggle-slider"></span>
                   </div>
                 </label>
-                <input type="number" id="yt-hls-cache-latency" min="1" max="60" placeholder="8"
-                  style="width: 64px; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-                <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                <span id="yt-hls-cache-latency-group" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                  <input type="number" id="yt-hls-cache-latency" min="1" max="60" placeholder="8"
+                    style="width: 48px; padding: 4px 6px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px; text-align: center;">
+                  <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                </span>
                 <button onclick="saveYtHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
                   ✓
                 </button>
                 <button onclick="cancelYtHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
                   ✕
                 </button>
               </div>
@@ -1481,22 +1483,24 @@
               </button>
             </div>
             <div id="tw-hls-cache-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                <label class="toggle-label" style="margin: 0;">
+              <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: nowrap;">
+                <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
                   <div class="toggle-switch" style="transform: scale(0.85);">
                     <input type="checkbox" id="tw-hls-cache-enabled">
                     <span class="toggle-slider"></span>
                   </div>
                 </label>
-                <input type="number" id="tw-hls-cache-latency" min="1" max="60" placeholder="8"
-                  style="width: 64px; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
-                <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                <span id="tw-hls-cache-latency-group" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                  <input type="number" id="tw-hls-cache-latency" min="1" max="60" placeholder="8"
+                    style="width: 48px; padding: 4px 6px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px; text-align: center;">
+                  <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                </span>
                 <button onclick="saveTwHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
                   ✓
                 </button>
                 <button onclick="cancelTwHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
                   ✕
                 </button>
               </div>
@@ -2831,20 +2835,22 @@
       }
 
       function setHlsCacheLatencyInputState(platform, enabled) {
+        const latencyGroup = document.getElementById(`${platform}-hls-cache-latency-group`);
         const latencyInput = document.getElementById(`${platform}-hls-cache-latency`);
+        if (latencyGroup) {
+          latencyGroup.style.display = enabled ? 'flex' : 'none';
+        }
         if (latencyInput) {
           latencyInput.disabled = !enabled;
-          latencyInput.style.opacity = enabled ? '1' : '0.5';
         }
       }
 
       function toggleYtHlsCacheEdit() {
         const statusSpan = document.getElementById('yt-hls-cache-status');
         const editContainer = document.getElementById('yt-hls-cache-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
+        const statusContainer = statusSpan.parentElement;
 
-        statusSpan.style.display = 'none';
-        editButton.style.display = 'none';
+        statusContainer.style.display = 'none';
         editContainer.style.display = 'flex';
 
         fetch('/api/ffmpeg-cache/youtube')
@@ -2869,11 +2875,10 @@
       function cancelYtHlsCacheEdit() {
         const statusSpan = document.getElementById('yt-hls-cache-status');
         const editContainer = document.getElementById('yt-hls-cache-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
+        const statusContainer = statusSpan.parentElement;
 
         editContainer.style.display = 'none';
-        statusSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        statusContainer.style.display = 'flex';
       }
 
       async function saveYtHlsCacheEdit() {
@@ -2907,10 +2912,9 @@
       function toggleTwHlsCacheEdit() {
         const statusSpan = document.getElementById('tw-hls-cache-status');
         const editContainer = document.getElementById('tw-hls-cache-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
+        const statusContainer = statusSpan.parentElement;
 
-        statusSpan.style.display = 'none';
-        editButton.style.display = 'none';
+        statusContainer.style.display = 'none';
         editContainer.style.display = 'flex';
 
         fetch('/api/ffmpeg-cache/twitch')
@@ -2935,11 +2939,10 @@
       function cancelTwHlsCacheEdit() {
         const statusSpan = document.getElementById('tw-hls-cache-status');
         const editContainer = document.getElementById('tw-hls-cache-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
+        const statusContainer = statusSpan.parentElement;
 
         editContainer.style.display = 'none';
-        statusSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        statusContainer.style.display = 'flex';
       }
 
       async function saveTwHlsCacheEdit() {
