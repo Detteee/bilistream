@@ -57,6 +57,8 @@ lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
     // Use atomic for lock-free speed updates (stored as f32 bits)
     static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_CACHE_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_HLS_CACHE_ACTIVE: AtomicBool = AtomicBool::new(false);
     // Track last progress time for timeout detection (stored as Unix timestamp in seconds)
     static ref LAST_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track last reported stream time from ffmpeg (stored as seconds, converted from HH:MM:SS.ms)
@@ -241,7 +243,7 @@ pub fn clear_manual_restart() {
     MANUAL_RESTART.store(false, Ordering::SeqCst);
 }
 
-// Get current ffmpeg speed (lock-free read)
+// Get current ffmpeg push speed (lock-free read)
 pub async fn get_ffmpeg_speed() -> Option<f32> {
     let bits = FFMPEG_SPEED.load(Ordering::Relaxed);
     if bits == 0 {
@@ -249,6 +251,20 @@ pub async fn get_ffmpeg_speed() -> Option<f32> {
     } else {
         Some(f32::from_bits(bits))
     }
+}
+
+// Get current ffmpeg HLS cache writer speed (lock-free read)
+pub async fn get_ffmpeg_cache_speed() -> Option<f32> {
+    let bits = FFMPEG_CACHE_SPEED.load(Ordering::Relaxed);
+    if bits == 0 {
+        None
+    } else {
+        Some(f32::from_bits(bits))
+    }
+}
+
+pub async fn is_ffmpeg_hls_cache_active() -> bool {
+    FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed)
 }
 
 // Update last progress time (lock-free write)
@@ -434,6 +450,8 @@ async fn stop_ffmpeg_internal(manual: bool) {
     // Clear speed, progress time, and rendered stats when ffmpeg stops.
     reset_stats_display();
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_SPEED.store(0, Ordering::Relaxed);
+    FFMPEG_HLS_CACHE_ACTIVE.store(false, Ordering::Relaxed);
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
@@ -709,13 +727,20 @@ fn handle_ffmpeg_stderr_line(
     if let Some(sample) = extract_ffmpeg_stats(line) {
         update_progress_time();
         if let Some(role) = stats_role {
-            if let FfmpegStatsRole::Push = role {
-                if let Some(speed) = sample.speed {
-                    FFMPEG_SPEED.store(speed.to_bits(), Ordering::Relaxed);
-                    update_speed_tracking(speed);
+            match role {
+                FfmpegStatsRole::Cache => {
+                    if let Some(speed) = sample.speed {
+                        FFMPEG_CACHE_SPEED.store(speed.to_bits(), Ordering::Relaxed);
+                    }
                 }
-                if let Some(stream_time) = sample.stream_time_secs {
-                    update_stream_time(stream_time);
+                FfmpegStatsRole::Push => {
+                    if let Some(speed) = sample.speed {
+                        FFMPEG_SPEED.store(speed.to_bits(), Ordering::Relaxed);
+                        update_speed_tracking(speed);
+                    }
+                    if let Some(stream_time) = sample.stream_time_secs {
+                        update_stream_time(stream_time);
+                    }
                 }
             }
             update_stats_display(role, sample);
@@ -770,6 +795,7 @@ fn reset_ffmpeg_tracking_state() {
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_SPEED.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
 
@@ -828,6 +854,7 @@ async fn spawn_direct_ffmpeg(
             }
 
             reset_ffmpeg_tracking_state();
+            FFMPEG_HLS_CACHE_ACTIVE.store(false, Ordering::Relaxed);
 
             if let Some(stderr) = child.stderr.take() {
                 spawn_ffmpeg_stderr_monitor(
@@ -928,6 +955,7 @@ async fn spawn_cached_ffmpeg(
             }
 
             reset_ffmpeg_tracking_state();
+            FFMPEG_HLS_CACHE_ACTIVE.store(true, Ordering::Relaxed);
 
             if let Some(stderr) = cache_child.stderr.take() {
                 spawn_ffmpeg_stderr_monitor(

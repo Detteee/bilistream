@@ -4153,10 +4153,21 @@
             // Update stream quality
             const qualityRow = document.getElementById('bili-stream-quality-row');
             const qualityElement = document.getElementById('bili-stream-quality');
-            if (bili.is_live && bili.stream_quality) {
+            if (bili.is_live && (bili.stream_quality || bili.hls_cache_active)) {
               qualityRow.style.display = '';
-              const speedText = bili.stream_speed ? ` (${bili.stream_speed.toFixed(2)}x)` : '';
-              qualityElement.textContent = bili.stream_quality + speedText;
+              let speedText = '';
+              if (bili.hls_cache_active) {
+                const cacheText = bili.stream_cache_speed
+                  ? `${bili.stream_cache_speed.toFixed(2)}x`
+                  : '-';
+                const pushText = bili.stream_speed
+                  ? `${bili.stream_speed.toFixed(2)}x`
+                  : '-';
+                speedText = ` (缓存 ${cacheText} / 推送 ${pushText})`;
+              } else if (bili.stream_speed) {
+                speedText = ` (${bili.stream_speed.toFixed(2)}x)`;
+              }
+              qualityElement.textContent = (bili.stream_quality || '-') + speedText;
 
               // Set color based on quality
               if (bili.stream_quality === '流畅') {
@@ -4165,6 +4176,8 @@
                 qualityElement.style.color = '#f59e0b'; // orange
               } else if (bili.stream_quality === '卡顿') {
                 qualityElement.style.color = '#ef4444'; // red
+              } else {
+                qualityElement.style.color = '';
               }
             } else {
               qualityRow.style.display = 'none';
