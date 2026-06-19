@@ -5,7 +5,7 @@
 )]
 
 use bilistream::config::{
-    load_config, save_config, BiliLive, Config, Credentials, Twitch, Youtube,
+    load_config, save_config, BiliLive, Config, Credentials, FfmpegCache, Twitch, Youtube,
 };
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Twitch as TwitchClient;
@@ -17,7 +17,7 @@ use bilistream::plugins::{
     get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
-    was_manual_restart, was_manual_stop, BILI_START_TEMP_BAN_PREFIX,
+    was_manual_restart, was_manual_stop, FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
 };
 use qrcode::QrCode;
 
@@ -746,6 +746,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     proxy,
                     ffmpeg_log_level.to_string(),
                     crop,
+                    FfmpegCacheOptions {
+                        enabled: cfg.ffmpeg_cache.enabled,
+                        latency_secs: cfg.ffmpeg_cache.latency_secs,
+                    },
                 )
                 .await;
 
@@ -2183,6 +2187,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         enable_lol_monitor,
         lol_monitor_interval: Some(1),
         anti_collision_list: collision_map,
+        ffmpeg_cache: FfmpegCache::default(),
     };
 
     // Write config file as JSON

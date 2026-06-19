@@ -28,6 +28,30 @@ pub struct Config {
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
     pub anti_collision_list: HashMap<String, i32>,
+    #[serde(default)]
+    pub ffmpeg_cache: FfmpegCache,
+}
+
+/// FFmpeg HLS timeshift cache settings.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FfmpegCache {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ffmpeg_cache_latency_secs")]
+    pub latency_secs: u64,
+}
+
+impl Default for FfmpegCache {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            latency_secs: default_ffmpeg_cache_latency_secs(),
+        }
+    }
+}
+
+fn default_ffmpeg_cache_latency_secs() -> u64 {
+    8
 }
 
 /// Struct representing BiliLive-specific configuration.
@@ -306,6 +330,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,
             anti_collision_list: legacy.anti_collision_list,
+            ffmpeg_cache: FfmpegCache::default(),
         };
 
         // Save as JSON

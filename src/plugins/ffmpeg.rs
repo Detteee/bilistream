@@ -23,11 +23,26 @@ const LOW_SPEED_THRESHOLD: f32 = 0.98;
 const LOW_SPEED_TIMEOUT_SECS: u32 = 60;
 const STREAM_TIME_FROZEN_SECS: u32 = 10;
 const STARTUP_NO_STATS_TIMEOUT_SECS: u64 = 30;
+const CACHE_PLAYLIST_WAIT_SECS: u64 = 30;
 
-// Real input-to-output timeshift cache for bursty 2s HLS segments.
-const HLS_CACHE_LATENCY_SECS: u64 = 8;
 const HLS_CACHE_SEGMENT_SECS: u32 = 2;
 const HLS_CACHE_LIST_SIZE: u32 = 30;
+
+#[derive(Clone, Copy)]
+pub struct FfmpegCacheOptions {
+    pub enabled: bool,
+    pub latency_secs: u64,
+}
+
+impl FfmpegCacheOptions {
+    fn latency_secs(&self) -> u64 {
+        self.latency_secs.clamp(1, 60)
+    }
+}
+
+fn cache_startup_timeout_secs(latency_secs: u64) -> u64 {
+    latency_secs + CACHE_PLAYLIST_WAIT_SECS
+}
 
 #[derive(Debug)]
 enum StuckReason {
@@ -585,21 +600,116 @@ fn spawn_ffmpeg_stderr_monitor(
     });
 }
 
-/// Spawns and supervises an ffmpeg process with output monitoring
-pub async fn ffmpeg(
-    rtmp_url: String,
-    rtmp_key: String,
+fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
+    if let Some((width, height, x, y)) = crop {
+        tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
+        cmd.arg("-vf")
+            .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-preset")
+            .arg("veryfast")
+            .arg("-c:a")
+            .arg("copy");
+    } else {
+        cmd.arg("-c").arg("copy");
+    }
+}
+
+fn reset_ffmpeg_tracking_state() {
+    update_progress_time();
+    LAST_STREAM_TIME.store(0, Ordering::Relaxed);
+    LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
+    FFMPEG_SPEED.store(0, Ordering::Relaxed);
+    LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
+}
+
+fn start_ffmpeg_timeout_monitor(timeout_secs: u64) {
+    tokio::spawn(async move {
+        monitor_ffmpeg_timeout(timeout_secs).await;
+    });
+}
+
+async fn spawn_direct_ffmpeg(
+    rtmp_url_key: String,
     m3u8_url: String,
     proxy: Option<String>,
     log_level: String,
-    crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
+    crop: Option<(u32, u32, u32, u32)>,
 ) {
-    // Check if already running
-    if is_ffmpeg_running().await {
-        tracing::debug!("ffmpeg already running, skipping spawn");
-        return;
+    let ffmpeg_cmd = get_ffmpeg_command();
+    tracing::info!("⏱️ HLS cache disabled: direct restream");
+
+    let mut cmd = Command::new(&ffmpeg_cmd);
+    #[cfg(target_os = "windows")]
+    configure_no_window(&mut cmd);
+
+    if let Some(proxy_url) = proxy {
+        cmd.arg("-http_proxy").arg(proxy_url);
     }
 
+    cmd.arg("-nostdin")
+        .arg("-stats")
+        .arg("-loglevel")
+        .arg(&log_level)
+        .arg("-multiple_requests")
+        .arg("1")
+        .arg("-thread_queue_size")
+        .arg("2048")
+        .arg("-re")
+        .arg("-fflags")
+        .arg("+genpts")
+        .arg("-i")
+        .arg(m3u8_url);
+
+    append_crop_or_copy(&mut cmd, crop);
+
+    cmd.arg("-max_muxing_queue_size")
+        .arg("8192")
+        .arg("-f")
+        .arg("flv")
+        .arg(rtmp_url_key)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    match cmd.spawn() {
+        Ok(mut child) => {
+            let pid = child.id();
+            tracing::info!("🚀 ffmpeg process started (PID: {:?})", pid);
+
+            if let Some(pid_value) = pid {
+                set_high_priority(pid_value);
+            }
+
+            if let Some(stderr) = child.stderr.take() {
+                spawn_ffmpeg_stderr_monitor(stderr, log_level, "ffmpeg");
+            }
+
+            let process = FfmpegProcess {
+                children: vec![child],
+                pid,
+                cache_dir: None,
+            };
+            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+            *supervisor = Some(process);
+
+            reset_ffmpeg_tracking_state();
+            start_ffmpeg_timeout_monitor(STARTUP_NO_STATS_TIMEOUT_SECS);
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to spawn ffmpeg: {}", e);
+        }
+    }
+}
+
+async fn spawn_cached_ffmpeg(
+    rtmp_url_key: String,
+    m3u8_url: String,
+    proxy: Option<String>,
+    log_level: String,
+    crop: Option<(u32, u32, u32, u32)>,
+    latency_secs: u64,
+) {
     let cache_dir = match create_hls_cache_dir() {
         Ok(path) => path,
         Err(e) => {
@@ -609,12 +719,11 @@ pub async fn ffmpeg(
     };
     let playlist_path = cache_dir.join("index.m3u8");
     let segment_pattern = cache_dir.join("segment_%06d.ts");
-    let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
     let ffmpeg_cmd = get_ffmpeg_command();
 
     tracing::info!(
-        "⏱️ HLS cache: {}s input-to-output latency ({})",
-        HLS_CACHE_LATENCY_SECS,
+        "⏱️ HLS cache enabled: {}s input-to-output latency ({})",
+        latency_secs,
         playlist_path.display()
     );
 
@@ -632,13 +741,13 @@ pub async fn ffmpeg(
         .arg("-loglevel")
         .arg("warning")
         .arg("-multiple_requests")
-        .arg("1") // Use multiple HTTP requests for segments
+        .arg("1")
         .arg("-thread_queue_size")
         .arg("2048")
         .arg("-rtbufsize")
-        .arg("100M") // Larger realtime input buffer for segment bursts
+        .arg("100M")
         .arg("-fflags")
-        .arg("+genpts") // Regenerate PTS at HLS segment boundaries
+        .arg("+genpts")
         .arg("-i")
         .arg(m3u8_url)
         .arg("-c")
@@ -687,10 +796,12 @@ pub async fn ffmpeg(
             let reader_crop = crop;
             let reader_rtmp_url_key = rtmp_url_key.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(HLS_CACHE_LATENCY_SECS)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(latency_secs)).await;
 
                 let mut waited_ms = 0;
-                while tokio::fs::metadata(&reader_playlist_path).await.is_err() && waited_ms < 30000
+                let wait_limit_ms = CACHE_PLAYLIST_WAIT_SECS * 1000;
+                while tokio::fs::metadata(&reader_playlist_path).await.is_err()
+                    && waited_ms < wait_limit_ms
                 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     waited_ms += 500;
@@ -699,7 +810,7 @@ pub async fn ffmpeg(
                 if tokio::fs::metadata(&reader_playlist_path).await.is_err() {
                     tracing::error!(
                         "❌ HLS cache playlist was not created after {}s: {}",
-                        HLS_CACHE_LATENCY_SECS + 30,
+                        latency_secs + CACHE_PLAYLIST_WAIT_SECS,
                         reader_playlist_path.display()
                     );
                     stop_ffmpeg_internal(false).await;
@@ -715,29 +826,15 @@ pub async fn ffmpeg(
                     .arg("-stats")
                     .arg("-loglevel")
                     .arg(&reader_log_level)
-                    .arg("-re") // Pace RTMP output from the delayed local HLS cache
+                    .arg("-re")
                     .arg("-fflags")
                     .arg("+genpts")
-                    // This is the local cache playlist, not the remote source.
                     .arg("-live_start_index")
                     .arg("0")
                     .arg("-i")
                     .arg(&reader_playlist_path);
 
-                if let Some((width, height, x, y)) = reader_crop {
-                    tracing::info!("🎬 Applying crop filter: {}:{}:{}:{}", width, height, x, y);
-                    reader_cmd
-                        .arg("-vf")
-                        .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
-                        .arg("-c:v")
-                        .arg("libx264")
-                        .arg("-preset")
-                        .arg("veryfast")
-                        .arg("-c:a")
-                        .arg("copy");
-                } else {
-                    reader_cmd.arg("-c").arg("copy");
-                }
+                append_crop_or_copy(&mut reader_cmd, reader_crop);
 
                 reader_cmd
                     .arg("-max_muxing_queue_size")
@@ -778,23 +875,37 @@ pub async fn ffmpeg(
                 }
             });
 
-            // Reset all tracking state when ffmpeg starts
-            update_progress_time();
-            LAST_STREAM_TIME.store(0, Ordering::Relaxed);
-            LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
-            FFMPEG_SPEED.store(0, Ordering::Relaxed);
-            LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
-
-            // Allow delayed HLS startup/probing before treating missing stats as stuck.
-            tokio::spawn(async {
-                monitor_ffmpeg_timeout(STARTUP_NO_STATS_TIMEOUT_SECS).await;
-            });
-
-            // tracing::info!("✅ ffmpeg process supervision started");
+            reset_ffmpeg_tracking_state();
+            start_ffmpeg_timeout_monitor(cache_startup_timeout_secs(latency_secs));
         }
         Err(e) => {
-            tracing::error!("❌ Failed to spawn ffmpeg: {}", e);
+            tracing::error!("❌ Failed to spawn ffmpeg cache writer: {}", e);
         }
+    }
+}
+
+/// Spawns and supervises an ffmpeg process with output monitoring
+pub async fn ffmpeg(
+    rtmp_url: String,
+    rtmp_key: String,
+    m3u8_url: String,
+    proxy: Option<String>,
+    log_level: String,
+    crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
+    cache: FfmpegCacheOptions,
+) {
+    // Check if already running
+    if is_ffmpeg_running().await {
+        return;
+    }
+
+    let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
+    let latency_secs = cache.latency_secs();
+
+    if cache.enabled {
+        spawn_cached_ffmpeg(rtmp_url_key, m3u8_url, proxy, log_level, crop, latency_secs).await;
+    } else {
+        spawn_direct_ffmpeg(rtmp_url_key, m3u8_url, proxy, log_level, crop).await;
     }
 }
 

@@ -1827,6 +1827,22 @@
                   <span>启用弹幕指令</span>
                 </label>
               </div>
+              <div class="control-group">
+                <label class="toggle-label">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="config-ffmpeg-cache-checkbox" onchange="toggleFfmpegCacheLatency()">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <span>启用 HLS 缓存延迟</span>
+                </label>
+                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                  将源流先写入本地缓存再推流，缓解 m3u8 突发不稳定
+                </small>
+              </div>
+              <div class="control-group" id="config-ffmpeg-cache-latency-group">
+                <label>缓存延迟 (秒)</label>
+                <input type="number" id="config-ffmpeg-cache-latency" min="1" max="60" placeholder="8">
+              </div>
             </div>
           </div>
 
@@ -2752,6 +2768,15 @@
         }
       }
 
+      function toggleFfmpegCacheLatency() {
+        const enabled = document.getElementById('config-ffmpeg-cache-checkbox').checked;
+        const latencyInput = document.getElementById('config-ffmpeg-cache-latency');
+        const latencyGroup = document.getElementById('config-ffmpeg-cache-latency-group');
+
+        latencyInput.disabled = !enabled;
+        latencyGroup.style.opacity = enabled ? '1' : '0.5';
+      }
+
       async function loadSystemConfig() {
         try {
           const response = await fetch('/api/config');
@@ -2762,6 +2787,9 @@
           document.getElementById('config-interval').value = config.interval || 30;
           document.getElementById('config-auto-cover-checkbox').checked = config.auto_cover || false;
           document.getElementById('config-danmaku-command-checkbox').checked = config.bilibili?.enable_danmaku_command !== false;
+          document.getElementById('config-ffmpeg-cache-checkbox').checked = config.ffmpeg_cache?.enabled || false;
+          document.getElementById('config-ffmpeg-cache-latency').value = config.ffmpeg_cache?.latency_secs || 8;
+          toggleFfmpegCacheLatency();
           document.getElementById('config-anti-collision-checkbox').checked = config.enable_anti_collision || false;
           toggleAntiCollisionList(); // Show/hide anti-collision section based on checkbox
 
@@ -2967,7 +2995,12 @@
           anti_collision_list: window.currentAntiCollisionList || {},
           youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
           youtube_cookies_file: document.getElementById('config-yt-cookies-file').value.trim(),
-          youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim()
+          youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim(),
+          ffmpeg_cache_enabled: document.getElementById('config-ffmpeg-cache-checkbox').checked,
+          ffmpeg_cache_latency_secs: Math.min(
+            60,
+            Math.max(1, parseInt(document.getElementById('config-ffmpeg-cache-latency').value) || 8)
+          )
         };
       }
 
@@ -3001,6 +3034,10 @@
                 ...(window.configData.twitch || {}),
                 proxy: config.twitch_proxy,
                 proxy_region: config.twitch_proxy_region
+              },
+              ffmpeg_cache: {
+                enabled: config.ffmpeg_cache_enabled,
+                latency_secs: config.ffmpeg_cache_latency_secs
               }
             });
             updateDanmakuCommandToggle(config.enable_danmaku_command);

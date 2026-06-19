@@ -335,6 +335,10 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
             "proxy": cfg.twitch.proxy,
+        },
+        "ffmpeg_cache": {
+            "enabled": cfg.ffmpeg_cache.enabled,
+            "latency_secs": cfg.ffmpeg_cache.latency_secs,
         }
     });
 
@@ -360,6 +364,8 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
+    ffmpeg_cache_enabled: Option<bool>,
+    ffmpeg_cache_latency_secs: Option<u64>,
 }
 
 pub async fn update_config(
@@ -450,6 +456,12 @@ pub async fn update_config(
         } else {
             Some(youtube_deno_path)
         };
+    }
+    if let Some(enabled) = payload.ffmpeg_cache_enabled {
+        cfg.ffmpeg_cache.enabled = enabled;
+    }
+    if let Some(latency_secs) = payload.ffmpeg_cache_latency_secs {
+        cfg.ffmpeg_cache.latency_secs = latency_secs.clamp(1, 60);
     }
 
     // Save config
@@ -1058,6 +1070,7 @@ pub async fn save_setup_config(
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
+            ffmpeg_cache: crate::config::FfmpegCache::default(),
         }
     };
 
