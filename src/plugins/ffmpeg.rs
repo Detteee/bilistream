@@ -675,11 +675,30 @@ fn handle_ffmpeg_stderr_line(
         }
     } else if line.contains("error") || line.contains("Error") {
         tracing::error!("{}: {}", process_name, line);
+    } else if is_harmless_hls_keepalive_warning(line) {
+        tracing::debug!("{}: {}", process_name, line);
     } else if line.contains("warning") || line.contains("Warning") {
         tracing::warn!("{}: {}", process_name, line);
     } else if log_level == "debug" || log_level == "info" {
         tracing::debug!("{}: {}", process_name, line);
     }
+}
+
+/// Input options for remote live HLS (YouTube/Twitch CDN).
+///
+/// Segment URLs often rotate across different hosts; reusing HTTP connections
+/// then triggers "keepalive request failed" / "Cannot reuse HTTP connection"
+/// warnings (see https://github.com/mpv-player/mpv/issues/8500).
+fn append_remote_hls_input_options(cmd: &mut Command) {
+    cmd.arg("-http_persistent")
+        .arg("0")
+        .arg("-thread_queue_size")
+        .arg("2048");
+}
+
+fn is_harmless_hls_keepalive_warning(line: &str) -> bool {
+    line.contains("keepalive request failed")
+        || line.contains("Cannot reuse HTTP connection for different host")
 }
 
 fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
@@ -734,12 +753,9 @@ async fn spawn_direct_ffmpeg(
     cmd.arg("-nostdin")
         .arg("-stats")
         .arg("-loglevel")
-        .arg(&log_level)
-        .arg("-multiple_requests")
-        .arg("1")
-        .arg("-thread_queue_size")
-        .arg("2048")
-        .arg("-re")
+        .arg(&log_level);
+    append_remote_hls_input_options(&mut cmd);
+    cmd.arg("-re")
         .arg("-fflags")
         .arg("+genpts")
         .arg("-i")
@@ -828,11 +844,9 @@ async fn spawn_cached_ffmpeg(
         .arg("-nostdin")
         .arg("-stats")
         .arg("-loglevel")
-        .arg("warning")
-        .arg("-multiple_requests")
-        .arg("1")
-        .arg("-thread_queue_size")
-        .arg("2048")
+        .arg("warning");
+    append_remote_hls_input_options(&mut cache_cmd);
+    cache_cmd
         .arg("-rtbufsize")
         .arg("100M")
         .arg("-fflags")
