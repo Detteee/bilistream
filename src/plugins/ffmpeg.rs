@@ -1,7 +1,8 @@
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -64,6 +65,8 @@ lazy_static::lazy_static! {
     static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when speed first dropped below LOW_SPEED_THRESHOLD (0 = speed is OK)
     static ref LOW_SPEED_SINCE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_STATS_DISPLAY: Arc<StdMutex<FfmpegStatsDisplay>> =
+        Arc::new(StdMutex::new(FfmpegStatsDisplay::default()));
 }
 
 use std::sync::atomic::AtomicBool;
@@ -146,9 +149,7 @@ fn set_high_priority(pid: u32) {
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-                tracing::info!(
-                    "💡 提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能"
-                );
+                tracing::info!("💡 提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
             }
             Err(e) => {
                 tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
@@ -422,11 +423,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         if let Some(cache_dir) = cache_dir {
             if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
-                tracing::warn!(
-                    "⚠️ 删除 HLS 缓存目录失败 {}: {}",
-                    cache_dir.display(),
-                    e
-                );
+                tracing::warn!("⚠️ 删除 HLS 缓存目录失败 {}: {}", cache_dir.display(), e);
             }
         }
         tracing::info!("✅ ffmpeg 进程已停止");
@@ -434,13 +431,117 @@ async fn stop_ffmpeg_internal(manual: bool) {
         tracing::info!("没有需要停止的 ffmpeg 进程");
     }
 
-    // Clear speed and progress time when ffmpeg stops (lock-free write)
+    // Clear speed, progress time, and rendered stats when ffmpeg stops.
+    reset_stats_display();
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
+#[derive(Clone, Copy)]
+enum FfmpegStatsRole {
+    Cache,
+    Push,
+}
+
+#[derive(Clone, Default)]
+struct FfmpegStatsSample {
+    time: Option<String>,
+    bitrate: Option<String>,
+    speed: Option<f32>,
+    stream_time_secs: Option<u32>,
+}
+
+#[derive(Default)]
+struct FfmpegStatsDisplay {
+    cache: Option<FfmpegStatsSample>,
+    push: Option<FfmpegStatsSample>,
+    rendered_lines: usize,
+    enabled: bool,
+}
+
+impl FfmpegStatsDisplay {
+    fn reset(&mut self) {
+        if self.rendered_lines > 0 && self.enabled {
+            eprint!("\x1b[{}F\x1b[J", self.rendered_lines);
+            let _ = std::io::stderr().flush();
+        }
+        *self = Self {
+            enabled: std::io::stderr().is_terminal(),
+            ..Self::default()
+        };
+    }
+
+    fn update(&mut self, role: FfmpegStatsRole, sample: FfmpegStatsSample) {
+        match role {
+            FfmpegStatsRole::Cache => self.cache = Some(sample),
+            FfmpegStatsRole::Push => self.push = Some(sample),
+        }
+        self.render();
+    }
+
+    fn render(&mut self) {
+        if !self.enabled {
+            return;
+        }
+
+        let lines = [
+            "+-------------+--------------+--------------+----------+".to_string(),
+            "| Process     | Time         | Bitrate      | Speed    |".to_string(),
+            "+-------------+--------------+--------------+----------+".to_string(),
+            Self::row("HLS Cache", self.cache.as_ref()),
+            Self::row("RTMP Push", self.push.as_ref()),
+            "+-------------+--------------+--------------+----------+".to_string(),
+        ];
+
+        if self.rendered_lines > 0 {
+            eprint!("\x1b[{}F", self.rendered_lines);
+        }
+        for line in &lines {
+            eprintln!("\x1b[2K{}", line);
+        }
+        let _ = std::io::stderr().flush();
+        self.rendered_lines = lines.len();
+    }
+
+    fn row(label: &str, sample: Option<&FfmpegStatsSample>) -> String {
+        let time = sample.and_then(|s| s.time.as_deref()).unwrap_or("-");
+        let bitrate = sample.and_then(|s| s.bitrate.as_deref()).unwrap_or("-");
+        let speed = sample
+            .and_then(|s| s.speed.map(|v| format!("{:.2}x", v)))
+            .unwrap_or_else(|| "-".to_string());
+
+        format!(
+            "| {:<11} | {:<12} | {:<12} | {:<8} |",
+            truncate_cell(label, 11),
+            truncate_cell(time, 12),
+            truncate_cell(bitrate, 12),
+            truncate_cell(&speed, 8)
+        )
+    }
+}
+
+fn truncate_cell(value: &str, width: usize) -> String {
+    let mut text: String = value.chars().take(width).collect();
+    while text.chars().count() < width {
+        text.push(' ');
+    }
+    text
+}
+
+fn reset_stats_display() {
+    if let Ok(mut display) = FFMPEG_STATS_DISPLAY.lock() {
+        display.reset();
+    }
+}
+
+fn update_stats_display(role: FfmpegStatsRole, sample: FfmpegStatsSample) {
+    if let Ok(mut display) = FFMPEG_STATS_DISPLAY.lock() {
+        display.update(role, sample);
+    }
+}
+
 /// Parse time string (HH:MM:SS.ms) to seconds
 fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
     let parts: Vec<&str> = time_str.split(':').collect();
@@ -455,49 +556,38 @@ fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
     Some(hours * 3600 + minutes * 60 + seconds as u32)
 }
 
-/// Extract simplified stats from ffmpeg output line starting from "time="
-/// Optimized for speed - extracts everything from "time=" onwards for webui and stuck detection
-/// Returns (stats_from_time, parsed_speed, parsed_time_in_seconds)
-fn extract_compact_stats(line: &str) -> Option<(String, Option<f32>, Option<u32>)> {
-    // Find "time=" position for fast extraction
-    if let Some(time_pos) = line.find("time=") {
-        let stats_from_time = &line[time_pos..];
-
-        let mut speed_value: Option<f32> = None;
-        let mut time_value: Option<u32> = None;
-        let parts: Vec<&str> = stats_from_time.split_whitespace().collect();
-
-        // Quick parse for speed and time values (for stuck detection)
-        for (idx, part) in parts.iter().enumerate() {
-            if let Some(value) = part.strip_prefix("time=") {
-                time_value = parse_time_to_seconds(value);
-            } else if let Some(value) = part.strip_prefix("speed=") {
-                // Handle both formats:
-                // - "speed=0.99x" (single token)
-                // - "speed=   1x" (value is in next token because of padding)
-                let speed_token = if value.is_empty() {
-                    parts.get(idx + 1).copied().unwrap_or("")
-                } else {
-                    value
-                };
-                let clean_value = speed_token.trim_end_matches('x');
-                if let Ok(parsed) = clean_value.parse::<f32>() {
-                    speed_value = Some(parsed);
-                }
-            }
-        }
-
-        Some((stats_from_time.to_string(), speed_value, time_value))
+fn value_after_key<'a>(parts: &[&'a str], idx: usize, key: &str) -> Option<&'a str> {
+    let value = parts.get(idx)?.strip_prefix(key)?;
+    if value.is_empty() {
+        parts.get(idx + 1).copied()
     } else {
-        None
+        Some(value)
     }
 }
 
-/// Fast extraction of stats from "time=" onwards for console display
-/// Returns raw string starting from "time=" or None if not found
-/// This is optimized for speed - no parsing, just string slicing
-pub fn extract_stats_from_time(line: &str) -> Option<String> {
-    line.find("time=").map(|pos| line[pos..].to_string())
+fn extract_ffmpeg_stats(line: &str) -> Option<FfmpegStatsSample> {
+    if !line.starts_with("frame=") && !line.contains("fps=") {
+        return None;
+    }
+
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let mut sample = FfmpegStatsSample::default();
+
+    for (idx, _) in parts.iter().enumerate() {
+        if let Some(value) = value_after_key(&parts, idx, "time=") {
+            sample.time = Some(value.to_string());
+            sample.stream_time_secs = parse_time_to_seconds(value);
+        } else if let Some(value) = value_after_key(&parts, idx, "bitrate=") {
+            sample.bitrate = Some(value.to_string());
+        } else if let Some(value) = value_after_key(&parts, idx, "speed=") {
+            if let Ok(parsed) = value.trim_end_matches('x').parse::<f32>() {
+                sample.speed = Some(parsed);
+            }
+        }
+    }
+
+    sample.time.as_ref()?;
+    Some(sample)
 }
 
 fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
@@ -518,10 +608,9 @@ fn spawn_ffmpeg_stderr_monitor(
     stderr: tokio::process::ChildStderr,
     log_level: String,
     process_name: &'static str,
-    track_restream_stats: bool,
+    stats_role: Option<FfmpegStatsRole>,
 ) {
     tokio::spawn(async move {
-        use std::io::Write;
         use tokio::io::AsyncReadExt;
 
         let mut stderr = stderr;
@@ -537,60 +626,20 @@ fn spawn_ffmpeg_stderr_monitor(
 
             for ch in chunk.chars() {
                 if ch == '\r' {
-                    // Carriage return - stats update
-                    if line_buffer.starts_with("frame=") || line_buffer.contains("fps=") {
-                        // Extract only fps, time, bitrate, speed
-                        if let Some((compact, speed, stream_time)) =
-                            extract_compact_stats(&line_buffer)
-                        {
-                            if track_restream_stats {
-                                eprint!("\r{:<50}", compact);
-                                let _ = std::io::stderr().flush();
-
-                                if let Some(s) = speed {
-                                    FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                    update_speed_tracking(s);
-                                }
-                                if let Some(t) = stream_time {
-                                    update_stream_time(t);
-                                }
-                            }
-                            // Cache writer stats still count as activity during buffer fill.
-                            update_progress_time();
-                        }
-                    }
+                    handle_ffmpeg_stderr_line(
+                        &line_buffer,
+                        log_level.as_str(),
+                        process_name,
+                        stats_role,
+                    );
                     line_buffer.clear();
                 } else if ch == '\n' {
-                    // Newline - complete message
-                    if !line_buffer.is_empty() {
-                        if line_buffer.contains("error") || line_buffer.contains("Error") {
-                            tracing::error!("{}: {}", process_name, line_buffer);
-                        } else if line_buffer.contains("warning") || line_buffer.contains("Warning")
-                        {
-                            tracing::warn!("{}: {}", process_name, line_buffer);
-                        } else if line_buffer.starts_with("frame=") || line_buffer.contains("fps=")
-                        {
-                            // Final stats line with newline
-                            if let Some((compact, speed, stream_time)) =
-                                extract_compact_stats(&line_buffer)
-                            {
-                                if track_restream_stats {
-                                    eprintln!("\r{:<50}", compact);
-
-                                    if let Some(s) = speed {
-                                        FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                        update_speed_tracking(s);
-                                    }
-                                    if let Some(t) = stream_time {
-                                        update_stream_time(t);
-                                    }
-                                }
-                                update_progress_time();
-                            }
-                        } else if log_level == "debug" || log_level == "info" {
-                            tracing::debug!("{}: {}", process_name, line_buffer);
-                        }
-                    }
+                    handle_ffmpeg_stderr_line(
+                        &line_buffer,
+                        log_level.as_str(),
+                        process_name,
+                        stats_role,
+                    );
                     line_buffer.clear();
                 } else {
                     line_buffer.push(ch);
@@ -598,6 +647,39 @@ fn spawn_ffmpeg_stderr_monitor(
             }
         }
     });
+}
+
+fn handle_ffmpeg_stderr_line(
+    line: &str,
+    log_level: &str,
+    process_name: &'static str,
+    stats_role: Option<FfmpegStatsRole>,
+) {
+    if line.is_empty() {
+        return;
+    }
+
+    if let Some(sample) = extract_ffmpeg_stats(line) {
+        update_progress_time();
+        if let Some(role) = stats_role {
+            if let FfmpegStatsRole::Push = role {
+                if let Some(speed) = sample.speed {
+                    FFMPEG_SPEED.store(speed.to_bits(), Ordering::Relaxed);
+                    update_speed_tracking(speed);
+                }
+                if let Some(stream_time) = sample.stream_time_secs {
+                    update_stream_time(stream_time);
+                }
+            }
+            update_stats_display(role, sample);
+        }
+    } else if line.contains("error") || line.contains("Error") {
+        tracing::error!("{}: {}", process_name, line);
+    } else if line.contains("warning") || line.contains("Warning") {
+        tracing::warn!("{}: {}", process_name, line);
+    } else if log_level == "debug" || log_level == "info" {
+        tracing::debug!("{}: {}", process_name, line);
+    }
 }
 
 fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
@@ -617,6 +699,7 @@ fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
 }
 
 fn reset_ffmpeg_tracking_state() {
+    reset_stats_display();
     update_progress_time();
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
@@ -681,8 +764,15 @@ async fn spawn_direct_ffmpeg(
                 set_high_priority(pid_value);
             }
 
+            reset_ffmpeg_tracking_state();
+
             if let Some(stderr) = child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level, "ffmpeg", true);
+                spawn_ffmpeg_stderr_monitor(
+                    stderr,
+                    log_level,
+                    "ffmpeg",
+                    Some(FfmpegStatsRole::Push),
+                );
             }
 
             let process = FfmpegProcess {
@@ -693,7 +783,6 @@ async fn spawn_direct_ffmpeg(
             let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
 
-            reset_ffmpeg_tracking_state();
             start_ffmpeg_timeout_monitor(STARTUP_NO_STATS_TIMEOUT_SECS);
         }
         Err(e) => {
@@ -777,8 +866,15 @@ async fn spawn_cached_ffmpeg(
                 set_high_priority(pid_value);
             }
 
+            reset_ffmpeg_tracking_state();
+
             if let Some(stderr) = cache_child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg 缓存写入", false);
+                spawn_ffmpeg_stderr_monitor(
+                    stderr,
+                    log_level.clone(),
+                    "ffmpeg 缓存写入",
+                    Some(FfmpegStatsRole::Cache),
+                );
             }
 
             let process = FfmpegProcess {
@@ -848,10 +944,7 @@ async fn spawn_cached_ffmpeg(
                 match reader_cmd.spawn() {
                     Ok(mut reader_child) => {
                         let reader_pid = reader_child.id();
-                        tracing::info!(
-                            "🚀 ffmpeg 延迟推流进程已启动 (PID: {:?})",
-                            reader_pid
-                        );
+                        tracing::info!("🚀 ffmpeg 延迟推流进程已启动 (PID: {:?})", reader_pid);
                         if let Some(pid_value) = reader_pid {
                             set_high_priority(pid_value);
                         }
@@ -860,7 +953,7 @@ async fn spawn_cached_ffmpeg(
                                 stderr,
                                 reader_log_level,
                                 "ffmpeg 延迟推流",
-                                true,
+                                Some(FfmpegStatsRole::Push),
                             );
                         }
 
@@ -876,7 +969,6 @@ async fn spawn_cached_ffmpeg(
                 }
             });
 
-            reset_ffmpeg_tracking_state();
             start_ffmpeg_timeout_monitor(cache_startup_timeout_secs(latency_secs));
         }
         Err(e) => {
