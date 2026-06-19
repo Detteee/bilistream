@@ -439,6 +439,29 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
+const COL_PROCESS: usize = 11;
+const COL_TIME: usize = 12;
+const COL_BITRATE: usize = 12;
+const COL_SPEED: usize = 8;
+
+fn stats_col_inner(content_width: usize) -> usize {
+    content_width + 2
+}
+
+fn stats_border_line(left: char, mid: char, right: char) -> String {
+    let mut line = String::new();
+    line.push(left);
+    line.push_str(&"─".repeat(stats_col_inner(COL_PROCESS)));
+    line.push(mid);
+    line.push_str(&"─".repeat(stats_col_inner(COL_TIME)));
+    line.push(mid);
+    line.push_str(&"─".repeat(stats_col_inner(COL_BITRATE)));
+    line.push(mid);
+    line.push_str(&"─".repeat(stats_col_inner(COL_SPEED)));
+    line.push(right);
+    line
+}
+
 #[derive(Clone, Copy)]
 enum FfmpegStatsRole {
     Cache,
@@ -487,22 +510,42 @@ impl FfmpegStatsDisplay {
         }
 
         let lines = [
-            "+-------------+--------------+--------------+----------+".to_string(),
-            "| Process     | Time         | Bitrate      | Speed    |".to_string(),
-            "+-------------+--------------+--------------+----------+".to_string(),
+            stats_border_line('┌', '┬', '┐'),
+            Self::header_row(),
+            stats_border_line('├', '┼', '┤'),
             Self::row("HLS Cache", self.cache.as_ref()),
             Self::row("RTMP Push", self.push.as_ref()),
-            "+-------------+--------------+--------------+----------+".to_string(),
+            stats_border_line('└', '┴', '┘'),
         ];
 
         if self.rendered_lines > 0 {
             eprint!("\x1b[{}F", self.rendered_lines);
         }
-        for line in &lines {
-            eprintln!("\x1b[2K{}", line);
+        for (index, line) in lines.iter().enumerate() {
+            if index == 0 {
+                eprintln!("\x1b[2K\x1b[1m{}", line);
+            } else if index == lines.len() - 1 {
+                eprintln!("\x1b[2K{}\x1b[0m", line);
+            } else {
+                eprintln!("\x1b[2K{}", line);
+            }
         }
         let _ = std::io::stderr().flush();
         self.rendered_lines = lines.len();
+    }
+
+    fn header_row() -> String {
+        format!(
+            "│ {:<width1$} │ {:<width2$} │ {:<width3$} │ {:<width4$} │",
+            "Process",
+            "Time",
+            "Bitrate",
+            "Speed",
+            width1 = COL_PROCESS,
+            width2 = COL_TIME,
+            width3 = COL_BITRATE,
+            width4 = COL_SPEED,
+        )
     }
 
     fn row(label: &str, sample: Option<&FfmpegStatsSample>) -> String {
@@ -513,11 +556,15 @@ impl FfmpegStatsDisplay {
             .unwrap_or_else(|| "-".to_string());
 
         format!(
-            "| {:<11} | {:<12} | {:<12} | {:<8} |",
-            truncate_cell(label, 11),
-            truncate_cell(time, 12),
-            truncate_cell(bitrate, 12),
-            truncate_cell(&speed, 8)
+            "│ {:<width1$} │ {:<width2$} │ {:<width3$} │ {:<width4$} │",
+            truncate_cell(label, COL_PROCESS),
+            truncate_cell(time, COL_TIME),
+            truncate_cell(bitrate, COL_BITRATE),
+            truncate_cell(&speed, COL_SPEED),
+            width1 = COL_PROCESS,
+            width2 = COL_TIME,
+            width3 = COL_BITRATE,
+            width4 = COL_SPEED,
         )
     }
 }
