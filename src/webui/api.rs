@@ -74,6 +74,8 @@ pub async fn refresh_status_cache_config() {
                 yt_status.area_id = cfg.youtube.area_v2;
                 yt_status.area_name = yt_area_name;
                 yt_status.quality = cfg.youtube.quality.clone();
+                yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
+                yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
                 // Keep existing: is_live, title, topic
             } else {
                 // Create new status entry with default live status
@@ -87,6 +89,8 @@ pub async fn refresh_status_cache_config() {
                     topic: Some("-".to_string()),
                     quality: cfg.youtube.quality.clone(),
                     crop_enabled: cfg.youtube.crop.is_some(),
+                    ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+                    ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
                 });
             }
         }
@@ -103,6 +107,8 @@ pub async fn refresh_status_cache_config() {
                 tw_status.area_id = cfg.twitch.area_v2;
                 tw_status.area_name = tw_area_name;
                 tw_status.quality = cfg.twitch.quality.clone();
+                tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
+                tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
                 // Keep existing: is_live, title, game
             } else {
                 // Create new status entry with default live status
@@ -116,6 +122,8 @@ pub async fn refresh_status_cache_config() {
                     game: Some("-".to_string()),
                     quality: cfg.twitch.quality.clone(),
                     crop_enabled: cfg.twitch.crop.is_some(),
+                    ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+                    ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
                 });
             }
         }
@@ -178,6 +186,8 @@ pub struct YtStatus {
     pub area_id: u64,
     pub area_name: String,
     pub crop_enabled: bool,
+    pub ffmpeg_cache_enabled: bool,
+    pub ffmpeg_cache_latency_secs: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -191,6 +201,8 @@ pub struct TwStatus {
     pub area_id: u64,
     pub area_name: String,
     pub crop_enabled: bool,
+    pub ffmpeg_cache_enabled: bool,
+    pub ffmpeg_cache_latency_secs: u64,
 }
 
 pub async fn get_status() -> impl IntoResponse {
@@ -327,6 +339,10 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "cookies_file": cfg.youtube.cookies_file,
             "cookies_from_browser": cfg.youtube.cookies_from_browser,
             "deno_path": cfg.youtube.deno_path,
+            "ffmpeg_cache": {
+                "enabled": cfg.youtube.ffmpeg_cache.enabled,
+                "latency_secs": cfg.youtube.ffmpeg_cache.latency_secs,
+            },
         },
         "twitch": {
             "enable_monitor": cfg.twitch.enable_monitor,
@@ -335,11 +351,11 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
             "proxy": cfg.twitch.proxy,
+            "ffmpeg_cache": {
+                "enabled": cfg.twitch.ffmpeg_cache.enabled,
+                "latency_secs": cfg.twitch.ffmpeg_cache.latency_secs,
+            },
         },
-        "ffmpeg_cache": {
-            "enabled": cfg.ffmpeg_cache.enabled,
-            "latency_secs": cfg.ffmpeg_cache.latency_secs,
-        }
     });
 
     Ok(Json(config_json))
@@ -364,8 +380,6 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
-    ffmpeg_cache_enabled: Option<bool>,
-    ffmpeg_cache_latency_secs: Option<u64>,
 }
 
 pub async fn update_config(
@@ -456,12 +470,6 @@ pub async fn update_config(
         } else {
             Some(youtube_deno_path)
         };
-    }
-    if let Some(enabled) = payload.ffmpeg_cache_enabled {
-        cfg.ffmpeg_cache.enabled = enabled;
-    }
-    if let Some(latency_secs) = payload.ffmpeg_cache_latency_secs {
-        cfg.ffmpeg_cache.latency_secs = latency_secs.clamp(1, 60);
     }
 
     // Save config
@@ -1052,6 +1060,7 @@ pub async fn save_setup_config(
                 quality: "best".to_string(),
                 proxy: None,
                 crop: None,
+                ffmpeg_cache: crate::config::FfmpegCache::default(),
             },
             youtube: crate::config::Youtube {
                 enable_monitor: true,
@@ -1064,13 +1073,13 @@ pub async fn save_setup_config(
                 proxy: None,
                 deno_path: None,
                 crop: None,
+                ffmpeg_cache: crate::config::FfmpegCache::default(),
             },
             holodex_api_key: None,
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
-            ffmpeg_cache: crate::config::FfmpegCache::default(),
         }
     };
 
@@ -1807,6 +1816,8 @@ pub async fn switch_to_holodex_stream(
         area_id: cfg.youtube.area_v2,
         area_name: yt_area_name,
         crop_enabled: cfg.youtube.crop.is_some(),
+        ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+        ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
     });
 
     update_status_cache(current_cache);
@@ -1920,6 +1931,8 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         area_name: crate::plugins::get_area_name(cfg.youtube.area_v2)
             .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2)),
         crop_enabled: cfg.youtube.crop.is_some(),
+        ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+        ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
     });
 
     update_status_cache(current_cache);
@@ -1994,6 +2007,8 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         area_name: crate::plugins::get_area_name(cfg.twitch.area_v2)
             .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2)),
         crop_enabled: cfg.twitch.crop.is_some(),
+        ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+        ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
     });
 
     update_status_cache(current_cache);
@@ -2861,6 +2876,77 @@ pub async fn get_crop(
     Ok(Json(ApiResponse {
         success: true,
         data: Some(crop),
+        message: None,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateFfmpegCacheRequest {
+    pub platform: String,
+    pub enabled: bool,
+    pub latency_secs: Option<u64>,
+}
+
+pub async fn update_ffmpeg_cache(
+    Json(payload): Json<UpdateFfmpegCacheRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let cache = match payload.platform.as_str() {
+        "youtube" => &mut cfg.youtube.ffmpeg_cache,
+        "twitch" => &mut cfg.twitch.ffmpeg_cache,
+        _ => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Invalid platform".to_string()),
+            });
+        }
+    };
+
+    cache.enabled = payload.enabled;
+    if let Some(latency_secs) = payload.latency_secs {
+        cache.latency_secs = latency_secs.clamp(1, 60);
+    }
+
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    set_config_updated();
+    refresh_status_cache_config().await;
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("HLS cache configuration updated".to_string()),
+    })
+}
+
+pub async fn get_ffmpeg_cache(
+    platform: String,
+) -> Result<Json<ApiResponse<crate::config::FfmpegCache>>, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let cache = match platform.as_str() {
+        "youtube" => cfg.youtube.ffmpeg_cache.clone(),
+        "twitch" => cfg.twitch.ffmpeg_cache.clone(),
+        _ => {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some("Invalid platform".to_string()),
+            }));
+        }
+    };
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(cache),
         message: None,
     }))
 }

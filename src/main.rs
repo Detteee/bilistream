@@ -5,7 +5,7 @@
 )]
 
 use bilistream::config::{
-    load_config, save_config, BiliLive, Config, Credentials, FfmpegCache, Twitch, Youtube,
+    load_config, save_config, BiliLive, Config, Credentials, Twitch, Youtube,
 };
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Twitch as TwitchClient;
@@ -268,6 +268,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_id: cfg.youtube.area_v2,
                     area_name: yt_area_name,
                     crop_enabled: cfg.youtube.crop.is_some(),
+                    ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+                    ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
                 })
             } else {
                 None
@@ -285,6 +287,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     area_id: cfg.twitch.area_v2,
                     area_name: tw_area_name,
                     crop_enabled: cfg.twitch.crop.is_some(),
+                    ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+                    ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
                 })
             } else {
                 None
@@ -739,6 +743,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .map(|c| (c.width, c.height, c.x, c.y))
                 };
 
+                let cache = if platform == "YT" {
+                    &cfg.youtube.ffmpeg_cache
+                } else {
+                    &cfg.twitch.ffmpeg_cache
+                };
+
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -747,8 +757,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     ffmpeg_log_level.to_string(),
                     crop,
                     FfmpegCacheOptions {
-                        enabled: cfg.ffmpeg_cache.enabled,
-                        latency_secs: cfg.ffmpeg_cache.latency_secs,
+                        enabled: cache.enabled,
+                        latency_secs: cache.latency_secs,
                     },
                 )
                 .await;
@@ -2161,6 +2171,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             quality: tw_quality,
             proxy: tw_proxy,
             crop: None,
+            ffmpeg_cache: Default::default(),
         },
         youtube: Youtube {
             enable_monitor: true,
@@ -2173,6 +2184,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             proxy: yt_proxy,
             deno_path: None,
             crop: None,
+            ffmpeg_cache: Default::default(),
         },
         holodex_api_key: if holodex_api_key.is_empty() {
             None
@@ -2187,7 +2199,6 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         enable_lol_monitor,
         lol_monitor_interval: Some(1),
         anti_collision_list: collision_map,
-        ffmpeg_cache: FfmpegCache::default(),
     };
 
     // Write config file as JSON

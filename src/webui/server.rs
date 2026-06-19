@@ -65,11 +65,23 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/manage/channels/{name}", delete(api::delete_channel))
         .route("/crop/capture/{platform}", post(api::capture_frame))
         .route("/crop/update", post(api::update_crop))
+        .route("/ffmpeg-cache/update", post(api::update_ffmpeg_cache))
         .route(
             "/crop/{platform}",
             get(
                 |axum::extract::Path(platform): axum::extract::Path<String>| async move {
                     match api::get_crop(platform).await {
+                        Ok(response) => response.into_response(),
+                        Err(status) => status.into_response(),
+                    }
+                },
+            ),
+        )
+        .route(
+            "/ffmpeg-cache/{platform}",
+            get(
+                |axum::extract::Path(platform): axum::extract::Path<String>| async move {
+                    match api::get_ffmpeg_cache(platform).await {
                         Ok(response) => response.into_response(),
                         Err(status) => status.into_response(),
                     }
