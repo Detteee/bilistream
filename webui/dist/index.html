@@ -172,6 +172,39 @@
       border-bottom: none;
     }
 
+    .info-row.info-row-label-center {
+      align-items: center;
+    }
+
+    .bili-network-content {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .bili-network-cache-layout {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .bili-network-quality {
+      color: var(--text-primary);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .bili-network-speeds {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      color: var(--text-primary);
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
     .info-label {
       color: var(--text-secondary);
       font-weight: 500;
@@ -1110,7 +1143,16 @@
           </div>
           <div class="info-row" id="bili-stream-quality-row" style="display: none;">
             <span class="info-label">网络</span>
-            <span class="info-value" id="bili-stream-quality">-</span>
+            <div class="bili-network-content">
+              <span class="info-value" id="bili-stream-quality-simple">-</span>
+              <div class="bili-network-cache-layout" id="bili-stream-quality-cache" style="display: none;">
+                <span class="bili-network-quality" id="bili-stream-quality-label">-</span>
+                <div class="bili-network-speeds">
+                  <span id="bili-stream-cache-speed">缓存 -</span>
+                  <span id="bili-stream-push-speed">推送 -</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -4152,35 +4194,45 @@
 
             // Update stream quality
             const qualityRow = document.getElementById('bili-stream-quality-row');
-            const qualityElement = document.getElementById('bili-stream-quality');
+            const qualitySimple = document.getElementById('bili-stream-quality-simple');
+            const qualityCache = document.getElementById('bili-stream-quality-cache');
+            const qualityLabel = document.getElementById('bili-stream-quality-label');
+            const cacheSpeedEl = document.getElementById('bili-stream-cache-speed');
+            const pushSpeedEl = document.getElementById('bili-stream-push-speed');
+
+            function applyBiliStreamQualityColor(element, quality) {
+              if (quality === '流畅') {
+                element.style.color = '#10b981';
+              } else if (quality === '波动') {
+                element.style.color = '#f59e0b';
+              } else if (quality === '卡顿') {
+                element.style.color = '#ef4444';
+              } else {
+                element.style.color = '';
+              }
+            }
+
             if (bili.is_live && (bili.stream_quality || bili.hls_cache_active)) {
               qualityRow.style.display = '';
-              let speedText = '';
               if (bili.hls_cache_active) {
-                const cacheText = bili.stream_cache_speed
-                  ? `${bili.stream_cache_speed.toFixed(2)}x`
-                  : '-';
-                const pushText = bili.stream_speed
-                  ? `${bili.stream_speed.toFixed(2)}x`
-                  : '-';
-                speedText = ` (缓存 ${cacheText} / 推送 ${pushText})`;
-              } else if (bili.stream_speed) {
-                speedText = ` (${bili.stream_speed.toFixed(2)}x)`;
-              }
-              qualityElement.textContent = (bili.stream_quality || '-') + speedText;
-
-              // Set color based on quality
-              if (bili.stream_quality === '流畅') {
-                qualityElement.style.color = '#10b981'; // green
-              } else if (bili.stream_quality === '波动') {
-                qualityElement.style.color = '#f59e0b'; // orange
-              } else if (bili.stream_quality === '卡顿') {
-                qualityElement.style.color = '#ef4444'; // red
+                qualityRow.classList.add('info-row-label-center');
+                qualitySimple.style.display = 'none';
+                qualityCache.style.display = 'flex';
+                qualityLabel.textContent = bili.stream_quality || '-';
+                cacheSpeedEl.textContent = `缓存 ${bili.stream_cache_speed ? `${bili.stream_cache_speed.toFixed(2)}x` : '-'}`;
+                pushSpeedEl.textContent = `推送 ${bili.stream_speed ? `${bili.stream_speed.toFixed(2)}x` : '-'}`;
+                applyBiliStreamQualityColor(qualityLabel, bili.stream_quality);
               } else {
-                qualityElement.style.color = '';
+                qualityRow.classList.remove('info-row-label-center');
+                qualitySimple.style.display = '';
+                qualityCache.style.display = 'none';
+                const speedText = bili.stream_speed ? ` (${bili.stream_speed.toFixed(2)}x)` : '';
+                qualitySimple.textContent = (bili.stream_quality || '-') + speedText;
+                applyBiliStreamQualityColor(qualitySimple, bili.stream_quality);
               }
             } else {
               qualityRow.style.display = 'none';
+              qualityRow.classList.remove('info-row-label-center');
             }
 
             updateDanmakuCommandToggle(bili.enable_danmaku_command);
