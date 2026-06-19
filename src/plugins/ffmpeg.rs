@@ -518,6 +518,7 @@ fn spawn_ffmpeg_stderr_monitor(
     stderr: tokio::process::ChildStderr,
     log_level: String,
     process_name: &'static str,
+    track_restream_stats: bool,
 ) {
     tokio::spawn(async move {
         use std::io::Write;
@@ -542,19 +543,19 @@ fn spawn_ffmpeg_stderr_monitor(
                         if let Some((compact, speed, stream_time)) =
                             extract_compact_stats(&line_buffer)
                         {
-                            eprint!("\r{:<50}", compact);
-                            let _ = std::io::stderr().flush();
+                            if track_restream_stats {
+                                eprint!("\r{:<50}", compact);
+                                let _ = std::io::stderr().flush();
 
-                            // Update global speed if available (lock-free atomic write)
-                            if let Some(s) = speed {
-                                FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                update_speed_tracking(s);
+                                if let Some(s) = speed {
+                                    FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                    update_speed_tracking(s);
+                                }
+                                if let Some(t) = stream_time {
+                                    update_stream_time(t);
+                                }
                             }
-                            // Update stream time tracking
-                            if let Some(t) = stream_time {
-                                update_stream_time(t);
-                            }
-                            // Update progress time whenever we get stats
+                            // Cache writer stats still count as activity during buffer fill.
                             update_progress_time();
                         }
                     }
@@ -573,18 +574,17 @@ fn spawn_ffmpeg_stderr_monitor(
                             if let Some((compact, speed, stream_time)) =
                                 extract_compact_stats(&line_buffer)
                             {
-                                eprintln!("\r{:<50}", compact);
+                                if track_restream_stats {
+                                    eprintln!("\r{:<50}", compact);
 
-                                // Update global speed if available (lock-free atomic write)
-                                if let Some(s) = speed {
-                                    FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
-                                    update_speed_tracking(s);
+                                    if let Some(s) = speed {
+                                        FFMPEG_SPEED.store(s.to_bits(), Ordering::Relaxed);
+                                        update_speed_tracking(s);
+                                    }
+                                    if let Some(t) = stream_time {
+                                        update_stream_time(t);
+                                    }
                                 }
-                                // Update stream time tracking
-                                if let Some(t) = stream_time {
-                                    update_stream_time(t);
-                                }
-                                // Update progress time whenever we get stats
                                 update_progress_time();
                             }
                         } else if log_level == "debug" || log_level == "info" {
@@ -682,7 +682,7 @@ async fn spawn_direct_ffmpeg(
             }
 
             if let Some(stderr) = child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level, "ffmpeg");
+                spawn_ffmpeg_stderr_monitor(stderr, log_level, "ffmpeg", true);
             }
 
             let process = FfmpegProcess {
@@ -778,7 +778,7 @@ async fn spawn_cached_ffmpeg(
             }
 
             if let Some(stderr) = cache_child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg 缓存写入");
+                spawn_ffmpeg_stderr_monitor(stderr, log_level.clone(), "ffmpeg 缓存写入", false);
             }
 
             let process = FfmpegProcess {
@@ -860,6 +860,7 @@ async fn spawn_cached_ffmpeg(
                                 stderr,
                                 reader_log_level,
                                 "ffmpeg 延迟推流",
+                                true,
                             );
                         }
 
