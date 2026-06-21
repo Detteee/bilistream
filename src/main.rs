@@ -402,7 +402,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 } else {
                     (false, None, None)
                 };
-                Some(bilistream::PriorityChannelStatus {
+                Some(bilistream::webui::api::PriorityChannelStatus {
                     enabled: cfg.priority_channel.enabled,
                     channel_name: cfg.priority_channel.channel_name.clone(),
                     is_live,
