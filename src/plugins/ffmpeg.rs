@@ -501,6 +501,7 @@ const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
 const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 9;
 const NETWORK_HISTORY_LIMIT: usize = 60;
 const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
+const CACHE_RATE_WINDOW_MS: u64 = 1000;
 
 #[derive(Clone, Copy)]
 enum FfmpegStatsRole {
@@ -800,7 +801,11 @@ fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
     }
 }
 
-fn update_network_counters_from_bytes(role: FfmpegStatsRole, bitrate_kbps: f32, delta_bytes: u64) {
+fn update_network_counters_from_bytes(
+    role: FfmpegStatsRole,
+    bitrate_kbps: Option<f32>,
+    delta_bytes: u64,
+) {
     let now = now_millis();
     let (bitrate, total, last_sample) = match role {
         FfmpegStatsRole::Cache => (
@@ -815,8 +820,12 @@ fn update_network_counters_from_bytes(role: FfmpegStatsRole, bitrate_kbps: f32, 
         ),
     };
 
-    bitrate.store(bitrate_kbps.to_bits(), Ordering::Relaxed);
-    total.fetch_add(delta_bytes, Ordering::Relaxed);
+    if let Some(kbps) = bitrate_kbps {
+        bitrate.store(kbps.to_bits(), Ordering::Relaxed);
+    }
+    if delta_bytes > 0 {
+        total.fetch_add(delta_bytes, Ordering::Relaxed);
+    }
     last_sample.store(now, Ordering::Relaxed);
 }
 
@@ -908,7 +917,8 @@ fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
 struct CacheByteTracker {
     cache_dir: PathBuf,
     file_sizes: HashMap<PathBuf, u64>,
-    last_sample_ms: Option<u64>,
+    window_start_ms: Option<u64>,
+    window_bytes: u64,
 }
 
 impl CacheByteTracker {
@@ -916,11 +926,12 @@ impl CacheByteTracker {
         Self {
             cache_dir,
             file_sizes: HashMap::new(),
-            last_sample_ms: None,
+            window_start_ms: None,
+            window_bytes: 0,
         }
     }
 
-    fn sample(&mut self) -> Option<(f32, u64)> {
+    fn sample(&mut self) -> Option<(Option<f32>, u64)> {
         let now = now_millis();
         let mut delta_bytes = 0_u64;
 
@@ -931,19 +942,36 @@ impl CacheByteTracker {
             if !metadata.is_file() {
                 continue;
             }
-
             let size = metadata.len();
-            let previous_size = self.file_sizes.insert(path, size).unwrap_or(0);
-            delta_bytes = delta_bytes.saturating_add(size.saturating_sub(previous_size));
+            let previous = self.file_sizes.insert(path, size).unwrap_or(0);
+            delta_bytes = delta_bytes.saturating_add(size.saturating_sub(previous));
         }
 
-        let previous_sample_ms = self.last_sample_ms.replace(now)?;
-        let elapsed_ms = now.saturating_sub(previous_sample_ms);
-        if elapsed_ms == 0 || elapsed_ms > NETWORK_SAMPLE_GAP_LIMIT_MS || delta_bytes == 0 {
-            return None;
+        if self.window_start_ms.is_none() {
+            self.window_start_ms = Some(now);
+            self.window_bytes = delta_bytes;
+            return (delta_bytes > 0).then_some((None, delta_bytes));
         }
 
-        Some((delta_bytes as f32 * 8.0 / elapsed_ms as f32, delta_bytes))
+        let elapsed_ms = now.saturating_sub(self.window_start_ms.unwrap());
+        if elapsed_ms > NETWORK_SAMPLE_GAP_LIMIT_MS {
+            self.window_start_ms = Some(now);
+            self.window_bytes = 0;
+        }
+
+        self.window_bytes += delta_bytes;
+        let elapsed_ms = now.saturating_sub(self.window_start_ms.unwrap());
+
+        let bitrate_kbps = if elapsed_ms >= CACHE_RATE_WINDOW_MS && self.window_bytes > 0 {
+            let kbps = self.window_bytes as f32 * 8.0 / elapsed_ms as f32;
+            self.window_bytes = 0;
+            self.window_start_ms = Some(now);
+            Some(kbps)
+        } else {
+            None
+        };
+
+        (delta_bytes > 0 || bitrate_kbps.is_some()).then_some((bitrate_kbps, delta_bytes))
     }
 }
 
@@ -1014,9 +1042,11 @@ fn handle_ffmpeg_stderr_line(
                 if let Some((bitrate_kbps, delta_bytes)) =
                     cache_byte_tracker.and_then(CacheByteTracker::sample)
                 {
-                    sample.bitrate = Some(format_network_rate(bitrate_kbps));
-                    sample.bitrate_kbps = Some(bitrate_kbps);
                     update_network_counters_from_bytes(role, bitrate_kbps, delta_bytes);
+                    if let Some(kbps) = bitrate_kbps {
+                        sample.bitrate = Some(format_network_rate(kbps));
+                        sample.bitrate_kbps = Some(kbps);
+                    }
                 }
             } else if let Some(bitrate_kbps) = sample.bitrate_kbps {
                 update_network_counters(role, bitrate_kbps);
