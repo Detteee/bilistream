@@ -134,6 +134,9 @@ pub async fn save_setup_config(
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
+            priority_channel: crate::config::PriorityChannel::default(),
+            enable_youtube_monitor: true,
+            enable_twitch_monitor: true,
         }
     };
     let previous_cfg = cfg.clone();

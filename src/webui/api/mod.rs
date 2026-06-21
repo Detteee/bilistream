@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use super::state::{
     get_logs, get_status_cache, refresh_status_cache_config_from, update_status_cache,
-    update_status_cache_with, BiliStatus, NetworkStatus, TwStatus, YtStatus,
+    update_status_cache_with, BiliStatus, NetworkStatus, PriorityChannelStatus, TwStatus, YtStatus,
 };
 use crate::config::{load_config, Config};
 use crate::plugins::{

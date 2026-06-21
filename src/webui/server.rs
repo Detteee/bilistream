@@ -56,6 +56,7 @@ pub async fn start_webui_on_listener(
         .route("/events", get(events::sse_events))
         .route("/network-status", get(api::get_network_status))
         .route("/config", get(api::get_config).post(api::update_config))
+        .route("/priority-channel", post(api::update_priority_channel))
         .route("/start", post(api::start_stream))
         .route("/stop", post(api::stop_stream))
         .route("/restart", post(api::restart_stream))
@@ -82,6 +83,10 @@ pub async fn start_webui_on_listener(
         .route("/holodex/switch", post(api::switch_to_holodex_stream))
         .route("/refresh/youtube", get(api::refresh_youtube_status))
         .route("/refresh/twitch", get(api::refresh_twitch_status))
+        .route(
+            "/refresh/priority-channel",
+            get(api::refresh_priority_channel_status),
+        )
         .route("/banned-keywords", get(api::get_banned_keywords))
         .route("/banned-keywords", post(api::update_banned_keywords))
         .route("/toggle-youtube-monitor", post(api::toggle_youtube_monitor))

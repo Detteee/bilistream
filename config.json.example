@@ -2,6 +2,8 @@
   "auto_cover": true,                    // 自动更换封面
   "enable_anti_collision": true,         // 撞车监控
   "interval": 30,                        // 检测直播间隔(秒)
+  "enable_youtube_monitor": true,        // 启用YouTube监控转播
+  "enable_twitch_monitor": true,         // 启用Twitch监控转播
   
   // ===== Bilibili 直播配置 =====
   "bililive": {
@@ -56,5 +58,15 @@
     // "主播名1": 房间号1,                // 主播名仅用于弹幕提醒
     // "主播名2": 房间号2,                // 房间号用于检测撞车
     // 可添加更多需要监控的直播间...
+  },
+
+  // ===== 优先频道配置 =====
+  "priority_channel": {
+    "enabled": true,                     // 启用优先频道监控
+    "channel_name": "Kamito",            // 优先频道名称 (来自 channels.json)
+    "youtube_channel_id": "UCgYCMluaLpERsyNXlPOvBtA",  // YouTube频道ID (自动从channels.json获取)
+    "twitch_channel_id": "kamito_jp",    // Twitch频道ID (自动从channels.json获取)
+    "default_area": 235,                   // 优先频道的默认分区ID
+    "auto_restart": false                  // 优先频道下播后自动重启主频道监控
   }
 }

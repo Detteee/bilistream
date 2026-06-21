@@ -82,6 +82,12 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
         });
     }
 
+    if cfg.priority_channel.enabled && !cfg.priority_channel.channel_name.is_empty() {
+        if let Err(e) = refresh_priority_channel_status_cache_with_config(&cfg).await {
+            tracing::warn!("WebUI priority channel status refresh failed: {}", e);
+        }
+    }
+
     Ok(cfg.interval)
 }
 
@@ -166,6 +172,81 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
                 ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
             });
         })
+    });
+
+    Ok(())
+}
+
+pub(crate) async fn refresh_priority_channel_status_cache_with_config(
+    cfg: &Config,
+) -> Result<(), String> {
+    if !cfg.priority_channel.enabled {
+        return Err("Priority channel not enabled".to_string());
+    }
+
+    if cfg.priority_channel.channel_name.is_empty() {
+        return Err("Priority channel not configured".to_string());
+    }
+
+    let (priority_yt_is_live, priority_yt_title): (bool, Option<String>) =
+        if !cfg.priority_channel.youtube_channel_id.is_empty() {
+            match crate::plugins::youtube::get_holodex_streams(
+                vec![cfg.priority_channel.youtube_channel_id.clone()],
+                false,
+            )
+            .await
+            {
+                Ok(streams) => {
+                    let own_channel_streams: Vec<_> = streams
+                        .iter()
+                        .filter(|s| s.channel.id == cfg.priority_channel.youtube_channel_id)
+                        .collect();
+
+                    if let Some(stream) = own_channel_streams.first() {
+                        (stream.status == "live", Some(stream.title.clone()))
+                    } else {
+                        (false, None)
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Priority YouTube status refresh failed: {}", e);
+                    (false, None)
+                }
+            }
+        } else {
+            (false, None)
+        };
+
+    let (priority_tw_is_live, priority_tw_title): (bool, Option<String>) =
+        if !cfg.priority_channel.twitch_channel_id.is_empty() {
+            match crate::plugins::get_twitch_status(&cfg.priority_channel.twitch_channel_id).await {
+                Ok((is_live, _, title, _)) => (is_live, title),
+                Err(e) => {
+                    tracing::debug!("Priority Twitch status refresh failed: {}", e);
+                    (false, None)
+                }
+            }
+        } else {
+            (false, None)
+        };
+
+    let (is_live, platform, title) = if priority_yt_is_live {
+        (true, Some("youtube".to_string()), priority_yt_title)
+    } else if priority_tw_is_live {
+        (true, Some("twitch".to_string()), priority_tw_title)
+    } else {
+        (false, None, None)
+    };
+
+    update_status_cache_with(|status| {
+        status.priority_channel = Some(PriorityChannelStatus {
+            enabled: cfg.priority_channel.enabled,
+            channel_name: cfg.priority_channel.channel_name.clone(),
+            is_live,
+            platform,
+            title,
+            default_area: cfg.priority_channel.default_area,
+        });
     });
 
     Ok(())
@@ -347,6 +428,49 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
             success: false,
             data: None,
             message: Some(format!("Failed to get Twitch status: {}", e)),
+        }),
+    }
+}
+
+// Refresh Priority Channel status (fetch fresh data and update cache)
+pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
+        }
+    };
+
+    if !cfg.priority_channel.enabled {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("Priority channel not enabled".to_string()),
+        });
+    }
+
+    if cfg.priority_channel.channel_name.is_empty() {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("Priority channel not configured".to_string()),
+        });
+    }
+
+    match refresh_priority_channel_status_cache_with_config(&cfg).await {
+        Ok(()) => Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("Priority channel status refreshed".to_string()),
+        }),
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to get priority channel status: {}", e)),
         }),
     }
 }

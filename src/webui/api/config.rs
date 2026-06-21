@@ -23,6 +23,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "youtube_websub_callback_url": cfg.youtube_websub_callback_url.clone().unwrap_or_default(),
         "youtube_websub_port": cfg.youtube_websub_port,
         "anti_collision_list": cfg.anti_collision_list.clone(),
+        "enable_youtube_monitor": cfg.enable_youtube_monitor,
+        "enable_twitch_monitor": cfg.enable_twitch_monitor,
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -53,6 +55,14 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
                 "latency_secs": cfg.twitch.ffmpeg_cache.latency_secs,
             },
         },
+        "priority_channel": {
+            "enabled": cfg.priority_channel.enabled,
+            "channel_name": cfg.priority_channel.channel_name,
+            "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
+            "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
+            "default_area": cfg.priority_channel.default_area,
+            "auto_restart": cfg.priority_channel.auto_restart,
+        }
     });
 
     Ok(Json(config_json))
@@ -378,5 +388,59 @@ pub async fn update_config(
         success: true,
         data: None,
         message: Some("配置已更新".to_string()),
+    })
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePriorityChannelRequest {
+    enabled: Option<bool>,
+    channel_name: Option<String>,
+    default_area: Option<u64>,
+    auto_restart: Option<bool>,
+}
+
+pub async fn update_priority_channel(
+    Json(payload): Json<UpdatePriorityChannelRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Update fields
+    if let Some(enabled) = payload.enabled {
+        cfg.priority_channel.enabled = enabled;
+    }
+    if let Some(channel_name) = payload.channel_name {
+        cfg.priority_channel.channel_name = channel_name;
+        // Update platform IDs from channels.json
+        crate::config::update_priority_channel_from_channels(&mut cfg);
+    }
+    if let Some(default_area) = payload.default_area {
+        cfg.priority_channel.default_area = default_area;
+    }
+    if let Some(auto_restart) = payload.auto_restart {
+        cfg.priority_channel.auto_restart = auto_restart;
+    }
+
+    // Save config
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Set config updated flag so main loop can detect the change
+    set_config_updated();
+
+    // Refresh status cache with updated configuration
+    refresh_status_cache_config().await;
+
+    // Refresh priority channel status in background (independent of main loop)
+    tokio::spawn(async {
+        let _ = refresh_priority_channel_status().await;
+    });
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("优先频道配置已更新".to_string()),
     })
 }
