@@ -128,25 +128,6 @@ pub async fn refresh_status_cache_config() {
             }
         }
 
-        // Update Priority Channel status with fresh config (preserve live status)
-        if let Some(ref mut priority_status) = cached_status.priority_channel {
-            // Update only configuration fields, preserve live status
-            priority_status.enabled = cfg.priority_channel.enabled;
-            priority_status.channel_name = cfg.priority_channel.channel_name.clone();
-            priority_status.default_area = cfg.priority_channel.default_area;
-            // Keep existing: is_live, platform, title
-        } else {
-            // Create new priority channel status entry
-            cached_status.priority_channel = Some(PriorityChannelStatus {
-                enabled: cfg.priority_channel.enabled,
-                channel_name: cfg.priority_channel.channel_name.clone(),
-                is_live: false, // Will be updated by background refresh
-                platform: None, // Will be updated by background refresh
-                title: None,    // Will be updated by background refresh
-                default_area: cfg.priority_channel.default_area,
-            });
-        }
-
         update_status_cache(cached_status);
     }
 }
@@ -181,17 +162,6 @@ pub struct StatusData {
     pub bilibili: BiliStatus,
     pub youtube: Option<YtStatus>,
     pub twitch: Option<TwStatus>,
-    pub priority_channel: Option<PriorityChannelStatus>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct PriorityChannelStatus {
-    pub enabled: bool,
-    pub channel_name: String,
-    pub is_live: bool,
-    pub platform: Option<String>, // "youtube" or "twitch"
-    pub title: Option<String>,
-    pub default_area: u64,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -367,9 +337,6 @@ pub async fn get_status() -> impl IntoResponse {
         },
         youtube: youtube_status,
         twitch: twitch_status,
-        priority_channel: cached_status
-            .as_ref()
-            .and_then(|c| c.priority_channel.clone()),
     };
 
     (
@@ -433,8 +400,6 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             .is_some_and(|j| !j.is_empty()),
         "holodex_skip_jwt_verify": cfg.holodex_skip_jwt_verify,
         "anti_collision_list": cfg.anti_collision_list.clone(),
-        "enable_youtube_monitor": cfg.enable_youtube_monitor,
-        "enable_twitch_monitor": cfg.enable_twitch_monitor,
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -465,14 +430,6 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
                 "latency_secs": cfg.twitch.ffmpeg_cache.latency_secs,
             },
         },
-        "priority_channel": {
-            "enabled": cfg.priority_channel.enabled,
-            "channel_name": cfg.priority_channel.channel_name,
-            "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
-            "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
-            "default_area": cfg.priority_channel.default_area,
-            "auto_restart": cfg.priority_channel.auto_restart,
-        }
     });
 
     Ok(Json(config_json))
@@ -501,30 +458,9 @@ pub struct UpdateConfigRequest {
     youtube_cookies_file: Option<String>,
 }
 
-fn update_config_requires_stream_reload(payload: &UpdateConfigRequest) -> bool {
-    payload.interval.is_some()
-        || payload.auto_cover.is_some()
-        || payload.enable_anti_collision.is_some()
-        || payload.enable_lol_monitor.is_some()
-        || payload.lol_monitor_interval.is_some()
-        || payload.riot_api_key.is_some()
-        || payload.twitch_proxy_region.is_some()
-        || payload.twitch_proxy.is_some()
-        || payload.youtube_proxy.is_some()
-        || payload.youtube_deno_path.is_some()
-        || payload.anti_collision_list.is_some()
-        || payload.enable_danmaku_command.is_some()
-        || payload.youtube_enable_monitor.is_some()
-        || payload.twitch_enable_monitor.is_some()
-        || payload.youtube_cookies_from_browser.is_some()
-        || payload.youtube_cookies_file.is_some()
-}
-
 pub async fn update_config(
     Json(payload): Json<UpdateConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
-    let requires_stream_reload = update_config_requires_stream_reload(&payload);
-
     // Load current config
     let mut cfg = load_config()
         .await
@@ -645,74 +581,18 @@ pub async fn update_config(
         }
     }
 
-    // Holodex JWT/API key only affect the dashboard; don't restart the streaming loop.
-    if requires_stream_reload {
-        set_config_updated();
-
-        // Spawn status cache refresh in background (lightweight operation)
-        tokio::spawn(async {
-            refresh_status_cache_config().await;
-        });
-    }
-
-    Ok(ApiResponse {
-        success: true,
-        data: None,
-        message: Some("配置已更新".to_string()),
-    })
-}
-
-#[derive(Deserialize)]
-pub struct UpdatePriorityChannelRequest {
-    enabled: Option<bool>,
-    channel_name: Option<String>,
-    default_area: Option<u64>,
-    auto_restart: Option<bool>,
-}
-
-pub async fn update_priority_channel(
-    Json(payload): Json<UpdatePriorityChannelRequest>,
-) -> Result<ApiResponse<()>, StatusCode> {
-    let mut cfg = load_config()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Update fields
-    if let Some(enabled) = payload.enabled {
-        cfg.priority_channel.enabled = enabled;
-    }
-    if let Some(channel_name) = payload.channel_name {
-        cfg.priority_channel.channel_name = channel_name;
-        // Update platform IDs from channels.json
-        crate::config::update_priority_channel_from_channels(&mut cfg);
-    }
-    if let Some(default_area) = payload.default_area {
-        cfg.priority_channel.default_area = default_area;
-    }
-    if let Some(auto_restart) = payload.auto_restart {
-        cfg.priority_channel.auto_restart = auto_restart;
-    }
-
-    // Save config
-    crate::config::save_config(&cfg)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     // Set config updated flag so main loop can detect the change
     set_config_updated();
 
-    // Refresh status cache with updated configuration
-    refresh_status_cache_config().await;
-
-    // Refresh priority channel status in background (independent of main loop)
+    // Spawn status cache refresh in background (lightweight operation)
     tokio::spawn(async {
-        let _ = refresh_priority_channel_status().await;
+        refresh_status_cache_config().await;
     });
 
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("优先频道配置已更新".to_string()),
+        message: Some("配置已更新".to_string()),
     })
 }
 
@@ -1309,9 +1189,6 @@ pub async fn save_setup_config(
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
-            priority_channel: crate::config::PriorityChannel::default(),
-            enable_youtube_monitor: true,
-            enable_twitch_monitor: true,
         }
     };
 
@@ -2543,7 +2420,6 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
             },
             youtube: None,
             twitch: None,
-            priority_channel: None,
         }
     });
 
@@ -2626,7 +2502,6 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
             },
             youtube: None,
             twitch: None,
-            priority_channel: None,
         }
     });
 
@@ -2651,112 +2526,6 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         success: true,
         data: Some(()),
         message: Some("Twitch status refreshed".to_string()),
-    })
-}
-
-// Refresh Priority Channel status (fetch fresh data and update cache)
-pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
-    let cfg = match load_config().await {
-        Ok(c) => c,
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to load config: {}", e)),
-            });
-        }
-    };
-
-    if !cfg.priority_channel.enabled {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some("Priority channel not enabled".to_string()),
-        });
-    }
-
-    if cfg.priority_channel.channel_name.is_empty() {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some("Priority channel not configured".to_string()),
-        });
-    }
-
-    // Check priority channel's YouTube status
-    let (priority_yt_is_live, priority_yt_title): (bool, Option<String>) =
-        if !cfg.priority_channel.youtube_channel_id.is_empty() {
-            // Always fetch fresh data for priority channel refresh, regardless of main config
-            match crate::plugins::youtube::get_holodex_streams(
-                vec![cfg.priority_channel.youtube_channel_id.clone()],
-                false,
-            )
-            .await
-            {
-                Ok(streams) => {
-                    // Filter to only include streams where the priority channel is the actual streamer
-                    // This excludes collaboration streams on other channels
-                    let own_channel_streams: Vec<_> = streams
-                        .iter()
-                        .filter(|s| s.channel.id == cfg.priority_channel.youtube_channel_id)
-                        .collect();
-
-                    if let Some(stream) = own_channel_streams.first() {
-                        (stream.status == "live", Some(stream.title.clone()))
-                    } else {
-                        (false, None)
-                    }
-                }
-                Err(_) => (false, None),
-            }
-        } else {
-            (false, None)
-        };
-
-    // Check priority channel's Twitch status
-    let (priority_tw_is_live, priority_tw_title): (bool, Option<String>) =
-        if !cfg.priority_channel.twitch_channel_id.is_empty() {
-            // Always fetch fresh data for priority channel refresh, regardless of main config
-            match crate::plugins::get_twitch_status(&cfg.priority_channel.twitch_channel_id).await {
-                Ok((is_live, _, title, _)) => (is_live, title),
-                Err(_) => (false, None),
-            }
-        } else {
-            (false, None)
-        };
-
-    // Determine priority channel status (same logic as main loop)
-    let (is_live, platform, title) = if priority_yt_is_live {
-        (true, Some("youtube".to_string()), priority_yt_title)
-    } else if priority_tw_is_live {
-        (true, Some("twitch".to_string()), priority_tw_title)
-    } else {
-        (false, None, None)
-    };
-
-    // Update cache with fresh priority channel status
-    let mut current_cache = get_status_cache().unwrap_or_else(|| StatusData {
-        bilibili: BiliStatus::default(),
-        youtube: None,
-        twitch: None,
-        priority_channel: None,
-    });
-
-    current_cache.priority_channel = Some(PriorityChannelStatus {
-        enabled: cfg.priority_channel.enabled,
-        channel_name: cfg.priority_channel.channel_name.clone(),
-        is_live,
-        platform,
-        title,
-        default_area: cfg.priority_channel.default_area,
-    });
-
-    update_status_cache(current_cache);
-
-    Json(ApiResponse {
-        success: true,
-        data: Some(()),
-        message: Some("Priority channel status refreshed".to_string()),
     })
 }
 
@@ -3384,12 +3153,7 @@ pub async fn capture_frame(
                 _ => "asl", // Default to asl if invalid
             };
 
-            let channel_id = params
-                .get("channel_id")
-                .filter(|id| !id.is_empty())
-                .map(|s| s.as_str())
-                .unwrap_or(&cfg.twitch.channel_id);
-            let channel_url = format!("https://twitch.tv/{}", channel_id);
+            let channel_url = format!("https://twitch.tv/{}", cfg.twitch.channel_id);
 
             let mut cmd = tokio::process::Command::new("streamlink");
 

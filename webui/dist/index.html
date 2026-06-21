@@ -2031,176 +2031,6 @@
           </div>
         </div>
 
-        <div class="card" id="priority-channel-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h2 style="margin: 0;">
-              <span class="status-indicator" id="priority-status"></span>
-              优先频道
-            </h2>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <!-- Toggle Switch -->
-              <label class="toggle-label">
-                <div class="toggle-switch">
-                  <input type="checkbox" id="priority-toggle" onchange="togglePriorityChannel()">
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <button id="refreshPriorityBtn" onclick="refreshPriorityStatus()" title="刷新状态"
-                style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg id="refreshPriorityIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
-                  <path
-                    d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          <div class="info-row">
-            <span class="info-label">频道名称</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-              <span class="info-value" id="priority-channel-name" style="flex: 1; text-align: right;">未配置</span>
-              <button onclick="togglePriorityChannelEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置频道">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 20h9"></path>
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                </svg>
-              </button>
-            </div>
-            <!-- Hidden edit dropdown -->
-            <div id="priority-channel-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="priority-channel-edit-select"
-                  style="flex: 1; padding: 8px; border: 2px solid var(--input-focus); border-radius: 6px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
-                  <option value="">选择频道...</option>
-                </select>
-                <button onclick="savePriorityChannelEdit()"
-                  style="padding: 6px 12px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
-                  保存
-                </button>
-                <button onclick="cancelPriorityChannelEdit()"
-                  style="padding: 6px 12px; background: var(--text-muted); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
-                  取消
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="info-row">
-            <span class="info-label">状态</span>
-            <span class="info-value" id="priority-live-status">未启用</span>
-          </div>
-          <div class="info-row" id="priority-title-row">
-            <span class="info-label">标题</span>
-            <span class="info-value" id="priority-title" style="flex: 1; text-align: right;">-</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">默认分区</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-              <span class="info-value" id="priority-default-area" style="flex: 1; text-align: right;">-</span>
-              <button onclick="togglePriorityAreaEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置默认分区">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 20h9"></path>
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                </svg>
-              </button>
-            </div>
-            <!-- Hidden edit dropdown -->
-            <div id="priority-area-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="priority-area-edit-select"
-                  style="flex: 1; padding: 8px; border: 2px solid var(--input-focus); border-radius: 6px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
-                  <option value="">选择分区...</option>
-                </select>
-                <button onclick="savePriorityAreaEdit()"
-                  style="padding: 6px 12px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
-                  保存
-                </button>
-                <button onclick="cancelPriorityAreaEdit()"
-                  style="padding: 6px 12px; background: var(--text-muted); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
-                  取消
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="info-row">
-            <span class="info-label">自动重启流</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-              <label class="toggle-switch" style="margin: 0; margin-left: auto;">
-                <input type="checkbox" id="priority-auto-restart-toggle" onchange="togglePriorityAutoRestart()">
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="controls" id="holodex-section" style="margin-top: 20px;">
-        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
-          onclick="toggleHolodex()">
-          <svg viewBox="0 0 24 24" focusable="false" style="width: 24px; height: 24px;">
-            <g>
-              <path d="M4.5 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z"
-                fill="url(#holodex-a)">
-              </path>
-              <path d="M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z"
-                fill="url(#holodex-b)">
-              </path>
-            </g>
-            <defs>
-              <linearGradient id="holodex-a" x1=".2" y1="2.8" x2="19.3" y2="18.5" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#F06292"></stop>
-                <stop offset="1" stop-color="#FF3A81"></stop>
-              </linearGradient>
-              <linearGradient id="holodex-b" x1="-4.4" y1="2.8" x2="19.5" y2="11.3" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#5DA2F2"></stop>
-                <stop offset="1" stop-color="#715BF7" stop-opacity=".8"></stop>
-              </linearGradient>
-            </defs>
-          </svg>
-          <span>Holodex 直播监控</span>
-          <span id="holodex-toggle">▼</span>
-        </h2>
-        <div id="holodex-container" style="display: none;">
-          <!-- API Key Configuration Section -->
-          <div id="holodex-api-config"
-            style="display: none; padding: 20px; background: var(--input-bg); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
-            <h3 style="color: var(--heading-color); margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-              🔑 配置 Holodex API Key
-            </h3>
-            <p style="color: var(--text-secondary); margin-bottom: 15px; line-height: 1.6;">
-              Holodex API 用于获取 YouTube 直播状态
-            </p>
-            <div class="control-group" style="margin-bottom: 15px;">
-              <label style="color: var(--text-secondary); font-weight: 500;">API Key</label>
-              <input type="text" id="holodex-api-input" placeholder="输入你的 Holodex API Key"
-                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
-            </div>
-            <div
-              style="background: var(--card-bg); padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid var(--info-border);">
-              <h4 style="color: var(--text-primary); margin-bottom: 10px; font-size: 14px;">📋 如何获取 API Key:</h4>
-              <ol style="color: var(--text-secondary); font-size: 13px; line-height: 1.5; padding-left: 20px;">
-                <li>访问 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
-                    style="color: var(--heading-color);">holodex.net/login</a></li>
-                <li>登录, 复制 API Key 至上方输入框</li>
-              </ol>
-            </div>
-            <div style="display: flex; gap: 10px;">
-              <button class="btn-success" onclick="saveHolodexApiKey()" style="flex: 1;">
-                💾 保存配置
-              </button>
-              <button class="btn-secondary" onclick="testHolodexApiKey()" style="flex: 1;">
-                🧪 测试连接
-              </button>
-            </div>
-          </div>
-
           <!-- Holodex account login moved to modal (toolbar button) -->
 
           <!-- Streams Display Section -->
@@ -2966,7 +2796,6 @@
         enable_lol_monitor: false,
         riot_api_key: '',
         holodex_api_key: '',
-        priority_channel: {},
         bilibili: {},
         youtube: {},
         twitch: {}
@@ -2979,7 +2808,6 @@
           enable_lol_monitor: config.enable_lol_monitor || false,
           riot_api_key: config.riot_api_key || '',
           holodex_api_key: config.holodex_api_key || '',
-          priority_channel: config.priority_channel || window.configData.priority_channel || {},
           bilibili: config.bilibili || window.configData.bilibili || {},
           youtube: config.youtube || window.configData.youtube || {},
           twitch: config.twitch || window.configData.twitch || {}
@@ -3045,11 +2873,6 @@
             updateMonitorToggleStates(config);
             updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
-            // Update priority channel auto-restart toggle
-            const autoRestartToggle = document.getElementById('priority-auto-restart-toggle');
-            if (autoRestartToggle && config.priority_channel) {
-              autoRestartToggle.checked = config.priority_channel.auto_restart || false;
-            }
 
             // Show/hide Holodex sections based on API key configuration
             const holodexSection = document.getElementById('holodex-section');
@@ -3726,264 +3549,6 @@
           showNotification('捕获失败: ' + error.message, 'error');
         }
       }
-
-      // Priority Channel Functions
-      async function togglePriorityChannel() {
-        const toggle = document.getElementById('priority-toggle');
-        const enabled = toggle.checked;
-
-        try {
-          const response = await fetch('/api/priority-channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              enabled: enabled
-            })
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            showNotification(enabled ? '优先频道已启用' : '优先频道已禁用', 'success');
-            // Immediate refresh to show updated state
-            await refreshStatus();
-          } else {
-            // Revert toggle if save failed
-            toggle.checked = !enabled;
-            showNotification(result.message || '保存失败', 'error');
-          }
-        } catch (error) {
-          console.error('Failed to toggle priority channel:', error);
-          // Revert toggle if save failed
-          toggle.checked = !enabled;
-          showNotification('保存失败: ' + error.message, 'error');
-        }
-      }
-
-      // Priority Channel Auto-Restart Toggle
-      async function togglePriorityAutoRestart() {
-        const toggle = document.getElementById('priority-auto-restart-toggle');
-        const enabled = toggle.checked;
-
-        try {
-          const response = await fetch('/api/priority-channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              auto_restart: enabled
-            })
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            showNotification(enabled ? '自动重启流已启用' : '自动重启流已禁用', 'success');
-          } else {
-            // Revert toggle if save failed
-            toggle.checked = !enabled;
-            showNotification(result.message || '保存失败', 'error');
-          }
-        } catch (error) {
-          console.error('Failed to toggle auto restart:', error);
-          // Revert toggle if save failed
-          toggle.checked = !enabled;
-          showNotification('保存失败: ' + error.message, 'error');
-        }
-      }
-
-      // Priority Channel inline editing functions
-      async function togglePriorityChannelEdit() {
-        const channelSpan = document.getElementById('priority-channel-name');
-        const editContainer = document.getElementById('priority-channel-edit-container');
-        const editSelect = document.getElementById('priority-channel-edit-select');
-
-        // Show edit dropdown and hide channel span
-        channelSpan.style.display = 'none';
-        editContainer.style.display = 'flex';
-
-        // Load channels if not already loaded
-        await loadChannelsForPriorityInline();
-        editSelect.focus();
-      }
-
-      async function loadChannelsForPriorityInline() {
-        try {
-          const response = await fetch('/api/channels');
-          const data = await response.json();
-          const select = document.getElementById('priority-channel-edit-select');
-
-          select.innerHTML = '<option value="">选择频道...</option>';
-
-          if (data.channels) {
-            data.channels.forEach(channel => {
-              const option = document.createElement('option');
-              option.value = channel.name;
-              option.textContent = channel.name;
-              select.appendChild(option);
-            });
-
-            // Set current value
-            const currentChannel = document.getElementById('priority-channel-name').textContent;
-            if (currentChannel && currentChannel !== '未配置') {
-              select.value = currentChannel;
-            }
-          }
-        } catch (error) {
-          console.error('Failed to load channels:', error);
-        }
-      }
-
-      function cancelPriorityChannelEdit() {
-        const channelSpan = document.getElementById('priority-channel-name');
-        const editContainer = document.getElementById('priority-channel-edit-container');
-
-        // Hide edit dropdown and show channel span
-        editContainer.style.display = 'none';
-        channelSpan.style.display = 'block';
-      }
-
-      async function savePriorityChannelEdit() {
-        const editSelect = document.getElementById('priority-channel-edit-select');
-        const newChannel = editSelect.value;
-
-        if (!newChannel) {
-          showNotification('请选择一个频道', 'error');
-          return;
-        }
-
-        try {
-          // Get current config first
-          const configResponse = await fetch('/api/config');
-          const configData = await configResponse.json();
-
-          const priorityConfig = {
-            enabled: configData.priority_channel?.enabled || false,
-            channel_name: newChannel,
-            default_area: configData.priority_channel?.default_area || 235
-          };
-
-          const response = await fetch('/api/priority-channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(priorityConfig)
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            showNotification('频道配置已保存', 'success');
-            cancelPriorityChannelEdit();
-            await refreshStatus();
-          } else {
-            showNotification(result.message || '保存失败', 'error');
-          }
-        } catch (error) {
-          console.error('Failed to save priority channel:', error);
-          showNotification('保存失败: ' + error.message, 'error');
-        }
-      }
-
-      async function togglePriorityAreaEdit() {
-        const areaSpan = document.getElementById('priority-default-area');
-        const editContainer = document.getElementById('priority-area-edit-container');
-        const editSelect = document.getElementById('priority-area-edit-select');
-
-        // Show edit dropdown and hide area span
-        areaSpan.style.display = 'none';
-        editContainer.style.display = 'flex';
-
-        // Load areas if not already loaded
-        await loadAreasForPriorityInline();
-        editSelect.focus();
-      }
-
-      async function loadAreasForPriorityInline() {
-        try {
-          const response = await fetch('/api/areas');
-          const data = await response.json();
-          const select = document.getElementById('priority-area-edit-select');
-
-          select.innerHTML = '<option value="">选择分区...</option>';
-
-          if (data.areas) {
-            // Sort areas: 其他单机 (235) first, then others
-            const sortedAreas = [...data.areas].sort((a, b) => {
-              if (a.id === 235) return -1;
-              if (b.id === 235) return 1;
-              return 0;
-            });
-
-            sortedAreas.forEach(area => {
-              const option = document.createElement('option');
-              option.value = area.id;
-              option.textContent = `${area.name} (${area.id})`;
-              select.appendChild(option);
-            });
-
-            // Set current value
-            const currentAreaText = document.getElementById('priority-default-area').textContent;
-            if (currentAreaText && currentAreaText !== '-') {
-              // Extract area ID from text like "其他单机 (235)"
-              const match = currentAreaText.match(/\((\d+)\)/);
-              if (match) {
-                select.value = match[1];
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Failed to load areas:', error);
-        }
-      }
-
-      function cancelPriorityAreaEdit() {
-        const areaSpan = document.getElementById('priority-default-area');
-        const editContainer = document.getElementById('priority-area-edit-container');
-
-        // Hide edit dropdown and show area span
-        editContainer.style.display = 'none';
-        areaSpan.style.display = 'block';
-      }
-
-      async function savePriorityAreaEdit() {
-        const editSelect = document.getElementById('priority-area-edit-select');
-        const newAreaId = parseInt(editSelect.value);
-
-        if (!newAreaId) {
-          showNotification('请选择一个分区', 'error');
-          return;
-        }
-
-        try {
-          // Get current config first
-          const configResponse = await fetch('/api/config');
-          const configData = await configResponse.json();
-
-          const priorityConfig = {
-            enabled: configData.priority_channel?.enabled || false,
-            channel_name: configData.priority_channel?.channel_name || '',
-            default_area: newAreaId
-          };
-
-          const response = await fetch('/api/priority-channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(priorityConfig)
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            showNotification('默认分区已保存', 'success');
-            cancelPriorityAreaEdit();
-            await refreshStatus();
-          } else {
-            showNotification(result.message || '保存失败', 'error');
-          }
-        } catch (error) {
-          console.error('Failed to save priority area:', error);
-          showNotification('保存失败: ' + error.message, 'error');
-        }
-      }
-
-
-
-
 
       // Helper function to get area name by ID
       function getAreaName(areaId) {
@@ -5593,8 +5158,6 @@
           document.getElementById('tw-title')
         );
         syncInfoRowLabelCenter(
-          document.getElementById('priority-title-row'),
-          document.getElementById('priority-title')
         );
       }
 
@@ -5603,8 +5166,6 @@
           ? ['yt-title-row', 'yt-topic-row']
           : platform === 'twitch'
             ? ['tw-title-row', 'tw-game-row']
-            : platform === 'priority'
-              ? ['priority-title-row']
               : [];
         for (const id of rowIds) {
           const row = document.getElementById(id);
@@ -5767,47 +5328,6 @@
         }
       }
 
-      async function refreshPriorityStatus() {
-        const btn = document.getElementById('refreshPriorityBtn');
-        const icon = document.getElementById('refreshPriorityIcon');
-
-        // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
-
-        try {
-          // Call the specific priority channel status refresh endpoint
-          const response = await fetch('/api/refresh/priority-channel', {
-            method: 'GET',
-          });
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const result = await response.json();
-
-          if (result.success) {
-            // Refresh the main status to get the updated priority channel data in the UI
-            await refreshStatus();
-            showNotification('优先频道状态已刷新', 'success');
-          } else {
-            throw new Error(result.message || 'Failed to refresh priority channel status');
-          }
-        } catch (error) {
-          console.error('Error refreshing priority channel status:', error);
-          showNotification('刷新优先频道状态失败', 'error');
-        } finally {
-          // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
-        }
-      }
-
       async function refreshStatus() {
         if (statusRefreshInFlight) {
           return;
@@ -5901,49 +5421,6 @@
             }
 
             // Update Priority Channel status
-            const priorityCard = document.getElementById('priority-channel-card');
-            const priorityToggle = document.getElementById('priority-toggle');
-
-            if (data.data.priority_channel) {
-              const priority = data.data.priority_channel;
-
-              // Always show the card
-              priorityCard.style.display = 'block';
-
-              // Update toggle switch
-              priorityToggle.checked = priority.enabled;
-
-              if (priority.enabled) {
-                document.getElementById('priority-status').className =
-                  `status-indicator ${priority.is_live ? 'status-live' : 'status-offline'}`;
-                setPlatformLiveInfoVisibility('priority', priority.is_live);
-                document.getElementById('priority-channel-name').textContent = priority.channel_name || '未配置';
-                document.getElementById('priority-live-status').textContent =
-                  priority.is_live ? '直播中' : '未直播';
-                document.getElementById('priority-title').textContent = priority.title || '-';
-                document.getElementById('priority-default-area').textContent =
-                  priority.default_area ? `${getAreaName(priority.default_area)} (${priority.default_area})` : '-';
-              } else {
-                // Show disabled state
-                document.getElementById('priority-status').className = 'status-indicator status-offline';
-                setPlatformLiveInfoVisibility('priority', false);
-                document.getElementById('priority-channel-name').textContent = priority.channel_name || '未配置';
-                document.getElementById('priority-live-status').textContent = '未启用';
-                document.getElementById('priority-title').textContent = '-';
-                document.getElementById('priority-default-area').textContent =
-                  priority.default_area ? `${getAreaName(priority.default_area)} (${priority.default_area})` : '-';
-              }
-            } else {
-              // Show default state when no priority channel config exists
-              priorityCard.style.display = 'block';
-              priorityToggle.checked = false;
-              document.getElementById('priority-status').className = 'status-indicator status-offline';
-              setPlatformLiveInfoVisibility('priority', false);
-              document.getElementById('priority-channel-name').textContent = '未配置';
-              document.getElementById('priority-live-status').textContent = '未启用';
-              document.getElementById('priority-title').textContent = '-';
-              document.getElementById('priority-default-area').textContent = '-';
-            }
           } else {
             console.error('Invalid API response:', data);
             showNotification('获取状态失败：响应格式错误', 'error');

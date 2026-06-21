@@ -12,26 +12,6 @@ lazy_static! {
     static ref LEGACY_CONFIG_PATH: std::path::PathBuf =
         BILISTREAM_PATH.with_file_name("config.yaml");
     static ref COOKIES_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("cookies.json");
-    static ref CHANNELS_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("channels.json");
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ChannelsData {
-    pub channels: Vec<Channel>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Channel {
-    pub name: String,
-    pub aliases: Vec<String>,
-    pub platforms: ChannelPlatforms,
-    pub riot_puuid: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ChannelPlatforms {
-    pub youtube: Option<String>,
-    pub twitch: Option<String>,
 }
 
 /// Struct representing the overall configuration.
@@ -58,12 +38,6 @@ pub struct Config {
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
     pub anti_collision_list: HashMap<String, i32>,
-    #[serde(default)]
-    pub priority_channel: PriorityChannel,
-    #[serde(default = "default_true")]
-    pub enable_youtube_monitor: bool,
-    #[serde(default = "default_true")]
-    pub enable_twitch_monitor: bool,
 }
 
 /// FFmpeg HLS timeshift cache settings.
@@ -86,40 +60,6 @@ impl Default for FfmpegCache {
 
 fn default_ffmpeg_cache_latency_secs() -> u64 {
     8
-}
-
-/// Struct representing priority channel configuration.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PriorityChannel {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub channel_name: String,
-    #[serde(default)]
-    pub youtube_channel_id: String,
-    #[serde(default)]
-    pub twitch_channel_id: String,
-    #[serde(default = "default_priority_area")]
-    pub default_area: u64,
-    #[serde(default)]
-    pub auto_restart: bool,
-}
-
-impl Default for PriorityChannel {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            channel_name: String::new(),
-            youtube_channel_id: String::new(),
-            twitch_channel_id: String::new(),
-            default_area: 235,
-            auto_restart: false,
-        }
-    }
-}
-
-fn default_priority_area() -> u64 {
-    235
 }
 
 /// Struct representing BiliLive-specific configuration.
@@ -408,16 +348,6 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,
             anti_collision_list: legacy.anti_collision_list,
-            priority_channel: PriorityChannel {
-                enabled: true,
-                channel_name: "Kamito".to_string(),
-                youtube_channel_id: "UCgYCMluaLpERsyNXlPOvBtA".to_string(),
-                twitch_channel_id: "kamito_jp".to_string(),
-                default_area: 235,
-                auto_restart: false,
-            },
-            enable_youtube_monitor: true,
-            enable_twitch_monitor: true,
         };
 
         // Save as JSON
@@ -439,9 +369,6 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     // Load credentials from cookies.json
     let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path);
     config.bililive.credentials = credentials?;
-
-    // Update priority channel info from channels.json
-    update_priority_channel_from_channels(&mut config);
 
     Ok(config)
 }
@@ -469,41 +396,4 @@ async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-/// Loads channels from channels.json
-pub fn load_channels() -> Result<ChannelsData, Box<dyn Error>> {
-    if !CHANNELS_PATH.exists() {
-        return Ok(ChannelsData { channels: vec![] });
-    }
-
-    let content = fs::read_to_string(&*CHANNELS_PATH)?;
-    let channels: ChannelsData = serde_json::from_str(&content)?;
-    Ok(channels)
-}
-
-/// Finds channel info by name from channels.json
-pub fn find_channel_by_name(name: &str) -> Option<Channel> {
-    if let Ok(channels_data) = load_channels() {
-        channels_data
-            .channels
-            .into_iter()
-            .find(|ch| ch.name == name)
-    } else {
-        None
-    }
-}
-
-/// Updates priority channel config with channel info from channels.json
-pub fn update_priority_channel_from_channels(config: &mut Config) {
-    if config.priority_channel.enabled && !config.priority_channel.channel_name.is_empty() {
-        if let Some(channel) = find_channel_by_name(&config.priority_channel.channel_name) {
-            // Update YouTube ID or clear if not available
-            config.priority_channel.youtube_channel_id =
-                channel.platforms.youtube.unwrap_or_default();
-            // Update Twitch ID or clear if not available
-            config.priority_channel.twitch_channel_id =
-                channel.platforms.twitch.unwrap_or_default();
-        }
-    }
 }
