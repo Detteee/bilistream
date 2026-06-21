@@ -33,6 +33,8 @@ pub struct HolodexStream {
     pub link: Option<String>,
     #[serde(default)]
     pub thumbnail: Option<String>,
+    #[serde(default, rename = "placeholderType")]
+    pub placeholder_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

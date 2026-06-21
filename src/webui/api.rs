@@ -1704,6 +1704,7 @@ pub struct HolodexStreamWithArea {
     pub suggested_area_id: Option<u64>,
     pub suggested_area_name: Option<String>,
     pub is_placeholder: bool,
+    pub placeholder_type: Option<String>,
     pub external_link: Option<String>,
     pub thumbnail: Option<String>,
 }
@@ -1809,6 +1810,7 @@ fn map_holodex_streams_with_area(
                 },
                 suggested_area_name,
                 is_placeholder,
+                placeholder_type: stream.placeholder_type,
                 external_link: stream.link,
                 thumbnail: stream.thumbnail,
             }
