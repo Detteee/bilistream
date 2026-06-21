@@ -68,6 +68,14 @@
       "title_keywords": []
     },
     {
+      "aliases": [],
+      "id": 156,
+      "name": "影之诗",
+      "title_keywords": [
+        "shadowverse"
+      ]
+    },
+    {
       "aliases": [
         "mc",
         "マイクラ",
@@ -231,8 +239,10 @@
     {
       "aliases": [],
       "id": 646,
-      "name": "UP主日常",
-      "title_keywords": []
+      "name": "生活杂谈",
+      "title_keywords": [
+        "UP主日常"
+      ]
     },
     {
       "aliases": [],
@@ -342,6 +352,7 @@
     "tomodachi_live",
     "トモダチコレクション",
     "トモコレ",
+    "just chatting",
     "asmr",
     "dbd",
     "dead by daylight",

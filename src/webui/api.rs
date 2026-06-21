@@ -1655,6 +1655,13 @@ fn map_holodex_streams_with_area(
                 {
                     suggested_area_id = 530;
                 }
+                if topic_lower.contains("talk")
+                    || topic_lower.contains("zatsudan")
+                    || topic_lower.contains("雑談")
+                    || topic_lower.contains("just chatting")
+                {
+                    suggested_area_id = 646;
+                }
             }
 
             if suggested_area_id == 235 {
