@@ -456,9 +456,30 @@ pub struct UpdateConfigRequest {
     youtube_cookies_file: Option<String>,
 }
 
+fn update_config_requires_stream_reload(payload: &UpdateConfigRequest) -> bool {
+    payload.interval.is_some()
+        || payload.auto_cover.is_some()
+        || payload.enable_anti_collision.is_some()
+        || payload.enable_lol_monitor.is_some()
+        || payload.lol_monitor_interval.is_some()
+        || payload.riot_api_key.is_some()
+        || payload.twitch_proxy_region.is_some()
+        || payload.twitch_proxy.is_some()
+        || payload.youtube_proxy.is_some()
+        || payload.youtube_deno_path.is_some()
+        || payload.anti_collision_list.is_some()
+        || payload.enable_danmaku_command.is_some()
+        || payload.youtube_enable_monitor.is_some()
+        || payload.twitch_enable_monitor.is_some()
+        || payload.youtube_cookies_from_browser.is_some()
+        || payload.youtube_cookies_file.is_some()
+}
+
 pub async fn update_config(
     Json(payload): Json<UpdateConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
+    let requires_stream_reload = update_config_requires_stream_reload(&payload);
+
     // Load current config
     let mut cfg = load_config()
         .await
@@ -495,12 +516,18 @@ pub async fn update_config(
         }
     }
     if let Some(holodex_jwt) = payload.holodex_jwt {
-        if !holodex_jwt.is_empty() {
-            cfg.holodex_jwt = Some(holodex_jwt);
-            cfg.holodex_username = None;
-        } else {
+        let jwt = holodex_jwt.trim();
+        let jwt = jwt
+            .strip_prefix("BEARER ")
+            .or_else(|| jwt.strip_prefix("bearer "))
+            .unwrap_or(jwt)
+            .trim();
+        if jwt.is_empty() {
             cfg.holodex_jwt = None;
             cfg.holodex_jwt_refreshed_at = None;
+            cfg.holodex_username = None;
+        } else {
+            cfg.holodex_jwt = Some(jwt.to_string());
             cfg.holodex_username = None;
         }
     }
@@ -561,13 +588,15 @@ pub async fn update_config(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Set config updated flag so main loop can detect the change
-    set_config_updated();
+    // Holodex JWT/API key only affect the dashboard; don't restart the streaming loop.
+    if requires_stream_reload {
+        set_config_updated();
 
-    // Spawn status cache refresh in background (lightweight operation)
-    tokio::spawn(async {
-        refresh_status_cache_config().await;
-    });
+        // Spawn status cache refresh in background (lightweight operation)
+        tokio::spawn(async {
+            refresh_status_cache_config().await;
+        });
+    }
 
     Ok(ApiResponse {
         success: true,

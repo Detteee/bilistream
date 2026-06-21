@@ -129,7 +129,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Consume the previous reload signal before loading; updates that arrive during
         // load_config() remain set and will be picked up by the checks below.
         clear_config_updated();
-        let mut cfg = load_config().await?;
+        let mut cfg = match load_config().await {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!("加载配置失败，短暂重试: {}", e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                load_config().await?
+            }
+        };
 
         // Handle danmaku client based on enable_danmaku_command setting
         if cfg.bililive.enable_danmaku_command {

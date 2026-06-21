@@ -372,7 +372,9 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
 /// Saves the configuration to config.json
 pub async fn save_config(config: &Config) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string_pretty(config)?;
-    fs::write(&*CONFIG_PATH, json)?;
+    let tmp_path = CONFIG_PATH.with_file_name("config.json.tmp");
+    fs::write(&tmp_path, json)?;
+    fs::rename(&tmp_path, &*CONFIG_PATH)?;
     Ok(())
 }
 
