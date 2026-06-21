@@ -2797,6 +2797,7 @@
         const streamsDiv = document.getElementById('holodex-streams');
 
         stopHolodexDurationTicker();
+        statusDiv.style.display = '';
         statusDiv.innerHTML = '⏳ 加载中...';
         statusDiv.style.background = '#89b4fa';
         statusDiv.style.color = '#1e1e2e';
@@ -2807,6 +2808,7 @@
           const data = await response.json();
 
           if (!data.success) {
+            statusDiv.style.display = '';
             statusDiv.innerHTML = `⚠️ ${data.message}`;
             statusDiv.style.background = '#f9e2af';
             statusDiv.style.color = '#1e1e2e';
@@ -2821,6 +2823,7 @@
           const scheduledStreams = streams.filter(s => s.status !== 'live');
 
           if (streams.length === 0) {
+            statusDiv.style.display = '';
             statusDiv.innerHTML = isFavorites
               ? '✅ 收藏夹 - 当前无直播或预告'
               : '当前无直播或预告';
@@ -2836,10 +2839,8 @@
             return timeA - timeB;
           });
 
-          const counts = `${liveStreams.length} 个直播, ${scheduledStreams.length} 个预告`;
-          statusDiv.innerHTML = isFavorites ? `✅ 收藏夹: ${counts}` : counts;
-          statusDiv.style.background = '#a6e3a1';
-          statusDiv.style.color = '#1e1e2e';
+          statusDiv.style.display = 'none';
+          statusDiv.innerHTML = '';
 
           // Render live streams first
           liveStreams.forEach(stream => {
@@ -2862,6 +2863,7 @@
           startHolodexDurationTicker();
 
         } catch (error) {
+          statusDiv.style.display = '';
           statusDiv.innerHTML = `❌ 请求失败: ${error.message}`;
           statusDiv.style.background = '#f38ba8';
           statusDiv.style.color = '#1e1e2e';
