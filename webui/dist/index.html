@@ -176,33 +176,106 @@
       align-items: center;
     }
 
-    .bili-network-content {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      justify-content: flex-end;
+    .bili-network-panel {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--info-border);
+      border-radius: var(--radius);
+      background: rgba(49, 50, 68, 0.42);
     }
 
-    .bili-network-cache-layout {
+    body.light-theme .bili-network-panel {
+      background: rgba(102, 126, 234, 0.06);
+    }
+
+    .bili-network-header {
       display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
     }
 
     .bili-network-quality {
       color: var(--text-primary);
-      font-weight: 600;
-      flex-shrink: 0;
+      text-transform: none;
     }
 
-    .bili-network-speeds {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
+    .bili-network-graph {
+      display: grid;
+      grid-template-columns: repeat(48, minmax(2px, 1fr));
+      align-items: end;
       gap: 2px;
+      height: 54px;
+      padding: 8px 0 7px;
+      border-top: 1px solid var(--info-border);
+      border-bottom: 1px solid var(--info-border);
+    }
+
+    .bili-network-bar {
+      min-height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: linear-gradient(180deg, var(--accent-teal), var(--heading-color));
+      opacity: 0.35;
+    }
+
+    .bili-network-bar.cache {
+      background: linear-gradient(180deg, var(--accent-yellow), var(--accent-green));
+    }
+
+    .bili-network-bar.active {
+      opacity: 0.9;
+    }
+
+    .bili-network-meters {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .bili-network-meter {
+      min-width: 0;
+    }
+
+    .bili-network-meter-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .bili-network-meter-value {
       color: var(--text-primary);
-      font-weight: 600;
+      font-size: 14px;
+      font-weight: 700;
       line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    .bili-network-total {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.3;
+      margin-top: 2px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 520px) {
+      .bili-network-meters {
+        grid-template-columns: 1fr;
+      }
+
+      .bili-network-graph {
+        grid-template-columns: repeat(32, minmax(2px, 1fr));
+      }
     }
 
     .info-label {
@@ -1141,16 +1214,29 @@
               </label>
             </div>
           </div>
-          <div class="info-row" id="bili-stream-quality-row" style="display: none;">
-            <span class="info-label">网络</span>
-            <div class="bili-network-content">
-              <span class="info-value" id="bili-stream-quality-simple">-</span>
-              <div class="bili-network-cache-layout" id="bili-stream-quality-cache" style="display: none;">
-                <span class="bili-network-quality" id="bili-stream-quality-label">-</span>
-                <div class="bili-network-speeds">
-                  <span id="bili-stream-cache-speed">缓存 -</span>
-                  <span id="bili-stream-push-speed">推送 -</span>
+          <div class="bili-network-panel" id="bili-network-panel" style="display: none;">
+            <div class="bili-network-header">
+              <span>Network</span>
+              <span id="bili-network-scale">Scale -</span>
+              <span class="bili-network-quality" id="bili-network-quality">-</span>
+            </div>
+            <div class="bili-network-graph" id="bili-network-graph"></div>
+            <div class="bili-network-meters">
+              <div class="bili-network-meter" id="bili-network-cache-meter">
+                <div class="bili-network-meter-label">
+                  <span>Cache RX</span>
+                  <span id="bili-network-cache-speed-ratio">-</span>
                 </div>
+                <div class="bili-network-meter-value" id="bili-network-cache-rate">-</div>
+                <div class="bili-network-total" id="bili-network-cache-total">Total -</div>
+              </div>
+              <div class="bili-network-meter">
+                <div class="bili-network-meter-label">
+                  <span>RTMP TX</span>
+                  <span id="bili-network-push-speed-ratio">-</span>
+                </div>
+                <div class="bili-network-meter-value" id="bili-network-push-rate">-</div>
+                <div class="bili-network-total" id="bili-network-push-total">Total -</div>
               </div>
             </div>
           </div>
@@ -2283,6 +2369,8 @@
       let statusIntervalId = null;
       let logRefreshIntervalId = null;
       let statusRefreshInFlight = false;
+      const biliNetworkHistory = { cache: [], push: [] };
+      const biliNetworkHistoryLimit = 48;
       let faceAuthUrl = null;
 
       // Global config data for access across functions
@@ -4195,6 +4283,122 @@
         });
       }
 
+      function pushBiliNetworkSample(series, value) {
+        series.push(Number.isFinite(value) && value > 0 ? value : 0);
+        if (series.length > biliNetworkHistoryLimit) {
+          series.splice(0, series.length - biliNetworkHistoryLimit);
+        }
+      }
+
+      function formatNetworkRate(kbps) {
+        if (!Number.isFinite(kbps) || kbps <= 0) {
+          return '-';
+        }
+        if (kbps >= 1000) {
+          return `${(kbps / 1000).toFixed(2)} Mb/s`;
+        }
+        return `${Math.round(kbps)} Kb/s`;
+      }
+
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+          return '-';
+        }
+        const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+        let value = bytes;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+          value /= 1024;
+          unit += 1;
+        }
+        return unit === 0 ? `${bytes} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
+      }
+
+      function formatSpeedRatio(value) {
+        return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
+      }
+
+      function renderBiliNetworkGraph(showCache) {
+        const graph = document.getElementById('bili-network-graph');
+        if (!graph) {
+          return;
+        }
+
+        const activeSeries = showCache
+          ? biliNetworkHistory.cache.concat(biliNetworkHistory.push)
+          : biliNetworkHistory.push;
+        const maxRate = Math.max(1, ...activeSeries);
+        const scale = document.getElementById('bili-network-scale');
+        if (scale) {
+          scale.textContent = `Scale ${formatNetworkRate(maxRate)}`;
+        }
+        const graphWidth = window.matchMedia('(max-width: 520px)').matches ? 32 : biliNetworkHistoryLimit;
+        const pushStart = Math.max(0, biliNetworkHistory.push.length - graphWidth);
+        const pushSeries = biliNetworkHistory.push.slice(pushStart);
+        const cacheStart = Math.max(0, biliNetworkHistory.cache.length - graphWidth);
+        const cacheSeries = biliNetworkHistory.cache.slice(cacheStart);
+        const bars = [];
+
+        for (let i = 0; i < graphWidth; i += 1) {
+          const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
+          const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
+          const value = showCache ? Math.max(pushValue, cacheValue) : pushValue;
+          const height = Math.max(2, Math.round((value / maxRate) * 100));
+          const className = showCache && cacheValue >= pushValue ? 'bili-network-bar cache active' : 'bili-network-bar active';
+          bars.push(`<span class="${className}" style="height: ${height}%"></span>`);
+        }
+
+        graph.innerHTML = bars.join('');
+      }
+
+      function applyBiliStreamQualityColor(element, quality) {
+        if (quality === '流畅') {
+          element.style.color = '#10b981';
+        } else if (quality === '波动') {
+          element.style.color = '#f59e0b';
+        } else if (quality === '卡顿') {
+          element.style.color = '#ef4444';
+        } else {
+          element.style.color = '';
+        }
+      }
+
+      function updateBiliNetworkPanel(bili) {
+        const panel = document.getElementById('bili-network-panel');
+        if (!panel) {
+          return;
+        }
+
+        const hasPush = Number.isFinite(bili.stream_bitrate_kbps) || Number.isFinite(bili.stream_speed);
+        const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
+        if (!bili.is_live || (!hasPush && !hasCache && !bili.stream_quality)) {
+          panel.style.display = 'none';
+          return;
+        }
+
+        panel.style.display = '';
+        pushBiliNetworkSample(biliNetworkHistory.push, bili.stream_bitrate_kbps);
+        pushBiliNetworkSample(biliNetworkHistory.cache, hasCache ? bili.stream_cache_bitrate_kbps : 0);
+
+        const quality = document.getElementById('bili-network-quality');
+        quality.textContent = bili.stream_quality || 'Live';
+        applyBiliStreamQualityColor(quality, bili.stream_quality);
+
+        document.getElementById('bili-network-push-rate').textContent = formatNetworkRate(bili.stream_bitrate_kbps);
+        document.getElementById('bili-network-push-speed-ratio').textContent = formatSpeedRatio(bili.stream_speed);
+        document.getElementById('bili-network-push-total').textContent = `Total ${formatBytes(bili.stream_total_bytes)}`;
+
+        const cacheMeter = document.getElementById('bili-network-cache-meter');
+        cacheMeter.style.display = hasCache ? '' : 'none';
+        if (hasCache) {
+          document.getElementById('bili-network-cache-rate').textContent = formatNetworkRate(bili.stream_cache_bitrate_kbps);
+          document.getElementById('bili-network-cache-speed-ratio').textContent = formatSpeedRatio(bili.stream_cache_speed);
+          document.getElementById('bili-network-cache-total').textContent = `Total ${formatBytes(bili.stream_cache_total_bytes)}`;
+        }
+
+        renderBiliNetworkGraph(hasCache);
+      }
+
       async function refreshStatus() {
         if (statusRefreshInFlight) {
           return;
@@ -4227,48 +4431,7 @@
             document.getElementById('bili-area').textContent =
               bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
 
-            // Update stream quality
-            const qualityRow = document.getElementById('bili-stream-quality-row');
-            const qualitySimple = document.getElementById('bili-stream-quality-simple');
-            const qualityCache = document.getElementById('bili-stream-quality-cache');
-            const qualityLabel = document.getElementById('bili-stream-quality-label');
-            const cacheSpeedEl = document.getElementById('bili-stream-cache-speed');
-            const pushSpeedEl = document.getElementById('bili-stream-push-speed');
-
-            function applyBiliStreamQualityColor(element, quality) {
-              if (quality === '流畅') {
-                element.style.color = '#10b981';
-              } else if (quality === '波动') {
-                element.style.color = '#f59e0b';
-              } else if (quality === '卡顿') {
-                element.style.color = '#ef4444';
-              } else {
-                element.style.color = '';
-              }
-            }
-
-            if (bili.is_live && (bili.stream_quality || bili.hls_cache_active)) {
-              qualityRow.style.display = '';
-              if (bili.hls_cache_active) {
-                qualityRow.classList.add('info-row-label-center');
-                qualitySimple.style.display = 'none';
-                qualityCache.style.display = 'flex';
-                qualityLabel.textContent = bili.stream_quality || '-';
-                cacheSpeedEl.textContent = `缓存 ${bili.stream_cache_speed ? `${bili.stream_cache_speed.toFixed(2)}x` : '-'}`;
-                pushSpeedEl.textContent = `推送 ${bili.stream_speed ? `${bili.stream_speed.toFixed(2)}x` : '-'}`;
-                applyBiliStreamQualityColor(qualityLabel, bili.stream_quality);
-              } else {
-                qualityRow.classList.remove('info-row-label-center');
-                qualitySimple.style.display = '';
-                qualityCache.style.display = 'none';
-                const speedText = bili.stream_speed ? ` (${bili.stream_speed.toFixed(2)}x)` : '';
-                qualitySimple.textContent = (bili.stream_quality || '-') + speedText;
-                applyBiliStreamQualityColor(qualitySimple, bili.stream_quality);
-              }
-            } else {
-              qualityRow.style.display = 'none';
-              qualityRow.classList.remove('info-row-label-center');
-            }
+            updateBiliNetworkPanel(bili);
 
             updateDanmakuCommandToggle(bili.enable_danmaku_command);
 

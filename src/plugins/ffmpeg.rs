@@ -1,7 +1,7 @@
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -58,6 +58,12 @@ lazy_static::lazy_static! {
     // Use atomic for lock-free speed updates (stored as f32 bits)
     static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FFMPEG_CACHE_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_BITRATE_KBPS: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_CACHE_BITRATE_KBPS: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_TOTAL_BYTES: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    static ref FFMPEG_CACHE_TOTAL_BYTES: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    static ref FFMPEG_LAST_SAMPLE_MS: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    static ref FFMPEG_CACHE_LAST_SAMPLE_MS: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref FFMPEG_HLS_CACHE_ACTIVE: AtomicBool = AtomicBool::new(false);
     // Track last progress time for timeout detection (stored as Unix timestamp in seconds)
     static ref LAST_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
@@ -267,6 +273,32 @@ pub async fn is_ffmpeg_hls_cache_active() -> bool {
     FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FfmpegNetworkStats {
+    pub push_bitrate_kbps: Option<f32>,
+    pub cache_bitrate_kbps: Option<f32>,
+    pub push_total_bytes: u64,
+    pub cache_total_bytes: u64,
+}
+
+pub async fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
+    FfmpegNetworkStats {
+        push_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS),
+        cache_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS),
+        push_total_bytes: FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
+        cache_total_bytes: FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
+    }
+}
+
+fn f32_from_atomic_bits(value: &AtomicU32) -> Option<f32> {
+    let bits = value.load(Ordering::Relaxed);
+    if bits == 0 {
+        None
+    } else {
+        Some(f32::from_bits(bits))
+    }
+}
+
 // Update last progress time (lock-free write)
 fn update_progress_time() {
     let now = std::time::SystemTime::now()
@@ -451,34 +483,23 @@ async fn stop_ffmpeg_internal(manual: bool) {
     reset_stats_display();
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
     FFMPEG_CACHE_SPEED.store(0, Ordering::Relaxed);
+    FFMPEG_BITRATE_KBPS.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_BITRATE_KBPS.store(0, Ordering::Relaxed);
+    FFMPEG_TOTAL_BYTES.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_TOTAL_BYTES.store(0, Ordering::Relaxed);
+    FFMPEG_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     FFMPEG_HLS_CACHE_ACTIVE.store(false, Ordering::Relaxed);
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
-const COL_PROCESS: usize = 11;
-const COL_TIME: usize = 12;
-const COL_BITRATE: usize = 12;
-const COL_SPEED: usize = 8;
-
-fn stats_col_inner(content_width: usize) -> usize {
-    content_width + 2
-}
-
-fn stats_border_line(left: char, mid: char, right: char) -> String {
-    let mut line = String::new();
-    line.push(left);
-    line.push_str(&"─".repeat(stats_col_inner(COL_PROCESS)));
-    line.push(mid);
-    line.push_str(&"─".repeat(stats_col_inner(COL_TIME)));
-    line.push(mid);
-    line.push_str(&"─".repeat(stats_col_inner(COL_BITRATE)));
-    line.push(mid);
-    line.push_str(&"─".repeat(stats_col_inner(COL_SPEED)));
-    line.push(right);
-    line
-}
+const NETWORK_PANEL_WIDTH: usize = 72;
+const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
+const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 11;
+const NETWORK_HISTORY_LIMIT: usize = 60;
+const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
 
 #[derive(Clone, Copy)]
 enum FfmpegStatsRole {
@@ -490,6 +511,7 @@ enum FfmpegStatsRole {
 struct FfmpegStatsSample {
     time: Option<String>,
     bitrate: Option<String>,
+    bitrate_kbps: Option<f32>,
     speed: Option<f32>,
     stream_time_secs: Option<u32>,
 }
@@ -498,6 +520,8 @@ struct FfmpegStatsSample {
 struct FfmpegStatsDisplay {
     cache: Option<FfmpegStatsSample>,
     push: Option<FfmpegStatsSample>,
+    cache_history: Vec<f32>,
+    push_history: Vec<f32>,
     rendered_lines: usize,
     enabled: bool,
 }
@@ -515,9 +539,16 @@ impl FfmpegStatsDisplay {
     }
 
     fn update(&mut self, role: FfmpegStatsRole, sample: FfmpegStatsSample) {
+        let rate = sample.bitrate_kbps.unwrap_or(0.0);
         match role {
-            FfmpegStatsRole::Cache => self.cache = Some(sample),
-            FfmpegStatsRole::Push => self.push = Some(sample),
+            FfmpegStatsRole::Cache => {
+                push_history_sample(&mut self.cache_history, rate);
+                self.cache = Some(sample);
+            }
+            FfmpegStatsRole::Push => {
+                push_history_sample(&mut self.push_history, rate);
+                self.push = Some(sample);
+            }
         }
         self.render();
     }
@@ -527,13 +558,33 @@ impl FfmpegStatsDisplay {
             return;
         }
 
+        let scale_kbps = self
+            .cache_history
+            .iter()
+            .chain(self.push_history.iter())
+            .copied()
+            .fold(0.0_f32, f32::max)
+            .max(1.0);
+
         let lines = [
-            stats_border_line('┌', '┬', '┐'),
-            Self::header_row(),
-            stats_border_line('├', '┼', '┤'),
-            Self::row("HLS Cache", self.cache.as_ref()),
-            Self::row("RTMP Push", self.push.as_ref()),
-            stats_border_line('└', '┴', '┘'),
+            network_top_border(),
+            network_content_line(&format!(
+                "Auto scale {:>12}",
+                format_network_rate(scale_kbps)
+            )),
+            network_content_line(&Self::meter_row(
+                "Cache RX",
+                self.cache.as_ref(),
+                FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
+            )),
+            network_content_line(&Self::graph_row("Cache", &self.cache_history, scale_kbps)),
+            network_content_line(&Self::meter_row(
+                "RTMP TX",
+                self.push.as_ref(),
+                FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
+            )),
+            network_content_line(&Self::graph_row("Push", &self.push_history, scale_kbps)),
+            network_bottom_border(),
         ];
 
         if self.rendered_lines > 0 {
@@ -552,38 +603,102 @@ impl FfmpegStatsDisplay {
         self.rendered_lines = lines.len();
     }
 
-    fn header_row() -> String {
-        format!(
-            "│ {:<width1$} │ {:<width2$} │ {:<width3$} │ {:<width4$} │",
-            "Process",
-            "Time",
-            "Bitrate",
-            "Speed",
-            width1 = COL_PROCESS,
-            width2 = COL_TIME,
-            width3 = COL_BITRATE,
-            width4 = COL_SPEED,
-        )
-    }
-
-    fn row(label: &str, sample: Option<&FfmpegStatsSample>) -> String {
-        let time = sample.and_then(|s| s.time.as_deref()).unwrap_or("-");
-        let bitrate = sample.and_then(|s| s.bitrate.as_deref()).unwrap_or("-");
+    fn meter_row(label: &str, sample: Option<&FfmpegStatsSample>, total_bytes: u64) -> String {
+        let bitrate = sample
+            .and_then(|s| s.bitrate_kbps)
+            .map(format_network_rate)
+            .unwrap_or_else(|| "-".to_string());
         let speed = sample
             .and_then(|s| s.speed.map(|v| format!("{:.2}x", v)))
             .unwrap_or_else(|| "-".to_string());
-
-        format!(
-            "│ {:<width1$} │ {:<width2$} │ {:<width3$} │ {:<width4$} │",
-            truncate_cell(label, COL_PROCESS),
-            truncate_cell(time, COL_TIME),
-            truncate_cell(bitrate, COL_BITRATE),
-            truncate_cell(&speed, COL_SPEED),
-            width1 = COL_PROCESS,
-            width2 = COL_TIME,
-            width3 = COL_BITRATE,
-            width4 = COL_SPEED,
+        truncate_cell(
+            &format!(
+                "{:<8} {:>12}  {:>6}  Total {:>10}",
+                label,
+                bitrate,
+                speed,
+                format_bytes(total_bytes)
+            ),
+            NETWORK_PANEL_CONTENT_WIDTH,
         )
+    }
+
+    fn graph_row(label: &str, history: &[f32], scale_kbps: f32) -> String {
+        format!(
+            "{:<8} {}",
+            label,
+            sparkline(history, NETWORK_GRAPH_WIDTH, scale_kbps)
+        )
+    }
+}
+
+fn network_top_border() -> String {
+    let title = "─ Network ";
+    format!(
+        "┌{}{}┐",
+        title,
+        "─".repeat(NETWORK_PANEL_WIDTH - 2 - title.chars().count())
+    )
+}
+
+fn network_bottom_border() -> String {
+    format!("└{}┘", "─".repeat(NETWORK_PANEL_WIDTH - 2))
+}
+
+fn network_content_line(value: &str) -> String {
+    format!("│ {} │", truncate_cell(value, NETWORK_PANEL_CONTENT_WIDTH))
+}
+
+fn push_history_sample(history: &mut Vec<f32>, value: f32) {
+    history.push(value.max(0.0));
+    if history.len() > NETWORK_HISTORY_LIMIT {
+        history.remove(0);
+    }
+}
+
+fn sparkline(history: &[f32], width: usize, scale_kbps: f32) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    if history.is_empty() {
+        return " ".repeat(width);
+    }
+
+    let start = history.len().saturating_sub(width);
+    let mut output = String::with_capacity(width);
+    for _ in 0..width.saturating_sub(history.len() - start) {
+        output.push(' ');
+    }
+    for value in &history[start..] {
+        let ratio = if scale_kbps > 0.0 {
+            (value / scale_kbps).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let index = (ratio * (BARS.len() - 1) as f32).round() as usize;
+        output.push(BARS[index]);
+    }
+    output
+}
+
+fn format_network_rate(kbps: f32) -> String {
+    if kbps >= 1000.0 {
+        format!("{:.2} Mb/s", kbps / 1000.0)
+    } else {
+        format!("{:.0} Kb/s", kbps)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
     }
 }
 
@@ -607,6 +722,45 @@ fn update_stats_display(role: FfmpegStatsRole, sample: FfmpegStatsSample) {
     }
 }
 
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
+    let now = now_millis();
+    let (bitrate, total, last_sample) = match role {
+        FfmpegStatsRole::Cache => (
+            &*FFMPEG_CACHE_BITRATE_KBPS,
+            &*FFMPEG_CACHE_TOTAL_BYTES,
+            &*FFMPEG_CACHE_LAST_SAMPLE_MS,
+        ),
+        FfmpegStatsRole::Push => (
+            &*FFMPEG_BITRATE_KBPS,
+            &*FFMPEG_TOTAL_BYTES,
+            &*FFMPEG_LAST_SAMPLE_MS,
+        ),
+    };
+
+    bitrate.store(bitrate_kbps.to_bits(), Ordering::Relaxed);
+    let previous = last_sample.swap(now, Ordering::Relaxed);
+    if previous == 0 {
+        return;
+    }
+
+    let elapsed_ms = now.saturating_sub(previous);
+    if elapsed_ms == 0 || elapsed_ms > NETWORK_SAMPLE_GAP_LIMIT_MS {
+        return;
+    }
+
+    let bytes = (bitrate_kbps as f64 * 1000.0 / 8.0 * elapsed_ms as f64 / 1000.0).round();
+    if bytes.is_finite() && bytes > 0.0 {
+        total.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
+
 /// Parse time string (HH:MM:SS.ms) to seconds
 fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
     let parts: Vec<&str> = time_str.split(':').collect();
@@ -619,6 +773,28 @@ fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
     let seconds: f32 = parts[2].parse().ok()?;
 
     Some(hours * 3600 + minutes * 60 + seconds as u32)
+}
+
+fn parse_bitrate_to_kbps(value: &str) -> Option<f32> {
+    let trimmed = value.trim();
+    if trimmed == "N/A" {
+        return None;
+    }
+
+    let number: String = trimmed
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    let parsed = number.parse::<f32>().ok()?;
+    let unit = trimmed[number.len()..].trim().to_ascii_lowercase();
+
+    if unit.starts_with("mbit") {
+        Some(parsed * 1000.0)
+    } else if unit.starts_with("bit") {
+        Some(parsed / 1000.0)
+    } else {
+        Some(parsed)
+    }
 }
 
 fn value_after_key<'a>(parts: &[&'a str], idx: usize, key: &str) -> Option<&'a str> {
@@ -644,6 +820,7 @@ fn extract_ffmpeg_stats(line: &str) -> Option<FfmpegStatsSample> {
             sample.stream_time_secs = parse_time_to_seconds(value);
         } else if let Some(value) = value_after_key(&parts, idx, "bitrate=") {
             sample.bitrate = Some(value.to_string());
+            sample.bitrate_kbps = parse_bitrate_to_kbps(value);
         } else if let Some(value) = value_after_key(&parts, idx, "speed=") {
             if let Ok(parsed) = value.trim_end_matches('x').parse::<f32>() {
                 sample.speed = Some(parsed);
@@ -727,6 +904,9 @@ fn handle_ffmpeg_stderr_line(
     if let Some(sample) = extract_ffmpeg_stats(line) {
         update_progress_time();
         if let Some(role) = stats_role {
+            if let Some(bitrate_kbps) = sample.bitrate_kbps {
+                update_network_counters(role, bitrate_kbps);
+            }
             match role {
                 FfmpegStatsRole::Cache => {
                     if let Some(speed) = sample.speed {
@@ -796,6 +976,12 @@ fn reset_ffmpeg_tracking_state() {
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
     FFMPEG_CACHE_SPEED.store(0, Ordering::Relaxed);
+    FFMPEG_BITRATE_KBPS.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_BITRATE_KBPS.store(0, Ordering::Relaxed);
+    FFMPEG_TOTAL_BYTES.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_TOTAL_BYTES.store(0, Ordering::Relaxed);
+    FFMPEG_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
 }
 

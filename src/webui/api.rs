@@ -11,9 +11,8 @@ use std::sync::Mutex;
 use crate::config::load_config;
 use crate::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    get_bili_live_status, get_ffmpeg_cache_speed, get_ffmpeg_speed, is_ffmpeg_hls_cache_active,
-    send_danmaku as send_danmaku_to_bili,
-    set_config_updated,
+    get_bili_live_status, get_ffmpeg_cache_speed, get_ffmpeg_network_stats, get_ffmpeg_speed,
+    is_ffmpeg_hls_cache_active, send_danmaku as send_danmaku_to_bili, set_config_updated,
 };
 use crate::updater;
 
@@ -174,6 +173,10 @@ pub struct BiliStatus {
     pub stream_quality: Option<String>,
     pub stream_speed: Option<f32>,
     pub stream_cache_speed: Option<f32>,
+    pub stream_bitrate_kbps: Option<f32>,
+    pub stream_cache_bitrate_kbps: Option<f32>,
+    pub stream_total_bytes: u64,
+    pub stream_cache_total_bytes: u64,
     pub hls_cache_active: bool,
     pub enable_danmaku_command: bool,
 }
@@ -267,6 +270,7 @@ pub async fn get_status() -> impl IntoResponse {
     } else {
         None
     };
+    let network_stats = get_ffmpeg_network_stats().await;
     let stream_quality = if bili_is_live {
         stream_speed.map(|speed| {
             if speed > 0.97 {
@@ -305,6 +309,18 @@ pub async fn get_status() -> impl IntoResponse {
             stream_quality,
             stream_speed,
             stream_cache_speed,
+            stream_bitrate_kbps: network_stats.push_bitrate_kbps,
+            stream_cache_bitrate_kbps: if hls_cache_active {
+                network_stats.cache_bitrate_kbps
+            } else {
+                None
+            },
+            stream_total_bytes: network_stats.push_total_bytes,
+            stream_cache_total_bytes: if hls_cache_active {
+                network_stats.cache_total_bytes
+            } else {
+                0
+            },
             hls_cache_active,
             enable_danmaku_command: cfg.bililive.enable_danmaku_command,
         },
@@ -1925,6 +1941,10 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
                 stream_quality: None,
                 stream_speed: None,
                 stream_cache_speed: None,
+                stream_bitrate_kbps: None,
+                stream_cache_bitrate_kbps: None,
+                stream_total_bytes: 0,
+                stream_cache_total_bytes: 0,
                 hls_cache_active: false,
                 enable_danmaku_command: cfg.bililive.enable_danmaku_command,
             },
@@ -2003,6 +2023,10 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
                 stream_quality: None,
                 stream_speed: None,
                 stream_cache_speed: None,
+                stream_bitrate_kbps: None,
+                stream_cache_bitrate_kbps: None,
+                stream_total_bytes: 0,
+                stream_cache_total_bytes: 0,
                 hls_cache_active: false,
                 enable_danmaku_command: cfg.bililive.enable_danmaku_command,
             },
