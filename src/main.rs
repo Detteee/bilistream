@@ -2197,6 +2197,7 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             Some(holodex_api_key)
         },
+        holodex_jwt: None,
         riot_api_key: if riot_api_key.is_empty() {
             None
         } else {

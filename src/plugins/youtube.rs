@@ -3,6 +3,7 @@ use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error; // Ensure this is included
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -24,6 +25,17 @@ pub struct HolodexStream {
     pub live_viewers: Option<i32>,
     #[serde(default)]
     pub channel: HolodexChannel,
+    #[serde(default)]
+    pub link: Option<String>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HolodexFavoriteChannel {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -176,6 +188,80 @@ pub async fn get_holodex_streams(
 
     let streams: Vec<HolodexStream> = response.json().await?;
     Ok(streams)
+}
+
+/// Live/upcoming streams for Holodex account favorites (YouTube + Twitch placeholders).
+pub async fn get_holodex_favorites_live(
+    api_key: &str,
+    jwt: &str,
+) -> Result<(HashSet<String>, Vec<HolodexStream>), Box<dyn Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?;
+
+    let fav_resp = client
+        .get("https://holodex.net/api/v2/users/favorites")
+        .header("X-APIKEY", api_key)
+        .header("Authorization", format!("BEARER {jwt}"))
+        .send()
+        .await?;
+
+    if !fav_resp.status().is_success() {
+        return Err(format!("Holodex favorites error: {}", fav_resp.status()).into());
+    }
+
+    let favorites: Vec<HolodexFavoriteChannel> = fav_resp.json().await?;
+    let fav_ids: HashSet<String> = favorites.into_iter().map(|c| c.id).collect();
+
+    let live_resp = client
+        .get("https://holodex.net/api/v2/users/live?includePlaceholder=true")
+        .header("X-APIKEY", api_key)
+        .header("Authorization", format!("BEARER {jwt}"))
+        .send()
+        .await?;
+
+    if !live_resp.status().is_success() {
+        return Err(format!("Holodex favorites live error: {}", live_resp.status()).into());
+    }
+
+    let streams: Vec<HolodexStream> = live_resp.json().await?;
+
+    // Keep only streams hosted on a favorited channel (exclude collabs on other channels).
+    let filtered: Vec<HolodexStream> = streams
+        .into_iter()
+        .filter(|s| fav_ids.contains(&s.channel.id))
+        .collect();
+
+    Ok((fav_ids, filtered))
+}
+
+pub async fn check_holodex_jwt(
+    api_key: &str,
+    jwt: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get("https://holodex.net/api/v2/user/refresh")
+        .header("X-APIKEY", api_key)
+        .header("Authorization", format!("BEARER {jwt}"))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let body: serde_json::Value = response.json().await?;
+    let username = body
+        .get("user")
+        .and_then(|u| u.get("name"))
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string());
+
+    Ok(username)
 }
 
 pub async fn get_youtube_status(

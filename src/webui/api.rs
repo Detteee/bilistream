@@ -394,6 +394,10 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "lol_monitor_interval": cfg.lol_monitor_interval,
         "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
         "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
+        "holodex_jwt_configured": cfg
+            .holodex_jwt
+            .as_ref()
+            .is_some_and(|j| !j.is_empty()),
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
@@ -439,6 +443,7 @@ pub struct UpdateConfigRequest {
     lol_monitor_interval: Option<u64>,
     riot_api_key: Option<String>,
     holodex_api_key: Option<String>,
+    holodex_jwt: Option<String>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
     youtube_proxy: Option<String>,
@@ -487,6 +492,13 @@ pub async fn update_config(
             cfg.holodex_api_key = Some(holodex_api_key);
         } else {
             cfg.holodex_api_key = None;
+        }
+    }
+    if let Some(holodex_jwt) = payload.holodex_jwt {
+        if !holodex_jwt.is_empty() {
+            cfg.holodex_jwt = Some(holodex_jwt);
+        } else {
+            cfg.holodex_jwt = None;
         }
     }
 
@@ -1145,6 +1157,7 @@ pub async fn save_setup_config(
                 ffmpeg_cache: crate::config::FfmpegCache::default(),
             },
             holodex_api_key: None,
+            holodex_jwt: None,
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
@@ -1522,6 +1535,173 @@ pub struct HolodexStreamWithArea {
     pub channel_name: String,
     pub suggested_area_id: Option<u64>,
     pub suggested_area_name: Option<String>,
+    pub is_placeholder: bool,
+    pub external_link: Option<String>,
+    pub thumbnail: Option<String>,
+}
+
+fn filter_holodex_streams(
+    streams: Vec<crate::plugins::youtube::HolodexStream>,
+    allowed_channel_ids: std::collections::HashSet<String>,
+) -> Vec<crate::plugins::youtube::HolodexStream> {
+    use std::collections::HashSet;
+
+    let mut live_channels: HashSet<String> = HashSet::new();
+    for stream in &streams {
+        if stream.status == "live" {
+            live_channels.insert(stream.channel.id.clone());
+        }
+    }
+
+    let now = chrono::Utc::now();
+    let thirty_hours_later = now + chrono::Duration::hours(30);
+
+    streams
+        .into_iter()
+        .filter(|stream| {
+            if !allowed_channel_ids.contains(&stream.channel.id) {
+                return false;
+            }
+
+            if stream.status == "live" {
+                return true;
+            }
+
+            if live_channels.contains(&stream.channel.id) {
+                return false;
+            }
+
+            if stream.status == "upcoming" {
+                if let Some(ref scheduled_time) = stream.start_scheduled {
+                    if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time) {
+                        let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
+                        return scheduled_utc <= thirty_hours_later;
+                    }
+                }
+                return true;
+            }
+
+            true
+        })
+        .collect()
+}
+
+fn map_holodex_streams_with_area(
+    streams: Vec<crate::plugins::youtube::HolodexStream>,
+) -> Vec<HolodexStreamWithArea> {
+    streams
+        .into_iter()
+        .map(|stream| {
+            let is_placeholder = stream.stream_type == "placeholder";
+            let title_for_detection = if let Some(ref topic) = stream.topic_id {
+                format!("{} {}", topic, stream.title)
+            } else {
+                stream.title.clone()
+            };
+
+            let mut suggested_area_id = 235;
+            if let Some(ref topic) = stream.topic_id {
+                let topic_lower = topic.to_lowercase();
+                if topic_lower.contains("freechat")
+                    || topic_lower.contains("talk")
+                    || topic_lower.contains("singing")
+                {
+                    suggested_area_id = 530;
+                }
+            }
+
+            if suggested_area_id == 235 {
+                suggested_area_id =
+                    crate::plugins::check_area_id_with_title(&title_for_detection, 235);
+            }
+
+            let suggested_area_name = if suggested_area_id != 235 {
+                crate::plugins::get_area_name(suggested_area_id)
+            } else {
+                None
+            };
+
+            HolodexStreamWithArea {
+                id: stream.id,
+                title: stream.title,
+                stream_type: stream.stream_type,
+                topic_id: stream.topic_id,
+                status: stream.status,
+                start_scheduled: stream.start_scheduled,
+                start_actual: stream.start_actual,
+                live_viewers: stream.live_viewers,
+                channel_id: stream.channel.id,
+                channel_name: stream.channel.name,
+                suggested_area_id: if suggested_area_id != 235 {
+                    Some(suggested_area_id)
+                } else {
+                    None
+                },
+                suggested_area_name,
+                is_placeholder,
+                external_link: stream.link,
+                thumbnail: stream.thumbnail,
+            }
+        })
+        .collect()
+}
+
+pub async fn api_holodex_auth_status() -> impl IntoResponse {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to load config: {}", e)
+            }));
+        }
+    };
+
+    let api_key = match cfg.holodex_api_key.filter(|k| !k.is_empty()) {
+        Some(key) => key,
+        None => {
+            return Json(json!({
+                "success": true,
+                "data": {
+                    "logged_in": false,
+                    "message": "Holodex API key not configured"
+                }
+            }));
+        }
+    };
+
+    let jwt = match cfg.holodex_jwt.filter(|j| !j.is_empty()) {
+        Some(jwt) => jwt,
+        None => {
+            return Json(json!({
+                "success": true,
+                "data": {
+                    "logged_in": false
+                }
+            }));
+        }
+    };
+
+    match crate::plugins::youtube::check_holodex_jwt(&api_key, &jwt).await {
+        Ok(Some(username)) => Json(json!({
+            "success": true,
+            "data": {
+                "logged_in": true,
+                "username": username
+            }
+        })),
+        Ok(None) => Json(json!({
+            "success": true,
+            "data": {
+                "logged_in": false,
+                "expired": true
+            }
+        })),
+        Err(e) => Json(json!({
+            "success": false,
+            "message": format!("Failed to verify Holodex login: {}", e)
+        })),
+    }
 }
 
 pub async fn api_get_holodex_streams() -> impl IntoResponse {
@@ -1535,7 +1715,40 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
         }
     };
 
-    // Collect all channel IDs from channels.json
+    let api_key = match cfg.holodex_api_key.filter(|k| !k.is_empty()) {
+        Some(key) => key,
+        None => {
+            return Json(json!({
+                "success": false,
+                "message": "Holodex API key not configured"
+            }));
+        }
+    };
+
+    // Favorites mode: JWT + includePlaceholder (YouTube + Twitch external streams)
+    if let Some(jwt) = cfg.holodex_jwt.filter(|j| !j.is_empty()) {
+        let (fav_ids, streams) =
+            match crate::plugins::youtube::get_holodex_favorites_live(&api_key, &jwt).await {
+                Ok(result) => result,
+                Err(e) => {
+                    return Json(json!({
+                        "success": false,
+                        "message": format!("Failed to fetch Holodex favorites: {}", e)
+                    }));
+                }
+            };
+
+        let filtered_streams = filter_holodex_streams(streams, fav_ids);
+        let streams_with_area = map_holodex_streams_with_area(filtered_streams);
+
+        return Json(json!({
+            "success": true,
+            "source": "favorites",
+            "data": streams_with_area
+        }));
+    }
+
+    // Fallback: channels.json preset list (YouTube only)
     let mut channel_ids = Vec::new();
 
     // Load channels.json for all channels
@@ -1598,119 +1811,14 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
         }
     };
 
-    // Filter: if a channel is live, omit its scheduled streams
-    use std::collections::HashSet;
-    let mut live_channels: HashSet<String> = HashSet::new();
-
-    // Create a set of queried channel IDs for filtering collab streams
-    let queried_channels: HashSet<String> = channel_ids.iter().cloned().collect();
-
-    // First pass: collect all channels that are currently live
-    for stream in &streams {
-        if stream.status == "live" {
-            live_channels.insert(stream.channel.id.clone());
-        }
-    }
-
-    // Second pass: filter out scheduled streams for channels that are live
-    // Also filter out scheduled streams more than 30 hours in the future
-    // Also filter out collab streams (where the channel is not in our query list)
-    let now = chrono::Utc::now();
-    let thirty_hours_later = now + chrono::Duration::hours(30);
-
-    let filtered_streams: Vec<_> = streams
-        .into_iter()
-        .filter(|stream| {
-            // Only keep streams from channels we explicitly queried
-            // This filters out collab streams where our channel appears as a guest
-            if !queried_channels.contains(&stream.channel.id) {
-                return false;
-            }
-
-            // Keep live streams
-            if stream.status == "live" {
-                return true;
-            }
-
-            // Keep scheduled streams only if channel is not currently live
-            if live_channels.contains(&stream.channel.id) {
-                return false;
-            }
-
-            // Filter scheduled streams by time (within 30 hours)
-            if stream.status == "upcoming" {
-                if let Some(ref scheduled_time) = stream.start_scheduled {
-                    if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time) {
-                        let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
-                        // Only keep if scheduled within next 30 hours
-                        return scheduled_utc <= thirty_hours_later;
-                    }
-                }
-                // If we can't parse the time, keep it to be safe
-                return true;
-            }
-
-            true
-        })
-        .collect();
-
-    // Add area detection for each stream
-    let streams_with_area: Vec<HolodexStreamWithArea> = filtered_streams
-        .into_iter()
-        .map(|stream| {
-            let title_for_detection = if let Some(ref topic) = stream.topic_id {
-                format!("{} {}", topic, stream.title)
-            } else {
-                stream.title.clone()
-            };
-
-            // Check if topic_id suggests 萌宅领域 (530)
-            let mut suggested_area_id = 235; // Default to 其他单机
-            if let Some(ref topic) = stream.topic_id {
-                let topic_lower = topic.to_lowercase();
-                if topic_lower.contains("freechat")
-                    || topic_lower.contains("talk")
-                    || topic_lower.contains("singing")
-                {
-                    suggested_area_id = 530; // 萌宅领域
-                }
-            }
-
-            // If not matched by topic, check title
-            if suggested_area_id == 235 {
-                suggested_area_id =
-                    crate::plugins::check_area_id_with_title(&title_for_detection, 235);
-            }
-
-            let suggested_area_name = if suggested_area_id != 235 {
-                crate::plugins::get_area_name(suggested_area_id)
-            } else {
-                None
-            };
-
-            HolodexStreamWithArea {
-                id: stream.id,
-                title: stream.title,
-                stream_type: stream.stream_type,
-                topic_id: stream.topic_id,
-                status: stream.status,
-                start_scheduled: stream.start_scheduled,
-                start_actual: stream.start_actual,
-                live_viewers: stream.live_viewers,
-                channel_id: stream.channel.id,
-                channel_name: stream.channel.name,
-                suggested_area_id: if suggested_area_id != 235 {
-                    Some(suggested_area_id)
-                } else {
-                    None
-                },
-                suggested_area_name,
-            }
-        })
-        .collect();
+    let queried_channels: std::collections::HashSet<String> =
+        channel_ids.iter().cloned().collect();
+    let filtered_streams = filter_holodex_streams(streams, queried_channels);
+    let streams_with_area = map_holodex_streams_with_area(filtered_streams);
 
     Json(json!({
         "success": true,
+        "source": "channels",
         "data": streams_with_area
     }))
 }
@@ -1723,6 +1831,55 @@ pub struct SwitchToHolodexStream {
     pub title: Option<String>,
     pub topic_id: Option<String>,
     pub status: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub external_link: Option<String>,
+    #[serde(default)]
+    pub twitch_channel_id: Option<String>,
+}
+
+fn parse_twitch_login_from_link(link: &str) -> Option<String> {
+    let link = link.trim();
+    for prefix in [
+        "https://www.twitch.tv/",
+        "https://twitch.tv/",
+        "http://www.twitch.tv/",
+        "http://twitch.tv/",
+    ] {
+        if let Some(rest) = link.strip_prefix(prefix) {
+            let login = rest
+                .split(&['/', '?', '#'][..])
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !login.is_empty() {
+                return Some(login.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn lookup_twitch_id_from_channels(
+    channels_json: &serde_json::Value,
+    youtube_channel_id: &str,
+) -> Option<String> {
+    if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
+        for channel in channels {
+            if let Some(platforms) = channel.get("platforms") {
+                if platforms.get("youtube").and_then(|v| v.as_str()) == Some(youtube_channel_id)
+                {
+                    if let Some(twitch_id) = platforms.get("twitch").and_then(|v| v.as_str()) {
+                        if !twitch_id.is_empty() {
+                            return Some(twitch_id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 pub async fn switch_to_holodex_stream(
@@ -1831,6 +1988,105 @@ pub async fn switch_to_holodex_stream(
     }
 
     let channel_name = channel_name.unwrap_or_else(|| payload.channel_id.clone());
+
+    let is_twitch = payload
+        .platform
+        .as_deref()
+        .map(|p| p.eq_ignore_ascii_case("twitch"))
+        .unwrap_or(false)
+        || payload.external_link.is_some();
+
+    if is_twitch {
+        let twitch_channel_id = payload
+            .twitch_channel_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                payload
+                    .external_link
+                    .as_deref()
+                    .and_then(parse_twitch_login_from_link)
+            })
+            .or_else(|| lookup_twitch_id_from_channels(&channels_json, &payload.channel_id));
+
+        let twitch_channel_id = match twitch_channel_id {
+            Some(id) => id,
+            None => {
+                return Ok(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(
+                        "无法解析 Twitch 频道 ID，请检查 external_link 或 channels.json"
+                            .to_string(),
+                    ),
+                });
+            }
+        };
+
+        cfg.twitch.channel_id = twitch_channel_id.clone();
+        cfg.twitch.channel_name = channel_name.clone();
+        if let Some(area_id) = payload.area_id {
+            cfg.twitch.area_v2 = area_id;
+        }
+
+        if let Err(e) = crate::config::save_config(&cfg).await {
+            tracing::error!("Failed to save config: {}", e);
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to save config: {}", e)),
+            });
+        }
+
+        tracing::info!(
+            "Successfully switched to Twitch channel: {} ({})",
+            cfg.twitch.channel_name,
+            cfg.twitch.channel_id
+        );
+
+        set_config_updated();
+
+        let is_live = payload
+            .status
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase() == "live")
+            .unwrap_or(false);
+        let stream_title = payload.title.unwrap_or_else(|| "未知标题".to_string());
+        let stream_topic = payload.topic_id.unwrap_or_else(|| "未知".to_string());
+
+        let mut current_cache = get_status_cache().unwrap_or_default();
+        let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
+            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+
+        current_cache.twitch = Some(TwStatus {
+            is_live,
+            title: Some(stream_title.clone()),
+            game: Some(stream_topic),
+            channel_name: cfg.twitch.channel_name.clone(),
+            channel_id: cfg.twitch.channel_id.clone(),
+            quality: cfg.twitch.quality.clone(),
+            area_id: cfg.twitch.area_v2,
+            area_name: tw_area_name,
+            crop_enabled: cfg.twitch.crop.is_some(),
+            ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+            ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
+        });
+
+        update_status_cache(current_cache);
+
+        return Ok(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some(format!(
+                "已切换到 Twitch {} (分区: {}) - {}",
+                cfg.twitch.channel_name,
+                cfg.twitch.area_v2,
+                if is_live { "直播中" } else { "预定直播" }
+            )),
+        });
+    }
 
     // Update config
     cfg.youtube.channel_id = payload.channel_id.clone();

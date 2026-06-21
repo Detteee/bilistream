@@ -24,6 +24,8 @@ pub struct Config {
     pub twitch: Twitch,
     pub youtube: Youtube,
     pub holodex_api_key: Option<String>,
+    #[serde(default)]
+    pub holodex_jwt: Option<String>,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
@@ -330,6 +332,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
                 ffmpeg_cache: FfmpegCache::default(),
             },
             holodex_api_key: legacy.holodex_api_key,
+            holodex_jwt: None,
             riot_api_key: legacy.riot_api_key,
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,
