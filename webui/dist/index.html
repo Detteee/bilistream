@@ -1479,7 +1479,7 @@
             <span class="info-label">标题</span>
             <span class="info-value" id="yt-title" style="flex: 1; text-align: right;">-</span>
           </div>
-          <div class="info-row">
+          <div class="info-row" id="yt-topic-row">
             <span class="info-label">分区</span>
             <span class="info-value" id="yt-topic" style="text-align: right;">-</span>
           </div>
@@ -1676,7 +1676,7 @@
             <span class="info-label">标题</span>
             <span class="info-value" id="tw-title" style="flex: 1; text-align: right;">-</span>
           </div>
-          <div class="info-row">
+          <div class="info-row" id="tw-game-row">
             <span class="info-label">游戏</span>
             <span class="info-value" id="tw-game" style="text-align: right;">-</span>
           </div>
@@ -4822,6 +4822,18 @@
         );
       }
 
+      function setPlatformLiveInfoVisibility(platform, isLive) {
+        const rowIds = platform === 'youtube'
+          ? ['yt-title-row', 'yt-topic-row']
+          : ['tw-title-row', 'tw-game-row'];
+        for (const id of rowIds) {
+          const row = document.getElementById(id);
+          if (row) {
+            row.style.display = isLive ? '' : 'none';
+          }
+        }
+      }
+
       function schedulePlatformTitleRowCenters() {
         requestAnimationFrame(() => {
           requestAnimationFrame(syncPlatformTitleRowCenters);
@@ -5016,6 +5028,7 @@
               const yt = data.data.youtube;
               document.getElementById('yt-status').className =
                 `status-indicator ${yt.is_live ? 'status-live' : 'status-offline'}`;
+              setPlatformLiveInfoVisibility('youtube', yt.is_live);
               document.getElementById('yt-channel-name').textContent = yt.channel_name || '-';
               document.getElementById('yt-title').textContent = yt.title || '-';
               document.getElementById('yt-topic').textContent = yt.topic || '-';
@@ -5028,6 +5041,7 @@
                 formatHlsCacheStatus(yt.ffmpeg_cache_enabled, yt.ffmpeg_cache_latency_secs);
             } else {
               document.getElementById('yt-status').className = 'status-indicator status-offline';
+              setPlatformLiveInfoVisibility('youtube', false);
               document.getElementById('yt-channel-name').textContent = '-';
               document.getElementById('yt-title').textContent = '-';
               document.getElementById('yt-topic').textContent = '-';
@@ -5042,6 +5056,7 @@
               const tw = data.data.twitch;
               document.getElementById('tw-status').className =
                 `status-indicator ${tw.is_live ? 'status-live' : 'status-offline'}`;
+              setPlatformLiveInfoVisibility('twitch', tw.is_live);
               document.getElementById('tw-channel-name').textContent = tw.channel_name || '-';
               document.getElementById('tw-title').textContent = tw.title || '-';
               document.getElementById('tw-game').textContent = tw.game || '-';
@@ -5054,6 +5069,7 @@
                 formatHlsCacheStatus(tw.ffmpeg_cache_enabled, tw.ffmpeg_cache_latency_secs);
             } else {
               document.getElementById('tw-status').className = 'status-indicator status-offline';
+              setPlatformLiveInfoVisibility('twitch', false);
               document.getElementById('tw-channel-name').textContent = '-';
               document.getElementById('tw-title').textContent = '-';
               document.getElementById('tw-game').textContent = '-';
