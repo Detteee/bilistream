@@ -530,6 +530,8 @@ pub async fn update_config(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let mut holodex_jwt_saved = false;
+
     // Update fields
     if let Some(interval) = payload.interval {
         cfg.interval = interval;
@@ -574,6 +576,7 @@ pub async fn update_config(
         } else {
             cfg.holodex_jwt = Some(jwt.to_string());
             cfg.holodex_username = None;
+            holodex_jwt_saved = true;
         }
     }
     if let Some(holodex_skip_jwt_verify) = payload.holodex_skip_jwt_verify {
@@ -635,6 +638,12 @@ pub async fn update_config(
     crate::config::save_config(&cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if holodex_jwt_saved {
+        if let Some(jwt) = cfg.holodex_jwt.clone() {
+            ensure_holodex_username(&mut cfg, &jwt).await;
+        }
+    }
 
     // Holodex JWT/API key only affect the dashboard; don't restart the streaming loop.
     if requires_stream_reload {
@@ -1816,29 +1825,39 @@ async fn ensure_holodex_username(cfg: &mut crate::config::Config, jwt: &str) {
         return;
     }
 
-    let Some(api_key) = cfg
-        .holodex_api_key
-        .as_ref()
-        .filter(|key| !key.is_empty())
-    else {
-        return;
-    };
-
-    let Ok(Some(refresh)) = crate::plugins::youtube::refresh_holodex_jwt(api_key, jwt).await else {
-        return;
-    };
-
+    let api_key = cfg.holodex_api_key.as_deref().filter(|key| !key.is_empty());
     let mut should_save = false;
-    if let Some(name) = refresh.username.filter(|name| !name.is_empty()) {
-        cfg.holodex_username = Some(name);
-        should_save = true;
+
+    match crate::plugins::youtube::refresh_holodex_jwt(api_key, jwt).await {
+        Ok(Some(refresh)) => {
+            if let Some(name) = refresh.username.filter(|name| !name.is_empty()) {
+                cfg.holodex_username = Some(name);
+                should_save = true;
+            }
+            if let Some(new_jwt) = refresh.jwt.filter(|token| !token.is_empty()) {
+                if cfg.holodex_jwt.as_deref() != Some(new_jwt.as_str()) {
+                    cfg.holodex_jwt = Some(new_jwt);
+                    cfg.holodex_jwt_refreshed_at =
+                        Some(crate::plugins::youtube::holodex_unix_now());
+                    should_save = true;
+                }
+            }
+        }
+        Ok(None) => {
+            tracing::warn!("Holodex user/refresh returned no data while resolving username");
+        }
+        Err(e) => {
+            tracing::warn!("Holodex user/refresh request failed: {}", e);
+        }
     }
-    if let Some(new_jwt) = refresh.jwt.filter(|token| !token.is_empty()) {
-        if cfg.holodex_jwt.as_deref() != Some(new_jwt.as_str()) {
-            cfg.holodex_jwt = Some(new_jwt);
+
+    if cfg.holodex_username.is_none() {
+        if let Some(name) = crate::plugins::youtube::holodex_username_from_jwt(jwt) {
+            cfg.holodex_username = Some(name);
             should_save = true;
         }
     }
+
     if should_save {
         if let Err(e) = crate::config::save_config(cfg).await {
             tracing::warn!("Failed to save Holodex username: {}", e);

@@ -248,8 +248,56 @@ pub struct HolodexJwtRefresh {
     pub jwt: Option<String>,
 }
 
+pub fn holodex_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let mut padded = payload_b64.to_string();
+    let rem = padded.len() % 4;
+    if rem != 0 {
+        padded.push_str(&"=".repeat(4 - rem));
+    }
+    let bytes = URL_SAFE.decode(padded.as_bytes()).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn holodex_username_from_jwt(jwt: &str) -> Option<String> {
+    let payload = holodex_jwt_payload(jwt)?;
+    for key in ["name", "username", "display_name"] {
+        if let Some(name) = payload.get(key).and_then(|v| v.as_str()) {
+            let name = name.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    payload.get("user").and_then(|user| {
+        for key in ["name", "username", "display_name"] {
+            if let Some(name) = user.get(key).and_then(|v| v.as_str()) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        None
+    })
+}
+
+fn extract_holodex_refresh_username(body: &serde_json::Value) -> Option<String> {
+    body.get("user").and_then(|user| {
+        for key in ["name", "username", "display_name"] {
+            if let Some(name) = user.get(key).and_then(|v| v.as_str()) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        None
+    })
+}
+
 pub async fn refresh_holodex_jwt(
-    api_key: &str,
+    api_key: Option<&str>,
     jwt: &str,
 ) -> Result<Option<HolodexJwtRefresh>, String> {
     let client = reqwest::Client::builder()
@@ -257,24 +305,26 @@ pub async fn refresh_holodex_jwt(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client
+    let mut request = client
         .get("https://holodex.net/api/v2/user/refresh")
-        .header("X-APIKEY", api_key)
         .header("Authorization", format!("BEARER {jwt}"))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .header("Referer", "https://holodex.net/");
+
+    if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+        request = request.header("X-APIKEY", api_key);
+    }
+
+    let response = request.send().await.map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        tracing::warn!("Holodex user/refresh failed: {} {}", status, body);
         return Ok(None);
     }
 
     let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    let username = body
-        .get("user")
-        .and_then(|u| u.get("name"))
-        .and_then(|n| n.as_str())
-        .map(|s| s.to_string());
+    let username = extract_holodex_refresh_username(&body);
     let jwt = body
         .get("jwt")
         .and_then(|j| j.as_str())
@@ -284,6 +334,10 @@ pub async fn refresh_holodex_jwt(
     if username.is_some() || jwt.is_some() {
         Ok(Some(HolodexJwtRefresh { username, jwt }))
     } else {
+        tracing::warn!(
+            "Holodex user/refresh returned no username or jwt: {}",
+            body
+        );
         Ok(None)
     }
 }
@@ -296,15 +350,8 @@ pub fn holodex_unix_now() -> u64 {
 }
 
 pub fn holodex_jwt_exp(jwt: &str) -> Option<u64> {
-    let payload_b64 = jwt.split('.').nth(1)?;
-    let mut padded = payload_b64.to_string();
-    let rem = padded.len() % 4;
-    if rem != 0 {
-        padded.push_str(&"=".repeat(4 - rem));
-    }
-    let bytes = URL_SAFE.decode(padded.as_bytes()).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    value.get("exp").and_then(|exp| exp.as_u64())
+    holodex_jwt_payload(jwt)
+        .and_then(|value| value.get("exp").and_then(|exp| exp.as_u64()))
 }
 
 pub fn holodex_jwt_is_expired(jwt: &str) -> bool {
@@ -343,7 +390,7 @@ pub async fn sync_holodex_jwt_if_needed(
         });
     }
 
-    match refresh_holodex_jwt(api_key, jwt).await? {
+    match refresh_holodex_jwt(Some(api_key), jwt).await? {
         Some(refresh) => {
             let new_jwt = refresh
                 .jwt
