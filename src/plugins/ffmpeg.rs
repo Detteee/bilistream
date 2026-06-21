@@ -498,7 +498,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
 }
 const NETWORK_PANEL_WIDTH: usize = 72;
 const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
-const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 11;
+const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 9;
 const NETWORK_HISTORY_LIMIT: usize = 60;
 const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
 
@@ -530,7 +530,7 @@ struct FfmpegStatsDisplay {
 impl FfmpegStatsDisplay {
     fn reset(&mut self) {
         if self.rendered_lines > 0 && self.enabled {
-            eprint!("\x1b[{}F\x1b[J", self.rendered_lines);
+            eprint!("\x1b[?25l\x1b[{}F\x1b[J\x1b[?25h", self.rendered_lines);
             let _ = std::io::stderr().flush();
         }
         *self = Self {
@@ -578,28 +578,33 @@ impl FfmpegStatsDisplay {
                 self.cache.as_ref(),
                 FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
             )),
-            network_content_line(&Self::graph_row("Cache", &self.cache_history, scale_kbps)),
+            network_content_line(&Self::rx_graph_row("RX", &self.cache_history, scale_kbps)),
+            network_content_line(&Self::zero_axis_row()),
+            network_content_line(&Self::tx_graph_row("TX", &self.push_history, scale_kbps)),
             network_content_line(&Self::meter_row(
                 "RTMP TX",
                 self.push.as_ref(),
                 FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
             )),
-            network_content_line(&Self::graph_row("Push", &self.push_history, scale_kbps)),
             network_bottom_border(),
         ];
 
+        let mut output = String::new();
+        output.push_str("\x1b[?25l");
         if self.rendered_lines > 0 {
-            eprint!("\x1b[{}F", self.rendered_lines);
+            output.push_str(&format!("\x1b[{}F", self.rendered_lines));
         }
         for (index, line) in lines.iter().enumerate() {
             if index == 0 {
-                eprintln!("\x1b[2K\x1b[1m{}", line);
+                output.push_str(&format!("\x1b[2K\x1b[1m{}\n", line));
             } else if index == lines.len() - 1 {
-                eprintln!("\x1b[2K{}\x1b[0m", line);
+                output.push_str(&format!("\x1b[2K{}\x1b[0m\n", line));
             } else {
-                eprintln!("\x1b[2K{}", line);
+                output.push_str(&format!("\x1b[2K{}\n", line));
             }
         }
+        output.push_str("\x1b[?25h");
+        eprint!("{}", output);
         let _ = std::io::stderr().flush();
         self.rendered_lines = lines.len();
     }
@@ -624,11 +629,28 @@ impl FfmpegStatsDisplay {
         )
     }
 
-    fn graph_row(label: &str, history: &[f32], scale_kbps: f32) -> String {
+    fn rx_graph_row(label: &str, history: &[f32], scale_kbps: f32) -> String {
         format!(
-            "{:<8} {}",
+            "{:<6} ↑{}",
             label,
-            sparkline(history, NETWORK_GRAPH_WIDTH, scale_kbps)
+            mirrored_sparkline(history, NETWORK_GRAPH_WIDTH, scale_kbps, GraphDirection::Up)
+        )
+    }
+
+    fn zero_axis_row() -> String {
+        format!("{:<6} ┼{}", "0", "─".repeat(NETWORK_GRAPH_WIDTH))
+    }
+
+    fn tx_graph_row(label: &str, history: &[f32], scale_kbps: f32) -> String {
+        format!(
+            "{:<6} ↓{}",
+            label,
+            mirrored_sparkline(
+                history,
+                NETWORK_GRAPH_WIDTH,
+                scale_kbps,
+                GraphDirection::Down
+            )
         )
     }
 }
@@ -657,12 +679,28 @@ fn push_history_sample(history: &mut Vec<f32>, value: f32) {
     }
 }
 
-fn sparkline(history: &[f32], width: usize, scale_kbps: f32) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+#[derive(Clone, Copy)]
+enum GraphDirection {
+    Up,
+    Down,
+}
+
+fn mirrored_sparkline(
+    history: &[f32],
+    width: usize,
+    scale_kbps: f32,
+    direction: GraphDirection,
+) -> String {
+    const UP_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    const DOWN_BARS: [char; 8] = ['▔', '🮂', '🮃', '▀', '🮄', '🮅', '🮆', '█'];
     if history.is_empty() {
         return " ".repeat(width);
     }
 
+    let bars = match direction {
+        GraphDirection::Up => UP_BARS,
+        GraphDirection::Down => DOWN_BARS,
+    };
     let start = history.len().saturating_sub(width);
     let mut output = String::with_capacity(width);
     for _ in 0..width.saturating_sub(history.len() - start) {
@@ -674,8 +712,8 @@ fn sparkline(history: &[f32], width: usize, scale_kbps: f32) -> String {
         } else {
             0.0
         };
-        let index = (ratio * (BARS.len() - 1) as f32).round() as usize;
-        output.push(BARS[index]);
+        let index = (ratio * (bars.len() - 1) as f32).round() as usize;
+        output.push(bars[index]);
     }
     output
 }

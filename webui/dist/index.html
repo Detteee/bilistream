@@ -207,25 +207,51 @@
     }
 
     .bili-network-graph {
-      display: grid;
-      grid-template-columns: repeat(48, minmax(2px, 1fr));
-      align-items: end;
+      position: relative;
+      display: flex;
+      align-items: stretch;
       gap: 2px;
-      height: 54px;
+      height: 72px;
       padding: 8px 0 7px;
       border-top: 1px solid var(--info-border);
       border-bottom: 1px solid var(--info-border);
     }
 
+    .bili-network-graph::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 1px;
+      background: var(--info-border);
+      opacity: 0.95;
+    }
+
+    .bili-network-column {
+      position: relative;
+      flex: 1 1 0;
+      min-width: 2px;
+    }
+
     .bili-network-bar {
+      position: absolute;
+      left: 0;
+      right: 0;
       min-height: 2px;
-      border-radius: 2px 2px 0 0;
       background: linear-gradient(180deg, var(--accent-teal), var(--heading-color));
       opacity: 0.35;
     }
 
     .bili-network-bar.cache {
+      bottom: 50%;
+      border-radius: 2px 2px 0 0;
       background: linear-gradient(180deg, var(--accent-yellow), var(--accent-green));
+    }
+
+    .bili-network-bar.push {
+      top: 50%;
+      border-radius: 0 0 2px 2px;
     }
 
     .bili-network-bar.active {
@@ -271,10 +297,6 @@
     @media (max-width: 520px) {
       .bili-network-meters {
         grid-template-columns: 1fr;
-      }
-
-      .bili-network-graph {
-        grid-template-columns: repeat(32, minmax(2px, 1fr));
       }
     }
 
@@ -4352,18 +4374,21 @@
         const pushSeries = biliNetworkHistory.push.slice(pushStart);
         const cacheStart = Math.max(0, biliNetworkHistory.cache.length - graphWidth);
         const cacheSeries = biliNetworkHistory.cache.slice(cacheStart);
-        const bars = [];
+        const columns = [];
 
         for (let i = 0; i < graphWidth; i += 1) {
           const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
           const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
-          const value = showCache ? Math.max(pushValue, cacheValue) : pushValue;
-          const height = Math.max(2, Math.round((value / maxRate) * 100));
-          const className = showCache && cacheValue >= pushValue ? 'bili-network-bar cache active' : 'bili-network-bar active';
-          bars.push(`<span class="${className}" style="height: ${height}%"></span>`);
+          const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * 50)) : 0;
+          const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * 50));
+          const cacheBar = showCache
+            ? `<span class="bili-network-bar cache active" style="height: ${cacheHeight}%"></span>`
+            : '';
+          const pushBar = `<span class="bili-network-bar push active" style="height: ${pushHeight}%"></span>`;
+          columns.push(`<span class="bili-network-column">${cacheBar}${pushBar}</span>`);
         }
 
-        graph.innerHTML = bars.join('');
+        graph.innerHTML = columns.join('');
       }
 
       function applyBiliStreamQualityColor(element, quality) {
