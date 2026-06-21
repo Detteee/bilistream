@@ -125,6 +125,7 @@
       border: 1px solid var(--card-border);
       content-visibility: auto;
       contain-intrinsic-size: 260px;
+      min-width: 0;
     }
 
     .card:hover {
@@ -160,12 +161,13 @@
     }
 
     .info-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 8px 12px;
       padding: 10px 0;
       border-bottom: 1px solid var(--info-border);
+      min-width: 0;
     }
 
     .info-row:last-child {
@@ -173,6 +175,79 @@
     }
 
     .info-row.info-row-label-center {
+      align-items: center;
+    }
+
+    .info-row > .info-label {
+      grid-column: 1;
+    }
+
+    .info-row > .info-value,
+    .info-row > .info-row-view,
+    .info-row > [id$="-edit-container"] {
+      grid-column: 2;
+      min-width: 0;
+    }
+
+    .info-row-view {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .info-row > [id$="-edit-container"] {
+      width: 100%;
+    }
+
+    .info-row > [id$="-edit-container"] > div {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .info-row > [id$="-edit-container"] select,
+    .info-row > [id$="-edit-container"] input[type="text"] {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+
+    .info-row > [id$="-edit-container"] select {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dashboard .card .info-row > [id$="-edit-container"] > div > button {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      flex: 0 0 28px;
+      padding: 0 !important;
+      font-size: 12px;
+      line-height: 1;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .info-row > [id$="-hls-cache-edit-container"] > div {
+      justify-content: flex-end;
+      flex-wrap: nowrap;
+    }
+
+    .card-header-actions {
+      display: flex;
+      gap: 8px;
       align-items: center;
     }
 
@@ -542,7 +617,14 @@
       }
 
       .info-row {
-        flex-wrap: wrap;
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+
+      .info-row > .info-value,
+      .info-row > .info-row-view,
+      .info-row > [id$="-edit-container"] {
+        grid-column: 1;
       }
 
       .info-value {
@@ -1496,7 +1578,7 @@
               <span class="status-indicator" id="bili-status"></span>
               Bilibili
             </h2>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div class="card-header-actions">
               <button id="startLiveBtn" onclick="startStream()" title="开始直播"
                 style="padding: 8px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
                 <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px"
@@ -1536,7 +1618,7 @@
 
           <div class="info-row">
             <span class="info-label">标题</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="bili-title" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleTitleEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1550,16 +1632,15 @@
               </button>
             </div>
             <!-- Hidden edit input -->
-            <div id="title-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" id="title-edit-input"
-                  style="flex: 1; max-width: 150px; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="title-edit-container" style="display: none;">
+              <div>
+                <input type="text" id="title-edit-input">
                 <button onclick="saveTitleEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelTitleEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1567,7 +1648,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">分区</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="bili-area" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleAreaEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1581,18 +1662,17 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="area-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="area-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="area-edit-container" style="display: none;">
+              <div>
+                <select id="area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
                 <button onclick="saveAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1600,7 +1680,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">弹幕指令</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1; justify-content: flex-end;">
+            <div class="info-row-view" style="justify-content: flex-end;">
               <label class="toggle-label" style="margin: 0;">
                 <div class="toggle-switch">
                   <input type="checkbox" id="bili-danmaku-command-toggle" onchange="toggleDanmakuCommand()">
@@ -1643,7 +1723,7 @@
               <span class="status-indicator" id="yt-status"></span>
               YouTube
             </h2>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div class="card-header-actions">
               <!-- Toggle Switch -->
               <label class="toggle-label">
                 <div class="toggle-switch">
@@ -1663,7 +1743,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="yt-channel-name" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleYtChannelEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1677,18 +1757,17 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="yt-channel-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="yt-channel-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="yt-channel-edit-container" style="display: none;">
+              <div>
+                <select id="yt-channel-edit-select">
                   <option value="">选择频道...</option>
                 </select>
                 <button onclick="saveYtChannelEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelYtChannelEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1704,7 +1783,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">配置分区</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="yt-area" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleYtAreaEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1718,18 +1797,17 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="yt-area-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="yt-area-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="yt-area-edit-container" style="display: none;">
+              <div>
+                <select id="yt-area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
                 <button onclick="saveYtAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelYtAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1737,7 +1815,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">画质</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="yt-quality" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleYtQualityEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1751,17 +1829,16 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="yt-quality-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="yt-quality-edit-select"
-                  style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="yt-quality-edit-container" style="display: none;">
+              <div>
+                <select id="yt-quality-edit-select">
                 </select>
                 <button onclick="saveYtQualityEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelYtQualityEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1769,7 +1846,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">裁剪</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="yt-crop-status" style="flex: 1; text-align: right;">关闭</span>
               <button onclick="openCropConfig('youtube')"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1795,7 +1872,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">HLS缓存</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="yt-hls-cache-status" style="flex: 1; text-align: right;">关闭</span>
               <button onclick="toggleYtHlsCacheEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1808,8 +1885,8 @@
                 </svg>
               </button>
             </div>
-            <div id="yt-hls-cache-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: nowrap;">
+            <div id="yt-hls-cache-edit-container" style="display: none;">
+              <div>
                 <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
                   <div class="toggle-switch" style="transform: scale(0.85);">
                     <input type="checkbox" id="yt-hls-cache-enabled">
@@ -1822,11 +1899,11 @@
                   <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
                 </span>
                 <button onclick="saveYtHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelYtHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1840,7 +1917,7 @@
               <span class="status-indicator" id="tw-status"></span>
               Twitch
             </h2>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div class="card-header-actions">
               <!-- Toggle Switch -->
               <label class="toggle-label">
                 <div class="toggle-switch">
@@ -1860,7 +1937,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">频道</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="tw-channel-name" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleTwChannelEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1874,18 +1951,17 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="tw-channel-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="tw-channel-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="tw-channel-edit-container" style="display: none;">
+              <div>
+                <select id="tw-channel-edit-select">
                   <option value="">选择频道...</option>
                 </select>
                 <button onclick="saveTwChannelEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelTwChannelEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1901,7 +1977,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">配置分区</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="tw-area" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleTwAreaEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1915,18 +1991,17 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="tw-area-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="tw-area-edit-select"
-                  style="flex: 1; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="tw-area-edit-container" style="display: none;">
+              <div>
+                <select id="tw-area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
                 <button onclick="saveTwAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelTwAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1934,7 +2009,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">画质</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="tw-quality" style="flex: 1; text-align: right;">-</span>
               <button onclick="toggleTwQualityEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1948,17 +2023,16 @@
               </button>
             </div>
             <!-- Hidden edit dropdown -->
-            <div id="tw-quality-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <select id="tw-quality-edit-select"
-                  style="flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px;">
+            <div id="tw-quality-edit-container" style="display: none;">
+              <div>
+                <select id="tw-quality-edit-select">
                 </select>
                 <button onclick="saveTwQualityEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelTwQualityEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
@@ -1966,7 +2040,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">裁剪</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="tw-crop-status" style="flex: 1; text-align: right;">关闭</span>
               <button onclick="openCropConfig('twitch')"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -1992,7 +2066,7 @@
           </div>
           <div class="info-row">
             <span class="info-label">HLS缓存</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="info-row-view">
               <span class="info-value" id="tw-hls-cache-status" style="flex: 1; text-align: right;">关闭</span>
               <button onclick="toggleTwHlsCacheEdit()"
                 style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
@@ -2005,8 +2079,8 @@
                 </svg>
               </button>
             </div>
-            <div id="tw-hls-cache-edit-container" style="display: none; flex: 1;">
-              <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: nowrap;">
+            <div id="tw-hls-cache-edit-container" style="display: none;">
+              <div>
                 <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
                   <div class="toggle-switch" style="transform: scale(0.85);">
                     <input type="checkbox" id="tw-hls-cache-enabled">
@@ -2019,17 +2093,78 @@
                   <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
                 </span>
                 <button onclick="saveTwHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
+                  style="background: var(--accent-green); color: #1e1e2e;">
                   ✓
                 </button>
                 <button onclick="cancelTwHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e; border: none; padding: 4px 7px; border-radius: 4px; cursor: pointer; font-size: 12px; flex-shrink: 0;">
+                  style="background: var(--accent-red); color: #1e1e2e;">
                   ✕
                 </button>
               </div>
             </div>
           </div>
         </div>
+      </div>
+
+      <div class="controls" id="holodex-section" style="margin-top: 20px;">
+        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
+          onclick="toggleHolodex()">
+          <svg viewBox="0 0 24 24" focusable="false" style="width: 24px; height: 24px;">
+            <g>
+              <path d="M4.5 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z"
+                fill="url(#holodex-a)">
+              </path>
+              <path d="M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z"
+                fill="url(#holodex-b)">
+              </path>
+            </g>
+            <defs>
+              <linearGradient id="holodex-a" x1=".2" y1="2.8" x2="19.3" y2="18.5" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#F06292"></stop>
+                <stop offset="1" stop-color="#FF3A81"></stop>
+              </linearGradient>
+              <linearGradient id="holodex-b" x1="-4.4" y1="2.8" x2="19.5" y2="11.3" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#5DA2F2"></stop>
+                <stop offset="1" stop-color="#715BF7" stop-opacity=".8"></stop>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>Holodex 直播监控</span>
+          <span id="holodex-toggle">▼</span>
+        </h2>
+        <div id="holodex-container" style="display: none;">
+          <!-- API Key Configuration Section -->
+          <div id="holodex-api-config"
+            style="display: none; padding: 20px; background: var(--input-bg); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
+            <h3 style="color: var(--heading-color); margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+              🔑 配置 Holodex API Key
+            </h3>
+            <p style="color: var(--text-secondary); margin-bottom: 15px; line-height: 1.6;">
+              Holodex API 用于获取 YouTube 直播状态
+            </p>
+            <div class="control-group" style="margin-bottom: 15px;">
+              <label style="color: var(--text-secondary); font-weight: 500;">API Key</label>
+              <input type="text" id="holodex-api-input" placeholder="输入你的 Holodex API Key"
+                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
+            </div>
+            <div
+              style="background: var(--card-bg); padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid var(--info-border);">
+              <h4 style="color: var(--text-primary); margin-bottom: 10px; font-size: 14px;">📋 如何获取 API Key:</h4>
+              <ol style="color: var(--text-secondary); font-size: 13px; line-height: 1.5; padding-left: 20px;">
+                <li>访问 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
+                    style="color: var(--heading-color);">holodex.net/login</a></li>
+                <li>登录, 复制 API Key 至上方输入框</li>
+              </ol>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button class="btn-success" onclick="saveHolodexApiKey()" style="flex: 1;">
+                💾 保存配置
+              </button>
+              <button class="btn-secondary" onclick="testHolodexApiKey()" style="flex: 1;">
+                🧪 测试连接
+              </button>
+            </div>
+          </div>
 
           <!-- Holodex account login moved to modal (toolbar button) -->
 
@@ -3866,10 +4001,8 @@
       function toggleYtHlsCacheEdit() {
         const statusSpan = document.getElementById('yt-hls-cache-status');
         const editContainer = document.getElementById('yt-hls-cache-edit-container');
-        const statusContainer = statusSpan.parentElement;
 
-        statusContainer.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(statusSpan, editContainer);
 
         fetch('/api/ffmpeg-cache/youtube')
           .then(response => response.json())
@@ -3893,10 +4026,8 @@
       function cancelYtHlsCacheEdit() {
         const statusSpan = document.getElementById('yt-hls-cache-status');
         const editContainer = document.getElementById('yt-hls-cache-edit-container');
-        const statusContainer = statusSpan.parentElement;
 
-        editContainer.style.display = 'none';
-        statusContainer.style.display = 'flex';
+        hideInfoRowEdit(statusSpan, editContainer);
       }
 
       async function saveYtHlsCacheEdit() {
@@ -3930,10 +4061,8 @@
       function toggleTwHlsCacheEdit() {
         const statusSpan = document.getElementById('tw-hls-cache-status');
         const editContainer = document.getElementById('tw-hls-cache-edit-container');
-        const statusContainer = statusSpan.parentElement;
 
-        statusContainer.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(statusSpan, editContainer);
 
         fetch('/api/ffmpeg-cache/twitch')
           .then(response => response.json())
@@ -3957,10 +4086,8 @@
       function cancelTwHlsCacheEdit() {
         const statusSpan = document.getElementById('tw-hls-cache-status');
         const editContainer = document.getElementById('tw-hls-cache-edit-container');
-        const statusContainer = statusSpan.parentElement;
 
-        editContainer.style.display = 'none';
-        statusContainer.style.display = 'flex';
+        hideInfoRowEdit(statusSpan, editContainer);
       }
 
       async function saveTwHlsCacheEdit() {
@@ -5577,17 +5704,24 @@
         }
       }
 
+      // Inline row edit helpers
+      function showInfoRowEdit(valueEl, editContainer) {
+        valueEl.parentElement.style.display = 'none';
+        editContainer.style.display = 'flex';
+      }
+
+      function hideInfoRowEdit(valueEl, editContainer) {
+        editContainer.style.display = 'none';
+        valueEl.parentElement.style.display = 'flex';
+      }
+
       // Inline title editing functions
       function toggleTitleEdit() {
         const titleSpan = document.getElementById('bili-title');
         const editContainer = document.getElementById('title-edit-container');
         const editInput = document.getElementById('title-edit-input');
-        const editButton = titleSpan.parentElement.querySelector('button');
 
-        // Show edit input and hide title span and edit button
-        titleSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(titleSpan, editContainer);
 
         // Set current title as input value
         editInput.value = titleSpan.textContent === '-' ? '' : titleSpan.textContent;
@@ -5607,12 +5741,8 @@
       function cancelTitleEdit() {
         const titleSpan = document.getElementById('bili-title');
         const editContainer = document.getElementById('title-edit-container');
-        const editButton = titleSpan.parentElement.querySelector('button');
 
-        // Hide edit input and show title span and edit button
-        editContainer.style.display = 'none';
-        titleSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(titleSpan, editContainer);
       }
 
       // YouTube channel editing functions
@@ -5620,12 +5750,8 @@
         const channelSpan = document.getElementById('yt-channel-name');
         const editContainer = document.getElementById('yt-channel-edit-container');
         const editSelect = document.getElementById('yt-channel-edit-select');
-        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide channel span and edit button
-        channelSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(channelSpan, editContainer);
 
         // Load channels if not already loaded
         if (!channelsData) {
@@ -5661,12 +5787,8 @@
       function cancelYtChannelEdit() {
         const channelSpan = document.getElementById('yt-channel-name');
         const editContainer = document.getElementById('yt-channel-edit-container');
-        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show channel span and edit button
-        editContainer.style.display = 'none';
-        channelSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(channelSpan, editContainer);
       }
 
       async function saveYtChannelEdit() {
@@ -5704,12 +5826,8 @@
         const areaSpan = document.getElementById('yt-area');
         const editContainer = document.getElementById('yt-area-edit-container');
         const editSelect = document.getElementById('yt-area-edit-select');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span and edit button
-        areaSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(areaSpan, editContainer);
 
         // Load areas if not already loaded
         if (!areasData) {
@@ -5747,12 +5865,8 @@
       function cancelYtAreaEdit() {
         const areaSpan = document.getElementById('yt-area');
         const editContainer = document.getElementById('yt-area-edit-container');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span and edit button
-        editContainer.style.display = 'none';
-        areaSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(areaSpan, editContainer);
       }
 
       async function saveYtAreaEdit() {
@@ -5788,12 +5902,8 @@
         const qualitySpan = document.getElementById('yt-quality');
         const editContainer = document.getElementById('yt-quality-edit-container');
         const editSelect = document.getElementById('yt-quality-edit-select');
-        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide quality span and edit button
-        qualitySpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(qualitySpan, editContainer);
 
         // Populate quality options for YouTube
         populateQualityOptions(editSelect, 'youtube');
@@ -5811,12 +5921,8 @@
       function cancelYtQualityEdit() {
         const qualitySpan = document.getElementById('yt-quality');
         const editContainer = document.getElementById('yt-quality-edit-container');
-        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show quality span and edit button
-        editContainer.style.display = 'none';
-        qualitySpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(qualitySpan, editContainer);
       }
 
       async function saveYtQualityEdit() {
@@ -5854,12 +5960,8 @@
         const qualitySpan = document.getElementById('tw-quality');
         const editContainer = document.getElementById('tw-quality-edit-container');
         const editSelect = document.getElementById('tw-quality-edit-select');
-        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide quality span and edit button
-        qualitySpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(qualitySpan, editContainer);
 
         // Populate quality options for Twitch
         populateQualityOptions(editSelect, 'twitch');
@@ -5877,12 +5979,8 @@
       function cancelTwQualityEdit() {
         const qualitySpan = document.getElementById('tw-quality');
         const editContainer = document.getElementById('tw-quality-edit-container');
-        const editButton = qualitySpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show quality span and edit button
-        editContainer.style.display = 'none';
-        qualitySpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(qualitySpan, editContainer);
       }
 
       async function saveTwQualityEdit() {
@@ -5920,12 +6018,8 @@
         const channelSpan = document.getElementById('tw-channel-name');
         const editContainer = document.getElementById('tw-channel-edit-container');
         const editSelect = document.getElementById('tw-channel-edit-select');
-        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide channel span and edit button
-        channelSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(channelSpan, editContainer);
 
         // Load channels if not already loaded
         if (!channelsData) {
@@ -5961,12 +6055,8 @@
       function cancelTwChannelEdit() {
         const channelSpan = document.getElementById('tw-channel-name');
         const editContainer = document.getElementById('tw-channel-edit-container');
-        const editButton = channelSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show channel span and edit button
-        editContainer.style.display = 'none';
-        channelSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(channelSpan, editContainer);
       }
 
       async function saveTwChannelEdit() {
@@ -6004,12 +6094,8 @@
         const areaSpan = document.getElementById('tw-area');
         const editContainer = document.getElementById('tw-area-edit-container');
         const editSelect = document.getElementById('tw-area-edit-select');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span and edit button
-        areaSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(areaSpan, editContainer);
 
         // Load areas if not already loaded
         if (!areasData) {
@@ -6047,12 +6133,8 @@
       function cancelTwAreaEdit() {
         const areaSpan = document.getElementById('tw-area');
         const editContainer = document.getElementById('tw-area-edit-container');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span and edit button
-        editContainer.style.display = 'none';
-        areaSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(areaSpan, editContainer);
       }
 
       async function saveTwAreaEdit() {
@@ -6088,12 +6170,8 @@
         const areaSpan = document.getElementById('bili-area');
         const editContainer = document.getElementById('area-edit-container');
         const editSelect = document.getElementById('area-edit-select');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Show edit dropdown and hide area span and edit button
-        areaSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(areaSpan, editContainer);
 
         // Load areas if not already loaded
         if (!areasData) {
@@ -6131,12 +6209,8 @@
       function cancelAreaEdit() {
         const areaSpan = document.getElementById('bili-area');
         const editContainer = document.getElementById('area-edit-container');
-        const editButton = areaSpan.parentElement.querySelector('button');
 
-        // Hide edit dropdown and show area span and edit button
-        editContainer.style.display = 'none';
-        areaSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(areaSpan, editContainer);
       }
 
       async function saveAreaEdit() {
@@ -7204,23 +7278,15 @@
       function toggleYtCookiesEdit() {
         const statusSpan = document.getElementById('yt-cookies-status');
         const editContainer = document.getElementById('yt-cookies-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
 
-        // Show edit form and hide status span and edit button
-        statusSpan.style.display = 'none';
-        editButton.style.display = 'none';
-        editContainer.style.display = 'flex';
+        showInfoRowEdit(statusSpan, editContainer);
       }
 
       function cancelYtCookiesEdit() {
         const statusSpan = document.getElementById('yt-cookies-status');
         const editContainer = document.getElementById('yt-cookies-edit-container');
-        const editButton = statusSpan.parentElement.querySelector('button');
 
-        // Hide edit form and show status span and edit button
-        editContainer.style.display = 'none';
-        statusSpan.style.display = 'block';
-        editButton.style.display = 'flex';
+        hideInfoRowEdit(statusSpan, editContainer);
       }
 
       async function saveYtCookiesEdit() {
