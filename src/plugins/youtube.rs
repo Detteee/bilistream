@@ -327,14 +327,14 @@ pub struct HolodexJwtSyncResult {
     pub refreshed_at: Option<u64>,
 }
 
-/// Calls Holodex `/user/refresh` when `now > exp - 30 days`.
+/// Calls Holodex `/user/refresh` when `now > exp - 30 days`, or when username is unknown.
 pub async fn sync_holodex_jwt_if_needed(
     api_key: &str,
     jwt: &str,
     last_refreshed_at: Option<u64>,
     cached_username: Option<String>,
 ) -> Result<HolodexJwtSyncResult, String> {
-    if !holodex_jwt_should_refresh(jwt) {
+    if !holodex_jwt_should_refresh(jwt) && cached_username.is_some() {
         return Ok(HolodexJwtSyncResult {
             jwt: jwt.to_string(),
             token_rotated: false,
