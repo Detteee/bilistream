@@ -2129,6 +2129,11 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("\nHolodex JWT (用于收藏夹直播监控，可选)");
         println!("留空则 Holodex 监控使用 channels.json，可稍后在 Web UI 配置");
+        println!("如何获取 JWT:");
+        println!("  1. 打开 https://holodex.net/login 并完成登录");
+        println!("  2. 浏览器 F12 → Application（应用程序）→ Cookies → https://holodex.net");
+        println!("  3. 找到 HOLODEX_JWT，复制其 Value（值）");
+        println!("  (JWT 将在到期前 30 天内自动续期并写回 config.json)");
         print!("请输入 (直接回车跳过): ");
         io::stdout().flush()?;
         let mut holodex_jwt = String::new();
