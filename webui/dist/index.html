@@ -617,18 +617,17 @@
       }
 
       .info-row {
-        grid-template-columns: 1fr;
-        gap: 6px;
+        gap: 6px 8px;
       }
 
-      .info-row > .info-value,
-      .info-row > .info-row-view,
-      .info-row > [id$="-edit-container"] {
-        grid-column: 1;
+      .info-label {
+        font-size: 13px;
       }
 
-      .info-value {
-        text-align: left;
+      .info-row-view .info-value {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .button-group {
