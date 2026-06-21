@@ -49,6 +49,8 @@ pub struct HolodexChannel {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub photo: Option<String>,
 }
 
 // Helper function to get yt-dlp command path

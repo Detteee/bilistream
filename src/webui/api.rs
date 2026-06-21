@@ -1701,6 +1701,7 @@ pub struct HolodexStreamWithArea {
     pub live_viewers: Option<i32>,
     pub channel_id: String,
     pub channel_name: String,
+    pub channel_photo: Option<String>,
     pub suggested_area_id: Option<u64>,
     pub suggested_area_name: Option<String>,
     pub is_placeholder: bool,
@@ -1803,6 +1804,7 @@ fn map_holodex_streams_with_area(
                 live_viewers: stream.live_viewers,
                 channel_id: stream.channel.id,
                 channel_name: stream.channel.name,
+                channel_photo: stream.channel.photo.filter(|p| !p.is_empty()),
                 suggested_area_id: if suggested_area_id != 235 {
                     Some(suggested_area_id)
                 } else {

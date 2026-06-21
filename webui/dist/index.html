@@ -883,6 +883,41 @@
       min-height: 130px;
     }
 
+    .holodex-stream-content-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .holodex-stream-avatar {
+      flex-shrink: 0;
+      align-self: center;
+      line-height: 0;
+      display: block;
+      overflow: hidden;
+      border-radius: 50%;
+      text-decoration: none;
+    }
+
+    .holodex-stream-avatar img {
+      display: block;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #313244;
+    }
+
+    .holodex-stream-lines {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
     .holodex-stream-info {
       flex: 1;
       display: flex;
@@ -3347,6 +3382,24 @@
         return `https://holodex.net/channel/${encodeURIComponent(channelId)}`;
       }
 
+      function getHolodexChannelPhotoUrl(stream) {
+        if (stream.channel_photo) {
+          return stream.channel_photo;
+        }
+        if (!stream.channel_id) return '';
+        return `https://holodex.net/statics/channelImg/${encodeURIComponent(stream.channel_id)}/50.png`;
+      }
+
+      function buildHolodexAvatarBlock(stream) {
+        if (!stream.channel_id) return '';
+        const holodexUrl = getHolodexChannelUrl(stream.channel_id);
+        const photoUrl = getHolodexChannelPhotoUrl(stream);
+        const label = escapeHolodexHtml(stream.channel_name || 'channel');
+        return `<a class="holodex-stream-avatar" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer" title="${label}">
+            <img src="${escapeHolodexHtml(photoUrl)}" alt="" loading="lazy">
+          </a>`;
+      }
+
       function buildHolodexChannelBlock(stream) {
         if (!stream.channel_name) return '';
         const channelName = escapeHolodexHtml(stream.channel_name);
@@ -3450,11 +3503,14 @@
             ${durationBlock ? `<div class="holodex-stream-thumb-bottom">${durationBlock}</div>` : ''}
           </div>
           <div class="holodex-stream-body">
-            <div class="holodex-stream-info">
-              <h4 class="holodex-stream-title">${escapeHolodexHtml(stream.title)}</h4>
-              ${buildHolodexChannelBlock(stream)}
-              <div class="holodex-stream-meta">${statusMeta}</div>
-              ${areaInfo}
+            <div class="holodex-stream-content-row">
+              ${buildHolodexAvatarBlock(stream)}
+              <div class="holodex-stream-lines">
+                <h4 class="holodex-stream-title">${escapeHolodexHtml(stream.title)}</h4>
+                ${buildHolodexChannelBlock(stream)}
+                <div class="holodex-stream-meta">${statusMeta}</div>
+                ${areaInfo}
+              </div>
             </div>
             <div class="holodex-stream-actions">
               <a class="holodex-stream-watch" href="${escapeHolodexHtml(watchUrl)}" target="_blank" rel="noopener noreferrer">
