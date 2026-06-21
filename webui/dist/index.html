@@ -840,7 +840,7 @@
     }
 
     .holodex-stream-duration-live {
-      background: #dc2626;
+      background: rgba(209, 52, 56, 0.72);
     }
 
     .holodex-stream-duration-twitch .holodex-duration-hover {
@@ -909,6 +909,12 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      text-decoration: none;
+    }
+
+    a.holodex-stream-channel:hover {
+      color: #b4befe;
+      text-decoration: underline;
     }
 
     .holodex-stream-meta {
@@ -924,6 +930,12 @@
     .holodex-stream-live-label {
       color: #f38ba8;
       font-weight: 600;
+    }
+
+    .holodex-stream-scheduled {
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.35;
     }
 
     .holodex-stream-area-hint {
@@ -1001,6 +1013,67 @@
       color: #1e1e2e;
     }
 
+    .holodex-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .holodex-auth-bar {
+      display: none;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .holodex-favorites-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0;
+      border: none;
+      background: none;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+
+    .holodex-favorites-btn:hover {
+      color: var(--heading-color);
+    }
+
+    .holodex-heart-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #f38ba8;
+      flex-shrink: 0;
+    }
+
+    .holodex-heart-icon svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+
+    .holodex-jwt-skip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .holodex-jwt-skip .toggle-switch {
+      margin-right: 0;
+    }
+
     /* Toggle Switch Styles */
     .toggle-switch {
       position: relative;
@@ -1058,6 +1131,7 @@
       align-items: center;
       cursor: pointer;
       user-select: none;
+      margin: 0;
     }
   </style>
 </head>
@@ -1916,6 +1990,115 @@
             </div>
           </div>
         </div>
+
+        <div class="card" id="priority-channel-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin: 0;">
+              <span class="status-indicator" id="priority-status"></span>
+              优先频道
+            </h2>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <!-- Toggle Switch -->
+              <label class="toggle-label">
+                <div class="toggle-switch">
+                  <input type="checkbox" id="priority-toggle" onchange="togglePriorityChannel()">
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+              <button id="refreshPriorityBtn" onclick="refreshPriorityStatus()" title="刷新状态"
+                style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+                <svg id="refreshPriorityIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                  <path
+                    d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="info-row">
+            <span class="info-label">频道名称</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="priority-channel-name" style="flex: 1; text-align: right;">未配置</span>
+              <button onclick="togglePriorityChannelEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="配置频道">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+              </button>
+            </div>
+            <!-- Hidden edit dropdown -->
+            <div id="priority-channel-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="priority-channel-edit-select"
+                  style="flex: 1; padding: 8px; border: 2px solid var(--input-focus); border-radius: 6px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
+                  <option value="">选择频道...</option>
+                </select>
+                <button onclick="savePriorityChannelEdit()"
+                  style="padding: 6px 12px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
+                  保存
+                </button>
+                <button onclick="cancelPriorityChannelEdit()"
+                  style="padding: 6px 12px; background: var(--text-muted); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value" id="priority-live-status">未启用</span>
+          </div>
+          <div class="info-row" id="priority-title-row">
+            <span class="info-label">标题</span>
+            <span class="info-value" id="priority-title" style="flex: 1; text-align: right;">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">默认分区</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span class="info-value" id="priority-default-area" style="flex: 1; text-align: right;">-</span>
+              <button onclick="togglePriorityAreaEdit()"
+                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
+                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
+                title="配置默认分区">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+              </button>
+            </div>
+            <!-- Hidden edit dropdown -->
+            <div id="priority-area-edit-container" style="display: none; flex: 1;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="priority-area-edit-select"
+                  style="flex: 1; padding: 8px; border: 2px solid var(--input-focus); border-radius: 6px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
+                  <option value="">选择分区...</option>
+                </select>
+                <button onclick="savePriorityAreaEdit()"
+                  style="padding: 6px 12px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
+                  保存
+                </button>
+                <button onclick="cancelPriorityAreaEdit()"
+                  style="padding: 6px 12px; background: var(--text-muted); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="info-row">
+            <span class="info-label">自动重启流</span>
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <label class="toggle-switch" style="margin: 0; margin-left: auto;">
+                <input type="checkbox" id="priority-auto-restart-toggle" onchange="togglePriorityAutoRestart()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="controls" id="holodex-section" style="margin-top: 20px;">
@@ -1982,10 +2165,28 @@
 
           <!-- Streams Display Section -->
           <div id="holodex-streams-section">
-            <div id="holodex-toolbar"
-              style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 12px;">
+            <div id="holodex-toolbar" class="holodex-toolbar">
+              <div id="holodex-auth-bar" class="holodex-auth-bar">
+                <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn"
+                  onclick="openHolodexLoginModal()" title="使用 Holodex 收藏夹">
+                  <span class="holodex-heart-icon" aria-hidden="true" style="display: none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                      <path fill="currentColor"
+                        d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z">
+                      </path>
+                    </svg>
+                  </span>
+                  <span id="holodex-favorites-label">🔗 使用Holodex收藏夹</span>
+                </button>
+                <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期" style="display: none;">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="holodex-skip-jwt-verify" onchange="toggleHolodexSkipJwtVerify()">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+              </div>
               <button type="button" id="holodex-login-btn" class="btn-secondary" onclick="openHolodexLoginModal()"
-                style="display: none; padding: 8px 14px; font-size: 13px; align-items: center; gap: 6px;">
+                style="display: none; padding: 8px 14px; font-size: 13px; align-items: center; gap: 6px; margin-left: auto;">
                 🔐 收藏夹登录
               </button>
             </div>
@@ -2007,6 +2208,7 @@
               <span>刷新直播列表</span>
             </button>
           </div>
+
         </div>
       </div>
 
@@ -2724,6 +2926,7 @@
         enable_lol_monitor: false,
         riot_api_key: '',
         holodex_api_key: '',
+        priority_channel: {},
         bilibili: {},
         youtube: {},
         twitch: {}
@@ -2736,6 +2939,7 @@
           enable_lol_monitor: config.enable_lol_monitor || false,
           riot_api_key: config.riot_api_key || '',
           holodex_api_key: config.holodex_api_key || '',
+          priority_channel: config.priority_channel || window.configData.priority_channel || {},
           bilibili: config.bilibili || window.configData.bilibili || {},
           youtube: config.youtube || window.configData.youtube || {},
           twitch: config.twitch || window.configData.twitch || {}
@@ -2800,6 +3004,12 @@
             mergeConfigData(config);
             updateMonitorToggleStates(config);
             updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
+
+            // Update priority channel auto-restart toggle
+            const autoRestartToggle = document.getElementById('priority-auto-restart-toggle');
+            if (autoRestartToggle && config.priority_channel) {
+              autoRestartToggle.checked = config.priority_channel.auto_restart || false;
+            }
 
             // Show/hide Holodex sections based on API key configuration
             const holodexSection = document.getElementById('holodex-section');
@@ -2992,6 +3202,32 @@
           .replace(/"/g, '&quot;');
       }
 
+      function formatHolodexScheduledStart(startScheduled) {
+        const start = new Date(startScheduled);
+        if (Number.isNaN(start.getTime())) {
+          return '预告';
+        }
+
+        const now = Date.now();
+        const diffMs = start.getTime() - now;
+        const clock = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+
+        if (diffMs <= 0) {
+          return `即将开播 (${clock})`;
+        }
+
+        const diffHours = diffMs / (1000 * 60 * 60);
+        if (diffHours < 24) {
+          const hours = Math.max(1, Math.ceil(diffHours));
+          return `将在 ${hours} 小时内开播 (${clock})`;
+        }
+
+        const y = start.getFullYear();
+        const m = start.getMonth() + 1;
+        const d = start.getDate();
+        return `将在 ${y}/${m}/${d}开播 (${clock})`;
+      }
+
       function formatHolodexDuration(ms) {
         const totalSec = Math.max(0, Math.floor(ms / 1000));
         const h = Math.floor(totalSec / 3600);
@@ -3059,19 +3295,22 @@
             </div>`;
         }
 
-        if (!isLive && stream.start_scheduled) {
-          const scheduled = new Date(stream.start_scheduled).toLocaleString('zh-CN', {
-            month: 'numeric',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
-          return `<div class="holodex-stream-duration">
-              <span class="holodex-duration-text">${escapeHolodexHtml(scheduled)}</span>
-            </div>`;
-        }
-
         return '';
+      }
+
+      function getHolodexChannelUrl(channelId) {
+        if (!channelId) return '';
+        return `https://holodex.net/channel/${encodeURIComponent(channelId)}`;
+      }
+
+      function buildHolodexChannelBlock(stream) {
+        if (!stream.channel_name) return '';
+        const channelName = escapeHolodexHtml(stream.channel_name);
+        const holodexUrl = getHolodexChannelUrl(stream.channel_id);
+        if (holodexUrl) {
+          return `<a class="holodex-stream-channel" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer">${channelName}</a>`;
+        }
+        return `<p class="holodex-stream-channel">${channelName}</p>`;
       }
 
       function parseTwitchLoginFromLink(link) {
@@ -3119,7 +3358,10 @@
 
         let statusMeta = '';
         if (!isLive) {
-          statusMeta = '<span class="holodex-stream-status holodex-stream-status-upcoming">📅 预告</span>';
+          const scheduleText = stream.start_scheduled
+            ? formatHolodexScheduledStart(stream.start_scheduled)
+            : '预告';
+          statusMeta = `<span class="holodex-stream-scheduled">${escapeHolodexHtml(scheduleText)}</span>`;
         } else if (viewers) {
           statusMeta = `<span class="holodex-stream-live-label">直播中</span><span>• ${viewers}</span>`;
         } else {
@@ -3165,7 +3407,7 @@
           <div class="holodex-stream-body">
             <div class="holodex-stream-info">
               <h4 class="holodex-stream-title">${escapeHolodexHtml(stream.title)}</h4>
-              ${stream.channel_name ? `<p class="holodex-stream-channel">${escapeHolodexHtml(stream.channel_name)}</p>` : ''}
+              ${buildHolodexChannelBlock(stream)}
               <div class="holodex-stream-meta">${statusMeta}</div>
               ${areaInfo}
             </div>
@@ -3302,21 +3544,17 @@
             })
           });
 
-          console.log('Response status:', response.status);
-          const data = await response.json();
-          console.log('Response data:', data);
-
-          if (data.success) {
-            showNotification(data.message || '频道切换成功！', 'success');
-            // Refresh status immediately to show updated info
-            refreshStatus();
+          const result = await response.json();
+          if (result.success) {
+            showNotification(result.message || '频道切换成功', 'success');
+            // Refresh status after switching
+            setTimeout(refreshStatus, 1000);
           } else {
-            showNotification(data.message || '切换失败', 'error');
-            console.error('Switch failed:', data.message);
+            showNotification(result.message || '频道切换失败', 'error');
           }
         } catch (error) {
-          showNotification('切换失败: ' + error.message, 'error');
           console.error('Switch error:', error);
+          showNotification('频道切换失败: ' + error.message, 'error');
         }
       }
 
@@ -3388,6 +3626,271 @@
         }
       }
 
+      // Priority Channel Functions
+      async function togglePriorityChannel() {
+        const toggle = document.getElementById('priority-toggle');
+        const enabled = toggle.checked;
+
+        try {
+          const response = await fetch('/api/priority-channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              enabled: enabled
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification(enabled ? '优先频道已启用' : '优先频道已禁用', 'success');
+            // Immediate refresh to show updated state
+            await refreshStatus();
+          } else {
+            // Revert toggle if save failed
+            toggle.checked = !enabled;
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to toggle priority channel:', error);
+          // Revert toggle if save failed
+          toggle.checked = !enabled;
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      // Priority Channel Auto-Restart Toggle
+      async function togglePriorityAutoRestart() {
+        const toggle = document.getElementById('priority-auto-restart-toggle');
+        const enabled = toggle.checked;
+
+        try {
+          const response = await fetch('/api/priority-channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              auto_restart: enabled
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification(enabled ? '自动重启流已启用' : '自动重启流已禁用', 'success');
+          } else {
+            // Revert toggle if save failed
+            toggle.checked = !enabled;
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to toggle auto restart:', error);
+          // Revert toggle if save failed
+          toggle.checked = !enabled;
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      // Priority Channel inline editing functions
+      async function togglePriorityChannelEdit() {
+        const channelSpan = document.getElementById('priority-channel-name');
+        const editContainer = document.getElementById('priority-channel-edit-container');
+        const editSelect = document.getElementById('priority-channel-edit-select');
+
+        // Show edit dropdown and hide channel span
+        channelSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load channels if not already loaded
+        await loadChannelsForPriorityInline();
+        editSelect.focus();
+      }
+
+      async function loadChannelsForPriorityInline() {
+        try {
+          const response = await fetch('/api/channels');
+          const data = await response.json();
+          const select = document.getElementById('priority-channel-edit-select');
+
+          select.innerHTML = '<option value="">选择频道...</option>';
+
+          if (data.channels) {
+            data.channels.forEach(channel => {
+              const option = document.createElement('option');
+              option.value = channel.name;
+              option.textContent = channel.name;
+              select.appendChild(option);
+            });
+
+            // Set current value
+            const currentChannel = document.getElementById('priority-channel-name').textContent;
+            if (currentChannel && currentChannel !== '未配置') {
+              select.value = currentChannel;
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load channels:', error);
+        }
+      }
+
+      function cancelPriorityChannelEdit() {
+        const channelSpan = document.getElementById('priority-channel-name');
+        const editContainer = document.getElementById('priority-channel-edit-container');
+
+        // Hide edit dropdown and show channel span
+        editContainer.style.display = 'none';
+        channelSpan.style.display = 'block';
+      }
+
+      async function savePriorityChannelEdit() {
+        const editSelect = document.getElementById('priority-channel-edit-select');
+        const newChannel = editSelect.value;
+
+        if (!newChannel) {
+          showNotification('请选择一个频道', 'error');
+          return;
+        }
+
+        try {
+          // Get current config first
+          const configResponse = await fetch('/api/config');
+          const configData = await configResponse.json();
+
+          const priorityConfig = {
+            enabled: configData.priority_channel?.enabled || false,
+            channel_name: newChannel,
+            default_area: configData.priority_channel?.default_area || 235
+          };
+
+          const response = await fetch('/api/priority-channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(priorityConfig)
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification('频道配置已保存', 'success');
+            cancelPriorityChannelEdit();
+            await refreshStatus();
+          } else {
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to save priority channel:', error);
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+      async function togglePriorityAreaEdit() {
+        const areaSpan = document.getElementById('priority-default-area');
+        const editContainer = document.getElementById('priority-area-edit-container');
+        const editSelect = document.getElementById('priority-area-edit-select');
+
+        // Show edit dropdown and hide area span
+        areaSpan.style.display = 'none';
+        editContainer.style.display = 'flex';
+
+        // Load areas if not already loaded
+        await loadAreasForPriorityInline();
+        editSelect.focus();
+      }
+
+      async function loadAreasForPriorityInline() {
+        try {
+          const response = await fetch('/api/areas');
+          const data = await response.json();
+          const select = document.getElementById('priority-area-edit-select');
+
+          select.innerHTML = '<option value="">选择分区...</option>';
+
+          if (data.areas) {
+            // Sort areas: 其他单机 (235) first, then others
+            const sortedAreas = [...data.areas].sort((a, b) => {
+              if (a.id === 235) return -1;
+              if (b.id === 235) return 1;
+              return 0;
+            });
+
+            sortedAreas.forEach(area => {
+              const option = document.createElement('option');
+              option.value = area.id;
+              option.textContent = `${area.name} (${area.id})`;
+              select.appendChild(option);
+            });
+
+            // Set current value
+            const currentAreaText = document.getElementById('priority-default-area').textContent;
+            if (currentAreaText && currentAreaText !== '-') {
+              // Extract area ID from text like "其他单机 (235)"
+              const match = currentAreaText.match(/\((\d+)\)/);
+              if (match) {
+                select.value = match[1];
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load areas:', error);
+        }
+      }
+
+      function cancelPriorityAreaEdit() {
+        const areaSpan = document.getElementById('priority-default-area');
+        const editContainer = document.getElementById('priority-area-edit-container');
+
+        // Hide edit dropdown and show area span
+        editContainer.style.display = 'none';
+        areaSpan.style.display = 'block';
+      }
+
+      async function savePriorityAreaEdit() {
+        const editSelect = document.getElementById('priority-area-edit-select');
+        const newAreaId = parseInt(editSelect.value);
+
+        if (!newAreaId) {
+          showNotification('请选择一个分区', 'error');
+          return;
+        }
+
+        try {
+          // Get current config first
+          const configResponse = await fetch('/api/config');
+          const configData = await configResponse.json();
+
+          const priorityConfig = {
+            enabled: configData.priority_channel?.enabled || false,
+            channel_name: configData.priority_channel?.channel_name || '',
+            default_area: newAreaId
+          };
+
+          const response = await fetch('/api/priority-channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(priorityConfig)
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            showNotification('默认分区已保存', 'success');
+            cancelPriorityAreaEdit();
+            await refreshStatus();
+          } else {
+            showNotification(result.message || '保存失败', 'error');
+          }
+        } catch (error) {
+          console.error('Failed to save priority area:', error);
+          showNotification('保存失败: ' + error.message, 'error');
+        }
+      }
+
+
+
+
+
+      // Helper function to get area name by ID
+      function getAreaName(areaId) {
+        if (!areasData || !areasData.areas) return areaId.toString();
+        const area = areasData.areas.find(a => a.id === areaId);
+        return area ? area.name : areaId.toString();
+      }
+
       // Holodex API Key Management Functions
       async function testHolodexApiKey() {
         const apiKeyInput = document.getElementById('holodex-api-input');
@@ -3411,7 +3914,46 @@
         }
       }
 
-      let holodexAuthState = { logged_in: false, username: null, expired: false };
+      let holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+
+      function updateHolodexAuthBar() {
+        const authBar = document.getElementById('holodex-auth-bar');
+        const loginBtn = document.getElementById('holodex-login-btn');
+        const favoritesLabel = document.getElementById('holodex-favorites-label');
+        const heartIcon = document.querySelector('#holodex-favorites-btn .holodex-heart-icon');
+        const jwtSkip = document.querySelector('.holodex-jwt-skip');
+        const skipToggle = document.getElementById('holodex-skip-jwt-verify');
+        const logoutBtn = document.getElementById('holodex-logout-btn');
+
+        if (skipToggle) {
+          skipToggle.checked = !!holodexAuthState.skip_jwt_verify;
+        }
+
+        if (authBar) authBar.style.display = 'inline-flex';
+        if (loginBtn) loginBtn.style.display = 'none';
+
+        if (holodexAuthState.logged_in && !holodexAuthState.expired) {
+          if (heartIcon) heartIcon.style.display = 'inline-flex';
+          if (jwtSkip) jwtSkip.style.display = 'inline-flex';
+          if (favoritesLabel) {
+            favoritesLabel.textContent = holodexAuthState.username
+              ? `${holodexAuthState.username}的收藏`
+              : '收藏夹';
+          }
+        } else if (holodexAuthState.expired) {
+          if (heartIcon) heartIcon.style.display = 'none';
+          if (jwtSkip) jwtSkip.style.display = 'none';
+          if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
+        } else {
+          if (heartIcon) heartIcon.style.display = 'none';
+          if (jwtSkip) jwtSkip.style.display = 'none';
+          if (favoritesLabel) favoritesLabel.textContent = '🔗 使用Holodex收藏夹';
+        }
+
+        if (logoutBtn) {
+          logoutBtn.style.display = holodexAuthState.logged_in ? 'inline-flex' : 'none';
+        }
+      }
 
       function openHolodexLoginModal() {
         const modal = document.getElementById('holodex-login-modal');
@@ -3427,43 +3969,54 @@
       }
 
       function updateHolodexLoginButton() {
-        const btn = document.getElementById('holodex-login-btn');
-        const logoutBtn = document.getElementById('holodex-logout-btn');
-        if (!btn) return;
-
-        if (holodexAuthState.expired) {
-          btn.textContent = '⚠️ 重新登录';
-          btn.style.color = '#f9e2af';
-        } else if (holodexAuthState.logged_in) {
-          btn.textContent = holodexAuthState.username
-            ? `✅ ${holodexAuthState.username}`
-            : '✅ 已登录收藏夹';
-          btn.style.color = 'var(--accent-green, #a6e3a1)';
-        } else {
-          btn.textContent = '🔐 收藏夹登录';
-          btn.style.color = '';
-        }
-
-        if (logoutBtn) {
-          logoutBtn.style.display = holodexAuthState.logged_in ? 'inline-flex' : 'none';
-        }
+        updateHolodexAuthBar();
       }
 
       function updateHolodexModalHint() {
         const hint = document.getElementById('holodex-modal-auth-hint');
         if (!hint) return;
 
+        if (holodexAuthState.logged_in && !holodexAuthState.expired) {
+          hint.style.display = 'none';
+          return;
+        }
+
+        hint.style.display = '';
+
         if (holodexAuthState.expired) {
           hint.textContent = '⚠️ JWT 已过期，请重新登录 Holodex 并保存新的 token';
+          hint.style.background = 'var(--input-bg)';
           hint.style.color = '#f9e2af';
-        } else if (holodexAuthState.logged_in) {
-          hint.textContent = holodexAuthState.username
-            ? `✅ 当前已登录为 ${holodexAuthState.username}，显示收藏夹直播`
-            : '✅ 当前已登录，显示收藏夹直播';
-          hint.style.color = '#a6e3a1';
         } else {
           hint.textContent = '未登录 — 当前使用 channels.json 频道列表 (YouTube + Twitch 外部配信)';
+          hint.style.background = 'var(--input-bg)';
           hint.style.color = 'var(--text-secondary)';
+        }
+      }
+
+      async function toggleHolodexSkipJwtVerify() {
+        const toggle = document.getElementById('holodex-skip-jwt-verify');
+        if (!toggle) return;
+
+        try {
+          const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ holodex_skip_jwt_verify: toggle.checked })
+          });
+          const data = await response.json();
+          if (data.success) {
+            holodexAuthState.skip_jwt_verify = toggle.checked;
+            showNotification(toggle.checked ? '已跳过 JWT 校验' : '已启用 JWT 校验', 'success');
+            await loadHolodexAuthStatus();
+            await refreshHolodexStreams();
+          } else {
+            toggle.checked = !toggle.checked;
+            showNotification('更新失败: ' + (data.message || '未知错误'), 'error');
+          }
+        } catch (error) {
+          toggle.checked = !toggle.checked;
+          showNotification('更新失败: ' + error.message, 'error');
         }
       }
 
@@ -3476,7 +4029,7 @@
           const response = await fetch('/api/holodex/auth/status');
           const data = await response.json();
           if (!data.success) {
-            holodexAuthState = { logged_in: false, username: null, expired: false };
+            holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
             updateHolodexLoginButton();
             updateHolodexModalHint();
             return;
@@ -3485,10 +4038,11 @@
           holodexAuthState = {
             logged_in: !!info.logged_in,
             username: info.username || null,
-            expired: !!info.expired
+            expired: !!info.expired,
+            skip_jwt_verify: !!info.skip_jwt_verify
           };
         } catch (error) {
-          holodexAuthState = { logged_in: false, username: null, expired: false };
+          holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
         }
         updateHolodexLoginButton();
         updateHolodexModalHint();
@@ -4937,12 +5491,20 @@
           document.getElementById('tw-title-row'),
           document.getElementById('tw-title')
         );
+        syncInfoRowLabelCenter(
+          document.getElementById('priority-title-row'),
+          document.getElementById('priority-title')
+        );
       }
 
       function setPlatformLiveInfoVisibility(platform, isLive) {
         const rowIds = platform === 'youtube'
           ? ['yt-title-row', 'yt-topic-row']
-          : ['tw-title-row', 'tw-game-row'];
+          : platform === 'twitch'
+            ? ['tw-title-row', 'tw-game-row']
+            : platform === 'priority'
+              ? ['priority-title-row']
+              : [];
         for (const id of rowIds) {
           const row = document.getElementById(id);
           if (row) {
@@ -5104,6 +5666,47 @@
         }
       }
 
+      async function refreshPriorityStatus() {
+        const btn = document.getElementById('refreshPriorityBtn');
+        const icon = document.getElementById('refreshPriorityIcon');
+
+        // Disable button and start spinning animation
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        icon.style.animation = 'spin 1s linear infinite';
+
+        try {
+          // Call the specific priority channel status refresh endpoint
+          const response = await fetch('/api/refresh/priority-channel', {
+            method: 'GET',
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          if (result.success) {
+            // Refresh the main status to get the updated priority channel data in the UI
+            await refreshStatus();
+            showNotification('优先频道状态已刷新', 'success');
+          } else {
+            throw new Error(result.message || 'Failed to refresh priority channel status');
+          }
+        } catch (error) {
+          console.error('Error refreshing priority channel status:', error);
+          showNotification('刷新优先频道状态失败', 'error');
+        } finally {
+          // Re-enable button and stop spinning
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          icon.style.animation = '';
+        }
+      }
+
       async function refreshStatus() {
         if (statusRefreshInFlight) {
           return;
@@ -5194,6 +5797,51 @@
               document.getElementById('tw-quality').textContent = '-';
               document.getElementById('tw-crop-status').textContent = '关闭';
               document.getElementById('tw-hls-cache-status').textContent = '关闭';
+            }
+
+            // Update Priority Channel status
+            const priorityCard = document.getElementById('priority-channel-card');
+            const priorityToggle = document.getElementById('priority-toggle');
+
+            if (data.data.priority_channel) {
+              const priority = data.data.priority_channel;
+
+              // Always show the card
+              priorityCard.style.display = 'block';
+
+              // Update toggle switch
+              priorityToggle.checked = priority.enabled;
+
+              if (priority.enabled) {
+                document.getElementById('priority-status').className =
+                  `status-indicator ${priority.is_live ? 'status-live' : 'status-offline'}`;
+                setPlatformLiveInfoVisibility('priority', priority.is_live);
+                document.getElementById('priority-channel-name').textContent = priority.channel_name || '未配置';
+                document.getElementById('priority-live-status').textContent =
+                  priority.is_live ? '直播中' : '未直播';
+                document.getElementById('priority-title').textContent = priority.title || '-';
+                document.getElementById('priority-default-area').textContent =
+                  priority.default_area ? `${getAreaName(priority.default_area)} (${priority.default_area})` : '-';
+              } else {
+                // Show disabled state
+                document.getElementById('priority-status').className = 'status-indicator status-offline';
+                setPlatformLiveInfoVisibility('priority', false);
+                document.getElementById('priority-channel-name').textContent = priority.channel_name || '未配置';
+                document.getElementById('priority-live-status').textContent = '未启用';
+                document.getElementById('priority-title').textContent = '-';
+                document.getElementById('priority-default-area').textContent =
+                  priority.default_area ? `${getAreaName(priority.default_area)} (${priority.default_area})` : '-';
+              }
+            } else {
+              // Show default state when no priority channel config exists
+              priorityCard.style.display = 'block';
+              priorityToggle.checked = false;
+              document.getElementById('priority-status').className = 'status-indicator status-offline';
+              setPlatformLiveInfoVisibility('priority', false);
+              document.getElementById('priority-channel-name').textContent = '未配置';
+              document.getElementById('priority-live-status').textContent = '未启用';
+              document.getElementById('priority-title').textContent = '-';
+              document.getElementById('priority-default-area').textContent = '-';
             }
           } else {
             console.error('Invalid API response:', data);

@@ -44,6 +44,7 @@
   "holodex_jwt": null,                   // Holodex 登录 JWT (收藏夹 + Twitch 外部直播)
   "holodex_jwt_refreshed_at": null,      // 上次 Holodex JWT 续期时间 (Unix 秒，自动写入)
   "holodex_username": null,              // Holodex 用户名 (续期时自动写入)
+  "holodex_skip_jwt_verify": false,    // 跳过 JWT 过期校验与自动续期
   "riot_api_key": null,                  // Riot API密钥 (https://developer.riotgames.com/)
   "enable_lol_monitor": false,           // 启用LOL监控
   "lol_monitor_interval": 1,             // LOL监控间隔(秒)
