@@ -3074,7 +3074,12 @@ pub async fn capture_frame(
                 _ => "asl", // Default to asl if invalid
             };
 
-            let channel_url = format!("https://twitch.tv/{}", cfg.twitch.channel_id);
+            let channel_id = params
+                .get("channel_id")
+                .filter(|id| !id.is_empty())
+                .map(|s| s.as_str())
+                .unwrap_or(&cfg.twitch.channel_id);
+            let channel_url = format!("https://twitch.tv/{}", channel_id);
 
             let mut cmd = tokio::process::Command::new("streamlink");
 
