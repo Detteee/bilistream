@@ -26,6 +26,11 @@ pub struct Config {
     pub holodex_api_key: Option<String>,
     #[serde(default)]
     pub holodex_jwt: Option<String>,
+    /// Unix timestamp of last successful Holodex `/user/refresh` call.
+    #[serde(default)]
+    pub holodex_jwt_refreshed_at: Option<u64>,
+    #[serde(default)]
+    pub holodex_username: Option<String>,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
@@ -333,6 +338,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
             },
             holodex_api_key: legacy.holodex_api_key,
             holodex_jwt: None,
+            holodex_jwt_refreshed_at: None,
+            holodex_username: None,
             riot_api_key: legacy.riot_api_key,
             enable_lol_monitor: legacy.enable_lol_monitor,
             lol_monitor_interval: legacy.lol_monitor_interval,

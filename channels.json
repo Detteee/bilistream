@@ -35,8 +35,8 @@
         "su酱"
       ],
       "platforms": {
-        "twitch": "kagasumire",
-        "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA"
+        "youtube": "UCyLGcqYs7RsBb3L0SJfzGYA",
+        "twitch": "kagasumire"
       },
       "riot_puuid": "83YSmCVmDvYK46p3GmS0AdprnZQ7ckQzgWY4R1ogOB-GvbOqzhIBGvpU65wv3HvvIeVtqcKv5W-suA"
     },
@@ -71,8 +71,8 @@
         "诺宝"
       ],
       "platforms": {
-        "twitch": "963noah",
-        "youtube": "UCIcAj6WkJ8vZ7DeJVgmeqKw"
+        "youtube": "UCIcAj6WkJ8vZ7DeJVgmeqKw",
+        "twitch": "963noah"
       },
       "riot_puuid": "MDiBt0ywb8_Iiz4w_QVO2j2ugAu9IMd14ttTLyDC4eXvYCfy6feGb38biExOIyC0U8XzncX-xDi4_g"
     },
@@ -133,8 +133,8 @@
         "ren"
       ],
       "platforms": {
-        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg",
-        "twitch": "ren_kisaragi__"
+        "twitch": "ren_kisaragi__",
+        "youtube": "UCGWa1dMU_sDCaRQjdabsVgg"
       },
       "riot_puuid": "KjyMzB8x5HCJYygy8AlxE-YEvejsBSEoY04ZAsdiqj_2blcS9LnkyvGpV6JsQkxwdDoJrH9_IeC0MA"
     },
@@ -168,8 +168,8 @@
         "emts"
       ],
       "platforms": {
-        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng",
-        "twitch": "emtsmaru"
+        "twitch": "emtsmaru",
+        "youtube": "UCPkKpOHxEDcwmUAnRpIu-Ng"
       }
     },
     {
@@ -183,8 +183,8 @@
         "紫发小女孩"
       ],
       "platforms": {
-        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw",
-        "twitch": "shinomiya_runa"
+        "twitch": "shinomiya_runa",
+        "youtube": "UCD5W21JqNMv_tV9nfjvF9sw"
       },
       "riot_puuid": "EkYVJYRQAJheLNbvnG_hE5QR0LmRU-Gq-IdL8wHfRtOfQyYpVWk8ngWcA_JwLfRswPmhV4hrNkxTmQ"
     },
@@ -220,8 +220,8 @@
         "拉姆"
       ],
       "platforms": {
-        "youtube": "UC61OwuYOVuKkpKnid-43Twg",
-        "twitch": "ramuneshiranami"
+        "twitch": "ramuneshiranami",
+        "youtube": "UC61OwuYOVuKkpKnid-43Twg"
       },
       "riot_puuid": "feCDrVqSMb8pUkh-P7gaYNrP07EIdU2iFRsy0u8m1dYPDDFa3EkvFL-rSoy7cM9PhJEn-RPfkS5P9g"
     },
@@ -233,8 +233,8 @@
         "akarin"
       ],
       "platforms": {
-        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ",
-        "twitch": "akarindao"
+        "twitch": "akarindao",
+        "youtube": "UCS5l_Y0oMVTjEos2LuyeSZQ"
       },
       "riot_puuid": "rHYfGMspqOBz2pCoHprVG_xIJGP_i3nEGm41Q2-fveg4VIVZXvcb0I37BJP5KfwXF5iLXBaZXXNjbQ"
     },
@@ -274,8 +274,8 @@
         "千灯"
       ],
       "platforms": {
-        "twitch": "sendo_yuuhi",
-        "youtube": "UCuDY3ibSP2MFRgf7eo3cojg"
+        "youtube": "UCuDY3ibSP2MFRgf7eo3cojg",
+        "twitch": "sendo_yuuhi"
       },
       "riot_puuid": "HKELuBV0wznS9CYlX8r8L3ZlVSCXEHr5PwJkcBkAaIe6RrcrrBLlaZEsHxffi9W7Cah9m8PX-ipfoA"
     },
@@ -308,7 +308,8 @@
       "platforms": {
         "twitch": "saineginjo",
         "youtube": "UC2xXx1m1jeL0W84_0jTg-Yw"
-      }
+      },
+      "riot_puuid": "ki900kLWTo0y1DLz2SWo5qima6uorXTzRMlI3SrkSGHajcYjk6CwYwFodRP4pmrYSOKpllna-GDtJA"
     },
     {
       "name": "龍巻ちせ",
@@ -319,15 +320,15 @@
       ],
       "platforms": {
         "youtube": "UCoW8qQy80mKH0RJTKAK-nNA"
-      }
+      },
+      "riot_puuid": "ZbJdTMcRWzWLfgqDu5eVUJ5quKmwgngyfC7dR1I3Efc4nIAP2kROiJHnsYCV53cbZ2tmwA9JG-2GAA"
     },
     {
-      "name": "ぶいすぽっ!",
+      "name": "ぶいすぽっ!【公式】",
       "aliases": [
         "vspo"
       ],
       "platforms": {
-        "twitch": "vspo_official",
         "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
       }
     },
@@ -337,8 +338,8 @@
         "narinmikure"
       ],
       "platforms": {
-        "twitch": "narinmikure",
-        "youtube": "UCKSpM183c85d5V2cW5qaUjA"
+        "youtube": "UCKSpM183c85d5V2cW5qaUjA",
+        "twitch": "narinmikure"
       },
       "riot_puuid": "pwvdeGmgJ-s-tFOux3Pt7vbgy6mA4DhhyHVWKdzV0GWCATmhPhsMpIMlvqI1bxPZMUxUn3T52pRsiw"
     },
@@ -349,8 +350,8 @@
         "狮子堂"
       ],
       "platforms": {
-        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ",
-        "twitch": "shishidoakari"
+        "twitch": "shishidoakari",
+        "youtube": "UCWRPqA0ehhWV4Hnp27PJCkQ"
       },
       "riot_puuid": "jQAWeon-dvYiFQdrAOMNQRzWLAX_Ee79FujTYJHTHu-x5Pu2Pm1R-NUAZtPZiY1A6-cXoadLnpyHOw"
     },
@@ -361,8 +362,8 @@
         "天帝"
       ],
       "platforms": {
-        "twitch": "tentei_forte",
-        "youtube": "UC8hwewh9svh92E1gXvgVazg"
+        "youtube": "UC8hwewh9svh92E1gXvgVazg",
+        "twitch": "tentei_forte"
       },
       "riot_puuid": "JGbu7B6ajjntnp3O5A3Hr9EYY2CxwF3njPFN_LWOmrbaUqQwW5pnUgW49nO2D-L35YKFkuzaHG1pFQ"
     },
@@ -382,6 +383,7 @@
         "1005"
       ],
       "platforms": {
+        "youtube": "UCg8-ZOExFxonnHTaK9aYznQ",
         "twitch": "urs_toko"
       },
       "riot_puuid": "u8LIlHBKAusIsjA6fs4skEQq1VgUc_mdPPBpUDic5S3Qe0oTNWE5MuTyBNw8QQOHNXeVxNOYk9HEzA"
@@ -393,6 +395,7 @@
         "yo1"
       ],
       "platforms": {
+        "youtube": "UCqRkLD5OCNq37AAtxStmm3A",
         "twitch": "yoichi_0v0"
       },
       "riot_puuid": "R4RZ8cf1LzWeIixWjRoHHVuPozNI9_Tg9zPz-j0Jv78oxV2SEDnBcmcO1Rr5Ai13tNl1GHtzHyff1g"
@@ -405,6 +408,7 @@
         "なつき"
       ],
       "platforms": {
+        "youtube": "UCvNn6mRroGDctnqU-FUsszg",
         "twitch": "nacho_dayo"
       }
     },
@@ -416,6 +420,7 @@
         "god"
       ],
       "platforms": {
+        "youtube": "UCCrjg1JckfPBhDcU0qP1AqQ",
         "twitch": "kohaku_uru"
       },
       "riot_puuid": "H89m2wwV4PSxsmwumtbwbJOgln_LLEoE-pVoeUkiGn_q4KxrepcOuuEGBP9jk_Zrs3u1kwFk05DZow"
@@ -439,8 +444,8 @@
         "toitoi"
       ],
       "platforms": {
-        "twitch": "itoitoi_q",
-        "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ"
+        "youtube": "UCZrYHIPsKhYAXqOls2kQQNQ",
+        "twitch": "itoitoi_q"
       }
     }
   ]

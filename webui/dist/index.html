@@ -748,6 +748,154 @@
       }
     }
 
+    /* Holodex-style stream cards */
+    .holodex-stream-card {
+      background: var(--card-bg);
+      border: 2px solid var(--card-border);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+      min-width: 0;
+    }
+
+    .holodex-stream-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px var(--shadow-hover);
+    }
+
+    .holodex-stream-thumb {
+      position: relative;
+      line-height: 0;
+      background: #111;
+    }
+
+    .holodex-stream-thumb-link {
+      display: block;
+    }
+
+    .holodex-stream-thumb img {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      background: #111;
+    }
+
+    .holodex-stream-thumb-placeholder {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: linear-gradient(135deg, #1e1e2e 0%, #313244 100%);
+    }
+
+    .holodex-stream-thumb-top {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+
+    .holodex-stream-topic {
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 4px 0 4px 0;
+      max-width: 75%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-transform: lowercase;
+    }
+
+    .holodex-stream-thumb-bottom {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      pointer-events: none;
+    }
+
+    .holodex-stream-duration {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 0 0 4px 0;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+      pointer-events: auto;
+    }
+
+    .holodex-stream-duration-live {
+      background: rgba(0, 0, 0, 0.72);
+    }
+
+    .holodex-stream-duration-twitch .holodex-duration-hover {
+      display: none;
+    }
+
+    .holodex-stream-duration-twitch:hover .holodex-duration-text {
+      display: none;
+    }
+
+    .holodex-stream-duration-twitch:hover .holodex-duration-hover {
+      display: inline;
+    }
+
+    .holodex-duration-twitch-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    .holodex-duration-twitch-icon svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    .holodex-stream-body {
+      padding: 12px 14px 14px;
+    }
+
+    .holodex-stream-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .holodex-stream-status {
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .holodex-stream-status-live {
+      background: #f38ba8;
+      color: #1e1e2e;
+    }
+
+    .holodex-stream-status-upcoming {
+      background: #89b4fa;
+      color: #1e1e2e;
+    }
+
     /* Toggle Switch Styles */
     .toggle-switch {
       position: relative;
@@ -919,9 +1067,9 @@
             <h4 style="color: #667eea; margin-bottom: 15px;">📺 YouTube</h4>
 
             <div class="control-group">
-              <label>选择预设频道 (可选)</label>
+              <label>从 channels.json 选择 (可选)</label>
               <select id="setup-yt-channel-select" onchange="updateSetupYouTubeChannel()">
-                <option value="">选择预设频道或手动输入...</option>
+                <option value="">从 channels.json 选择或手动输入...</option>
               </select>
             </div>
 
@@ -971,9 +1119,9 @@
             <h4 style="color: #9146ff; margin-bottom: 15px;">🎮 Twitch</h4>
 
             <div class="control-group">
-              <label>选择预设频道 (可选)</label>
+              <label>从 channels.json 选择 (可选)</label>
               <select id="setup-tw-channel-select" onchange="updateSetupTwitchChannel()">
-                <option value="">选择预设频道或手动输入...</option>
+                <option value="">从 channels.json 选择或手动输入...</option>
               </select>
             </div>
 
@@ -1046,6 +1194,12 @@
               <input type="text" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
               <small style="color: #888;">获取: <a href="https://holodex.net/login"
                   target="_blank">holodex.net</a></small>
+            </div>
+
+            <div class="control-group">
+              <label>Holodex JWT (可选)</label>
+              <input type="password" id="setup-holodex-jwt" placeholder="收藏夹 + Twitch 外部配信，留空跳过">
+              <small style="color: #888;">留空则 Holodex 监控使用 channels.json；可稍后在控制面板配置</small>
             </div>
 
             <div class="control-group">
@@ -1719,49 +1873,17 @@
             </div>
           </div>
 
-          <!-- Holodex account login for favorites (YouTube + Twitch placeholders) -->
-          <div id="holodex-login-config"
-            style="display: none; padding: 20px; background: var(--input-bg); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
-            <h3 style="color: var(--heading-color); margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
-              ❤️ Holodex 收藏夹登录
-            </h3>
-            <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.6; font-size: 13px;">
-              登录后显示你在 Holodex 的收藏频道直播，包含 YouTube 直播与 Twitch 外部配信。
-            </p>
-            <div id="holodex-auth-status"
-              style="padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; background: var(--card-bg); color: var(--text-secondary); font-size: 13px;">
-              检查登录状态...
-            </div>
-            <div class="control-group" style="margin-bottom: 12px;">
-              <label style="color: var(--text-secondary); font-weight: 500;">JWT Token</label>
-              <input type="password" id="holodex-jwt-input" placeholder="粘贴 Holodex JWT"
-                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
-            </div>
-            <div
-              style="background: var(--card-bg); padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid var(--info-border);">
-              <h4 style="color: var(--text-primary); margin-bottom: 10px; font-size: 14px;">📋 如何获取 JWT:</h4>
-              <ol style="color: var(--text-secondary); font-size: 13px; line-height: 1.5; padding-left: 20px; margin: 0;">
-                <li>点击下方按钮在 Holodex 登录</li>
-                <li>打开浏览器开发者工具 (F12) → Network</li>
-                <li>刷新 Holodex 页面，点击任意 <code>api/v2</code> 请求</li>
-                <li>复制 Request Headers 里的 <code>Authorization: BEARER ...</code> 中 BEARER 后面的 token</li>
-              </ol>
-            </div>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-              <button class="btn-secondary" onclick="openHolodexLogin()" style="flex: 1; min-width: 140px;">
-                🔗 打开 Holodex 登录
-              </button>
-              <button class="btn-success" onclick="saveHolodexJwt()" style="flex: 1; min-width: 140px;">
-                💾 保存登录
-              </button>
-              <button class="btn-secondary" onclick="logoutHolodexJwt()" style="flex: 1; min-width: 140px;">
-                🚪 退出登录
-              </button>
-            </div>
-          </div>
+          <!-- Holodex account login moved to modal (toolbar button) -->
 
           <!-- Streams Display Section -->
           <div id="holodex-streams-section">
+            <div id="holodex-toolbar"
+              style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 12px;">
+              <button type="button" id="holodex-login-btn" class="btn-secondary" onclick="openHolodexLoginModal()"
+                style="display: none; padding: 8px 14px; font-size: 13px; align-items: center; gap: 6px;">
+                🔐 收藏夹登录
+              </button>
+            </div>
             <div id="holodex-status"
               style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 15px; text-align: center;">
               加载中...
@@ -1799,9 +1921,9 @@
             </div>
 
             <div class="control-group">
-              <label>选择频道 (可选)</label>
+              <label>从 channels.json 选择 (可选)</label>
               <select id="channel-select" onchange="updateChannelInfo()">
-                <option value="">选择预设频道或手动输入...</option>
+                <option value="">从 channels.json 选择或手动输入...</option>
               </select>
             </div>
 
@@ -2393,6 +2515,57 @@
       </div>
     </div>
 
+    <!-- Holodex Login Modal -->
+    <div id="holodex-login-modal"
+      style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.55); z-index: 1000; align-items: center; justify-content: center;"
+      onclick="if (event.target === this) closeHolodexLoginModal()">
+      <div
+        style="background: var(--card-bg); border-radius: 12px; padding: 24px; max-width: 520px; width: 92%; box-shadow: 0 20px 60px rgba(0,0,0,0.35); border: 1px solid var(--card-border);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="color: var(--heading-color); margin: 0; font-size: 1.1em;">Holodex 收藏夹登录</h3>
+          <button type="button" onclick="closeHolodexLoginModal()"
+            style="background: none; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; line-height: 1;">×</button>
+        </div>
+        <p style="color: var(--text-secondary); margin: 0 0 12px; line-height: 1.55; font-size: 13px;">
+          登录后显示 Holodex 收藏夹直播（含 Twitch 外部配信）。未登录时使用 <code>channels.json</code> 频道列表，可在下方「频道管理」中编辑。
+        </p>
+        <div id="holodex-modal-auth-hint"
+          style="padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; background: var(--input-bg); color: var(--text-secondary); font-size: 13px;">
+        </div>
+        <div class="control-group" style="margin-bottom: 12px;">
+          <label style="color: var(--text-secondary); font-weight: 500;">JWT Token</label>
+          <input type="password" id="holodex-jwt-input" placeholder="粘贴 Holodex JWT"
+            style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); box-sizing: border-box;">
+        </div>
+        <details style="margin-bottom: 16px; color: var(--text-secondary); font-size: 13px;">
+          <summary style="cursor: pointer; color: var(--text-primary); font-weight: 500;">如何获取 JWT</summary>
+          <ol style="line-height: 1.5; padding-left: 20px; margin: 10px 0 0;">
+            <li>点击下方「打开 Holodex 登录」</li>
+            <li>浏览器 F12 → Network，刷新 Holodex 页面</li>
+            <li>打开任意 <code>api/v2</code> 请求，复制 <code>Authorization: BEARER ...</code> 中 token</li>
+          </ol>
+          <p style="margin: 10px 0 0; font-size: 12px; line-height: 1.5;">
+            JWT 将在到期前 30 天内自动续期并写回 config.json。
+          </p>
+        </details>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button type="button" class="btn-secondary" onclick="openHolodexLogin()" style="flex: 1; min-width: 120px;">
+            🔗 打开 Holodex
+          </button>
+          <button type="button" class="btn-success" onclick="saveHolodexJwt()" style="flex: 1; min-width: 120px;">
+            💾 保存
+          </button>
+          <button type="button" id="holodex-logout-btn" class="btn-secondary" onclick="logoutHolodexJwt()"
+            style="flex: 1; min-width: 120px; display: none;">
+            🚪 退出
+          </button>
+          <button type="button" class="btn-secondary" onclick="closeHolodexLoginModal()" style="flex: 1; min-width: 120px;">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Face Auth Modal -->
     <div id="face-auth-modal"
       style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1001; align-items: center; justify-content: center;">
@@ -2526,7 +2699,7 @@
             // Show/hide Holodex sections based on API key configuration
             const holodexSection = document.getElementById('holodex-section');
             const holodexApiConfig = document.getElementById('holodex-api-config');
-            const holodexLoginConfig = document.getElementById('holodex-login-config');
+            const holodexLoginBtn = document.getElementById('holodex-login-btn');
             const holodexStreamsSection = document.getElementById('holodex-streams-section');
 
             // Always show the Holodex section
@@ -2535,14 +2708,14 @@
             if (config.holodex_api_key && config.holodex_api_key.trim() !== '') {
               // API key is configured - show streams section, hide api key setup
               holodexApiConfig.style.display = 'none';
-              holodexLoginConfig.style.display = 'block';
               holodexStreamsSection.style.display = 'block';
+              if (holodexLoginBtn) holodexLoginBtn.style.display = 'inline-flex';
               loadHolodexAuthStatus();
             } else {
               // No API key - show config section, hide streams
               holodexApiConfig.style.display = 'block';
-              holodexLoginConfig.style.display = 'none';
               holodexStreamsSection.style.display = 'none';
+              if (holodexLoginBtn) holodexLoginBtn.style.display = 'none';
             }
 
             if (config.interval) {
@@ -2623,6 +2796,7 @@
         const statusDiv = document.getElementById('holodex-status');
         const streamsDiv = document.getElementById('holodex-streams');
 
+        stopHolodexDurationTicker();
         statusDiv.innerHTML = '⏳ 加载中...';
         statusDiv.style.background = '#89b4fa';
         statusDiv.style.color = '#1e1e2e';
@@ -2640,20 +2814,20 @@
           }
 
           const streams = data.data || [];
-          const sourceLabel = data.source === 'favorites'
-            ? '收藏夹 (YouTube + Twitch)'
-            : '预设频道列表 (YouTube)';
-
-          if (streams.length === 0) {
-            statusDiv.innerHTML = `✅ 已连接 Holodex API (${sourceLabel}) - 当前无直播或预告`;
-            statusDiv.style.background = '#a6e3a1';
-            statusDiv.style.color = '#1e1e2e';
-            return;
-          }
+          const isFavorites = data.source === 'favorites';
 
           // Separate live and scheduled streams
           const liveStreams = streams.filter(s => s.status === 'live');
           const scheduledStreams = streams.filter(s => s.status !== 'live');
+
+          if (streams.length === 0) {
+            statusDiv.innerHTML = isFavorites
+              ? '✅ 收藏夹 - 当前无直播或预告'
+              : '当前无直播或预告';
+            statusDiv.style.background = '#a6e3a1';
+            statusDiv.style.color = '#1e1e2e';
+            return;
+          }
 
           // Sort scheduled streams by time - nearest first
           scheduledStreams.sort((a, b) => {
@@ -2662,7 +2836,8 @@
             return timeA - timeB;
           });
 
-          statusDiv.innerHTML = `✅ ${sourceLabel}: ${liveStreams.length} 个直播, ${scheduledStreams.length} 个预告`;
+          const counts = `${liveStreams.length} 个直播, ${scheduledStreams.length} 个预告`;
+          statusDiv.innerHTML = isFavorites ? `✅ 收藏夹: ${counts}` : counts;
           statusDiv.style.background = '#a6e3a1';
           statusDiv.style.color = '#1e1e2e';
 
@@ -2684,6 +2859,8 @@
             streamsDiv.appendChild(createStreamCard(stream, false));
           });
 
+          startHolodexDurationTicker();
+
         } catch (error) {
           statusDiv.innerHTML = `❌ 请求失败: ${error.message}`;
           statusDiv.style.background = '#f38ba8';
@@ -2694,6 +2871,100 @@
             icon.style.animation = '';
           }
         }
+      }
+
+      const TWITCH_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z"></path></svg>';
+
+      let holodexDurationIntervalId = null;
+
+      function escapeHolodexHtml(text) {
+        return String(text ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function formatHolodexDuration(ms) {
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        if (h > 0) {
+          return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${m}:${String(s).padStart(2, '0')}`;
+      }
+
+      function getHolodexStreamStartMs(stream, isLive) {
+        const raw = isLive
+          ? (stream.start_actual || stream.available_at || stream.published_at || stream.start_scheduled)
+          : stream.start_scheduled;
+        if (!raw) return null;
+        const ms = new Date(raw).getTime();
+        return Number.isNaN(ms) ? null : ms;
+      }
+
+      function stopHolodexDurationTicker() {
+        if (holodexDurationIntervalId) {
+          clearInterval(holodexDurationIntervalId);
+          holodexDurationIntervalId = null;
+        }
+      }
+
+      function updateHolodexDurations() {
+        const now = Date.now();
+        document.querySelectorAll('.holodex-stream-duration[data-tick="live"]').forEach((el) => {
+          const startMs = Number(el.dataset.startMs);
+          if (!startMs) return;
+          const textEl = el.querySelector('.holodex-duration-text');
+          if (textEl) {
+            textEl.textContent = formatHolodexDuration(now - startMs);
+          }
+        });
+      }
+
+      function startHolodexDurationTicker() {
+        stopHolodexDurationTicker();
+        updateHolodexDurations();
+        if (document.querySelector('.holodex-stream-duration[data-tick="live"]')) {
+          holodexDurationIntervalId = setInterval(updateHolodexDurations, 1000);
+        }
+      }
+
+      function buildHolodexDurationOverlay(stream, isLive, isPlaceholder) {
+        const startMs = getHolodexStreamStartMs(stream, isLive);
+        if (isLive && startMs) {
+          const durationClass = isPlaceholder
+            ? 'holodex-stream-duration holodex-stream-duration-twitch'
+            : 'holodex-stream-duration holodex-stream-duration-live';
+          const initial = formatHolodexDuration(Date.now() - startMs);
+          const twitchIcon = isPlaceholder
+            ? `<span class="holodex-duration-twitch-icon">${TWITCH_ICON_SVG}</span>`
+            : '';
+          const hoverSpan = isPlaceholder
+            ? '<span class="holodex-duration-hover">外部配信</span>'
+            : '';
+          return `<div class="${durationClass}" data-tick="live" data-start-ms="${startMs}">
+              <span class="holodex-duration-text">${initial}</span>
+              ${hoverSpan}
+              ${twitchIcon}
+            </div>`;
+        }
+
+        if (!isLive && stream.start_scheduled) {
+          const scheduled = new Date(stream.start_scheduled).toLocaleString('zh-CN', {
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          return `<div class="holodex-stream-duration">
+              <span class="holodex-duration-text">${escapeHolodexHtml(scheduled)}</span>
+            </div>`;
+        }
+
+        return '';
       }
 
       function parseTwitchLoginFromLink(link) {
@@ -2715,15 +2986,7 @@
 
       function createStreamCard(stream, isLive) {
         const streamCard = document.createElement('div');
-        streamCard.style.cssText = 'background: var(--card-bg); border: 2px solid var(--card-border); border-radius: 8px; padding: 15px; transition: all 0.2s; min-width: 0; overflow: hidden;';
-        streamCard.onmouseenter = () => {
-          streamCard.style.transform = 'translateY(-2px)';
-          streamCard.style.boxShadow = '0 4px 12px var(--shadow-hover)';
-        };
-        streamCard.onmouseleave = () => {
-          streamCard.style.transform = 'translateY(0)';
-          streamCard.style.boxShadow = 'none';
-        };
+        streamCard.className = 'holodex-stream-card';
 
         const isPlaceholder = stream.is_placeholder || stream.stream_type === 'placeholder';
         const platform = isPlaceholder ? 'twitch' : 'youtube';
@@ -2731,28 +2994,25 @@
         const watchUrl = stream.external_link || `https://www.youtube.com/watch?v=${stream.id}`;
         const thumbUrl = stream.thumbnail || (isPlaceholder ? '' : `https://i.ytimg.com/vi/${stream.id}/mqdefault.jpg`);
 
-        const statusBadge = isLive
-          ? '<span style="background: #f38ba8; color: #1e1e2e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">🔴 直播中</span>'
-          : '<span style="background: #89b4fa; color: #1e1e2e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">📅 预告</span>';
-
-        const platformBadge = isPlaceholder
-          ? '<span style="background: #9146ff; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 8px;">外部配信</span>'
-          : '';
-
         const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
-        const scheduledTime = stream.start_scheduled ? new Date(stream.start_scheduled).toLocaleString('zh-CN') : '';
-        const actualTime = stream.start_actual ? new Date(stream.start_actual).toLocaleString('zh-CN') : '';
 
         let areaInfo = '';
         if (stream.suggested_area_id && stream.suggested_area_name) {
-          areaInfo = `<p style="color: #a6e3a1; font-size: 12px; margin: 5px 0;">🎯 建议分区: ${stream.suggested_area_name}</p>`;
+          areaInfo = `<p style="color: #a6e3a1; font-size: 12px; margin: 8px 0 0;">🎯 建议分区: ${escapeHolodexHtml(stream.suggested_area_name)}</p>`;
         }
 
-        const thumbBlock = thumbUrl
-          ? `<a href="${watchUrl}" target="_blank" rel="noopener noreferrer" style="display: block; margin: -25px -25px 12px -25px; border-radius: 12px 12px 0 0; overflow: hidden; line-height: 0;">
-            <img src="${thumbUrl}" alt="" style="width: 100%; display: block; object-fit: cover; min-height: 120px; background: #111;">
-          </a>`
+        const topicBlock = stream.topic_id
+          ? `<span class="holodex-stream-topic">${escapeHolodexHtml(stream.topic_id)}</span>`
           : '';
+        const durationBlock = buildHolodexDurationOverlay(stream, isLive, isPlaceholder);
+
+        const thumbInner = thumbUrl
+          ? `<img src="${escapeHolodexHtml(thumbUrl)}" alt="">`
+          : '<div class="holodex-stream-thumb-placeholder"></div>';
+
+        const statusMeta = !isLive
+          ? '<span class="holodex-stream-status holodex-stream-status-upcoming">📅 预告</span>'
+          : (viewers ? `<span>${viewers}</span>` : '');
 
         const switchButtons = `
             ${isLive && !isPlaceholder ? `<button class="crop-switch-button" 
@@ -2783,26 +3043,27 @@
             </button>`;
 
         streamCard.innerHTML = `
-          ${thumbBlock}
-          <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
-            <div>
-              ${statusBadge}
-              ${platformBadge}
-              ${viewers ? `<span style="margin-left: 10px; color: var(--text-secondary); font-size: 14px;">${viewers}</span>` : ''}
+          <div class="holodex-stream-thumb">
+            <a class="holodex-stream-thumb-link" href="${escapeHolodexHtml(watchUrl)}" target="_blank" rel="noopener noreferrer">
+              ${thumbInner}
+            </a>
+            <div class="holodex-stream-thumb-top">
+              ${topicBlock}
             </div>
+            ${durationBlock ? `<div class="holodex-stream-thumb-bottom">${durationBlock}</div>` : ''}
           </div>
-          ${stream.channel_name ? `<p style="color: var(--text-muted); font-size: 12px; margin: 5px 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">👤 ${stream.channel_name}</p>` : ''}
-          <h4 style="margin: 10px 0; color: var(--text-primary); font-size: 14px; line-height: 1.4; font-weight: 600; word-wrap: break-word; overflow-wrap: break-word;">${stream.title}</h4>
-          ${stream.topic_id ? `<p style="color: var(--heading-color); font-size: 12px; margin: 5px 0;">🎮 ${stream.topic_id}</p>` : ''}
-          ${areaInfo}
-          ${isLive && actualTime ? `<p style="color: var(--text-secondary); font-size: 12px; margin: 5px 0;">⏰ 开始: ${actualTime}</p>` : ''}
-          ${!isLive && scheduledTime ? `<p style="color: var(--text-secondary); font-size: 12px; margin: 5px 0;">⏰ 预定: ${scheduledTime}</p>` : ''}
-          <div style="margin-top: 12px; display: flex; gap: 8px;">
-            <a href="${watchUrl}" target="_blank" rel="noopener noreferrer"
-               style="flex: 1; padding: 6px 12px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; text-decoration: none; border-radius: 4px; font-size: 12px; text-align: center; font-weight: 600;">
-              ${isPlaceholder ? '🟣 打开 Twitch' : '📺 观看'}
-            </a> 
-            ${switchButtons}
+          <div class="holodex-stream-body">
+            ${statusMeta ? `<div class="holodex-stream-meta">${statusMeta}</div>` : ''}
+            ${stream.channel_name ? `<p style="color: var(--text-muted); font-size: 12px; margin: 0 0 6px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHolodexHtml(stream.channel_name)}</p>` : ''}
+            <h4 style="margin: 0; color: var(--text-primary); font-size: 14px; line-height: 1.4; font-weight: 600; word-wrap: break-word; overflow-wrap: break-word;">${escapeHolodexHtml(stream.title)}</h4>
+            ${areaInfo}
+            <div style="margin-top: 12px; display: flex; gap: 8px;">
+              <a href="${escapeHolodexHtml(watchUrl)}" target="_blank" rel="noopener noreferrer"
+                 style="flex: 1; padding: 6px 12px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; line-height: 1;">
+                ${isPlaceholder ? '🟣 打开 Twitch' : '📺 观看'}
+              </a>
+              ${switchButtons}
+            </div>
           </div>
         `;
 
@@ -3033,36 +3294,87 @@
         }
       }
 
+      let holodexAuthState = { logged_in: false, username: null, expired: false };
+
+      function openHolodexLoginModal() {
+        const modal = document.getElementById('holodex-login-modal');
+        if (!modal) return;
+        updateHolodexModalHint();
+        modal.style.display = 'flex';
+        loadHolodexAuthStatus();
+      }
+
+      function closeHolodexLoginModal() {
+        const modal = document.getElementById('holodex-login-modal');
+        if (modal) modal.style.display = 'none';
+      }
+
+      function updateHolodexLoginButton() {
+        const btn = document.getElementById('holodex-login-btn');
+        const logoutBtn = document.getElementById('holodex-logout-btn');
+        if (!btn) return;
+
+        if (holodexAuthState.expired) {
+          btn.textContent = '⚠️ 重新登录';
+          btn.style.color = '#f9e2af';
+        } else if (holodexAuthState.logged_in) {
+          btn.textContent = holodexAuthState.username
+            ? `✅ ${holodexAuthState.username}`
+            : '✅ 已登录收藏夹';
+          btn.style.color = 'var(--accent-green, #a6e3a1)';
+        } else {
+          btn.textContent = '🔐 收藏夹登录';
+          btn.style.color = '';
+        }
+
+        if (logoutBtn) {
+          logoutBtn.style.display = holodexAuthState.logged_in ? 'inline-flex' : 'none';
+        }
+      }
+
+      function updateHolodexModalHint() {
+        const hint = document.getElementById('holodex-modal-auth-hint');
+        if (!hint) return;
+
+        if (holodexAuthState.expired) {
+          hint.textContent = '⚠️ JWT 已过期，请重新登录 Holodex 并保存新的 token';
+          hint.style.color = '#f9e2af';
+        } else if (holodexAuthState.logged_in) {
+          hint.textContent = holodexAuthState.username
+            ? `✅ 当前已登录为 ${holodexAuthState.username}，显示收藏夹直播`
+            : '✅ 当前已登录，显示收藏夹直播';
+          hint.style.color = '#a6e3a1';
+        } else {
+          hint.textContent = '未登录 — 当前使用 channels.json 频道列表 (YouTube + Twitch 外部配信)';
+          hint.style.color = 'var(--text-secondary)';
+        }
+      }
+
       function openHolodexLogin() {
         window.open('https://holodex.net/login', '_blank', 'noopener,noreferrer');
       }
 
       async function loadHolodexAuthStatus() {
-        const statusEl = document.getElementById('holodex-auth-status');
-        if (!statusEl) return;
         try {
           const response = await fetch('/api/holodex/auth/status');
           const data = await response.json();
           if (!data.success) {
-            statusEl.textContent = data.message || '无法检查登录状态';
-            statusEl.style.color = '#f38ba8';
+            holodexAuthState = { logged_in: false, username: null, expired: false };
+            updateHolodexLoginButton();
+            updateHolodexModalHint();
             return;
           }
           const info = data.data || {};
-          if (info.logged_in) {
-            statusEl.innerHTML = `✅ 已登录 Holodex${info.username ? ` (${info.username})` : ''} — 显示收藏夹直播`;
-            statusEl.style.color = '#a6e3a1';
-          } else if (info.expired) {
-            statusEl.textContent = '⚠️ JWT 已过期，请重新登录并保存新的 token';
-            statusEl.style.color = '#f9e2af';
-          } else {
-            statusEl.textContent = '未登录 — 当前显示 channels.json 预设频道 (仅 YouTube)';
-            statusEl.style.color = 'var(--text-secondary)';
-          }
+          holodexAuthState = {
+            logged_in: !!info.logged_in,
+            username: info.username || null,
+            expired: !!info.expired
+          };
         } catch (error) {
-          statusEl.textContent = '检查登录状态失败: ' + error.message;
-          statusEl.style.color = '#f38ba8';
+          holodexAuthState = { logged_in: false, username: null, expired: false };
         }
+        updateHolodexLoginButton();
+        updateHolodexModalHint();
       }
 
       async function saveHolodexJwt() {
@@ -3082,6 +3394,7 @@
           if (data.success) {
             showNotification('Holodex 登录已保存', 'success');
             jwtInput.value = '';
+            closeHolodexLoginModal();
             await loadHolodexAuthStatus();
             await refreshHolodexStreams();
           } else {
@@ -3103,6 +3416,7 @@
           if (data.success) {
             showNotification('已退出 Holodex 登录', 'success');
             document.getElementById('holodex-jwt-input').value = '';
+            closeHolodexLoginModal();
             await loadHolodexAuthStatus();
             await refreshHolodexStreams();
           } else {
@@ -5588,7 +5902,7 @@
         const platform = document.getElementById('platform-select').value;
         const channelSelect = document.getElementById('channel-select');
 
-        channelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
+        channelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
 
         // Only populate if channels data is available
         if (channelsData && channelsData.channels) {
@@ -6053,7 +6367,11 @@
           twitch_proxy: document.getElementById('setup-tw-proxy').value || null,
 
           // Advanced
-          holodex_api_key: document.getElementById('setup-holodex').value || null,
+          holodex_api_key: document.getElementById('setup-holodex').value.trim() || null,
+          holodex_jwt: (() => {
+            const jwt = document.getElementById('setup-holodex-jwt').value.trim().replace(/^BEARER\s+/i, '');
+            return jwt || null;
+          })(),
           riot_api_key: document.getElementById('setup-riot').value || null,
           enable_lol_monitor: document.getElementById('setup-lol-monitor').checked
         };
@@ -6169,7 +6487,7 @@
             console.log('Found', channelsData.channels.length, 'channels');
 
             // Populate YouTube channels
-            ytChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
+            ytChannelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
             channelsData.channels.forEach(channel => {
               if (channel.platforms && channel.platforms.youtube) {
                 const option = document.createElement('option');
@@ -6184,7 +6502,7 @@
             console.log('Populated YouTube channels:', ytChannelSelect.options.length - 1);
 
             // Populate Twitch channels
-            twChannelSelect.innerHTML = '<option value="">选择预设频道或手动输入...</option>';
+            twChannelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
             channelsData.channels.forEach(channel => {
               if (channel.platforms && channel.platforms.twitch) {
                 const option = document.createElement('option');

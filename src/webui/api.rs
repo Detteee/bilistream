@@ -497,8 +497,11 @@ pub async fn update_config(
     if let Some(holodex_jwt) = payload.holodex_jwt {
         if !holodex_jwt.is_empty() {
             cfg.holodex_jwt = Some(holodex_jwt);
+            cfg.holodex_username = None;
         } else {
             cfg.holodex_jwt = None;
+            cfg.holodex_jwt_refreshed_at = None;
+            cfg.holodex_username = None;
         }
     }
 
@@ -1109,6 +1112,7 @@ pub struct SetupConfigRequest {
     twitch_quality: Option<String>,
     twitch_proxy: Option<String>,
     holodex_api_key: Option<String>,
+    holodex_jwt: Option<String>,
     riot_api_key: Option<String>,
     enable_lol_monitor: bool,
 }
@@ -1158,6 +1162,8 @@ pub async fn save_setup_config(
             },
             holodex_api_key: None,
             holodex_jwt: None,
+            holodex_jwt_refreshed_at: None,
+            holodex_username: None,
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),
@@ -1171,8 +1177,24 @@ pub async fn save_setup_config(
     cfg.interval = payload.interval;
     cfg.bililive.enable_danmaku_command = payload.enable_danmaku_command;
     cfg.bililive.room = payload.room;
-    cfg.holodex_api_key = payload.holodex_api_key;
-    cfg.riot_api_key = payload.riot_api_key;
+    cfg.holodex_api_key = payload.holodex_api_key.filter(|key| !key.is_empty());
+    if let Some(jwt) = payload.holodex_jwt {
+        let jwt = jwt.trim();
+        let jwt = jwt
+            .strip_prefix("BEARER ")
+            .or_else(|| jwt.strip_prefix("bearer "))
+            .unwrap_or(jwt)
+            .trim();
+        if jwt.is_empty() {
+            cfg.holodex_jwt = None;
+            cfg.holodex_jwt_refreshed_at = None;
+            cfg.holodex_username = None;
+        } else {
+            cfg.holodex_jwt = Some(jwt.to_string());
+            cfg.holodex_username = None;
+        }
+    }
+    cfg.riot_api_key = payload.riot_api_key.filter(|key| !key.is_empty());
     cfg.enable_lol_monitor = payload.enable_lol_monitor;
 
     // Track which platforms were updated
@@ -1530,6 +1552,8 @@ pub struct HolodexStreamWithArea {
     pub status: String,
     pub start_scheduled: Option<String>,
     pub start_actual: Option<String>,
+    pub available_at: Option<String>,
+    pub published_at: Option<String>,
     pub live_viewers: Option<i32>,
     pub channel_id: String,
     pub channel_name: String,
@@ -1629,6 +1653,8 @@ fn map_holodex_streams_with_area(
                 status: stream.status,
                 start_scheduled: stream.start_scheduled,
                 start_actual: stream.start_actual,
+                available_at: stream.available_at,
+                published_at: stream.published_at,
                 live_viewers: stream.live_viewers,
                 channel_id: stream.channel.id,
                 channel_name: stream.channel.name,
@@ -1646,8 +1672,52 @@ fn map_holodex_streams_with_area(
         .collect()
 }
 
-pub async fn api_holodex_auth_status() -> impl IntoResponse {
-    let cfg = match load_config().await {
+async fn apply_holodex_jwt_sync(cfg: &mut crate::config::Config) -> Result<(String, bool), String> {
+    let api_key = cfg
+        .holodex_api_key
+        .as_ref()
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| "Holodex API key not configured".to_string())?
+        .clone();
+    let jwt = cfg
+        .holodex_jwt
+        .as_ref()
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "Holodex JWT not configured".to_string())?
+        .clone();
+
+    let sync = crate::plugins::youtube::sync_holodex_jwt_if_needed(
+        &api_key,
+        &jwt,
+        cfg.holodex_jwt_refreshed_at,
+        cfg.holodex_username.clone(),
+    )
+    .await?;
+
+    let mut should_save = false;
+    if sync.jwt != jwt {
+        cfg.holodex_jwt = Some(sync.jwt.clone());
+        should_save = true;
+    }
+    if sync.refreshed_at != cfg.holodex_jwt_refreshed_at {
+        cfg.holodex_jwt_refreshed_at = sync.refreshed_at;
+        should_save = true;
+    }
+    if sync.username.is_some() && sync.username != cfg.holodex_username {
+        cfg.holodex_username = sync.username.clone();
+        should_save = true;
+    }
+    if should_save {
+        if let Err(e) = crate::config::save_config(cfg).await {
+            tracing::warn!("Failed to save Holodex JWT state: {}", e);
+        }
+    }
+
+    Ok((sync.jwt, sync.token_rotated))
+}
+
+pub async fn api_holodex_auth_status() -> Json<serde_json::Value> {
+    let mut cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
             return Json(json!({
@@ -1657,21 +1727,18 @@ pub async fn api_holodex_auth_status() -> impl IntoResponse {
         }
     };
 
-    let api_key = match cfg.holodex_api_key.filter(|k| !k.is_empty()) {
-        Some(key) => key,
-        None => {
-            return Json(json!({
-                "success": true,
-                "data": {
-                    "logged_in": false,
-                    "message": "Holodex API key not configured"
-                }
-            }));
-        }
-    };
+    if cfg.holodex_api_key.as_ref().is_none_or(|k| k.is_empty()) {
+        return Json(json!({
+            "success": true,
+            "data": {
+                "logged_in": false,
+                "message": "Holodex API key not configured"
+            }
+        }));
+    }
 
-    let jwt = match cfg.holodex_jwt.filter(|j| !j.is_empty()) {
-        Some(jwt) => jwt,
+    let jwt = match cfg.holodex_jwt.as_ref().filter(|j| !j.is_empty()) {
+        Some(jwt) => jwt.clone(),
         None => {
             return Json(json!({
                 "success": true,
@@ -1682,30 +1749,46 @@ pub async fn api_holodex_auth_status() -> impl IntoResponse {
         }
     };
 
-    match crate::plugins::youtube::check_holodex_jwt(&api_key, &jwt).await {
-        Ok(Some(username)) => Json(json!({
-            "success": true,
-            "data": {
-                "logged_in": true,
-                "username": username
+    let (active_jwt, jwt_refreshed) = match apply_holodex_jwt_sync(&mut cfg).await {
+        Ok(result) => result,
+        Err(e) => {
+            if crate::plugins::youtube::holodex_jwt_is_expired(&jwt) {
+                return Json(json!({
+                    "success": true,
+                    "data": {
+                        "logged_in": false,
+                        "expired": true,
+                        "message": e
+                    }
+                }));
             }
-        })),
-        Ok(None) => Json(json!({
+            tracing::warn!("Holodex JWT sync skipped: {}", e);
+            (jwt, false)
+        }
+    };
+
+    if crate::plugins::youtube::holodex_jwt_is_expired(&active_jwt) {
+        return Json(json!({
             "success": true,
             "data": {
                 "logged_in": false,
                 "expired": true
             }
-        })),
-        Err(e) => Json(json!({
-            "success": false,
-            "message": format!("Failed to verify Holodex login: {}", e)
-        })),
+        }));
     }
+
+    Json(json!({
+        "success": true,
+        "data": {
+            "logged_in": true,
+            "username": cfg.holodex_username,
+            "jwt_refreshed": jwt_refreshed
+        }
+    }))
 }
 
-pub async fn api_get_holodex_streams() -> impl IntoResponse {
-    let cfg = match load_config().await {
+pub async fn api_get_holodex_streams() -> Json<serde_json::Value> {
+    let mut cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
             return Json(json!({
@@ -1715,8 +1798,8 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
         }
     };
 
-    let api_key = match cfg.holodex_api_key.filter(|k| !k.is_empty()) {
-        Some(key) => key,
+    let api_key = match cfg.holodex_api_key.as_ref().filter(|k| !k.is_empty()) {
+        Some(key) => key.clone(),
         None => {
             return Json(json!({
                 "success": false,
@@ -1726,9 +1809,19 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
     };
 
     // Favorites mode: JWT + includePlaceholder (YouTube + Twitch external streams)
-    if let Some(jwt) = cfg.holodex_jwt.filter(|j| !j.is_empty()) {
+    if cfg.holodex_jwt.as_ref().is_some_and(|j| !j.is_empty()) {
+        let active_jwt = match apply_holodex_jwt_sync(&mut cfg).await {
+            Ok((jwt, _)) => jwt,
+            Err(e) => {
+                return Json(json!({
+                    "success": false,
+                    "message": format!("Failed to refresh Holodex JWT: {}", e)
+                }));
+            }
+        };
+
         let (fav_ids, streams) =
-            match crate::plugins::youtube::get_holodex_favorites_live(&api_key, &jwt).await {
+            match crate::plugins::youtube::get_holodex_favorites_live(&api_key, &active_jwt).await {
                 Ok(result) => result,
                 Err(e) => {
                     return Json(json!({
@@ -1748,7 +1841,7 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
         }));
     }
 
-    // Fallback: channels.json preset list (YouTube only)
+    // channels.json preset list (YouTube + Twitch placeholders)
     let mut channel_ids = Vec::new();
 
     // Load channels.json for all channels
@@ -1801,7 +1894,7 @@ pub async fn api_get_holodex_streams() -> impl IntoResponse {
     }
 
     // Call the new Holodex function from youtube.rs
-    let streams = match crate::plugins::youtube::get_holodex_streams(channel_ids.clone()).await {
+    let streams = match crate::plugins::youtube::get_holodex_streams(channel_ids.clone(), true).await {
         Ok(s) => s,
         Err(e) => {
             return Json(json!({
@@ -2182,7 +2275,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
 
     // Fetch fresh YouTube status using Holodex API directly
     let streams =
-        match crate::plugins::youtube::get_holodex_streams(vec![cfg.youtube.channel_id.clone()])
+        match crate::plugins::youtube::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
             .await
         {
             Ok(s) => s,

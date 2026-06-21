@@ -2115,17 +2115,29 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
     let configure_advanced = input.trim().eq_ignore_ascii_case("y");
 
-    let (holodex_api_key, riot_api_key, enable_lol_monitor) = if configure_advanced {
+    let (holodex_api_key, holodex_jwt, riot_api_key, enable_lol_monitor) = if configure_advanced {
         println!("\n高级选项配置");
         println!("----------------------------------------");
 
-        println!("\nHolodex API Key (用于YouTube直播状态检测)");
+        println!("\nHolodex API Key (用于YouTube直播状态检测，可选)");
         println!("获取方法: https://holodex.net/login");
         print!("请输入 (直接回车跳过): ");
         io::stdout().flush()?;
         let mut holodex = String::new();
         io::stdin().read_line(&mut holodex)?;
         let holodex = holodex.trim().to_string();
+
+        println!("\nHolodex JWT (用于收藏夹直播监控，可选)");
+        println!("留空则 Holodex 监控使用 channels.json，可稍后在 Web UI 配置");
+        print!("请输入 (直接回车跳过): ");
+        io::stdout().flush()?;
+        let mut holodex_jwt = String::new();
+        io::stdin().read_line(&mut holodex_jwt)?;
+        let holodex_jwt = holodex_jwt
+            .trim()
+            .trim_start_matches("BEARER ")
+            .trim_start_matches("bearer ")
+            .to_string();
 
         println!("\n英雄联盟玩家ID监控 (用于检测游戏内违禁词汇)");
         print!("是否启用? (y/N): ");
@@ -2146,9 +2158,9 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
             String::new()
         };
 
-        (holodex, riot, enable_lol)
+        (holodex, holodex_jwt, riot, enable_lol)
     } else {
-        (String::new(), String::new(), false)
+        (String::new(), String::new(), String::new(), false)
     };
 
     // Create config structure
@@ -2197,7 +2209,13 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             Some(holodex_api_key)
         },
-        holodex_jwt: None,
+        holodex_jwt: if holodex_jwt.is_empty() {
+            None
+        } else {
+            Some(holodex_jwt)
+        },
+        holodex_jwt_refreshed_at: None,
+        holodex_username: None,
         riot_api_key: if riot_api_key.is_empty() {
             None
         } else {
