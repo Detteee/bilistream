@@ -26,6 +26,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health_check))
         .route("/version", get(api::get_version))
         .route("/status", get(api::get_status))
+        .route("/network-status", get(api::get_network_status))
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/start", post(api::start_stream))
         .route("/stop", post(api::stop_stream))

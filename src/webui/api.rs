@@ -181,6 +181,17 @@ pub struct BiliStatus {
     pub enable_danmaku_command: bool,
 }
 
+#[derive(Serialize, Clone, Default)]
+pub struct NetworkStatus {
+    pub stream_speed: Option<f32>,
+    pub stream_cache_speed: Option<f32>,
+    pub stream_bitrate_kbps: Option<f32>,
+    pub stream_cache_bitrate_kbps: Option<f32>,
+    pub stream_total_bytes: u64,
+    pub stream_cache_total_bytes: u64,
+    pub hls_cache_active: bool,
+}
+
 #[derive(Serialize, Clone)]
 pub struct YtStatus {
     pub is_live: bool,
@@ -337,6 +348,37 @@ pub async fn get_status() -> impl IntoResponse {
         }),
     )
         .into_response()
+}
+
+pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
+    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
+    let network_stats = get_ffmpeg_network_stats().await;
+
+    Json(ApiResponse {
+        success: true,
+        data: Some(NetworkStatus {
+            stream_speed: get_ffmpeg_speed().await,
+            stream_cache_speed: if hls_cache_active {
+                get_ffmpeg_cache_speed().await
+            } else {
+                None
+            },
+            stream_bitrate_kbps: network_stats.push_bitrate_kbps,
+            stream_cache_bitrate_kbps: if hls_cache_active {
+                network_stats.cache_bitrate_kbps
+            } else {
+                None
+            },
+            stream_total_bytes: network_stats.push_total_bytes,
+            stream_cache_total_bytes: if hls_cache_active {
+                network_stats.cache_total_bytes
+            } else {
+                0
+            },
+            hls_cache_active,
+        }),
+        message: None,
+    })
 }
 
 pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {

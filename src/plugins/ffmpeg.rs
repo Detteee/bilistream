@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -761,6 +762,26 @@ fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
     }
 }
 
+fn update_network_counters_from_bytes(role: FfmpegStatsRole, bitrate_kbps: f32, delta_bytes: u64) {
+    let now = now_millis();
+    let (bitrate, total, last_sample) = match role {
+        FfmpegStatsRole::Cache => (
+            &*FFMPEG_CACHE_BITRATE_KBPS,
+            &*FFMPEG_CACHE_TOTAL_BYTES,
+            &*FFMPEG_CACHE_LAST_SAMPLE_MS,
+        ),
+        FfmpegStatsRole::Push => (
+            &*FFMPEG_BITRATE_KBPS,
+            &*FFMPEG_TOTAL_BYTES,
+            &*FFMPEG_LAST_SAMPLE_MS,
+        ),
+    };
+
+    bitrate.store(bitrate_kbps.to_bits(), Ordering::Relaxed);
+    total.fetch_add(delta_bytes, Ordering::Relaxed);
+    last_sample.store(now, Ordering::Relaxed);
+}
+
 /// Parse time string (HH:MM:SS.ms) to seconds
 fn parse_time_to_seconds(time_str: &str) -> Option<u32> {
     let parts: Vec<&str> = time_str.split(':').collect();
@@ -846,11 +867,54 @@ fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
     Ok(cache_dir)
 }
 
+struct CacheByteTracker {
+    cache_dir: PathBuf,
+    file_sizes: HashMap<PathBuf, u64>,
+    last_sample_ms: Option<u64>,
+}
+
+impl CacheByteTracker {
+    fn new(cache_dir: PathBuf) -> Self {
+        Self {
+            cache_dir,
+            file_sizes: HashMap::new(),
+            last_sample_ms: None,
+        }
+    }
+
+    fn sample(&mut self) -> Option<(f32, u64)> {
+        let now = now_millis();
+        let mut delta_bytes = 0_u64;
+
+        let entries = std::fs::read_dir(&self.cache_dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                continue;
+            }
+
+            let size = metadata.len();
+            let previous_size = self.file_sizes.insert(path, size).unwrap_or(0);
+            delta_bytes = delta_bytes.saturating_add(size.saturating_sub(previous_size));
+        }
+
+        let previous_sample_ms = self.last_sample_ms.replace(now)?;
+        let elapsed_ms = now.saturating_sub(previous_sample_ms);
+        if elapsed_ms == 0 || elapsed_ms > NETWORK_SAMPLE_GAP_LIMIT_MS || delta_bytes == 0 {
+            return None;
+        }
+
+        Some((delta_bytes as f32 * 8.0 / elapsed_ms as f32, delta_bytes))
+    }
+}
+
 fn spawn_ffmpeg_stderr_monitor(
     stderr: tokio::process::ChildStderr,
     log_level: String,
     process_name: &'static str,
     stats_role: Option<FfmpegStatsRole>,
+    cache_dir: Option<PathBuf>,
 ) {
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
@@ -858,6 +922,7 @@ fn spawn_ffmpeg_stderr_monitor(
         let mut stderr = stderr;
         let mut buffer = vec![0u8; 8192];
         let mut line_buffer = String::new();
+        let mut cache_byte_tracker = cache_dir.map(CacheByteTracker::new);
 
         while let Ok(n) = stderr.read(&mut buffer).await {
             if n == 0 {
@@ -873,6 +938,7 @@ fn spawn_ffmpeg_stderr_monitor(
                         log_level.as_str(),
                         process_name,
                         stats_role,
+                        cache_byte_tracker.as_mut(),
                     );
                     line_buffer.clear();
                 } else if ch == '\n' {
@@ -881,6 +947,7 @@ fn spawn_ffmpeg_stderr_monitor(
                         log_level.as_str(),
                         process_name,
                         stats_role,
+                        cache_byte_tracker.as_mut(),
                     );
                     line_buffer.clear();
                 } else {
@@ -896,15 +963,24 @@ fn handle_ffmpeg_stderr_line(
     log_level: &str,
     process_name: &'static str,
     stats_role: Option<FfmpegStatsRole>,
+    cache_byte_tracker: Option<&mut CacheByteTracker>,
 ) {
     if line.is_empty() {
         return;
     }
 
-    if let Some(sample) = extract_ffmpeg_stats(line) {
+    if let Some(mut sample) = extract_ffmpeg_stats(line) {
         update_progress_time();
         if let Some(role) = stats_role {
-            if let Some(bitrate_kbps) = sample.bitrate_kbps {
+            if sample.bitrate_kbps.is_none() && matches!(role, FfmpegStatsRole::Cache) {
+                if let Some((bitrate_kbps, delta_bytes)) =
+                    cache_byte_tracker.and_then(CacheByteTracker::sample)
+                {
+                    sample.bitrate = Some(format_network_rate(bitrate_kbps));
+                    sample.bitrate_kbps = Some(bitrate_kbps);
+                    update_network_counters_from_bytes(role, bitrate_kbps, delta_bytes);
+                }
+            } else if let Some(bitrate_kbps) = sample.bitrate_kbps {
                 update_network_counters(role, bitrate_kbps);
             }
             match role {
@@ -1048,6 +1124,7 @@ async fn spawn_direct_ffmpeg(
                     log_level,
                     "ffmpeg",
                     Some(FfmpegStatsRole::Push),
+                    None,
                 );
             }
 
@@ -1149,6 +1226,7 @@ async fn spawn_cached_ffmpeg(
                     log_level.clone(),
                     "ffmpeg 缓存写入",
                     Some(FfmpegStatsRole::Cache),
+                    Some(cache_dir.clone()),
                 );
             }
 
@@ -1229,6 +1307,7 @@ async fn spawn_cached_ffmpeg(
                                 reader_log_level,
                                 "ffmpeg 延迟推流",
                                 Some(FfmpegStatsRole::Push),
+                                None,
                             );
                         }
 

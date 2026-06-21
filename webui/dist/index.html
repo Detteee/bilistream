@@ -2366,9 +2366,14 @@
       let logLines = [];
       let maxLogLines = 500;
       let statusRefreshInterval = 60000; // Default 60 seconds
+      const networkRefreshInterval = 1000;
       let statusIntervalId = null;
+      let networkRefreshIntervalId = null;
       let logRefreshIntervalId = null;
       let statusRefreshInFlight = false;
+      let networkRefreshInFlight = false;
+      let lastBiliNetworkLive = false;
+      let lastBiliNetworkQuality = null;
       const biliNetworkHistory = { cache: [], push: [] };
       const biliNetworkHistoryLimit = 48;
       let faceAuthUrl = null;
@@ -2495,8 +2500,18 @@
           }
         }, statusRefreshInterval);
 
+        if (networkRefreshIntervalId) {
+          clearInterval(networkRefreshIntervalId);
+        }
+        networkRefreshIntervalId = setInterval(() => {
+          if (isDashboardVisible()) {
+            refreshNetworkStatus();
+          }
+        }, networkRefreshInterval);
+
         // Initial refresh
         refreshStatus();
+        refreshNetworkStatus();
 
         let titleRowCenterTimer;
         window.addEventListener('resize', () => {
@@ -4369,9 +4384,11 @@
           return;
         }
 
+        lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
+        lastBiliNetworkQuality = bili.stream_quality || lastBiliNetworkQuality;
         const hasPush = Number.isFinite(bili.stream_bitrate_kbps) || Number.isFinite(bili.stream_speed);
         const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
-        if (!bili.is_live || (!hasPush && !hasCache && !bili.stream_quality)) {
+        if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
           panel.style.display = 'none';
           return;
         }
@@ -4381,8 +4398,8 @@
         pushBiliNetworkSample(biliNetworkHistory.cache, hasCache ? bili.stream_cache_bitrate_kbps : 0);
 
         const quality = document.getElementById('bili-network-quality');
-        quality.textContent = bili.stream_quality || 'Live';
-        applyBiliStreamQualityColor(quality, bili.stream_quality);
+        quality.textContent = lastBiliNetworkQuality || 'Live';
+        applyBiliStreamQualityColor(quality, lastBiliNetworkQuality);
 
         document.getElementById('bili-network-push-rate').textContent = formatNetworkRate(bili.stream_bitrate_kbps);
         document.getElementById('bili-network-push-speed-ratio').textContent = formatSpeedRatio(bili.stream_speed);
@@ -4397,6 +4414,32 @@
         }
 
         renderBiliNetworkGraph(hasCache);
+      }
+
+      async function refreshNetworkStatus() {
+        if (networkRefreshInFlight || !lastBiliNetworkLive) {
+          return;
+        }
+
+        networkRefreshInFlight = true;
+        try {
+          const response = await fetch('/api/network-status');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          const result = await response.json();
+          if (result.success && result.data) {
+            updateBiliNetworkPanel({
+              ...result.data,
+              is_live: lastBiliNetworkLive,
+              stream_quality: lastBiliNetworkQuality,
+            });
+          }
+        } catch (error) {
+          console.log('Failed to refresh network status:', error);
+        } finally {
+          networkRefreshInFlight = false;
+        }
       }
 
       async function refreshStatus() {
