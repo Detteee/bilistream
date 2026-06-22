@@ -1,5 +1,5 @@
 use axum::{
-    extract::Json,
+    extract::{Json, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -1873,7 +1873,16 @@ pub async fn api_holodex_auth_status() -> Json<serde_json::Value> {
     }))
 }
 
-pub async fn api_get_holodex_streams() -> Json<serde_json::Value> {
+#[derive(Deserialize)]
+pub struct HolodexStreamsQuery {
+    /// When true, fetch account favorites (requires JWT). Otherwise uses channels.json.
+    #[serde(default)]
+    favorites: bool,
+}
+
+pub async fn api_get_holodex_streams(
+    Query(query): Query<HolodexStreamsQuery>,
+) -> Json<serde_json::Value> {
     let mut cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
@@ -1895,7 +1904,14 @@ pub async fn api_get_holodex_streams() -> Json<serde_json::Value> {
     };
 
     // Favorites mode: JWT + includePlaceholder (YouTube + Twitch external streams)
-    if cfg.holodex_jwt.as_ref().is_some_and(|j| !j.is_empty()) {
+    if query.favorites {
+        if cfg.holodex_jwt.as_ref().is_none_or(|j| j.is_empty()) {
+            return Json(json!({
+                "success": false,
+                "message": "Holodex JWT required for favorites mode"
+            }));
+        }
+
         let active_jwt = match apply_holodex_jwt_sync(&mut cfg).await {
             Ok((jwt, _)) => jwt,
             Err(e) => {
@@ -1927,7 +1943,7 @@ pub async fn api_get_holodex_streams() -> Json<serde_json::Value> {
         }));
     }
 
-    // channels.json preset list (YouTube + Twitch placeholders)
+    // channels.json preset list (YouTube + Twitch placeholders via ?channels=...&includePlaceholder=true)
     let mut channel_ids = Vec::new();
 
     // Load channels.json for all channels

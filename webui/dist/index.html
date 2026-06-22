@@ -2185,7 +2185,7 @@
             <div id="holodex-toolbar" class="holodex-toolbar">
               <div id="holodex-auth-bar" class="holodex-auth-bar">
                 <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn"
-                  onclick="openHolodexLoginModal()" title="使用 Holodex 收藏夹">
+                  onclick="toggleHolodexFavoritesMode()" title="切换 Holodex 收藏夹 / channels.json">
                   <span class="holodex-heart-icon" aria-hidden="true" style="display: none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                       <path fill="currentColor"
@@ -3129,7 +3129,7 @@
         streamsDiv.innerHTML = '';
 
         try {
-          const response = await fetch('/api/holodex/streams');
+          const response = await fetch(`/api/holodex/streams?favorites=${holodexUseFavorites ? 'true' : 'false'}`);
           const data = await response.json();
 
           if (!data.success) {
@@ -3728,11 +3728,13 @@
       }
 
       let holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+      let holodexUseFavorites = false;
 
       function updateHolodexAuthBar() {
         const authBar = document.getElementById('holodex-auth-bar');
         const loginBtn = document.getElementById('holodex-login-btn');
         const favoritesLabel = document.getElementById('holodex-favorites-label');
+        const favoritesBtn = document.getElementById('holodex-favorites-btn');
         const heartIcon = document.querySelector('#holodex-favorites-btn .holodex-heart-icon');
         const jwtSkip = document.querySelector('.holodex-jwt-skip');
         const skipToggle = document.getElementById('holodex-skip-jwt-verify');
@@ -3745,7 +3747,7 @@
         if (authBar) authBar.style.display = 'inline-flex';
         if (loginBtn) loginBtn.style.display = 'none';
 
-        if (holodexAuthState.logged_in && !holodexAuthState.expired) {
+        if (holodexUseFavorites && holodexAuthState.logged_in && !holodexAuthState.expired) {
           if (heartIcon) heartIcon.style.display = 'inline-flex';
           if (jwtSkip) jwtSkip.style.display = 'inline-flex';
           if (favoritesLabel) {
@@ -3753,19 +3755,41 @@
               ? `${holodexAuthState.username}的收藏`
               : '收藏夹';
           }
-        } else if (holodexAuthState.expired) {
+          if (favoritesBtn) favoritesBtn.title = '点击切换为 channels.json 频道列表';
+        } else if (holodexAuthState.expired && holodexUseFavorites) {
           if (heartIcon) heartIcon.style.display = 'none';
           if (jwtSkip) jwtSkip.style.display = 'none';
           if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
+          if (favoritesBtn) favoritesBtn.title = 'Holodex 登录已过期';
         } else {
           if (heartIcon) heartIcon.style.display = 'none';
           if (jwtSkip) jwtSkip.style.display = 'none';
-          if (favoritesLabel) favoritesLabel.textContent = '🔗 使用Holodex收藏夹';
+          if (favoritesLabel) favoritesLabel.textContent = '📺 channels.json';
+          if (favoritesBtn) {
+            favoritesBtn.title = holodexAuthState.logged_in
+              ? '点击切换为 Holodex 收藏夹'
+              : '点击启用 Holodex 收藏夹（需登录）';
+          }
         }
 
         if (logoutBtn) {
           logoutBtn.style.display = holodexAuthState.logged_in ? 'inline-flex' : 'none';
         }
+      }
+
+      async function toggleHolodexFavoritesMode() {
+        if (!holodexUseFavorites) {
+          if (!holodexAuthState.logged_in || holodexAuthState.expired) {
+            openHolodexLoginModal();
+            return;
+          }
+          holodexUseFavorites = true;
+        } else {
+          holodexUseFavorites = false;
+        }
+
+        updateHolodexAuthBar();
+        await refreshHolodexStreams();
       }
 
       function openHolodexLoginModal() {
@@ -3878,6 +3902,7 @@
           if (data.success) {
             showNotification('Holodex 登录已保存', 'success');
             jwtInput.value = '';
+            holodexUseFavorites = true;
             closeHolodexLoginModal();
             await loadHolodexAuthStatus();
             await refreshHolodexStreams();
@@ -3899,6 +3924,7 @@
           const data = await response.json();
           if (data.success) {
             showNotification('已退出 Holodex 登录', 'success');
+            holodexUseFavorites = false;
             document.getElementById('holodex-jwt-input').value = '';
             closeHolodexLoginModal();
             await loadHolodexAuthStatus();
