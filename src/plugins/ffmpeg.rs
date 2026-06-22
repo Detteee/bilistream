@@ -462,6 +462,7 @@ const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
 const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 9;
 const NETWORK_HISTORY_LIMIT: usize = 60;
 const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
+const NETWORK_HISTORY_SAMPLE_MS: u64 = 1000;
 const CACHE_BYTE_SAMPLE_INTERVAL_MS: u64 = 1000;
 const CACHE_RATE_WINDOW_MS: u64 = 5_000;
 const OPTIONAL_F32_NONE_BITS: u32 = u32::MAX;
@@ -491,6 +492,7 @@ struct FfmpegStatsDisplay {
     push: Option<FfmpegStatsSample>,
     cache_history: Vec<f32>,
     push_history: Vec<f32>,
+    last_history_sample_ms: u64,
     rendered_lines: usize,
     enabled: bool,
 }
@@ -525,15 +527,12 @@ impl FfmpegStatsDisplay {
                     merged.fps = sample.fps;
                 }
                 if sample.bitrate_kbps.is_some() {
-                    push_history_sample(&mut self.cache_history, sample.bitrate_kbps.unwrap());
                     merged.bitrate = sample.bitrate;
                     merged.bitrate_kbps = sample.bitrate_kbps;
                 }
                 self.cache = Some(merged);
             }
             FfmpegStatsRole::Push => {
-                let rate = sample.bitrate_kbps.unwrap_or(0.0);
-                push_history_sample(&mut self.push_history, rate);
                 self.push = Some(sample);
             }
         }
@@ -549,7 +548,6 @@ impl FfmpegStatsDisplay {
             sample.bitrate = None;
             sample.bitrate_kbps = None;
         }
-        push_history_sample(&mut self.cache_history, bitrate_kbps.max(0.0));
         self.cache = Some(sample);
         self.render();
     }
@@ -558,6 +556,7 @@ impl FfmpegStatsDisplay {
         if !self.enabled {
             return;
         }
+        self.sample_history();
 
         let scale_kbps = self
             .cache_history
@@ -607,6 +606,30 @@ impl FfmpegStatsDisplay {
         eprint!("{}", output);
         let _ = std::io::stderr().flush();
         self.rendered_lines = lines.len();
+    }
+
+    fn sample_history(&mut self) {
+        let now = now_millis();
+        if self.last_history_sample_ms != 0
+            && now.saturating_sub(self.last_history_sample_ms) < NETWORK_HISTORY_SAMPLE_MS
+        {
+            return;
+        }
+        self.last_history_sample_ms = now;
+        push_history_sample(
+            &mut self.cache_history,
+            self.cache
+                .as_ref()
+                .and_then(|s| s.bitrate_kbps)
+                .unwrap_or(0.0),
+        );
+        push_history_sample(
+            &mut self.push_history,
+            self.push
+                .as_ref()
+                .and_then(|s| s.bitrate_kbps)
+                .unwrap_or(0.0),
+        );
     }
 
     fn meter_row(label: &str, sample: Option<&FfmpegStatsSample>, total_bytes: u64) -> String {
@@ -707,6 +730,10 @@ fn mirrored_sparkline(
         output.push(' ');
     }
     for value in &history[start..] {
+        if *value <= 0.0 {
+            output.push(' ');
+            continue;
+        }
         let ratio = if scale_kbps > 0.0 {
             (value / scale_kbps).clamp(0.0, 1.0)
         } else {
