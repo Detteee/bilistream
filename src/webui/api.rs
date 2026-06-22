@@ -1588,9 +1588,9 @@ pub struct HolodexStreamWithArea {
 }
 
 fn filter_holodex_streams(
-    streams: Vec<crate::plugins::youtube::HolodexStream>,
+    streams: Vec<crate::plugins::holodex::HolodexStream>,
     allowed_channel_ids: std::collections::HashSet<String>,
-) -> Vec<crate::plugins::youtube::HolodexStream> {
+) -> Vec<crate::plugins::holodex::HolodexStream> {
     use std::collections::HashSet;
 
     let mut live_channels: HashSet<String> = HashSet::new();
@@ -1634,7 +1634,7 @@ fn filter_holodex_streams(
 }
 
 fn map_holodex_streams_with_area(
-    streams: Vec<crate::plugins::youtube::HolodexStream>,
+    streams: Vec<crate::plugins::holodex::HolodexStream>,
 ) -> Vec<HolodexStreamWithArea> {
     streams
         .into_iter()
@@ -1717,7 +1717,7 @@ async fn ensure_holodex_username(cfg: &mut crate::config::Config, jwt: &str) {
         return;
     };
 
-    let Ok(Some(refresh)) = crate::plugins::youtube::refresh_holodex_jwt(api_key, jwt).await else {
+    let Ok(Some(refresh)) = crate::plugins::holodex::refresh_holodex_jwt(api_key, jwt).await else {
         return;
     };
 
@@ -1728,7 +1728,7 @@ async fn ensure_holodex_username(cfg: &mut crate::config::Config, jwt: &str) {
     }
     if let Some(new_jwt) = refresh.jwt.filter(|token| !token.is_empty()) {
         cfg.holodex_jwt = Some(new_jwt);
-        cfg.holodex_jwt_refreshed_at = Some(crate::plugins::youtube::holodex_unix_now());
+        cfg.holodex_jwt_refreshed_at = Some(crate::plugins::holodex::holodex_unix_now());
         should_save = true;
     }
     if should_save {
@@ -1757,7 +1757,7 @@ async fn apply_holodex_jwt_sync(cfg: &mut crate::config::Config) -> Result<(Stri
         .ok_or_else(|| "Holodex API key not configured".to_string())?
         .clone();
 
-    let sync = crate::plugins::youtube::sync_holodex_jwt_if_needed(
+    let sync = crate::plugins::holodex::sync_holodex_jwt_if_needed(
         &api_key,
         &jwt,
         cfg.holodex_jwt_refreshed_at,
@@ -1837,7 +1837,7 @@ pub async fn api_holodex_auth_status() -> Json<serde_json::Value> {
     let (active_jwt, jwt_refreshed) = match apply_holodex_jwt_sync(&mut cfg).await {
         Ok(result) => result,
         Err(e) => {
-            if crate::plugins::youtube::holodex_jwt_is_expired(&jwt) {
+            if crate::plugins::holodex::holodex_jwt_is_expired(&jwt) {
                 return Json(json!({
                     "success": true,
                     "data": {
@@ -1852,7 +1852,7 @@ pub async fn api_holodex_auth_status() -> Json<serde_json::Value> {
         }
     };
 
-    if crate::plugins::youtube::holodex_jwt_is_expired(&active_jwt) {
+    if crate::plugins::holodex::holodex_jwt_is_expired(&active_jwt) {
         return Json(json!({
             "success": true,
             "data": {
@@ -1923,7 +1923,7 @@ pub async fn api_get_holodex_streams(
         };
 
         let (fav_ids, streams) =
-            match crate::plugins::youtube::get_holodex_favorites_live(&api_key, &active_jwt).await {
+            match crate::plugins::holodex::get_holodex_favorites_live(&api_key, &active_jwt).await {
                 Ok(result) => result,
                 Err(e) => {
                     return Json(json!({
@@ -1995,8 +1995,8 @@ pub async fn api_get_holodex_streams(
         }));
     }
 
-    // Call the new Holodex function from youtube.rs
-    let streams = match crate::plugins::youtube::get_holodex_streams(channel_ids.clone(), true).await {
+    // Call Holodex directly for configured YouTube channels.
+    let streams = match crate::plugins::holodex::get_holodex_streams(channel_ids.clone(), true).await {
         Ok(s) => s,
         Err(e) => {
             return Json(json!({
@@ -2377,7 +2377,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
 
     // Fetch fresh YouTube status using Holodex API directly
     let streams =
-        match crate::plugins::youtube::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
+        match crate::plugins::holodex::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
             .await
         {
             Ok(s) => s,

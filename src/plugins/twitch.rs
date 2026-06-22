@@ -6,48 +6,12 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
-use std::process::{Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
-// Helper function to create a Command with hidden console on Windows
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-#[cfg(target_os = "windows")]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
-
-#[cfg(target_os = "windows")]
-fn configure_no_window(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-}
+use super::utils::{command_output_with_timeout, configure_no_window};
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
-
-fn command_output_with_timeout(
-    command: &mut Command,
-    timeout: Duration,
-) -> Result<Output, Box<dyn Error>> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = command.spawn()?;
-    let started = Instant::now();
-
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
-        }
-
-        if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("streamlink timed out after {} seconds", timeout.as_secs()).into());
-        }
-
-        thread::sleep(Duration::from_millis(200));
-    }
-}
 
 pub struct Twitch {
     pub channel_id: String,
@@ -147,7 +111,6 @@ impl Twitch {
         let quality = quality.unwrap_or("best");
 
         let mut cmd = Command::new("streamlink");
-        #[cfg(target_os = "windows")]
         configure_no_window(&mut cmd);
         // Add HTTP proxy if configured
         if let Some(ref proxy) = self.proxy {
@@ -166,7 +129,7 @@ impl Twitch {
         ))
         .arg(quality);
 
-        let output = match command_output_with_timeout(&mut cmd, STREAMLINK_TIMEOUT) {
+        let output = match command_output_with_timeout(&mut cmd, STREAMLINK_TIMEOUT, "streamlink") {
             Ok(output) => output,
             Err(e) => {
                 if e.downcast_ref::<std::io::Error>()

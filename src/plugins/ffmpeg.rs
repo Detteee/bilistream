@@ -7,18 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-#[cfg(target_os = "windows")]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
-
-#[cfg(target_os = "windows")]
-fn configure_no_window(cmd: &mut Command) {
-    #[allow(unused_imports)]
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-}
+use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
 
 // Stuck-detection thresholds for live HLS restreaming.
 const LOW_SPEED_THRESHOLD: f32 = 0.98;
@@ -122,101 +111,7 @@ impl FfmpegProcess {
 
 // Helper function to get ffmpeg command path
 fn get_ffmpeg_command() -> String {
-    if cfg!(target_os = "windows") {
-        // On Windows, check if ffmpeg.exe exists in the executable directory
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let local_ffmpeg = exe_dir.join("ffmpeg.exe");
-                if local_ffmpeg.exists() {
-                    return local_ffmpeg.to_string_lossy().to_string();
-                }
-            }
-        }
-        "ffmpeg.exe".to_string()
-    } else {
-        "ffmpeg".to_string()
-    }
-}
-
-// Set high priority for ffmpeg process to ensure stable streaming
-fn set_high_priority(pid: u32) {
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, use renice to set nice value to -10 (higher priority)
-        // Nice values range from -20 (highest) to 19 (lowest), default is 0
-        let status = std::process::Command::new("renice")
-            .arg("-n")
-            .arg("-10")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output();
-
-        match status {
-            Ok(output) if output.status.success() => {
-                // tracing::info!("✅ Set ffmpeg process priority to high (nice -10)");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("💡 提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // On Windows, use wmic to set priority to "high priority"
-        // Priority classes: realtime, high, abovenormal, normal, belownormal, low
-        let status = std::process::Command::new("wmic")
-            .arg("process")
-            .arg("where")
-            .arg(format!("ProcessId={}", pid))
-            .arg("CALL")
-            .arg("setpriority")
-            .arg("128") // 128 = High priority
-            .output();
-
-        match status {
-            Ok(output) if output.status.success() => {
-                // tracing::info!("✅ Set ffmpeg process priority to high");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // On macOS, use renice similar to Linux
-        let status = std::process::Command::new("renice")
-            .arg("-n")
-            .arg("-10")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output();
-
-        match status {
-            Ok(output) if output.status.success() => {
-                // tracing::info!("✅ Set ffmpeg process priority to high (nice -10)");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("💡 提示: 使用 sudo 运行以获得更好性能");
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
-            }
-        }
-    }
+    executable_command("ffmpeg.exe", "ffmpeg")
 }
 
 // Check if ffmpeg is running via supervisor
@@ -1201,8 +1096,7 @@ async fn spawn_direct_ffmpeg(
     tracing::info!("⏱️ HLS 缓存已关闭: 直接转播");
 
     let mut cmd = Command::new(&ffmpeg_cmd);
-    #[cfg(target_os = "windows")]
-    configure_no_window(&mut cmd);
+    configure_tokio_no_window(&mut cmd);
 
     if let Some(proxy_url) = proxy {
         cmd.arg("-http_proxy").arg(proxy_url);
@@ -1292,8 +1186,7 @@ async fn spawn_cached_ffmpeg(
     );
 
     let mut cache_cmd = Command::new(&ffmpeg_cmd);
-    #[cfg(target_os = "windows")]
-    configure_no_window(&mut cache_cmd);
+    configure_tokio_no_window(&mut cache_cmd);
 
     if let Some(proxy_url) = proxy.clone() {
         cache_cmd.arg("-http_proxy").arg(proxy_url);
@@ -1389,8 +1282,7 @@ async fn spawn_cached_ffmpeg(
                 }
 
                 let mut reader_cmd = Command::new(reader_ffmpeg_cmd);
-                #[cfg(target_os = "windows")]
-                configure_no_window(&mut reader_cmd);
+                configure_tokio_no_window(&mut reader_cmd);
 
                 reader_cmd
                     .arg("-nostdin")
