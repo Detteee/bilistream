@@ -2478,6 +2478,17 @@
         return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
       }
 
+      function formatFps(value) {
+        if (!Number.isFinite(value) || value < 0) {
+          return '-';
+        }
+        return value >= 100 ? `${Math.round(value)}` : value.toFixed(1);
+      }
+
+      function formatFrameCount(value) {
+        return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : '-';
+      }
+
       function renderBiliNetworkGraph(showCache) {
         const graph = document.getElementById('bili-network-graph');
         if (!graph) {
@@ -2534,7 +2545,10 @@
 
         lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
         lastBiliNetworkQuality = bili.stream_quality || lastBiliNetworkQuality;
-        const hasPush = Number.isFinite(bili.stream_bitrate_kbps) || Number.isFinite(bili.stream_speed);
+        const hasPush = Number.isFinite(bili.stream_bitrate_kbps)
+          || Number.isFinite(bili.stream_speed)
+          || Number.isFinite(bili.stream_fps)
+          || Number.isFinite(bili.stream_frame);
         const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
         if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
           panel.style.display = 'none';
@@ -2552,6 +2566,10 @@
         document.getElementById('bili-network-push-rate').textContent = formatNetworkRate(bili.stream_bitrate_kbps);
         document.getElementById('bili-network-push-speed-ratio').textContent = formatSpeedRatio(bili.stream_speed);
         document.getElementById('bili-network-push-total').textContent = `Total ${formatBytes(bili.stream_total_bytes)}`;
+        const pushFrame = document.getElementById('bili-network-push-frame');
+        if (pushFrame) {
+          pushFrame.textContent = `FPS ${formatFps(bili.stream_fps)} / Frame ${formatFrameCount(bili.stream_frame)}`;
+        }
 
         const cacheMeter = document.getElementById('bili-network-cache-meter');
         cacheMeter.style.display = hasCache ? '' : 'none';

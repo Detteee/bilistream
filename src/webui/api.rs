@@ -301,6 +301,8 @@ async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
     } else {
         None
     };
+    bili.stream_fps = network_stats.push_fps;
+    bili.stream_frame = network_stats.push_frame;
     bili.stream_total_bytes = network_stats.push_total_bytes;
     bili.stream_cache_total_bytes = if hls_cache_active {
         network_stats.cache_total_bytes
@@ -386,6 +388,8 @@ pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
             } else {
                 None
             },
+            stream_fps: network_stats.push_fps,
+            stream_frame: network_stats.push_frame,
             stream_total_bytes: network_stats.push_total_bytes,
             stream_cache_total_bytes: if hls_cache_active {
                 network_stats.cache_total_bytes
@@ -1939,16 +1943,20 @@ pub async fn api_get_holodex_streams(
             }
         };
 
-        let (fav_ids, streams) =
-            match crate::plugins::holodex::get_holodex_favorites_live(&api_key, &active_jwt).await {
-                Ok(result) => result,
-                Err(e) => {
-                    return Json(json!({
-                        "success": false,
-                        "message": format!("Failed to fetch Holodex favorites: {}", e)
-                    }));
-                }
-            };
+        let (fav_ids, streams) = match crate::plugins::holodex::get_holodex_favorites_live(
+            &api_key,
+            &active_jwt,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                return Json(json!({
+                    "success": false,
+                    "message": format!("Failed to fetch Holodex favorites: {}", e)
+                }));
+            }
+        };
 
         let filtered_streams = filter_holodex_streams(streams, fav_ids);
         let streams_with_area = map_holodex_streams_with_area(filtered_streams);
@@ -2013,18 +2021,18 @@ pub async fn api_get_holodex_streams(
     }
 
     // Call Holodex directly for configured YouTube channels.
-    let streams = match crate::plugins::holodex::get_holodex_streams(channel_ids.clone(), true).await {
-        Ok(s) => s,
-        Err(e) => {
-            return Json(json!({
-                "success": false,
-                "message": format!("Failed to fetch from Holodex: {}", e)
-            }));
-        }
-    };
+    let streams =
+        match crate::plugins::holodex::get_holodex_streams(channel_ids.clone(), true).await {
+            Ok(s) => s,
+            Err(e) => {
+                return Json(json!({
+                    "success": false,
+                    "message": format!("Failed to fetch from Holodex: {}", e)
+                }));
+            }
+        };
 
-    let queried_channels: std::collections::HashSet<String> =
-        channel_ids.iter().cloned().collect();
+    let queried_channels: std::collections::HashSet<String> = channel_ids.iter().cloned().collect();
     let filtered_streams = filter_holodex_streams(streams, queried_channels);
     let streams_with_area = map_holodex_streams_with_area(filtered_streams);
 
@@ -2060,11 +2068,7 @@ fn parse_twitch_login_from_link(link: &str) -> Option<String> {
         "http://twitch.tv/",
     ] {
         if let Some(rest) = link.strip_prefix(prefix) {
-            let login = rest
-                .split(&['/', '?', '#'][..])
-                .next()
-                .unwrap_or("")
-                .trim();
+            let login = rest.split(&['/', '?', '#'][..]).next().unwrap_or("").trim();
             if !login.is_empty() {
                 return Some(login.to_string());
             }
@@ -2080,8 +2084,7 @@ fn lookup_twitch_id_from_channels(
     if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
         for channel in channels {
             if let Some(platforms) = channel.get("platforms") {
-                if platforms.get("youtube").and_then(|v| v.as_str()) == Some(youtube_channel_id)
-                {
+                if platforms.get("youtube").and_then(|v| v.as_str()) == Some(youtube_channel_id) {
                     if let Some(twitch_id) = platforms.get("twitch").and_then(|v| v.as_str()) {
                         if !twitch_id.is_empty() {
                             return Some(twitch_id.to_string());

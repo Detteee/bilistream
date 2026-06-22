@@ -256,6 +256,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 stream_cache_speed: None,
                 stream_bitrate_kbps: None,
                 stream_cache_bitrate_kbps: None,
+                stream_fps: None,
+                stream_frame: None,
                 stream_total_bytes: 0,
                 stream_cache_total_bytes: 0,
                 hls_cache_active: false,
