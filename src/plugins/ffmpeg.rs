@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -37,9 +37,16 @@ fn cache_startup_timeout_secs(latency_secs: u64) -> u64 {
 
 #[derive(Debug)]
 enum StuckReason {
-    NoStats { elapsed_secs: u32 },
-    StreamTimeFrozen { elapsed_secs: u32 },
-    LowSpeed { elapsed_secs: u32 },
+    NoStats {
+        elapsed_secs: u32,
+        source: &'static str,
+    },
+    StreamTimeFrozen {
+        elapsed_secs: u32,
+    },
+    LowSpeed {
+        elapsed_secs: u32,
+    },
 }
 
 // Global process supervisor
@@ -57,6 +64,10 @@ lazy_static::lazy_static! {
     static ref FFMPEG_HLS_CACHE_ACTIVE: AtomicBool = AtomicBool::new(false);
     // Track last progress time for timeout detection (stored as Unix timestamp in seconds)
     static ref LAST_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref LAST_PUSH_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref LAST_CACHE_PROGRESS_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_PUSH_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static ref FFMPEG_PUSH_STARTED_AT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track last reported stream time from ffmpeg (stored as seconds, converted from HH:MM:SS.ms)
     static ref LAST_STREAM_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when stream time last changed (Unix timestamp in seconds)
@@ -66,8 +77,6 @@ lazy_static::lazy_static! {
     static ref FFMPEG_STATS_DISPLAY: Arc<StdMutex<FfmpegStatsDisplay>> =
         Arc::new(StdMutex::new(FfmpegStatsDisplay::default()));
 }
-
-use std::sync::atomic::AtomicBool;
 
 // Track if ffmpeg was stopped manually (e.g., via restart button)
 static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
@@ -195,13 +204,27 @@ fn f32_from_atomic_bits(value: &AtomicU32) -> Option<f32> {
     }
 }
 
-// Update last progress time (lock-free write)
-fn update_progress_time() {
-    let now = std::time::SystemTime::now()
+fn unix_time_secs() -> u32 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as u32;
+        .as_secs() as u32
+}
+
+// Update last stats progress time (lock-free write).
+fn update_progress_time(role: Option<FfmpegStatsRole>) {
+    let now = unix_time_secs();
     LAST_PROGRESS_TIME.store(now, Ordering::Relaxed);
+    match role {
+        Some(FfmpegStatsRole::Push) => LAST_PUSH_PROGRESS_TIME.store(now, Ordering::Relaxed),
+        Some(FfmpegStatsRole::Cache) => LAST_CACHE_PROGRESS_TIME.store(now, Ordering::Relaxed),
+        None => {}
+    }
+}
+
+fn mark_push_process_started() {
+    FFMPEG_PUSH_ACTIVE.store(true, Ordering::Relaxed);
+    FFMPEG_PUSH_STARTED_AT.store(unix_time_secs(), Ordering::Relaxed);
 }
 
 // Update stream time tracking (lock-free write)
@@ -213,20 +236,14 @@ fn update_stream_time(stream_time_secs: u32) {
         LAST_STREAM_TIME.store(stream_time_secs, Ordering::Relaxed);
 
         // Update the timestamp when stream time last changed
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+        let now = unix_time_secs();
         LAST_STREAM_TIME_UPDATE.store(now, Ordering::Relaxed);
     }
 }
 
 // Update low-speed tracking: record when speed first drops below threshold, clear when it recovers
 fn update_speed_tracking(speed: f32) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32;
+    let now = unix_time_secs();
     if speed < LOW_SPEED_THRESHOLD {
         // Only set the timestamp if not already tracking a low-speed period
         LOW_SPEED_SINCE
@@ -240,34 +257,55 @@ fn update_speed_tracking(speed: f32) {
 // Check if ffmpeg has made progress recently (within timeout seconds)
 // This checks: 1) stats updates, 2) stream time progression, 3) sustained low speed
 fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
-    let last_progress = LAST_PROGRESS_TIME.load(Ordering::Relaxed);
+    let now = unix_time_secs();
+    let hls_cache_active = FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed);
+    let push_active = FFMPEG_PUSH_ACTIVE.load(Ordering::Relaxed);
+
+    let (last_progress, stats_source) = if hls_cache_active && !push_active {
+        let cache_progress = LAST_CACHE_PROGRESS_TIME.load(Ordering::Relaxed);
+        if cache_progress > 0 {
+            (cache_progress, "HLS 缓存写入")
+        } else {
+            (LAST_PROGRESS_TIME.load(Ordering::Relaxed), "HLS 缓存写入")
+        }
+    } else {
+        let push_progress = LAST_PUSH_PROGRESS_TIME.load(Ordering::Relaxed);
+        if push_progress > 0 {
+            (push_progress, "推流")
+        } else {
+            (FFMPEG_PUSH_STARTED_AT.load(Ordering::Relaxed), "推流")
+        }
+    };
+
     if last_progress == 0 {
         // No progress recorded yet, not stuck
         return None;
     }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32;
 
     // Check if we're getting stats updates
     let stats_elapsed = now.saturating_sub(last_progress);
     if stats_elapsed > timeout_secs as u32 {
         return Some(StuckReason::NoStats {
             elapsed_secs: stats_elapsed,
+            source: stats_source,
         });
     }
 
-    // Check if stream time is progressing (only after initial startup)
-    let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);
-    if last_stream_update > 0 {
-        let stream_time_elapsed = now.saturating_sub(last_stream_update);
+    // In cached HLS mode the delayed reader may report a steady speed/bitrate
+    // while its input playlist advances by segment cadence, so stream timestamp
+    // freezes alone are not a reliable stuck signal. Push no-stats and low-speed
+    // checks still cover actual delayed-push stalls.
+    if !hls_cache_active {
+        // Check if stream time is progressing (only after initial startup)
+        let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);
+        if last_stream_update > 0 {
+            let stream_time_elapsed = now.saturating_sub(last_stream_update);
 
-        if stream_time_elapsed > STREAM_TIME_FROZEN_SECS {
-            return Some(StuckReason::StreamTimeFrozen {
-                elapsed_secs: stream_time_elapsed,
-            });
+            if stream_time_elapsed > STREAM_TIME_FROZEN_SECS {
+                return Some(StuckReason::StreamTimeFrozen {
+                    elapsed_secs: stream_time_elapsed,
+                });
+            }
         }
     }
 
@@ -386,7 +424,11 @@ async fn stop_ffmpeg_internal(manual: bool) {
     FFMPEG_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     FFMPEG_CACHE_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     FFMPEG_HLS_CACHE_ACTIVE.store(false, Ordering::Relaxed);
+    FFMPEG_PUSH_ACTIVE.store(false, Ordering::Relaxed);
+    FFMPEG_PUSH_STARTED_AT.store(0, Ordering::Relaxed);
     LAST_PROGRESS_TIME.store(0, Ordering::Relaxed);
+    LAST_PUSH_PROGRESS_TIME.store(0, Ordering::Relaxed);
+    LAST_CACHE_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
@@ -993,7 +1035,7 @@ fn handle_ffmpeg_stderr_line(
     }
 
     if let Some(mut sample) = extract_ffmpeg_stats(line) {
-        update_progress_time();
+        update_progress_time(stats_role);
         if let Some(role) = stats_role {
             if matches!(role, FfmpegStatsRole::Cache) {
                 sample.bitrate = None;
@@ -1065,7 +1107,11 @@ fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
 
 fn reset_ffmpeg_tracking_state() {
     reset_stats_display();
-    update_progress_time();
+    update_progress_time(None);
+    LAST_PUSH_PROGRESS_TIME.store(0, Ordering::Relaxed);
+    LAST_CACHE_PROGRESS_TIME.store(0, Ordering::Relaxed);
+    FFMPEG_PUSH_ACTIVE.store(false, Ordering::Relaxed);
+    FFMPEG_PUSH_STARTED_AT.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
@@ -1134,6 +1180,7 @@ async fn spawn_direct_ffmpeg(
 
             reset_ffmpeg_tracking_state();
             FFMPEG_HLS_CACHE_ACTIVE.store(false, Ordering::Relaxed);
+            mark_push_process_started();
 
             if let Some(stderr) = child.stderr.take() {
                 spawn_ffmpeg_stderr_monitor(
@@ -1315,6 +1362,7 @@ async fn spawn_cached_ffmpeg(
                         if let Some(pid_value) = reader_pid {
                             set_high_priority(pid_value);
                         }
+                        mark_push_process_started();
                         if let Some(stderr) = reader_child.stderr.take() {
                             spawn_ffmpeg_stderr_monitor(
                                 stderr,
@@ -1422,9 +1470,13 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
 
         if let Some(reason) = check_ffmpeg_stuck(timeout_secs) {
             match reason {
-                StuckReason::NoStats { elapsed_secs } => {
+                StuckReason::NoStats {
+                    elapsed_secs,
+                    source,
+                } => {
                     tracing::error!(
-                        "⚠️ ffmpeg 似乎卡住（{} 秒无 stats 输出），正在终止进程",
+                        "⚠️ ffmpeg 似乎卡住（{} {} 秒无 stats 输出），正在终止进程",
+                        source,
                         elapsed_secs
                     );
                 }
