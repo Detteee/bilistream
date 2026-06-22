@@ -5,10 +5,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use crate::config::load_config;
+use super::state::{
+    get_logs, get_status_cache, update_status_cache, update_status_cache_with, BiliStatus,
+    NetworkStatus, TwStatus, YtStatus,
+};
+use crate::config::{load_config, Config};
 use crate::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     get_bili_live_status, get_ffmpeg_cache_speed, get_ffmpeg_network_stats, get_ffmpeg_speed,
@@ -16,54 +21,21 @@ use crate::plugins::{
 };
 use crate::updater;
 
-// Global log buffer
-static LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
-
-// Global status cache updated by main loop
-static STATUS_CACHE: Mutex<Option<StatusData>> = Mutex::new(None);
-
-pub fn init_log_buffer() {
-    let mut buffer = LOG_BUFFER.lock().unwrap();
-    *buffer = Some(VecDeque::with_capacity(500));
-}
-
-pub fn add_log_line(line: String) {
-    let mut buffer = LOG_BUFFER.lock().unwrap();
-    if let Some(ref mut buf) = *buffer {
-        buf.push_back(line);
-        if buf.len() > 500 {
-            buf.pop_front();
-        }
-    }
-}
-
-pub fn get_logs() -> Vec<String> {
-    let buffer = LOG_BUFFER.lock().unwrap();
-    if let Some(ref buf) = *buffer {
-        buf.iter().cloned().collect()
-    } else {
-        Vec::new()
-    }
-}
-
-pub fn update_status_cache(status: StatusData) {
-    let mut cache = STATUS_CACHE.lock().unwrap();
-    *cache = Some(status);
-}
-
-pub fn get_status_cache() -> Option<StatusData> {
-    let cache = STATUS_CACHE.lock().unwrap();
-    cache.clone()
-}
+static STATUS_REFRESH_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 
 // Update status cache with fresh configuration data (config fields only)
 pub async fn refresh_status_cache_config() {
     if let Ok(cfg) = load_config().await {
-        let mut cached_status = get_status_cache().unwrap_or_default();
+        apply_status_cache_config(&cfg);
+    }
+}
+
+fn apply_status_cache_config(cfg: &Config) {
+    update_status_cache_with(|cached_status| {
         cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
         // Update YouTube status with fresh config (preserve live status)
-        if !cfg.youtube.channel_id.is_empty() {
+        if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
             let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
                 .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
 
@@ -74,6 +46,7 @@ pub async fn refresh_status_cache_config() {
                 yt_status.area_id = cfg.youtube.area_v2;
                 yt_status.area_name = yt_area_name;
                 yt_status.quality = cfg.youtube.quality.clone();
+                yt_status.crop_enabled = cfg.youtube.crop.is_some();
                 yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
                 yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
                 // Keep existing: is_live, title, topic
@@ -93,10 +66,12 @@ pub async fn refresh_status_cache_config() {
                     ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
                 });
             }
+        } else {
+            cached_status.youtube = None;
         }
 
         // Update Twitch status with fresh config (preserve live status)
-        if !cfg.twitch.channel_id.is_empty() {
+        if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
             let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
                 .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
 
@@ -107,6 +82,7 @@ pub async fn refresh_status_cache_config() {
                 tw_status.area_id = cfg.twitch.area_v2;
                 tw_status.area_name = tw_area_name;
                 tw_status.quality = cfg.twitch.quality.clone();
+                tw_status.crop_enabled = cfg.twitch.crop.is_some();
                 tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
                 tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
                 // Keep existing: is_live, title, game
@@ -126,10 +102,10 @@ pub async fn refresh_status_cache_config() {
                     ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
                 });
             }
+        } else {
+            cached_status.twitch = None;
         }
-
-        update_status_cache(cached_status);
-    }
+    });
 }
 
 // Refresh live status in background (like refresh buttons)
@@ -142,6 +118,196 @@ pub async fn refresh_live_status_background() {
     tokio::spawn(async {
         let _ = refresh_twitch_status().await;
     });
+}
+
+pub fn start_status_refresh_worker() {
+    if STATUS_REFRESH_WORKER_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tokio::spawn(async {
+        loop {
+            let interval_secs = match refresh_status_snapshot().await {
+                Ok(interval_secs) => interval_secs.max(5),
+                Err(e) => {
+                    tracing::debug!("WebUI status refresh skipped: {}", e);
+                    15
+                }
+            };
+
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+async fn refresh_status_snapshot() -> Result<u64, String> {
+    let cfg = load_config().await.map_err(|e| e.to_string())?;
+    apply_status_cache_config(&cfg);
+
+    if let Err(e) = refresh_bilibili_status_cache_with_config(&cfg).await {
+        tracing::warn!("WebUI Bilibili status refresh failed: {}", e);
+    }
+
+    if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
+        if let Err(e) = refresh_youtube_status_cache_with_config(&cfg).await {
+            tracing::warn!("WebUI YouTube status refresh failed: {}", e);
+        }
+    } else {
+        update_status_cache_with(|status| status.youtube = None);
+    }
+
+    if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
+        if let Err(e) = refresh_twitch_status_cache_with_config(&cfg).await {
+            tracing::warn!("WebUI Twitch status refresh failed: {}", e);
+        }
+    } else {
+        update_status_cache_with(|status| status.twitch = None);
+    }
+
+    Ok(cfg.interval)
+}
+
+async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> Result<(), String> {
+    let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room)
+        .await
+        .map_err(|e| e.to_string())?;
+    let area_name = crate::plugins::get_area_name(area_id)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", area_id));
+
+    update_status_cache_with(|status| {
+        status.bilibili.is_live = is_live;
+        status.bilibili.title = title;
+        status.bilibili.area_id = area_id;
+        status.bilibili.area_name = area_name;
+        status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
+    });
+
+    Ok(())
+}
+
+async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Result<(), String> {
+    if cfg.youtube.channel_id.is_empty() {
+        return Err("YouTube channel not configured".to_string());
+    }
+
+    let streams =
+        crate::plugins::holodex::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let channel_streams: Vec<_> = streams
+        .iter()
+        .filter(|s| s.channel.id == cfg.youtube.channel_id)
+        .collect();
+
+    let (is_live, topic, title) = if let Some(live_stream) =
+        channel_streams.iter().find(|s| s.status == "live")
+    {
+        (
+            true,
+            live_stream.topic_id.clone(),
+            Some(live_stream.title.clone()),
+        )
+    } else if let Some(upcoming_stream) = channel_streams.iter().find(|s| s.status == "upcoming") {
+        (
+            false,
+            upcoming_stream.topic_id.clone(),
+            Some(upcoming_stream.title.clone()),
+        )
+    } else {
+        (false, None, None)
+    };
+
+    let area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+
+    update_status_cache_with(|status| {
+        status.youtube = Some(YtStatus {
+            is_live,
+            title,
+            topic,
+            channel_name: cfg.youtube.channel_name.clone(),
+            channel_id: cfg.youtube.channel_id.clone(),
+            quality: cfg.youtube.quality.clone(),
+            area_id: cfg.youtube.area_v2,
+            area_name,
+            crop_enabled: cfg.youtube.crop.is_some(),
+            ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+            ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
+        });
+    });
+
+    Ok(())
+}
+
+async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Result<(), String> {
+    if cfg.twitch.channel_id.is_empty() {
+        return Err("Twitch channel not configured".to_string());
+    }
+
+    let (is_live, game, title, _) = crate::plugins::get_twitch_status(&cfg.twitch.channel_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+
+    update_status_cache_with(|status| {
+        status.twitch = Some(TwStatus {
+            is_live,
+            title,
+            game,
+            channel_name: cfg.twitch.channel_name.clone(),
+            channel_id: cfg.twitch.channel_id.clone(),
+            quality: cfg.twitch.quality.clone(),
+            area_id: cfg.twitch.area_v2,
+            area_name,
+            crop_enabled: cfg.twitch.crop.is_some(),
+            ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+            ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
+        });
+    });
+
+    Ok(())
+}
+
+async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
+    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
+    let stream_speed = get_ffmpeg_speed().await;
+    let stream_cache_speed = if hls_cache_active {
+        get_ffmpeg_cache_speed().await
+    } else {
+        None
+    };
+    let network_stats = get_ffmpeg_network_stats().await;
+
+    bili.stream_quality = if bili.is_live {
+        stream_speed.map(|speed| {
+            if speed > 0.97 {
+                "流畅".to_string()
+            } else if speed > 0.94 {
+                "波动".to_string()
+            } else {
+                "卡顿".to_string()
+            }
+        })
+    } else {
+        None
+    };
+    bili.stream_speed = stream_speed;
+    bili.stream_cache_speed = stream_cache_speed;
+    bili.stream_bitrate_kbps = network_stats.push_bitrate_kbps;
+    bili.stream_cache_bitrate_kbps = if hls_cache_active {
+        network_stats.cache_bitrate_kbps
+    } else {
+        None
+    };
+    bili.stream_total_bytes = network_stats.push_total_bytes;
+    bili.stream_cache_total_bytes = if hls_cache_active {
+        network_stats.cache_total_bytes
+    } else {
+        0
+    };
+    bili.hls_cache_active = hls_cache_active;
 }
 
 #[derive(Serialize)]
@@ -157,76 +323,9 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
-#[derive(Serialize, Clone, Default)]
-pub struct StatusData {
-    pub bilibili: BiliStatus,
-    pub youtube: Option<YtStatus>,
-    pub twitch: Option<TwStatus>,
-}
-
-#[derive(Serialize, Clone, Default)]
-pub struct BiliStatus {
-    pub is_live: bool,
-    pub title: String,
-    pub area_id: u64,
-    pub area_name: String,
-    pub stream_quality: Option<String>,
-    pub stream_speed: Option<f32>,
-    pub stream_cache_speed: Option<f32>,
-    pub stream_bitrate_kbps: Option<f32>,
-    pub stream_cache_bitrate_kbps: Option<f32>,
-    pub stream_total_bytes: u64,
-    pub stream_cache_total_bytes: u64,
-    pub hls_cache_active: bool,
-    pub enable_danmaku_command: bool,
-}
-
-#[derive(Serialize, Clone, Default)]
-pub struct NetworkStatus {
-    pub stream_speed: Option<f32>,
-    pub stream_cache_speed: Option<f32>,
-    pub stream_bitrate_kbps: Option<f32>,
-    pub stream_cache_bitrate_kbps: Option<f32>,
-    pub stream_total_bytes: u64,
-    pub stream_cache_total_bytes: u64,
-    pub hls_cache_active: bool,
-}
-
-#[derive(Serialize, Clone)]
-pub struct YtStatus {
-    pub is_live: bool,
-    pub title: Option<String>,
-    pub topic: Option<String>,
-    pub channel_name: String,
-    pub channel_id: String,
-    pub quality: String,
-    pub area_id: u64,
-    pub area_name: String,
-    pub crop_enabled: bool,
-    pub ffmpeg_cache_enabled: bool,
-    pub ffmpeg_cache_latency_secs: u64,
-}
-
-#[derive(Serialize, Clone)]
-pub struct TwStatus {
-    pub is_live: bool,
-    pub title: Option<String>,
-    pub game: Option<String>,
-    pub channel_name: String,
-    pub channel_id: String,
-    pub quality: String,
-    pub area_id: u64,
-    pub area_name: String,
-    pub crop_enabled: bool,
-    pub ffmpeg_cache_enabled: bool,
-    pub ffmpeg_cache_latency_secs: u64,
-}
-
 pub async fn get_status() -> impl IntoResponse {
-    // Always fetch fresh Bilibili status for accurate real-time updates
-    let cfg = match load_config().await {
-        Ok(cfg) => cfg,
-        Err(e) => {
+    if get_status_cache().is_none() {
+        if let Err(e) = load_config().await {
             // Only log error if it's not a "file not found" error (expected on first run)
             let is_not_found = e.to_string().contains("No such file");
             if !is_not_found {
@@ -250,94 +349,12 @@ pub async fn get_status() -> impl IntoResponse {
             )
                 .into_response();
         }
-    };
 
-    // Fetch fresh Bilibili status
-    let (bili_is_live, bili_title, bili_area_id) =
-        match get_bili_live_status(cfg.bililive.room).await {
-            Ok(status) => status,
-            Err(e) => {
-                tracing::error!("Failed to get Bilibili status: {}", e);
-                return (
-                    StatusCode::OK,
-                    Json(ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        message: Some(format!("获取B站状态失败: {}", e)),
-                    }),
-                )
-                    .into_response();
-            }
-        };
+        refresh_status_cache_config().await;
+    }
 
-    let bili_area_name = crate::plugins::get_area_name(bili_area_id)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", bili_area_id));
-
-    // Get ffmpeg speed and calculate stream quality
-    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
-    let stream_speed = get_ffmpeg_speed().await;
-    let stream_cache_speed = if hls_cache_active {
-        get_ffmpeg_cache_speed().await
-    } else {
-        None
-    };
-    let network_stats = get_ffmpeg_network_stats().await;
-    let stream_quality = if bili_is_live {
-        stream_speed.map(|speed| {
-            if speed > 0.97 {
-                "流畅".to_string()
-            } else if speed > 0.94 {
-                "波动".to_string()
-            } else {
-                "卡顿".to_string()
-            }
-        })
-    } else {
-        None
-    };
-
-    // Get YouTube/Twitch status from cache (updated by main loop)
-    // This avoids expensive yt-dlp/streamlink calls on every refresh
-    // Note: Individual platform refresh buttons can trigger fresh fetches if needed
-    let cached_status = get_status_cache();
-    let youtube_status = if cfg.youtube.enable_monitor {
-        cached_status.as_ref().and_then(|c| c.youtube.clone())
-    } else {
-        None
-    };
-    let twitch_status = if cfg.twitch.enable_monitor {
-        cached_status.as_ref().and_then(|c| c.twitch.clone())
-    } else {
-        None
-    };
-
-    let status = StatusData {
-        bilibili: BiliStatus {
-            is_live: bili_is_live,
-            title: bili_title,
-            area_id: bili_area_id,
-            area_name: bili_area_name,
-            stream_quality,
-            stream_speed,
-            stream_cache_speed,
-            stream_bitrate_kbps: network_stats.push_bitrate_kbps,
-            stream_cache_bitrate_kbps: if hls_cache_active {
-                network_stats.cache_bitrate_kbps
-            } else {
-                None
-            },
-            stream_total_bytes: network_stats.push_total_bytes,
-            stream_cache_total_bytes: if hls_cache_active {
-                network_stats.cache_total_bytes
-            } else {
-                0
-            },
-            hls_cache_active,
-            enable_danmaku_command: cfg.bililive.enable_danmaku_command,
-        },
-        youtube: youtube_status,
-        twitch: twitch_status,
-    };
+    let mut status = get_status_cache().unwrap_or_default();
+    apply_realtime_stream_metrics(&mut status.bilibili).await;
 
     (
         StatusCode::OK,
@@ -2375,99 +2392,18 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         });
     }
 
-    // Fetch fresh YouTube status using Holodex API directly
-    let streams =
-        match crate::plugins::holodex::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to get YouTube status: {}", e)),
-                });
-            }
-        };
-
-    // Find the stream for this channel, prioritizing live streams over upcoming ones
-    let (yt_is_live, yt_area, yt_title) = {
-        let channel_streams: Vec<_> = streams
-            .iter()
-            .filter(|s| s.channel.id == cfg.youtube.channel_id)
-            .collect();
-
-        if channel_streams.is_empty() {
-            // No streams found for this channel
-            (false, None, None)
-        } else {
-            // First try to find a live stream
-            if let Some(live_stream) = channel_streams.iter().find(|s| s.status == "live") {
-                let topic = live_stream.topic_id.clone();
-                let title = Some(live_stream.title.clone());
-                (true, topic, title)
-            } else {
-                // No live stream, check for upcoming streams
-                if let Some(upcoming_stream) =
-                    channel_streams.iter().find(|s| s.status == "upcoming")
-                {
-                    let topic = upcoming_stream.topic_id.clone();
-                    let title = Some(upcoming_stream.title.clone());
-                    (false, topic, title)
-                } else {
-                    // No live or upcoming streams
-                    (false, None, None)
-                }
-            }
-        }
-    };
-
-    // Get current cache and update only YouTube part
-    let mut current_cache = get_status_cache().unwrap_or_else(|| {
-        // Create default cache if none exists
-        StatusData {
-            bilibili: BiliStatus {
-                is_live: false,
-                title: String::new(),
-                area_id: 0,
-                area_name: String::new(),
-                stream_quality: None,
-                stream_speed: None,
-                stream_cache_speed: None,
-                stream_bitrate_kbps: None,
-                stream_cache_bitrate_kbps: None,
-                stream_total_bytes: 0,
-                stream_cache_total_bytes: 0,
-                hls_cache_active: false,
-                enable_danmaku_command: cfg.bililive.enable_danmaku_command,
-            },
-            youtube: None,
-            twitch: None,
-        }
-    });
-
-    current_cache.youtube = Some(YtStatus {
-        is_live: yt_is_live,
-        title: yt_title,
-        topic: yt_area,
-        channel_name: cfg.youtube.channel_name.clone(),
-        channel_id: cfg.youtube.channel_id.clone(),
-        quality: cfg.youtube.quality.clone(),
-        area_id: cfg.youtube.area_v2,
-        area_name: crate::plugins::get_area_name(cfg.youtube.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2)),
-        crop_enabled: cfg.youtube.crop.is_some(),
-        ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
-        ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
-    });
-
-    update_status_cache(current_cache);
-
-    Json(ApiResponse {
-        success: true,
-        data: Some(()),
-        message: Some("YouTube status refreshed".to_string()),
-    })
+    match refresh_youtube_status_cache_with_config(&cfg).await {
+        Ok(()) => Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("YouTube status refreshed".to_string()),
+        }),
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to get YouTube status: {}", e)),
+        }),
+    }
 }
 
 // Refresh Twitch status (fetch fresh data and update cache)
@@ -2491,65 +2427,18 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         });
     }
 
-    // Fetch fresh Twitch status using get_twitch_status
-    let (tw_is_live, tw_area, tw_title, _) =
-        match crate::plugins::get_twitch_status(&cfg.twitch.channel_id).await {
-            Ok(status) => status,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to get Twitch status: {}", e)),
-                });
-            }
-        };
-
-    // Get current cache and update only Twitch part
-    let mut current_cache = get_status_cache().unwrap_or_else(|| {
-        // Create default cache if none exists
-        StatusData {
-            bilibili: BiliStatus {
-                is_live: false,
-                title: String::new(),
-                area_id: 0,
-                area_name: String::new(),
-                stream_quality: None,
-                stream_speed: None,
-                stream_cache_speed: None,
-                stream_bitrate_kbps: None,
-                stream_cache_bitrate_kbps: None,
-                stream_total_bytes: 0,
-                stream_cache_total_bytes: 0,
-                hls_cache_active: false,
-                enable_danmaku_command: cfg.bililive.enable_danmaku_command,
-            },
-            youtube: None,
-            twitch: None,
-        }
-    });
-
-    current_cache.twitch = Some(TwStatus {
-        is_live: tw_is_live,
-        title: tw_title,
-        game: tw_area,
-        channel_name: cfg.twitch.channel_name.clone(),
-        channel_id: cfg.twitch.channel_id.clone(),
-        quality: cfg.twitch.quality.clone(),
-        area_id: cfg.twitch.area_v2,
-        area_name: crate::plugins::get_area_name(cfg.twitch.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2)),
-        crop_enabled: cfg.twitch.crop.is_some(),
-        ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
-        ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
-    });
-
-    update_status_cache(current_cache);
-
-    Json(ApiResponse {
-        success: true,
-        data: Some(()),
-        message: Some("Twitch status refreshed".to_string()),
-    })
+    match refresh_twitch_status_cache_with_config(&cfg).await {
+        Ok(()) => Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("Twitch status refreshed".to_string()),
+        }),
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to get Twitch status: {}", e)),
+        }),
+    }
 }
 
 // Data structures for area and channel management
