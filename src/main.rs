@@ -3009,9 +3009,27 @@ fn init_logger() {
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
         .with_target(true)
         .with_span_events(fmt::format::FmtSpan::NONE)
-        .with_writer(std::io::stdout)
+        .with_writer(|| LogWriter)
         .with_max_level(tracing::Level::INFO)
         .init();
+}
+
+struct LogWriter;
+
+impl std::io::Write for LogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        write_log_bytes(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut std::io::stdout())
+    }
+}
+
+fn write_log_bytes(buf: &[u8]) -> std::io::Result<()> {
+    bilistream::plugins::clear_ffmpeg_stats_display();
+    std::io::Write::write_all(&mut std::io::stdout(), buf)
 }
 
 fn init_logger_with_capture() {
@@ -3024,8 +3042,7 @@ fn init_logger_with_capture() {
     impl std::io::Write for LogCapture {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             if let Ok(s) = std::str::from_utf8(buf) {
-                // Also write to stdout
-                print!("{}", s);
+                write_log_bytes(buf)?;
                 // Capture for web UI (strip ANSI codes)
                 // First strip ANSI codes from the entire string
                 let clean_str = strip_ansi_codes(s);

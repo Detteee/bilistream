@@ -499,14 +499,19 @@ struct FfmpegStatsDisplay {
 
 impl FfmpegStatsDisplay {
     fn reset(&mut self) {
-        if self.rendered_lines > 0 && self.enabled {
-            eprint!("\x1b[?25l\x1b[{}F\x1b[J\x1b[?25h", self.rendered_lines);
-            let _ = std::io::stderr().flush();
-        }
+        self.clear_rendered();
         *self = Self {
             enabled: std::io::stderr().is_terminal(),
             ..Self::default()
         };
+    }
+
+    fn clear_rendered(&mut self) {
+        if self.rendered_lines > 0 && self.enabled {
+            eprint!("\x1b[?25l\x1b[{}F\x1b[J\x1b[?25h", self.rendered_lines);
+            let _ = std::io::stderr().flush();
+        }
+        self.rendered_lines = 0;
     }
 
     fn update(&mut self, role: FfmpegStatsRole, sample: FfmpegStatsSample) {
@@ -779,6 +784,12 @@ fn truncate_cell(value: &str, width: usize) -> String {
 fn reset_stats_display() {
     if let Ok(mut display) = FFMPEG_STATS_DISPLAY.lock() {
         display.reset();
+    }
+}
+
+pub fn clear_ffmpeg_stats_display() {
+    if let Ok(mut display) = FFMPEG_STATS_DISPLAY.lock() {
+        display.clear_rendered();
     }
 }
 
