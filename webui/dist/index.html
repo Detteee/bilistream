@@ -1195,6 +1195,19 @@
       margin-right: 0;
     }
 
+    .holodex-favorites-mode {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .holodex-favorites-mode .toggle-switch {
+      margin-right: 0;
+    }
+
     /* Toggle Switch Styles */
     .toggle-switch {
       position: relative;
@@ -2185,7 +2198,7 @@
             <div id="holodex-toolbar" class="holodex-toolbar">
               <div id="holodex-auth-bar" class="holodex-auth-bar">
                 <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn"
-                  onclick="toggleHolodexFavoritesMode()" title="切换 Holodex 收藏夹 / channels.json">
+                  onclick="openHolodexLoginModal()" title="使用 Holodex 收藏夹">
                   <span class="holodex-heart-icon" aria-hidden="true" style="display: none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                       <path fill="currentColor"
@@ -2195,6 +2208,12 @@
                   </span>
                   <span id="holodex-favorites-label">🔗 使用Holodex收藏夹</span>
                 </button>
+                <label class="holodex-favorites-mode" title="开启: 使用 Holodex JWT 收藏夹；关闭: 使用 channels.json">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="holodex-use-favorites-toggle" onchange="toggleHolodexFavoritesMode()">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
                 <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期" style="display: none;">
                   <span class="toggle-switch">
                     <input type="checkbox" id="holodex-skip-jwt-verify" onchange="toggleHolodexSkipJwtVerify()">
@@ -3729,6 +3748,7 @@
 
       let holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
       let holodexUseFavorites = false;
+      let holodexUseFavoritesInitialized = false;
 
       function updateHolodexAuthBar() {
         const authBar = document.getElementById('holodex-auth-bar');
@@ -3736,6 +3756,8 @@
         const favoritesLabel = document.getElementById('holodex-favorites-label');
         const favoritesBtn = document.getElementById('holodex-favorites-btn');
         const heartIcon = document.querySelector('#holodex-favorites-btn .holodex-heart-icon');
+        const favoritesMode = document.querySelector('.holodex-favorites-mode');
+        const favoritesToggle = document.getElementById('holodex-use-favorites-toggle');
         const jwtSkip = document.querySelector('.holodex-jwt-skip');
         const skipToggle = document.getElementById('holodex-skip-jwt-verify');
         const logoutBtn = document.getElementById('holodex-logout-btn');
@@ -3743,33 +3765,35 @@
         if (skipToggle) {
           skipToggle.checked = !!holodexAuthState.skip_jwt_verify;
         }
+        if (favoritesToggle) {
+          favoritesToggle.checked = !!holodexUseFavorites;
+        }
 
         if (authBar) authBar.style.display = 'inline-flex';
         if (loginBtn) loginBtn.style.display = 'none';
 
-        if (holodexUseFavorites && holodexAuthState.logged_in && !holodexAuthState.expired) {
+        if (holodexAuthState.logged_in && !holodexAuthState.expired) {
           if (heartIcon) heartIcon.style.display = 'inline-flex';
-          if (jwtSkip) jwtSkip.style.display = 'inline-flex';
+          if (favoritesMode) favoritesMode.style.display = 'inline-flex';
+          if (jwtSkip) jwtSkip.style.display = 'none';
           if (favoritesLabel) {
             favoritesLabel.textContent = holodexAuthState.username
               ? `${holodexAuthState.username}的收藏`
               : '收藏夹';
           }
-          if (favoritesBtn) favoritesBtn.title = '点击切换为 channels.json 频道列表';
-        } else if (holodexAuthState.expired && holodexUseFavorites) {
+          if (favoritesBtn) favoritesBtn.title = '管理 Holodex 登录';
+        } else if (holodexAuthState.expired) {
           if (heartIcon) heartIcon.style.display = 'none';
+          if (favoritesMode) favoritesMode.style.display = 'none';
           if (jwtSkip) jwtSkip.style.display = 'none';
           if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
           if (favoritesBtn) favoritesBtn.title = 'Holodex 登录已过期';
         } else {
           if (heartIcon) heartIcon.style.display = 'none';
+          if (favoritesMode) favoritesMode.style.display = 'none';
           if (jwtSkip) jwtSkip.style.display = 'none';
-          if (favoritesLabel) favoritesLabel.textContent = '📺 channels.json';
-          if (favoritesBtn) {
-            favoritesBtn.title = holodexAuthState.logged_in
-              ? '点击切换为 Holodex 收藏夹'
-              : '点击启用 Holodex 收藏夹（需登录）';
-          }
+          if (favoritesLabel) favoritesLabel.textContent = '🔗 使用Holodex收藏夹';
+          if (favoritesBtn) favoritesBtn.title = '登录后使用 Holodex 收藏夹';
         }
 
         if (logoutBtn) {
@@ -3778,16 +3802,15 @@
       }
 
       async function toggleHolodexFavoritesMode() {
-        if (!holodexUseFavorites) {
-          if (!holodexAuthState.logged_in || holodexAuthState.expired) {
-            openHolodexLoginModal();
-            return;
-          }
-          holodexUseFavorites = true;
-        } else {
-          holodexUseFavorites = false;
+        const toggle = document.getElementById('holodex-use-favorites-toggle');
+        if (!holodexAuthState.logged_in || holodexAuthState.expired) {
+          if (toggle) toggle.checked = false;
+          openHolodexLoginModal();
+          return;
         }
 
+        holodexUseFavorites = toggle ? toggle.checked : !holodexUseFavorites;
+        holodexUseFavoritesInitialized = true;
         updateHolodexAuthBar();
         await refreshHolodexStreams();
       }
@@ -3867,6 +3890,8 @@
           const data = await response.json();
           if (!data.success) {
             holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+            holodexUseFavorites = false;
+            holodexUseFavoritesInitialized = false;
             updateHolodexLoginButton();
             updateHolodexModalHint();
             return;
@@ -3878,8 +3903,19 @@
             expired: !!info.expired,
             skip_jwt_verify: !!info.skip_jwt_verify
           };
+          if (holodexAuthState.logged_in && !holodexAuthState.expired) {
+            if (!holodexUseFavoritesInitialized) {
+              holodexUseFavorites = true;
+              holodexUseFavoritesInitialized = true;
+            }
+          } else {
+            holodexUseFavorites = false;
+            holodexUseFavoritesInitialized = false;
+          }
         } catch (error) {
           holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+          holodexUseFavorites = false;
+          holodexUseFavoritesInitialized = false;
         }
         updateHolodexLoginButton();
         updateHolodexModalHint();
@@ -3903,6 +3939,7 @@
             showNotification('Holodex 登录已保存', 'success');
             jwtInput.value = '';
             holodexUseFavorites = true;
+            holodexUseFavoritesInitialized = true;
             closeHolodexLoginModal();
             await loadHolodexAuthStatus();
             await refreshHolodexStreams();
@@ -3925,6 +3962,7 @@
           if (data.success) {
             showNotification('已退出 Holodex 登录', 'success');
             holodexUseFavorites = false;
+            holodexUseFavoritesInitialized = false;
             document.getElementById('holodex-jwt-input').value = '';
             closeHolodexLoginModal();
             await loadHolodexAuthStatus();
