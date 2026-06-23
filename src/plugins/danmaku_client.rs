@@ -750,6 +750,7 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COVER_AUDIT_STATUS_CHANGED"
+            | "VOICE_REPORT_LIKE"
             | "FLOW_REWARD_CARD"
             | "COMMON_NOTICE_DANMAKU"
             | "LIVE_ANI_RES_UPDATE"
