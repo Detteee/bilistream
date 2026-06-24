@@ -3437,9 +3437,11 @@
             areasResponse.json()
           ]);
 
-          // Populate area select
+          // Populate the removed legacy channel-management area select if present.
           const areaSelect = document.getElementById('area-select');
-          areaSelect.innerHTML = '<option value="">不修改分区</option>';
+          if (areaSelect) {
+            areaSelect.innerHTML = '<option value="">不修改分区</option>';
+          }
 
           // Handle both array and object responses
           let areasList = [];
@@ -3457,13 +3459,15 @@
               return 0;
             });
 
-            // Populate channel management area select
-            sortedAreas.forEach(area => {
-              const option = document.createElement('option');
-              option.value = area.id;
-              option.textContent = `${area.name} (${area.id})`;
-              areaSelect.appendChild(option);
-            });
+            if (areaSelect) {
+              // Populate channel management area select
+              sortedAreas.forEach(area => {
+                const option = document.createElement('option');
+                option.value = area.id;
+                option.textContent = `${area.name} (${area.id})`;
+                areaSelect.appendChild(option);
+              });
+            }
 
             console.log('Successfully populated', areasList.length, 'areas');
           } else {
@@ -3471,8 +3475,10 @@
             showNotification('未找到分区数据', 'error');
           }
 
-          // Update channel list
-          updateChannelList();
+          // Update the removed legacy channel list if the controls still exist.
+          if (document.getElementById('platform-select') && document.getElementById('channel-select')) {
+            updateChannelList();
+          }
         } catch (error) {
           console.error('Failed to load channel data:', error);
           showNotification('加载频道数据失败: ' + error.message, 'error');
@@ -3485,8 +3491,11 @@
       }
 
       function updateChannelList() {
-        const platform = document.getElementById('platform-select').value;
+        const platformSelect = document.getElementById('platform-select');
         const channelSelect = document.getElementById('channel-select');
+        if (!platformSelect || !channelSelect) return;
+
+        const platform = platformSelect.value;
 
         channelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
 
@@ -3511,8 +3520,11 @@
       }
 
       function updateQualityOptions() {
-        const platform = document.getElementById('platform-select').value;
+        const platformSelect = document.getElementById('platform-select');
         const qualitySelect = document.getElementById('quality-select');
+        if (!platformSelect || !qualitySelect) return;
+
+        const platform = platformSelect.value;
 
         // Store current value
         const currentValue = qualitySelect.value;
