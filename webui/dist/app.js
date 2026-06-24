@@ -15,6 +15,7 @@
       const biliNetworkHistory = { cache: [], push: [] };
       const biliNetworkHistoryLimit = 48;
       let faceAuthUrl = null;
+      let holodexCurrentSource = 'channels';
 
       // Global config data for access across functions
       window.configData = {
@@ -220,6 +221,17 @@
 
           const streams = data.data || [];
           const isFavorites = data.source === 'favorites';
+          holodexCurrentSource = data.source || (isFavorites ? 'favorites' : 'channels');
+
+          if (isFavorites) {
+            try {
+              await refreshHolodexChannelsData();
+            } catch (error) {
+              console.error('Failed to load channels.json for Holodex add controls:', error);
+              holodexCurrentSource = 'channels';
+              showNotification('加载 channels.json 失败，无法显示添加按钮', 'error');
+            }
+          }
 
           // Separate live and scheduled streams
           const liveStreams = streams.filter(s => s.status === 'live');
@@ -448,14 +460,71 @@
           </a>`;
       }
 
+      async function refreshHolodexChannelsData() {
+        const response = await fetch('/api/manage/channels');
+        const result = await response.json();
+        if (!response.ok || !result.success || !result.data) {
+          throw new Error(result.message || `HTTP ${response.status}`);
+        }
+        channelsData = result.data;
+        return channelsData;
+      }
+
+      function normalizeHolodexChannelValue(value) {
+        return String(value || '').trim().toLowerCase();
+      }
+
+      function holodexStreamHasConfiguredChannel(stream) {
+        if (!channelsData || !Array.isArray(channelsData.channels)) return false;
+
+        const streamName = normalizeHolodexChannelValue(stream.channel_name);
+        const youtubeId = normalizeHolodexChannelValue(stream.channel_id);
+        const twitchId = normalizeHolodexChannelValue(parseTwitchLoginFromLink(stream.external_link));
+
+        return channelsData.channels.some(channel => {
+          const platforms = channel.platforms || {};
+          return (streamName && normalizeHolodexChannelValue(channel.name) === streamName)
+            || (youtubeId && normalizeHolodexChannelValue(platforms.youtube) === youtubeId)
+            || (twitchId && normalizeHolodexChannelValue(platforms.twitch) === twitchId);
+        });
+      }
+
+      function buildHolodexAddChannelControls(stream) {
+        if (holodexCurrentSource !== 'favorites' || !stream.channel_name || holodexStreamHasConfiguredChannel(stream)) {
+          return '';
+        }
+
+        const youtubeId = stream.channel_id || '';
+        const twitchId = parseTwitchLoginFromLink(stream.external_link);
+        if (!youtubeId && !twitchId) return '';
+
+        const channelName = escapeHolodexHtml(stream.channel_name);
+        const youtubeAttr = escapeHolodexHtml(youtubeId);
+        const twitchAttr = escapeHolodexHtml(twitchId);
+
+        return `<span class="holodex-channel-add" data-channel-name="${channelName}" data-youtube-id="${youtubeAttr}" data-twitch-id="${twitchAttr}">
+            <button type="button" class="holodex-channel-add-btn holodex-add-channel-start" title="添加到 channels.json" aria-label="添加到 channels.json">➕</button>
+            <span class="holodex-channel-add-actions" aria-label="确认添加频道">
+              <button type="button" class="holodex-channel-add-btn holodex-add-channel-confirm" title="确认添加">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+              </button>
+              <button type="button" class="holodex-channel-add-btn holodex-add-channel-reject" title="取消">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+              </button>
+            </span>
+          </span>`;
+      }
+
       function buildHolodexChannelBlock(stream) {
         if (!stream.channel_name) return '';
         const channelName = escapeHolodexHtml(stream.channel_name);
         const holodexUrl = getHolodexChannelUrl(stream.channel_id);
-        if (holodexUrl) {
-          return `<a class="holodex-stream-channel" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer">${channelName}</a>`;
-        }
-        return `<p class="holodex-stream-channel">${channelName}</p>`;
+        const addControls = buildHolodexAddChannelControls(stream);
+        const channelLink = holodexUrl
+          ? `<a class="holodex-stream-channel" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer">${channelName}</a>`
+          : `<p class="holodex-stream-channel">${channelName}</p>`;
+
+        return `<div class="holodex-stream-channel-row">${channelLink}${addControls}</div>`;
       }
 
       function parseTwitchLoginFromLink(link) {
@@ -1935,6 +2004,103 @@
         document.getElementById('channel-form-title').textContent = '添加频道';
         document.getElementById('channel-submit-btn').textContent = '添加频道';
         document.getElementById('channel-submit-btn').onclick = addChannel;
+      }
+
+      function readHolodexAddChannelData(control) {
+        return {
+          name: control.dataset.channelName || '',
+          youtubeId: control.dataset.youtubeId || '',
+          twitchId: control.dataset.twitchId || ''
+        };
+      }
+
+      function buildHolodexAddChannelPayload(channelData) {
+        const platforms = {};
+        if (channelData.youtubeId) platforms.youtube = channelData.youtubeId;
+        if (channelData.twitchId) platforms.twitch = channelData.twitchId;
+
+        return {
+          name: channelData.name,
+          aliases: [],
+          platforms,
+          riot_puuid: null
+        };
+      }
+
+      function addHolodexChannelToCache(payload) {
+        if (!channelsData || !Array.isArray(channelsData.channels)) {
+          channelsData = { channels: [] };
+        }
+
+        const exists = channelsData.channels.some(channel => {
+          const platforms = channel.platforms || {};
+          return normalizeHolodexChannelValue(channel.name) === normalizeHolodexChannelValue(payload.name)
+            || (payload.platforms.youtube && normalizeHolodexChannelValue(platforms.youtube) === normalizeHolodexChannelValue(payload.platforms.youtube))
+            || (payload.platforms.twitch && normalizeHolodexChannelValue(platforms.twitch) === normalizeHolodexChannelValue(payload.platforms.twitch));
+        });
+
+        if (!exists) {
+          channelsData.channels.push(payload);
+        }
+      }
+
+      function markHolodexChannelAdded(channelData) {
+        document.querySelectorAll('.holodex-channel-add').forEach(control => {
+          const data = readHolodexAddChannelData(control);
+          const sameChannel = normalizeHolodexChannelValue(data.name) === normalizeHolodexChannelValue(channelData.name)
+            || (channelData.youtubeId && normalizeHolodexChannelValue(data.youtubeId) === normalizeHolodexChannelValue(channelData.youtubeId))
+            || (channelData.twitchId && normalizeHolodexChannelValue(data.twitchId) === normalizeHolodexChannelValue(channelData.twitchId));
+
+          if (sameChannel) {
+            control.classList.add('holodex-channel-add-added');
+            control.innerHTML = '<span class="holodex-channel-added-icon" title="已添加到 channels.json"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>';
+          }
+        });
+      }
+
+      function setHolodexAddChannelConfirmVisible(control, visible) {
+        control.classList.toggle('holodex-channel-add-active', visible);
+      }
+
+      async function confirmHolodexAddChannel(button) {
+        const control = button.closest('.holodex-channel-add');
+        if (!control) return;
+
+        const channelData = readHolodexAddChannelData(control);
+        const payload = buildHolodexAddChannelPayload(channelData);
+        if (!payload.name || Object.keys(payload.platforms).length === 0) {
+          showNotification('频道信息不完整，无法添加', 'error');
+          return;
+        }
+
+        control.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
+
+        try {
+          const response = await fetch('/api/manage/channels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const result = await response.json();
+          const alreadyExists = /already exists/i.test(result.message || '');
+
+          if (response.ok && (result.success || alreadyExists)) {
+            addHolodexChannelToCache(payload);
+            markHolodexChannelAdded(channelData);
+            showNotification(alreadyExists ? 'channels.json 已有该频道' : '已添加到 channels.json', 'success');
+
+            const channelsContent = document.getElementById('channels-content');
+            if (channelsContent && channelsContent.style.display !== 'none') {
+              loadChannels();
+            }
+          } else {
+            showNotification('添加失败: ' + (result.message || `HTTP ${response.status}`), 'error');
+            control.querySelectorAll('button').forEach(btn => { btn.disabled = false; });
+          }
+        } catch (error) {
+          showNotification('添加失败: ' + error.message, 'error');
+          control.querySelectorAll('button').forEach(btn => { btn.disabled = false; });
+        }
       }
 
       function editArea(areaId) {
@@ -4410,6 +4576,26 @@
 
       // Add event listener for switch buttons using data attributes
       document.addEventListener('click', function (e) {
+        const addStart = e.target.closest('.holodex-add-channel-start');
+        if (addStart) {
+          const control = addStart.closest('.holodex-channel-add');
+          if (control) setHolodexAddChannelConfirmVisible(control, true);
+          return;
+        }
+
+        const addReject = e.target.closest('.holodex-add-channel-reject');
+        if (addReject) {
+          const control = addReject.closest('.holodex-channel-add');
+          if (control) setHolodexAddChannelConfirmVisible(control, false);
+          return;
+        }
+
+        const addConfirm = e.target.closest('.holodex-add-channel-confirm');
+        if (addConfirm) {
+          confirmHolodexAddChannel(addConfirm);
+          return;
+        }
+
         if (e.target.closest('.switch-button')) {
           const button = e.target.closest('.switch-button');
           const channelId = button.dataset.channelId;
