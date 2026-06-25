@@ -36,7 +36,6 @@ pub fn configure_no_window(_cmd: &mut Command) {}
 
 #[cfg(target_os = "windows")]
 pub fn configure_tokio_no_window(cmd: &mut tokio::process::Command) {
-    use std::os::windows::process::CommandExt;
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
 }
 
