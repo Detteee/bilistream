@@ -557,7 +557,7 @@
           ? (placeholderKind === 'twitch' && twitchChannelId
             ? `https://static-cdn.jtvnw.net/previews-ttv/live_user_${twitchChannelId}-640x360.jpg`
             : '')
-          : `https://i.ytimg.com/vi/${stream.id}/mqdefault.jpg`);
+          : `https://i.ytimg.com/vi/${stream.id}/sddefault.jpg`);
 
         const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
 

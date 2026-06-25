@@ -82,4 +82,3 @@ winapi = { version = "0.3", features = [
   "winnt",
   "winbase",
 ] }
-sevenz-rust = "0.6"

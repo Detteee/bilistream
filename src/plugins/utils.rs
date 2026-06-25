@@ -82,7 +82,7 @@ pub fn stream_thumbnail_url(
     match platform {
         "YT" => stream_id
             .filter(|id| !id.is_empty())
-            .map(|id| format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg")),
+            .map(|id| format!("https://i.ytimg.com/vi/{id}/sddefault.jpg")),
         "TW" if !channel_id.is_empty() => Some(format!(
             "https://static-cdn.jtvnw.net/previews-ttv/live_user_{channel_id}-640x360.jpg"
         )),

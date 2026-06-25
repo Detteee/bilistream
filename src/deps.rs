@@ -195,25 +195,6 @@ async fn ensure_windows_dependencies() -> Result<(), Box<dyn Error>> {
         println!("✅ ffmpeg.exe 已存在");
     }
 
-    // Check and download ImageMagick (convert.exe)
-    let convert_path = exe_dir.join("convert.exe");
-    if !convert_path.exists() {
-        println!("📥 下载 ImageMagick...");
-        match download_imagemagick(&exe_dir).await {
-            Ok(_) => println!("✅ ImageMagick 下载完成"),
-            Err(e) => {
-                println!("⚠️  ImageMagick 下载失败: {}", e);
-                println!("   封面功能可能无法使用");
-                println!("   手动下载: https://github.com/ImageMagick/ImageMagick/releases/latest");
-                println!("   下载 ImageMagick-*-portable-Q16-HDRI-x64.7z");
-                println!("   解压后将 magick.exe 重命名为 convert.exe 并放到程序目录");
-            }
-        }
-        println!();
-    } else {
-        println!("✅ ImageMagick 已存在");
-    }
-
     // Check for streamlink (needs to be installed separately)
     if !check_streamlink_installed() {
         println!("⚠️  streamlink 未安装");
@@ -436,107 +417,6 @@ async fn download_and_extract_ffmpeg(dest_dir: &PathBuf) -> Result<(), Box<dyn s
 
     // Clean up temp file
     let _ = fs::remove_file(&temp_zip);
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-async fn download_imagemagick(dest_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
-
-    // Fetch the latest release from GitHub API
-    let client = reqwest::Client::builder()
-        .user_agent("bilistream")
-        .timeout(std::time::Duration::from_secs(300))
-        .build()?;
-
-    println!("🔍 获取最新版本信息...");
-    let releases_url = "https://api.github.com/repos/ImageMagick/ImageMagick/releases/latest";
-    let release_response = client.get(releases_url).send().await?;
-
-    if !release_response.status().is_success() {
-        return Err(format!("获取版本信息失败: HTTP {}", release_response.status()).into());
-    }
-
-    let release_data: serde_json::Value = release_response.json().await?;
-    let assets = release_data["assets"].as_array().ok_or("无法解析 assets")?;
-
-    // Find the portable-Q16-HDRI-x64.7z file
-    let asset = assets
-        .iter()
-        .find(|a| {
-            if let Some(name) = a["name"].as_str() {
-                name.contains("portable")
-                    && name.contains("Q16-HDRI")
-                    && name.contains("x64")
-                    && name.ends_with(".7z")
-            } else {
-                false
-            }
-        })
-        .ok_or("未找到合适的 ImageMagick 版本")?;
-
-    let download_url = asset["browser_download_url"]
-        .as_str()
-        .ok_or("无法获取下载链接")?;
-
-    let file_name = asset["name"].as_str().unwrap_or("ImageMagick.7z");
-
-    println!("📥 下载 {}...", file_name);
-
-    let response = client.get(download_url).send().await?;
-
-    if !response.status().is_success() {
-        return Err(format!("下载失败: HTTP {}", response.status()).into());
-    }
-
-    let bytes = response.bytes().await?;
-
-    println!("📦 下载完成，大小: {} MB", bytes.len() / 1024 / 1024);
-
-    if bytes.len() < 100000 {
-        return Err("下载的文件太小，可能是错误页面".into());
-    }
-
-    // Save to temporary file
-    let temp_7z = dest_dir.join("imagemagick_temp.7z");
-    let mut file = fs::File::create(&temp_7z)?;
-    file.write_all(&bytes)?;
-    drop(file);
-
-    println!("📂 正在解压 magick.exe...");
-
-    // Extract only magick.exe from the 7z archive
-    let temp_extract_dir = dest_dir.join("imagemagick_temp");
-    fs::create_dir_all(&temp_extract_dir)?;
-
-    sevenz_rust::decompress_file(&temp_7z, &temp_extract_dir)
-        .map_err(|e| format!("解压失败: {}", e))?;
-
-    // Find magick.exe in the extracted files
-    let mut magick_found = false;
-    for entry in fs::read_dir(&temp_extract_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.file_name().and_then(|n| n.to_str()) == Some("magick.exe") {
-            let convert_path = dest_dir.join("convert.exe");
-            fs::rename(&path, &convert_path)?;
-            println!("✅ 已将 magick.exe 重命名为 convert.exe");
-            magick_found = true;
-            break;
-        }
-    }
-
-    // Clean up temp files
-    let _ = fs::remove_file(&temp_7z);
-    let _ = fs::remove_dir_all(&temp_extract_dir);
-
-    if !magick_found {
-        return Err("未找到 magick.exe".into());
-    }
-
-    // Clean up temp file
-    let _ = fs::remove_file(&temp_7z);
 
     Ok(())
 }

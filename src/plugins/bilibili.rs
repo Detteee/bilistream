@@ -18,7 +18,6 @@ use std::error::Error;
 use std::fs;
 use std::io::Seek;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -1300,40 +1299,7 @@ pub async fn renew() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Helper function to create a Command with hidden console on Windows
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-#[cfg(target_os = "windows")]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
-
-#[cfg(target_os = "windows")]
-fn configure_no_window(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-}
-
-// Helper function to get ImageMagick command
-fn get_imagemagick_command() -> String {
-    if cfg!(target_os = "windows") {
-        // On Windows, use convert.exe (renamed from ImageMagick installer)
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let local_convert = exe_dir.join("convert.exe");
-                if local_convert.exists() {
-                    return local_convert.to_string_lossy().to_string();
-                }
-            }
-        }
-        // Try system-installed convert
-        "convert".to_string()
-    } else {
-        // On Linux/macOS, use convert
-        "convert".to_string()
-    }
-}
-
-/// Downloads and processes thumbnail for live streams using platform CDN URLs.
+/// Downloads thumbnail for live streams using platform CDN URLs.
 pub async fn get_thumbnail(
     platform: &str,
     channel_id: &str,
@@ -1381,45 +1347,9 @@ pub async fn get_thumbnail(
         }
     };
 
-    if let Err(e) = fs::write("thumbnail.jpg", &bytes) {
+    if let Err(e) = fs::write("cover.jpg", &bytes) {
         warn!("保存封面失败: {}", e);
         return Ok(String::new());
-    }
-
-    // Process the downloaded thumbnail with ImageMagick
-    let convert_cmd = get_imagemagick_command();
-
-    let mut convert_command = Command::new(&convert_cmd);
-    #[cfg(target_os = "windows")]
-    configure_no_window(&mut convert_command);
-    let convert_output = match convert_command
-        .arg("thumbnail.jpg")
-        .arg("-resize")
-        .arg("640x480")
-        .arg("-quality")
-        .arg("95")
-        .arg("cover.jpg")
-        .output()
-    {
-        Ok(output) => output,
-        Err(e) => {
-            warn!("ImageMagick 失败: {}", e);
-            return Ok(String::new()); // Return empty string to skip thumbnail
-        }
-    };
-
-    if !convert_output.status.success() {
-        warn!(
-            "ImageMagick 转换封面失败: {}",
-            String::from_utf8_lossy(&convert_output.stderr)
-        );
-        return Ok(String::new()); // Return empty string to skip thumbnail
-    }
-
-    // Remove the original thumbnail
-    if let Err(e) = std::fs::remove_file("thumbnail.jpg") {
-        warn!("删除原始封面文件失败: {}", e);
-        // Continue anyway, not critical
     }
 
     Ok("cover.jpg".to_string())
