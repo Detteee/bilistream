@@ -55,6 +55,61 @@ enum CollisionResult {
     Proceed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamPlatform {
+    Youtube,
+    Twitch,
+}
+
+impl StreamPlatform {
+    fn code(self) -> &'static str {
+        match self {
+            StreamPlatform::Youtube => "YT",
+            StreamPlatform::Twitch => "TW",
+        }
+    }
+
+    fn is_youtube(self) -> bool {
+        self == StreamPlatform::Youtube
+    }
+}
+
+#[derive(Clone)]
+struct StreamCandidate {
+    platform: StreamPlatform,
+    is_live: bool,
+    topic: Option<String>,
+    title: Option<String>,
+    m3u8_url: Option<String>,
+    stream_id: Option<String>,
+    channel_name: String,
+    channel_id: String,
+    area_v2: u64,
+}
+
+impl StreamCandidate {
+    fn stream_title(&self) -> Option<String> {
+        match (&self.topic, &self.title) {
+            (Some(topic), Some(title)) => Some(format!("{} {}", topic, title)),
+            _ => self.title.clone(),
+        }
+    }
+
+    fn cfg_title(&self) -> String {
+        format!("【转播】{}", self.channel_name)
+    }
+}
+
+fn select_stream(yt: &StreamCandidate, tw: &StreamCandidate) -> Option<StreamCandidate> {
+    if yt.is_live {
+        Some(yt.clone())
+    } else if tw.is_live {
+        Some(tw.clone())
+    } else {
+        None
+    }
+}
+
 fn load_streaming_banned_keywords() -> Vec<String> {
     let areas_path = match std::env::current_exe() {
         Ok(path) => path.with_file_name("areas.json"),
@@ -303,24 +358,51 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             },
         });
 
-        // Modified main code section
+        let mut yt_stream = StreamCandidate {
+            platform: StreamPlatform::Youtube,
+            is_live: yt_is_live,
+            topic: yt_area,
+            title: yt_title,
+            m3u8_url: yt_m3u8_url,
+            stream_id: yt_video_id,
+            channel_name: cfg.youtube.channel_name.clone(),
+            channel_id: cfg.youtube.channel_id.clone(),
+            area_v2: cfg.youtube.area_v2,
+        };
+        let mut tw_stream = StreamCandidate {
+            platform: StreamPlatform::Twitch,
+            is_live: tw_is_live,
+            topic: tw_area,
+            title: tw_title,
+            m3u8_url: tw_m3u8_url,
+            stream_id: tw_stream_id,
+            channel_name: cfg.twitch.channel_name.clone(),
+            channel_id: cfg.twitch.channel_id.clone(),
+            area_v2: cfg.twitch.area_v2,
+        };
+
+        yt_is_live = yt_stream.is_live;
+        tw_is_live = tw_stream.is_live;
+
         if cfg.enable_anti_collision {
             match handle_collisions(&mut yt_is_live, &mut tw_is_live).await? {
                 CollisionResult::Continue => continue 'outer,
                 CollisionResult::Proceed => (),
             }
+            yt_stream.is_live = yt_is_live;
+            tw_stream.is_live = tw_is_live;
         }
 
-        if yt_is_live || tw_is_live {
+        if yt_stream.is_live || tw_stream.is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
 
             // Check if YouTube channel should be skipped due to warning
-            if yt_is_live && should_skip_due_to_warning(&cfg.youtube.channel_name) {
+            if yt_stream.is_live && should_skip_due_to_warning(&yt_stream.channel_name) {
                 // Only log warning message once
-                if should_skip_due_to_warned(&cfg.youtube.channel_name) {
+                if should_skip_due_to_warned(&yt_stream.channel_name) {
                     tracing::warn!(
                         "⚠️ 跳过频道 {} - 之前因警告/切断停止",
-                        &cfg.youtube.channel_name
+                        yt_stream.channel_name
                     );
                     if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                         enable_danmaku_commands(true);
@@ -328,7 +410,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             &cfg,
                             &format!(
                                 "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                                &cfg.youtube.channel_name
+                                yt_stream.channel_name
                             ),
                         )
                         .await
@@ -338,16 +420,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     }
                 }
                 // Set YouTube as not live so Twitch can be used if available
-                yt_is_live = false;
+                yt_stream.is_live = false;
             }
 
             // Check if Twitch channel should be skipped due to warning
-            if tw_is_live && should_skip_due_to_warning(&cfg.twitch.channel_name) {
+            if tw_stream.is_live && should_skip_due_to_warning(&tw_stream.channel_name) {
                 // Only log warning message once
-                if should_skip_due_to_warned(&cfg.twitch.channel_name) {
+                if should_skip_due_to_warned(&tw_stream.channel_name) {
                     tracing::warn!(
                         "⚠️ 跳过频道 {} - 之前因警告/切断停止",
-                        &cfg.twitch.channel_name
+                        tw_stream.channel_name
                     );
                     if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                         enable_danmaku_commands(true);
@@ -355,7 +437,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             &cfg,
                             &format!(
                                 "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                                &cfg.twitch.channel_name
+                                tw_stream.channel_name
                             ),
                         )
                         .await
@@ -365,7 +447,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     }
                 }
                 // Set Twitch as not live
-                tw_is_live = false;
+                tw_stream.is_live = false;
             }
 
             // Check if config was updated by danmaku command after warning filtering
@@ -376,18 +458,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // If both channels are skipped after filtering, continue to next iteration
-            if !yt_is_live && !tw_is_live {
+            if !yt_stream.is_live && !tw_stream.is_live {
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
 
             let streaming_banned_keywords = load_streaming_banned_keywords();
 
-            if yt_is_live {
-                let yt_stream_title = match (&yt_area, &yt_title) {
-                    (Some(area), Some(title)) => Some(format!("{} {}", area, title)),
-                    _ => yt_title.clone(),
-                };
+            if yt_stream.is_live {
+                let yt_stream_title = yt_stream.stream_title();
                 let default_title = "无标题".to_string();
                 let title_str = yt_stream_title.as_ref().unwrap_or(&default_title);
 
@@ -426,15 +505,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         }
                     }
 
-                    yt_is_live = false;
+                    yt_stream.is_live = false;
                 }
             }
 
-            if tw_is_live {
-                let tw_stream_title = match (&tw_area, &tw_title) {
-                    (Some(area), Some(title)) => Some(format!("{} {}", area, title)),
-                    _ => tw_title.clone(),
-                };
+            if tw_stream.is_live {
+                let tw_stream_title = tw_stream.stream_title();
                 let default_title = "无标题".to_string();
                 let title_str = tw_stream_title.as_ref().unwrap_or(&default_title);
 
@@ -473,11 +549,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         }
                     }
 
-                    tw_is_live = false;
+                    tw_stream.is_live = false;
                 }
             }
 
-            if !yt_is_live && !tw_is_live {
+            if !yt_stream.is_live && !tw_stream.is_live {
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
@@ -485,31 +561,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Clear warning stop since we have a valid channel to stream
             clear_warning_stop();
 
-            let (platform, channel_name, channel_id, mut area_v2, cfg_title) = if yt_is_live {
-                (
-                    "YT",
-                    cfg.youtube.channel_name.clone(),
-                    cfg.youtube.channel_id.clone(),
-                    cfg.youtube.area_v2,
-                    format!("【转播】{}", cfg.youtube.channel_name),
-                )
-            } else {
-                (
-                    "TW",
-                    cfg.twitch.channel_name.clone(),
-                    cfg.twitch.channel_id.clone(),
-                    cfg.twitch.area_v2,
-                    format!("【转播】{}", cfg.twitch.channel_name),
-                )
-            };
-            let yot_area = if yt_is_live { yt_area } else { tw_area };
-            let mut title = if yt_is_live { yt_title } else { tw_title };
-            let mut m3u8_url = if yt_is_live { yt_m3u8_url } else { tw_m3u8_url };
-            let current_video_id = if yt_is_live {
-                yt_video_id
-            } else {
-                tw_stream_id
-            };
+            let mut selected_stream = select_stream(&yt_stream, &tw_stream).unwrap();
+
+            let platform = selected_stream.platform.code();
+            let channel_name = selected_stream.channel_name.clone();
+            let channel_id = selected_stream.channel_id.clone();
+            let mut area_v2 = selected_stream.area_v2;
+            let cfg_title = selected_stream.cfg_title();
+            let current_video_id = selected_stream.stream_id.clone();
+            let mut title = selected_stream.title.clone();
+            let mut m3u8_url = selected_stream.m3u8_url.clone();
 
             // Check if video/stream ID has changed
             let video_id_changed = {
@@ -527,8 +588,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 title.clone().unwrap_or_else(|| "无标题".to_string())
             );
 
-            if yot_area.is_some() && title.is_some() {
-                title = Some(format!("{} {}", yot_area.unwrap(), title.unwrap()));
+            if selected_stream.topic.is_some() && title.is_some() {
+                title = selected_stream.stream_title();
+                selected_stream.title = title.clone();
             }
             let default_title = "无标题".to_string();
             let title_str = title.as_ref().unwrap_or(&default_title);
@@ -777,7 +839,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let (current_is_live, _, _, new_m3u8_url, _, _) = if yt_is_live {
+                let (current_is_live, _, _, new_m3u8_url, _, _) = if selected_stream
+                    .platform
+                    .is_youtube()
+                {
                     if let Some(ref client) = yt_live {
                         client
                             .get_status()
@@ -869,7 +934,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Check current live status to determine what actually happened
-            let (current_is_live, _, _, _, _, _) = if yt_is_live {
+            let (current_is_live, _, _, _, _, _) = if selected_stream.platform.is_youtube() {
                 if let Some(ref client) = yt_live {
                     client
                         .get_status()
@@ -985,13 +1050,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             // 计划直播(预告窗)
             if scheduled_start.is_some() {
-                if yt_title.is_some() {
+                if let Some(yt_title) = yt_stream.title.as_ref() {
                     let current_message = box_message(
-                        &cfg.youtube.channel_name,
+                        &yt_stream.channel_name,
                         cfg.youtube.enable_monitor,
                         Some(scheduled_start.unwrap()),
-                        Some(&yt_title.unwrap()),
-                        &cfg.twitch.channel_name,
+                        Some(yt_title),
+                        &tw_stream.channel_name,
                         cfg.twitch.enable_monitor,
                     );
 
@@ -1020,11 +1085,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     }
                 } else {
                     let current_message = box_message(
-                        &cfg.youtube.channel_name,
+                        &yt_stream.channel_name,
                         cfg.youtube.enable_monitor,
                         None,
                         None,
-                        &cfg.twitch.channel_name,
+                        &tw_stream.channel_name,
                         cfg.twitch.enable_monitor,
                     );
 
@@ -1054,11 +1119,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             } else {
                 if !NO_LIVE.load(Ordering::SeqCst) {
                     let current_message = box_message(
-                        &cfg.youtube.channel_name,
+                        &yt_stream.channel_name,
                         cfg.youtube.enable_monitor,
                         None,
                         None, // No title when not streaming
-                        &cfg.twitch.channel_name,
+                        &tw_stream.channel_name,
                         cfg.twitch.enable_monitor,
                     );
                     print!("{}", current_message);
