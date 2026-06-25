@@ -610,23 +610,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     let platform_clone = platform.to_string();
                     let channel_id_clone = channel_id.clone();
 
+                    let stream_id_clone = current_video_id.clone();
                     tokio::spawn(async move {
-                        let (proxy, cookies_file, cookies_from_browser) = if platform_clone == "YT"
-                        {
-                            (
-                                cfg_clone.youtube.proxy.clone(),
-                                cfg_clone.youtube.cookies_file.clone(),
-                                cfg_clone.youtube.cookies_from_browser.clone(),
-                            )
+                        let proxy = if platform_clone == "YT" {
+                            cfg_clone.youtube.proxy.clone()
                         } else {
-                            (cfg_clone.twitch.proxy.clone(), None, None)
+                            cfg_clone.twitch.proxy.clone()
                         };
                         match get_thumbnail(
                             &platform_clone,
                             &channel_id_clone,
+                            stream_id_clone.as_deref(),
                             proxy,
-                            &cookies_file,
-                            &cookies_from_browser,
                         )
                         .await
                         {
@@ -689,23 +684,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     let platform_clone = platform.to_string();
                     let channel_id_clone = channel_id.clone();
 
+                    let stream_id_clone = current_video_id.clone();
                     tokio::spawn(async move {
-                        let (proxy, cookies_file, cookies_from_browser) = if platform_clone == "YT"
-                        {
-                            (
-                                cfg_clone.youtube.proxy.clone(),
-                                cfg_clone.youtube.cookies_file.clone(),
-                                cfg_clone.youtube.cookies_from_browser.clone(),
-                            )
+                        let proxy = if platform_clone == "YT" {
+                            cfg_clone.youtube.proxy.clone()
                         } else {
-                            (cfg_clone.twitch.proxy.clone(), None, None)
+                            cfg_clone.twitch.proxy.clone()
                         };
                         match get_thumbnail(
                             &platform_clone,
                             &channel_id_clone,
+                            stream_id_clone.as_deref(),
                             proxy,
-                            &cookies_file,
-                            &cookies_from_browser,
                         )
                         .await
                         {

@@ -553,7 +553,11 @@
         const platform = isPlaceholder ? (placeholderKind === 'twitch' ? 'twitch' : 'external') : 'youtube';
         const twitchChannelId = isPlaceholder ? parseTwitchLoginFromLink(stream.external_link) : '';
         const watchUrl = stream.external_link || `https://www.youtube.com/watch?v=${stream.id}`;
-        const thumbUrl = stream.thumbnail || (isPlaceholder ? '' : `https://i.ytimg.com/vi/${stream.id}/mqdefault.jpg`);
+        const thumbUrl = stream.thumbnail || (isPlaceholder
+          ? (placeholderKind === 'twitch' && twitchChannelId
+            ? `https://static-cdn.jtvnw.net/previews-ttv/live_user_${twitchChannelId}-640x360.jpg`
+            : '')
+          : `https://i.ytimg.com/vi/${stream.id}/mqdefault.jpg`);
 
         const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
 

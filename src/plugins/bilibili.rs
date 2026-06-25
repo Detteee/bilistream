@@ -1313,24 +1313,6 @@ fn configure_no_window(cmd: &mut Command) {
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
 }
 
-// Helper function to get yt-dlp command path
-fn get_yt_dlp_command() -> String {
-    if cfg!(target_os = "windows") {
-        // On Windows, check if yt-dlp.exe exists in the executable directory
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let local_yt_dlp = exe_dir.join("yt-dlp.exe");
-                if local_yt_dlp.exists() {
-                    return local_yt_dlp.to_string_lossy().to_string();
-                }
-            }
-        }
-        "yt-dlp.exe".to_string()
-    } else {
-        "yt-dlp".to_string()
-    }
-}
-
 // Helper function to get ImageMagick command
 fn get_imagemagick_command() -> String {
     if cfg!(target_os = "windows") {
@@ -1351,62 +1333,57 @@ fn get_imagemagick_command() -> String {
     }
 }
 
-/// Downloads and processes thumbnail for live streams
+/// Downloads and processes thumbnail for live streams using platform CDN URLs.
 pub async fn get_thumbnail(
     platform: &str,
     channel_id: &str,
+    stream_id: Option<&str>,
     proxy: Option<String>,
-    cookies_file: &Option<String>,
-    cookies_from_browser: &Option<String>,
 ) -> Result<String, anyhow::Error> {
-    let mut command = Command::new(get_yt_dlp_command());
-    #[cfg(target_os = "windows")]
-    configure_no_window(&mut command);
+    let Some(thumbnail_url) =
+        super::utils::stream_thumbnail_url(platform, channel_id, stream_id, None)
+    else {
+        warn!(
+            "无法构建缩略图 URL: platform={}, channel_id={}, stream_id={:?}",
+            platform, channel_id, stream_id
+        );
+        return Ok(String::new());
+    };
 
-    if let Some(proxy_url) = proxy {
-        command.arg("--proxy").arg(proxy_url);
+    let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    if let Some(proxy_url) = proxy.filter(|p| !p.is_empty()) {
+        client_builder = client_builder.proxy(reqwest::Proxy::all(proxy_url)?);
     }
+    let client = client_builder.build()?;
 
-    // Add cookies support for YouTube authentication
-    if let Some(browser) = cookies_from_browser {
-        if !browser.is_empty() {
-            command.arg("--cookies-from-browser");
-            command.arg(browser);
-        }
-    } else if let Some(file_path) = cookies_file {
-        if !file_path.is_empty() {
-            command.arg("--cookies");
-            command.arg(file_path);
-        }
-    }
-
-    command
-        .arg("--write-thumbnail")
-        .arg("--skip-download")
-        .arg("--convert-thumbnails")
-        .arg("jpg")
-        .arg(match platform {
-            "YT" => format!("https://www.youtube.com/channel/{}/live", channel_id),
-            "TW" => format!("https://www.twitch.tv/{}", channel_id),
-            _ => return Err(anyhow::anyhow!("Unsupported platform")),
-        })
-        .arg("--output")
-        .arg("thumbnail");
-
-    let output = match command.output() {
-        Ok(output) => output,
+    let response = match client.get(&thumbnail_url).send().await {
+        Ok(response) => response,
         Err(e) => {
-            warn!("yt-dlp 下载封面失败: {}", e);
-            return Ok(String::new()); // Return empty string to skip thumbnail
+            warn!("下载封面失败: {}", e);
+            return Ok(String::new());
         }
     };
 
-    if !output.status.success() {
+    if !response.status().is_success() {
         warn!(
-            "yt-dlp 下载封面失败: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "下载封面失败: HTTP {} from {}",
+            response.status(),
+            thumbnail_url
         );
-        return Ok(String::new()); // Return empty string to skip thumbnail
+        return Ok(String::new());
+    }
+
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!("读取封面失败: {}", e);
+            return Ok(String::new());
+        }
+    };
+
+    if let Err(e) = fs::write("thumbnail.jpg", &bytes) {
+        warn!("保存封面失败: {}", e);
+        return Ok(String::new());
     }
 
     // Process the downloaded thumbnail with ImageMagick
