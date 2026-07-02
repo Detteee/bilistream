@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod cluster;
 pub mod config;
 pub mod deps;
 pub mod plugins;

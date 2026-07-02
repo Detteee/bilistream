@@ -1,8 +1,8 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 
-#[derive(Serialize, Clone, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct StatusData {
     pub bilibili: BiliStatus,
     pub youtube: Option<YtStatus>,
@@ -10,9 +10,10 @@ pub struct StatusData {
     pub priority_channel: Option<PriorityChannelStatus>,
 }
 
-#[derive(Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PriorityChannelStatus {
     pub enabled: bool,
+    #[serde(default)]
     pub auto_restart: bool,
     pub channel_name: String,
     pub is_live: bool,
@@ -21,7 +22,7 @@ pub struct PriorityChannelStatus {
     pub default_area: u64,
 }
 
-#[derive(Serialize, Clone, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct BiliStatus {
     pub is_live: bool,
     /// This node's publisher, independent of the shared Bilibili room state.
@@ -64,7 +65,7 @@ impl BiliStatus {
     }
 }
 
-#[derive(Serialize, Clone, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct NetworkStatus {
     #[serde(default)]
     pub ffmpeg_running: bool,
@@ -83,9 +84,11 @@ pub struct NetworkStatus {
     pub stream_cache_bitrate_history: Vec<f32>,
 }
 
-#[derive(Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct YtStatus {
     pub is_live: bool,
+    #[serde(default)]
+    pub enable_monitor: bool,
     pub title: Option<String>,
     pub topic: Option<String>,
     pub channel_name: String,
@@ -98,9 +101,11 @@ pub struct YtStatus {
     pub ffmpeg_cache_latency_secs: u64,
 }
 
-#[derive(Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TwStatus {
     pub is_live: bool,
+    #[serde(default)]
+    pub enable_monitor: bool,
     pub title: Option<String>,
     pub game: Option<String>,
     pub channel_name: String,
@@ -153,7 +158,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
         update_status_cache_with(|cached_status| {
             cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
-            if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
+            if platform_channel_configured(&cfg.youtube.channel_name, &cfg.youtube.channel_id) {
                 let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
 
@@ -165,6 +170,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     cached_status.youtube = None;
                 }
                 if let Some(ref mut yt_status) = cached_status.youtube {
+                yt_status.enable_monitor = cfg.youtube.enable_monitor;
                     yt_status.channel_name = cfg.youtube.channel_name.clone();
                     yt_status.channel_id = cfg.youtube.channel_id.clone();
                     yt_status.area_id = cfg.youtube.area_v2;
@@ -176,6 +182,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                 } else {
                     cached_status.youtube = Some(YtStatus {
                         is_live: false,
+                        enable_monitor: cfg.youtube.enable_monitor,
                         title: Some("-".to_string()),
                         channel_name: cfg.youtube.channel_name.clone(),
                         channel_id: cfg.youtube.channel_id.clone(),
@@ -192,7 +199,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                 cached_status.youtube = None;
             }
 
-            if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
+            if platform_channel_configured(&cfg.twitch.channel_name, &cfg.twitch.channel_id) {
                 let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
 
@@ -204,6 +211,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     cached_status.twitch = None;
                 }
                 if let Some(ref mut tw_status) = cached_status.twitch {
+                tw_status.enable_monitor = cfg.twitch.enable_monitor;
                     tw_status.channel_name = cfg.twitch.channel_name.clone();
                     tw_status.channel_id = cfg.twitch.channel_id.clone();
                     tw_status.area_id = cfg.twitch.area_v2;
@@ -215,6 +223,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                 } else {
                     cached_status.twitch = Some(TwStatus {
                         is_live: false,
+                        enable_monitor: cfg.twitch.enable_monitor,
                         title: Some("-".to_string()),
                         channel_name: cfg.twitch.channel_name.clone(),
                         channel_id: cfg.twitch.channel_id.clone(),
@@ -260,4 +269,8 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
             }
         });
     });
+}
+
+pub(crate) fn platform_channel_configured(channel_name: &str, channel_id: &str) -> bool {
+    !channel_name.trim().is_empty() || !channel_id.trim().is_empty()
 }

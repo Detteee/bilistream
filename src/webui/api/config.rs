@@ -1,5 +1,19 @@
 use super::*;
 
+pub(crate) async fn sync_monitored_config_after_change(cfg: &Config) -> String {
+    if !cfg.cluster.enabled || !cfg.cluster.sync_monitored_channels {
+        return String::new();
+    }
+
+    match push_monitored_config_to_peers(cfg).await {
+        Ok(count) => format!("；已同步到 {} 个节点", count),
+        Err(e) => {
+            tracing::warn!("Cluster monitored config auto-sync failed: {}", e);
+            format!("；集群同步失败: {}", e)
+        }
+    }
+}
+
 pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     let cfg = load_config()
         .await
@@ -25,6 +39,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "enable_youtube_monitor": cfg.enable_youtube_monitor,
         "enable_twitch_monitor": cfg.enable_twitch_monitor,
+        "cluster": cfg.cluster.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -95,6 +110,7 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
+    cluster: Option<ClusterConfig>,
 }
 
 pub(crate) const EDIT_CONFLICT: &str = "配置已被其他操作修改，请重新加载后再保存";
@@ -216,6 +232,17 @@ pub async fn update_config(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let previous_cfg = cfg.clone();
+    let old_cluster = cfg.cluster.clone();
+    let old_monitored_config_version = monitored_config_version(&cfg);
+    let cluster_changed = payload.cluster.is_some();
+    let danmaku_command_changed = payload.enable_danmaku_command;
+    let requests_monitor_toggle_enable = payload.enable_danmaku_command == Some(true)
+        || payload.youtube_enable_monitor == Some(true)
+        || payload.twitch_enable_monitor == Some(true);
+
+    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
 
     validate_edit_preconditions(
         &config_form_values(&cfg),
@@ -336,9 +363,11 @@ pub async fn update_config(
     }
     if let Some(youtube_enable_monitor) = payload.youtube_enable_monitor {
         cfg.youtube.enable_monitor = youtube_enable_monitor;
+        cfg.enable_youtube_monitor = youtube_enable_monitor;
     }
     if let Some(twitch_enable_monitor) = payload.twitch_enable_monitor {
         cfg.twitch.enable_monitor = twitch_enable_monitor;
+        cfg.enable_twitch_monitor = twitch_enable_monitor;
     }
     if let Some(youtube_cookies_from_browser) = payload.youtube_cookies_from_browser {
         cfg.youtube.cookies_from_browser = if youtube_cookies_from_browser.is_empty() {
@@ -361,11 +390,18 @@ pub async fn update_config(
             Some(youtube_deno_path)
         };
     }
+    if let Some(cluster) = payload.cluster {
+        cfg.cluster = cluster;
+    }
 
     // Save config
     crate::config::save_config(&mut cfg)
         .await
         .map_err(config_save_status)?;
+
+    if let Some(enabled) = danmaku_command_changed {
+        apply_danmaku_command_runtime_state(enabled);
+    }
 
     if holodex_jwt_saved {
         if let Some(jwt) = cfg.holodex_jwt.clone() {
@@ -384,10 +420,38 @@ pub async fn update_config(
     // Apply the exact saved config to the cache without re-reading config.json.
     refresh_status_cache_config_from(&cfg);
 
+    let monitor_toggle_changed = danmaku_command_changed.is_some()
+        || payload.youtube_enable_monitor.is_some()
+        || payload.twitch_enable_monitor.is_some();
+    let toggle_sync_message = if monitor_toggle_changed {
+        schedule_active_monitor_state_sync_after_toggle_change(&cfg)
+    } else {
+        String::new()
+    };
+    let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+        sync_monitored_config_after_change(&cfg).await
+    } else {
+        String::new()
+    };
+    let membership_message = if cluster_changed {
+        match propagate_cluster_membership(&old_cluster, &cfg.cluster).await {
+            Ok(count) => format!("；节点配置已同步到 {} 个节点", count),
+            Err(e) => {
+                tracing::warn!("Cluster membership sync failed: {}", e);
+                format!("；节点配置同步失败: {}", e)
+            }
+        }
+    } else {
+        String::new()
+    };
+
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("配置已更新".to_string()),
+        message: Some(format!(
+            "配置已更新{}{}{}",
+            sync_message, toggle_sync_message, membership_message
+        )),
     })
 }
 
@@ -407,6 +471,12 @@ pub async fn update_priority_channel(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let old_monitored_config_version = monitored_config_version(&cfg);
+    let requests_monitor_toggle_enable =
+        payload.enabled == Some(true) || payload.auto_restart == Some(true);
+    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
 
     validate_edit_preconditions(
         &json!({
@@ -458,9 +528,15 @@ pub async fn update_priority_channel(
         let _ = refresh_priority_channel_status().await;
     });
 
+    let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+        sync_monitored_config_after_change(&cfg).await
+    } else {
+        String::new()
+    };
+
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("优先频道配置已更新".to_string()),
+        message: Some(format!("优先频道配置已更新{}", sync_message)),
     })
 }

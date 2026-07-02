@@ -1,5 +1,16 @@
 use super::*;
 
+pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
+    crate::plugins::enable_danmaku_commands(enabled);
+    if enabled {
+        if !crate::plugins::is_danmaku_running() {
+            crate::plugins::run_danmaku();
+        }
+    } else if crate::plugins::is_danmaku_running() {
+        crate::plugins::stop_danmaku();
+    }
+}
+
 #[derive(Deserialize)]
 pub struct StartStreamRequest {
     platform: Option<String>,
@@ -82,6 +93,168 @@ pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
         data: None,
         message: Some("已停止当前流并重新加载配置".to_string()),
     })
+}
+
+pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
+    let Some(screen_session) = current_screen_session() else {
+        return Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(
+                "未检测到 screen 会话；请在 screen -R bb 中运行 bilistream 后再重启".to_string(),
+            ),
+        });
+    };
+    let restart_command = match restart_command_line() {
+        Ok(command) => command,
+        Err(e) => {
+            tracing::error!("Failed to build server restart command: {}", e);
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("生成重启命令失败: {}", e)),
+            });
+        }
+    };
+
+    if let Err(e) = schedule_screen_restart(&screen_session, &restart_command, std::process::id()) {
+        tracing::error!("Failed to schedule screen restart: {}", e);
+        return Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("发送 screen 重启命令失败: {}", e)),
+        });
+    }
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some(format!("程序将在 screen 会话 {} 中重启", screen_session)),
+    })
+}
+
+pub(crate) fn current_screen_session() -> Option<String> {
+    non_empty_env("BILISTREAM_SCREEN_SESSION")
+        .or_else(|| non_empty_env("STY"))
+        .or_else(find_named_screen_session)
+}
+
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn find_named_screen_session() -> Option<String> {
+    let output = Command::new("screen").arg("-ls").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for preferred in ["bb", "b"] {
+        if let Some(session) = find_screen_session_by_name(&text, preferred) {
+            return Some(session);
+        }
+    }
+    None
+}
+
+pub(crate) fn find_screen_session_by_name(screen_list: &str, name: &str) -> Option<String> {
+    screen_list.lines().find_map(|line| {
+        let session = line.trim().split_whitespace().next()?;
+        let session_name = session.rsplit_once('.').map(|(_, name)| name)?;
+        (session_name == name).then(|| session.to_string())
+    })
+}
+
+pub(crate) fn restart_command_line() -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_word = resolve_restart_executable_word(&cwd, &exe);
+
+    let mut parts = vec![
+        "cd".to_string(),
+        shell_word(&cwd.to_string_lossy()),
+        "&&".to_string(),
+        shell_word(&exe_word),
+    ];
+    parts.extend(std::env::args_os().skip(1).map(|arg| {
+        let arg = arg.to_string_lossy();
+        shell_word(&arg)
+    }));
+
+    Ok(parts.join(" "))
+}
+
+pub(crate) fn resolve_restart_executable_word(
+    cwd: &std::path::Path,
+    current_exe: &std::path::Path,
+) -> String {
+    let local_bin = cwd.join("bilistream");
+    let local_bin_exists = local_bin.exists();
+    let current_exe_display = current_exe.to_string_lossy();
+    let running_deleted_binary = current_exe_display.ends_with(" (deleted)");
+
+    if local_bin_exists {
+        if running_deleted_binary {
+            return "./bilistream".to_string();
+        }
+        if std::fs::canonicalize(&local_bin).ok().as_ref()
+            == std::fs::canonicalize(current_exe).ok().as_ref()
+        {
+            return "./bilistream".to_string();
+        }
+    }
+
+    if running_deleted_binary {
+        return current_exe_display
+            .strip_suffix(" (deleted)")
+            .unwrap_or(&current_exe_display)
+            .to_string();
+    }
+
+    current_exe_display.to_string()
+}
+
+pub(crate) fn shell_word(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(crate) fn schedule_screen_restart(
+    screen_session: &str,
+    restart_command: &str,
+    old_pid: u32,
+) -> Result<(), String> {
+    let script = concat!(
+        "sleep 1; ",
+        "screen -S \"$BILISTREAM_RESTART_SCREEN\" -X stuff \"$(printf '\\003')\"; ",
+        "for i in $(seq 1 60); do ",
+        "kill -0 \"$BILISTREAM_RESTART_OLD_PID\" 2>/dev/null || break; ",
+        "sleep 1; ",
+        "done; ",
+        "if kill -0 \"$BILISTREAM_RESTART_OLD_PID\" 2>/dev/null; then ",
+        "kill -TERM \"$BILISTREAM_RESTART_OLD_PID\" 2>/dev/null; ",
+        "sleep 2; ",
+        "fi; ",
+        "sleep 1; ",
+        "screen -S \"$BILISTREAM_RESTART_SCREEN\" -X stuff \"$(printf '%s\\015' \"$BILISTREAM_RESTART_COMMAND\")\""
+    );
+
+    Command::new("setsid")
+        .arg("sh")
+        .arg("-c")
+        .arg(script)
+        .env("BILISTREAM_RESTART_SCREEN", screen_session)
+        .env("BILISTREAM_RESTART_COMMAND", restart_command)
+        .env("BILISTREAM_RESTART_OLD_PID", old_pid.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -205,6 +378,7 @@ pub async fn update_channel(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let previous_cfg = cfg.clone();
+    let old_monitored_config_version = monitored_config_version(&cfg);
 
     match payload.platform.as_str() {
         "youtube" => {
@@ -295,10 +469,16 @@ pub async fn update_channel(
         });
     }
 
+    let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+        sync_monitored_config_after_change(&cfg).await
+    } else {
+        String::new()
+    };
+
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some(format!("{} 频道已更新", payload.platform)),
+        message: Some(format!("{} 频道已更新{}", payload.platform, sync_message)),
     })
 }
 
@@ -448,6 +628,10 @@ pub async fn toggle_youtube_monitor(
         });
     }
 
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
+
     cfg.youtube.enable_monitor = payload.enabled;
 
     crate::config::save_config(&mut cfg)
@@ -485,6 +669,10 @@ pub async fn toggle_twitch_monitor(
                 if payload.enabled { "启用" } else { "禁用" }
             )),
         });
+    }
+
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
     }
 
     cfg.twitch.enable_monitor = payload.enabled;

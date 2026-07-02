@@ -438,6 +438,7 @@ pub async fn switch_to_holodex_stream(
         }
     };
     let previous_cfg = cfg.clone();
+    let old_monitored_config_version = monitored_config_version(&cfg);
 
     // Get channel info from channels.json
     let channels_path = std::env::current_exe()
@@ -584,6 +585,13 @@ pub async fn switch_to_holodex_stream(
         if twitch_monitor_reload_needed(&previous_cfg, &cfg) {
             set_config_updated();
         }
+        refresh_status_cache_config().await;
+
+        let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+            sync_monitored_config_after_change(&cfg).await
+        } else {
+            String::new()
+        };
 
         let is_live = payload
             .status
@@ -600,6 +608,7 @@ pub async fn switch_to_holodex_stream(
 
         current_cache.twitch = Some(TwStatus {
             is_live,
+            enable_monitor: cfg.twitch.enable_monitor,
             title: Some(stream_title.clone()),
             game: Some(stream_topic),
             channel_name: cfg.twitch.channel_name.clone(),
@@ -618,10 +627,11 @@ pub async fn switch_to_holodex_stream(
             success: true,
             data: Some(()),
             message: Some(format!(
-                "已切换到 Twitch {} (分区: {}) - {}",
+                "已切换到 Twitch {} (分区: {}) - {}{}",
                 cfg.twitch.channel_name,
                 cfg.twitch.area_v2,
-                if is_live { "直播中" } else { "预定直播" }
+                if is_live { "直播中" } else { "预定直播" },
+                sync_message
             )),
         });
     }
@@ -653,6 +663,13 @@ pub async fn switch_to_holodex_stream(
     if youtube_monitor_reload_needed(&previous_cfg, &cfg) {
         set_config_updated();
     }
+    refresh_status_cache_config().await;
+
+    let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+        sync_monitored_config_after_change(&cfg).await
+    } else {
+        String::new()
+    };
 
     // Use stream data from Holodex monitor (passed from frontend)
     let is_live = payload
@@ -672,6 +689,7 @@ pub async fn switch_to_holodex_stream(
 
     current_cache.youtube = Some(YtStatus {
         is_live, // From Holodex monitor data
+        enable_monitor: cfg.youtube.enable_monitor,
         title: Some(stream_title.clone()),
         topic: Some(stream_topic),
         channel_name: cfg.youtube.channel_name.clone(),
@@ -690,10 +708,11 @@ pub async fn switch_to_holodex_stream(
         success: true,
         data: Some(()),
         message: Some(format!(
-            "已切换到 {} (分区: {}) - {}",
+            "已切换到 {} (分区: {}) - {}{}",
             cfg.youtube.channel_name,
             cfg.youtube.area_v2,
-            if is_live { "直播中" } else { "预定直播" }
+            if is_live { "直播中" } else { "预定直播" },
+            sync_message
         )),
     })
 }

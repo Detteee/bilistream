@@ -44,6 +44,7 @@ pub async fn start_webui_on_listener(
     let _twitch_live_worker = crate::plugins::twitch_live::start_twitch_live_worker();
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
+    crate::cluster::start_cluster_worker();
 
     // API router
     let api_router = Router::new()
@@ -55,11 +56,32 @@ pub async fn start_webui_on_listener(
         .route("/status", get(api::get_status))
         .route("/events", get(events::sse_events))
         .route("/network-status", get(api::get_network_status))
+        .route("/cluster/status", get(api::get_cluster_status))
+        .route("/cluster/heartbeat", post(api::cluster_heartbeat))
+        .route("/cluster/drain", post(api::cluster_drain))
+        .route(
+            "/cluster/auto-failover",
+            post(api::cluster_set_auto_failover),
+        )
+        .route("/cluster/failover", post(api::cluster_failover))
+        .route("/cluster/restart-node", post(api::cluster_restart_node))
+        .route("/cluster/export-config", get(api::cluster_export_config))
+        .route(
+            "/cluster/apply-node-mode",
+            post(api::cluster_apply_node_mode),
+        )
+        .route(
+            "/cluster/sync-membership",
+            post(api::cluster_sync_membership),
+        )
+        .route("/cluster/sync-config", post(api::cluster_sync_config))
+        .route("/cluster/push-config", post(api::cluster_push_config))
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/priority-channel", post(api::update_priority_channel))
         .route("/start", post(api::start_stream))
         .route("/stop", post(api::stop_stream))
         .route("/restart", post(api::restart_stream))
+        .route("/server/restart", post(api::restart_server_process))
         .route("/danmaku", post(api::send_danmaku))
         .route("/cover", post(api::update_cover))
         .route("/area", post(api::update_area))

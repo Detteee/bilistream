@@ -68,5 +68,32 @@
     "twitch_channel_id": "kamito_jp",    // Twitch频道ID (自动从channels.json获取)
     "default_area": 235,                   // 优先频道的默认分区ID
     "auto_restart": false                  // 优先频道下播后自动重启主频道监控
+  },
+
+  // ===== 多服务器集群配置 =====
+  "cluster": {
+    "enabled": false,                      // 启用后仅活跃节点会推送 RTMP
+    "node_id": "server-a",                 // 每台服务器唯一 ID
+    "node_name": "Server A",               // WebUI 显示名称
+    "public_api_url": "http://server-a:3150", // 其他节点访问本节点 WebUI API 的地址
+    "priority": 0,                         // 数值越高越优先成为活跃节点
+    "heartbeat_interval_secs": 5,
+    "failover_timeout_secs": 15,
+    "lease_ttl_secs": 20,
+    "sync_monitored_channels": true,        // 同步监控频道/优先频道/channels.json/areas.json
+    "auto_failover": true,                 // 按优先级自动故障转移；false 时仅手动切换
+    "peers": [
+      {
+        "node_id": "server-b",
+        "name": "Server B",
+        "api_url": "http://server-b:3150",
+        "priority": 0
+      }
+    ],
+    "thresholds": {
+      "max_failed_restarts": 3,
+      "max_external_api_failures": 3,
+      "external_api_failure_window_secs": 60
+    }
   }
 }

@@ -166,6 +166,126 @@ pub struct Config {
     pub enable_youtube_monitor: bool,
     #[serde(default = "default_true")]
     pub enable_twitch_monitor: bool,
+    #[serde(default)]
+    pub cluster: ClusterConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusterConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cluster_node_id")]
+    pub node_id: String,
+    #[serde(default = "default_cluster_node_name")]
+    pub node_name: String,
+    #[serde(default)]
+    pub public_api_url: String,
+    #[serde(default)]
+    pub peers: Vec<ClusterPeer>,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default = "default_cluster_heartbeat_interval_secs")]
+    pub heartbeat_interval_secs: u64,
+    #[serde(default = "default_cluster_failover_timeout_secs")]
+    pub failover_timeout_secs: u64,
+    #[serde(default = "default_cluster_lease_ttl_secs")]
+    pub lease_ttl_secs: u64,
+    #[serde(default)]
+    pub sync_monitored_channels: bool,
+    #[serde(default = "default_cluster_auto_failover")]
+    pub auto_failover: bool,
+    #[serde(default)]
+    pub thresholds: ClusterHealthThresholds,
+}
+
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_id: default_cluster_node_id(),
+            node_name: default_cluster_node_name(),
+            public_api_url: String::new(),
+            peers: Vec::new(),
+            priority: 0,
+            heartbeat_interval_secs: default_cluster_heartbeat_interval_secs(),
+            failover_timeout_secs: default_cluster_failover_timeout_secs(),
+            lease_ttl_secs: default_cluster_lease_ttl_secs(),
+            sync_monitored_channels: false,
+            auto_failover: default_cluster_auto_failover(),
+            thresholds: ClusterHealthThresholds::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusterPeer {
+    pub node_id: String,
+    #[serde(default)]
+    pub name: String,
+    pub api_url: String,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusterHealthThresholds {
+    #[serde(default = "default_cluster_max_failed_restarts")]
+    pub max_failed_restarts: u32,
+    #[serde(default = "default_cluster_max_external_api_failures")]
+    pub max_external_api_failures: u32,
+    #[serde(default = "default_cluster_external_api_failure_window_secs")]
+    pub external_api_failure_window_secs: u64,
+}
+
+impl Default for ClusterHealthThresholds {
+    fn default() -> Self {
+        Self {
+            max_failed_restarts: default_cluster_max_failed_restarts(),
+            max_external_api_failures: default_cluster_max_external_api_failures(),
+            external_api_failure_window_secs: default_cluster_external_api_failure_window_secs(),
+        }
+    }
+}
+
+fn default_cluster_node_id() -> String {
+    std::env::var("BILISTREAM_NODE_ID").unwrap_or_else(|_| {
+        std::env::var("HOSTNAME")
+            .ok()
+            .filter(|hostname| !hostname.trim().is_empty())
+            .unwrap_or_else(|| "local".to_string())
+    })
+}
+
+fn default_cluster_node_name() -> String {
+    default_cluster_node_id()
+}
+
+fn default_cluster_heartbeat_interval_secs() -> u64 {
+    5
+}
+
+fn default_cluster_failover_timeout_secs() -> u64 {
+    15
+}
+
+fn default_cluster_lease_ttl_secs() -> u64 {
+    20
+}
+
+fn default_cluster_auto_failover() -> bool {
+    true
+}
+
+fn default_cluster_max_failed_restarts() -> u32 {
+    3
+}
+
+fn default_cluster_max_external_api_failures() -> u32 {
+    3
+}
+
+fn default_cluster_external_api_failure_window_secs() -> u64 {
+    60
 }
 
 /// FFmpeg HLS timeshift cache settings.

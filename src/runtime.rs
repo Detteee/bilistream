@@ -5,6 +5,7 @@ pub use launch::{cli_main, request_shutdown, BackendRuntime};
 
 use crate as bilistream;
 
+use bilistream::cluster::{self, ClusterStreamIdentity};
 use bilistream::config::{load_config, save_config, Config};
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Twitch as TwitchClient;
@@ -84,6 +85,7 @@ enum FfmpegLoopExitReason {
     SourceEnded,
     BiliStopped,
     IntentionalRestart { target_m3u8_available: bool },
+    ClusterHandoff,
 }
 
 fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
@@ -91,7 +93,7 @@ fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
         reason,
         FfmpegLoopExitReason::IntentionalRestart {
             target_m3u8_available: true
-        }
+        } | FfmpegLoopExitReason::ClusterHandoff
     )
 }
 
@@ -238,13 +240,18 @@ async fn source_client_status(client: &Option<SourceClient<'_>>) -> SourceStatus
     }
 }
 
-/// Fetches Bilibili live status, logging failures. Callers decide the fallback.
+/// Fetches Bilibili live status while feeding the cluster external-API health
+/// tracker. Errors are logged; callers decide the fallback.
 async fn fetch_bili_live_status_logged(
     room: i32,
 ) -> Result<(bool, String, u64), Box<dyn std::error::Error>> {
     match get_bili_live_status(room).await {
-        Ok(status) => Ok(status),
+        Ok(status) => {
+            cluster::record_external_api_result(true);
+            Ok(status)
+        }
         Err(e) => {
+            cluster::record_external_api_result(false);
             tracing::error!("获取B站直播状态失败: {}", e);
             Err(e)
         }
@@ -681,6 +688,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
                 Some(bilistream::YtStatus {
                     is_live: yt_is_live,
+                    enable_monitor: cfg.youtube.enable_monitor,
                     title: yt_title.clone(),
                     topic: yt_area.clone(),
                     channel_name: cfg.youtube.channel_name.clone(),
@@ -700,6 +708,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
                 Some(bilistream::TwStatus {
                     is_live: tw_is_live,
+                    enable_monitor: cfg.twitch.enable_monitor,
                     title: tw_title.clone(),
                     game: tw_area.clone(),
                     channel_name: cfg.twitch.channel_name.clone(),
@@ -920,6 +929,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let cfg_title = selected_stream.cfg_title();
             let current_video_id = selected_stream.stream_id.clone();
             let mut title = selected_stream.title.clone();
+            let cluster_stream = ClusterStreamIdentity {
+                platform: platform.to_string(),
+                channel_name: channel_name.clone(),
+                channel_id: channel_id.clone(),
+                stream_id: current_video_id.clone(),
+                title: title.clone(),
+            };
 
             // Check if video/stream ID has changed
             let video_id_changed = {
@@ -940,6 +956,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             if selected_stream.topic.is_some() && title.is_some() {
                 title = selected_stream.stream_title();
                 selected_stream.title = title.clone();
+            }
+            if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())).await {
+                tracing::info!(
+                    "集群备用节点已监测到 {} 正在直播，等待当前活跃节点推流",
+                    channel_name
+                );
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue 'outer;
             }
             let default_title = "无标题".to_string();
             let title_str = title.as_ref().unwrap_or(&default_title);
@@ -1092,6 +1116,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Main ffmpeg monitoring loop - blocks until stream ends
             let ffmpeg_loop_exit_reason = loop {
+                if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())).await {
+                    tracing::warn!("集群租约已转移，停止本节点推流循环");
+                    set_manual_restart();
+                    stop_ffmpeg().await;
+                    break FfmpegLoopExitReason::ClusterHandoff;
+                }
+
                 let proxy = if platform == "YT" {
                     cfg.youtube.proxy.clone()
                 } else {
@@ -1150,12 +1181,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 };
 
                 if let Some(status) = exit_status {
+                    cluster::record_stream_exit(status.success());
                     if status.success() {
                         tracing::info!("✅ ffmpeg正常退出");
                     } else {
                         tracing::warn!("⚠️ ffmpeg异常退出: {:?}", status);
                     }
                 } else {
+                    cluster::record_stream_exit(false);
                     tracing::warn!("⚠️ ffmpeg进程已停止");
                 }
 
@@ -1250,6 +1283,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Stop priority monitoring when ffmpeg loop ends
+            cluster::clear_local_stream();
 
             // Check current live status to determine what actually happened
             let (current_is_live, _, _, _, _, _) = source_client_status(&source_client).await;

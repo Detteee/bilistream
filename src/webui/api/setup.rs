@@ -137,6 +137,7 @@ pub async fn save_setup_config(
             priority_channel: crate::config::PriorityChannel::default(),
             enable_youtube_monitor: true,
             enable_twitch_monitor: true,
+            cluster: crate::config::ClusterConfig::default(),
         }
     };
     let previous_cfg = cfg.clone();

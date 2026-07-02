@@ -66,7 +66,7 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
         if let Err(e) = refresh_youtube_status_cache_with_config(&cfg).await {
             tracing::warn!("WebUI YouTube status refresh failed: {}", e);
         }
-    } else {
+    } else if !platform_channel_configured(&cfg.youtube.channel_name, &cfg.youtube.channel_id) {
         crate::config::with_current_config(&cfg, || {
             update_status_cache_with(|status| status.youtube = None)
         });
@@ -76,7 +76,7 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
         if let Err(e) = refresh_twitch_status_cache_with_config(&cfg).await {
             tracing::warn!("WebUI Twitch status refresh failed: {}", e);
         }
-    } else {
+    } else if !platform_channel_configured(&cfg.twitch.channel_name, &cfg.twitch.channel_id) {
         crate::config::with_current_config(&cfg, || {
             update_status_cache_with(|status| status.twitch = None)
         });
@@ -92,9 +92,16 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 }
 
 pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> Result<(), String> {
-    let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room)
-        .await
-        .map_err(|e| e.to_string())?;
+    let (is_live, title, area_id) = match get_bili_live_status(cfg.bililive.room).await {
+        Ok(status) => {
+            crate::cluster::record_external_api_result(true);
+            status
+        }
+        Err(e) => {
+            crate::cluster::record_external_api_result(false);
+            return Err(e.to_string());
+        }
+    };
     let area_name = crate::plugins::get_area_name(area_id)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", area_id));
 
@@ -128,6 +135,7 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
         update_status_cache_with(|status| {
             status.youtube = Some(YtStatus {
                 is_live: source.is_live,
+                enable_monitor: cfg.youtube.enable_monitor,
                 title: source.title,
                 topic: source.topic,
                 channel_name: cfg.youtube.channel_name.clone(),
@@ -160,6 +168,7 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
         update_status_cache_with(|status| {
             status.twitch = Some(TwStatus {
                 is_live,
+                enable_monitor: cfg.twitch.enable_monitor,
                 title,
                 game,
                 channel_name: cfg.twitch.channel_name.clone(),
@@ -273,33 +282,36 @@ pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
 }
 
 pub async fn get_status() -> impl IntoResponse {
-    if get_status_cache().is_none() {
-        if let Err(e) = load_config().await {
-            // Only log error if it's not a "file not found" error (expected on first run)
-            let is_not_found = e.to_string().contains("No such file");
-            if !is_not_found {
-                tracing::error!("Failed to load config: {}", e);
-            }
-
-            let error_msg = if e.to_string().contains("Permission denied") {
-                format!("配置文件权限错误: {}。请确保 config.json 文件存在且有读取权限，或在可执行文件所在目录运行程序。", e)
-            } else if is_not_found {
-                "配置文件不存在，请完成首次设置".to_string()
+    match load_config().await {
+        Ok(cfg) => refresh_status_cache_config_from(&cfg),
+        Err(e) => {
+            if get_status_cache().is_some() {
+                tracing::debug!("Skipped status config refresh: {}", e);
             } else {
-                format!("配置加载失败: {}", e)
-            };
-            return (
-                StatusCode::OK,
-                Json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    message: Some(error_msg),
-                }),
-            )
-                .into_response();
-        }
+                // Only log error if it's not a "file not found" error (expected on first run)
+                let is_not_found = e.to_string().contains("No such file");
+                if !is_not_found {
+                    tracing::error!("Failed to load config: {}", e);
+                }
 
-        refresh_status_cache_config().await;
+                let error_msg = if e.to_string().contains("Permission denied") {
+                    format!("配置文件权限错误: {}。请确保 config.json 文件存在且有读取权限，或在可执行文件所在目录运行程序。", e)
+                } else if is_not_found {
+                    "配置文件不存在，请完成首次设置".to_string()
+                } else {
+                    format!("配置加载失败: {}", e)
+                };
+                return (
+                    StatusCode::OK,
+                    Json(ApiResponse::<()> {
+                        success: false,
+                        data: None,
+                        message: Some(error_msg),
+                    }),
+                )
+                    .into_response();
+            }
+        }
     }
 
     let mut status = get_status_cache().unwrap_or_default();
