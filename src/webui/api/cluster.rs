@@ -169,18 +169,22 @@ pub async fn cluster_failover(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let should_propagate = payload.propagate.unwrap_or(true);
     let target_node_id = payload.target_node_id.clone();
-
-    if should_propagate && cfg.cluster.enabled {
+    let transfer_plan = if should_propagate && cfg.cluster.enabled {
         if let Some(target) = target_node_id.as_deref() {
-            if let Err(e) = prepare_cluster_node_switch(&cfg, target).await {
-                return Ok(Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("集群节点切换准备失败: {}", e)),
-                }));
-            }
+            let before = load_cluster_status().await.ok();
+            before.map(|status| {
+                let source_node_id = status
+                    .active_owner
+                    .clone()
+                    .unwrap_or_else(|| cfg.cluster.node_id.clone());
+                (status, source_node_id, target.to_string())
+            })
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     let status = crate::cluster::force_failover(&cfg, payload.target_node_id);
 
@@ -195,6 +199,17 @@ pub async fn cluster_failover(
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/failover", &forwarded, None).await;
+    }
+
+    if let Some((before, source_node_id, target)) = transfer_plan {
+        if let Err(e) = finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target).await
+        {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: Some(status),
+                message: Some(format!("集群节点切换后状态同步失败: {}", e)),
+            }));
+        }
     }
 
     Ok(Json(ApiResponse {
@@ -314,22 +329,27 @@ pub struct ClusterMembershipRequest {
     pub nodes: Vec<ClusterMembershipNode>,
 }
 
-pub(crate) async fn prepare_cluster_node_switch(
+pub(crate) async fn finalize_cluster_node_switch(
     cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
     target_node_id: &str,
 ) -> Result<(), String> {
-    let before = load_cluster_status().await?;
-    let source_node_id = before
-        .active_owner
-        .clone()
-        .unwrap_or_else(|| cfg.cluster.node_id.clone());
-    let source_config = export_cluster_config_from_node(cfg, &source_node_id).await?;
-    let source_toggles =
-        monitor_toggle_state_from_monitored_config(&source_config.monitored_config);
-    let source_channel_targets =
-        channel_target_state_from_monitored_config(&source_config.monitored_config);
+    let source_config = export_cluster_config_from_node(cfg, source_node_id).await?;
+    let source_toggles = resolve_source_monitor_toggles(
+        cfg,
+        before,
+        source_node_id,
+        &source_config.monitored_config,
+    );
+    let source_channel_targets = resolve_source_channel_targets(
+        cfg,
+        before,
+        source_node_id,
+        &source_config.monitored_config,
+    );
 
-    apply_cluster_node_mode_to_node(
+    apply_cluster_node_mode_to_node_with_retry(
         cfg,
         target_node_id,
         ClusterApplyNodeModeRequest {
@@ -339,6 +359,7 @@ pub(crate) async fn prepare_cluster_node_switch(
             monitor_toggles: Some(source_toggles),
             channel_targets: Some(source_channel_targets),
         },
+        "enable_new_active",
     )
     .await?;
 
@@ -352,16 +373,16 @@ pub(crate) async fn prepare_cluster_node_switch(
 
     if source_node_id != target_node_id {
         let source_standby = ClusterDrainRequest {
-            node_id: Some(source_node_id.clone()),
+            node_id: Some(source_node_id.to_string()),
             draining: false,
             ddos: false,
             propagate: Some(false),
         };
         post_cluster_control(cfg, "/api/cluster/drain", &source_standby, None).await;
 
-        apply_cluster_node_mode_to_node(
+        apply_cluster_node_mode_to_node_with_retry(
             cfg,
-            &source_node_id,
+            source_node_id,
             ClusterApplyNodeModeRequest {
                 monitored_config: None,
                 active: false,
@@ -369,6 +390,7 @@ pub(crate) async fn prepare_cluster_node_switch(
                 monitor_toggles: Some(all_monitor_toggles_off()),
                 channel_targets: None,
             },
+            "disable_previous_active",
         )
         .await?;
     }
@@ -424,6 +446,36 @@ pub(crate) async fn export_cluster_config_from_node(
     }
 }
 
+pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
+    cfg: &Config,
+    node_id: &str,
+    payload: ClusterApplyNodeModeRequest,
+    phase: &str,
+) -> Result<(), String> {
+    let max_attempts = 3;
+    let mut last_error = String::new();
+    for attempt in 1..=max_attempts {
+        match apply_cluster_node_mode_to_node(cfg, node_id, payload.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_error = e;
+                tracing::warn!(
+                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                    phase,
+                    attempt,
+                    max_attempts,
+                    node_id,
+                    last_error
+                );
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
 pub(crate) async fn apply_cluster_node_mode_to_node(
     cfg: &Config,
     node_id: &str,
@@ -469,7 +521,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
 
     if envelope.success {
         if let Some(status) = envelope.data {
-            crate::cluster::merge_cluster_status(status);
+            crate::cluster::merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
         }
         Ok(())
     } else {
@@ -485,6 +537,8 @@ pub(crate) async fn apply_cluster_node_mode_locally(
     let has_monitored_config = payload.monitored_config.is_some();
     let monitor_toggles = payload.monitor_toggles;
     let channel_targets = payload.channel_targets;
+    let monitor_toggles_for_cache = monitor_toggles.clone();
+    let channel_targets_for_cache = channel_targets.clone();
     if let Some(monitored_config) = payload.monitored_config {
         apply_monitored_config(monitored_config).await?;
     }
@@ -514,17 +568,25 @@ pub(crate) async fn apply_cluster_node_mode_locally(
         crate::cluster::set_drain_state(&cfg, None, false, false);
     } else {
         let ddos = crate::cluster::local_ddos_state();
-        crate::cluster::set_drain_state(&cfg, None, false, ddos);
+        crate::cluster::set_local_drain_state_preserving_fault(&cfg, false, ddos);
     }
 
     apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
     set_config_updated();
     refresh_status_cache_config().await;
 
-    if !payload.active {
-        crate::plugins::set_manual_restart();
-        crate::plugins::stop_ffmpeg().await;
-    } else if payload.restart {
+    if payload.active {
+        if let Some(monitor_toggles) = monitor_toggles_for_cache.as_ref() {
+            let cache_targets =
+                channel_targets_for_cache.unwrap_or_else(|| channel_target_state_from_config(&cfg));
+            crate::cluster::cache_active_monitor_state_from_owner(
+                monitor_toggles,
+                Some(&cache_targets),
+            );
+        }
+    }
+
+    if !payload.active || payload.restart {
         crate::plugins::set_manual_restart();
         crate::plugins::stop_ffmpeg().await;
     }
@@ -560,6 +622,22 @@ pub async fn cluster_sync_config(
         success: true,
         data: Some(status),
         message: Some("监控频道配置已同步".to_string()),
+    }))
+}
+
+pub async fn cluster_cache_active_monitor_state(
+    Json(payload): Json<ClusterActiveMonitorStateRequest>,
+) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
+    cache_active_monitor_state_from_peer(payload.monitor_toggles, payload.channel_targets);
+
+    let status = load_cluster_status()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(status),
+        message: Some("活跃节点监控开关已缓存".to_string()),
     }))
 }
 
@@ -605,56 +683,81 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
     target_node_id: Option<&str>,
 ) {
     let client = reqwest::Client::new();
-    for peer in &cfg.cluster.peers {
-        if peer.node_id == cfg.cluster.node_id {
-            continue;
-        }
-        if let Some(target) = target_node_id {
-            if peer.node_id != target {
-                continue;
-            }
-        }
+    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+    let peers = cfg
+        .cluster
+        .peers
+        .iter()
+        .filter(|peer| peer.node_id != cfg.cluster.node_id)
+        .filter(|peer| {
+            target_node_id
+                .map(|target| peer.node_id == target)
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    let tasks = peers
+        .into_iter()
+        .map(|peer| post_cluster_control_to_peer(&client, cfg, peer, path, payload, timeout));
+    join_all(tasks).await;
+}
 
-        let url = format!("{}{}", peer.api_url.trim_end_matches('/'), path);
-        match client.post(url).json(payload).send().await {
-            Ok(response) if !response.status().is_success() => {
-                tracing::warn!(
-                    "Cluster control propagation failed for {}: HTTP {}",
-                    peer.node_id,
-                    response.status()
-                );
-            }
-            Ok(response) => match response
-                .json::<ClusterPeerApiResponse<ClusterStatus>>()
-                .await
-            {
-                Ok(envelope) if envelope.success => {
-                    if let Some(status) = envelope.data {
-                        crate::cluster::merge_cluster_status(status);
+pub(crate) async fn post_cluster_control_to_peer<T: Serialize>(
+    client: &reqwest::Client,
+    cfg: &Config,
+    peer: &ClusterPeer,
+    path: &str,
+    payload: &T,
+    timeout: Duration,
+) {
+    let url = format!("{}{}", peer.api_url.trim_end_matches('/'), path);
+    match client.post(url).json(payload).timeout(timeout).send().await {
+        Ok(response) if !response.status().is_success() => {
+            tracing::warn!(
+                "Cluster control propagation failed for {}: HTTP {}",
+                peer.node_id,
+                response.status()
+            );
+        }
+        Ok(response) => match response
+            .json::<ClusterPeerApiResponse<ClusterStatus>>()
+            .await
+        {
+            Ok(envelope) if envelope.success => {
+                if let Some(status) = envelope.data {
+                    if let Err(e) = crate::cluster::merge_cluster_status_from_direct_peer(
+                        status,
+                        &peer.node_id,
+                        cfg,
+                    ) {
+                        tracing::warn!(
+                            "Cluster control response from {} ignored: {}",
+                            peer.node_id,
+                            e
+                        );
                     }
                 }
-                Ok(envelope) => {
-                    tracing::warn!(
-                        "Cluster control rejected by {}: {:?}",
-                        peer.node_id,
-                        envelope.message
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Cluster control response parse failed for {}: {}",
-                        peer.node_id,
-                        e
-                    );
-                }
-            },
+            }
+            Ok(envelope) => {
+                tracing::warn!(
+                    "Cluster control rejected by {}: {:?}",
+                    peer.node_id,
+                    envelope.message
+                );
+            }
             Err(e) => {
                 tracing::warn!(
-                    "Cluster control propagation failed for {}: {}",
+                    "Cluster control response parse failed for {}: {}",
                     peer.node_id,
                     e
                 );
             }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Cluster control propagation failed for {}: {}",
+                peer.node_id,
+                e
+            );
         }
     }
 }

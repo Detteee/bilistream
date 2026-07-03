@@ -1,5 +1,20 @@
 use super::*;
 
+pub(crate) async fn sync_active_monitor_state_after_toggle_change(cfg: &Config) -> String {
+    if !cfg.cluster.enabled {
+        return String::new();
+    }
+
+    match push_active_monitor_state_to_peers(cfg).await {
+        Ok(count) if count > 0 => format!("；监控开关已同步到 {} 个节点", count),
+        Ok(_) => String::new(),
+        Err(e) => {
+            tracing::warn!("Cluster monitor toggle sync failed: {}", e);
+            format!("；监控开关同步失败: {}", e)
+        }
+    }
+}
+
 pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
     crate::plugins::enable_danmaku_commands(enabled);
     if enabled {
@@ -9,6 +24,41 @@ pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
     } else if crate::plugins::is_danmaku_running() {
         crate::plugins::stop_danmaku();
     }
+}
+
+pub(crate) fn resolve_source_monitor_toggles(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+) -> MonitorToggleState {
+    if source_node_id == cfg.cluster.node_id {
+        let local_toggles = monitor_toggle_state_from_config(cfg);
+        if monitor_toggles_any_enabled(&local_toggles) {
+            return local_toggles;
+        }
+    }
+
+    if let Some(node) = before
+        .nodes
+        .iter()
+        .find(|node| node.node_id == source_node_id)
+    {
+        if monitor_toggles_any_enabled(&node.monitor_toggles) {
+            return node.monitor_toggles.clone();
+        }
+    }
+
+    if let Some(cached) = last_known_active_toggles() {
+        return cached;
+    }
+
+    let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
+    if monitor_toggles_any_enabled(&from_config) {
+        return from_config;
+    }
+
+    all_monitor_toggles_on()
 }
 
 #[derive(Deserialize)]
@@ -159,7 +209,7 @@ pub(crate) fn find_named_screen_session() -> Option<String> {
 
 pub(crate) fn find_screen_session_by_name(screen_list: &str, name: &str) -> Option<String> {
     screen_list.lines().find_map(|line| {
-        let session = line.trim().split_whitespace().next()?;
+        let session = line.split_whitespace().next()?;
         let session_name = session.rsplit_once('.').map(|(_, name)| name)?;
         (session_name == name).then(|| session.to_string())
     })
@@ -633,6 +683,7 @@ pub async fn toggle_youtube_monitor(
     }
 
     cfg.youtube.enable_monitor = payload.enabled;
+    cfg.enable_youtube_monitor = payload.enabled;
 
     crate::config::save_config(&mut cfg)
         .await
@@ -641,13 +692,15 @@ pub async fn toggle_youtube_monitor(
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
+    let toggle_sync_message = sync_active_monitor_state_after_toggle_change(&cfg).await;
 
     Ok(ApiResponse {
         success: true,
         data: None,
         message: Some(format!(
-            "YouTube监控已{}",
-            if payload.enabled { "启用" } else { "禁用" }
+            "YouTube监控已{}{}",
+            if payload.enabled { "启用" } else { "禁用" },
+            toggle_sync_message
         )),
     })
 }
@@ -676,6 +729,7 @@ pub async fn toggle_twitch_monitor(
     }
 
     cfg.twitch.enable_monitor = payload.enabled;
+    cfg.enable_twitch_monitor = payload.enabled;
 
     crate::config::save_config(&mut cfg)
         .await
@@ -684,13 +738,15 @@ pub async fn toggle_twitch_monitor(
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
+    let toggle_sync_message = sync_active_monitor_state_after_toggle_change(&cfg).await;
 
     Ok(ApiResponse {
         success: true,
         data: None,
         message: Some(format!(
-            "Twitch监控已{}",
-            if payload.enabled { "启用" } else { "禁用" }
+            "Twitch监控已{}{}",
+            if payload.enabled { "启用" } else { "禁用" },
+            toggle_sync_message
         )),
     })
 }

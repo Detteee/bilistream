@@ -424,7 +424,7 @@ pub async fn update_config(
         || payload.youtube_enable_monitor.is_some()
         || payload.twitch_enable_monitor.is_some();
     let toggle_sync_message = if monitor_toggle_changed {
-        schedule_active_monitor_state_sync_after_toggle_change(&cfg)
+        sync_active_monitor_state_after_toggle_change(&cfg).await
     } else {
         String::new()
     };
@@ -528,8 +528,14 @@ pub async fn update_priority_channel(
         let _ = refresh_priority_channel_status().await;
     });
 
+    let priority_toggle_changed = payload.enabled.is_some() || payload.auto_restart.is_some();
     let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
         sync_monitored_config_after_change(&cfg).await
+    } else {
+        String::new()
+    };
+    let toggle_sync_message = if priority_toggle_changed {
+        sync_active_monitor_state_after_toggle_change(&cfg).await
     } else {
         String::new()
     };
@@ -537,6 +543,9 @@ pub async fn update_priority_channel(
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some(format!("优先频道配置已更新{}", sync_message)),
+        message: Some(format!(
+            "优先频道配置已更新{}{}",
+            sync_message, toggle_sync_message
+        )),
     })
 }

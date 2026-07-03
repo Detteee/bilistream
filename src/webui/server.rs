@@ -75,6 +75,10 @@ pub async fn start_webui_on_listener(
             post(api::cluster_sync_membership),
         )
         .route("/cluster/sync-config", post(api::cluster_sync_config))
+        .route(
+            "/cluster/cache-active-monitor-state",
+            post(api::cluster_cache_active_monitor_state),
+        )
         .route("/cluster/push-config", post(api::cluster_push_config))
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/priority-channel", post(api::update_priority_channel))

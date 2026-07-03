@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use futures_util::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,14 +18,19 @@ use super::state::{
     update_status_cache_with, BiliStatus, NetworkStatus, PriorityChannelStatus, TwStatus, YtStatus,
 };
 use crate::cluster::{
-    all_monitor_toggles_off, apply_channel_target_state_to_config,
+    all_monitor_toggles_off, all_monitor_toggles_on, apply_channel_target_state_to_config,
     apply_monitor_toggle_state_to_config, apply_monitored_config,
-    channel_target_state_from_monitored_config, get_cluster_status as load_cluster_status,
-    monitor_toggle_state_from_monitored_config, monitored_config_from_config,
-    monitored_config_integrity_version, monitored_config_integrity_version_from_payload,
-    monitored_config_version, push_monitored_config_to_peers, ClusterApplyNodeModeRequest,
-    ClusterDrainRequest, ClusterFailoverRequest, ClusterHeartbeatRequest, ClusterStatus,
-    ClusterSyncConfigRequest,
+    cache_active_monitor_state_from_peer, channel_target_state_from_config,
+    channel_target_state_from_monitored_config, channel_targets_configured,
+    get_cluster_status as load_cluster_status, last_known_active_channel_targets,
+    last_known_active_toggles, monitor_toggle_state_from_config,
+    monitor_toggle_state_from_monitored_config, monitor_toggles_any_enabled,
+    monitored_config_from_config, monitored_config_integrity_version,
+    monitored_config_integrity_version_from_payload, monitored_config_version,
+    push_active_monitor_state_to_peers, push_monitored_config_to_peers, ChannelTargetState,
+    ClusterActiveMonitorStateRequest, ClusterApplyNodeModeRequest, ClusterDrainRequest,
+    ClusterFailoverRequest, ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest,
+    MonitorToggleState, MonitoredConfig,
 };
 use crate::config::{load_config, ClusterConfig, ClusterHealthThresholds, ClusterPeer, Config};
 use crate::plugins::{
@@ -77,9 +83,41 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
+fn resolve_source_channel_targets(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+) -> ChannelTargetState {
+    if source_node_id == cfg.cluster.node_id {
+        let local_targets = channel_target_state_from_config(cfg);
+        if channel_targets_configured(&local_targets) {
+            return local_targets;
+        }
+    }
+
+    let from_config = channel_target_state_from_monitored_config(monitored_config);
+    if channel_targets_configured(&from_config) {
+        return from_config;
+    }
+
+    if let Some(node) = before
+        .nodes
+        .iter()
+        .find(|node| node.node_id == source_node_id)
+    {
+        if channel_targets_configured(&node.channel_targets) {
+            return node.channel_targets.clone();
+        }
+    }
+
+    last_known_active_channel_targets().unwrap_or(from_config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::{ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot};
     use crate::config::{BiliLive, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube};
     use crate::StatusData;
 
@@ -281,8 +319,10 @@ mod tests {
 
     #[test]
     fn membership_target_bootstraps_node_identity() {
-        let mut cluster = ClusterConfig::default();
-        cluster.node_id = "local".to_string();
+        let mut cluster = ClusterConfig {
+            node_id: "local".to_string(),
+            ..ClusterConfig::default()
+        };
 
         apply_cluster_membership_to_config(&mut cluster, &membership_payload(Some("ca")));
 
@@ -297,15 +337,17 @@ mod tests {
 
     #[test]
     fn membership_without_matching_node_disables_cluster() {
-        let mut cluster = ClusterConfig::default();
-        cluster.node_id = "removed".to_string();
-        cluster.enabled = true;
-        cluster.peers = vec![ClusterPeer {
-            node_id: "la".to_string(),
-            name: "Los Angeles".to_string(),
-            api_url: "http://la:3150".to_string(),
-            priority: 20,
-        }];
+        let mut cluster = ClusterConfig {
+            node_id: "removed".to_string(),
+            enabled: true,
+            peers: vec![ClusterPeer {
+                node_id: "la".to_string(),
+                name: "Los Angeles".to_string(),
+                api_url: "http://la:3150".to_string(),
+                priority: 20,
+            }],
+            ..ClusterConfig::default()
+        };
 
         apply_cluster_membership_to_config(&mut cluster, &membership_payload(None));
 
@@ -315,9 +357,11 @@ mod tests {
 
     #[test]
     fn membership_syncs_auto_failover_setting() {
-        let mut cluster = ClusterConfig::default();
-        cluster.node_id = "ca".to_string();
-        cluster.auto_failover = true;
+        let mut cluster = ClusterConfig {
+            node_id: "ca".to_string(),
+            auto_failover: true,
+            ..ClusterConfig::default()
+        };
 
         let mut payload = membership_payload(Some("ca"));
         payload.auto_failover = false;
@@ -376,6 +420,141 @@ mod tests {
             enable_twitch_monitor: false,
             cluster: ClusterConfig::default(),
         }
+    }
+
+    fn healthy_cluster_node(
+        node_id: &str,
+        monitor_toggles: MonitorToggleState,
+        channel_targets: ChannelTargetState,
+    ) -> ClusterNodeSnapshot {
+        ClusterNodeSnapshot {
+            node_id: node_id.to_string(),
+            name: node_id.to_string(),
+            api_url: format!("http://{}", node_id),
+            priority: 0,
+            last_seen: Some(1),
+            is_local: false,
+            role: ClusterNodeRole::Standby,
+            health: ClusterHealth {
+                healthy: true,
+                reason: "healthy".to_string(),
+                stale: false,
+                stream_degraded: false,
+            },
+            draining: false,
+            ddos: false,
+            ffmpeg_running: false,
+            active_stream: None,
+            status: None,
+            network: None,
+            config_version: String::new(),
+            failed_restarts: 0,
+            monitor_toggles,
+            channel_targets,
+        }
+    }
+
+    fn cluster_status_with_node(node: ClusterNodeSnapshot) -> ClusterStatus {
+        ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: Some(node.node_id.clone()),
+            lease_until: Some(30),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: vec![node],
+        }
+    }
+
+    fn enabled_monitor_toggles() -> MonitorToggleState {
+        MonitorToggleState {
+            enable_danmaku_command: true,
+            enable_youtube_monitor: true,
+            enable_twitch_monitor: false,
+            youtube_enable_monitor: true,
+            twitch_enable_monitor: false,
+            priority_channel_enabled: true,
+            priority_channel_auto_restart: false,
+        }
+    }
+
+    fn channel_targets(label: &str) -> ChannelTargetState {
+        ChannelTargetState {
+            youtube_channel_name: format!("yt-{}", label),
+            youtube_channel_id: format!("ytid-{}", label),
+            twitch_channel_name: format!("tw-{}", label),
+            twitch_channel_id: format!("twid-{}", label),
+            priority_channel_name: format!("priority-{}", label),
+            priority_youtube_channel_id: format!("priority-yt-{}", label),
+            priority_twitch_channel_id: format!("priority-tw-{}", label),
+        }
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_uses_snapshot_before_exported_off_toggles() {
+        let cfg = status_cache_test_config();
+        let expected_toggles = enabled_monitor_toggles();
+        let before = cluster_status_with_node(healthy_cluster_node(
+            "source",
+            expected_toggles.clone(),
+            ChannelTargetState::default(),
+        ));
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported);
+
+        assert_eq!(resolved, expected_toggles);
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_uses_current_local_toggles() {
+        let mut cfg = status_cache_test_config();
+        cfg.cluster.node_id = "local".to_string();
+        cfg.bililive.enable_danmaku_command = true;
+        cfg.enable_youtube_monitor = true;
+        cfg.youtube.enable_monitor = true;
+        cfg.priority_channel.enabled = true;
+        let before = ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: Some("local".to_string()),
+            lease_until: Some(30),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: Vec::new(),
+        };
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "local", &exported);
+
+        assert_eq!(resolved, monitor_toggle_state_from_config(&cfg));
+    }
+
+    #[test]
+    fn node_switch_channel_resolution_prefers_current_exported_config() {
+        let cfg = status_cache_test_config();
+        let stale_targets = channel_targets("stale");
+        let current_targets = channel_targets("current");
+        let before = cluster_status_with_node(healthy_cluster_node(
+            "source",
+            MonitorToggleState::default(),
+            stale_targets,
+        ));
+        let mut exported_cfg = status_cache_test_config();
+        exported_cfg.youtube.channel_name = current_targets.youtube_channel_name.clone();
+        exported_cfg.youtube.channel_id = current_targets.youtube_channel_id.clone();
+        exported_cfg.twitch.channel_name = current_targets.twitch_channel_name.clone();
+        exported_cfg.twitch.channel_id = current_targets.twitch_channel_id.clone();
+        exported_cfg.priority_channel.channel_name = current_targets.priority_channel_name.clone();
+        exported_cfg.priority_channel.youtube_channel_id =
+            current_targets.priority_youtube_channel_id.clone();
+        exported_cfg.priority_channel.twitch_channel_id =
+            current_targets.priority_twitch_channel_id.clone();
+        let exported = monitored_config_from_config(&exported_cfg);
+
+        let resolved = resolve_source_channel_targets(&cfg, &before, "source", &exported);
+
+        assert_eq!(resolved, current_targets);
     }
 
     #[test]

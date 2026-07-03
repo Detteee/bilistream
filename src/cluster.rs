@@ -23,12 +23,14 @@ lazy_static! {
 const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
 const EXTERNAL_API_FAILURE_RETENTION_SECS: u64 = 60 * 60;
 const HEARTBEAT_FAILURE_THRESHOLD: u32 = 3;
+const NETWORK_ISOLATED_REASON: &str = "network_isolated";
 
 #[derive(Clone, Debug, Default)]
 struct ClusterState {
     nodes: HashMap<String, ClusterNodeSnapshot>,
     local_draining: bool,
     local_ddos: bool,
+    local_fault_ddos: bool,
     local_fault_latched: bool,
     local_fault_reason: Option<String>,
     forced_owner: Option<String>,
@@ -160,6 +162,13 @@ pub struct ClusterAutoFailoverRequest {
 pub struct ClusterSyncConfigRequest {
     pub monitored_config: MonitoredConfig,
     pub config_version: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterActiveMonitorStateRequest {
+    pub monitor_toggles: MonitorToggleState,
+    #[serde(default)]
+    pub channel_targets: Option<ChannelTargetState>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -340,8 +349,138 @@ pub async fn apply_monitor_toggle_state(payload: MonitorToggleState) -> Result<(
     apply_monitor_toggle_state_to_config(&mut cfg, &payload);
     save_config(&cfg).await.map_err(|e| e.to_string())?;
     apply_danmaku_command_runtime_state(payload.enable_danmaku_command);
+    if monitor_toggles_any_enabled(&payload) {
+        cache_active_monitor_state_from_owner(
+            &payload,
+            Some(&channel_target_state_from_config(&cfg)),
+        );
+    }
     set_config_updated();
     Ok(())
+}
+
+pub fn cache_active_monitor_state_from_owner(
+    toggles: &MonitorToggleState,
+    channel_targets: Option<&ChannelTargetState>,
+) {
+    if monitor_toggles_any_enabled(toggles) {
+        CLUSTER_STATE.write().unwrap().last_known_active_toggles = Some(toggles.clone());
+    }
+    if let Some(targets) = channel_targets.filter(|targets| channel_targets_configured(targets)) {
+        CLUSTER_STATE
+            .write()
+            .unwrap()
+            .last_known_active_channel_targets = Some(targets.clone());
+    }
+}
+
+pub fn cache_active_monitor_state_from_peer(
+    toggles: MonitorToggleState,
+    channel_targets: Option<ChannelTargetState>,
+) {
+    cache_active_monitor_state_from_owner(&toggles, channel_targets.as_ref());
+}
+
+pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, String> {
+    if !cfg.cluster.enabled {
+        return Ok(0);
+    }
+
+    let status = get_cluster_status_for_config(cfg).await;
+    if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
+        return Ok(0);
+    }
+
+    let toggles = monitor_toggle_state_from_config(cfg);
+    let channel_targets = channel_target_state_from_config(cfg);
+    cache_active_monitor_state_from_owner(&toggles, Some(&channel_targets));
+
+    let request = ClusterActiveMonitorStateRequest {
+        monitor_toggles: toggles,
+        channel_targets: Some(channel_targets),
+    };
+    let client = reqwest::Client::new();
+    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+
+    let tasks = cfg
+        .cluster
+        .peers
+        .iter()
+        .filter(|peer| peer.node_id != cfg.cluster.node_id)
+        .map(|peer| push_active_monitor_state_to_peer(&client, cfg, peer, &request, timeout));
+    summarize_peer_push_results(join_all(tasks).await, "部分节点监控开关缓存失败")
+}
+
+async fn push_active_monitor_state_to_peer(
+    client: &reqwest::Client,
+    cfg: &Config,
+    peer: &crate::config::ClusterPeer,
+    request: &ClusterActiveMonitorStateRequest,
+    timeout: Duration,
+) -> Result<(), String> {
+    let url = format!(
+        "{}/api/cluster/cache-active-monitor-state",
+        peer.api_url.trim_end_matches('/')
+    );
+    let response = client
+        .post(url)
+        .json(request)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| format!("节点 {} 缓存监控开关失败: {}", peer.node_id, e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "节点 {} 缓存监控开关失败: HTTP {}",
+            peer.node_id, status
+        ));
+    }
+
+    let envelope = response
+        .json::<PeerApiResponse<ClusterStatus>>()
+        .await
+        .map_err(|e| format!("节点 {} 缓存监控开关响应解析失败: {}", peer.node_id, e))?;
+    if !envelope.success {
+        return Err(format!(
+            "节点 {} 缓存监控开关失败: {}",
+            peer.node_id,
+            envelope.message.unwrap_or_else(|| "缓存被拒绝".to_string())
+        ));
+    }
+    if let Some(status) = envelope.data {
+        merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
+            .map_err(|e| format!("{} {}", peer.node_id, e))?;
+    }
+    Ok(())
+}
+
+fn summarize_peer_push_results(
+    results: Vec<Result<(), String>>,
+    partial_failure_prefix: &str,
+) -> Result<usize, String> {
+    let mut synced = 0usize;
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(()) => synced += 1,
+            Err(e) => errors.push(e),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(synced)
+    } else if synced > 0 {
+        Err(format!(
+            "{} ({} 成功): {}",
+            partial_failure_prefix,
+            synced,
+            errors.join("; ")
+        ))
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 pub fn apply_monitor_toggle_state_to_config(cfg: &mut Config, payload: &MonitorToggleState) {
@@ -500,63 +639,56 @@ pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, Strin
     };
     let client = reqwest::Client::new();
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
-    let mut synced = 0usize;
-    let mut errors = Vec::new();
 
-    for peer in &cfg.cluster.peers {
-        if peer.node_id == cfg.cluster.node_id {
-            continue;
-        }
+    let tasks = cfg
+        .cluster
+        .peers
+        .iter()
+        .filter(|peer| peer.node_id != cfg.cluster.node_id)
+        .map(|peer| push_monitored_config_to_peer(&client, cfg, peer, &request, timeout));
+    summarize_peer_push_results(join_all(tasks).await, "部分节点监控频道配置同步失败")
+}
 
-        let url = format!(
-            "{}/api/cluster/sync-config",
-            peer.api_url.trim_end_matches('/')
-        );
+async fn push_monitored_config_to_peer(
+    client: &reqwest::Client,
+    cfg: &Config,
+    peer: &crate::config::ClusterPeer,
+    request: &ClusterSyncConfigRequest,
+    timeout: Duration,
+) -> Result<(), String> {
+    let url = format!(
+        "{}/api/cluster/sync-config",
+        peer.api_url.trim_end_matches('/')
+    );
+    let response = client
+        .post(url)
+        .json(request)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| format!("{} {}", peer.node_id, e))?;
 
-        match client
-            .post(url)
-            .json(&request)
-            .timeout(timeout)
-            .send()
-            .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                if !status.is_success() {
-                    errors.push(format!("{} HTTP {}", peer.node_id, status));
-                    continue;
-                }
-
-                match response.json::<PeerApiResponse<ClusterStatus>>().await {
-                    Ok(envelope) if envelope.success => {
-                        synced += 1;
-                        if let Some(status) = envelope.data {
-                            merge_cluster_status(status);
-                        }
-                    }
-                    Ok(envelope) => {
-                        errors.push(format!(
-                            "{} {}",
-                            peer.node_id,
-                            envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
-                        ));
-                    }
-                    Err(e) => {
-                        errors.push(format!("{} 响应解析失败: {}", peer.node_id, e));
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(format!("{} {}", peer.node_id, e));
-            }
-        }
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{} HTTP {}", peer.node_id, status));
     }
 
-    if errors.is_empty() {
-        Ok(synced)
-    } else {
-        Err(errors.join("; "))
+    let envelope = response
+        .json::<PeerApiResponse<ClusterStatus>>()
+        .await
+        .map_err(|e| format!("{} 响应解析失败: {}", peer.node_id, e))?;
+    if !envelope.success {
+        return Err(format!(
+            "{} {}",
+            peer.node_id,
+            envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
+        ));
     }
+    if let Some(status) = envelope.data {
+        merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
+            .map_err(|e| format!("{} {}", peer.node_id, e))?;
+    }
+    Ok(())
 }
 
 pub fn start_cluster_worker() {
@@ -629,6 +761,10 @@ pub fn local_ddos_state() -> bool {
     CLUSTER_STATE.read().unwrap().local_ddos
 }
 
+fn local_effective_ddos_state(state: &ClusterState) -> bool {
+    state.local_ddos || state.local_fault_ddos
+}
+
 async fn handle_auto_owner_transition(
     client: &reqwest::Client,
     cfg: &Config,
@@ -655,10 +791,6 @@ async fn handle_auto_owner_transition(
         .nodes
         .iter()
         .find(|node| node.node_id == previous_owner);
-    if previous_node.is_some_and(|node| node.health.healthy && !node.draining && !node.ddos) {
-        return;
-    }
-
     tracing::warn!(
         "集群自动故障转移: {} -> {}, transfer active channel targets and monitor toggles",
         previous_owner,
@@ -691,7 +823,7 @@ async fn handle_auto_owner_transition(
         cfg,
         new_owner,
         toggles,
-        channel_targets,
+        channel_targets.clone(),
         true,
         "enable_new_active",
     )
@@ -699,22 +831,27 @@ async fn handle_auto_owner_transition(
     {
         tracing::warn!("Failed to transfer monitor toggles to {}: {}", new_owner, e);
     }
-    if let Err(e) = apply_monitor_toggles_to_node_with_retry(
-        client,
-        cfg,
-        &previous_owner,
-        all_monitor_toggles_off(),
-        None,
-        false,
-        "disable_previous_active",
-    )
-    .await
-    {
-        tracing::warn!(
-            "Failed to disable monitor toggles on {}: {}",
-            previous_owner,
-            e
-        );
+
+    let should_disable_previous =
+        previous_node.is_none_or(|node| !node.health.healthy || node.draining || node.ddos);
+    if should_disable_previous {
+        if let Err(e) = apply_monitor_toggles_to_node_with_retry(
+            client,
+            cfg,
+            &previous_owner,
+            all_monitor_toggles_off(),
+            None,
+            false,
+            "disable_previous_active",
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to disable monitor toggles on {}: {}",
+                previous_owner,
+                e
+            );
+        }
     }
 }
 
@@ -764,11 +901,11 @@ fn monitor_toggles_all_off(toggles: &MonitorToggleState) -> bool {
     *toggles == all_monitor_toggles_off()
 }
 
-fn monitor_toggles_any_enabled(toggles: &MonitorToggleState) -> bool {
+pub(crate) fn monitor_toggles_any_enabled(toggles: &MonitorToggleState) -> bool {
     !monitor_toggles_all_off(toggles)
 }
 
-fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
+pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
     !targets.youtube_channel_name.is_empty()
         || !targets.youtube_channel_id.is_empty()
         || !targets.twitch_channel_name.is_empty()
@@ -778,7 +915,7 @@ fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
         || !targets.priority_twitch_channel_id.is_empty()
 }
 
-fn last_known_active_toggles() -> Option<MonitorToggleState> {
+pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
     CLUSTER_STATE
         .read()
         .unwrap()
@@ -788,7 +925,7 @@ fn last_known_active_toggles() -> Option<MonitorToggleState> {
         .cloned()
 }
 
-fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
+pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
     CLUSTER_STATE
         .read()
         .unwrap()
@@ -808,6 +945,16 @@ async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
 }
 
 fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) -> bool {
+    if CLUSTER_STATE
+        .read()
+        .unwrap()
+        .forced_owner
+        .as_deref()
+        .is_some_and(|owner| owner == cfg.cluster.node_id)
+    {
+        return false;
+    }
+
     let Some(owner) = status.active_owner.as_deref() else {
         // No elected owner (startup / transient partition): keep local toggles
         // untouched so the last-active node does not lose its configuration.
@@ -837,6 +984,11 @@ async fn apply_monitor_toggles_to_node(
         apply_monitor_toggle_state_to_config(&mut cfg, &monitor_toggles);
         save_config(&cfg).await.map_err(|e| e.to_string())?;
         apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
+        if active {
+            let cache_targets =
+                channel_targets.unwrap_or_else(|| channel_target_state_from_config(&cfg));
+            cache_active_monitor_state_from_owner(&monitor_toggles, Some(&cache_targets));
+        }
         set_config_updated();
         return Ok(());
     }
@@ -882,7 +1034,7 @@ async fn apply_monitor_toggles_to_node(
         .map_err(|e| format!("解析节点 {} 监控开关响应失败: {}", node_id, e))?;
     if envelope.success {
         if let Some(status) = envelope.data {
-            merge_cluster_status(status);
+            merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
         }
         Ok(())
     } else {
@@ -949,8 +1101,29 @@ pub fn record_external_api_result(success: bool) {
 fn latch_local_fault(reason: impl Into<String>) {
     let mut state = CLUSTER_STATE.write().unwrap();
     state.local_fault_latched = true;
-    state.local_ddos = true;
+    state.local_fault_ddos = true;
     state.local_fault_reason = Some(reason.into());
+}
+
+fn clear_local_fault_latch(state: &mut ClusterState) {
+    state.local_fault_latched = false;
+    state.local_fault_ddos = false;
+    state.local_fault_reason = None;
+}
+
+fn clear_recovered_local_network_isolation(
+    state: &mut ClusterState,
+    network_isolated: bool,
+) -> bool {
+    if network_isolated
+        || !state.local_fault_latched
+        || state.local_fault_reason.as_deref() != Some(NETWORK_ISOLATED_REASON)
+    {
+        return false;
+    }
+
+    clear_local_fault_latch(state);
+    true
 }
 
 pub async fn get_cluster_status() -> Result<ClusterStatus, String> {
@@ -983,24 +1156,43 @@ pub fn set_drain_state(
     draining: bool,
     ddos: bool,
 ) -> ClusterStatus {
+    set_drain_state_inner(cfg, node_id, draining, ddos, true)
+}
+
+pub fn set_local_drain_state_preserving_fault(
+    cfg: &Config,
+    draining: bool,
+    ddos: bool,
+) -> ClusterStatus {
+    set_drain_state_inner(cfg, None, draining, ddos, false)
+}
+
+fn set_drain_state_inner(
+    cfg: &Config,
+    node_id: Option<String>,
+    draining: bool,
+    ddos: bool,
+    clear_faults_when_enabled: bool,
+) -> ClusterStatus {
     let target = node_id.unwrap_or_else(|| cfg.cluster.node_id.clone());
     let mut state = CLUSTER_STATE.write().unwrap();
+    let mut effective_ddos = ddos;
     if target == cfg.cluster.node_id {
         state.local_draining = draining;
         state.local_ddos = ddos;
-        if !draining && !ddos {
-            state.local_fault_latched = false;
-            state.local_fault_reason = None;
+        if clear_faults_when_enabled && !draining && !ddos {
+            clear_local_fault_latch(&mut state);
             state.local_failed_restarts = 0;
             state.local_failed_restart_times.clear();
             state.local_external_api_failures = 0;
             state.local_external_api_failure_times.clear();
             state.heartbeat_failures.clear();
         }
+        effective_ddos = local_effective_ddos_state(&state);
     }
     if let Some(node) = state.nodes.get_mut(&target) {
         node.draining = draining;
-        node.ddos = ddos;
+        node.ddos = effective_ddos;
     }
     drop(state);
     compute_cluster_status(cfg)
@@ -1155,13 +1347,16 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
     let status = get_status_cache();
     let (
         draining,
-        ddos,
+        operator_ddos,
+        mut fault_ddos,
         mut fault_latched,
         mut fault_reason,
         active_stream,
         failed_restarts,
         external_api_failures,
         heartbeat_failures,
+        peer_last_seen,
+        observed_at,
     ) = {
         let mut state = CLUSTER_STATE.write().unwrap();
         let now = now_secs();
@@ -1179,22 +1374,45 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         (
             state.local_draining,
             state.local_ddos,
+            state.local_fault_ddos,
             state.local_fault_latched,
             state.local_fault_reason.clone(),
             state.local_stream.clone(),
             state.local_failed_restarts,
             state.local_external_api_failures,
             state.heartbeat_failures.clone(),
+            state
+                .nodes
+                .iter()
+                .map(|(node_id, node)| (node_id.clone(), node.last_seen))
+                .collect::<HashMap<_, _>>(),
+            now,
         )
     };
 
     let stream_degraded = ffmpeg_restart_degraded(&cfg.cluster, failed_restarts);
     let external_api_degraded = external_api_degraded(&cfg.cluster, external_api_failures);
-    let network_isolated =
-        local_network_isolated(&cfg.cluster, &heartbeat_failures, external_api_failures);
+    let network_isolated = local_network_isolated(
+        &cfg.cluster,
+        &heartbeat_failures,
+        &peer_last_seen,
+        external_api_failures,
+        observed_at,
+    );
+    if fault_latched
+        && fault_reason.as_deref() == Some(NETWORK_ISOLATED_REASON)
+        && !network_isolated
+    {
+        let mut state = CLUSTER_STATE.write().unwrap();
+        if clear_recovered_local_network_isolation(&mut state, network_isolated) {
+            fault_latched = false;
+            fault_ddos = false;
+            fault_reason = None;
+        }
+    }
     if (stream_degraded || external_api_degraded || network_isolated) && !fault_latched {
         let reason = if network_isolated {
-            "network_isolated"
+            NETWORK_ISOLATED_REASON
         } else if external_api_degraded {
             "external_api_unreachable"
         } else {
@@ -1203,10 +1421,11 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         .to_string();
         latch_local_fault(reason.clone());
         fault_latched = true;
+        fault_ddos = true;
         fault_reason = Some(reason);
     }
 
-    let effective_ddos = ddos || fault_latched;
+    let effective_ddos = operator_ddos || fault_ddos || fault_latched;
     let health = if draining {
         ClusterHealth::unhealthy("draining", false, false)
     } else if fault_latched {
@@ -1215,7 +1434,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
             false,
             true,
         )
-    } else if ddos {
+    } else if operator_ddos {
         ClusterHealth::unhealthy("ddos_or_network_unstable", false, false)
     } else {
         ClusterHealth::healthy()
@@ -1489,6 +1708,34 @@ fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
             node.health.reason = "stream_metrics_degraded".to_string();
         }
     }
+
+    let indirectly_observed_nodes = state
+        .nodes
+        .iter()
+        .filter(|(node_id, node)| {
+            node.node_id != cfg.cluster.node_id
+                && !node.draining
+                && !node.ddos
+                && node.health.stale
+                && matches!(
+                    node.health.reason.as_str(),
+                    "api_unreachable" | "heartbeat_timeout" | "waiting_for_heartbeat"
+                )
+                && indirectly_observed_by_quorum(state, node_id, cfg, now)
+        })
+        .map(|(node_id, _)| node_id.clone())
+        .collect::<Vec<_>>();
+
+    for node_id in indirectly_observed_nodes {
+        if let Some(node) = state.nodes.get_mut(&node_id) {
+            node.health = ClusterHealth {
+                healthy: true,
+                reason: "indirectly_observed".to_string(),
+                stale: true,
+                stream_degraded: false,
+            };
+        }
+    }
 }
 
 fn is_stale(node: &ClusterNodeSnapshot, cfg: &Config, now: u64) -> bool {
@@ -1582,15 +1829,28 @@ fn update_node(mut node: ClusterNodeSnapshot, local_node_id: &str) {
     node.is_local = node.node_id == local_node_id;
     if node.is_local {
         node.draining = state.local_draining;
-        node.ddos = state.local_ddos;
+        node.ddos = local_effective_ddos_state(&state);
         node.active_stream = state.local_stream.clone();
         node.failed_restarts = state.local_failed_restarts;
     }
     state.nodes.insert(node.node_id.clone(), node);
 }
 
-pub(crate) fn merge_cluster_status(status: ClusterStatus) {
-    merge_cluster_status_inner(status, None, None);
+pub(crate) fn merge_cluster_status_from_direct_peer(
+    status: ClusterStatus,
+    peer_node_id: &str,
+    cfg: &Config,
+) -> Result<(), String> {
+    if !heartbeat_response_is_valid(&status, peer_node_id, cfg) {
+        return Err(format!(
+            "节点 {} 返回的集群状态身份或时间戳无效",
+            peer_node_id
+        ));
+    }
+
+    mark_peer_reachable(peer_node_id);
+    merge_cluster_status_from_peer(status, peer_node_id, cfg);
+    Ok(())
 }
 
 fn merge_cluster_status_from_peer(status: ClusterStatus, peer_node_id: &str, cfg: &Config) {
@@ -1817,10 +2077,15 @@ fn external_api_degraded(cluster: &ClusterConfig, failures: u32) -> bool {
 fn local_network_isolated(
     cluster: &ClusterConfig,
     heartbeat_failures: &HashMap<String, u32>,
+    peer_last_seen: &HashMap<String, Option<u64>>,
     external_api_failures: u32,
+    now: u64,
 ) -> bool {
     let peer_count = cluster.peers.len();
     if peer_count == 0 {
+        return false;
+    }
+    if !external_api_degraded(cluster, external_api_failures) {
         return false;
     }
 
@@ -1829,11 +2094,21 @@ fn local_network_isolated(
         .peers
         .iter()
         .filter(|peer| {
+            let inbound_is_fresh = peer_last_seen
+                .get(&peer.node_id)
+                .and_then(|last_seen| *last_seen)
+                .is_some_and(|last_seen| {
+                    now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
+                });
+            if inbound_is_fresh {
+                return false;
+            }
+
             let failures = heartbeat_failures
                 .get(&peer.node_id)
                 .copied()
                 .unwrap_or_default();
-            failures >= HEARTBEAT_FAILURE_THRESHOLD || (external_api_failures > 0 && failures > 0)
+            failures >= HEARTBEAT_FAILURE_THRESHOLD
         })
         .count();
 
@@ -2223,6 +2498,61 @@ mod tests {
     }
 
     #[test]
+    fn direct_peer_status_merge_refreshes_peer_liveness() {
+        let peer_id = "direct-merge-peer";
+        let mut cfg = test_config("direct-merge-local", 0);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: peer_id.to_string(),
+            name: peer_id.to_string(),
+            api_url: "http://direct-merge-peer".to_string(),
+            priority: 1,
+        }];
+        let now = now_secs();
+
+        {
+            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut stale_peer =
+                empty_node(peer_id, peer_id, "http://direct-merge-peer", 1, false, now);
+            stale_peer.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
+            state.nodes.insert(peer_id.to_string(), stale_peer);
+            state
+                .heartbeat_failures
+                .insert(peer_id.to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        }
+
+        let mut peer_snapshot =
+            empty_node(peer_id, peer_id, "http://direct-merge-peer", 1, false, now);
+        peer_snapshot.last_seen = Some(now);
+        peer_snapshot.health = ClusterHealth::healthy();
+        let status = ClusterStatus {
+            enabled: true,
+            local_node_id: peer_id.to_string(),
+            active_owner: Some(peer_id.to_string()),
+            lease_until: Some(now + 10),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: vec![peer_snapshot],
+        };
+
+        merge_cluster_status_from_direct_peer(status, peer_id, &cfg)
+            .expect("direct peer status should merge");
+
+        let state = CLUSTER_STATE.read().unwrap();
+        let stored = state
+            .nodes
+            .get(peer_id)
+            .cloned()
+            .expect("peer should be stored");
+        assert!(!is_stale(&stored, &cfg, now_secs()));
+        assert!(!state.heartbeat_failures.contains_key(peer_id));
+        drop(state);
+
+        let mut state = CLUSTER_STATE.write().unwrap();
+        state.nodes.remove(peer_id);
+        state.heartbeat_failures.remove(peer_id);
+    }
+
+    #[test]
     fn indirect_quorum_can_keep_peer_eligible_without_refreshing_heartbeat() {
         let mut cfg = test_config("a", 1);
         cfg.cluster.peers = vec![
@@ -2275,6 +2605,63 @@ mod tests {
 
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
         assert!(is_stale(state.nodes.get("b").unwrap(), &cfg, now));
+    }
+
+    #[test]
+    fn indirect_quorum_marks_peer_healthy_but_stale_for_status() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.peers = vec![
+            crate::config::ClusterPeer {
+                node_id: "b".to_string(),
+                name: "b".to_string(),
+                api_url: "http://b".to_string(),
+                priority: 10,
+            },
+            crate::config::ClusterPeer {
+                node_id: "c".to_string(),
+                name: "c".to_string(),
+                api_url: "http://c".to_string(),
+                priority: 5,
+            },
+            crate::config::ClusterPeer {
+                node_id: "d".to_string(),
+                name: "d".to_string(),
+                api_url: "http://d".to_string(),
+                priority: 3,
+            },
+        ];
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        let mut b = empty_node("b", "b", "http://b", 10, false, now);
+        b.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
+        state.nodes.insert("b".to_string(), b);
+
+        for (node_id, priority) in [("c", 5), ("d", 3)] {
+            let mut observer = empty_node(
+                node_id,
+                node_id,
+                &format!("http://{}", node_id),
+                priority,
+                false,
+                now,
+            );
+            observer.last_seen = Some(now);
+            observer.health = ClusterHealth::healthy();
+            state.nodes.insert(node_id.to_string(), observer);
+            state
+                .peer_observations
+                .entry("b".to_string())
+                .or_default()
+                .insert(node_id.to_string(), now);
+        }
+
+        normalize_node_health(&mut state, &cfg, now);
+
+        let node = state.nodes.get("b").unwrap();
+        assert!(node.health.healthy);
+        assert!(node.health.stale);
+        assert_eq!(node.health.reason, "indirectly_observed");
+        assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
     }
 
     #[test]
@@ -2413,7 +2800,7 @@ mod tests {
     }
 
     #[test]
-    fn local_network_isolation_uses_majority_peer_failures() {
+    fn local_network_isolation_requires_external_api_and_majority_peer_failures() {
         let mut cfg = test_config("a", 0);
         cfg.cluster.peers = vec![
             crate::config::ClusterPeer {
@@ -2437,15 +2824,216 @@ mod tests {
         ];
         let mut failures = HashMap::new();
         failures.insert("b".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        let peer_last_seen = HashMap::new();
+        let now = now_secs();
 
-        assert!(!local_network_isolated(&cfg.cluster, &failures, 0));
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
 
         failures.insert("c".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
-        assert!(local_network_isolated(&cfg.cluster, &failures, 0));
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            0,
+            now
+        ));
+        assert!(local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
     }
 
     #[test]
-    fn local_network_isolation_uses_external_api_failures_as_early_signal() {
+    fn two_node_link_failure_without_external_api_degradation_does_not_isolate_local() {
+        let mut cfg = test_config("a", 0);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 5,
+        }];
+
+        let now = now_secs();
+        let mut failures = HashMap::new();
+        failures.insert("b".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        let peer_last_seen = HashMap::new();
+
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            0,
+            now
+        ));
+        assert!(local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
+    }
+
+    #[test]
+    fn manual_mode_two_node_link_failure_keeps_original_local_owner() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.auto_failover = false;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 10,
+        }];
+
+        let now = now_secs();
+        let mut heartbeat_failures = HashMap::new();
+        heartbeat_failures.insert("b".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        let mut peer_last_seen = HashMap::new();
+        peer_last_seen.insert(
+            "b".to_string(),
+            Some(now - cfg.cluster.failover_timeout_secs - 1),
+        );
+
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &heartbeat_failures,
+            &peer_last_seen,
+            0,
+            now
+        ));
+
+        let mut state = ClusterState {
+            active_owner: Some("a".to_string()),
+            ..ClusterState::default()
+        };
+        state.nodes.insert(
+            "a".to_string(),
+            empty_node("a", "a", "http://a", 1, true, now),
+        );
+        state.nodes.insert(
+            "b".to_string(),
+            empty_node("b", "b", "http://b", 10, false, now),
+        );
+        state.nodes.get_mut("a").unwrap().last_seen = Some(now);
+        state.nodes.get_mut("a").unwrap().health = ClusterHealth::healthy();
+        state.nodes.get_mut("b").unwrap().last_seen =
+            Some(now - cfg.cluster.failover_timeout_secs - 1);
+        state.nodes.get_mut("b").unwrap().health =
+            ClusterHealth::unhealthy("heartbeat_timeout", true, false);
+
+        assert_eq!(choose_owner(&state, &cfg, now), Some("a".to_string()));
+    }
+
+    #[test]
+    fn recovered_network_isolation_latch_clears_only_fault_quarantine() {
+        let mut state = ClusterState {
+            local_ddos: true,
+            local_fault_ddos: true,
+            local_fault_latched: true,
+            local_fault_reason: Some(NETWORK_ISOLATED_REASON.to_string()),
+            ..ClusterState::default()
+        };
+
+        assert!(clear_recovered_local_network_isolation(&mut state, false));
+        assert!(!state.local_fault_latched);
+        assert!(!state.local_fault_ddos);
+        assert_eq!(state.local_fault_reason, None);
+        assert!(state.local_ddos);
+        assert!(local_effective_ddos_state(&state));
+    }
+
+    #[test]
+    fn network_isolation_latch_stays_while_evidence_remains() {
+        let mut state = ClusterState {
+            local_fault_ddos: true,
+            local_fault_latched: true,
+            local_fault_reason: Some(NETWORK_ISOLATED_REASON.to_string()),
+            ..ClusterState::default()
+        };
+
+        assert!(!clear_recovered_local_network_isolation(&mut state, true));
+        assert!(state.local_fault_latched);
+        assert!(state.local_fault_ddos);
+        assert_eq!(
+            state.local_fault_reason.as_deref(),
+            Some(NETWORK_ISOLATED_REASON)
+        );
+    }
+
+    #[test]
+    fn four_node_last_survivor_stays_healthy_and_active() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.peers = vec![
+            crate::config::ClusterPeer {
+                node_id: "b".to_string(),
+                name: "b".to_string(),
+                api_url: "http://b".to_string(),
+                priority: 10,
+            },
+            crate::config::ClusterPeer {
+                node_id: "c".to_string(),
+                name: "c".to_string(),
+                api_url: "http://c".to_string(),
+                priority: 5,
+            },
+            crate::config::ClusterPeer {
+                node_id: "d".to_string(),
+                name: "d".to_string(),
+                api_url: "http://d".to_string(),
+                priority: 3,
+            },
+        ];
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        let mut local = empty_node("a", "a", "http://a", 1, true, now);
+        local.health = ClusterHealth::healthy();
+        state.nodes.insert("a".to_string(), local);
+
+        let mut heartbeat_failures = HashMap::new();
+        for peer in &cfg.cluster.peers {
+            let mut peer_node = empty_node(
+                &peer.node_id,
+                &peer.name,
+                &peer.api_url,
+                peer.priority,
+                false,
+                now,
+            );
+            peer_node.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
+            state.nodes.insert(peer.node_id.clone(), peer_node);
+            heartbeat_failures.insert(peer.node_id.clone(), HEARTBEAT_FAILURE_THRESHOLD);
+        }
+
+        normalize_node_health(&mut state, &cfg, now);
+
+        let peer_last_seen = state
+            .nodes
+            .iter()
+            .map(|(node_id, node)| (node_id.clone(), node.last_seen))
+            .collect::<HashMap<_, _>>();
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &heartbeat_failures,
+            &peer_last_seen,
+            0,
+            now
+        ));
+        let local = state.nodes.get("a").unwrap();
+        assert!(local.health.healthy);
+        assert_eq!(choose_owner(&state, &cfg, now), Some("a".to_string()));
+    }
+
+    #[test]
+    fn local_network_isolation_ignores_fresh_inbound_heartbeats() {
         let mut cfg = test_config("a", 0);
         cfg.cluster.peers = vec![
             crate::config::ClusterPeer {
@@ -2468,11 +3056,31 @@ mod tests {
             },
         ];
         let mut failures = HashMap::new();
-        failures.insert("b".to_string(), 1);
-        failures.insert("c".to_string(), 1);
+        failures.insert("b".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        failures.insert("c".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        let now = now_secs();
+        let mut peer_last_seen = HashMap::new();
+        peer_last_seen.insert("b".to_string(), Some(now));
 
-        assert!(!local_network_isolated(&cfg.cluster, &failures, 0));
-        assert!(local_network_isolated(&cfg.cluster, &failures, 1));
+        assert!(!local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
+
+        peer_last_seen.insert(
+            "b".to_string(),
+            Some(now - cfg.cluster.failover_timeout_secs - 1),
+        );
+        assert!(local_network_isolated(
+            &cfg.cluster,
+            &failures,
+            &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
     }
 
     #[test]
@@ -2781,6 +3389,32 @@ mod tests {
             &cfg,
             &status_remote_owner
         ));
+    }
+
+    #[test]
+    fn forced_owner_keeps_local_toggles_before_ownership_applies() {
+        let cfg = test_config("b", 0);
+        let status_remote_owner = ClusterStatus {
+            enabled: true,
+            local_node_id: "b".to_string(),
+            active_owner: Some("a".to_string()),
+            lease_until: Some(now_secs() + 30),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: Vec::new(),
+        };
+
+        {
+            let mut state = CLUSTER_STATE.write().unwrap();
+            state.forced_owner = Some("b".to_string());
+        }
+
+        assert!(!should_disable_local_standby_toggles(
+            &cfg,
+            &status_remote_owner
+        ));
+
+        CLUSTER_STATE.write().unwrap().forced_owner = None;
     }
 
     #[test]
