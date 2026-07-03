@@ -15,6 +15,12 @@ const LOW_SPEED_TIMEOUT_SECS: u32 = 60;
 const STREAM_TIME_FROZEN_SECS: u32 = 10;
 const STARTUP_NO_STATS_TIMEOUT_SECS: u64 = 30;
 const CACHE_PLAYLIST_WAIT_SECS: u64 = 30;
+// When a source ends, ffmpeg may keep printing stats with a slowly decaying speed
+// while TX/RX stay at zero. Treat sustained zero transfer as drain-complete.
+const NETWORK_IDLE_BITRATE_KBPS: f32 = 1.0;
+// Match STREAM_TIME_FROZEN_SECS: pre-bfcccde HLS cache mode used stream-time
+// freeze for fast end-of-stream shutdown; bfcccde disabled it entirely.
+const IDLE_DRAIN_TIMEOUT_SECS: u32 = STREAM_TIME_FROZEN_SECS;
 
 const HLS_CACHE_SEGMENT_SECS: u32 = 2;
 const HLS_CACHE_LIST_SIZE: u32 = 30;
@@ -47,6 +53,9 @@ enum StuckReason {
     LowSpeed {
         elapsed_secs: u32,
     },
+    IdleDrain {
+        elapsed_secs: u32,
+    },
 }
 
 // Global process supervisor
@@ -77,6 +86,8 @@ lazy_static::lazy_static! {
     static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when speed first dropped below LOW_SPEED_THRESHOLD (0 = speed is OK)
     static ref LOW_SPEED_SINCE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    // Track when network transfer dropped to idle (0 = transfer active)
+    static ref NETWORK_IDLE_SINCE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FFMPEG_STATS_DISPLAY: Arc<StdMutex<FfmpegStatsDisplay>> =
         Arc::new(StdMutex::new(FfmpegStatsDisplay::default()));
 }
@@ -263,6 +274,35 @@ fn update_stream_time(stream_time_secs: u32) {
     }
 }
 
+fn is_network_transfer_idle(
+    hls_cache_active: bool,
+    push_active: bool,
+    push_bitrate_kbps: f32,
+    cache_bitrate_kbps: f32,
+) -> bool {
+    if hls_cache_active && !push_active {
+        return false;
+    }
+
+    if hls_cache_active {
+        push_bitrate_kbps < NETWORK_IDLE_BITRATE_KBPS
+            && cache_bitrate_kbps < NETWORK_IDLE_BITRATE_KBPS
+    } else {
+        push_bitrate_kbps < NETWORK_IDLE_BITRATE_KBPS
+    }
+}
+
+fn update_network_idle_tracking(idle: bool) {
+    let now = unix_time_secs();
+    if idle {
+        NETWORK_IDLE_SINCE
+            .compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed)
+            .ok();
+    } else {
+        NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
+    }
+}
+
 // Update low-speed tracking: record when speed first drops below threshold, clear when it recovers
 fn update_speed_tracking(speed: f32) {
     let now = unix_time_secs();
@@ -315,10 +355,23 @@ fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
 
     // In cached HLS mode the delayed reader may report a steady speed/bitrate
     // while its input playlist advances by segment cadence, so stream timestamp
-    // freezes alone are not a reliable stuck signal. Push no-stats and low-speed
-    // checks still cover actual delayed-push stalls.
-    if !hls_cache_active {
-        // Check if stream time is progressing (only after initial startup)
+    // freezes alone are not a reliable stuck signal during live playback.
+    // Once transfer is idle, restore the pre-bfcccde stream-time check so
+    // end-of-stream shutdown stays fast instead of waiting on low-speed decay.
+    let push_bitrate_kbps = f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS).unwrap_or(0.0);
+    let cache_bitrate_kbps = f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS).unwrap_or(0.0);
+    let transfer_idle = is_network_transfer_idle(
+        hls_cache_active,
+        push_active,
+        push_bitrate_kbps,
+        cache_bitrate_kbps,
+    );
+    update_network_idle_tracking(transfer_idle);
+
+    let check_stream_time_frozen =
+        !hls_cache_active || (hls_cache_active && push_active && transfer_idle);
+
+    if check_stream_time_frozen {
         let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);
         if last_stream_update > 0 {
             let stream_time_elapsed = now.saturating_sub(last_stream_update);
@@ -331,13 +384,28 @@ fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
         }
     }
 
-    let low_speed_since = LOW_SPEED_SINCE.load(Ordering::Relaxed);
-    if low_speed_since > 0 {
-        let low_speed_elapsed = now.saturating_sub(low_speed_since);
-        if low_speed_elapsed > LOW_SPEED_TIMEOUT_SECS {
-            return Some(StuckReason::LowSpeed {
-                elapsed_secs: low_speed_elapsed,
-            });
+    if transfer_idle {
+        let idle_since = NETWORK_IDLE_SINCE.load(Ordering::Relaxed);
+        if idle_since > 0 {
+            let idle_elapsed = now.saturating_sub(idle_since);
+            if idle_elapsed >= IDLE_DRAIN_TIMEOUT_SECS {
+                return Some(StuckReason::IdleDrain {
+                    elapsed_secs: idle_elapsed,
+                });
+            }
+        }
+    }
+
+    // A decaying speed with zero TX/RX is normal end-of-stream drain, not a stall.
+    if !transfer_idle {
+        let low_speed_since = LOW_SPEED_SINCE.load(Ordering::Relaxed);
+        if low_speed_since > 0 {
+            let low_speed_elapsed = now.saturating_sub(low_speed_since);
+            if low_speed_elapsed > LOW_SPEED_TIMEOUT_SECS {
+                return Some(StuckReason::LowSpeed {
+                    elapsed_secs: low_speed_elapsed,
+                });
+            }
         }
     }
 
@@ -456,6 +524,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
+    NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
 }
 const NETWORK_PANEL_WIDTH: usize = 72;
 const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
@@ -1306,6 +1375,7 @@ fn reset_ffmpeg_tracking_state() {
     FFMPEG_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     FFMPEG_CACHE_LAST_SAMPLE_MS.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
+    NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
 }
 
 fn start_ffmpeg_timeout_monitor(timeout_secs: u64) {
@@ -1670,6 +1740,12 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
                         elapsed_secs
                     );
                 }
+                StuckReason::IdleDrain { elapsed_secs } => {
+                    tracing::info!(
+                        "📡 流传输已结束（{} 秒无数据），正在停止 ffmpeg",
+                        elapsed_secs
+                    );
+                }
             }
             stop_ffmpeg_internal(false).await;
             break;
@@ -1677,5 +1753,24 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
 
         // Check every 5 seconds
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_idle_requires_both_paths_in_cache_mode() {
+        assert!(!is_network_transfer_idle(true, false, 0.0, 0.0));
+        assert!(!is_network_transfer_idle(true, true, 500.0, 0.0));
+        assert!(!is_network_transfer_idle(true, true, 0.0, 500.0));
+        assert!(is_network_transfer_idle(true, true, 0.0, 0.0));
+    }
+
+    #[test]
+    fn network_idle_direct_mode_uses_push_only() {
+        assert!(!is_network_transfer_idle(false, true, 500.0, 999.0));
+        assert!(is_network_transfer_idle(false, true, 0.0, 999.0));
     }
 }
