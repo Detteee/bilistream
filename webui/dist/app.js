@@ -539,14 +539,10 @@
 
             if (config.interval) {
               statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
-              console.log('Status refresh interval set to', config.interval, 'seconds');
             }
-
-            console.log('LOL Monitor enabled:', config.enable_lol_monitor || false);
-            console.log('Holodex API configured:', !!config.holodex_api_key);
           }
         } catch (error) {
-          console.log('Failed to load config, using default interval:', error);
+          console.warn('Failed to load config, using default interval:', error);
         }
 
         // Start status refresh with configured interval
@@ -1414,7 +1410,6 @@
 
       async function performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
         try {
-          console.log('Switching to channel:', channelId, 'platform:', platform, 'area:', areaId, 'status:', status);
           const response = await fetch('/api/holodex/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1876,116 +1871,105 @@
         }
       }
 
-      function toggleYtHlsCacheEdit() {
-        const statusSpan = document.getElementById('yt-hls-cache-status');
-        const editContainer = document.getElementById('yt-hls-cache-edit-container');
+      function hlsCacheDom(prefix) {
+        return {
+          status: document.getElementById(`${prefix}-hls-cache-status`),
+          editor: document.getElementById(`${prefix}-hls-cache-edit-container`),
+          enabled: document.getElementById(`${prefix}-hls-cache-enabled`),
+          latency: document.getElementById(`${prefix}-hls-cache-latency`)
+        };
+      }
 
-        showInfoRowEdit(statusSpan, editContainer);
+      function setHlsCacheEditorValues(prefix, cache = {}) {
+        const fields = hlsCacheDom(prefix);
+        const enabled = !!cache.enabled;
+        if (fields.enabled) {
+          fields.enabled.checked = enabled;
+        }
+        if (fields.latency) {
+          fields.latency.value = cache.latency_secs || 8;
+        }
+        setHlsCacheLatencyInputState(prefix, enabled);
+      }
 
-        fetch('/api/ffmpeg-cache/youtube')
-          .then(response => response.json())
-          .then(result => {
-            const cache = result.data || {};
-            document.getElementById('yt-hls-cache-enabled').checked = !!cache.enabled;
-            document.getElementById('yt-hls-cache-latency').value = cache.latency_secs || 8;
-            setHlsCacheLatencyInputState('yt', !!cache.enabled);
-          })
-          .catch(() => {
-            document.getElementById('yt-hls-cache-enabled').checked = false;
-            document.getElementById('yt-hls-cache-latency').value = 8;
-            setHlsCacheLatencyInputState('yt', false);
+      function readHlsCacheEditorValues(prefix) {
+        const fields = hlsCacheDom(prefix);
+        return {
+          enabled: !!fields.enabled?.checked,
+          latencySecs: Math.min(60, Math.max(1, parseInt(fields.latency?.value) || 8))
+        };
+      }
+
+      async function toggleHlsCacheEdit(prefix, apiPlatform) {
+        const fields = hlsCacheDom(prefix);
+        showInfoRowEdit(fields.status, fields.editor);
+
+        try {
+          const response = await fetch(`/api/ffmpeg-cache/${apiPlatform}`);
+          const result = await response.json();
+          setHlsCacheEditorValues(prefix, result.data || {});
+        } catch {
+          setHlsCacheEditorValues(prefix, { enabled: false, latency_secs: 8 });
+        }
+      }
+
+      function cancelHlsCacheEdit(prefix) {
+        const fields = hlsCacheDom(prefix);
+        hideInfoRowEdit(fields.status, fields.editor);
+      }
+
+      async function saveHlsCacheEdit(prefix, apiPlatform, label) {
+        const { enabled, latencySecs } = readHlsCacheEditorValues(prefix);
+
+        try {
+          const response = await fetch('/api/ffmpeg-cache/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: apiPlatform,
+              enabled,
+              latency_secs: latencySecs
+            })
           });
+          const result = await response.json();
+          if (!result.success) {
+            showNotification(result.message || 'HLS 缓存配置保存失败', 'error');
+            return;
+          }
+
+          const fields = hlsCacheDom(prefix);
+          if (fields.status) {
+            fields.status.textContent = formatHlsCacheStatus(enabled, latencySecs);
+          }
+          cancelHlsCacheEdit(prefix);
+          showNotification(`${label} HLS 缓存已更新`, 'success');
+        } catch (error) {
+          showNotification('HLS 缓存配置保存失败: ' + error.message, 'error');
+        }
+      }
+
+      function toggleYtHlsCacheEdit() {
+        toggleHlsCacheEdit('yt', 'youtube');
       }
 
       function cancelYtHlsCacheEdit() {
-        const statusSpan = document.getElementById('yt-hls-cache-status');
-        const editContainer = document.getElementById('yt-hls-cache-edit-container');
-
-        hideInfoRowEdit(statusSpan, editContainer);
+        cancelHlsCacheEdit('yt');
       }
 
-      async function saveYtHlsCacheEdit() {
-        const enabled = document.getElementById('yt-hls-cache-enabled').checked;
-        const latencySecs = Math.min(60, Math.max(1, parseInt(document.getElementById('yt-hls-cache-latency').value) || 8));
-
-        try {
-          const response = await fetch('/api/ffmpeg-cache/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'youtube',
-              enabled,
-              latency_secs: latencySecs
-            })
-          });
-          const result = await response.json();
-          if (!result.success) {
-            showNotification(result.message || 'HLS 缓存配置保存失败', 'error');
-            return;
-          }
-
-          document.getElementById('yt-hls-cache-status').textContent = formatHlsCacheStatus(enabled, latencySecs);
-          cancelYtHlsCacheEdit();
-          showNotification('YouTube HLS 缓存已更新', 'success');
-        } catch (error) {
-          showNotification('HLS 缓存配置保存失败: ' + error.message, 'error');
-        }
+      function saveYtHlsCacheEdit() {
+        return saveHlsCacheEdit('yt', 'youtube', 'YouTube');
       }
 
       function toggleTwHlsCacheEdit() {
-        const statusSpan = document.getElementById('tw-hls-cache-status');
-        const editContainer = document.getElementById('tw-hls-cache-edit-container');
-
-        showInfoRowEdit(statusSpan, editContainer);
-
-        fetch('/api/ffmpeg-cache/twitch')
-          .then(response => response.json())
-          .then(result => {
-            const cache = result.data || {};
-            document.getElementById('tw-hls-cache-enabled').checked = !!cache.enabled;
-            document.getElementById('tw-hls-cache-latency').value = cache.latency_secs || 8;
-            setHlsCacheLatencyInputState('tw', !!cache.enabled);
-          })
-          .catch(() => {
-            document.getElementById('tw-hls-cache-enabled').checked = false;
-            document.getElementById('tw-hls-cache-latency').value = 8;
-            setHlsCacheLatencyInputState('tw', false);
-          });
+        toggleHlsCacheEdit('tw', 'twitch');
       }
 
       function cancelTwHlsCacheEdit() {
-        const statusSpan = document.getElementById('tw-hls-cache-status');
-        const editContainer = document.getElementById('tw-hls-cache-edit-container');
-
-        hideInfoRowEdit(statusSpan, editContainer);
+        cancelHlsCacheEdit('tw');
       }
 
-      async function saveTwHlsCacheEdit() {
-        const enabled = document.getElementById('tw-hls-cache-enabled').checked;
-        const latencySecs = Math.min(60, Math.max(1, parseInt(document.getElementById('tw-hls-cache-latency').value) || 8));
-
-        try {
-          const response = await fetch('/api/ffmpeg-cache/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'twitch',
-              enabled,
-              latency_secs: latencySecs
-            })
-          });
-          const result = await response.json();
-          if (!result.success) {
-            showNotification(result.message || 'HLS 缓存配置保存失败', 'error');
-            return;
-          }
-
-          document.getElementById('tw-hls-cache-status').textContent = formatHlsCacheStatus(enabled, latencySecs);
-          cancelTwHlsCacheEdit();
-          showNotification('Twitch HLS 缓存已更新', 'success');
-        } catch (error) {
-          showNotification('HLS 缓存配置保存失败: ' + error.message, 'error');
-        }
+      function saveTwHlsCacheEdit() {
+        return saveHlsCacheEdit('tw', 'twitch', 'Twitch');
       }
 
       async function loadSystemConfig() {
@@ -3207,7 +3191,7 @@
           }
         } catch (error) {
           // Silently fail - logs are optional
-          console.log('Failed to fetch logs:', error);
+          console.debug('Failed to fetch logs:', error);
         }
       }
 
@@ -3627,7 +3611,7 @@
             });
           }
         } catch (error) {
-          console.log('Failed to refresh network status:', error);
+          console.debug('Failed to refresh network status:', error);
         } finally {
           networkRefreshInFlight = false;
         }
@@ -3739,7 +3723,6 @@
 
           // Suppress network errors (when server is down)
           if (error.message && error.message.includes('NetworkError')) {
-            console.log('Server appears to be down, suppressing error notification');
             return;
           }
 
@@ -3751,7 +3734,6 @@
             errorMsg = '配置文件不存在！请先运行 "bilistream setup" 创建配置。';
           } else if (errorMsg.includes('Failed to fetch')) {
             // Also suppress generic fetch failures
-            console.log('Connection failed, suppressing error notification');
             return;
           }
 
@@ -4422,7 +4404,6 @@
               appendAreaOptions(areaSelect, sortedAreas, true);
             }
 
-            console.log('Successfully populated', areasList.length, 'areas');
           } else {
             console.error('No areas data found:', areasData);
             showNotification('未找到分区数据', 'error');
@@ -5117,8 +5098,6 @@
           const updateInfo = data.data;
           latestUpdateInfo = updateInfo;
 
-          console.log('Update info:', updateInfo);
-
           // Compare versions
           if (updateInfo.has_update) {
             renderUpdateNotification(updateInfo, { includeBuildType: true });
@@ -5254,7 +5233,7 @@
               }
             })
             .catch(error => {
-              console.log('Auto-update check failed (silent):', error);
+              console.debug('Auto-update check failed (silent):', error);
             });
         }
       }
