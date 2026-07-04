@@ -2499,6 +2499,46 @@
       text-align: center;
     }
 
+    .holodex-status-loading {
+      background: #89b4fa;
+      color: #1e1e2e;
+    }
+
+    .holodex-status-warning {
+      background: #f9e2af;
+      color: #1e1e2e;
+    }
+
+    .holodex-status-success {
+      background: #a6e3a1;
+      color: #1e1e2e;
+    }
+
+    .holodex-status-error {
+      background: #f38ba8;
+      color: #1e1e2e;
+    }
+
+    .holodex-schedule-divider {
+      position: relative;
+      grid-column: 1 / -1;
+      height: 2px;
+      margin: 10px 0;
+      background: linear-gradient(to right, transparent, var(--heading-color), transparent);
+    }
+
+    .holodex-schedule-divider-label {
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      padding: 0 15px;
+      transform: translateX(-50%);
+      background: var(--card-bg);
+      color: var(--heading-color);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
     .holodex-stream-status {
       padding: 3px 8px;
       border-radius: 4px;
@@ -2663,6 +2703,84 @@
 
     .management-list-heading {
       color: var(--text-primary);
+    }
+
+    .management-empty-message,
+    .management-error-message {
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .management-error-message {
+      color: #f38ba8;
+    }
+
+    .management-item-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
+      gap: 12px;
+    }
+
+    .management-item-card {
+      padding: 12px;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: var(--card-bg);
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+
+    .management-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .management-item-title {
+      min-width: 0;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .management-item-actions {
+      display: flex;
+      flex-shrink: 0;
+      gap: 4px;
+    }
+
+    .management-item-action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--heading-color);
+      cursor: pointer;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    .management-item-action-btn:hover {
+      background: var(--button-hover-bg);
+    }
+
+    .management-item-divider {
+      height: 1px;
+      margin: 8px 0;
+      border: none;
+      background: var(--card-border);
+    }
+
+    .management-item-meta {
+      display: block;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
     }
 
     .management-refresh-btn {

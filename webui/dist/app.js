@@ -607,6 +607,38 @@
         }
       }
 
+      const HOLODEX_STATUS_STATE_CLASSES = [
+        'holodex-status-loading',
+        'holodex-status-warning',
+        'holodex-status-success',
+        'holodex-status-error'
+      ];
+
+      function setHolodexStatus(statusDiv, message, stateClass) {
+        statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+        statusDiv.classList.add(stateClass);
+        statusDiv.style.display = '';
+        statusDiv.textContent = message;
+      }
+
+      function hideHolodexStatus(statusDiv) {
+        statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+        statusDiv.style.display = 'none';
+        statusDiv.textContent = '';
+      }
+
+      function createHolodexScheduleDivider() {
+        const divider = document.createElement('div');
+        divider.className = 'holodex-schedule-divider';
+
+        const label = document.createElement('span');
+        label.className = 'holodex-schedule-divider-label';
+        label.textContent = '预告';
+
+        divider.appendChild(label);
+        return divider;
+      }
+
       async function refreshHolodexStreams() {
         // Start continuous spinning animation
         const icon = document.getElementById('refreshHolodexIcon');
@@ -616,23 +648,23 @@
 
         const statusDiv = document.getElementById('holodex-status');
         const streamsDiv = document.getElementById('holodex-streams');
+        if (!statusDiv || !streamsDiv) {
+          if (icon) {
+            icon.style.animation = '';
+          }
+          return;
+        }
 
         stopHolodexDurationTicker();
-        statusDiv.style.display = '';
-        statusDiv.innerHTML = '⏳ 加载中...';
-        statusDiv.style.background = '#89b4fa';
-        statusDiv.style.color = '#1e1e2e';
-        streamsDiv.innerHTML = '';
+        setHolodexStatus(statusDiv, '⏳ 加载中...', 'holodex-status-loading');
+        streamsDiv.replaceChildren();
 
         try {
           const response = await fetch(`/api/holodex/streams?favorites=${holodexUseFavorites ? 'true' : 'false'}`);
           const data = await response.json();
 
           if (!data.success) {
-            statusDiv.style.display = '';
-            statusDiv.innerHTML = `⚠️ ${data.message}`;
-            statusDiv.style.background = '#f9e2af';
-            statusDiv.style.color = '#1e1e2e';
+            setHolodexStatus(statusDiv, `⚠️ ${data.message}`, 'holodex-status-warning');
             return;
           }
 
@@ -655,12 +687,10 @@
           const scheduledStreams = streams.filter(s => s.status !== 'live');
 
           if (streams.length === 0) {
-            statusDiv.style.display = '';
-            statusDiv.innerHTML = isFavorites
+            const emptyMessage = isFavorites
               ? '✅ 收藏夹 - 当前无直播或预告'
               : '当前无直播或预告';
-            statusDiv.style.background = '#a6e3a1';
-            statusDiv.style.color = '#1e1e2e';
+            setHolodexStatus(statusDiv, emptyMessage, 'holodex-status-success');
             return;
           }
 
@@ -671,8 +701,7 @@
             return timeA - timeB;
           });
 
-          statusDiv.style.display = 'none';
-          statusDiv.innerHTML = '';
+          hideHolodexStatus(statusDiv);
 
           // Render live streams first
           liveStreams.forEach(stream => {
@@ -681,10 +710,7 @@
 
           // Add divider if both live and scheduled exist
           if (liveStreams.length > 0 && scheduledStreams.length > 0) {
-            const divider = document.createElement('div');
-            divider.style.cssText = 'grid-column: 1 / -1; height: 2px; background: linear-gradient(to right, transparent, var(--heading-color), transparent); margin: 10px 0; position: relative;';
-            divider.innerHTML = '<span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--card-bg); padding: 0 15px; color: var(--heading-color); font-size: 12px; font-weight: 600;">预告</span>';
-            streamsDiv.appendChild(divider);
+            streamsDiv.appendChild(createHolodexScheduleDivider());
           }
 
           // Render scheduled streams (now sorted by time)
@@ -695,10 +721,7 @@
           startHolodexDurationTicker();
 
         } catch (error) {
-          statusDiv.style.display = '';
-          statusDiv.innerHTML = `❌ 请求失败: ${error.message}`;
-          statusDiv.style.background = '#f38ba8';
-          statusDiv.style.color = '#1e1e2e';
+          setHolodexStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'holodex-status-error');
         } finally {
           // Stop spinning animation when complete
           if (icon) {
@@ -707,10 +730,8 @@
         }
       }
 
-      const TWITCH_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z"></path></svg>';
-      const RADIO_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 10C10.9 10 10 10.9 10 12S10.9 14 12 14 14 13.1 14 12 13.1 10 12 10M18 12C18 8.7 15.3 6 12 6S6 8.7 6 12C6 14.2 7.2 16.1 9 17.2L10 15.5C8.8 14.8 8 13.5 8 12.1C8 9.9 9.8 8.1 12 8.1S16 9.9 16 12.1C16 13.6 15.2 14.9 14 15.5L15 17.2C16.8 16.2 18 14.2 18 12M12 2C6.5 2 2 6.5 2 12C2 15.7 4 18.9 7 20.6L8 18.9C5.6 17.5 4 14.9 4 12C4 7.6 7.6 4 12 4S20 7.6 20 12C20 15 18.4 17.5 16 18.9L17 20.6C20 18.9 22 15.7 22 12C22 6.5 17.5 2 12 2Z"></path></svg>';
-
       let holodexDurationIntervalId = null;
+      const SVG_NS = 'http://www.w3.org/2000/svg';
 
       function getHolodexPlaceholderKind(stream) {
         const link = (stream.external_link || '').toLowerCase();
@@ -720,57 +741,114 @@
         return 'radio';
       }
 
-      function buildHolodexPlaceholderDurationOverlay(stream, isLive) {
+      function createSvgIcon(viewBox, pathData, className = '') {
+        const svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('viewBox', viewBox);
+        svg.setAttribute('aria-hidden', 'true');
+        if (className) {
+          svg.classList.add(className);
+        }
+
+        const paths = Array.isArray(pathData) ? pathData : [pathData];
+        paths.forEach(pathDefinition => {
+          const path = document.createElementNS(SVG_NS, 'path');
+          if (typeof pathDefinition === 'string') {
+            path.setAttribute('d', pathDefinition);
+          } else {
+            Object.entries(pathDefinition).forEach(([name, value]) => {
+              path.setAttribute(name, value);
+            });
+          }
+          svg.appendChild(path);
+        });
+        return svg;
+      }
+
+      function createHolodexStreamSvg(pathData) {
+        const svg = createSvgIcon('0 0 24 24', pathData);
+        svg.setAttribute('width', '14');
+        svg.setAttribute('height', '14');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        return svg;
+      }
+
+      function createHolodexPlaceholderIcon(kind) {
+        const iconClass = kind === 'twitch'
+          ? 'holodex-duration-twitch-icon'
+          : 'holodex-duration-radio-icon';
+        const wrapper = document.createElement('span');
+        wrapper.className = iconClass;
+        wrapper.appendChild(kind === 'twitch'
+          ? createSvgIcon('0 0 24 24', 'M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z')
+          : createSvgIcon('0 0 24 24', 'M12 10C10.9 10 10 10.9 10 12S10.9 14 12 14 14 13.1 14 12 13.1 10 12 10M18 12C18 8.7 15.3 6 12 6S6 8.7 6 12C6 14.2 7.2 16.1 9 17.2L10 15.5C8.8 14.8 8 13.5 8 12.1C8 9.9 9.8 8.1 12 8.1S16 9.9 16 12.1C16 13.6 15.2 14.9 14 15.5L15 17.2C16.8 16.2 18 14.2 18 12M12 2C6.5 2 2 6.5 2 12C2 15.7 4 18.9 7 20.6L8 18.9C5.6 17.5 4 14.9 4 12C4 7.6 7.6 4 12 4S20 7.6 20 12C20 15 18.4 17.5 16 18.9L17 20.6C20 18.9 22 15.7 22 12C22 6.5 17.5 2 12 2Z')
+        );
+        return wrapper;
+      }
+
+      function createHolodexPlaceholderDurationOverlay(stream, isLive) {
         const kind = getHolodexPlaceholderKind(stream);
         const durationClass = kind === 'twitch'
           ? 'holodex-stream-duration holodex-stream-duration-twitch'
           : 'holodex-stream-duration holodex-stream-duration-radio';
-        const iconSvg = kind === 'twitch' ? TWITCH_ICON_SVG : RADIO_ICON_SVG;
-        const iconClass = kind === 'twitch' ? 'holodex-duration-twitch-icon' : 'holodex-duration-radio-icon';
         const hoverText = kind === 'twitch' ? '外部配信' : '外部直播';
         const startMs = getHolodexStreamStartMs(stream, isLive);
+        const duration = document.createElement('div');
+        duration.className = durationClass;
+        let hasDurationText = false;
 
         if (isLive && startMs) {
-          const initial = formatHolodexDuration(Date.now() - startMs);
-          return `<div class="${durationClass}" data-tick="live" data-start-ms="${startMs}">
-              <span class="holodex-duration-text">${initial}</span>
-              <span class="holodex-duration-hover">${hoverText}</span>
-              <span class="${iconClass}">${iconSvg}</span>
-            </div>`;
+          duration.dataset.tick = 'live';
+          duration.dataset.startMs = String(startMs);
+
+          const text = document.createElement('span');
+          text.className = 'holodex-duration-text';
+          text.textContent = formatHolodexDuration(Date.now() - startMs);
+          duration.appendChild(text);
+          hasDurationText = true;
         }
 
-        if (stream.start_scheduled) {
+        if (!hasDurationText && stream.start_scheduled) {
           const start = new Date(stream.start_scheduled);
           const clock = Number.isNaN(start.getTime())
             ? '预告'
             : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-          return `<div class="${durationClass}">
-              <span class="holodex-duration-text">${clock}</span>
-              <span class="holodex-duration-hover">${hoverText}</span>
-              <span class="${iconClass}">${iconSvg}</span>
-            </div>`;
+          const text = document.createElement('span');
+          text.className = 'holodex-duration-text';
+          text.textContent = clock;
+          duration.appendChild(text);
         }
 
-        return `<div class="${durationClass}">
-            <span class="holodex-duration-hover">${hoverText}</span>
-            <span class="${iconClass}">${iconSvg}</span>
-          </div>`;
+        const hover = document.createElement('span');
+        hover.className = 'holodex-duration-hover';
+        hover.textContent = hoverText;
+        duration.append(hover, createHolodexPlaceholderIcon(kind));
+        return duration;
       }
 
-      function buildHolodexDurationOverlay(stream, isLive, isPlaceholder) {
+      function createHolodexDurationOverlay(stream, isLive, isPlaceholder) {
         if (isPlaceholder) {
-          return buildHolodexPlaceholderDurationOverlay(stream, isLive);
+          return createHolodexPlaceholderDurationOverlay(stream, isLive);
         }
 
         const startMs = getHolodexStreamStartMs(stream, isLive);
         if (isLive && startMs) {
-          const initial = formatHolodexDuration(Date.now() - startMs);
-          return `<div class="holodex-stream-duration holodex-stream-duration-live" data-tick="live" data-start-ms="${startMs}">
-              <span class="holodex-duration-text">${initial}</span>
-            </div>`;
+          const duration = document.createElement('div');
+          duration.className = 'holodex-stream-duration holodex-stream-duration-live';
+          duration.dataset.tick = 'live';
+          duration.dataset.startMs = String(startMs);
+
+          const text = document.createElement('span');
+          text.className = 'holodex-duration-text';
+          text.textContent = formatHolodexDuration(Date.now() - startMs);
+          duration.appendChild(text);
+          return duration;
         }
 
-        return '';
+        return null;
       }
 
       function escapeHolodexHtml(text) {
@@ -867,14 +945,24 @@
         return `https://holodex.net/statics/channelImg/${encodeURIComponent(stream.channel_id)}/50.png`;
       }
 
-      function buildHolodexAvatarBlock(stream) {
-        if (!stream.channel_id) return '';
+      function createHolodexAvatarBlock(stream) {
+        if (!stream.channel_id) return null;
         const holodexUrl = getHolodexChannelUrl(stream.channel_id);
         const photoUrl = getHolodexChannelPhotoUrl(stream);
-        const label = escapeHolodexHtml(stream.channel_name || 'channel');
-        return `<a class="holodex-stream-avatar" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer" title="${label}">
-            <img src="${escapeHolodexHtml(photoUrl)}" alt="" loading="lazy">
-          </a>`;
+
+        const avatar = document.createElement('a');
+        avatar.className = 'holodex-stream-avatar';
+        avatar.href = holodexUrl;
+        avatar.target = '_blank';
+        avatar.rel = 'noopener noreferrer';
+        avatar.title = stream.channel_name || 'channel';
+
+        const image = document.createElement('img');
+        image.src = photoUrl;
+        image.alt = '';
+        image.loading = 'lazy';
+        avatar.appendChild(image);
+        return avatar;
       }
 
       async function refreshHolodexChannelsData() {
@@ -906,42 +994,92 @@
         });
       }
 
-      function buildHolodexAddChannelControls(stream) {
+      function createHolodexChannelAddIcon(pathData, title) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'holodex-channel-add-btn';
+        button.title = title;
+        button.appendChild(createSvgIcon('0 0 24 24', pathData));
+        return button;
+      }
+
+      function createHolodexAddChannelControls(stream) {
         if (holodexCurrentSource !== 'favorites' || !stream.channel_name || holodexStreamHasConfiguredChannel(stream)) {
-          return '';
+          return null;
         }
 
         const youtubeId = stream.channel_id || '';
         const twitchId = parseTwitchLoginFromLink(stream.external_link);
-        if (!youtubeId && !twitchId) return '';
+        if (!youtubeId && !twitchId) return null;
 
-        const channelName = escapeHolodexHtml(stream.channel_name);
-        const youtubeAttr = escapeHolodexHtml(youtubeId);
-        const twitchAttr = escapeHolodexHtml(twitchId);
+        const control = document.createElement('span');
+        control.className = 'holodex-channel-add';
+        control.dataset.channelName = stream.channel_name;
+        control.dataset.youtubeId = youtubeId;
+        control.dataset.twitchId = twitchId;
 
-        return `<span class="holodex-channel-add" data-channel-name="${channelName}" data-youtube-id="${youtubeAttr}" data-twitch-id="${twitchAttr}">
-            <button type="button" class="holodex-channel-add-btn holodex-add-channel-start" title="添加到 channels.json" aria-label="添加到 channels.json">➕</button>
-            <span class="holodex-channel-add-actions" aria-label="确认添加频道">
-              <button type="button" class="holodex-channel-add-btn holodex-add-channel-confirm" title="确认添加">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
-              </button>
-              <button type="button" class="holodex-channel-add-btn holodex-add-channel-reject" title="取消">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
-              </button>
-            </span>
-          </span>`;
+        const startButton = document.createElement('button');
+        startButton.type = 'button';
+        startButton.className = 'holodex-channel-add-btn holodex-add-channel-start';
+        startButton.title = '添加到 channels.json';
+        startButton.setAttribute('aria-label', '添加到 channels.json');
+        startButton.textContent = '➕';
+
+        const actions = document.createElement('span');
+        actions.className = 'holodex-channel-add-actions';
+        actions.setAttribute('aria-label', '确认添加频道');
+
+        const confirmButton = createHolodexChannelAddIcon('M20 6 9 17l-5-5', '确认添加');
+        confirmButton.classList.add('holodex-add-channel-confirm');
+
+        const rejectButton = createHolodexChannelAddIcon('M18 6 6 18M6 6l12 12', '取消');
+        rejectButton.classList.add('holodex-add-channel-reject');
+
+        actions.append(confirmButton, rejectButton);
+        control.append(startButton, actions);
+        return control;
       }
 
-      function buildHolodexChannelBlock(stream) {
-        if (!stream.channel_name) return '';
-        const channelName = escapeHolodexHtml(stream.channel_name);
+      function createHolodexChannelBlock(stream) {
+        if (!stream.channel_name) return null;
         const holodexUrl = getHolodexChannelUrl(stream.channel_id);
-        const addControls = buildHolodexAddChannelControls(stream);
-        const channelLink = holodexUrl
-          ? `<a class="holodex-stream-channel" href="${escapeHolodexHtml(holodexUrl)}" target="_blank" rel="noopener noreferrer">${channelName}</a>`
-          : `<p class="holodex-stream-channel">${channelName}</p>`;
+        const row = document.createElement('div');
+        row.className = 'holodex-stream-channel-row';
 
-        return `<div class="holodex-stream-channel-row">${channelLink}${addControls}</div>`;
+        const channel = document.createElement(holodexUrl ? 'a' : 'p');
+        channel.className = 'holodex-stream-channel';
+        channel.textContent = stream.channel_name;
+        if (holodexUrl) {
+          channel.href = holodexUrl;
+          channel.target = '_blank';
+          channel.rel = 'noopener noreferrer';
+        }
+        row.appendChild(channel);
+
+        const addControls = createHolodexAddChannelControls(stream);
+        if (addControls) {
+          row.appendChild(addControls);
+        }
+        return row;
+      }
+
+      function createHolodexStreamActionButton(extraClasses, streamActionData, icon) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `holodex-stream-btn ${extraClasses}`;
+        button.dataset.platform = streamActionData.platform;
+        button.dataset.channelId = streamActionData.channelId;
+        button.dataset.twitchId = streamActionData.twitchId;
+        button.dataset.externalLink = streamActionData.externalLink;
+        button.dataset.suggestedAreaId = streamActionData.suggestedAreaId;
+        button.dataset.title = streamActionData.title;
+        button.dataset.topicId = streamActionData.topicId;
+        button.dataset.status = streamActionData.status;
+
+        const label = document.createElement('span');
+        label.textContent = '切换';
+        button.append(icon, label);
+        return button;
       }
 
       function parseTwitchLoginFromLink(link) {
@@ -978,87 +1116,140 @@
 
         const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
 
-        let areaInfo = '';
+        const areaInfo = document.createElement('p');
+        areaInfo.className = 'holodex-stream-area-hint';
         if (stream.suggested_area_id && stream.suggested_area_name) {
-          areaInfo = `<p class="holodex-stream-area-hint">🎯 建议分区: ${escapeHolodexHtml(stream.suggested_area_name)}</p>`;
+          areaInfo.textContent = `🎯 建议分区: ${stream.suggested_area_name}`;
         }
 
-        const topicBlock = stream.topic_id
-          ? `<span class="holodex-stream-topic">${escapeHolodexHtml(stream.topic_id)}</span>`
-          : '';
-        const durationBlock = buildHolodexDurationOverlay(stream, isLive, isPlaceholder);
-
-        const thumbInner = thumbUrl
-          ? `<img src="${escapeHolodexHtml(thumbUrl)}" alt="">`
-          : '<div class="holodex-stream-thumb-placeholder"></div>';
-
-        let statusMeta = '';
+        const statusMeta = document.createElement('div');
+        statusMeta.className = 'holodex-stream-meta';
         if (!isLive) {
           const scheduleText = stream.start_scheduled
             ? formatHolodexScheduledStart(stream.start_scheduled)
             : '预告';
-          statusMeta = `<span class="holodex-stream-scheduled">${escapeHolodexHtml(scheduleText)}</span>`;
+          const scheduled = document.createElement('span');
+          scheduled.className = 'holodex-stream-scheduled';
+          scheduled.textContent = scheduleText;
+          statusMeta.appendChild(scheduled);
         } else if (viewers) {
-          statusMeta = `<span class="holodex-stream-live-label">直播中</span><span>• ${viewers}</span>`;
+          const liveLabel = document.createElement('span');
+          liveLabel.className = 'holodex-stream-live-label';
+          liveLabel.textContent = '直播中';
+          const viewerText = document.createElement('span');
+          viewerText.textContent = `• ${viewers}`;
+          statusMeta.append(liveLabel, viewerText);
         } else {
-          statusMeta = '<span class="holodex-stream-live-label">直播中</span>';
+          const liveLabel = document.createElement('span');
+          liveLabel.className = 'holodex-stream-live-label';
+          liveLabel.textContent = '直播中';
+          statusMeta.appendChild(liveLabel);
         }
 
-        const cropButton = isLive ? `<button class="holodex-stream-btn holodex-stream-btn-crop crop-switch-button" 
-               data-platform="${platform}"
-               data-channel-id="${stream.channel_id}" 
-               data-twitch-id="${twitchChannelId}"
-               data-external-link="${stream.external_link || ''}"
-               data-suggested-area-id="${stream.suggested_area_id || ''}" 
-               data-title="${stream.title.replace(/"/g, '&quot;')}" 
-               data-topic-id="${stream.topic_id || ''}" 
-               data-status="${stream.status || ''}">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path><path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path></svg>
-              <span>切换</span>
-            </button>` : '';
+        const streamActionData = {
+          platform,
+          channelId: stream.channel_id || '',
+          twitchId: twitchChannelId,
+          externalLink: stream.external_link || '',
+          suggestedAreaId: stream.suggested_area_id || '',
+          title: stream.title || '',
+          topicId: stream.topic_id || '',
+          status: stream.status || ''
+        };
 
-        const switchButton = `<button class="holodex-stream-btn holodex-stream-btn-switch switch-button" 
-               data-platform="${platform}"
-               data-channel-id="${stream.channel_id}" 
-               data-twitch-id="${twitchChannelId}"
-               data-external-link="${stream.external_link || ''}"
-               data-suggested-area-id="${stream.suggested_area_id || ''}" 
-               data-title="${stream.title.replace(/"/g, '&quot;')}" 
-               data-topic-id="${stream.topic_id || ''}" 
-               data-status="${stream.status || ''}">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8"/><path d="m7 17l-4-1l-1 4M17 7l4 1l1-4"/></svg>
-              <span>切换</span>
-            </button>`;
+        const thumb = document.createElement('div');
+        thumb.className = 'holodex-stream-thumb';
+        const thumbLink = document.createElement('a');
+        thumbLink.className = 'holodex-stream-thumb-link';
+        thumbLink.href = watchUrl;
+        thumbLink.target = '_blank';
+        thumbLink.rel = 'noopener noreferrer';
+        if (thumbUrl) {
+          const image = document.createElement('img');
+          image.src = thumbUrl;
+          image.alt = '';
+          thumbLink.appendChild(image);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'holodex-stream-thumb-placeholder';
+          thumbLink.appendChild(placeholder);
+        }
 
-        streamCard.innerHTML = `
-          <div class="holodex-stream-thumb">
-            <a class="holodex-stream-thumb-link" href="${escapeHolodexHtml(watchUrl)}" target="_blank" rel="noopener noreferrer">
-              ${thumbInner}
-            </a>
-            <div class="holodex-stream-thumb-top">
-              ${topicBlock}
-            </div>
-            ${durationBlock ? `<div class="holodex-stream-thumb-bottom">${durationBlock}</div>` : ''}
-          </div>
-          <div class="holodex-stream-body">
-            <div class="holodex-stream-content-row">
-              ${buildHolodexAvatarBlock(stream)}
-              <div class="holodex-stream-lines">
-                <h4 class="holodex-stream-title">${escapeHolodexHtml(stream.title)}</h4>
-                ${buildHolodexChannelBlock(stream)}
-                <div class="holodex-stream-meta">${statusMeta}</div>
-                ${areaInfo}
-              </div>
-            </div>
-            <div class="holodex-stream-actions">
-              <a class="holodex-stream-watch" href="${escapeHolodexHtml(watchUrl)}" target="_blank" rel="noopener noreferrer">
-                📺 观看
-              </a>
-              ${cropButton}
-              ${switchButton}
-            </div>
-          </div>
-        `;
+        const thumbTop = document.createElement('div');
+        thumbTop.className = 'holodex-stream-thumb-top';
+        if (stream.topic_id) {
+          const topic = document.createElement('span');
+          topic.className = 'holodex-stream-topic';
+          topic.textContent = stream.topic_id;
+          thumbTop.appendChild(topic);
+        }
+
+        thumb.append(thumbLink, thumbTop);
+        const durationBlock = createHolodexDurationOverlay(stream, isLive, isPlaceholder);
+        if (durationBlock) {
+          const thumbBottom = document.createElement('div');
+          thumbBottom.className = 'holodex-stream-thumb-bottom';
+          thumbBottom.appendChild(durationBlock);
+          thumb.appendChild(thumbBottom);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'holodex-stream-body';
+        const contentRow = document.createElement('div');
+        contentRow.className = 'holodex-stream-content-row';
+        const avatar = createHolodexAvatarBlock(stream);
+        if (avatar) {
+          contentRow.appendChild(avatar);
+        }
+
+        const lines = document.createElement('div');
+        lines.className = 'holodex-stream-lines';
+        const title = document.createElement('h4');
+        title.className = 'holodex-stream-title';
+        title.textContent = stream.title || '';
+        lines.appendChild(title);
+
+        const channelBlock = createHolodexChannelBlock(stream);
+        if (channelBlock) {
+          lines.appendChild(channelBlock);
+        }
+        lines.appendChild(statusMeta);
+        if (areaInfo.textContent) {
+          lines.appendChild(areaInfo);
+        }
+        contentRow.appendChild(lines);
+
+        const actions = document.createElement('div');
+        actions.className = 'holodex-stream-actions';
+        const watchLink = document.createElement('a');
+        watchLink.className = 'holodex-stream-watch';
+        watchLink.href = watchUrl;
+        watchLink.target = '_blank';
+        watchLink.rel = 'noopener noreferrer';
+        watchLink.textContent = '📺 观看';
+        actions.appendChild(watchLink);
+
+        if (isLive) {
+          actions.appendChild(createHolodexStreamActionButton(
+            'holodex-stream-btn-crop crop-switch-button',
+            streamActionData,
+            createHolodexStreamSvg([
+              { d: 'M6.13 1L6 16a2 2 0 0 0 2 2h15' },
+              { d: 'M1 6.13L16 6a2 2 0 0 1 2 2v15' }
+            ])
+          ));
+        }
+        actions.appendChild(createHolodexStreamActionButton(
+          'holodex-stream-btn-switch switch-button',
+          streamActionData,
+          createHolodexStreamSvg([
+            { d: 'M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8' },
+            { d: 'm7 17l-4-1l-1 4M17 7l4 1l1-4' }
+          ])
+        ));
+
+        body.append(contentRow, actions);
+        streamCard.append(thumb, body);
 
         return streamCard;
       }
@@ -1115,6 +1306,43 @@
         option.value = value;
         option.textContent = label;
         return option;
+      }
+
+      function getSortedAreas(areas) {
+        return [...areas].sort((a, b) => {
+          if (a.id === 235) return -1;
+          if (b.id === 235) return 1;
+          return 0;
+        });
+      }
+
+      function appendAreaOptions(select, areas, includeId = false) {
+        getSortedAreas(areas).forEach(area => {
+          const label = includeId ? `${area.name} (${area.id})` : area.name;
+          select.appendChild(createAreaOption(area.id, label));
+        });
+      }
+
+      function createPlatformChannelOption(channel, platform) {
+        const platforms = channel.platforms || {};
+        return createSelectOption(
+          JSON.stringify({
+            id: platforms[platform],
+            name: channel.name
+          }),
+          channel.name
+        );
+      }
+
+      function appendPlatformChannelOptions(select, platform) {
+        if (!channelsData || !Array.isArray(channelsData.channels)) return;
+
+        channelsData.channels.forEach(channel => {
+          const platforms = channel.platforms || {};
+          if (platforms[platform]) {
+            select.appendChild(createPlatformChannelOption(channel, platform));
+          }
+        });
       }
 
       function showFaceAuthModal(qrUrl) {
@@ -1995,6 +2223,56 @@
         button.appendChild(svg);
       }
 
+      function appendEditIcon(button) {
+        const svgNamespace = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNamespace, 'svg');
+        svg.classList.add('cluster-btn-icon');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+
+        const bottomLine = document.createElementNS(svgNamespace, 'path');
+        bottomLine.setAttribute('d', 'M12 20h9');
+
+        const pencil = document.createElementNS(svgNamespace, 'path');
+        pencil.setAttribute('d', 'M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z');
+
+        svg.append(bottomLine, pencil);
+        button.appendChild(svg);
+      }
+
+      function createManagementMessage(message, className) {
+        const paragraph = document.createElement('p');
+        paragraph.className = className;
+        paragraph.textContent = message;
+        return paragraph;
+      }
+
+      function createManagementActionButton(title, onClick, appendIcon) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'management-item-action-btn';
+        button.title = title;
+        button.setAttribute('aria-label', title);
+        button.addEventListener('click', onClick);
+        appendIcon(button);
+        return button;
+      }
+
+      function createManagementMeta(label, values, extraClass = '') {
+        const small = document.createElement('small');
+        small.className = extraClass
+          ? `management-item-meta ${extraClass}`
+          : 'management-item-meta';
+        const normalized = Array.isArray(values) ? values.filter(Boolean).join(', ') : values;
+        small.textContent = `${label}: ${normalized || '无'}`;
+        return small;
+      }
+
       function addAntiCollisionEntry() {
         const username = document.getElementById('anti-collision-username').value.trim();
         const roomId = parseInt(document.getElementById('anti-collision-roomid').value);
@@ -2226,50 +2504,68 @@
 
           if (result.success) {
             const areasContent = document.getElementById('areas-content');
+            if (!areasContent) return;
+
             if (result.data.areas.length === 0) {
-              areasContent.innerHTML = '<p style="color: var(--text-secondary);">暂无分区</p>';
+              areasContent.replaceChildren(
+                createManagementMessage('暂无分区', 'management-empty-message')
+              );
             } else {
-              areasContent.innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px;">
-                  ${result.data.areas.map(area => `
-                    <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--text-primary);">
-                      <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div><strong>ID: ${area.id}</strong> - ${area.name}</div>
-                        <div style="display: flex; gap: 4px;">
-                          <button onclick="editArea(${area.id})" title="编辑分区"
-                            style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                            onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M12 20h9"></path>
-                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                            </svg>
-                          </button>
-                          <button onclick="deleteArea(${area.id})" title="删除分区"
-                            style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                            onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <polyline points="3,6 5,6 21,6"></polyline>
-                              <path d="m19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
-                              <line x1="10" y1="11" x2="10" y2="17"></line>
-                              <line x1="14" y1="11" x2="14" y2="17"></line>
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
-                      <hr style="margin: 8px 0; border: none; height: 1px; background: var(--card-border);">
-                      <small style="color: var(--text-secondary);">关键词: ${area.title_keywords.join(', ') || '无'}</small>
-                      <br><small style="color: var(--text-secondary);">别名: ${area.aliases.join(', ') || '无'}</small>
-                    </div>
-                  `).join('')}
-                </div>
-              `;
+              const grid = document.createElement('div');
+              grid.className = 'management-item-grid';
+
+              result.data.areas.forEach(area => {
+                const card = document.createElement('div');
+                card.className = 'management-item-card';
+
+                const header = document.createElement('div');
+                header.className = 'management-item-header';
+
+                const title = document.createElement('div');
+                title.className = 'management-item-title';
+
+                const id = document.createElement('strong');
+                id.textContent = `ID: ${area.id}`;
+                title.append(id, document.createTextNode(` - ${area.name}`));
+
+                const actions = document.createElement('div');
+                actions.className = 'management-item-actions';
+                actions.append(
+                  createManagementActionButton('编辑分区', () => editArea(area.id), appendEditIcon),
+                  createManagementActionButton('删除分区', () => deleteArea(area.id), appendAntiCollisionRemoveIcon)
+                );
+
+                const divider = document.createElement('hr');
+                divider.className = 'management-item-divider';
+
+                header.append(title, actions);
+                card.append(
+                  header,
+                  divider,
+                  createManagementMeta('关键词', area.title_keywords),
+                  createManagementMeta('别名', area.aliases)
+                );
+                grid.appendChild(card);
+              });
+
+              areasContent.replaceChildren(grid);
             }
           } else {
-            document.getElementById('areas-content').innerHTML = `<p style="color: red;">加载失败: ${result.message}</p>`;
+            const areasContent = document.getElementById('areas-content');
+            if (areasContent) {
+              areasContent.replaceChildren(
+                createManagementMessage(`加载失败: ${result.message}`, 'management-error-message')
+              );
+            }
           }
         } catch (error) {
           console.error('Load areas error:', error);
-          document.getElementById('areas-content').innerHTML = `<p style="color: red;">加载失败: ${error.message}</p>`;
+          const areasContent = document.getElementById('areas-content');
+          if (areasContent) {
+            areasContent.replaceChildren(
+              createManagementMessage(`加载失败: ${error.message}`, 'management-error-message')
+            );
+          }
         }
       }
 
@@ -2328,55 +2624,89 @@
       async function loadChannels() {
         try {
           const response = await fetch('/api/manage/channels');
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
+          }
+
           const result = await response.json();
 
           if (result.success) {
             const channelsContent = document.getElementById('channels-content');
+            if (!channelsContent) return;
+
             if (result.data.channels.length === 0) {
-              channelsContent.innerHTML = '<p style="color: var(--text-secondary);">暂无频道</p>';
+              channelsContent.replaceChildren(
+                createManagementMessage('暂无频道', 'management-empty-message')
+              );
             } else {
-              channelsContent.innerHTML = `
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px;">
-                  ${result.data.channels.map(channel => `
-                    <div style="padding: 10px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--text-primary); word-wrap: break-word; overflow-wrap: break-word;">
-                      <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div><strong>${channel.name}</strong></div>
-                        <div style="display: flex; gap: 4px;">
-                          <button onclick="editChannel('${channel.name}')" title="编辑频道"
-                            style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                            onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M12 20h9"></path>
-                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                            </svg>
-                          </button>
-                          <button onclick="deleteChannel('${channel.name}')" title="删除频道"
-                            style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                            onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <polyline points="3,6 5,6 21,6"></polyline>
-                              <path d="m19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
-                              <line x1="10" y1="11" x2="10" y2="17"></line>
-                              <line x1="14" y1="11" x2="14" y2="17"></line>
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
-                      <hr style="margin: 8px 0; border: none; height: 1px; background: var(--card-border);">
-                      <small style="color: var(--text-secondary);">别名: ${channel.aliases.join(', ') || '无'}</small>
-                      <br><small style="color: var(--text-secondary); word-break: break-all;">YouTube: ${channel.platforms.youtube || '无'}</small>
-                      <br><small style="color: var(--text-secondary);">Twitch: ${channel.platforms.twitch || '无'}</small>
-                      ${channel.riot_puuid ? `<br><small style="color: var(--text-secondary); word-break: break-all; line-height: 1.3;">Riot PUUID: ${channel.riot_puuid}</small>` : ''}
-                    </div>
-                  `).join('')}
-                </div>
-              `;
+              const grid = document.createElement('div');
+              grid.className = 'management-item-grid';
+
+              result.data.channels.forEach(channel => {
+                const platforms = channel.platforms || {};
+                const card = document.createElement('div');
+                card.className = 'management-item-card';
+
+                const header = document.createElement('div');
+                header.className = 'management-item-header';
+
+                const title = document.createElement('div');
+                title.className = 'management-item-title';
+                const name = document.createElement('strong');
+                name.textContent = channel.name;
+                title.appendChild(name);
+
+                const actions = document.createElement('div');
+                actions.className = 'management-item-actions';
+                actions.append(
+                  createManagementActionButton('编辑频道', () => editChannel(channel.name), appendEditIcon),
+                  createManagementActionButton('删除频道', () => deleteChannel(channel.name), appendAntiCollisionRemoveIcon)
+                );
+
+                const divider = document.createElement('hr');
+                divider.className = 'management-item-divider';
+
+                header.append(title, actions);
+                card.append(
+                  header,
+                  divider,
+                  createManagementMeta('别名', channel.aliases),
+                  createManagementMeta('YouTube', platforms.youtube),
+                  createManagementMeta('Twitch', platforms.twitch)
+                );
+
+                if (channel.riot_puuid) {
+                  card.appendChild(createManagementMeta('Riot PUUID', channel.riot_puuid));
+                }
+
+                grid.appendChild(card);
+              });
+
+              channelsContent.replaceChildren(grid);
             }
           } else {
-            document.getElementById('channels-content').innerHTML = `<p style="color: red;">加载失败: ${result.message}</p>`;
+            const channelsContent = document.getElementById('channels-content');
+            if (channelsContent) {
+              channelsContent.replaceChildren(
+                createManagementMessage(`加载失败: ${result.message}`, 'management-error-message')
+              );
+            }
           }
         } catch (error) {
-          document.getElementById('channels-content').innerHTML = `<p style="color: red;">加载失败: ${error.message}</p>`;
+          console.error('Load channels error:', error);
+          const channelsContent = document.getElementById('channels-content');
+          if (channelsContent) {
+            channelsContent.replaceChildren(
+              createManagementMessage(`加载失败: ${error.message}`, 'management-error-message')
+            );
+          }
         }
       }
 
@@ -2562,6 +2892,14 @@
         }
       }
 
+      function createHolodexChannelAddedIndicator() {
+        const indicator = document.createElement('span');
+        indicator.className = 'holodex-channel-added-icon';
+        indicator.title = '已添加到 channels.json';
+        indicator.appendChild(createSvgIcon('0 0 24 24', 'M20 6 9 17l-5-5'));
+        return indicator;
+      }
+
       function markHolodexChannelAdded(channelData) {
         document.querySelectorAll('.holodex-channel-add').forEach(control => {
           const data = readHolodexAddChannelData(control);
@@ -2571,7 +2909,7 @@
 
           if (sameChannel) {
             control.classList.add('holodex-channel-add-added');
-            control.innerHTML = '<span class="holodex-channel-added-icon" title="已添加到 channels.json"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>';
+            control.replaceChildren(createHolodexChannelAddedIndicator());
           }
         });
       }
@@ -3189,6 +3527,13 @@
         return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : '-';
       }
 
+      function createBiliNetworkBar(type, heightPercent) {
+        const bar = document.createElement('span');
+        bar.className = `bili-network-bar ${type} active`;
+        bar.style.height = `${heightPercent}%`;
+        return bar;
+      }
+
       function renderBiliNetworkGraph(showCache) {
         const graph = document.getElementById('bili-network-graph');
         if (!graph) {
@@ -3208,21 +3553,24 @@
         const pushSeries = biliNetworkHistory.push.slice(pushStart);
         const cacheStart = Math.max(0, biliNetworkHistory.cache.length - graphWidth);
         const cacheSeries = biliNetworkHistory.cache.slice(cacheStart);
-        const columns = [];
+        const fragment = document.createDocumentFragment();
 
         for (let i = 0; i < graphWidth; i += 1) {
           const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
           const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
           const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * 50)) : 0;
           const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * 50));
-          const cacheBar = showCache
-            ? `<span class="bili-network-bar cache active" style="height: ${cacheHeight}%"></span>`
-            : '';
-          const pushBar = `<span class="bili-network-bar push active" style="height: ${pushHeight}%"></span>`;
-          columns.push(`<span class="bili-network-column">${cacheBar}${pushBar}</span>`);
+
+          const column = document.createElement('span');
+          column.className = 'bili-network-column';
+          if (showCache) {
+            column.appendChild(createBiliNetworkBar('cache', cacheHeight));
+          }
+          column.appendChild(createBiliNetworkBar('push', pushHeight));
+          fragment.appendChild(column);
         }
 
-        graph.innerHTML = columns.join('');
+        graph.replaceChildren(fragment);
       }
 
       function applyBiliStreamQualityColor(element, quality) {
@@ -3623,21 +3971,8 @@
 
       function populateYtChannelEditSelect() {
         const editSelect = document.getElementById('yt-channel-edit-select');
-        editSelect.innerHTML = '<option value="">选择频道...</option>';
-
-        if (channelsData && channelsData.channels) {
-          channelsData.channels.forEach(channel => {
-            if (channel.platforms && channel.platforms.youtube) {
-              const option = document.createElement('option');
-              option.value = JSON.stringify({
-                id: channel.platforms.youtube,
-                name: channel.name
-              });
-              option.textContent = channel.name;
-              editSelect.appendChild(option);
-            }
-          });
-        }
+        editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+        appendPlatformChannelOptions(editSelect, 'youtube');
       }
 
       function cancelYtChannelEdit() {
@@ -3699,22 +4034,10 @@
 
       function populateYtAreaEditSelect() {
         const editSelect = document.getElementById('yt-area-edit-select');
-        editSelect.innerHTML = '<option value="">选择分区...</option>';
+        editSelect.replaceChildren(createAreaOption('', '选择分区...'));
 
         if (areasData && areasData.areas) {
-          // Sort areas: 其他单机 (235) first, then others
-          const sortedAreas = [...areasData.areas].sort((a, b) => {
-            if (a.id === 235) return -1;
-            if (b.id === 235) return 1;
-            return 0;
-          });
-
-          sortedAreas.forEach(area => {
-            const option = document.createElement('option');
-            option.value = area.id;
-            option.textContent = area.name; // Removed (${area.id}) for cleaner display
-            editSelect.appendChild(option);
-          });
+          appendAreaOptions(editSelect, areasData.areas);
         }
       }
 
@@ -3891,21 +4214,8 @@
 
       function populateTwChannelEditSelect() {
         const editSelect = document.getElementById('tw-channel-edit-select');
-        editSelect.innerHTML = '<option value="">选择频道...</option>';
-
-        if (channelsData && channelsData.channels) {
-          channelsData.channels.forEach(channel => {
-            if (channel.platforms && channel.platforms.twitch) {
-              const option = document.createElement('option');
-              option.value = JSON.stringify({
-                id: channel.platforms.twitch,
-                name: channel.name
-              });
-              option.textContent = channel.name;
-              editSelect.appendChild(option);
-            }
-          });
-        }
+        editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+        appendPlatformChannelOptions(editSelect, 'twitch');
       }
 
       function cancelTwChannelEdit() {
@@ -3967,22 +4277,10 @@
 
       function populateTwAreaEditSelect() {
         const editSelect = document.getElementById('tw-area-edit-select');
-        editSelect.innerHTML = '<option value="">选择分区...</option>';
+        editSelect.replaceChildren(createAreaOption('', '选择分区...'));
 
         if (areasData && areasData.areas) {
-          // Sort areas: 其他单机 (235) first, then others
-          const sortedAreas = [...areasData.areas].sort((a, b) => {
-            if (a.id === 235) return -1;
-            if (b.id === 235) return 1;
-            return 0;
-          });
-
-          sortedAreas.forEach(area => {
-            const option = document.createElement('option');
-            option.value = area.id;
-            option.textContent = area.name; // Removed (${area.id}) for cleaner display
-            editSelect.appendChild(option);
-          });
+          appendAreaOptions(editSelect, areasData.areas);
         }
       }
 
@@ -4043,22 +4341,10 @@
 
       function populateAreaEditSelect() {
         const editSelect = document.getElementById('area-edit-select');
-        editSelect.innerHTML = '<option value="">选择分区...</option>';
+        editSelect.replaceChildren(createAreaOption('', '选择分区...'));
 
         if (areasData && areasData.areas) {
-          // Sort areas: 其他单机 (235) first, then others
-          const sortedAreas = [...areasData.areas].sort((a, b) => {
-            if (a.id === 235) return -1;
-            if (b.id === 235) return 1;
-            return 0;
-          });
-
-          sortedAreas.forEach(area => {
-            const option = document.createElement('option');
-            option.value = area.id;
-            option.textContent = area.name; // Removed (${area.id}) for cleaner display
-            editSelect.appendChild(option);
-          });
+          appendAreaOptions(editSelect, areasData.areas);
         }
       }
 
@@ -4143,7 +4429,7 @@
           // Populate the removed legacy channel-management area select if present.
           const areaSelect = document.getElementById('area-select');
           if (areaSelect) {
-            areaSelect.innerHTML = '<option value="">不修改分区</option>';
+            areaSelect.replaceChildren(createAreaOption('', '不修改分区'));
           }
 
           // Handle both array and object responses
@@ -4164,12 +4450,7 @@
 
             if (areaSelect) {
               // Populate channel management area select
-              sortedAreas.forEach(area => {
-                const option = document.createElement('option');
-                option.value = area.id;
-                option.textContent = `${area.name} (${area.id})`;
-                areaSelect.appendChild(option);
-              });
+              appendAreaOptions(areaSelect, sortedAreas, true);
             }
 
             console.log('Successfully populated', areasList.length, 'areas');
@@ -4200,22 +4481,8 @@
 
         const platform = platformSelect.value;
 
-        channelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
-
-        // Only populate if channels data is available
-        if (channelsData && channelsData.channels) {
-          channelsData.channels.forEach(channel => {
-            if (channel.platforms && channel.platforms[platform]) {
-              const option = document.createElement('option');
-              option.value = JSON.stringify({
-                id: channel.platforms[platform],
-                name: channel.name
-              });
-              option.textContent = channel.name;
-              channelSelect.appendChild(option);
-            }
-          });
-        }
+        channelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
+        appendPlatformChannelOptions(channelSelect, platform);
 
         // Don't clear inputs - allow manual entry to persist
         // Update quality options based on platform
@@ -4234,9 +4501,10 @@
 
         // Clear all options except the first "不修改画质" option
         const firstOption = qualitySelect.querySelector('option[value=""]');
-        qualitySelect.innerHTML = '';
         if (firstOption) {
-          qualitySelect.appendChild(firstOption);
+          qualitySelect.replaceChildren(firstOption);
+        } else {
+          qualitySelect.replaceChildren();
         }
 
         // Add platform-specific quality options if platform is selected
