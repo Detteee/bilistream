@@ -1236,7 +1236,7 @@ async fn send_heartbeats(client: &reqwest::Client, cfg: &Config, local: ClusterN
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| send_heartbeat_to_peer(client, cfg, peer, request.clone()));
+        .map(|peer| send_heartbeat_to_peer(client, cfg, peer, &request));
     join_all(tasks).await;
 }
 
@@ -1244,7 +1244,7 @@ async fn send_heartbeat_to_peer(
     client: &reqwest::Client,
     cfg: &Config,
     peer: &crate::config::ClusterPeer,
-    request: ClusterHeartbeatRequest,
+    request: &ClusterHeartbeatRequest,
 ) {
     let url = format!(
         "{}/api/cluster/heartbeat",
@@ -1363,7 +1363,7 @@ fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, cfg: 
 }
 
 async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
-    let network = collect_network_status().await;
+    let network = collect_network_status();
     let status = get_status_cache();
     let (
         draining,
@@ -1482,7 +1482,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
     }
 }
 
-async fn collect_network_status() -> NetworkStatus {
+fn collect_network_status() -> NetworkStatus {
     let hls_cache_active = is_ffmpeg_hls_cache_active();
     let stats = get_ffmpeg_network_stats();
 
