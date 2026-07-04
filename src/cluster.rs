@@ -1483,11 +1483,11 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
 }
 
 async fn collect_network_status() -> NetworkStatus {
-    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
-    let stats = get_ffmpeg_network_stats().await;
+    let hls_cache_active = is_ffmpeg_hls_cache_active();
+    let stats = get_ffmpeg_network_stats();
 
     NetworkStatus {
-        stream_speed: get_ffmpeg_speed().await,
+        stream_speed: get_ffmpeg_speed(),
         stream_cache_speed: None,
         stream_bitrate_kbps: stats.push_bitrate_kbps,
         stream_cache_bitrate_kbps: if hls_cache_active {
