@@ -3088,10 +3088,33 @@
         }
       }
 
+      function formatHttpError(response, bodyText = '') {
+        const trimmed = bodyText.trim();
+        if (trimmed) {
+          return trimmed.length > 200 ? `${trimmed.slice(0, 200)}...` : trimmed;
+        }
+        return `HTTP ${response.status}: ${response.statusText}`;
+      }
+
       async function readJsonApiResponse(response) {
-        const result = await response.json();
+        const bodyText = await response.text();
+        let result = null;
+        if (bodyText) {
+          try {
+            result = JSON.parse(bodyText);
+          } catch (error) {
+            if (response.ok) {
+              throw new Error('服务器返回了无效 JSON');
+            }
+            throw new Error(formatHttpError(response, bodyText));
+          }
+        }
+
         if (!response.ok) {
-          throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+          throw new Error(result?.message || formatHttpError(response, bodyText));
+        }
+        if (!result) {
+          throw new Error('服务器返回空响应');
         }
         return result;
       }
