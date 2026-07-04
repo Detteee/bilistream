@@ -399,6 +399,42 @@ mod tests {
     }
 
     #[test]
+    fn membership_export_skips_urls_that_normalize_empty() {
+        let cluster = ClusterConfig {
+            node_id: "local".to_string(),
+            node_name: "Local".to_string(),
+            public_api_url: "http://local:3150/".to_string(),
+            peers: vec![
+                ClusterPeer {
+                    node_id: "slash".to_string(),
+                    name: "Slash".to_string(),
+                    api_url: " / ".to_string(),
+                    priority: 1,
+                },
+                ClusterPeer {
+                    node_id: "valid".to_string(),
+                    name: " Valid ".to_string(),
+                    api_url: " http://valid:3150/ ".to_string(),
+                    priority: 2,
+                },
+            ],
+            ..ClusterConfig::default()
+        };
+
+        let request = cluster_membership_from_config(&cluster);
+
+        assert_eq!(request.nodes.len(), 2);
+        assert!(request
+            .nodes
+            .iter()
+            .any(|node| { node.node_id == "local" && node.api_url == "http://local:3150" }));
+        assert!(request.nodes.iter().any(|node| {
+            node.node_id == "valid" && node.name == "Valid" && node.api_url == "http://valid:3150"
+        }));
+        assert!(!request.nodes.iter().any(|node| node.node_id == "slash"));
+    }
+
+    #[test]
     fn membership_propagation_targets_include_new_and_removed_peers() {
         let old_cluster = ClusterConfig {
             node_id: "local".to_string(),
@@ -413,6 +449,12 @@ mod tests {
                     node_id: "empty".to_string(),
                     name: "Empty".to_string(),
                     api_url: " ".to_string(),
+                    priority: 1,
+                },
+                ClusterPeer {
+                    node_id: "slash".to_string(),
+                    name: "Slash".to_string(),
+                    api_url: " / ".to_string(),
                     priority: 1,
                 },
             ],
@@ -445,6 +487,12 @@ mod tests {
                     api_url: "http://new:3150/".to_string(),
                     priority: 20,
                 },
+                ClusterMembershipNode {
+                    node_id: "slash-new".to_string(),
+                    name: "Slash New".to_string(),
+                    api_url: "/".to_string(),
+                    priority: 1,
+                },
             ],
         };
 
@@ -461,6 +509,8 @@ mod tests {
         );
         assert!(!targets.contains_key("local"));
         assert!(!targets.contains_key("empty"));
+        assert!(!targets.contains_key("slash"));
+        assert!(!targets.contains_key("slash-new"));
     }
 
     #[test]

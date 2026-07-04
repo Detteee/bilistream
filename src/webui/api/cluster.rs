@@ -815,7 +815,7 @@ pub(crate) fn normalize_cluster_membership_nodes(nodes: &mut Vec<ClusterMembersh
     let mut seen = HashSet::new();
     nodes.retain(|node| {
         let node_id = node.node_id.trim();
-        let api_url = node.api_url.trim();
+        let api_url = normalized_cluster_api_url(&node.api_url);
         if node_id.is_empty() || api_url.is_empty() || seen.contains(node_id) {
             return false;
         }
@@ -826,7 +826,7 @@ pub(crate) fn normalize_cluster_membership_nodes(nodes: &mut Vec<ClusterMembersh
     for node in nodes {
         node.node_id = node.node_id.trim().to_string();
         node.name = node.name.trim().to_string();
-        node.api_url = node.api_url.trim().trim_end_matches('/').to_string();
+        node.api_url = normalized_cluster_api_url(&node.api_url).to_string();
     }
 }
 
@@ -903,7 +903,7 @@ pub(crate) fn normalized_membership_nodes(
 
     for node in nodes {
         let node_id = node.node_id.trim();
-        let api_url = node.api_url.trim().trim_end_matches('/');
+        let api_url = normalized_cluster_api_url(&node.api_url);
         if node_id.is_empty() || api_url.is_empty() || !seen.insert(node_id) {
             continue;
         }
@@ -983,13 +983,14 @@ pub(crate) fn insert_membership_target(
     node_id: &str,
     api_url: &str,
 ) {
-    let api_url = api_url.trim();
+    let api_url = normalized_cluster_api_url(api_url);
     if node_id != local_node_id && !api_url.is_empty() {
-        targets.insert(
-            node_id.to_string(),
-            api_url.trim_end_matches('/').to_string(),
-        );
+        targets.insert(node_id.to_string(), api_url.to_string());
     }
+}
+
+pub(crate) fn normalized_cluster_api_url(api_url: &str) -> &str {
+    api_url.trim().trim_end_matches('/')
 }
 
 pub(crate) async fn push_cluster_membership_to_target(
