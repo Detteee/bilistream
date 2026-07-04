@@ -57,6 +57,9 @@
       --network-cache-bar-end: var(--accent-green);
       --network-bar-idle-opacity: 0.35;
       --network-bar-active-opacity: 0.9;
+      --network-graph-bg: transparent;
+      --network-graph-border: var(--info-border);
+      --network-graph-guide: var(--info-border);
       --radius: 8px;
       --radius-lg: 10px;
       --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
@@ -124,6 +127,9 @@
       --network-cache-bar-end: var(--accent-green);
       --network-bar-idle-opacity: 0.35;
       --network-bar-active-opacity: 0.9;
+      --network-graph-bg: rgba(15, 23, 42, 0.12);
+      --network-graph-border: rgba(15, 23, 42, 0.18);
+      --network-graph-guide: rgba(15, 23, 42, 0.16);
       --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
       --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
       --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
@@ -1394,14 +1400,13 @@
       gap: 2px;
       height: 72px;
       padding: 8px 0 7px;
-      border-top: 1px solid var(--info-border);
-      border-bottom: 1px solid var(--info-border);
+      border-top: 1px solid var(--network-graph-border);
+      border-bottom: 1px solid var(--network-graph-border);
+      background: var(--network-graph-bg);
     }
 
     body.light-theme .bili-network-graph {
-      border-color: rgba(49, 95, 206, 0.18);
       border-radius: 6px;
-      background: rgba(15, 23, 42, 0.22);
     }
 
     .bili-network-graph::before {
@@ -1411,7 +1416,7 @@
       right: 0;
       top: 50%;
       height: 1px;
-      background: var(--info-border);
+      background: var(--network-graph-guide);
       opacity: 0.95;
     }
 
