@@ -258,23 +258,30 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Check Twitch status (only if enabled)
         let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
             if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-                let tw_live = TwitchClient::new(
+                match TwitchClient::new(
                     &cfg.twitch.channel_id,
                     cfg.twitch.proxy_region.clone(),
                     cfg.twitch.proxy.clone(),
-                );
-                let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None, None));
-                (
-                    Some(tw_live),
-                    tw_is_live,
-                    tw_area,
-                    tw_title,
-                    tw_m3u8_url,
-                    tw_stream_id,
-                )
+                ) {
+                    Ok(tw_live) => {
+                        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
+                            .get_status()
+                            .await
+                            .unwrap_or((false, None, None, None, None, None));
+                        (
+                            Some(tw_live),
+                            tw_is_live,
+                            tw_area,
+                            tw_title,
+                            tw_m3u8_url,
+                            tw_stream_id,
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!("Twitch 客户端初始化失败: {}", e);
+                        (None, false, None, None, None, None)
+                    }
+                }
             } else {
                 (None, false, None, None, None, None)
             };
@@ -284,7 +291,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             tracing::info!("🔄 Twitch状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
         }
-
         // Get Bilibili status
         let (bili_is_live, bili_title, bili_area_id) =
             match get_bili_live_status(cfg.bililive.room).await {
@@ -1324,7 +1330,7 @@ async fn get_live_status(
                 channel_id,
                 cfg.twitch.proxy_region.clone(),
                 cfg.twitch.proxy.clone(),
-            );
+            )?;
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(
@@ -1397,7 +1403,7 @@ async fn get_live_status(
                 &channel_id,
                 cfg.twitch.proxy_region.clone(),
                 cfg.twitch.proxy.clone(),
-            );
+            )?;
             let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
             if is_live {
                 println!(

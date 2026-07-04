@@ -21,25 +21,28 @@ pub struct Twitch {
 }
 
 impl Twitch {
-    pub fn new(channel_id: &str, proxy_region: String, proxy: Option<String>) -> Self {
+    pub fn new(
+        channel_id: &str,
+        proxy_region: String,
+        proxy: Option<String>,
+    ) -> Result<Self, reqwest::Error> {
         // 设置最大重试次数为5次
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
         let raw_client = reqwest::Client::builder()
             .cookie_store(true)
             // 设置超时时间为30秒
             .timeout(Duration::new(30, 0))
-            .build()
-            .unwrap();
+            .build()?;
         let client = ClientBuilder::new(raw_client.clone())
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
 
-        Twitch {
+        Ok(Twitch {
             channel_id: channel_id.to_string(),
             client,
             proxy_region,
             proxy,
-        }
+        })
     }
 
     pub async fn get_status(
@@ -246,4 +249,18 @@ pub async fn get_twitch_status(
         Some(title.to_string()),
         stream_id,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn twitch_constructor_returns_result() {
+        let client = Twitch::new("example", "asl".to_string(), None)
+            .expect("Twitch client should be constructible");
+
+        assert_eq!(client.channel_id, "example");
+        assert_eq!(client.proxy_region, "asl");
+    }
 }
