@@ -332,7 +332,8 @@ pub(crate) async fn finalize_cluster_node_switch(
     source_node_id: &str,
     target_node_id: &str,
 ) -> Result<(), String> {
-    let source_config = export_cluster_config_from_node(cfg, source_node_id).await?;
+    let client = reqwest::Client::new();
+    let source_config = export_cluster_config_from_node(&client, cfg, source_node_id).await?;
     let source_toggles = resolve_source_monitor_toggles(
         cfg,
         before,
@@ -347,6 +348,7 @@ pub(crate) async fn finalize_cluster_node_switch(
     );
 
     apply_cluster_node_mode_to_node_with_retry(
+        &client,
         cfg,
         target_node_id,
         ClusterApplyNodeModeRequest {
@@ -378,6 +380,7 @@ pub(crate) async fn finalize_cluster_node_switch(
         post_cluster_control(cfg, "/api/cluster/drain", &source_standby, None).await;
 
         apply_cluster_node_mode_to_node_with_retry(
+            &client,
             cfg,
             source_node_id,
             ClusterApplyNodeModeRequest {
@@ -396,6 +399,7 @@ pub(crate) async fn finalize_cluster_node_switch(
 }
 
 pub(crate) async fn export_cluster_config_from_node(
+    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
 ) -> Result<ClusterSyncConfigRequest, String> {
@@ -413,7 +417,7 @@ pub(crate) async fn export_cluster_config_from_node(
         "{}/api/cluster/export-config",
         peer.api_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = client
         .get(url)
         .timeout(Duration::from_secs(
             cfg.cluster.heartbeat_interval_secs.max(5),
@@ -441,6 +445,7 @@ pub(crate) async fn export_cluster_config_from_node(
 }
 
 pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
+    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: ClusterApplyNodeModeRequest,
@@ -449,7 +454,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
     let max_attempts = 3;
     let mut last_error = String::new();
     for attempt in 1..=max_attempts {
-        match apply_cluster_node_mode_to_node(cfg, node_id, payload.clone()).await {
+        match apply_cluster_node_mode_to_node(client, cfg, node_id, payload.clone()).await {
             Ok(()) => return Ok(()),
             Err(e) => {
                 last_error = e;
@@ -471,6 +476,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
 }
 
 pub(crate) async fn apply_cluster_node_mode_to_node(
+    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: ClusterApplyNodeModeRequest,
@@ -490,7 +496,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
         "{}/api/cluster/apply-node-mode",
         peer.api_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = client
         .post(url)
         .json(&payload)
         .timeout(Duration::from_secs(
