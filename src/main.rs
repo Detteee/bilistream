@@ -2548,8 +2548,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         use tokio::signal;
         tokio::spawn(async {
-            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
-            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
+            let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(e) => {
+                    tracing::error!("设置 SIGTERM 处理器失败: {}", e);
+                    return;
+                }
+            };
+            let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+                Ok(signal) => signal,
+                Err(e) => {
+                    tracing::error!("设置 SIGINT 处理器失败: {}", e);
+                    return;
+                }
+            };
 
             tokio::select! {
                 _ = sigterm.recv() => {
