@@ -1,11 +1,10 @@
 use std::error::Error;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(target_os = "windows")]
 use std::io::Write;
-#[cfg(target_os = "windows")]
-use std::path::PathBuf;
 
 const GITHUB_RAW_BASE: &str = "https://raw.githubusercontent.com/Detteee/bilistream/main";
 
@@ -52,10 +51,7 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
     let mut total_items = 0;
 
     // Check what needs to be downloaded
-    let exe_dir = std::env::current_exe()?
-        .parent()
-        .ok_or("Failed to get executable directory")?
-        .to_path_buf();
+    let exe_dir = current_exe_dir()?;
 
     if !exe_dir.join("areas.json").exists() {
         total_items += 1;
@@ -113,10 +109,7 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
 
 /// Ensure required data files (areas.json, channels.json, webui)
 async fn ensure_required_files() -> Result<(), Box<dyn Error>> {
-    let exe_dir = std::env::current_exe()?
-        .parent()
-        .ok_or("Failed to get executable directory")?
-        .to_path_buf();
+    let exe_dir = current_exe_dir()?;
 
     let mut missing_files = Vec::new();
 
@@ -171,7 +164,7 @@ async fn ensure_required_files() -> Result<(), Box<dyn Error>> {
 /// Ensure Windows-specific dependencies (yt-dlp, ffmpeg)
 #[cfg(target_os = "windows")]
 async fn ensure_windows_dependencies() -> Result<(), Box<dyn Error>> {
-    let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
+    let exe_dir = current_exe_dir()?;
 
     println!("🔍 检查 Windows 依赖项...");
 
@@ -464,12 +457,8 @@ fn show_file_usage_info() {
 }
 
 pub fn check_files_exist() -> bool {
-    let exe_dir = match std::env::current_exe() {
-        Ok(path) => match path.parent() {
-            Some(dir) => dir.to_path_buf(),
-            None => return false,
-        },
-        Err(_) => return false,
+    let Ok(exe_dir) = current_exe_dir() else {
+        return false;
     };
 
     let areas_json = exe_dir.join("areas.json");
@@ -477,4 +466,30 @@ pub fn check_files_exist() -> bool {
     let webui_index = exe_dir.join("webui").join("dist").join("index.html");
 
     areas_json.exists() && channels_json.exists() && webui_index.exists()
+}
+
+fn current_exe_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let exe = std::env::current_exe()?;
+    executable_parent_dir(&exe)
+}
+
+fn executable_parent_dir(exe: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    exe.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("Failed to get executable directory: {}", exe.display()).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executable_parent_dir_rejects_paths_without_parent() {
+        assert_eq!(
+            executable_parent_dir(Path::new("parent/bilistream")).unwrap(),
+            PathBuf::from("parent")
+        );
+        assert!(executable_parent_dir(Path::new("bilistream")).is_err());
+    }
 }
