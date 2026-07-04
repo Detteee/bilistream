@@ -371,6 +371,71 @@ mod tests {
         assert!(!cluster.auto_failover);
     }
 
+    #[test]
+    fn membership_propagation_targets_include_new_and_removed_peers() {
+        let old_cluster = ClusterConfig {
+            node_id: "local".to_string(),
+            peers: vec![
+                ClusterPeer {
+                    node_id: "removed".to_string(),
+                    name: "Removed".to_string(),
+                    api_url: " http://removed:3150/ ".to_string(),
+                    priority: 1,
+                },
+                ClusterPeer {
+                    node_id: "empty".to_string(),
+                    name: "Empty".to_string(),
+                    api_url: " ".to_string(),
+                    priority: 1,
+                },
+            ],
+            ..ClusterConfig::default()
+        };
+        let new_cluster = ClusterConfig {
+            node_id: "local".to_string(),
+            peers: Vec::new(),
+            ..ClusterConfig::default()
+        };
+        let request = ClusterMembershipRequest {
+            target_node_id: None,
+            enabled: true,
+            sync_monitored_channels: true,
+            auto_failover: true,
+            heartbeat_interval_secs: 5,
+            failover_timeout_secs: 15,
+            lease_ttl_secs: 20,
+            thresholds: ClusterHealthThresholds::default(),
+            nodes: vec![
+                ClusterMembershipNode {
+                    node_id: "local".to_string(),
+                    name: "Local".to_string(),
+                    api_url: "http://local:3150".to_string(),
+                    priority: 10,
+                },
+                ClusterMembershipNode {
+                    node_id: "new".to_string(),
+                    name: "New".to_string(),
+                    api_url: "http://new:3150/".to_string(),
+                    priority: 20,
+                },
+            ],
+        };
+
+        let targets = cluster_membership_propagation_targets(&old_cluster, &new_cluster, &request);
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets.get("new").map(String::as_str),
+            Some("http://new:3150")
+        );
+        assert_eq!(
+            targets.get("removed").map(String::as_str),
+            Some("http://removed:3150")
+        );
+        assert!(!targets.contains_key("local"));
+        assert!(!targets.contains_key("empty"));
+    }
+
     fn status_cache_test_config() -> Config {
         Config {
             auto_cover: false,

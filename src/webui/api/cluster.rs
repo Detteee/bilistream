@@ -882,60 +882,21 @@ pub(crate) async fn propagate_cluster_membership(
     new_cluster: &ClusterConfig,
 ) -> Result<usize, String> {
     let request = cluster_membership_from_config(new_cluster);
-    let mut targets: HashMap<String, String> = HashMap::new();
-
-    for node in &request.nodes {
-        if node.node_id != new_cluster.node_id && !node.api_url.trim().is_empty() {
-            targets.insert(
-                node.node_id.clone(),
-                node.api_url.trim().trim_end_matches('/').to_string(),
-            );
-        }
-    }
-
-    for peer in old_cluster.peers.iter() {
-        if peer.node_id != new_cluster.node_id && !peer.api_url.trim().is_empty() {
-            targets.insert(
-                peer.node_id.clone(),
-                peer.api_url.trim().trim_end_matches('/').to_string(),
-            );
-        }
-    }
-
+    let targets = cluster_membership_propagation_targets(old_cluster, new_cluster, &request);
     let client = reqwest::Client::new();
     let timeout = Duration::from_secs(new_cluster.heartbeat_interval_secs.max(5));
+
+    let tasks = targets.into_iter().map(|(node_id, api_url)| {
+        push_cluster_membership_to_target(&client, &request, node_id, api_url, timeout)
+    });
+    let results = join_all(tasks).await;
     let mut synced = 0usize;
     let mut errors = Vec::new();
 
-    for (node_id, api_url) in targets {
-        let url = format!("{}/api/cluster/sync-membership", api_url);
-        let mut targeted_request = request.clone();
-        targeted_request.target_node_id = Some(node_id.clone());
-        match client
-            .post(url)
-            .json(&targeted_request)
-            .timeout(timeout)
-            .send()
-            .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                if !status.is_success() {
-                    errors.push(format!("{} HTTP {}", node_id, status));
-                    continue;
-                }
-
-                match response.json::<ClusterPeerApiResponse<()>>().await {
-                    Ok(envelope) if envelope.success => synced += 1,
-                    Ok(envelope) => errors.push(format!(
-                        "{} {}",
-                        node_id,
-                        envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
-                    )),
-                    Err(e) => errors.push(format!("{} 响应解析失败: {}", node_id, e)),
-                }
-            }
-            Err(e) => errors.push(format!("{} {}", node_id, e)),
+    for result in results {
+        match result {
+            Ok(()) => synced += 1,
+            Err(error) => errors.push(error),
         }
     }
 
@@ -943,5 +904,82 @@ pub(crate) async fn propagate_cluster_membership(
         Ok(synced)
     } else {
         Err(errors.join("; "))
+    }
+}
+
+pub(crate) fn cluster_membership_propagation_targets(
+    old_cluster: &ClusterConfig,
+    new_cluster: &ClusterConfig,
+    request: &ClusterMembershipRequest,
+) -> HashMap<String, String> {
+    let mut targets = HashMap::new();
+
+    for node in &request.nodes {
+        insert_membership_target(
+            &mut targets,
+            &new_cluster.node_id,
+            &node.node_id,
+            &node.api_url,
+        );
+    }
+
+    for peer in &old_cluster.peers {
+        insert_membership_target(
+            &mut targets,
+            &new_cluster.node_id,
+            &peer.node_id,
+            &peer.api_url,
+        );
+    }
+
+    targets
+}
+
+pub(crate) fn insert_membership_target(
+    targets: &mut HashMap<String, String>,
+    local_node_id: &str,
+    node_id: &str,
+    api_url: &str,
+) {
+    let api_url = api_url.trim();
+    if node_id != local_node_id && !api_url.is_empty() {
+        targets.insert(
+            node_id.to_string(),
+            api_url.trim_end_matches('/').to_string(),
+        );
+    }
+}
+
+pub(crate) async fn push_cluster_membership_to_target(
+    client: &reqwest::Client,
+    request: &ClusterMembershipRequest,
+    node_id: String,
+    api_url: String,
+    timeout: Duration,
+) -> Result<(), String> {
+    let url = format!("{}/api/cluster/sync-membership", api_url);
+    let mut targeted_request = request.clone();
+    targeted_request.target_node_id = Some(node_id.clone());
+    let response = client
+        .post(url)
+        .json(&targeted_request)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| format!("{} {}", node_id, e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{} HTTP {}", node_id, status));
+    }
+
+    match response.json::<ClusterPeerApiResponse<()>>().await {
+        Ok(envelope) if envelope.success => Ok(()),
+        Ok(envelope) => Err(format!(
+            "{} {}",
+            node_id,
+            envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
+        )),
+        Err(e) => Err(format!("{} 响应解析失败: {}", node_id, e)),
     }
 }
