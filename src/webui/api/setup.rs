@@ -407,6 +407,7 @@ pub async fn download_update(
 
                 // Perform graceful shutdown before restarting
                 tracing::info!("🛑 执行优雅关闭...");
+                crate::cluster::clear_local_stream();
                 crate::plugins::stop_ffmpeg().await;
 
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;

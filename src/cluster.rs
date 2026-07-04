@@ -850,6 +850,7 @@ pub fn start_cluster_worker() {
                 if owner != cfg.cluster.node_id.as_str() && is_ffmpeg_running().await {
                     tracing::warn!("集群租约已转移，停止本节点 ffmpeg 推流");
                     set_manual_restart();
+                    clear_local_stream();
                     stop_ffmpeg().await;
                 }
             }
@@ -1112,6 +1113,7 @@ async fn enter_local_network_quarantine(node_id: &str) -> Result<(), String> {
     }
     apply_monitor_toggle_state(all_monitor_toggles_off()).await?;
     set_manual_restart();
+    clear_local_stream();
     stop_ffmpeg().await;
     Ok(())
 }

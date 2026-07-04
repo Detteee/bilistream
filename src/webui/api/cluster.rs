@@ -259,6 +259,7 @@ pub async fn cluster_failover(
 
     if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         crate::plugins::set_manual_restart();
+        crate::cluster::clear_local_stream();
         crate::plugins::stop_ffmpeg().await;
     }
 
@@ -724,6 +725,7 @@ pub(crate) async fn apply_cluster_node_mode_locally(
 
     if !active || restart {
         crate::plugins::set_manual_restart();
+        crate::cluster::clear_local_stream();
         crate::plugins::stop_ffmpeg().await;
     }
 
@@ -955,6 +957,7 @@ pub(crate) async fn apply_cluster_membership_locally(
 
     if !cfg.cluster.enabled {
         crate::plugins::set_manual_restart();
+        crate::cluster::clear_local_stream();
         crate::plugins::stop_ffmpeg().await;
     }
 

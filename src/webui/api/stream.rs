@@ -135,6 +135,7 @@ pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
     // Publish the restart reason before stopping ffmpeg so the main loop sees a complete state.
     crate::plugins::set_manual_restart();
     set_config_updated();
+    crate::cluster::clear_local_stream();
 
     // Stop current ffmpeg process
     crate::plugins::stop_ffmpeg().await;
