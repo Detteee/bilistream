@@ -107,6 +107,10 @@ struct StreamCandidate {
 }
 
 impl StreamCandidate {
+    fn is_playable(&self) -> bool {
+        self.is_live && self.m3u8_url.is_some()
+    }
+
     fn stream_title(&self) -> Option<String> {
         match (&self.topic, &self.title) {
             (Some(topic), Some(title)) => Some(format!("{} {}", topic, title)),
@@ -120,9 +124,9 @@ impl StreamCandidate {
 }
 
 fn select_stream(yt: &StreamCandidate, tw: &StreamCandidate) -> Option<StreamCandidate> {
-    if yt.is_live {
+    if yt.is_playable() {
         Some(yt.clone())
-    } else if tw.is_live {
+    } else if tw.is_playable() {
         Some(tw.clone())
     } else {
         None
@@ -589,14 +593,35 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             }
 
-            // Clear warning stop since we have a valid channel to stream
-            clear_warning_stop();
-
             let Some(mut selected_stream) = select_stream(&yt_stream, &tw_stream) else {
+                if yt_stream.is_live && yt_stream.m3u8_url.is_none() {
+                    tracing::warn!(
+                        "YouTube 直播 {} 缺少可播放的流URL，跳过本轮转播",
+                        yt_stream.channel_name
+                    );
+                }
+                if tw_stream.is_live && tw_stream.m3u8_url.is_none() {
+                    tracing::warn!(
+                        "Twitch 直播 {} 缺少可播放的流URL，跳过本轮转播",
+                        tw_stream.channel_name
+                    );
+                }
                 tracing::warn!("未找到可转播的直播候选，等待下一轮检查");
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             };
+            let Some(mut m3u8_url) = selected_stream.m3u8_url.take() else {
+                tracing::warn!(
+                    "{} 直播 {} 缺少可播放的流URL，等待下一轮检查",
+                    selected_stream.platform.code(),
+                    selected_stream.channel_name
+                );
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue 'outer;
+            };
+
+            // Clear warning stop since we have a playable stream candidate.
+            clear_warning_stop();
 
             let platform = selected_stream.platform.code();
             let channel_name = selected_stream.channel_name.clone();
@@ -605,7 +630,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let cfg_title = selected_stream.cfg_title();
             let current_video_id = selected_stream.stream_id.clone();
             let mut title = selected_stream.title.clone();
-            let mut m3u8_url = selected_stream.m3u8_url.clone();
 
             // Check if video/stream ID has changed
             let video_id_changed = {
@@ -850,7 +874,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
-                    m3u8_url.clone().unwrap(),
+                    m3u8_url.clone(),
                     proxy,
                     ffmpeg_log_level.to_string(),
                     crop,
@@ -927,9 +951,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 // Update m3u8 URL if it changed
-                if new_m3u8_url.is_some() && new_m3u8_url != m3u8_url {
-                    tracing::info!("🔄 检测到流URL变化，使用新URL重启");
-                    m3u8_url = new_m3u8_url;
+                if let Some(new_m3u8_url) = new_m3u8_url {
+                    if new_m3u8_url != m3u8_url {
+                        tracing::info!("🔄 检测到流URL变化，使用新URL重启");
+                        m3u8_url = new_m3u8_url;
+                    }
                 }
 
                 // Stream is still live but ffmpeg exited, restart it
@@ -3311,7 +3337,6 @@ mod tests {
             channel_name: platform.code().to_string(),
             channel_id: "channel-id".to_string(),
             area_v2: 235,
-            is_priority: false,
         }
     }
 
@@ -3329,6 +3354,27 @@ mod tests {
     fn select_stream_returns_none_when_no_live_candidate() {
         let yt = test_stream_candidate(StreamPlatform::Youtube, false);
         let tw = test_stream_candidate(StreamPlatform::Twitch, false);
+
+        assert!(select_stream(&yt, &tw).is_none());
+    }
+
+    #[test]
+    fn select_stream_skips_live_candidate_without_stream_url() {
+        let mut yt = test_stream_candidate(StreamPlatform::Youtube, true);
+        yt.m3u8_url = None;
+        let tw = test_stream_candidate(StreamPlatform::Twitch, true);
+
+        let selected = select_stream(&yt, &tw).expect("playable fallback should be selected");
+
+        assert_eq!(selected.platform, StreamPlatform::Twitch);
+    }
+
+    #[test]
+    fn select_stream_returns_none_when_live_candidates_have_no_stream_url() {
+        let mut yt = test_stream_candidate(StreamPlatform::Youtube, true);
+        yt.m3u8_url = None;
+        let mut tw = test_stream_candidate(StreamPlatform::Twitch, true);
+        tw.m3u8_url = None;
 
         assert!(select_stream(&yt, &tw).is_none());
     }
