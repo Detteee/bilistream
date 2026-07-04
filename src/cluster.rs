@@ -1374,9 +1374,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         active_stream,
         failed_restarts,
         external_api_failures,
-        heartbeat_failures,
-        peer_last_seen,
-        observed_at,
+        network_isolated,
     ) = {
         let mut state = CLUSTER_STATE.write().unwrap();
         let now = now_secs();
@@ -1400,25 +1398,17 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
             state.local_stream.clone(),
             state.local_failed_restarts,
             state.local_external_api_failures,
-            state.heartbeat_failures.clone(),
-            state
-                .nodes
-                .iter()
-                .map(|(node_id, node)| (node_id.clone(), node.last_seen))
-                .collect::<HashMap<_, _>>(),
-            now,
+            local_network_isolated_from_state(
+                &cfg.cluster,
+                &state,
+                state.local_external_api_failures,
+                now,
+            ),
         )
     };
 
     let stream_degraded = ffmpeg_restart_degraded(&cfg.cluster, failed_restarts);
     let external_api_degraded = external_api_degraded(&cfg.cluster, external_api_failures);
-    let network_isolated = local_network_isolated(
-        &cfg.cluster,
-        &heartbeat_failures,
-        &peer_last_seen,
-        external_api_failures,
-        observed_at,
-    );
     if fault_latched
         && fault_reason.as_deref() == Some(NETWORK_ISOLATED_REASON)
         && !network_isolated
@@ -2057,12 +2047,64 @@ fn external_api_degraded(cluster: &ClusterConfig, failures: u32) -> bool {
     failures >= cluster.thresholds.max_external_api_failures.max(1)
 }
 
+#[cfg(test)]
 fn local_network_isolated(
     cluster: &ClusterConfig,
     heartbeat_failures: &HashMap<String, u32>,
     peer_last_seen: &HashMap<String, Option<u64>>,
     external_api_failures: u32,
     now: u64,
+) -> bool {
+    local_network_isolated_with(cluster, external_api_failures, |peer| {
+        let inbound_is_fresh = peer_last_seen
+            .get(&peer.node_id)
+            .and_then(|last_seen| *last_seen)
+            .is_some_and(|last_seen| {
+                now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
+            });
+        if inbound_is_fresh {
+            return false;
+        }
+
+        let failures = heartbeat_failures
+            .get(&peer.node_id)
+            .copied()
+            .unwrap_or_default();
+        failures >= HEARTBEAT_FAILURE_THRESHOLD
+    })
+}
+
+fn local_network_isolated_from_state(
+    cluster: &ClusterConfig,
+    state: &ClusterState,
+    external_api_failures: u32,
+    now: u64,
+) -> bool {
+    local_network_isolated_with(cluster, external_api_failures, |peer| {
+        let inbound_is_fresh = state
+            .nodes
+            .get(&peer.node_id)
+            .and_then(|node| node.last_seen)
+            .is_some_and(|last_seen| {
+                now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
+            });
+        if inbound_is_fresh {
+            return false;
+        }
+
+        state
+            .heartbeat_failures
+            .get(&peer.node_id)
+            .copied()
+            .unwrap_or_default()
+            >= HEARTBEAT_FAILURE_THRESHOLD
+    })
+}
+
+fn local_network_isolated_with(
+    cluster: &ClusterConfig,
+    external_api_failures: u32,
+    mut peer_failed: impl FnMut(&crate::config::ClusterPeer) -> bool,
 ) -> bool {
     let peer_count = cluster.peers.len();
     if peer_count == 0 {
@@ -2076,23 +2118,7 @@ fn local_network_isolated(
     let failed_peers = cluster
         .peers
         .iter()
-        .filter(|peer| {
-            let inbound_is_fresh = peer_last_seen
-                .get(&peer.node_id)
-                .and_then(|last_seen| *last_seen)
-                .is_some_and(|last_seen| {
-                    now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
-                });
-            if inbound_is_fresh {
-                return false;
-            }
-
-            let failures = heartbeat_failures
-                .get(&peer.node_id)
-                .copied()
-                .unwrap_or_default();
-            failures >= HEARTBEAT_FAILURE_THRESHOLD
-        })
+        .filter(|peer| peer_failed(peer))
         .count();
 
     failed_peers >= required_failed_peers
@@ -3128,10 +3154,29 @@ mod tests {
         let mut peer_last_seen = HashMap::new();
         peer_last_seen.insert("b".to_string(), Some(now));
 
+        let mut state = ClusterState::default();
+        state.nodes.insert(
+            "b".to_string(),
+            empty_node("b", "b", "http://b", 5, false, now),
+        );
+        state.nodes.get_mut("b").unwrap().last_seen = Some(now);
+        state
+            .heartbeat_failures
+            .insert("b".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+        state
+            .heartbeat_failures
+            .insert("c".to_string(), HEARTBEAT_FAILURE_THRESHOLD);
+
         assert!(!local_network_isolated(
             &cfg.cluster,
             &failures,
             &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
+        assert!(!local_network_isolated_from_state(
+            &cfg.cluster,
+            &state,
             cfg.cluster.thresholds.max_external_api_failures,
             now
         ));
@@ -3140,10 +3185,18 @@ mod tests {
             "b".to_string(),
             Some(now - cfg.cluster.failover_timeout_secs - 1),
         );
+        state.nodes.get_mut("b").unwrap().last_seen =
+            Some(now - cfg.cluster.failover_timeout_secs - 1);
         assert!(local_network_isolated(
             &cfg.cluster,
             &failures,
             &peer_last_seen,
+            cfg.cluster.thresholds.max_external_api_failures,
+            now
+        ));
+        assert!(local_network_isolated_from_state(
+            &cfg.cluster,
+            &state,
             cfg.cluster.thresholds.max_external_api_failures,
             now
         ));
