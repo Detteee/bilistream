@@ -37,6 +37,54 @@ fn strip_scheduled_title_suffix(line: &str) -> String {
     }
 }
 
+fn live_event_minutes_regex() -> Option<&'static Regex> {
+    static LIVE_EVENT_MINUTES_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    LIVE_EVENT_MINUTES_RE
+        .get_or_init(|| Regex::new(r"This live event will begin in (\d+) minutes").ok())
+        .as_ref()
+}
+
+fn live_event_hours_regex() -> Option<&'static Regex> {
+    static LIVE_EVENT_HOURS_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    LIVE_EVENT_HOURS_RE
+        .get_or_init(|| Regex::new(r"This live event will begin in (\d+) hours").ok())
+        .as_ref()
+}
+
+fn live_event_days_regex() -> Option<&'static Regex> {
+    static LIVE_EVENT_DAYS_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    LIVE_EVENT_DAYS_RE
+        .get_or_init(|| Regex::new(r"This live event will begin in (\d+) days").ok())
+        .as_ref()
+}
+
+fn capture_first_i64(regex: Option<&Regex>, text: &str) -> Option<i64> {
+    regex?.captures(text)?.get(1)?.as_str().parse::<i64>().ok()
+}
+
+fn m3u8_url_regex() -> Option<&'static Regex> {
+    static M3U8_URL_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    M3U8_URL_RE
+        .get_or_init(|| Regex::new(r"https://[^\s]+\.m3u8[^\s]*").ok())
+        .as_ref()
+}
+
+fn yt_dlp_video_id_from_stdout(stdout: &str) -> Option<String> {
+    let mut lines = stdout.lines().filter_map(|line| {
+        let trimmed = line.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    let first = lines.next()?;
+    lines.next().map(|_| first.to_string())
+}
+
+fn first_m3u8_url_from_stdout(stdout: &str) -> Option<(String, bool)> {
+    let mut matches = m3u8_url_regex()?.find_iter(stdout);
+    let first = matches.next()?.as_str().to_string();
+    let has_multiple = matches.next().is_some();
+    Some((first, has_multiple))
+}
+
 fn optional_channel_name_for_holodex<E: std::fmt::Display>(
     lookup: Result<Option<String>, E>,
     channel_id: &str,
@@ -293,26 +341,15 @@ async fn get_status_with_yt_dlp(
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Extract video ID from stdout (first line when using --print id)
-    let lines: Vec<&str> = stdout.lines().collect();
-    let video_id = if lines.len() >= 2 {
-        Some(lines[0].to_string()) // First line is the video ID
-    } else {
-        None
-    };
+    let video_id = yt_dlp_video_id_from_stdout(&stdout);
 
     if stderr.contains("ERROR: [youtube") {
         // Check for scheduled start time in stderr
-        if let Some(captures) =
-            Regex::new(r"This live event will begin in (\d+) minutes")?.captures(&stderr)
-        {
-            let minutes: i64 = captures[1].parse()?;
+        if let Some(minutes) = capture_first_i64(live_event_minutes_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::minutes(minutes);
             return Ok((false, None, title, None, Some(start_time), video_id));
         }
-        if let Some(captures) =
-            Regex::new(r"This live event will begin in (\d+) hours")?.captures(&stderr)
-        {
-            let hours: i64 = captures[1].parse()?;
+        if let Some(hours) = capture_first_i64(live_event_hours_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::hours(hours);
             let title = if title.is_some() {
                 title
@@ -321,10 +358,7 @@ async fn get_status_with_yt_dlp(
             };
             return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
         }
-        if let Some(captures) =
-            Regex::new(r"This live event will begin in (\d+) days")?.captures(&stderr)
-        {
-            let days: i64 = captures[1].parse()?;
+        if let Some(days) = capture_first_i64(live_event_days_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::days(days);
             let title = if title.is_some() {
                 title
@@ -334,19 +368,11 @@ async fn get_status_with_yt_dlp(
             return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
         }
         return Ok((false, None, None, None, None, video_id)); // Channel is not live and no scheduled time
-    } else if Regex::new(r"https://.*\.m3u8")?.is_match(&stdout) {
-        let regex = Regex::new(r"(https://.*\.m3u8.*)")?;
-        let matches: Vec<&str> = regex.find_iter(&stdout).map(|m| m.as_str()).collect();
-
-        if matches.len() > 1 {
-            tracing::warn!(
-                "Multiple m3u8 URLs found (likely separate video and audio streams): {} URLs",
-                matches.len()
-            );
-            tracing::warn!("Using first URL: {}", matches[0]);
+    } else if let Some((m3u8_url, has_multiple)) = first_m3u8_url_from_stdout(&stdout) {
+        if has_multiple {
+            tracing::warn!("Multiple m3u8 URLs found (likely separate video and audio streams)");
+            tracing::warn!("Using first URL: {}", m3u8_url);
         }
-
-        let m3u8_url = matches[0].to_string();
         return Ok((true, None, title, Some(m3u8_url), None, video_id));
     }
 
@@ -441,5 +467,48 @@ mod tests {
             optional_channel_name_for_holodex(Ok::<_, &str>(Some("Channel".to_string())), "id");
 
         assert_eq!(result.as_deref(), Some("Channel"));
+    }
+
+    #[test]
+    fn yt_dlp_video_id_requires_following_output_line() {
+        assert_eq!(
+            yt_dlp_video_id_from_stdout("video-id\nhttps://example.com/live.m3u8\n").as_deref(),
+            Some("video-id")
+        );
+        assert_eq!(yt_dlp_video_id_from_stdout("video-id\n"), None);
+    }
+
+    #[test]
+    fn first_m3u8_url_from_stdout_detects_multiple_urls() {
+        let (url, has_multiple) = first_m3u8_url_from_stdout(
+            "video-id\nhttps://example.com/video.m3u8?token=1\nhttps://example.com/audio.m3u8\n",
+        )
+        .expect("m3u8 URL should be found");
+
+        assert_eq!(url, "https://example.com/video.m3u8?token=1");
+        assert!(has_multiple);
+    }
+
+    #[test]
+    fn first_m3u8_url_from_stdout_returns_none_without_url() {
+        assert!(first_m3u8_url_from_stdout("video-id\nnot-a-stream\n").is_none());
+    }
+
+    #[test]
+    fn live_event_delay_parsers_ignore_invalid_values() {
+        assert_eq!(
+            capture_first_i64(
+                live_event_hours_regex(),
+                "ERROR: [youtube] This live event will begin in 12 hours"
+            ),
+            Some(12)
+        );
+        assert_eq!(
+            capture_first_i64(
+                live_event_days_regex(),
+                "ERROR: [youtube] This live event will begin in many days"
+            ),
+            None
+        );
     }
 }
