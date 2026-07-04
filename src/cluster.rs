@@ -2988,17 +2988,26 @@ mod tests {
     fn record_heartbeat_ignores_when_cluster_disabled() {
         let mut cfg = test_config("local", 0);
         cfg.cluster.enabled = false;
+        let peer_id = "disabled-peer";
         cfg.cluster.peers = vec![crate::config::ClusterPeer {
-            node_id: "peer".to_string(),
-            name: "peer".to_string(),
-            api_url: "http://peer".to_string(),
+            node_id: peer_id.to_string(),
+            name: peer_id.to_string(),
+            api_url: format!("http://{}", peer_id),
             priority: 1,
         }];
         let now = now_secs();
-        let node = empty_node("peer", "peer", "http://peer", 1, false, now);
+        cluster_state_write().nodes.remove(peer_id);
+        let node = empty_node(
+            peer_id,
+            peer_id,
+            &format!("http://{}", peer_id),
+            1,
+            false,
+            now,
+        );
 
         assert!(!record_heartbeat(&cfg, node));
-        assert!(!cluster_state_read().nodes.contains_key("peer"));
+        assert!(!cluster_state_read().nodes.contains_key(peer_id));
     }
 
     #[test]
