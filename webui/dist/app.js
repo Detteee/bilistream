@@ -3004,10 +3004,7 @@
 
       async function refreshLogs() {
         try {
-          const response = await fetch('/api/logs');
-          if (!response.ok) return;
-
-          const data = await response.json();
+          const data = await getJson('/api/logs');
           if (data.success && data.logs) {
             // Add new logs
             const newLogs = data.logs.split('\n').filter(line => line.trim());
@@ -4310,38 +4307,27 @@
         const lolMonitorGroup = document.getElementById('lol-monitor-group');
         const riotApiKeyGroup = document.getElementById('riot-api-key-group');
         const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
+        if (!lolMonitorGroup || !riotApiKeyGroup || !enableCheckbox) return;
 
-        // Show LOL monitor checkbox if area is 86 (英雄联盟)
-        if (areaId === '86') {
-          lolMonitorGroup.style.display = 'block';
+        const isLolArea = areaId === '86';
+        setElementDisplay(lolMonitorGroup, isLolArea);
 
+        if (isLolArea) {
           // Load current enable_lol_monitor state
           if (window.configData) {
             enableCheckbox.checked = window.configData.enable_lol_monitor || false;
           }
-
-          // Show Riot API Key input if checkbox is checked
-          if (enableCheckbox.checked) {
-            riotApiKeyGroup.style.display = 'block';
-          } else {
-            riotApiKeyGroup.style.display = 'none';
-          }
-        } else {
-          lolMonitorGroup.style.display = 'none';
-          riotApiKeyGroup.style.display = 'none';
         }
+
+        setElementDisplay(riotApiKeyGroup, isLolArea && enableCheckbox.checked);
       }
 
       function toggleRiotApiKeyInputInline() {
         const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
         const riotApiKeyGroup = document.getElementById('riot-api-key-group');
+        if (!enableCheckbox || !riotApiKeyGroup) return;
 
-        // Show/hide Riot API Key input based on checkbox
-        if (enableCheckbox.checked) {
-          riotApiKeyGroup.style.display = 'block';
-        } else {
-          riotApiKeyGroup.style.display = 'none';
-        }
+        setElementDisplay(riotApiKeyGroup, enableCheckbox.checked);
       }
 
       // Quality mapping functions for display vs technical values
