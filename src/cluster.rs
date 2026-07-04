@@ -363,15 +363,8 @@ pub fn cache_active_monitor_state_from_owner(
     toggles: &MonitorToggleState,
     channel_targets: Option<&ChannelTargetState>,
 ) {
-    if monitor_toggles_any_enabled(toggles) {
-        CLUSTER_STATE.write().unwrap().last_known_active_toggles = Some(toggles.clone());
-    }
-    if let Some(targets) = channel_targets.filter(|targets| channel_targets_configured(targets)) {
-        CLUSTER_STATE
-            .write()
-            .unwrap()
-            .last_known_active_channel_targets = Some(targets.clone());
-    }
+    let mut state = CLUSTER_STATE.write().unwrap();
+    cache_active_monitor_state(&mut state, toggles, channel_targets);
 }
 
 pub fn cache_active_monitor_state_from_peer(
@@ -379,6 +372,33 @@ pub fn cache_active_monitor_state_from_peer(
     channel_targets: Option<ChannelTargetState>,
 ) {
     cache_active_monitor_state_from_owner(&toggles, channel_targets.as_ref());
+}
+
+fn cache_active_monitor_state(
+    state: &mut ClusterState,
+    toggles: &MonitorToggleState,
+    channel_targets: Option<&ChannelTargetState>,
+) {
+    if monitor_toggles_any_enabled(toggles) {
+        state.last_known_active_toggles = Some(toggles.clone());
+    }
+    if let Some(targets) = channel_targets.filter(|targets| channel_targets_configured(targets)) {
+        state.last_known_active_channel_targets = Some(targets.clone());
+    }
+}
+
+fn cache_current_owner_monitor_state(state: &mut ClusterState) {
+    let Some(owner) = state.active_owner.as_deref() else {
+        return;
+    };
+    let Some((toggles, channel_targets)) = state
+        .nodes
+        .get(owner)
+        .map(|node| (node.monitor_toggles.clone(), node.channel_targets.clone()))
+    else {
+        return;
+    };
+    cache_active_monitor_state(state, &toggles, Some(&channel_targets));
 }
 
 pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, String> {
@@ -1508,21 +1528,8 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
     clear_invalid_forced_owner(&mut state, cfg, now);
 
     let chosen = choose_owner(&state, cfg, now);
-    if let Some(owner) = chosen.as_ref() {
-        if let Some((owner_toggles, owner_channel_targets)) = state
-            .nodes
-            .get(owner)
-            .map(|node| (node.monitor_toggles.clone(), node.channel_targets.clone()))
-        {
-            if monitor_toggles_any_enabled(&owner_toggles) {
-                state.last_known_active_toggles = Some(owner_toggles);
-            }
-            if channel_targets_configured(&owner_channel_targets) {
-                state.last_known_active_channel_targets = Some(owner_channel_targets);
-            }
-        }
-    }
     state.active_owner = chosen.clone();
+    cache_current_owner_monitor_state(&mut state);
     state.lease_until = if chosen.is_some() {
         now + cfg.cluster.lease_ttl_secs.max(1)
     } else {
@@ -1864,21 +1871,6 @@ fn merge_cluster_status_inner(
 ) {
     let mut state = CLUSTER_STATE.write().unwrap();
     let received_at = now_secs();
-    let active_toggles_from_status = status.active_owner.as_ref().and_then(|active_owner| {
-        status
-            .nodes
-            .iter()
-            .find(|node| &node.node_id == active_owner)
-            .map(|node| node.monitor_toggles.clone())
-    });
-    let active_channel_targets_from_status =
-        status.active_owner.as_ref().and_then(|active_owner| {
-            status
-                .nodes
-                .iter()
-                .find(|node| &node.node_id == active_owner)
-                .map(|node| node.channel_targets.clone())
-        });
     if let (Some(peer_node_id), Some(cfg)) = (direct_peer_id, cfg) {
         record_peer_observations(&mut state, peer_node_id, &status.nodes, cfg, received_at);
     }
@@ -1900,21 +1892,12 @@ fn merge_cluster_status_inner(
         node.is_local = false;
         state.nodes.insert(node.node_id.clone(), node);
     }
-    if let Some(active_toggles) = active_toggles_from_status {
-        if monitor_toggles_any_enabled(&active_toggles) {
-            state.last_known_active_toggles = Some(active_toggles);
-        }
-    }
-    if let Some(active_channel_targets) = active_channel_targets_from_status {
-        if channel_targets_configured(&active_channel_targets) {
-            state.last_known_active_channel_targets = Some(active_channel_targets);
-        }
-    }
     adopt_owner_view(
         &mut state,
         status.active_owner,
         status.lease_until.unwrap_or(0),
     );
+    cache_current_owner_monitor_state(&mut state);
 }
 
 /// Adopts a peer's active-owner view only when it does not regress ours.
@@ -2163,6 +2146,20 @@ mod tests {
     use crate::config::{
         BiliLive, ClusterHealthThresholds, Credentials, FfmpegCache, PriorityChannel,
     };
+
+    struct ClusterStateGuard(ClusterState);
+
+    impl ClusterStateGuard {
+        fn new() -> Self {
+            Self(CLUSTER_STATE.read().unwrap().clone())
+        }
+    }
+
+    impl Drop for ClusterStateGuard {
+        fn drop(&mut self) {
+            *CLUSTER_STATE.write().unwrap() = self.0.clone();
+        }
+    }
 
     fn test_config(node_id: &str, priority: i32) -> Config {
         Config {
@@ -2479,6 +2476,75 @@ mod tests {
 
         assert!(snapshot_is_older(&older, &newer));
         assert!(!snapshot_is_older(&newer, &older));
+    }
+
+    #[test]
+    fn stale_active_snapshot_does_not_overwrite_cached_active_state() {
+        let _guard = ClusterStateGuard::new();
+        let now = now_secs();
+        let current_toggles = MonitorToggleState {
+            enable_youtube_monitor: true,
+            youtube_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+        let stale_toggles = MonitorToggleState {
+            enable_twitch_monitor: true,
+            twitch_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+        let current_targets = ChannelTargetState {
+            youtube_channel_name: "current".to_string(),
+            youtube_channel_id: "current-yt".to_string(),
+            ..ChannelTargetState::default()
+        };
+        let stale_targets = ChannelTargetState {
+            twitch_channel_name: "stale".to_string(),
+            twitch_channel_id: "stale-tw".to_string(),
+            ..ChannelTargetState::default()
+        };
+
+        let mut current_owner = empty_node("owner", "owner", "http://owner", 10, false, now);
+        current_owner.last_seen = Some(now);
+        current_owner.monitor_toggles = current_toggles.clone();
+        current_owner.channel_targets = current_targets.clone();
+
+        let mut stale_owner = current_owner.clone();
+        stale_owner.last_seen = Some(now.saturating_sub(10));
+        stale_owner.monitor_toggles = stale_toggles;
+        stale_owner.channel_targets = stale_targets;
+
+        {
+            let mut state = CLUSTER_STATE.write().unwrap();
+            *state = ClusterState::default();
+            state.active_owner = Some("owner".to_string());
+            state.lease_until = 1_000;
+            state.nodes.insert("owner".to_string(), current_owner);
+            state.last_known_active_toggles = Some(current_toggles.clone());
+            state.last_known_active_channel_targets = Some(current_targets.clone());
+        }
+
+        merge_cluster_status_inner(
+            ClusterStatus {
+                enabled: true,
+                local_node_id: "peer".to_string(),
+                active_owner: Some("owner".to_string()),
+                lease_until: Some(900),
+                config_version: String::new(),
+                auto_failover: true,
+                nodes: vec![stale_owner],
+            },
+            None,
+            None,
+        );
+
+        let state = CLUSTER_STATE.read().unwrap();
+        assert_eq!(state.active_owner.as_deref(), Some("owner"));
+        assert_eq!(state.lease_until, 1_000);
+        assert_eq!(state.last_known_active_toggles, Some(current_toggles));
+        assert_eq!(
+            state.last_known_active_channel_targets,
+            Some(current_targets)
+        );
     }
 
     #[test]
