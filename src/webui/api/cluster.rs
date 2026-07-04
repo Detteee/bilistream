@@ -39,7 +39,7 @@ pub async fn cluster_heartbeat(
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    crate::cluster::receive_heartbeat(&cfg, payload.node);
+    crate::cluster::record_heartbeat(&cfg, payload.node);
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
 
     Ok(Json(ApiResponse {

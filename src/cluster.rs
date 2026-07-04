@@ -1196,14 +1196,19 @@ pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
     compute_cluster_status(cfg)
 }
 
-pub fn receive_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> ClusterStatus {
+pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> bool {
     if !configured_node_id(cfg, &node.node_id) {
         tracing::debug!("Ignored heartbeat from unknown node {}", node.node_id);
-        return compute_cluster_status(cfg);
+        return false;
     }
     node.last_seen = Some(now_secs());
     mark_peer_reachable(&node.node_id);
     update_node(node, &cfg.cluster.node_id);
+    true
+}
+
+pub fn receive_heartbeat(cfg: &Config, node: ClusterNodeSnapshot) -> ClusterStatus {
+    record_heartbeat(cfg, node);
     compute_cluster_status(cfg)
 }
 
@@ -2684,6 +2689,16 @@ mod tests {
         let mut stale = valid;
         stale.nodes[0].last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
         assert!(!heartbeat_response_is_valid(&stale, "peer", &cfg));
+    }
+
+    #[test]
+    fn record_heartbeat_ignores_unconfigured_nodes() {
+        let cfg = test_config("local", 0);
+        let now = now_secs();
+        let node = empty_node("unknown", "unknown", "http://unknown", 1, false, now);
+
+        assert!(!record_heartbeat(&cfg, node));
+        assert!(!CLUSTER_STATE.read().unwrap().nodes.contains_key("unknown"));
     }
 
     #[test]
