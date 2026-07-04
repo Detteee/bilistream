@@ -2132,6 +2132,27 @@
       }
     }
 
+    .holodex-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .holodex-heading-logo {
+      width: 24px;
+      height: 24px;
+      max-width: 24px;
+      max-height: 24px;
+      flex: 0 0 24px;
+      display: block;
+    }
+
+    #holodex-toggle {
+      margin-left: auto;
+    }
+
     /* Holodex-style stream cards */
     .holodex-stream-card {
       background: var(--card-bg);
