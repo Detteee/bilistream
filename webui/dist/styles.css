@@ -45,6 +45,9 @@
       --action-success-border: rgba(166, 227, 161, 0.34);
       --action-success-color: #c2f5bc;
       --action-success-hover-bg: rgba(166, 227, 161, 0.22);
+      --holodex-channel-color: #89b4fa;
+      --holodex-channel-hover-color: #b4befe;
+      --holodex-area-hint-color: #a6e3a1;
       --radius: 8px;
       --radius-lg: 10px;
       --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
@@ -100,6 +103,9 @@
       --action-success-border: rgba(31, 122, 61, 0.28);
       --action-success-color: #176534;
       --action-success-hover-bg: rgba(31, 122, 61, 0.18);
+      --holodex-channel-color: #284eb8;
+      --holodex-channel-hover-color: #1d3f9c;
+      --holodex-area-hint-color: #176534;
       --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
       --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
       --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
@@ -2291,7 +2297,7 @@
     }
 
     .holodex-stream-channel {
-      color: #89b4fa;
+      color: var(--holodex-channel-color);
       font-size: 12px;
       font-weight: 500;
       margin: 0;
@@ -2313,7 +2319,7 @@
     }
 
     a.holodex-stream-channel:hover {
-      color: #b4befe;
+      color: var(--holodex-channel-hover-color);
       text-decoration: underline;
     }
 
@@ -2409,7 +2415,7 @@
     }
 
     .holodex-stream-area-hint {
-      color: #a6e3a1;
+      color: var(--holodex-area-hint-color);
       font-size: 12px;
       margin: 0;
     }
