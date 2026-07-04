@@ -27,6 +27,9 @@
       --accent-green: #a6e3a1;
       --accent-yellow: #f9e2af;
       --accent-teal: #94e2d5;
+      --accent-blue: #89b4fa;
+      --accent-sky: #74c7ec;
+      --accent-foreground: #1e1e2e;
       --radius: 8px;
       --radius-lg: 10px;
       --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
@@ -479,8 +482,8 @@
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%);
-      color: #1e1e2e;
+      background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-mauve) 100%);
+      color: var(--accent-foreground);
     }
 
     .btn-primary:hover {
@@ -489,8 +492,8 @@
     }
 
     .btn-success {
-      background: #a6e3a1;
-      color: #1e1e2e;
+      background: var(--accent-green);
+      color: var(--accent-foreground);
     }
 
     .btn-success:hover {
@@ -499,8 +502,8 @@
     }
 
     .btn-danger {
-      background: #f38ba8;
-      color: #1e1e2e;
+      background: var(--accent-red);
+      color: var(--accent-foreground);
     }
 
     .btn-danger:hover {
@@ -509,12 +512,12 @@
     }
 
     .btn-secondary {
-      background: linear-gradient(135deg, #89b4fa 0%, #74c7ec 100%);
-      color: #1e1e2e;
+      background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-sky) 100%);
+      color: var(--accent-foreground);
     }
 
     .btn-secondary:hover {
-      background: linear-gradient(135deg, #74c7ec 0%, #89b4fa 100%);
+      background: linear-gradient(135deg, var(--accent-sky) 0%, var(--accent-blue) 100%);
       transform: translateY(-2px);
     }
 
@@ -534,13 +537,13 @@
     }
 
     .notification.success {
-      background: #a6e3a1;
-      color: #1e1e2e;
+      background: var(--accent-green);
+      color: var(--accent-foreground);
     }
 
     .notification.error {
-      background: #f38ba8;
-      color: #1e1e2e;
+      background: var(--accent-red);
+      color: var(--accent-foreground);
     }
 
     @keyframes slideIn {
@@ -1172,13 +1175,13 @@
     }
 
     .holodex-stream-btn-crop {
-      background: #f9e2af;
-      color: #1e1e2e;
+      background: var(--accent-yellow);
+      color: var(--accent-foreground);
     }
 
     .holodex-stream-btn-switch {
-      background: #a6e3a1;
-      color: #1e1e2e;
+      background: var(--accent-green);
+      color: var(--accent-foreground);
     }
 
     #holodex-streams {
@@ -1193,13 +1196,13 @@
     }
 
     .holodex-stream-status-live {
-      background: #f38ba8;
-      color: #1e1e2e;
+      background: var(--accent-red);
+      color: var(--accent-foreground);
     }
 
     .holodex-stream-status-upcoming {
-      background: #89b4fa;
-      color: #1e1e2e;
+      background: var(--accent-blue);
+      color: var(--accent-foreground);
     }
 
     .holodex-toolbar {
