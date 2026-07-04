@@ -1073,7 +1073,12 @@ async fn enter_local_network_quarantine(node_id: &str) -> Result<(), String> {
         )
     };
     if let Some(snapshot) = snapshot {
-        write_network_quarantine_snapshot(&snapshot)?;
+        if let Err(e) = write_network_quarantine_snapshot(&snapshot) {
+            tracing::warn!(
+                "Failed to persist local network quarantine snapshot; continuing quarantine: {}",
+                e
+            );
+        }
     }
     if !should_apply_quarantine {
         return Ok(());
