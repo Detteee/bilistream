@@ -32,6 +32,22 @@ pub(crate) fn resolve_source_monitor_toggles(
     source_node_id: &str,
     monitored_config: &MonitoredConfig,
 ) -> MonitorToggleState {
+    resolve_source_monitor_toggles_with_cache(
+        cfg,
+        before,
+        source_node_id,
+        monitored_config,
+        last_known_active_toggles(),
+    )
+}
+
+pub(crate) fn resolve_source_monitor_toggles_with_cache(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+    cached_toggles: Option<MonitorToggleState>,
+) -> MonitorToggleState {
     if source_node_id == cfg.cluster.node_id {
         let local_toggles = monitor_toggle_state_from_config(cfg);
         if monitor_toggles_any_enabled(&local_toggles) {
@@ -49,7 +65,7 @@ pub(crate) fn resolve_source_monitor_toggles(
         }
     }
 
-    if let Some(cached) = last_known_active_toggles() {
+    if let Some(cached) = cached_toggles {
         return cached;
     }
 

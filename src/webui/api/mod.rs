@@ -120,7 +120,9 @@ mod tests {
     use crate::cluster::{
         monitored_config_from_config, ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot,
     };
-    use crate::config::{BiliLive, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube};
+    use crate::config::{
+        BiliLive, ClusterPeer, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube,
+    };
     use crate::StatusData;
 
     #[test]
@@ -685,6 +687,46 @@ mod tests {
         let resolved = resolve_source_monitor_toggles(&cfg, &before, "local", &exported);
 
         assert_eq!(resolved, monitor_toggle_state_from_config(&cfg));
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_defaults_new_active_to_all_on() {
+        let cfg = status_cache_test_config();
+        let before = ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: Some("source".to_string()),
+            lease_until: Some(30),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: Vec::new(),
+        };
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved =
+            resolve_source_monitor_toggles_with_cache(&cfg, &before, "source", &exported, None);
+
+        assert_eq!(resolved, all_monitor_toggles_on());
+    }
+
+    #[test]
+    fn cluster_failover_target_validation_rejects_unknown_nodes() {
+        let mut cfg = status_cache_test_config();
+        cfg.cluster.node_id = "local".to_string();
+        cfg.cluster.peers = vec![ClusterPeer {
+            node_id: "peer".to_string(),
+            name: "Peer".to_string(),
+            api_url: "http://peer".to_string(),
+            priority: 1,
+        }];
+
+        assert_eq!(
+            normalize_cluster_failover_target(&cfg, Some(" peer ".to_string())).unwrap(),
+            Some("peer".to_string())
+        );
+        assert_eq!(normalize_cluster_failover_target(&cfg, None).unwrap(), None);
+        assert!(normalize_cluster_failover_target(&cfg, Some(" ".to_string())).is_err());
+        assert!(normalize_cluster_failover_target(&cfg, Some("missing".to_string())).is_err());
     }
 
     #[test]

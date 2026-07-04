@@ -165,7 +165,16 @@ pub async fn cluster_failover(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let should_propagate = payload.propagate.unwrap_or(true);
-    let target_node_id = payload.target_node_id.clone();
+    let target_node_id = match normalize_cluster_failover_target(&cfg, payload.target_node_id) {
+        Ok(target_node_id) => target_node_id,
+        Err(message) => {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(message),
+            }));
+        }
+    };
     let transfer_plan = if should_propagate && cfg.cluster.enabled {
         if let Some(target) = target_node_id.as_deref() {
             let before = load_cluster_status().await.ok();
@@ -183,7 +192,7 @@ pub async fn cluster_failover(
         None
     };
 
-    let status = crate::cluster::force_failover(&cfg, payload.target_node_id);
+    let status = crate::cluster::force_failover(&cfg, target_node_id.clone());
 
     if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         crate::plugins::set_manual_restart();
@@ -192,7 +201,7 @@ pub async fn cluster_failover(
 
     if should_propagate && cfg.cluster.enabled {
         let forwarded = ClusterFailoverRequest {
-            target_node_id,
+            target_node_id: target_node_id.clone(),
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/failover", &forwarded, None).await;
@@ -214,6 +223,30 @@ pub async fn cluster_failover(
         data: Some(status),
         message: Some("集群节点切换已触发".to_string()),
     }))
+}
+
+pub(crate) fn normalize_cluster_failover_target(
+    cfg: &Config,
+    target_node_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let Some(target_node_id) = target_node_id else {
+        return Ok(None);
+    };
+    let target_node_id = target_node_id.trim();
+    if target_node_id.is_empty() {
+        return Err("目标节点不能为空".to_string());
+    }
+    if target_node_id == cfg.cluster.node_id
+        || cfg
+            .cluster
+            .peers
+            .iter()
+            .any(|peer| peer.node_id == target_node_id)
+    {
+        Ok(Some(target_node_id.to_string()))
+    } else {
+        Err(format!("未知集群节点: {}", target_node_id))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -356,7 +389,17 @@ pub(crate) async fn finalize_cluster_node_switch(
     target_node_id: &str,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let source_config = export_cluster_config_from_node(&client, cfg, source_node_id).await?;
+    let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
+        Ok(source_config) => source_config,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to export active source config from {}; using local synced config and cached active state: {}",
+                source_node_id,
+                e
+            );
+            cluster_sync_config_from_config(cfg)
+        }
+    };
     let source_toggles = resolve_source_monitor_toggles(
         cfg,
         before,
@@ -402,7 +445,7 @@ pub(crate) async fn finalize_cluster_node_switch(
         };
         post_cluster_control(cfg, "/api/cluster/drain", &source_standby, None).await;
 
-        apply_cluster_node_mode_to_node_with_retry(
+        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
             &client,
             cfg,
             source_node_id,
@@ -415,7 +458,14 @@ pub(crate) async fn finalize_cluster_node_switch(
             },
             "disable_previous_active",
         )
-        .await?;
+        .await
+        {
+            tracing::warn!(
+                "Failed to disable previous active {}; it will reconcile from the new active owner on recovery: {}",
+                source_node_id,
+                e
+            );
+        }
     }
 
     Ok(())

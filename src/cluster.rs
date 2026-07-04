@@ -63,6 +63,7 @@ struct ClusterState {
     local_failed_restart_times: Vec<u64>,
     local_external_api_failures: u32,
     local_external_api_failure_times: Vec<u64>,
+    local_network_quarantined: bool,
     heartbeat_failures: HashMap<String, u32>,
     peer_observations: HashMap<String, HashMap<String, u64>>,
     last_known_active_toggles: Option<MonitorToggleState>,
@@ -808,6 +809,7 @@ pub fn start_cluster_worker() {
             send_heartbeats(&client, &cfg, local).await;
             let status = get_cluster_status_for_config(&cfg).await;
             handle_auto_owner_transition(&client, &cfg, previous_owner, &status).await;
+            enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_toggles(&cfg, &status).await;
 
             if let Some(owner) = status.active_owner.as_deref() {
@@ -1019,6 +1021,93 @@ pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> 
         .as_ref()
         .filter(|targets| channel_targets_configured(targets))
         .cloned()
+}
+
+async fn enforce_local_network_quarantine(cfg: &Config, status: &ClusterStatus) {
+    let local_is_network_isolated = status
+        .nodes
+        .iter()
+        .find(|node| node.node_id == cfg.cluster.node_id)
+        .is_some_and(|node| node.health.reason == NETWORK_ISOLATED_REASON);
+
+    if local_is_network_isolated {
+        if let Err(e) = enter_local_network_quarantine().await {
+            tracing::warn!("Failed to quarantine local network-isolated node: {}", e);
+        }
+        return;
+    }
+
+    if status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str()) {
+        if let Err(e) = recover_local_network_quarantine().await {
+            tracing::warn!("Failed to recover local network quarantine: {}", e);
+        }
+        return;
+    }
+
+    clear_local_network_quarantine();
+}
+
+async fn enter_local_network_quarantine() -> Result<(), String> {
+    let current_toggles = crate::config::load_config()
+        .await
+        .map_err(|e| e.to_string())
+        .map(|cfg| monitor_toggle_state_from_config(&cfg))?;
+    let should_apply_quarantine = {
+        let mut state = cluster_state_write();
+        enter_local_network_quarantine_state(&mut state, current_toggles)
+    };
+    if !should_apply_quarantine {
+        return Ok(());
+    }
+    apply_monitor_toggle_state(all_monitor_toggles_off()).await?;
+    set_manual_restart();
+    stop_ffmpeg().await;
+    Ok(())
+}
+
+async fn recover_local_network_quarantine() -> Result<(), String> {
+    let toggles = {
+        let mut state = cluster_state_write();
+        let Some(toggles) = take_local_network_quarantine_recovery_toggles(&mut state) else {
+            return Ok(());
+        };
+        toggles
+    };
+    apply_monitor_toggle_state(toggles).await
+}
+
+fn clear_local_network_quarantine() {
+    let mut state = cluster_state_write();
+    state.local_network_quarantined = false;
+}
+
+fn enter_local_network_quarantine_state(
+    state: &mut ClusterState,
+    current_toggles: MonitorToggleState,
+) -> bool {
+    let toggles_enabled = monitor_toggles_any_enabled(&current_toggles);
+    let should_apply = !state.local_network_quarantined || toggles_enabled;
+    if toggles_enabled {
+        state.last_known_active_toggles = Some(current_toggles);
+    }
+    state.local_network_quarantined = true;
+    should_apply
+}
+
+fn take_local_network_quarantine_recovery_toggles(
+    state: &mut ClusterState,
+) -> Option<MonitorToggleState> {
+    if !state.local_network_quarantined {
+        return None;
+    }
+    state.local_network_quarantined = false;
+    Some(
+        state
+            .last_known_active_toggles
+            .clone()
+            .filter(monitor_toggles_any_enabled)
+            .unwrap_or_else(all_monitor_toggles_on),
+    )
 }
 
 async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
@@ -2021,6 +2110,7 @@ fn merge_cluster_status_inner(
         status.active_owner,
         status.lease_until.unwrap_or(0),
         cfg.map(|cfg| cfg.cluster.auto_failover).unwrap_or(true),
+        direct_peer_id,
     );
     cache_current_owner_monitor_state(&mut state);
 }
@@ -2033,6 +2123,7 @@ fn adopt_owner_view(
     incoming_owner: Option<String>,
     incoming_lease: u64,
     auto_failover: bool,
+    direct_peer_id: Option<&str>,
 ) {
     let Some(incoming_owner) = incoming_owner else {
         // Peer has no owner opinion: keep ours.
@@ -2044,6 +2135,13 @@ fn adopt_owner_view(
         }
         Some(_) => {
             if !auto_failover {
+                if direct_peer_id == Some(incoming_owner.as_str()) {
+                    if state.forced_owner.as_deref() != Some(incoming_owner.as_str()) {
+                        state.forced_owner = None;
+                    }
+                    state.active_owner = Some(incoming_owner);
+                    state.lease_until = incoming_lease;
+                }
                 return;
             }
             // Conflicting views: adopt the peer's owner only if its lease is
@@ -3497,6 +3595,62 @@ mod tests {
     }
 
     #[test]
+    fn network_quarantine_caches_enabled_toggles_and_stays_idempotent_after_off() {
+        let mut state = ClusterState::default();
+        let enabled = MonitorToggleState {
+            enable_youtube_monitor: true,
+            youtube_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+
+        assert!(enter_local_network_quarantine_state(
+            &mut state,
+            enabled.clone()
+        ));
+        assert!(state.local_network_quarantined);
+        assert_eq!(state.last_known_active_toggles, Some(enabled.clone()));
+
+        assert!(!enter_local_network_quarantine_state(
+            &mut state,
+            all_monitor_toggles_off()
+        ));
+        assert_eq!(state.last_known_active_toggles, Some(enabled));
+    }
+
+    #[test]
+    fn network_quarantine_recovery_uses_cached_toggles_or_all_on() {
+        let cached = MonitorToggleState {
+            enable_danmaku_command: true,
+            priority_channel_enabled: true,
+            ..all_monitor_toggles_off()
+        };
+        let mut state = ClusterState {
+            local_network_quarantined: true,
+            last_known_active_toggles: Some(cached.clone()),
+            ..ClusterState::default()
+        };
+
+        assert_eq!(
+            take_local_network_quarantine_recovery_toggles(&mut state),
+            Some(cached)
+        );
+        assert!(!state.local_network_quarantined);
+        assert_eq!(
+            take_local_network_quarantine_recovery_toggles(&mut state),
+            None
+        );
+
+        let mut state_without_cache = ClusterState {
+            local_network_quarantined: true,
+            ..ClusterState::default()
+        };
+        assert_eq!(
+            take_local_network_quarantine_recovery_toggles(&mut state_without_cache),
+            Some(all_monitor_toggles_on())
+        );
+    }
+
+    #[test]
     fn four_node_last_survivor_stays_healthy_and_active() {
         let mut cfg = test_config("a", 1);
         cfg.cluster.peers = vec![
@@ -3891,25 +4045,25 @@ mod tests {
             ..ClusterState::default()
         };
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 900, true);
+        adopt_owner_view(&mut state, Some("b".to_string()), 900, true, None);
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 1_000);
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, None);
         assert_eq!(state.active_owner.as_deref(), Some("b"));
         assert_eq!(state.lease_until, 1_100);
 
-        adopt_owner_view(&mut state, None, 0, true);
+        adopt_owner_view(&mut state, None, 0, true, None);
         assert_eq!(state.active_owner.as_deref(), Some("b"));
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_500, true);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_500, true, None);
         assert_eq!(state.lease_until, 1_500);
     }
 
     #[test]
     fn adopt_owner_view_accepts_first_owner_opinion() {
         let mut state = ClusterState::default();
-        adopt_owner_view(&mut state, Some("a".to_string()), 42, false);
+        adopt_owner_view(&mut state, Some("a".to_string()), 42, false, None);
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 42);
     }
@@ -3922,10 +4076,26 @@ mod tests {
             ..ClusterState::default()
         };
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, false);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, false, None);
 
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 1_000);
+    }
+
+    #[test]
+    fn manual_mode_accepts_direct_active_owner_view_after_recovery() {
+        let mut state = ClusterState {
+            active_owner: Some("a".to_string()),
+            forced_owner: Some("a".to_string()),
+            lease_until: 1_000,
+            ..ClusterState::default()
+        };
+
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, false, Some("b"));
+
+        assert_eq!(state.active_owner.as_deref(), Some("b"));
+        assert_eq!(state.forced_owner, None);
+        assert_eq!(state.lease_until, 1_100);
     }
 
     #[test]
