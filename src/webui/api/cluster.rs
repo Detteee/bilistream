@@ -1,5 +1,26 @@
 use super::*;
 
+pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Config) -> String {
+    if !cfg.cluster.enabled {
+        return String::new();
+    }
+
+    let cfg = cfg.clone();
+    tokio::spawn(async move {
+        match push_active_monitor_state_to_peers(&cfg).await {
+            Ok(count) if count > 0 => {
+                tracing::info!("Cluster monitor toggles synced to {} peer nodes", count);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Cluster monitor toggle background sync failed: {}", e);
+            }
+        }
+    });
+
+    "；监控开关同步已在后台执行".to_string()
+}
+
 pub(crate) async fn local_node_can_enable_monitor_toggles(cfg: &Config) -> bool {
     if !cfg.cluster.enabled {
         return true;

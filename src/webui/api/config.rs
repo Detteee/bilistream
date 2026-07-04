@@ -410,7 +410,7 @@ pub async fn update_config(
         || payload.youtube_enable_monitor.is_some()
         || payload.twitch_enable_monitor.is_some();
     let toggle_sync_message = if monitor_toggle_changed {
-        sync_active_monitor_state_after_toggle_change(&cfg).await
+        schedule_active_monitor_state_sync_after_toggle_change(&cfg)
     } else {
         String::new()
     };
@@ -521,7 +521,7 @@ pub async fn update_priority_channel(
         String::new()
     };
     let toggle_sync_message = if priority_toggle_changed {
-        sync_active_monitor_state_after_toggle_change(&cfg).await
+        schedule_active_monitor_state_sync_after_toggle_change(&cfg)
     } else {
         String::new()
     };

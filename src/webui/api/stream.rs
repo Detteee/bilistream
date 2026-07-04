@@ -1,20 +1,5 @@
 use super::*;
 
-pub(crate) async fn sync_active_monitor_state_after_toggle_change(cfg: &Config) -> String {
-    if !cfg.cluster.enabled {
-        return String::new();
-    }
-
-    match push_active_monitor_state_to_peers(cfg).await {
-        Ok(count) if count > 0 => format!("；监控开关已同步到 {} 个节点", count),
-        Ok(_) => String::new(),
-        Err(e) => {
-            tracing::warn!("Cluster monitor toggle sync failed: {}", e);
-            format!("；监控开关同步失败: {}", e)
-        }
-    }
-}
-
 pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
     crate::plugins::enable_danmaku_commands(enabled);
     if enabled {
@@ -708,7 +693,7 @@ pub async fn toggle_youtube_monitor(
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
-    let toggle_sync_message = sync_active_monitor_state_after_toggle_change(&cfg).await;
+    let toggle_sync_message = schedule_active_monitor_state_sync_after_toggle_change(&cfg);
 
     Ok(ApiResponse {
         success: true,
@@ -754,7 +739,7 @@ pub async fn toggle_twitch_monitor(
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
-    let toggle_sync_message = sync_active_monitor_state_after_toggle_change(&cfg).await;
+    let toggle_sync_message = schedule_active_monitor_state_sync_after_toggle_change(&cfg);
 
     Ok(ApiResponse {
         success: true,
