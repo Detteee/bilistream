@@ -1286,9 +1286,18 @@ async fn send_heartbeat_to_peer(
             Ok(envelope) if envelope.success => {
                 if let Some(status) = envelope.data {
                     if heartbeat_response_is_valid(&status, &peer.node_id, cfg) {
+                        let peer_auto_failover = status.auto_failover;
+                        let peer_is_active_owner =
+                            status.active_owner.as_deref() == Some(peer.node_id.as_str());
                         mark_peer_reachable(&peer.node_id);
-                        merge_cluster_status_from_peer(status.clone(), &peer.node_id, cfg);
-                        adopt_auto_failover_from_peer_status(&status, &peer.node_id, cfg).await;
+                        merge_cluster_status_from_peer(status, &peer.node_id, cfg);
+                        adopt_auto_failover_from_peer_view(
+                            peer_auto_failover,
+                            peer_is_active_owner,
+                            &peer.node_id,
+                            cfg,
+                        )
+                        .await;
                     } else {
                         tracing::debug!(
                             "Cluster heartbeat response from {} failed identity/freshness validation",
@@ -1326,31 +1335,24 @@ async fn send_heartbeat_to_peer(
 
 /// Adopt the active owner's auto-failover setting when a peer heartbeat shows we
 /// missed a membership sync (e.g. node was offline during a toggle).
-async fn adopt_auto_failover_from_peer_status(
-    status: &ClusterStatus,
+async fn adopt_auto_failover_from_peer_view(
+    peer_auto_failover: bool,
+    peer_is_active_owner: bool,
     peer_node_id: &str,
     cfg: &Config,
 ) {
-    if !cfg.cluster.enabled || status.auto_failover == cfg.cluster.auto_failover {
-        return;
-    }
-
-    let adopt_from_peer = status
-        .active_owner
-        .as_deref()
-        .is_some_and(|owner| owner == peer_node_id);
-    if !adopt_from_peer {
+    if !should_adopt_auto_failover_from_peer(peer_auto_failover, peer_is_active_owner, cfg) {
         return;
     }
 
     let Ok(mut updated) = load_config().await else {
         return;
     };
-    if !updated.cluster.enabled || updated.cluster.auto_failover == status.auto_failover {
+    if !updated.cluster.enabled || updated.cluster.auto_failover == peer_auto_failover {
         return;
     }
 
-    updated.cluster.auto_failover = status.auto_failover;
+    updated.cluster.auto_failover = peer_auto_failover;
     if let Err(e) = save_config(&updated).await {
         tracing::warn!(
             "Failed to adopt cluster auto_failover from peer {}: {}",
@@ -1360,10 +1362,18 @@ async fn adopt_auto_failover_from_peer_status(
     } else {
         tracing::info!(
             "Adopted cluster auto_failover={} from active owner {}",
-            status.auto_failover,
+            peer_auto_failover,
             peer_node_id
         );
     }
+}
+
+fn should_adopt_auto_failover_from_peer(
+    peer_auto_failover: bool,
+    peer_is_active_owner: bool,
+    cfg: &Config,
+) -> bool {
+    cfg.cluster.enabled && peer_is_active_owner && peer_auto_failover != cfg.cluster.auto_failover
 }
 
 fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, cfg: &Config) -> bool {
@@ -2536,6 +2546,19 @@ mod tests {
         let mut stale = valid;
         stale.nodes[0].last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
         assert!(!heartbeat_response_is_valid(&stale, "peer", &cfg));
+    }
+
+    #[test]
+    fn auto_failover_adoption_requires_active_owner_change() {
+        let mut cfg = test_config("local", 0);
+        cfg.cluster.auto_failover = false;
+
+        assert!(should_adopt_auto_failover_from_peer(true, true, &cfg));
+        assert!(!should_adopt_auto_failover_from_peer(false, true, &cfg));
+        assert!(!should_adopt_auto_failover_from_peer(true, false, &cfg));
+
+        cfg.cluster.enabled = false;
+        assert!(!should_adopt_auto_failover_from_peer(true, true, &cfg));
     }
 
     #[test]
