@@ -119,10 +119,7 @@ pub async fn cluster_export_config(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(ClusterSyncConfigRequest {
-            monitored_config: monitored_config_from_config(&cfg),
-            config_version: monitored_config_integrity_version(&cfg),
-        }),
+        data: Some(cluster_sync_config_from_config(&cfg)),
         message: None,
     }))
 }
@@ -403,10 +400,7 @@ pub(crate) async fn export_cluster_config_from_node(
     node_id: &str,
 ) -> Result<ClusterSyncConfigRequest, String> {
     if node_id == cfg.cluster.node_id {
-        return Ok(ClusterSyncConfigRequest {
-            monitored_config: monitored_config_from_config(cfg),
-            config_version: monitored_config_integrity_version(cfg),
-        });
+        return Ok(cluster_sync_config_from_config(cfg));
     }
 
     let peer = cfg

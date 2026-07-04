@@ -22,10 +22,9 @@ use crate::cluster::{
     apply_monitor_toggle_state_to_config, apply_monitored_config,
     cache_active_monitor_state_from_peer, channel_target_state_from_config,
     channel_target_state_from_monitored_config, channel_targets_configured,
-    get_cluster_status as load_cluster_status, last_known_active_channel_targets,
-    last_known_active_toggles, monitor_toggle_state_from_config,
+    cluster_sync_config_from_config, get_cluster_status as load_cluster_status,
+    last_known_active_channel_targets, last_known_active_toggles, monitor_toggle_state_from_config,
     monitor_toggle_state_from_monitored_config, monitor_toggles_any_enabled,
-    monitored_config_from_config, monitored_config_integrity_version,
     monitored_config_integrity_version_from_payload, monitored_config_version,
     push_active_monitor_state_to_peers, push_monitored_config_to_peers, ChannelTargetState,
     ClusterActiveMonitorStateRequest, ClusterApplyNodeModeRequest, ClusterDrainRequest,
@@ -117,7 +116,9 @@ fn resolve_source_channel_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::{ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot};
+    use crate::cluster::{
+        monitored_config_from_config, ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot,
+    };
     use crate::config::{BiliLive, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube};
     use crate::StatusData;
 

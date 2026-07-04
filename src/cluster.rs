@@ -268,6 +268,15 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
     }
 }
 
+pub fn cluster_sync_config_from_config(cfg: &Config) -> ClusterSyncConfigRequest {
+    let monitored_config = monitored_config_from_config(cfg);
+    let config_version = monitored_config_integrity_version_from_payload(&monitored_config);
+    ClusterSyncConfigRequest {
+        monitored_config,
+        config_version,
+    }
+}
+
 pub fn monitor_toggle_state_from_config(cfg: &Config) -> MonitorToggleState {
     MonitorToggleState {
         enable_danmaku_command: cfg.bililive.enable_danmaku_command,
@@ -653,10 +662,7 @@ pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, Strin
         return Err("集群配置同步未启用".to_string());
     }
 
-    let request = ClusterSyncConfigRequest {
-        monitored_config: monitored_config_from_config(cfg),
-        config_version: monitored_config_integrity_version(cfg),
-    };
+    let request = cluster_sync_config_from_config(cfg);
     let client = reqwest::Client::new();
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
 
@@ -2276,6 +2282,17 @@ mod tests {
         assert_eq!(
             monitored_config_integrity_version(&cfg_a),
             monitored_config_integrity_version(&cfg_b)
+        );
+    }
+
+    #[test]
+    fn cluster_sync_config_hashes_exported_payload() {
+        let cfg = test_config("a", 0);
+        let request = cluster_sync_config_from_config(&cfg);
+
+        assert_eq!(
+            request.config_version,
+            monitored_config_integrity_version_from_payload(&request.monitored_config)
         );
     }
 
