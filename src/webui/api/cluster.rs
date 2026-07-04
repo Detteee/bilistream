@@ -255,12 +255,13 @@ pub async fn cluster_failover(
         None
     };
 
-    let status = crate::cluster::force_failover(&cfg, target_node_id.clone());
+    let mut status = crate::cluster::force_failover(&cfg, target_node_id.clone());
 
     if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         crate::plugins::set_manual_restart();
         crate::cluster::clear_local_stream();
         crate::plugins::stop_ffmpeg().await;
+        status = crate::cluster::get_cluster_status_for_config(&cfg).await;
     }
 
     if should_propagate && cfg.cluster.enabled {
