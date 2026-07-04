@@ -3475,11 +3475,7 @@
 
         networkRefreshInFlight = true;
         try {
-          const response = await fetch('/api/network-status');
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-          const result = await response.json();
+          const result = await getJson('/api/network-status');
           if (result.success && result.data) {
             updateBiliNetworkPanel({
               ...result.data,
