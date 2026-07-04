@@ -2593,6 +2593,9 @@ mod tests {
     use crate::config::{
         BiliLive, ClusterHealthThresholds, Credentials, FfmpegCache, PriorityChannel,
     };
+    use std::sync::{Mutex, MutexGuard};
+
+    static CLUSTER_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn recover_locks_return_inner_after_poison() {
@@ -2612,17 +2615,28 @@ mod tests {
         assert_eq!(*recover_read_lock(&lock, "test lock"), 3);
     }
 
-    struct ClusterStateGuard(ClusterState);
+    struct ClusterStateGuard {
+        _lock: MutexGuard<'static, ()>,
+        snapshot: ClusterState,
+    }
 
     impl ClusterStateGuard {
         fn new() -> Self {
-            Self(cluster_state_read().clone())
+            let lock = CLUSTER_STATE_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("Recovering poisoned cluster state test lock");
+                poisoned.into_inner()
+            });
+            let snapshot = cluster_state_read().clone();
+            Self {
+                _lock: lock,
+                snapshot,
+            }
         }
     }
 
     impl Drop for ClusterStateGuard {
         fn drop(&mut self) {
-            *cluster_state_write() = self.0.clone();
+            *cluster_state_write() = self.snapshot.clone();
         }
     }
 
