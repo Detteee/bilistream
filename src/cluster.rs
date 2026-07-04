@@ -1407,6 +1407,10 @@ pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
 }
 
 pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> bool {
+    if !cfg.cluster.enabled {
+        tracing::debug!("Ignored cluster heartbeat while cluster mode is disabled");
+        return false;
+    }
     if node.node_id == cfg.cluster.node_id {
         tracing::debug!(
             "Ignored heartbeat claiming local node identity {}",
@@ -2978,6 +2982,23 @@ mod tests {
 
         assert!(!record_heartbeat(&cfg, node));
         assert!(!cluster_state_read().nodes.contains_key("unknown"));
+    }
+
+    #[test]
+    fn record_heartbeat_ignores_when_cluster_disabled() {
+        let mut cfg = test_config("local", 0);
+        cfg.cluster.enabled = false;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "peer".to_string(),
+            name: "peer".to_string(),
+            api_url: "http://peer".to_string(),
+            priority: 1,
+        }];
+        let now = now_secs();
+        let node = empty_node("peer", "peer", "http://peer", 1, false, now);
+
+        assert!(!record_heartbeat(&cfg, node));
+        assert!(!cluster_state_read().nodes.contains_key("peer"));
     }
 
     #[test]
