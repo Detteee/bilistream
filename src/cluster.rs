@@ -1398,6 +1398,9 @@ pub async fn get_cluster_status() -> Result<ClusterStatus, String> {
 
 pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
     let config_version = monitored_config_version(cfg);
+    if !cfg.cluster.enabled {
+        return compute_cluster_status_with_version(cfg, config_version);
+    }
     let local = collect_local_snapshot(cfg, config_version.clone()).await;
     update_node(local, &cfg.cluster.node_id);
     compute_cluster_status_with_version(cfg, config_version)
