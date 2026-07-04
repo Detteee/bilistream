@@ -21,13 +21,14 @@ use bilistream::plugins::{
 };
 use qrcode::QrCode;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use clap::{Arg, Command};
 use regex::Regex;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::{error::Error, thread, time::Duration};
 use textwrap;
 use tracing_subscriber::fmt;
@@ -44,6 +45,10 @@ static NO_LIVE: AtomicBool = AtomicBool::new(false);
 static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
 static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
 const DUAL_COLLISION_PLATFORM: &str = "双平台";
+const MESSAGE_TIME_PATTERN: &str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}";
+const MESSAGE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const MESSAGE_TIME_PLACEHOLDER: &str = "TIME";
+const MESSAGE_UPDATE_TIME_THRESHOLD_MINUTES: i64 = 5;
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 // Track last video/stream ID for cover change detection (works across platforms)
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
@@ -243,12 +248,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .get_status()
                         .await
                         .unwrap_or((false, None, None, None, None, None));
-                if scheduled_start.is_some() {
-                    if scheduled_start.unwrap()
-                        > Local::now() + Duration::from_secs(2 * 24 * 60 * 60)
-                    {
-                        scheduled_start = None;
-                    }
+                let max_scheduled_start = Local::now() + Duration::from_secs(2 * 24 * 60 * 60);
+                if scheduled_start
+                    .as_ref()
+                    .is_some_and(|start| start > &max_scheduled_start)
+                {
+                    scheduled_start = None;
                 }
                 (
                     Some(yt_live),
@@ -1082,73 +1087,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
         } else {
             // 计划直播(预告窗)
-            if scheduled_start.is_some() {
-                if let Some(yt_title) = yt_stream.title.as_ref() {
-                    let current_message = box_message(
-                        &yt_stream.channel_name,
-                        cfg.youtube.enable_monitor,
-                        Some(scheduled_start.unwrap()),
-                        Some(yt_title),
-                        &tw_stream.channel_name,
-                        cfg.twitch.enable_monitor,
-                    );
-
-                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
-                    let should_update = match last.as_ref() {
-                        Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
-                        Some(last_msg) => {
-                            // Only update if message content changed significantly
-                            let time_diff = if let Some(last_time) = extract_time(last_msg) {
-                                if let Some(current_time) = extract_time(&current_message) {
-                                    (current_time - last_time).num_minutes().abs()
-                                } else {
-                                    i64::MAX
-                                }
-                            } else {
-                                i64::MAX
-                            };
-                            time_diff > 5 || remove_time(last_msg) != remove_time(&current_message)
-                        }
-                        None => true,
-                    };
-
-                    if should_update {
-                        print!("{}", current_message);
-                        *last = Some(current_message.into_boxed_str());
-                    }
-                } else {
-                    let current_message = box_message(
-                        &yt_stream.channel_name,
-                        cfg.youtube.enable_monitor,
-                        None,
-                        None,
-                        &tw_stream.channel_name,
-                        cfg.twitch.enable_monitor,
-                    );
-
-                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
-                    let should_update = match last.as_ref() {
-                        Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
-                        Some(last_msg) => {
-                            let time_diff = if let Some(last_time) = extract_time(last_msg) {
-                                if let Some(current_time) = extract_time(&current_message) {
-                                    (current_time - last_time).num_minutes().abs()
-                                } else {
-                                    i64::MAX
-                                }
-                            } else {
-                                i64::MAX
-                            };
-                            time_diff > 5 || remove_time(last_msg) != remove_time(&current_message)
-                        }
-                        None => true,
-                    };
-
-                    if should_update {
-                        print!("{}", current_message);
-                        *last = Some(current_message.into_boxed_str());
-                    }
-                }
+            if let Some(scheduled_start) = scheduled_start {
+                let current_message = box_message(
+                    &yt_stream.channel_name,
+                    cfg.youtube.enable_monitor,
+                    Some(scheduled_start),
+                    yt_stream.title.as_deref(),
+                    &tw_stream.channel_name,
+                    cfg.twitch.enable_monitor,
+                );
+                update_last_status_message(current_message);
             } else {
                 if !NO_LIVE.load(Ordering::SeqCst) {
                     let current_message = box_message(
@@ -1208,11 +1156,11 @@ fn box_message(
     // Calculate YouTube line
     let yt_line = if !yt_monitor_enabled {
         format!("YT: 监听已关闭")
-    } else if scheduled_time.is_some() {
+    } else if let Some(scheduled_time) = scheduled_time {
         format!(
             "YT: {} 未直播，计划于 {} 开始，",
             yt_channel,
-            scheduled_time.unwrap().format("%Y-%m-%d %H:%M:%S")
+            scheduled_time.format(MESSAGE_TIME_FORMAT)
         )
     } else {
         format!(
@@ -1635,16 +1583,66 @@ async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn extract_time(message: &str) -> Option<DateTime<Local>> {
-    let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").ok()?;
-    re.find(message)
-        .and_then(|m| DateTime::parse_from_str(m.as_str(), "%Y-%m-%d %H:%M:%S").ok())
-        .map(|dt| dt.with_timezone(&Local))
+fn message_time_regex() -> Option<&'static Regex> {
+    static MESSAGE_TIME_RE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+
+    MESSAGE_TIME_RE
+        .get_or_init(|| Regex::new(MESSAGE_TIME_PATTERN))
+        .as_ref()
+        .ok()
 }
 
-fn remove_time(message: &str) -> String {
-    let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
-    re.replace_all(message, "TIME").to_string()
+fn extract_time(message: &str) -> Option<NaiveDateTime> {
+    let re = message_time_regex()?;
+    re.find(message)
+        .and_then(|m| NaiveDateTime::parse_from_str(m.as_str(), MESSAGE_TIME_FORMAT).ok())
+}
+
+fn message_without_time(message: &str) -> Cow<'_, str> {
+    match message_time_regex() {
+        Some(re) => re.replace_all(message, MESSAGE_TIME_PLACEHOLDER),
+        None => Cow::Borrowed(message),
+    }
+}
+
+fn should_update_status_message(last_message: &str, current_message: &str) -> bool {
+    if last_message == current_message {
+        return false;
+    }
+
+    let time_diff = if let Some(last_time) = extract_time(last_message) {
+        if let Some(current_time) = extract_time(current_message) {
+            (current_time - last_time).num_minutes().abs()
+        } else {
+            i64::MAX
+        }
+    } else {
+        i64::MAX
+    };
+
+    time_diff > MESSAGE_UPDATE_TIME_THRESHOLD_MINUTES
+        || message_without_time(last_message) != message_without_time(current_message)
+}
+
+fn update_last_status_message(current_message: String) {
+    let message_to_print = {
+        let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
+        let should_update = last
+            .as_deref()
+            .map(|last_msg| should_update_status_message(last_msg, &current_message))
+            .unwrap_or(true);
+
+        if should_update {
+            *last = Some(current_message.clone().into_boxed_str());
+            Some(current_message)
+        } else {
+            None
+        }
+    };
+
+    if let Some(message) = message_to_print {
+        print!("{}", message);
+    }
 }
 
 async fn check_collision(
@@ -3357,5 +3355,21 @@ mod tests {
         assert_eq!(normalized_api_key(Some("  key  ")).as_deref(), Some("key"));
         assert_eq!(normalized_api_key(Some("   ")), None);
         assert_eq!(normalized_api_key(None), None);
+    }
+
+    #[test]
+    fn status_message_update_ignores_small_time_only_changes() {
+        let last = "YT: channel 未直播，计划于 2026-07-04 12:00:00 开始，";
+        let current = "YT: channel 未直播，计划于 2026-07-04 12:04:00 开始，";
+
+        assert!(!should_update_status_message(last, current));
+    }
+
+    #[test]
+    fn status_message_update_keeps_non_time_changes() {
+        let last = "YT: channel 未直播，计划于 2026-07-04 12:00:00 开始，";
+        let current = "YT: channel 未直播，计划于 2026-07-04 12:04:00 开始，new title";
+
+        assert!(should_update_status_message(last, current));
     }
 }
