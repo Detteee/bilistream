@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::state::{
-    get_logs, get_status_cache, refresh_status_cache_config_from, update_status_cache,
-    update_status_cache_with, BiliStatus, NetworkStatus, PriorityChannelStatus, TwStatus, YtStatus,
+    get_logs, get_status_cache, platform_channel_configured, refresh_status_cache_config_from,
+    update_status_cache, update_status_cache_with, BiliStatus, NetworkStatus,
+    PriorityChannelStatus, TwStatus, YtStatus,
 };
 use crate::cluster::{
     all_monitor_toggles_off, all_monitor_toggles_on, apply_channel_target_state_to_config,

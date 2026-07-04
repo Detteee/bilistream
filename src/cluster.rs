@@ -5,7 +5,9 @@ use crate::plugins::{
     get_ffmpeg_network_stats, get_ffmpeg_speed, is_ffmpeg_hls_cache_active, is_ffmpeg_running,
     set_config_updated, set_manual_restart, stop_ffmpeg,
 };
-use crate::webui::state::{get_status_cache, NetworkStatus, StatusData};
+use crate::webui::state::{
+    get_status_cache, refresh_status_cache_config_from, NetworkStatus, StatusData,
+};
 use futures_util::future::join_all;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -403,6 +405,7 @@ pub async fn apply_monitor_toggle_state(payload: MonitorToggleState) -> Result<(
         .map_err(|e| e.to_string())?;
     apply_monitor_toggle_state_to_config(&mut cfg, &payload);
     save_config(&cfg).await.map_err(|e| e.to_string())?;
+    refresh_status_cache_config_from(&cfg);
     apply_danmaku_command_runtime_state(payload.enable_danmaku_command);
     if monitor_toggles_any_enabled(&payload) {
         cache_active_monitor_state_from_owner(
@@ -717,6 +720,7 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
     apply_monitored_config_to_config(&mut cfg, payload);
 
     save_config(&cfg).await.map_err(|e| e.to_string())?;
+    refresh_status_cache_config_from(&cfg);
 
     set_config_updated();
     Ok(())
@@ -1247,6 +1251,7 @@ async fn apply_monitor_toggles_to_node(
         }
         apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
         save_config(&cfg).await.map_err(|e| e.to_string())?;
+        refresh_status_cache_config_from(&cfg);
         apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
         if active {
             if let Some(channel_targets) = channel_targets {
