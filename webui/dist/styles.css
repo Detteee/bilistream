@@ -30,6 +30,18 @@
       --accent-blue: #89b4fa;
       --accent-sky: #74c7ec;
       --accent-foreground: #1e1e2e;
+      --action-primary-bg: rgba(137, 180, 250, 0.14);
+      --action-primary-border: rgba(137, 180, 250, 0.36);
+      --action-primary-color: #b4cfff;
+      --action-primary-hover-bg: rgba(137, 180, 250, 0.22);
+      --action-secondary-bg: rgba(205, 214, 244, 0.08);
+      --action-secondary-border: rgba(205, 214, 244, 0.18);
+      --action-secondary-color: var(--text-primary);
+      --action-secondary-hover-bg: rgba(205, 214, 244, 0.14);
+      --action-success-bg: rgba(166, 227, 161, 0.13);
+      --action-success-border: rgba(166, 227, 161, 0.34);
+      --action-success-color: #c2f5bc;
+      --action-success-hover-bg: rgba(166, 227, 161, 0.22);
       --radius: 8px;
       --radius-lg: 10px;
       --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
@@ -55,6 +67,18 @@
       --info-border: #f0f0f0;
       --heading-color: #667eea;
       --button-hover-bg: #e5e7eb;
+      --action-primary-bg: rgba(102, 126, 234, 0.1);
+      --action-primary-border: rgba(102, 126, 234, 0.28);
+      --action-primary-color: #4257c4;
+      --action-primary-hover-bg: rgba(102, 126, 234, 0.16);
+      --action-secondary-bg: rgba(35, 38, 59, 0.05);
+      --action-secondary-border: rgba(35, 38, 59, 0.12);
+      --action-secondary-color: var(--text-primary);
+      --action-secondary-hover-bg: rgba(35, 38, 59, 0.08);
+      --action-success-bg: rgba(38, 166, 91, 0.1);
+      --action-success-border: rgba(38, 166, 91, 0.24);
+      --action-success-color: #227a43;
+      --action-success-hover-bg: rgba(38, 166, 91, 0.16);
       --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
       --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
       --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
@@ -2680,6 +2704,69 @@
       margin-left: auto;
       padding: 8px 14px;
       font-size: 13px;
+    }
+
+    .holodex-api-action,
+    .holodex-login-btn,
+    .holodex-refresh-btn,
+    .holodex-favorites-btn,
+    .settings-actions .btn-primary,
+    .settings-actions .btn-secondary,
+    .log-actions .btn-primary,
+    .log-actions .btn-secondary {
+      border: 1px solid var(--action-secondary-border);
+      background: var(--action-secondary-bg);
+      color: var(--action-secondary-color);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+
+    .holodex-favorites-btn {
+      min-height: 38px;
+      padding: 8px 12px;
+      border-radius: var(--radius);
+    }
+
+    .holodex-api-action.btn-primary,
+    .holodex-refresh-btn,
+    .settings-actions .btn-primary,
+    .log-actions .btn-primary {
+      border-color: var(--action-primary-border);
+      background: var(--action-primary-bg);
+      color: var(--action-primary-color);
+    }
+
+    .holodex-api-action.btn-success {
+      border-color: var(--action-success-border);
+      background: var(--action-success-bg);
+      color: var(--action-success-color);
+    }
+
+    .holodex-api-action:hover:not(:disabled),
+    .holodex-login-btn:hover:not(:disabled),
+    .holodex-refresh-btn:hover:not(:disabled),
+    .holodex-favorites-btn:hover:not(:disabled),
+    .settings-actions .btn-primary:hover:not(:disabled),
+    .settings-actions .btn-secondary:hover:not(:disabled),
+    .log-actions .btn-primary:hover:not(:disabled),
+    .log-actions .btn-secondary:hover:not(:disabled) {
+      filter: none;
+      transform: translateY(-1px);
+      background: var(--action-secondary-hover-bg);
+      border-color: var(--heading-color);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .holodex-api-action.btn-primary:hover:not(:disabled),
+    .holodex-refresh-btn:hover:not(:disabled),
+    .settings-actions .btn-primary:hover:not(:disabled),
+    .log-actions .btn-primary:hover:not(:disabled) {
+      background: var(--action-primary-hover-bg);
+      border-color: var(--action-primary-border);
+    }
+
+    .holodex-api-action.btn-success:hover:not(:disabled) {
+      background: var(--action-success-hover-bg);
+      border-color: var(--action-success-border);
     }
 
     .management-section {
