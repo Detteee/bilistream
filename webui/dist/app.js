@@ -1927,33 +1927,33 @@
           mergeConfigData(config);
 
           // Load basic settings
-          document.getElementById('config-interval').value = config.interval || 30;
-          document.getElementById('config-auto-cover-checkbox').checked = config.auto_cover || false;
-          document.getElementById('config-danmaku-command-checkbox').checked = config.bilibili?.enable_danmaku_command !== false;
-          document.getElementById('config-anti-collision-checkbox').checked = config.enable_anti_collision || false;
+          setInputValue('config-interval', config.interval || 30);
+          setCheckboxChecked('config-auto-cover-checkbox', config.auto_cover || false);
+          setCheckboxChecked('config-danmaku-command-checkbox', config.bilibili?.enable_danmaku_command !== false);
+          setCheckboxChecked('config-anti-collision-checkbox', config.enable_anti_collision || false);
           toggleAntiCollisionList(); // Show/hide anti-collision section based on checkbox
 
           // Load API keys
-          document.getElementById('config-holodex-key').value = config.holodex_api_key || '';
-          document.getElementById('config-riot-key').value = config.riot_api_key || '';
+          setInputValue('config-holodex-key', config.holodex_api_key || '');
+          setInputValue('config-riot-key', config.riot_api_key || '');
 
           // Load LoL monitor settings
           const lolMonitorEnabled = config.enable_lol_monitor || false;
-          document.getElementById('config-lol-monitor-checkbox').checked = lolMonitorEnabled;
-          document.getElementById('config-lol-interval').value = config.lol_monitor_interval || 1;
+          setCheckboxChecked('config-lol-monitor-checkbox', lolMonitorEnabled);
+          setInputValue('config-lol-interval', config.lol_monitor_interval || 1);
           toggleConfigRiotApiKey(); // Show/hide riot API fields based on checkbox
 
           // Load Twitch settings
-          document.getElementById('config-tw-region').value = (config.twitch && config.twitch.proxy_region) || 'asl';
+          setInputValue('config-tw-region', (config.twitch && config.twitch.proxy_region) || 'asl');
 
           // Load YouTube cookies settings
-          document.getElementById('config-yt-cookies-browser').value = (config.youtube && config.youtube.cookies_from_browser) || '';
-          document.getElementById('config-yt-cookies-file').value = (config.youtube && config.youtube.cookies_file) || '';
-          document.getElementById('config-yt-deno-path').value = (config.youtube && config.youtube.deno_path) || '';
+          setInputValue('config-yt-cookies-browser', (config.youtube && config.youtube.cookies_from_browser) || '');
+          setInputValue('config-yt-cookies-file', (config.youtube && config.youtube.cookies_file) || '');
+          setInputValue('config-yt-deno-path', (config.youtube && config.youtube.deno_path) || '');
 
           // Load proxy settings
-          document.getElementById('config-yt-proxy').value = (config.youtube && config.youtube.proxy) || '';
-          document.getElementById('config-tw-proxy').value = (config.twitch && config.twitch.proxy) || '';
+          setInputValue('config-yt-proxy', (config.youtube && config.youtube.proxy) || '');
+          setInputValue('config-tw-proxy', (config.twitch && config.twitch.proxy) || '');
 
           // Load anti-collision list
           window.currentAntiCollisionList = config.anti_collision_list || {};
@@ -1987,10 +1987,8 @@
         try {
           const data = await getJson('/api/banned-keywords');
 
-          document.getElementById('streaming-banned-keywords').value =
-            (data.streaming_banned_keywords || []).join('\n');
-          document.getElementById('danmaku-banned-keywords').value =
-            (data.danmaku_banned_keywords || []).join('\n');
+          setInputValue('streaming-banned-keywords', (data.streaming_banned_keywords || []).join('\n'));
+          setInputValue('danmaku-banned-keywords', (data.danmaku_banned_keywords || []).join('\n'));
         } catch (error) {
           console.error('Failed to load banned keywords:', error);
         }
@@ -2556,6 +2554,13 @@
         const element = document.getElementById(id);
         if (element) {
           element.textContent = value;
+        }
+      }
+
+      function setCheckboxChecked(id, checked) {
+        const checkbox = document.getElementById(id);
+        if (checkbox) {
+          checkbox.checked = !!checked;
         }
       }
 
