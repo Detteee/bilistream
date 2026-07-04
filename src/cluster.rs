@@ -4424,6 +4424,7 @@ mod tests {
 
     #[test]
     fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
+        let _guard = ClusterStateGuard::new();
         let node_id = "fresh-inbound-guard-peer";
         let mut cfg = test_config("guard-local", 0);
         cfg.cluster.peers = vec![crate::config::ClusterPeer {
@@ -4463,7 +4464,11 @@ mod tests {
         {
             let mut state = cluster_state_write();
             if let Some(node) = state.nodes.get_mut(node_id) {
-                node.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 5);
+                node.last_seen = Some(
+                    now_secs()
+                        .saturating_sub(cfg.cluster.failover_timeout_secs)
+                        .saturating_sub(5),
+                );
             }
         }
         mark_peer_unreachable(node_id, &cfg);
@@ -4477,10 +4482,6 @@ mod tests {
             .expect("peer should exist");
         assert!(!stored.health.healthy);
         assert_eq!(stored.health.reason, "api_unreachable");
-
-        let mut state = cluster_state_write();
-        state.nodes.remove(node_id);
-        state.heartbeat_failures.remove(node_id);
     }
 
     #[test]
