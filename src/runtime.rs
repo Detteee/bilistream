@@ -1554,28 +1554,40 @@ pub fn start_priority_monitoring(current_channel_name: String) {
     // Spawn in a separate thread to avoid blocking the main ffmpeg loop
     std::thread::spawn(move || {
         // Create a new runtime for this thread
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                tracing::error!(
+                    "优先频道监控运行时创建失败 (频道: {}): {}",
+                    current_channel_name,
+                    e
+                );
+                finish_priority_monitoring(&current_channel_name);
+                return;
+            }
+        };
         rt.block_on(async {
             if let Err(e) = monitor_priority_channel_background(current_channel_name.clone()).await
             {
                 tracing::error!("优先频道监控错误 (频道: {}): {}", current_channel_name, e);
             }
 
-            // Only clear the flag if this is still the current monitor
-            {
-                let monitor_channel = CURRENT_MONITOR_CHANNEL.lock().unwrap();
-                if monitor_channel.as_ref() == Some(&current_channel_name) {
-                    PRIORITY_MONITORING_ACTIVE.store(false, Ordering::SeqCst);
-                    tracing::debug!("优先频道监控已结束 (频道: {})", current_channel_name);
-                } else {
-                    tracing::debug!(
-                        "优先频道监控已被替换，不清除标志 (频道: {})",
-                        current_channel_name
-                    );
-                }
-            }
+            finish_priority_monitoring(&current_channel_name);
         });
     });
+}
+
+fn finish_priority_monitoring(current_channel_name: &str) {
+    let monitor_channel = recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
+    if monitor_channel.as_deref() == Some(current_channel_name) {
+        PRIORITY_MONITORING_ACTIVE.store(false, Ordering::SeqCst);
+        tracing::debug!("优先频道监控已结束 (频道: {})", current_channel_name);
+    } else {
+        tracing::debug!(
+            "优先频道监控已被替换，不清除标志 (频道: {})",
+            current_channel_name
+        );
+    }
 }
 
 /// Stop priority channel background monitoring
@@ -2246,5 +2258,25 @@ mod tests {
         let current = "YT: channel 未直播，计划于 2026-07-04 12:04:00 开始，new title";
 
         assert!(should_update_status_message(last, current));
+    }
+
+    #[test]
+    fn finish_priority_monitoring_clears_matching_monitor() {
+        {
+            let mut monitor_channel =
+                recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
+            *monitor_channel = Some("channel-a".to_string());
+        }
+        PRIORITY_MONITORING_ACTIVE.store(true, Ordering::SeqCst);
+
+        finish_priority_monitoring("channel-a");
+
+        assert!(!PRIORITY_MONITORING_ACTIVE.load(Ordering::SeqCst));
+        let monitor_channel =
+            recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
+        assert_eq!(monitor_channel.as_deref(), Some("channel-a"));
+
+        drop(monitor_channel);
+        *recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel") = None;
     }
 }
