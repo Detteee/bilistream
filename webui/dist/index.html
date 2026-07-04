@@ -1349,16 +1349,15 @@
           </div>
 
           <!-- Anti-Collision Settings Section -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+          <div class="settings-section">
+            <h3 class="settings-section-title">
               防撞车设置
             </h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 25px;">
+            <div class="settings-grid settings-grid-wide">
               <div class="control-group">
                 <label class="toggle-label">
                   <div class="toggle-switch">
-                    <input type="checkbox" id="config-anti-collision-checkbox" onchange="toggleAntiCollisionList()">
+                    <input type="checkbox" id="config-anti-collision-checkbox">
                     <span class="toggle-slider"></span>
                   </div>
                   <span>启用防撞车</span>
@@ -1368,12 +1367,11 @@
           </div>
 
           <!-- Anti-Collision List -->
-          <div id="anti-collision-section" style="margin-top: 0px; display: none;">
-            <h3 style="color: var(--text-primary); margin-bottom: 15px; font-size: 1.1em; font-weight: 600;">
+          <div id="anti-collision-section" class="anti-collision-section hidden">
+            <h3 class="settings-subsection-title">
               防撞车名单
             </h3>
-            <div
-              style="display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div class="anti-collision-add">
               <div class="control-group">
                 <label>用户名</label>
                 <input type="text" id="anti-collision-username" placeholder="输入用户名">
@@ -1382,16 +1380,15 @@
                 <label>房间号</label>
                 <input type="number" id="anti-collision-roomid" placeholder="输入房间号">
               </div>
-              <div class="control-group" style="display: flex; align-items: end;">
-                <button class="btn-secondary" onclick="addAntiCollisionEntry()" style="width: 100%;">
+              <div class="control-group anti-collision-add-action">
+                <button id="anti-collision-add-btn" class="btn-secondary anti-collision-add-btn">
                   添加到名单
                 </button>
               </div>
             </div>
 
-            <div id="anti-collision-list"
-              style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 15px; max-height: 300px; overflow-y: auto;">
-              <div style="color: var(--text-secondary); text-align: center; padding: 20px;">
+            <div id="anti-collision-list" class="anti-collision-list">
+              <div class="anti-collision-empty">
                 加载中...
               </div>
             </div>

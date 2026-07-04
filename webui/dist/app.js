@@ -65,6 +65,15 @@
         return document.visibilityState === 'visible' && mainPage && !mainPage.classList.contains('hidden');
       }
 
+      function initAntiCollisionControls() {
+        document
+          .getElementById('config-anti-collision-checkbox')
+          ?.addEventListener('change', toggleAntiCollisionList);
+        document
+          .getElementById('anti-collision-add-btn')
+          ?.addEventListener('click', addAntiCollisionEntry);
+      }
+
       function startLogRefresh() {
         if (logRefreshIntervalId) {
           clearInterval(logRefreshIntervalId);
@@ -79,6 +88,7 @@
 
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
+      initAntiCollisionControls();
 
       document.addEventListener('visibilitychange', () => {
         if (isDashboardVisible()) {
@@ -1184,11 +1194,8 @@
         const checkbox = document.getElementById('config-anti-collision-checkbox');
         const section = document.getElementById('anti-collision-section');
 
-        if (checkbox.checked) {
-          section.style.display = 'block';
-        } else {
-          section.style.display = 'none';
-        }
+        if (!checkbox || !section) return;
+        section.classList.toggle('hidden', !checkbox.checked);
       }
 
       function formatHlsCacheStatus(enabled, latencySecs) {
@@ -1453,44 +1460,106 @@
 
       function loadAntiCollisionList(list) {
         const container = document.getElementById('anti-collision-list');
-        if (Object.keys(list).length === 0) {
-          container.innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 20px;">暂无防撞车名单</div>';
+        if (!container) return;
+
+        container.replaceChildren();
+        const entries = Object.entries(list || {});
+        if (entries.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'anti-collision-empty';
+          empty.textContent = '暂无防撞车名单';
+          container.appendChild(empty);
           return;
         }
 
-        const html = `
-          <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr style="border-bottom: 2px solid var(--card-border);">
-                <th style="text-align: left; padding: 12px 8px; color: var(--text-primary); font-weight: 600;">用户名</th>
-                <th style="text-align: left; padding: 12px 8px; color: var(--text-primary); font-weight: 600;">房间号</th>
-                <th style="text-align: center; padding: 12px 8px; color: var(--text-primary); font-weight: 600; width: 60px;">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(list).map(([username, roomId]) => `
-                <tr style="border-bottom: 1px solid var(--card-border);">
-                  <td style="padding: 12px 8px; color: var(--text-primary); font-weight: 500;">${username}</td>
-                  <td style="padding: 12px 8px; color: var(--text-secondary);">${roomId}</td>
-                  <td style="padding: 12px 8px; text-align: center;">
-                    <button onclick="removeAntiCollisionEntry('${username}')" title="删除"
-                      style="background: none; border: none; color: #F38BA8; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s; margin: 0 auto;"
-                      onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="3,6 5,6 21,6"></polyline>
-                        <path d="m19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
-                        <line x1="10" y1="11" x2="10" y2="17"></line>
-                        <line x1="14" y1="11" x2="14" y2="17"></line>
-                      </svg>
-                    </button>
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        `;
+        const table = document.createElement('table');
+        table.className = 'anti-collision-table';
 
-        container.innerHTML = html;
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headerRow.append(
+          createTextCell('th', '用户名'),
+          createTextCell('th', '房间号'),
+          createTextCell('th', '操作', 'anti-collision-action-cell')
+        );
+        thead.appendChild(headerRow);
+
+        const tbody = document.createElement('tbody');
+        for (const [username, roomId] of entries) {
+          tbody.appendChild(createAntiCollisionRow(username, roomId));
+        }
+
+        table.append(thead, tbody);
+        container.appendChild(table);
+      }
+
+      function createAntiCollisionRow(username, roomId) {
+        const row = document.createElement('tr');
+        row.append(
+          createTextCell('td', username, 'anti-collision-username'),
+          createTextCell('td', String(roomId), 'anti-collision-room'),
+          createAntiCollisionActionCell(username)
+        );
+        return row;
+      }
+
+      function createAntiCollisionActionCell(username) {
+        const cell = document.createElement('td');
+        cell.className = 'anti-collision-action-cell';
+
+        const button = document.createElement('button');
+        button.className = 'btn-secondary compact-btn icon-btn cluster-action-btn anti-collision-remove-btn';
+        button.type = 'button';
+        button.title = '删除';
+        button.setAttribute('aria-label', '删除');
+        button.addEventListener('click', () => removeAntiCollisionEntry(username));
+        appendAntiCollisionRemoveIcon(button);
+
+        cell.appendChild(button);
+        return cell;
+      }
+
+      function createTextCell(tagName, text, className = '') {
+        const cell = document.createElement(tagName);
+        if (className) {
+          cell.className = className;
+        }
+        cell.textContent = text;
+        return cell;
+      }
+
+      function appendAntiCollisionRemoveIcon(button) {
+        const svgNamespace = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNamespace, 'svg');
+        svg.classList.add('cluster-btn-icon');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+
+        const polyline = document.createElementNS(svgNamespace, 'polyline');
+        polyline.setAttribute('points', '3,6 5,6 21,6');
+
+        const path = document.createElementNS(svgNamespace, 'path');
+        path.setAttribute('d', 'm19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2');
+
+        const leftLine = document.createElementNS(svgNamespace, 'line');
+        leftLine.setAttribute('x1', '10');
+        leftLine.setAttribute('y1', '11');
+        leftLine.setAttribute('x2', '10');
+        leftLine.setAttribute('y2', '17');
+
+        const rightLine = document.createElementNS(svgNamespace, 'line');
+        rightLine.setAttribute('x1', '14');
+        rightLine.setAttribute('y1', '11');
+        rightLine.setAttribute('x2', '14');
+        rightLine.setAttribute('y2', '17');
+
+        svg.append(polyline, path, leftLine, rightLine);
+        button.appendChild(svg);
       }
 
       function addAntiCollisionEntry() {
