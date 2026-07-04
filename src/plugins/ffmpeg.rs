@@ -589,7 +589,7 @@ impl FfmpegStatsDisplay {
     fn update(&mut self, role: FfmpegStatsRole, sample: FfmpegStatsSample) {
         match role {
             FfmpegStatsRole::Cache => {
-                let mut merged = self.cache.clone().unwrap_or_default();
+                let merged = self.cache.get_or_insert_with(FfmpegStatsSample::default);
                 if sample.time.is_some() {
                     merged.time = sample.time;
                     merged.stream_time_secs = sample.stream_time_secs;
@@ -607,7 +607,6 @@ impl FfmpegStatsDisplay {
                     merged.bitrate = sample.bitrate;
                     merged.bitrate_kbps = sample.bitrate_kbps;
                 }
-                self.cache = Some(merged);
             }
             FfmpegStatsRole::Push => {
                 self.push = Some(sample);
@@ -617,7 +616,7 @@ impl FfmpegStatsDisplay {
     }
 
     fn update_cache_bitrate(&mut self, bitrate_kbps: f32) {
-        let mut sample = self.cache.clone().unwrap_or_default();
+        let sample = self.cache.get_or_insert_with(FfmpegStatsSample::default);
         if bitrate_kbps > 0.0 {
             sample.bitrate = Some(format_network_rate(bitrate_kbps));
             sample.bitrate_kbps = Some(bitrate_kbps);
@@ -625,7 +624,6 @@ impl FfmpegStatsDisplay {
             sample.bitrate = None;
             sample.bitrate_kbps = None;
         }
-        self.cache = Some(sample);
         self.render();
     }
 
@@ -1818,6 +1816,58 @@ mod tests {
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(u32::MAX as u64 + 1);
 
         assert_eq!(unix_time_secs_from(after_epoch), u32::MAX);
+    }
+
+    #[test]
+    fn cache_stats_update_merges_sparse_samples() {
+        let mut display = FfmpegStatsDisplay::default();
+
+        display.update(
+            FfmpegStatsRole::Cache,
+            FfmpegStatsSample {
+                time: Some("00:00:01.00".to_string()),
+                stream_time_secs: Some(1),
+                speed: Some(1.0),
+                ..FfmpegStatsSample::default()
+            },
+        );
+        display.update(
+            FfmpegStatsRole::Cache,
+            FfmpegStatsSample {
+                bitrate: Some("2.00 Mbps".to_string()),
+                bitrate_kbps: Some(2_000.0),
+                ..FfmpegStatsSample::default()
+            },
+        );
+
+        let cache = display.cache.expect("cache stats should be initialized");
+        assert_eq!(cache.time.as_deref(), Some("00:00:01.00"));
+        assert_eq!(cache.stream_time_secs, Some(1));
+        assert_eq!(cache.speed, Some(1.0));
+        assert_eq!(cache.bitrate.as_deref(), Some("2.00 Mbps"));
+        assert_eq!(cache.bitrate_kbps, Some(2_000.0));
+    }
+
+    #[test]
+    fn cache_bitrate_update_preserves_progress_fields() {
+        let mut display = FfmpegStatsDisplay::default();
+        display.update(
+            FfmpegStatsRole::Cache,
+            FfmpegStatsSample {
+                time: Some("00:00:02.00".to_string()),
+                stream_time_secs: Some(2),
+                speed: Some(0.99),
+                ..FfmpegStatsSample::default()
+            },
+        );
+
+        display.update_cache_bitrate(1_500.0);
+
+        let cache = display.cache.expect("cache stats should be initialized");
+        assert_eq!(cache.time.as_deref(), Some("00:00:02.00"));
+        assert_eq!(cache.stream_time_secs, Some(2));
+        assert_eq!(cache.speed, Some(0.99));
+        assert_eq!(cache.bitrate_kbps, Some(1_500.0));
     }
 
     #[test]
