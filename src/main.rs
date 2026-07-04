@@ -1283,39 +1283,32 @@ async fn get_live_status(
             } else {
                 &cfg.youtube.channel_id
             };
-            let mut channel_name = get_channel_name("YT", channel_id).unwrap();
-            if channel_name.is_none() {
-                channel_name = Some(channel_id.to_string());
-            }
-            let yt_client = YoutubeClient::new(
-                channel_name.as_deref().unwrap_or(channel_id),
-                channel_id,
-                cfg.youtube.proxy.clone(),
-            );
+            let channel_name =
+                get_channel_name("YT", channel_id)?.unwrap_or_else(|| channel_id.to_string());
+            let yt_client =
+                YoutubeClient::new(&channel_name, channel_id, cfg.youtube.proxy.clone());
             let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
                 println!(
                     "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
-                    channel_name.unwrap(),
-                    topic.unwrap(),
-                    title.unwrap()
+                    channel_name,
+                    topic.as_deref().unwrap_or("未知分区"),
+                    title.as_deref().unwrap_or("无标题")
+                );
+            } else if let Some(start_time) = start_time {
+                println!(
+                    "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
+                    channel_name,
+                    if let Some(t) = &topic {
+                        format!("分区: {}, ", t)
+                    } else {
+                        String::new()
+                    },
+                    start_time.format(MESSAGE_TIME_FORMAT),
+                    title.as_deref().unwrap_or("无标题")
                 );
             } else {
-                if start_time.is_some() {
-                    println!(
-                        "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
-                        channel_name.unwrap(),
-                        if let Some(t) = &topic {
-                            format!("分区: {}, ", t)
-                        } else {
-                            String::new()
-                        },
-                        start_time.unwrap().format("%Y-%m-%d %H:%M:%S"),
-                        title.unwrap()
-                    );
-                } else {
-                    println!("{} 未在 YouTube 直播", channel_name.unwrap());
-                }
+                println!("{} 未在 YouTube 直播", channel_name);
             }
             Ok(())
         }
@@ -1326,10 +1319,8 @@ async fn get_live_status(
             } else {
                 &cfg.twitch.channel_id
             };
-            let mut channel_name = get_channel_name("TW", channel_id).unwrap();
-            if channel_name.is_none() {
-                channel_name = Some(channel_id.to_string());
-            }
+            let channel_name =
+                get_channel_name("TW", channel_id)?.unwrap_or_else(|| channel_id.to_string());
             let tw_client = TwitchClient::new(
                 channel_id,
                 cfg.twitch.proxy_region.clone(),
@@ -1339,12 +1330,12 @@ async fn get_live_status(
             if is_live {
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
-                    channel_name.unwrap(),
-                    game_name.unwrap(),
-                    title.unwrap()
+                    channel_name,
+                    game_name.as_deref().unwrap_or("未知分区"),
+                    title.as_deref().unwrap_or("无标题")
                 );
             } else {
-                println!("{} 未在 Twitch 直播", channel_name.unwrap());
+                println!("{} 未在 Twitch 直播", channel_name);
             }
             Ok(())
         }
@@ -1369,36 +1360,34 @@ async fn get_live_status(
                 YoutubeClient::new(&channel_name, &channel_id, cfg.youtube.proxy.clone());
             let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
             if is_live {
-                if topic.is_some() {
+                if let Some(topic) = topic.as_deref() {
                     println!(
                         "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
                         channel_name,
-                        topic.unwrap(),
-                        title.unwrap()
+                        topic,
+                        title.as_deref().unwrap_or("无标题")
                     );
                 } else {
                     println!(
                         "{} 在 YouTube 直播中, 标题: {}",
                         channel_name,
-                        title.unwrap()
+                        title.as_deref().unwrap_or("无标题")
                     );
                 }
+            } else if let Some(start_time) = start_time {
+                println!(
+                    "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
+                    channel_name,
+                    if let Some(t) = &topic {
+                        format!("分区: {}, ", t)
+                    } else {
+                        String::new()
+                    },
+                    start_time.format(MESSAGE_TIME_FORMAT),
+                    title.as_deref().unwrap_or("无标题")
+                );
             } else {
-                if start_time.is_some() {
-                    println!(
-                        "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
-                        channel_name,
-                        if let Some(t) = &topic {
-                            format!("分区: {}, ", t)
-                        } else {
-                            String::new()
-                        },
-                        start_time.unwrap().format("%Y-%m-%d %H:%M:%S"),
-                        title.unwrap()
-                    );
-                } else {
-                    println!("{} 未在 YouTube 直播", channel_name);
-                }
+                println!("{} 未在 YouTube 直播", channel_name);
             }
             let channel_id = cfg.twitch.channel_id;
             let channel_name = cfg.twitch.channel_name;
@@ -1412,8 +1401,8 @@ async fn get_live_status(
                 println!(
                     "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
                     channel_name,
-                    game_name.unwrap(),
-                    title.unwrap()
+                    game_name.as_deref().unwrap_or("未知分区"),
+                    title.as_deref().unwrap_or("无标题")
                 );
             } else {
                 println!("{} 未在 Twitch 直播", channel_name);
