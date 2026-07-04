@@ -16,6 +16,8 @@
       const biliNetworkHistoryLimit = 48;
       let faceAuthUrl = null;
       let holodexCurrentSource = 'channels';
+      const monitorToggleSaveDebounceMs = 160;
+      const monitorToggleSaveState = new Map();
 
       // Global config data for access across functions
       window.configData = {
@@ -46,10 +48,23 @@
         const twitchToggle = document.getElementById('twitch-monitor-toggle');
 
         if (youtubeToggle) {
-          youtubeToggle.checked = config.youtube?.enable_monitor !== false;
+          applyMonitorToggleConfigState(youtubeToggle, 'youtube-monitor-toggle', config.youtube?.enable_monitor !== false);
         }
         if (twitchToggle) {
-          twitchToggle.checked = config.twitch?.enable_monitor !== false;
+          applyMonitorToggleConfigState(twitchToggle, 'twitch-monitor-toggle', config.twitch?.enable_monitor !== false);
+        }
+      }
+
+      function applyMonitorToggleConfigState(toggle, toggleId, enabled) {
+        const state = monitorToggleSaveState.get(toggleId);
+        if (state?.timer || state?.inFlight) {
+          return;
+        }
+
+        toggle.checked = enabled;
+        if (state) {
+          state.confirmed = enabled;
+          state.desired = enabled;
         }
       }
 
@@ -3195,27 +3210,85 @@
         });
       }
 
-      async function togglePlatformMonitor(platform, toggleId, endpoint) {
+      function togglePlatformMonitor(platform, toggleId, endpoint) {
         const toggle = document.getElementById(toggleId);
-        const enabled = toggle.checked;
+        if (!toggle) {
+          return;
+        }
 
+        const state = getMonitorToggleSaveState(platform, toggleId);
+        state.desired = toggle.checked;
+
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+        state.timer = setTimeout(() => {
+          state.timer = null;
+          flushPlatformMonitorToggle(platform, toggleId, endpoint);
+        }, monitorToggleSaveDebounceMs);
+      }
+
+      function getMonitorToggleSaveState(platform, toggleId) {
+        let state = monitorToggleSaveState.get(toggleId);
+        if (!state) {
+          const confirmed = window.configData[platform]?.enable_monitor !== false;
+          state = {
+            confirmed,
+            desired: confirmed,
+            inFlight: false,
+            timer: null
+          };
+          monitorToggleSaveState.set(toggleId, state);
+        }
+        return state;
+      }
+
+      async function flushPlatformMonitorToggle(platform, toggleId, endpoint) {
+        const state = getMonitorToggleSaveState(platform, toggleId);
+        if (state.inFlight) {
+          return;
+        }
+
+        const toggle = document.getElementById(toggleId);
+        const enabled = state.desired;
+        state.inFlight = true;
         try {
           const result = await postJsonApi(endpoint, { enabled });
           if (result.success) {
+            state.confirmed = enabled;
             window.configData[platform] = {
               ...(window.configData[platform] || {}),
               enable_monitor: enabled
             };
-            showNotification(result.message, 'success');
-            await refreshStatus();
+            if (state.desired === enabled) {
+              showNotification(result.message, 'success');
+              refreshStatus().catch((error) => {
+                console.debug('Failed to refresh status after monitor toggle:', error);
+              });
+            }
           } else {
-            toggle.checked = !enabled;
-            showNotification(result.message || '保存失败', 'error');
+            if (state.desired === enabled) {
+              state.desired = state.confirmed;
+              if (toggle) {
+                toggle.checked = state.confirmed;
+              }
+              showNotification(result.message || '保存失败', 'error');
+            }
           }
         } catch (error) {
           console.error(`Failed to toggle ${platform} monitor:`, error);
-          toggle.checked = !enabled;
-          showNotification('保存失败: ' + error.message, 'error');
+          if (state.desired === enabled) {
+            state.desired = state.confirmed;
+            if (toggle) {
+              toggle.checked = state.confirmed;
+            }
+            showNotification('保存失败: ' + error.message, 'error');
+          }
+        } finally {
+          state.inFlight = false;
+          if (state.desired !== state.confirmed) {
+            flushPlatformMonitorToggle(platform, toggleId, endpoint);
+          }
         }
       }
 
