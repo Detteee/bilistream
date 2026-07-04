@@ -7,7 +7,9 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{fs, io};
+use tokio::sync::Notify;
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
 static DANMAKU_STOP_SIGNAL: AtomicBool = AtomicBool::new(false);
@@ -17,6 +19,7 @@ lazy_static! {
     static ref WARNING_STOP: AtomicBool = AtomicBool::new(false);
     static ref LAST_WARNING_CHANNEL: Mutex<Option<String>> = Mutex::new(None);
     static ref CONFIG_UPDATED: AtomicBool = AtomicBool::new(false);
+    static ref CONFIG_UPDATE_NOTIFY: Notify = Notify::new();
     static ref WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 }
 
@@ -846,6 +849,7 @@ pub fn clear_warning_stop() {
 /// Set the config updated flag to skip waiting interval
 pub fn set_config_updated() {
     CONFIG_UPDATED.store(true, Ordering::SeqCst);
+    CONFIG_UPDATE_NOTIFY.notify_waiters();
 }
 
 /// Check if config was updated (to skip waiting)
@@ -856,6 +860,23 @@ pub fn is_config_updated() -> bool {
 /// Clear the config updated flag
 pub fn clear_config_updated() {
     CONFIG_UPDATED.store(false, Ordering::SeqCst);
+}
+
+/// Wait until either config changes or the timeout expires.
+pub async fn wait_config_update_or_timeout(timeout: Duration) -> bool {
+    if is_config_updated() {
+        return true;
+    }
+
+    let notified = CONFIG_UPDATE_NOTIFY.notified();
+    if is_config_updated() {
+        return true;
+    }
+
+    tokio::select! {
+        _ = notified => true,
+        _ = tokio::time::sleep(timeout) => is_config_updated(),
+    }
 }
 
 pub fn get_area_name(area_id: u64) -> Option<String> {
@@ -931,5 +952,17 @@ mod tests {
             area_name_or_unknown(u64::MAX),
             "未知分区(18446744073709551615)"
         );
+    }
+
+    #[tokio::test]
+    async fn config_update_wait_wakes_on_signal() {
+        clear_config_updated();
+
+        let waiter = tokio::spawn(wait_config_update_or_timeout(Duration::from_secs(5)));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        set_config_updated();
+
+        assert!(waiter.await.unwrap());
+        clear_config_updated();
     }
 }

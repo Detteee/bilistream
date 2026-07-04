@@ -16,8 +16,9 @@ use bilistream::plugins::{
     clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
     get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg, wait_ffmpeg,
-    was_manual_restart, was_manual_stop, FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    wait_config_update_or_timeout, wait_ffmpeg, was_manual_restart, was_manual_stop,
+    FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
 };
 use qrcode::QrCode;
 
@@ -233,7 +234,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
             tracing::info!("💡 提示: 访问 WebUI 进行配置，或参考 config.json.example");
             // Sleep and continue to allow WebUI configuration
-            tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+            wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
             continue 'outer;
         }
 
@@ -325,7 +326,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 Err(e) => {
                     tracing::error!("获取B站直播状态失败: {}", e);
                     tracing::warn!("⚠️ 将在下次循环重试");
-                    tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                    wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                     continue 'outer;
                 }
             };
@@ -492,7 +493,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // If both channels are skipped after filtering, continue to next iteration
             if !yt_stream.is_live && !tw_stream.is_live {
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
 
@@ -593,7 +594,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             if !yt_stream.is_live && !tw_stream.is_live {
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
 
@@ -611,7 +612,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     );
                 }
                 tracing::warn!("未找到可转播的直播候选，等待下一轮检查");
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             };
             let Some(mut m3u8_url) = selected_stream.m3u8_url.take() else {
@@ -620,7 +621,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     selected_stream.platform.code(),
                     selected_stream.channel_name
                 );
-                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             };
 
@@ -725,7 +726,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             }
                         }
                         tracing::warn!("⚠️ 将在下次循环重试");
-                        tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                        wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                         continue 'outer;
                     }
                 }
@@ -1159,7 +1160,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             while elapsed < sleep_duration {
                 let sleep_time = std::cmp::min(check_interval, sleep_duration - elapsed);
-                tokio::time::sleep(Duration::from_secs(sleep_time)).await;
+                if wait_config_update_or_timeout(Duration::from_secs(sleep_time)).await {
+                    clear_config_updated();
+                    tracing::info!("🔄 等待期间检测到配置更新，重新加载配置并检查频道状态");
+                    continue 'outer;
+                }
                 elapsed += sleep_time;
 
                 // Check if config was updated during sleep
