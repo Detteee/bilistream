@@ -2011,6 +2011,7 @@ fn merge_cluster_status_inner(
         &mut state,
         status.active_owner,
         status.lease_until.unwrap_or(0),
+        cfg.map(|cfg| cfg.cluster.auto_failover).unwrap_or(true),
     );
     cache_current_owner_monitor_state(&mut state);
 }
@@ -2018,7 +2019,12 @@ fn merge_cluster_status_inner(
 /// Adopts a peer's active-owner view only when it does not regress ours.
 /// Without this, a peer holding a stale view could flip `active_owner`
 /// back and forth on every heartbeat and defeat owner stickiness.
-fn adopt_owner_view(state: &mut ClusterState, incoming_owner: Option<String>, incoming_lease: u64) {
+fn adopt_owner_view(
+    state: &mut ClusterState,
+    incoming_owner: Option<String>,
+    incoming_lease: u64,
+    auto_failover: bool,
+) {
     let Some(incoming_owner) = incoming_owner else {
         // Peer has no owner opinion: keep ours.
         return;
@@ -2028,6 +2034,9 @@ fn adopt_owner_view(state: &mut ClusterState, incoming_owner: Option<String>, in
             state.lease_until = state.lease_until.max(incoming_lease);
         }
         Some(_) => {
+            if !auto_failover {
+                return;
+            }
             // Conflicting views: adopt the peer's owner only if its lease is
             // at least as fresh as ours; otherwise keep the local view and let
             // the next election round converge.
@@ -3873,27 +3882,41 @@ mod tests {
             ..ClusterState::default()
         };
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 900);
+        adopt_owner_view(&mut state, Some("b".to_string()), 900, true);
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 1_000);
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_100);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true);
         assert_eq!(state.active_owner.as_deref(), Some("b"));
         assert_eq!(state.lease_until, 1_100);
 
-        adopt_owner_view(&mut state, None, 0);
+        adopt_owner_view(&mut state, None, 0, true);
         assert_eq!(state.active_owner.as_deref(), Some("b"));
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_500);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_500, true);
         assert_eq!(state.lease_until, 1_500);
     }
 
     #[test]
     fn adopt_owner_view_accepts_first_owner_opinion() {
         let mut state = ClusterState::default();
-        adopt_owner_view(&mut state, Some("a".to_string()), 42);
+        adopt_owner_view(&mut state, Some("a".to_string()), 42, false);
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 42);
+    }
+
+    #[test]
+    fn manual_mode_peer_owner_view_does_not_replace_existing_owner() {
+        let mut state = ClusterState {
+            active_owner: Some("a".to_string()),
+            lease_until: 1_000,
+            ..ClusterState::default()
+        };
+
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, false);
+
+        assert_eq!(state.active_owner.as_deref(), Some("a"));
+        assert_eq!(state.lease_until, 1_000);
     }
 
     #[test]

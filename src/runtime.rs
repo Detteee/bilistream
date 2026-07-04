@@ -400,6 +400,24 @@ fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id:
     });
 }
 
+fn ffmpeg_exit_should_count_as_failure(
+    ffmpeg_exit_failed: bool,
+    source_is_live: bool,
+    bili_is_live: bool,
+    manual_restart: bool,
+    manual_stop: bool,
+    config_updated: bool,
+    warning_skip: bool,
+) -> bool {
+    ffmpeg_exit_failed
+        && source_is_live
+        && bili_is_live
+        && !manual_restart
+        && !manual_stop
+        && !config_updated
+        && !warning_skip
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1180,17 +1198,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     None => None,
                 };
 
-                if let Some(status) = exit_status {
-                    cluster::record_stream_exit(status.success());
+                let ffmpeg_exit_failed = if let Some(status) = exit_status {
                     if status.success() {
                         tracing::info!("✅ ffmpeg正常退出");
+                        false
                     } else {
                         tracing::warn!("⚠️ ffmpeg异常退出: {:?}", status);
+                        true
                     }
                 } else {
-                    cluster::record_stream_exit(false);
                     tracing::warn!("⚠️ ffmpeg进程已停止");
-                }
+                    true
+                };
 
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1201,6 +1220,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let (bili_is_live, _, _) = fetch_bili_live_status_logged(cfg.bililive.room)
                     .await
                     .unwrap_or((true, String::new(), 0));
+                let manual_restart_requested = was_manual_restart();
+                let manual_stop_requested = was_manual_stop();
+                let config_updated_now = is_config_updated();
+                let warning_skip_now = should_skip_due_to_warning(&channel_name);
+                let count_ffmpeg_exit_failure = ffmpeg_exit_should_count_as_failure(
+                    ffmpeg_exit_failed,
+                    current_is_live,
+                    bili_is_live,
+                    manual_restart_requested,
+                    manual_stop_requested,
+                    config_updated_now,
+                    warning_skip_now,
+                );
+                cluster::record_stream_exit(!count_ffmpeg_exit_failure);
 
                 if !current_is_live {
                     tracing::info!("直播已结束，停止ffmpeg监控循环");
@@ -1213,7 +1246,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 // Check if manual restart was requested (force immediate restart)
-                if was_manual_restart() {
+                if manual_restart_requested {
                     let exit_reason = FfmpegLoopExitReason::IntentionalRestart {
                         target_m3u8_available: new_m3u8_url.is_some(),
                     };
@@ -1222,8 +1255,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 // Check if config was updated (channel switch)
-                // Only break if stream has ended, otherwise continue streaming current channel
-                if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+                if config_updated_now || !bilistream::config::config_is_current(&cfg) {
                     tracing::info!("🔄 检测到配置更新请求，但当前流仍在进行，继续转播直到流结束");
                     // Don't break, let the stream continue until it naturally ends
                 }
@@ -2176,6 +2208,39 @@ mod tests {
         ));
         assert!(!restart_exit_should_skip_end_danmaku(
             FfmpegLoopExitReason::SourceEnded
+        ));
+        assert!(restart_exit_should_skip_end_danmaku(
+            FfmpegLoopExitReason::ClusterHandoff
+        ));
+    }
+
+    #[test]
+    fn ffmpeg_exit_failure_counts_only_when_streams_remain_live() {
+        assert!(ffmpeg_exit_should_count_as_failure(
+            true, true, true, false, false, false, false
+        ));
+
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, false, true, false, false, false, false
+        ));
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, true, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn ffmpeg_exit_failure_ignores_intentional_stops() {
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, true, true, true, false, false, false
+        ));
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, true, true, false, true, false, false
+        ));
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, true, true, false, false, true, false
+        ));
+        assert!(!ffmpeg_exit_should_count_as_failure(
+            true, true, true, false, false, false, true
         ));
     }
 
