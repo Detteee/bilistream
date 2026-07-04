@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::LockResult;
 
 #[cfg(target_os = "windows")]
 use std::io::Write;
@@ -28,12 +29,12 @@ pub fn is_download_complete() -> bool {
 pub fn get_download_progress() -> (usize, usize, String) {
     let progress = DOWNLOAD_PROGRESS.load(Ordering::Relaxed);
     let total = DOWNLOAD_TOTAL.load(Ordering::Relaxed);
-    let message = DOWNLOAD_MESSAGE.lock().unwrap().clone();
+    let message = recover_lock(DOWNLOAD_MESSAGE.lock(), "dependency download message").clone();
     (progress, total, message)
 }
 
 fn set_download_message(msg: &str) {
-    *DOWNLOAD_MESSAGE.lock().unwrap() = msg.to_string();
+    *recover_lock(DOWNLOAD_MESSAGE.lock(), "dependency download message") = msg.to_string();
     tracing::info!("{}", msg);
 }
 
@@ -480,9 +481,17 @@ fn executable_parent_dir(exe: &Path) -> Result<PathBuf, Box<dyn Error>> {
         .ok_or_else(|| format!("Failed to get executable directory: {}", exe.display()).into())
 }
 
+fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
+    lock.unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {}", name);
+        poisoned.into_inner()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     #[test]
     fn executable_parent_dir_rejects_paths_without_parent() {
@@ -491,5 +500,20 @@ mod tests {
             PathBuf::from("parent")
         );
         assert!(executable_parent_dir(Path::new("bilistream")).is_err());
+    }
+
+    #[test]
+    fn recover_lock_returns_inner_after_poison() {
+        let lock = std::sync::Mutex::new(String::from("before"));
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut guard = lock.lock().unwrap();
+            guard.push_str("-panic");
+            panic!("poison test lock");
+        }));
+
+        let mut guard = recover_lock(lock.lock(), "test lock");
+        guard.push_str("-after");
+
+        assert_eq!(guard.as_str(), "before-panic-after");
     }
 }
