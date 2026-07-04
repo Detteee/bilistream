@@ -1539,12 +1539,13 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
 
     let now = now_secs();
     let mut state = CLUSTER_STATE.write().unwrap();
-    ensure_configured_nodes(&mut state, cfg, now);
-    prune_peer_observations(&mut state, cfg, now);
-    normalize_node_health(&mut state, cfg, now);
-    clear_invalid_forced_owner(&mut state, cfg, now);
+    let configured = configured_node_ids(cfg);
+    ensure_configured_nodes(&mut state, cfg, now, &configured);
+    prune_peer_observations(&mut state, cfg, now, &configured);
+    normalize_node_health(&mut state, cfg, now, &configured);
+    clear_invalid_forced_owner(&mut state, cfg, now, &configured);
 
-    let chosen = choose_owner(&state, cfg, now);
+    let chosen = choose_owner_with_configured(&state, cfg, now, &configured);
     state.active_owner = chosen.clone();
     cache_current_owner_monitor_state(&mut state);
     state.lease_until = if chosen.is_some() {
@@ -1579,19 +1580,35 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
     }
 }
 
-fn clear_invalid_forced_owner(state: &mut ClusterState, cfg: &Config, now: u64) {
+fn clear_invalid_forced_owner(
+    state: &mut ClusterState,
+    cfg: &Config,
+    now: u64,
+    configured: &HashSet<&str>,
+) {
     let forced_owner_is_eligible = state
         .forced_owner
         .as_ref()
         .and_then(|owner| state.nodes.get(owner))
-        .is_some_and(|node| node_is_eligible(node, state, cfg, now));
+        .is_some_and(|node| node_is_eligible(node, state, cfg, now, configured));
 
     if state.forced_owner.is_some() && !forced_owner_is_eligible {
         state.forced_owner = None;
     }
 }
 
+#[cfg(test)]
 fn choose_owner(state: &ClusterState, cfg: &Config, now: u64) -> Option<String> {
+    let configured = configured_node_ids(cfg);
+    choose_owner_with_configured(state, cfg, now, &configured)
+}
+
+fn choose_owner_with_configured(
+    state: &ClusterState,
+    cfg: &Config,
+    now: u64,
+    configured: &HashSet<&str>,
+) -> Option<String> {
     let forced_owner = state
         .forced_owner
         .as_ref()
@@ -1599,7 +1616,7 @@ fn choose_owner(state: &ClusterState, cfg: &Config, now: u64) -> Option<String> 
             state
                 .nodes
                 .get(*owner)
-                .is_some_and(|node| node_is_eligible(node, state, cfg, now))
+                .is_some_and(|node| node_is_eligible(node, state, cfg, now, configured))
         })
         .cloned();
     if forced_owner.is_some() {
@@ -1610,7 +1627,7 @@ fn choose_owner(state: &ClusterState, cfg: &Config, now: u64) -> Option<String> 
         if state
             .nodes
             .get(current_owner)
-            .is_some_and(|node| node_is_eligible(node, state, cfg, now))
+            .is_some_and(|node| node_is_eligible(node, state, cfg, now, configured))
         {
             return Some(current_owner.clone());
         }
@@ -1623,7 +1640,7 @@ fn choose_owner(state: &ClusterState, cfg: &Config, now: u64) -> Option<String> 
     state
         .nodes
         .values()
-        .filter(|node| node_is_eligible(node, state, cfg, now))
+        .filter(|node| node_is_eligible(node, state, cfg, now, configured))
         .max_by(|a, b| {
             a.priority
                 .cmp(&b.priority)
@@ -1648,6 +1665,7 @@ fn node_is_eligible(
     state: &ClusterState,
     cfg: &Config,
     now: u64,
+    configured: &HashSet<&str>,
 ) -> bool {
     if node.health.healthy && !node.draining && !node.ddos && !is_stale(node, cfg, now) {
         return true;
@@ -1662,7 +1680,7 @@ fn node_is_eligible(
     {
         return false;
     }
-    indirectly_observed_by_quorum(state, &node.node_id, cfg, now)
+    indirectly_observed_by_quorum(state, &node.node_id, cfg, now, configured)
 }
 
 fn indirectly_observed_by_quorum(
@@ -1670,6 +1688,7 @@ fn indirectly_observed_by_quorum(
     node_id: &str,
     cfg: &Config,
     now: u64,
+    configured: &HashSet<&str>,
 ) -> bool {
     let Some(observations) = state.peer_observations.get(node_id) else {
         return false;
@@ -1678,7 +1697,7 @@ fn indirectly_observed_by_quorum(
     let fresh_observers = observations
         .iter()
         .filter(|(observer, observed_at)| {
-            configured_node_id(cfg, observer)
+            configured.contains(observer.as_str())
                 && now.saturating_sub(**observed_at) <= timeout
                 && observer_node_is_reliable(state, observer, cfg, now)
         })
@@ -1717,7 +1736,12 @@ fn configured_node_ids(cfg: &Config) -> HashSet<&str> {
     configured
 }
 
-fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
+fn normalize_node_health(
+    state: &mut ClusterState,
+    cfg: &Config,
+    now: u64,
+    configured: &HashSet<&str>,
+) {
     for node in state.nodes.values_mut() {
         if node.last_seen.is_none() {
             node.health = ClusterHealth::unhealthy("waiting_for_heartbeat", true, false);
@@ -1754,7 +1778,7 @@ fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
                     node.health.reason.as_str(),
                     "api_unreachable" | "heartbeat_timeout" | "waiting_for_heartbeat"
                 )
-                && indirectly_observed_by_quorum(state, node_id, cfg, now)
+                && indirectly_observed_by_quorum(state, node_id, cfg, now, configured)
         })
         .map(|(node_id, _)| node_id.clone())
         .collect::<Vec<_>>();
@@ -1781,8 +1805,12 @@ fn last_seen_is_stale(last_seen: u64, cfg: &Config, now: u64) -> bool {
     now.saturating_sub(last_seen) > cfg.cluster.failover_timeout_secs.max(1)
 }
 
-fn ensure_configured_nodes(state: &mut ClusterState, cfg: &Config, now: u64) {
-    let configured = configured_node_ids(cfg);
+fn ensure_configured_nodes(
+    state: &mut ClusterState,
+    cfg: &Config,
+    now: u64,
+    configured: &HashSet<&str>,
+) {
     state
         .nodes
         .retain(|node_id, _| configured.contains(node_id.as_str()));
@@ -1992,9 +2020,13 @@ fn record_peer_observations(
     }
 }
 
-fn prune_peer_observations(state: &mut ClusterState, cfg: &Config, now: u64) {
+fn prune_peer_observations(
+    state: &mut ClusterState,
+    cfg: &Config,
+    now: u64,
+    configured: &HashSet<&str>,
+) {
     let timeout = cfg.cluster.failover_timeout_secs.max(1);
-    let configured = configured_node_ids(cfg);
     state.peer_observations.retain(|node_id, observations| {
         configured.contains(node_id.as_str()) && {
             observations.retain(|observer, observed_at| {
@@ -2826,7 +2858,8 @@ mod tests {
                 .insert(node_id.to_string(), now);
         }
 
-        normalize_node_health(&mut state, &cfg, now);
+        let configured = configured_node_ids(&cfg);
+        normalize_node_health(&mut state, &cfg, now, &configured);
 
         let node = state.nodes.get("b").unwrap();
         assert!(node.health.healthy);
@@ -2868,7 +2901,8 @@ mod tests {
             HashMap::from([("c".to_string(), now)]),
         );
 
-        prune_peer_observations(&mut state, &cfg, now);
+        let configured = configured_node_ids(&cfg);
+        prune_peer_observations(&mut state, &cfg, now, &configured);
 
         assert!(!state.peer_observations.contains_key("removed-target"));
         let observations = state
@@ -2986,7 +3020,8 @@ mod tests {
             empty_node("b", "b", "http://b", 1, false, now),
         );
 
-        normalize_node_health(&mut state, &cfg, now + 1_000);
+        let configured = configured_node_ids(&cfg);
+        normalize_node_health(&mut state, &cfg, now + 1_000, &configured);
 
         let node = state.nodes.get("b").unwrap();
         assert!(!node.health.healthy);
@@ -3228,7 +3263,8 @@ mod tests {
             heartbeat_failures.insert(peer.node_id.clone(), HEARTBEAT_FAILURE_THRESHOLD);
         }
 
-        normalize_node_health(&mut state, &cfg, now);
+        let configured = configured_node_ids(&cfg);
+        normalize_node_health(&mut state, &cfg, now, &configured);
 
         let peer_last_seen = state
             .nodes
@@ -3423,7 +3459,8 @@ mod tests {
         }
         state.nodes.get_mut("a").unwrap().draining = true;
 
-        clear_invalid_forced_owner(&mut state, &cfg, now);
+        let configured = configured_node_ids(&cfg);
+        clear_invalid_forced_owner(&mut state, &cfg, now, &configured);
 
         assert!(state.forced_owner.is_none());
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
