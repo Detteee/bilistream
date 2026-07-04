@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
@@ -12,6 +14,8 @@ lazy_static! {
     static ref LEGACY_CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.yaml");
     static ref COOKIES_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "cookies.json");
 }
+
+static CONFIG_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn executable_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("bilistream"))
@@ -383,10 +387,54 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
 /// Saves the configuration to config.json
 pub async fn save_config(config: &Config) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string_pretty(config)?;
-    let tmp_path = CONFIG_PATH.with_file_name("config.json.tmp");
-    fs::write(&tmp_path, json)?;
-    fs::rename(&tmp_path, &*CONFIG_PATH)?;
+    write_file_atomic(&CONFIG_PATH, json.as_bytes())?;
     Ok(())
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let (tmp_path, mut tmp_file) = create_unique_tmp_file(path)?;
+    let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
+    drop(tmp_file);
+
+    let result = write_result.and_then(|_| fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+fn create_unique_tmp_file(path: &Path) -> std::io::Result<(PathBuf, fs::File)> {
+    const MAX_ATTEMPTS: usize = 16;
+    for _ in 0..MAX_ATTEMPTS {
+        let tmp_path = unique_tmp_path(path);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to reserve unique config temporary file",
+    ))
+}
+
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    let suffix = CONFIG_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        "{}.tmp-{}-{}",
+        file_name,
+        std::process::id(),
+        suffix
+    ))
 }
 
 async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
@@ -422,5 +470,45 @@ mod tests {
             sibling_file_path(Path::new("bilistream"), "config.json"),
             PathBuf::from("config.json")
         );
+    }
+
+    #[test]
+    fn unique_tmp_path_stays_next_to_target() {
+        let path = PathBuf::from("/opt/bilistream/config.json");
+
+        let first = unique_tmp_path(&path);
+        let second = unique_tmp_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("config.json.tmp-")));
+    }
+
+    #[test]
+    fn atomic_write_replaces_target_without_leftover_tmp() {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-config-write-test-{}-{}",
+            std::process::id(),
+            CONFIG_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        write_file_atomic(&path, br#"{"old":true}"#).unwrap();
+        write_file_atomic(&path, br#"{"new":true}"#).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"new":true}"#);
+        let entries = fs::read_dir(&dir)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), path);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }
