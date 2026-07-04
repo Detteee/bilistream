@@ -271,14 +271,14 @@ async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Result<(), Str
 }
 
 async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
-    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
-    let stream_speed = get_ffmpeg_speed().await;
+    let hls_cache_active = is_ffmpeg_hls_cache_active();
+    let stream_speed = get_ffmpeg_speed();
     let stream_cache_speed = if hls_cache_active {
-        get_ffmpeg_cache_speed().await
+        get_ffmpeg_cache_speed()
     } else {
         None
     };
-    let network_stats = get_ffmpeg_network_stats().await;
+    let network_stats = get_ffmpeg_network_stats();
 
     bili.stream_quality = if bili.is_live {
         stream_speed.map(|speed| {
@@ -370,15 +370,15 @@ pub async fn get_status() -> impl IntoResponse {
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
-    let hls_cache_active = is_ffmpeg_hls_cache_active().await;
-    let network_stats = get_ffmpeg_network_stats().await;
+    let hls_cache_active = is_ffmpeg_hls_cache_active();
+    let network_stats = get_ffmpeg_network_stats();
 
     Json(ApiResponse {
         success: true,
         data: Some(NetworkStatus {
-            stream_speed: get_ffmpeg_speed().await,
+            stream_speed: get_ffmpeg_speed(),
             stream_cache_speed: if hls_cache_active {
-                get_ffmpeg_cache_speed().await
+                get_ffmpeg_cache_speed()
             } else {
                 None
             },

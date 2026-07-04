@@ -169,7 +169,7 @@ pub fn clear_manual_restart() {
 }
 
 // Get current ffmpeg push speed (lock-free read)
-pub async fn get_ffmpeg_speed() -> Option<f32> {
+pub fn get_ffmpeg_speed() -> Option<f32> {
     let bits = FFMPEG_SPEED.load(Ordering::Relaxed);
     if bits == 0 {
         None
@@ -179,7 +179,7 @@ pub async fn get_ffmpeg_speed() -> Option<f32> {
 }
 
 // Get current ffmpeg HLS cache writer speed (lock-free read)
-pub async fn get_ffmpeg_cache_speed() -> Option<f32> {
+pub fn get_ffmpeg_cache_speed() -> Option<f32> {
     let bits = FFMPEG_CACHE_SPEED.load(Ordering::Relaxed);
     if bits == 0 {
         None
@@ -188,7 +188,7 @@ pub async fn get_ffmpeg_cache_speed() -> Option<f32> {
     }
 }
 
-pub async fn is_ffmpeg_hls_cache_active() -> bool {
+pub fn is_ffmpeg_hls_cache_active() -> bool {
     FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed)
 }
 
@@ -202,7 +202,7 @@ pub struct FfmpegNetworkStats {
     pub cache_total_bytes: u64,
 }
 
-pub async fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
+pub fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
     FfmpegNetworkStats {
         push_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS),
         cache_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS),
