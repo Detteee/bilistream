@@ -2227,11 +2227,22 @@
         return small;
       }
 
-      function addAntiCollisionEntry() {
-        const username = document.getElementById('anti-collision-username').value.trim();
-        const roomId = parseInt(document.getElementById('anti-collision-roomid').value);
+      function readAntiCollisionEntryForm() {
+        return {
+          username: document.getElementById('anti-collision-username').value.trim(),
+          roomId: parseInt(document.getElementById('anti-collision-roomid').value, 10)
+        };
+      }
 
-        if (!username || !roomId || isNaN(roomId)) {
+      function clearAntiCollisionEntryForm() {
+        setInputValue('anti-collision-username', '');
+        setInputValue('anti-collision-roomid', '');
+      }
+
+      function addAntiCollisionEntry() {
+        const { username, roomId } = readAntiCollisionEntryForm();
+
+        if (!username || !Number.isFinite(roomId) || roomId <= 0) {
           showNotification('请填写用户名和有效的房间号', 'error');
           return;
         }
@@ -2244,10 +2255,7 @@
 
         loadAntiCollisionList(window.currentAntiCollisionList);
 
-        // Clear inputs
-        document.getElementById('anti-collision-username').value = '';
-        document.getElementById('anti-collision-roomid').value = '';
-
+        clearAntiCollisionEntryForm();
         showNotification('已添加到防撞车名单', 'success');
       }
 
