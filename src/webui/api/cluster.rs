@@ -326,6 +326,14 @@ pub struct ClusterMembershipRequest {
     pub nodes: Vec<ClusterMembershipNode>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NormalizedMembershipNode<'a> {
+    node_id: &'a str,
+    name: &'a str,
+    api_url: &'a str,
+    priority: i32,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ClusterMembershipTargetRequest<'a> {
     #[serde(default)]
@@ -804,7 +812,7 @@ pub(crate) fn cluster_membership_from_config(cluster: &ClusterConfig) -> Cluster
 }
 
 pub(crate) fn normalize_cluster_membership_nodes(nodes: &mut Vec<ClusterMembershipNode>) {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     nodes.retain(|node| {
         let node_id = node.node_id.trim();
         let api_url = node.api_url.trim();
@@ -844,35 +852,33 @@ pub(crate) fn apply_cluster_membership_to_config(
     cluster: &mut ClusterConfig,
     payload: &ClusterMembershipRequest,
 ) {
+    let nodes = normalized_membership_nodes(&payload.nodes);
     let local_node_id = payload
         .target_node_id
         .as_deref()
         .filter(|node_id| !node_id.trim().is_empty())
         .unwrap_or(cluster.node_id.as_str())
+        .trim()
         .to_string();
-    let local_node = payload
-        .nodes
-        .iter()
-        .find(|node| node.node_id == local_node_id);
+    let local_node = nodes.iter().find(|node| node.node_id == local_node_id);
 
     if let Some(local_node) = local_node {
         cluster.enabled = payload.enabled;
-        cluster.node_id = local_node.node_id.clone();
+        cluster.node_id = local_node.node_id.to_string();
         cluster.node_name = if local_node.name.is_empty() {
-            local_node.node_id.clone()
+            local_node.node_id.to_string()
         } else {
-            local_node.name.clone()
+            local_node.name.to_string()
         };
-        cluster.public_api_url = local_node.api_url.clone();
+        cluster.public_api_url = local_node.api_url.to_string();
         cluster.priority = local_node.priority;
-        cluster.peers = payload
-            .nodes
+        cluster.peers = nodes
             .iter()
             .filter(|node| node.node_id != local_node_id)
             .map(|node| ClusterPeer {
-                node_id: node.node_id.clone(),
-                name: node.name.clone(),
-                api_url: node.api_url.clone(),
+                node_id: node.node_id.to_string(),
+                name: node.name.to_string(),
+                api_url: node.api_url.to_string(),
                 priority: node.priority,
             })
             .collect();
@@ -887,6 +893,30 @@ pub(crate) fn apply_cluster_membership_to_config(
     cluster.failover_timeout_secs = payload.failover_timeout_secs.max(1);
     cluster.lease_ttl_secs = payload.lease_ttl_secs.max(1);
     cluster.thresholds = payload.thresholds.clone();
+}
+
+pub(crate) fn normalized_membership_nodes(
+    nodes: &[ClusterMembershipNode],
+) -> Vec<NormalizedMembershipNode<'_>> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::with_capacity(nodes.len());
+
+    for node in nodes {
+        let node_id = node.node_id.trim();
+        let api_url = node.api_url.trim().trim_end_matches('/');
+        if node_id.is_empty() || api_url.is_empty() || !seen.insert(node_id) {
+            continue;
+        }
+
+        normalized.push(NormalizedMembershipNode {
+            node_id,
+            name: node.name.trim(),
+            api_url,
+            priority: node.priority,
+        });
+    }
+
+    normalized
 }
 
 pub(crate) async fn propagate_cluster_membership(

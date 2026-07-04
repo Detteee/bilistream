@@ -372,6 +372,33 @@ mod tests {
     }
 
     #[test]
+    fn membership_apply_normalizes_inbound_nodes() {
+        let mut cluster = ClusterConfig {
+            node_id: "ca".to_string(),
+            enabled: false,
+            ..ClusterConfig::default()
+        };
+        let mut payload = membership_payload(Some(" ca "));
+        payload.nodes[0].node_id = " la ".to_string();
+        payload.nodes[0].name = " Los Angeles ".to_string();
+        payload.nodes[0].api_url = " http://la:3150/ ".to_string();
+        payload.nodes[1].node_id = " ca ".to_string();
+        payload.nodes[1].name = " Canada ".to_string();
+        payload.nodes[1].api_url = " http://ca:3150/ ".to_string();
+
+        apply_cluster_membership_to_config(&mut cluster, &payload);
+
+        assert!(cluster.enabled);
+        assert_eq!(cluster.node_id, "ca");
+        assert_eq!(cluster.node_name, "Canada");
+        assert_eq!(cluster.public_api_url, "http://ca:3150");
+        assert_eq!(cluster.peers.len(), 1);
+        assert_eq!(cluster.peers[0].node_id, "la");
+        assert_eq!(cluster.peers[0].name, "Los Angeles");
+        assert_eq!(cluster.peers[0].api_url, "http://la:3150");
+    }
+
+    #[test]
     fn membership_propagation_targets_include_new_and_removed_peers() {
         let old_cluster = ClusterConfig {
             node_id: "local".to_string(),
