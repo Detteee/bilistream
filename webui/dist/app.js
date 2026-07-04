@@ -9,6 +9,7 @@
       let networkRefreshIntervalId = null;
       let logRefreshIntervalId = null;
       let statusRefreshInFlight = false;
+      let statusRefreshQueued = false;
       let networkRefreshInFlight = false;
       let lastBiliNetworkLive = false;
       let lastBiliNetworkQuality = null;
@@ -3552,10 +3553,12 @@
 
       async function refreshStatus() {
         if (statusRefreshInFlight) {
+          statusRefreshQueued = true;
           return;
         }
 
         statusRefreshInFlight = true;
+        statusRefreshQueued = false;
 
         try {
           const data = await getJson('/api/status');
@@ -3671,6 +3674,9 @@
         } finally {
           statusRefreshInFlight = false;
           schedulePlatformTitleRowCenters();
+          if (statusRefreshQueued) {
+            refreshStatus();
+          }
         }
       }
 
