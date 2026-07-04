@@ -1303,7 +1303,7 @@ async fn send_heartbeat_to_peer(
                 peer.node_id,
                 response.status()
             );
-            mark_peer_unreachable(peer.node_id.clone(), cfg);
+            mark_peer_unreachable(&peer.node_id, cfg);
         }
         Ok(response) => match response.json::<PeerApiResponse<ClusterStatus>>().await {
             Ok(envelope) if envelope.success => {
@@ -1326,14 +1326,14 @@ async fn send_heartbeat_to_peer(
                             "Cluster heartbeat response from {} failed identity/freshness validation",
                             peer.node_id
                         );
-                        mark_peer_unreachable(peer.node_id.clone(), cfg);
+                        mark_peer_unreachable(&peer.node_id, cfg);
                     }
                 } else {
                     tracing::debug!(
                         "Cluster heartbeat response from {} had no status",
                         peer.node_id
                     );
-                    mark_peer_unreachable(peer.node_id.clone(), cfg);
+                    mark_peer_unreachable(&peer.node_id, cfg);
                 }
             }
             Ok(envelope) => {
@@ -1342,16 +1342,16 @@ async fn send_heartbeat_to_peer(
                     peer.node_id,
                     envelope.message
                 );
-                mark_peer_unreachable(peer.node_id.clone(), cfg);
+                mark_peer_unreachable(&peer.node_id, cfg);
             }
             Err(e) => {
                 tracing::debug!("Cluster heartbeat parse failed for {}: {}", peer.node_id, e);
-                mark_peer_unreachable(peer.node_id.clone(), cfg);
+                mark_peer_unreachable(&peer.node_id, cfg);
             }
         },
         Err(e) => {
             tracing::debug!("Cluster heartbeat failed for {}: {}", peer.node_id, e);
-            mark_peer_unreachable(peer.node_id.clone(), cfg);
+            mark_peer_unreachable(&peer.node_id, cfg);
         }
     }
 }
@@ -2074,21 +2074,23 @@ fn mark_peer_reachable(node_id: &str) {
     state.heartbeat_failures.remove(node_id);
 }
 
-fn mark_peer_unreachable(node_id: String, cfg: &Config) {
+fn mark_peer_unreachable(node_id: &str, cfg: &Config) {
     let mut state = CLUSTER_STATE.write().unwrap();
     let now = now_secs();
-    let failures = {
-        let count = state.heartbeat_failures.entry(node_id.clone()).or_insert(0);
+    let failures = if let Some(count) = state.heartbeat_failures.get_mut(node_id) {
         *count = count.saturating_add(1);
         *count
+    } else {
+        state.heartbeat_failures.insert(node_id.to_string(), 1);
+        1
     };
     let peer = cfg
         .cluster
         .peers
         .iter()
         .find(|peer| peer.node_id == node_id);
-    let node = state.nodes.entry(node_id.clone()).or_insert_with(|| {
-        if let Some(peer) = peer {
+    if !state.nodes.contains_key(node_id) {
+        let node = if let Some(peer) = peer {
             empty_node(
                 &peer.node_id,
                 &peer.name,
@@ -2098,9 +2100,13 @@ fn mark_peer_unreachable(node_id: String, cfg: &Config) {
                 now,
             )
         } else {
-            empty_node(&node_id, &node_id, "", 0, false, now)
-        }
-    });
+            empty_node(node_id, node_id, "", 0, false, now)
+        };
+        state.nodes.insert(node_id.to_string(), node);
+    }
+    let Some(node) = state.nodes.get_mut(node_id) else {
+        return;
+    };
     let stale = is_stale(node, cfg, now);
     if failures < HEARTBEAT_FAILURE_THRESHOLD && !stale {
         tracing::debug!(
@@ -3839,7 +3845,7 @@ mod tests {
         }
 
         for _ in 0..(HEARTBEAT_FAILURE_THRESHOLD + 1) {
-            mark_peer_unreachable(node_id.to_string(), &cfg);
+            mark_peer_unreachable(node_id, &cfg);
         }
 
         let stored = CLUSTER_STATE
@@ -3861,7 +3867,7 @@ mod tests {
                 node.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 5);
             }
         }
-        mark_peer_unreachable(node_id.to_string(), &cfg);
+        mark_peer_unreachable(node_id, &cfg);
 
         let stored = CLUSTER_STATE
             .read()
