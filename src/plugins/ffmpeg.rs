@@ -237,11 +237,14 @@ fn optional_u64_from_atomic(value: &AtomicU64) -> Option<u64> {
     (value != OPTIONAL_U64_NONE).then_some(value)
 }
 
+fn unix_time_secs_from(time: std::time::SystemTime) -> u32 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(u32::MAX as u64) as u32)
+        .unwrap_or(0)
+}
+
 fn unix_time_secs() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32
+    unix_time_secs_from(std::time::SystemTime::now())
 }
 
 // Update last stats progress time (lock-free write).
@@ -875,10 +878,13 @@ fn update_cache_bitrate_display(bitrate_kbps: f32) {
 }
 
 fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    unix_time_millis_from(std::time::SystemTime::now())
+}
+
+fn unix_time_millis_from(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
 }
 
 fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
@@ -1095,10 +1101,7 @@ fn extract_ffmpeg_stats(line: &str) -> Option<FfmpegStatsSample> {
 }
 
 fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+    let now_ms = now_millis();
     let cache_dir = std::env::temp_dir().join(format!(
         "bilistream-hls-cache-{}-{}",
         std::process::id(),
@@ -1772,5 +1775,20 @@ mod tests {
     fn network_idle_direct_mode_uses_push_only() {
         assert!(!is_network_transfer_idle(false, true, 500.0, 999.0));
         assert!(is_network_transfer_idle(false, true, 0.0, 999.0));
+    }
+    #[test]
+    fn unix_time_helpers_do_not_panic_before_epoch() {
+        let before_epoch = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+
+        assert_eq!(unix_time_secs_from(before_epoch), 0);
+        assert_eq!(unix_time_millis_from(before_epoch), 0);
+    }
+
+    #[test]
+    fn unix_time_secs_saturates_to_u32_max() {
+        let after_epoch =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(u32::MAX as u64 + 1);
+
+        assert_eq!(unix_time_secs_from(after_epoch), u32::MAX);
     }
 }
