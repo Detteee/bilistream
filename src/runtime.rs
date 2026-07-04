@@ -1401,11 +1401,19 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
 
         // Check Twitch if configured and YouTube is not live
         if !priority_is_live && !cfg.priority_channel.twitch_channel_id.is_empty() {
-            let tw_client = TwitchClient::new(
+            let tw_client = match TwitchClient::new(
                 &cfg.priority_channel.twitch_channel_id,
                 cfg.twitch.proxy_region.clone(),
                 cfg.twitch.proxy.clone(),
-            );
+            ) {
+                Ok(client) => client,
+                Err(e) => {
+                    let error_msg = format!("Twitch 客户端初始化失败: {}", e);
+                    tracing::warn!("优先频道监控: {}", error_msg);
+                    tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                    continue;
+                }
+            };
 
             match tw_client.get_status().await {
                 Ok((is_live, _, title, _, _, _)) => {
@@ -2160,6 +2168,7 @@ mod tests {
             channel_name: platform.code().to_string(),
             channel_id: "channel-id".to_string(),
             area_v2: 235,
+            is_priority: false,
         }
     }
 
