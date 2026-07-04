@@ -666,8 +666,8 @@
 
           // Sort scheduled streams by time - nearest first
           scheduledStreams.sort((a, b) => {
-            const timeA = a.start_scheduled ? new Date(a.start_scheduled).getTime() : Infinity;
-            const timeB = b.start_scheduled ? new Date(b.start_scheduled).getTime() : Infinity;
+            const timeA = getHolodexStreamStartMs(a, false) ?? Infinity;
+            const timeB = getHolodexStreamStartMs(b, false) ?? Infinity;
             return timeA - timeB;
           });
 
@@ -934,10 +934,9 @@
       }
 
       async function refreshHolodexChannelsData() {
-        const response = await fetch('/api/manage/channels');
-        const result = await response.json();
-        if (!response.ok || !result.success || !result.data) {
-          throw new Error(result.message || `HTTP ${response.status}`);
+        const result = await managementRequest('/api/manage/channels');
+        if (!result.success || !result.data) {
+          throw new Error(result.message || 'Failed to load channels');
         }
         channelsData = result.data;
         return channelsData;
@@ -1048,6 +1047,19 @@
         label.textContent = '切换';
         button.append(icon, label);
         return button;
+      }
+
+      function readHolodexStreamActionData(button) {
+        return {
+          channelId: button.dataset.channelId || '',
+          suggestedAreaId: button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null,
+          title: button.dataset.title || '',
+          topicId: button.dataset.topicId || '',
+          status: button.dataset.status || '',
+          platform: button.dataset.platform || 'youtube',
+          twitchChannelId: button.dataset.twitchId || '',
+          externalLink: button.dataset.externalLink || ''
+        };
       }
 
       function parseTwitchLoginFromLink(link) {
@@ -1244,9 +1256,7 @@
         // Load areas if not already loaded
         if (!areasData) {
           try {
-            const response = await fetch('/api/areas');
-            const data = await response.json();
-            areasData = data;
+            areasData = normalizeAreaData(await getJson('/api/areas'));
           } catch (error) {
             showNotification('加载分区列表失败', 'error');
             return;
@@ -1255,11 +1265,7 @@
 
         // Populate select
         select.replaceChildren(createAreaOption('', '选择分区...'));
-        if (areasData && areasData.areas) {
-          areasData.areas.forEach(area => {
-            select.appendChild(createAreaOption(area.id, `${area.name} (${area.id})`));
-          });
-        }
+        appendAreaOptions(select, getAreaList(), true);
 
         modal.classList.remove('hidden');
       }
@@ -1274,6 +1280,14 @@
         option.value = value;
         option.textContent = label;
         return option;
+      }
+
+      function normalizeAreaData(data) {
+        return Array.isArray(data) ? { areas: data } : (data || { areas: [] });
+      }
+
+      function getAreaList(data = areasData) {
+        return normalizeAreaData(data).areas || [];
       }
 
       function getSortedAreas(areas) {
@@ -1385,24 +1399,32 @@
         await performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink);
       }
 
+      function createHolodexSwitchPayload(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
+        return {
+          channel_id: channelId,
+          area_id: areaId,
+          title: title || null,
+          topic_id: topicId || null,
+          status: status || null,
+          platform: platform || 'youtube',
+          twitch_channel_id: twitchChannelId || null,
+          external_link: externalLink || null
+        };
+      }
+
       async function performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
         try {
-          const response = await fetch('/api/holodex/switch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              channel_id: channelId,
-              area_id: areaId,
-              title: title || null,
-              topic_id: topicId || null,
-              status: status || null,
-              platform: platform || 'youtube',
-              twitch_channel_id: twitchChannelId || null,
-              external_link: externalLink || null
-            })
-          });
-
-          const result = await response.json();
+          const payload = createHolodexSwitchPayload(
+            channelId,
+            areaId,
+            title,
+            topicId,
+            status,
+            platform,
+            twitchChannelId,
+            externalLink
+          );
+          const result = await postJsonApi('/api/holodex/switch', payload);
           if (result.success) {
             showNotification(result.message || '频道切换成功', 'success');
             // Refresh status after switching
@@ -1427,11 +1449,7 @@
           const captureUrl = platform === 'twitch'
             ? `/api/crop/capture/twitch?channel_id=${encodeURIComponent(twitchChannelId)}`
             : `/api/crop/capture/youtube?channel_id=${encodeURIComponent(channelId)}`;
-          const response = await fetch(captureUrl, {
-            method: 'POST'
-          });
-
-          const result = await response.json();
+          const result = await postJsonApi(captureUrl);
 
           if (result.success && result.message) {
             // Load the captured image
@@ -2357,8 +2375,7 @@
       // Area management functions
       async function loadAreas() {
         try {
-          const response = await fetch('/api/manage/areas');
-          const result = await readManagementResponse(response);
+          const result = await managementRequest('/api/manage/areas');
 
           if (result.success) {
             const areasContent = document.getElementById('areas-content');
@@ -2437,13 +2454,7 @@
         }
 
         try {
-          const response = await fetch('/api/manage/areas', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(area)
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await managementJsonRequest('/api/manage/areas', 'POST', area);
           if (result.success) {
             showNotification('分区添加成功', 'success');
             clearAreaForm();
@@ -2459,16 +2470,42 @@
 
       async function readManagementResponse(response) {
         const contentType = response.headers.get('content-type') || '';
+        const bodyText = await response.text();
         if (!contentType.includes('application/json')) {
-          const text = await response.text();
-          throw new Error(`Expected JSON, got: ${contentType || 'unknown'}. Response: ${text}`);
+          throw new Error(`Expected JSON, got: ${contentType || 'unknown'}. Response: ${bodyText}`);
         }
 
-        const result = await response.json();
+        let result = null;
+        try {
+          result = bodyText ? JSON.parse(bodyText) : null;
+        } catch (error) {
+          throw new Error(response.ok ? '服务器返回了无效 JSON' : formatHttpError(response, bodyText));
+        }
+
         if (!response.ok) {
-          throw new Error(result.message || `HTTP error! status: ${response.status}`);
+          throw new Error(result?.message || formatHttpError(response, bodyText));
+        }
+        if (!result) {
+          throw new Error('服务器返回空响应');
         }
         return result;
+      }
+
+      async function managementRequest(path, options = {}) {
+        const response = await fetch(path, options);
+        return readManagementResponse(response);
+      }
+
+      function managementJsonRequest(path, method, payload) {
+        return managementRequest(path, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      function deleteManagementResource(path) {
+        return managementRequest(path, { method: 'DELETE' });
       }
 
       function parseCommaSeparatedInput(id) {
@@ -2488,8 +2525,16 @@
       }
 
       function parseInteger(value, fallback = 0) {
-        const parsed = parseInt(value, 10);
-        return Number.isFinite(parsed) ? parsed : fallback;
+        const normalized = String(value ?? '').trim();
+        if (!normalized) {
+          return fallback;
+        }
+        if (!/^[+-]?\d+$/.test(normalized)) {
+          return fallback;
+        }
+
+        const parsed = Number(normalized);
+        return Number.isSafeInteger(parsed) ? parsed : fallback;
       }
 
       function readIntegerInput(id, fallback = 0) {
@@ -2503,8 +2548,7 @@
       // Channel management functions
       async function loadChannels() {
         try {
-          const response = await fetch('/api/manage/channels');
-          const result = await readManagementResponse(response);
+          const result = await managementRequest('/api/manage/channels');
 
           if (result.success) {
             const channelsContent = document.getElementById('channels-content');
@@ -2594,13 +2638,7 @@
         }
 
         try {
-          const response = await fetch('/api/manage/channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await managementJsonRequest('/api/manage/channels', 'POST', payload);
           if (result.success) {
             showNotification('频道添加成功', 'success');
             clearChannelForm();
@@ -2628,13 +2666,7 @@
         }
 
         try {
-          const response = await fetch('/api/manage/channels', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await managementJsonRequest('/api/manage/channels', 'PUT', payload);
           if (result.success) {
             showNotification('频道更新成功', 'success');
             clearChannelForm();
@@ -2664,8 +2696,7 @@
 
       async function editChannel(channelName) {
         try {
-          const response = await fetch('/api/manage/channels');
-          const result = await readManagementResponse(response);
+          const result = await managementRequest('/api/manage/channels');
           if (!result.success) {
             showNotification(`加载失败: ${result.message}`, 'error');
             return;
@@ -2769,6 +2800,12 @@
         control.classList.toggle('holodex-channel-add-active', visible);
       }
 
+      function setHolodexAddChannelButtonsDisabled(control, disabled) {
+        control.querySelectorAll('button').forEach(button => {
+          button.disabled = disabled;
+        });
+      }
+
       async function confirmHolodexAddChannel(button) {
         const control = button.closest('.holodex-channel-add');
         if (!control) return;
@@ -2780,40 +2817,34 @@
           return;
         }
 
-        control.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
+        setHolodexAddChannelButtonsDisabled(control, true);
 
         try {
-          const response = await fetch('/api/manage/channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          const result = await response.json();
+          const result = await managementJsonRequest('/api/manage/channels', 'POST', payload);
           const alreadyExists = /already exists/i.test(result.message || '');
 
-          if (response.ok && (result.success || alreadyExists)) {
+          if (result.success || alreadyExists) {
             addHolodexChannelToCache(payload);
             markHolodexChannelAdded(channelData);
             showNotification(alreadyExists ? 'channels.json 已有该频道' : '已添加到 channels.json', 'success');
 
             const channelsContent = document.getElementById('channels-content');
-            if (channelsContent && channelsContent.style.display !== 'none') {
+            if (channelsContent && !isElementHidden(channelsContent)) {
               loadChannels();
             }
           } else {
-            showNotification('添加失败: ' + (result.message || `HTTP ${response.status}`), 'error');
-            control.querySelectorAll('button').forEach(btn => { btn.disabled = false; });
+            showNotification('添加失败: ' + (result.message || 'Unknown error'), 'error');
+            setHolodexAddChannelButtonsDisabled(control, false);
           }
         } catch (error) {
           showNotification('添加失败: ' + error.message, 'error');
-          control.querySelectorAll('button').forEach(btn => { btn.disabled = false; });
+          setHolodexAddChannelButtonsDisabled(control, false);
         }
       }
 
       async function editArea(areaId) {
         try {
-          const response = await fetch('/api/manage/areas');
-          const result = await readManagementResponse(response);
+          const result = await managementRequest('/api/manage/areas');
           if (!result.success) {
             showNotification(`加载失败: ${result.message}`, 'error');
             return;
@@ -2862,23 +2893,13 @@
           // If ID changed, we need to delete the old one and add the new one
           if (originalId !== area.id) {
             // Delete old area
-            const deleteResponse = await fetch(`/api/manage/areas/${originalId}`, {
-              method: 'DELETE'
-            });
-
-            const deleteResult = await readManagementResponse(deleteResponse);
+            const deleteResult = await deleteManagementResource(`/api/manage/areas/${originalId}`);
             if (!deleteResult.success) {
               throw new Error(deleteResult.message || '删除原分区失败');
             }
 
             // Add new area with new ID
-            const response = await fetch('/api/manage/areas', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(area)
-            });
-
-            const result = await readManagementResponse(response);
+            const result = await managementJsonRequest('/api/manage/areas', 'POST', area);
             if (result.success) {
               showNotification('分区更新成功', 'success');
               clearAreaForm();
@@ -2890,13 +2911,7 @@
           }
 
           // Update existing area (ID unchanged)
-          const response = await fetch('/api/manage/areas', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(area)
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await managementJsonRequest('/api/manage/areas', 'PUT', area);
           if (result.success) {
             showNotification('分区更新成功', 'success');
             clearAreaForm();
@@ -2917,11 +2932,7 @@
         }
 
         try {
-          const response = await fetch(`/api/manage/areas/${areaId}`, {
-            method: 'DELETE'
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await deleteManagementResource(`/api/manage/areas/${areaId}`);
           if (result.success) {
             showNotification('分区删除成功', 'success');
             loadAreas();
@@ -2939,11 +2950,7 @@
         }
 
         try {
-          const response = await fetch(`/api/manage/channels/${encodeURIComponent(channelName)}`, {
-            method: 'DELETE'
-          });
-
-          const result = await readManagementResponse(response);
+          const result = await deleteManagementResource(`/api/manage/channels/${encodeURIComponent(channelName)}`);
           if (result.success) {
             showNotification('频道删除成功', 'success');
             loadChannels();
@@ -3369,15 +3376,9 @@
       }
 
       function applyBiliStreamQualityColor(element, quality) {
-        if (quality === '流畅') {
-          element.style.color = '#10b981';
-        } else if (quality === '波动') {
-          element.style.color = '#f59e0b';
-        } else if (quality === '卡顿') {
-          element.style.color = '#ef4444';
-        } else {
-          element.style.color = '';
-        }
+        element.classList.toggle('bili-network-quality-smooth', quality === '流畅');
+        element.classList.toggle('bili-network-quality-unstable', quality === '波动');
+        element.classList.toggle('bili-network-quality-stalled', quality === '卡顿');
       }
 
       function updateBiliNetworkPanel(bili) {
@@ -3417,7 +3418,7 @@
         }
 
         const cacheMeter = document.getElementById('bili-network-cache-meter');
-        cacheMeter.style.display = hasCache ? '' : 'none';
+        setElementDisplay(cacheMeter, hasCache, '');
         if (hasCache) {
           updateBiliNetworkMeter('cache', {
             bitrateKbps: bili.stream_cache_bitrate_kbps,
@@ -3465,15 +3466,7 @@
         statusRefreshInFlight = true;
 
         try {
-          const response = await fetch('/api/status');
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', response.status, errorText);
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-
-          const data = await response.json();
+          const data = await getJson('/api/status');
 
           if (!data.success) {
             // API returned an error
@@ -3591,25 +3584,7 @@
 
       async function startStream() {
         try {
-          const response = await fetch('/api/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-          });
-
-          // Check if response is ok before parsing JSON
-          if (!response.ok) {
-            const errorText = await response.text();
-            try {
-              const errorData = JSON.parse(errorText);
-              showNotification(errorData.message || '开播失败', 'error');
-            } catch {
-              showNotification('开播失败: ' + errorText, 'error');
-            }
-            return;
-          }
-
-          const data = await response.json();
+          const data = await postJsonApi('/api/start', {});
 
           // Check if face verification is required
           if (data.data && data.data.requires_face_auth) {
@@ -3633,11 +3608,8 @@
 
       async function stopStream() {
         try {
-          const response = await fetch('/api/stop', {
-            method: 'POST'
-          });
-          const data = await response.json();
-          showNotification(data.message || '直播已停止', 'success');
+          const data = await postJsonApi('/api/stop');
+          showNotification(data.message || (data.success ? '直播已停止' : '停播失败'), data.success ? 'success' : 'error');
           setTimeout(refreshStatus, 2000);
         } catch (error) {
           showNotification('操作失败: ' + error.message, 'error');
@@ -3656,11 +3628,8 @@
         setButtonLoading(btn, icon, true);
 
         try {
-          const response = await fetch('/api/restart', {
-            method: 'POST'
-          });
-          const data = await response.json();
-          showNotification(data.message || '已重启流', 'success');
+          const data = await postJsonApi('/api/restart');
+          showNotification(data.message || (data.success ? '已重启流' : '重启失败'), data.success ? 'success' : 'error');
           setTimeout(refreshStatus, 2000);
         } catch (error) {
           showNotification('操作失败: ' + error.message, 'error');
@@ -3672,6 +3641,14 @@
         }
       }
 
+      function postTitleUpdate(title) {
+        return postJsonApi('/api/title', { title });
+      }
+
+      function postChannelUpdate(payload) {
+        return postJsonApi('/api/channel', payload);
+      }
+
       async function changeTitle() {
         const title = document.getElementById('title-input').value.trim();
         if (!title) {
@@ -3680,12 +3657,7 @@
         }
 
         try {
-          const response = await fetch('/api/title', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: title })
-          });
-          const data = await response.json();
+          const data = await postTitleUpdate(title);
           if (data.success) {
             showNotification(data.message || '直播标题已更新', 'success');
             document.getElementById('title-input').value = '';
@@ -3700,17 +3672,27 @@
 
       // Inline row edit helpers
       function showInfoRowEdit(valueEl, editContainer) {
-        valueEl.parentElement.classList.add('hidden');
-        valueEl.parentElement.style.display = '';
+        const valueContainer = valueEl?.parentElement;
+        if (!valueContainer || !editContainer) {
+          return;
+        }
+
+        valueContainer.classList.add('hidden');
+        valueContainer.style.display = '';
         editContainer.classList.remove('hidden');
         editContainer.style.display = '';
       }
 
       function hideInfoRowEdit(valueEl, editContainer) {
+        const valueContainer = valueEl?.parentElement;
+        if (!valueContainer || !editContainer) {
+          return;
+        }
+
         editContainer.classList.add('hidden');
         editContainer.style.display = '';
-        valueEl.parentElement.classList.remove('hidden');
-        valueEl.parentElement.style.display = '';
+        valueContainer.classList.remove('hidden');
+        valueContainer.style.display = '';
       }
 
       function handleTitleEditKeydown(event) {
@@ -3786,16 +3768,17 @@
 
         try {
           const channelInfo = JSON.parse(selectedValue);
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'youtube',
-              channel_id: channelInfo.id,
-              channel_name: channelInfo.name
-            })
+          const data = await postChannelUpdate({
+            platform: 'youtube',
+            channel_id: channelInfo.id,
+            channel_name: channelInfo.name
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'YouTube频道更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'YouTube频道已更新', 'success');
           cancelYtChannelEdit();
           // Refresh status immediately to show updated info
@@ -3851,15 +3834,16 @@
         }
 
         try {
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'youtube',
-              area_id: areaId
-            })
+          const data = await postChannelUpdate({
+            platform: 'youtube',
+            area_id: areaId
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'YouTube配置分区更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'YouTube配置分区已更新', 'success');
           cancelYtAreaEdit();
           // Refresh status immediately to show updated info
@@ -3907,15 +3891,16 @@
         }
 
         try {
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'youtube',
-              quality: quality // Send technical value to server
-            })
+          const data = await postChannelUpdate({
+            platform: 'youtube',
+            quality // Send technical value to server
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'YouTube画质更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'YouTube画质已更新', 'success');
           cancelYtQualityEdit();
           // Update the display immediately with display text
@@ -3965,15 +3950,16 @@
         }
 
         try {
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'twitch',
-              quality: quality // Send technical value to server
-            })
+          const data = await postChannelUpdate({
+            platform: 'twitch',
+            quality // Send technical value to server
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'Twitch画质更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'Twitch画质已更新', 'success');
           cancelTwQualityEdit();
           // Update the display immediately with display text
@@ -4029,16 +4015,17 @@
 
         try {
           const channelInfo = JSON.parse(selectedValue);
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'twitch',
-              channel_id: channelInfo.id,
-              channel_name: channelInfo.name
-            })
+          const data = await postChannelUpdate({
+            platform: 'twitch',
+            channel_id: channelInfo.id,
+            channel_name: channelInfo.name
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'Twitch频道更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'Twitch频道已更新', 'success');
           cancelTwChannelEdit();
           // Refresh status immediately to show updated info
@@ -4094,15 +4081,16 @@
         }
 
         try {
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'twitch',
-              area_id: areaId
-            })
+          const data = await postChannelUpdate({
+            platform: 'twitch',
+            area_id: areaId
           });
-          const data = await response.json();
+
+          if (!data.success) {
+            showNotification(data.message || 'Twitch配置分区更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'Twitch配置分区已更新', 'success');
           cancelTwAreaEdit();
           // Refresh status immediately to show updated info
@@ -4135,10 +4123,7 @@
       function populateAreaEditSelect() {
         const editSelect = document.getElementById('area-edit-select');
         editSelect.replaceChildren(createAreaOption('', '选择分区...'));
-
-        if (areasData && areasData.areas) {
-          appendAreaOptions(editSelect, areasData.areas);
-        }
+        appendAreaOptions(editSelect, getAreaList());
       }
 
       function cancelAreaEdit() {
@@ -4158,12 +4143,12 @@
         }
 
         try {
-          const response = await fetch('/api/area', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ area_id: areaId })
-          });
-          const data = await response.json();
+          const data = await postJsonApi('/api/area', { area_id: areaId });
+          if (!data.success) {
+            showNotification(data.message || '分区更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || '分区已更新', 'success');
           cancelAreaEdit();
           setTimeout(refreshStatus, 2000);
@@ -4182,12 +4167,7 @@
         }
 
         try {
-          const response = await fetch('/api/title', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: title })
-          });
-          const data = await response.json();
+          const data = await postTitleUpdate(title);
           if (data.success) {
             showNotification(data.message || '直播标题已更新', 'success');
             cancelTitleEdit();
@@ -4207,15 +4187,12 @@
         setButtonLoading(null, icon, true);
 
         try {
-          const [channelsResponse, areasResponse] = await Promise.all([
-            fetch('/api/channels'),
-            fetch('/api/areas')
+          const [channelsResult, areasResult] = await Promise.all([
+            getJson('/api/channels'),
+            getJson('/api/areas')
           ]);
-
-          [channelsData, areasData] = await Promise.all([
-            channelsResponse.json(),
-            areasResponse.json()
-          ]);
+          channelsData = channelsResult;
+          areasData = normalizeAreaData(areasResult);
 
           // Populate the removed legacy channel-management area select if present.
           const areaSelect = document.getElementById('area-select');
@@ -4223,25 +4200,12 @@
             areaSelect.replaceChildren(createAreaOption('', '不修改分区'));
           }
 
-          // Handle both array and object responses
-          let areasList = [];
-          if (Array.isArray(areasData)) {
-            areasList = areasData;
-          } else if (areasData && areasData.areas) {
-            areasList = areasData.areas;
-          }
+          const areasList = getAreaList();
 
           if (areasList.length > 0) {
-            // Sort areas: 其他单机 (235) first, then others
-            const sortedAreas = [...areasList].sort((a, b) => {
-              if (a.id === 235) return -1;
-              if (b.id === 235) return 1;
-              return 0;
-            });
-
             if (areaSelect) {
               // Populate channel management area select
-              appendAreaOptions(areaSelect, sortedAreas, true);
+              appendAreaOptions(areaSelect, areasList, true);
             }
 
           } else {
@@ -4479,13 +4443,11 @@
             channelPayload.quality = quality;
           }
 
-          const channelResponse = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(channelPayload)
-          });
-
-          const channelData = await channelResponse.json();
+          const channelData = await postJsonApi('/api/channel', channelPayload);
+          if (!channelData.success) {
+            showNotification(channelData.message || '频道更新失败', 'error');
+            return;
+          }
 
           // If area is 86, also update enable_lol_monitor setting
           if (areaId === '86') {
@@ -4498,14 +4460,17 @@
               configPayload.riot_api_key = riotApiKey;
             }
 
-            await fetch('/api/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(configPayload)
-            });
+            const configData = await postJsonApi('/api/config', configPayload);
+            if (!configData.success) {
+              showNotification(configData.message || 'LoL 监控配置更新失败', 'error');
+              return;
+            }
 
             // Update global config
             window.configData.enable_lol_monitor = enableLolMonitor;
+            if (riotApiKey) {
+              window.configData.riot_api_key = riotApiKey;
+            }
           }
 
           showNotification(channelData.message || '频道已更新', 'success');
@@ -4551,23 +4516,22 @@
         group.classList.toggle('hidden', !checkbox.checked);
       }
 
+      function setSetupLoginStatus(loggedIn) {
+        const statusDiv = document.getElementById('login-status');
+        const statusText = document.getElementById('login-status-text');
+        if (!statusDiv || !statusText) return;
+
+        statusDiv.classList.toggle('setup-login-status-success', loggedIn);
+        statusDiv.classList.toggle('setup-login-status-error', !loggedIn);
+        statusText.textContent = loggedIn
+          ? '✅ 已登录 Bilibili'
+          : '❌ 未登录，请点击下方按钮登录';
+      }
+
       async function checkLoginStatus() {
         try {
-          const response = await fetch('/api/setup/login-status');
-          const data = await response.json();
-
-          const statusDiv = document.getElementById('login-status');
-          const statusText = document.getElementById('login-status-text');
-
-          if (data.logged_in) {
-            statusDiv.style.background = '#d1fae5';
-            statusDiv.style.color = '#065f46';
-            statusText.textContent = '✅ 已登录 Bilibili';
-          } else {
-            statusDiv.style.background = '#fee2e2';
-            statusDiv.style.color = '#991b1b';
-            statusText.textContent = '❌ 未登录，请点击下方按钮登录';
-          }
+          const data = await getJson('/api/setup/login-status');
+          setSetupLoginStatus(data.logged_in);
         } catch (error) {
           console.error('Failed to check login status:', error);
           showNotification('检查登录状态失败', 'error');
@@ -4577,11 +4541,18 @@
       let loginPollInterval = null;
       let currentAuthCode = null;
 
+      function setSetupQrStatus(message, isError = false) {
+        const qrStatus = document.getElementById('qr-status');
+        if (!qrStatus) return;
+
+        qrStatus.textContent = message;
+        qrStatus.classList.toggle('setup-qr-status-error', isError);
+      }
+
       async function showQrCode() {
         try {
           // Get QR code from API
-          const response = await fetch('/api/setup/qrcode');
-          const data = await response.json();
+          const data = await getJson('/api/setup/qrcode');
 
           if (!data.success || !data.data) {
             showNotification(data.message || '获取二维码失败', 'error');
@@ -4604,6 +4575,7 @@
           // Show QR code container
           document.getElementById('qr-code-container')?.classList.remove('hidden');
           document.getElementById('show-qr-btn').textContent = '🔄 刷新二维码';
+          setSetupQrStatus('等待扫码...');
 
           // Start polling for login status
           startLoginPolling();
@@ -4626,16 +4598,11 @@
           if (!currentAuthCode) return;
 
           try {
-            const response = await fetch('/api/setup/poll-login', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ auth_code: currentAuthCode })
-            });
-            const data = await response.json();
+            const data = await postJsonApi('/api/setup/poll-login', { auth_code: currentAuthCode });
 
             if (data.success && data.data) {
               const { status, message } = data.data;
-              document.getElementById('qr-status').textContent = message;
+              setSetupQrStatus(message);
 
               if (status === 'success') {
                 clearInterval(loginPollInterval);
@@ -4647,8 +4614,7 @@
                 clearInterval(loginPollInterval);
                 loginPollInterval = null;
                 showNotification('二维码已过期，请重新获取', 'error');
-                document.getElementById('qr-status').textContent = '二维码已过期';
-                document.getElementById('qr-status').style.color = '#ef4444';
+                setSetupQrStatus('二维码已过期', true);
               }
             }
           } catch (error) {
@@ -4661,10 +4627,7 @@
         showNotification('正在启动登录流程，请在终端查看二维码...', 'success');
 
         try {
-          const response = await fetch('/api/setup/login', {
-            method: 'POST'
-          });
-          const data = await response.json();
+          const data = await postJsonApi('/api/setup/login');
 
           if (data.success) {
             showNotification('登录成功！', 'success');
@@ -4680,8 +4643,8 @@
 
       async function saveSetupConfig() {
         // Validate required fields
-        const room = document.getElementById('setup-room').value;
-        if (!room || room <= 0) {
+        const room = readIntegerInput('setup-room', 0);
+        if (room <= 0) {
           showNotification('请输入有效的直播间号', 'error');
           goToStep(2);
           return;
@@ -4689,7 +4652,7 @@
 
         // Collect all configuration
         const config = {
-          room: parseInteger(room, 0),
+          room,
           interval: readIntegerInput('setup-interval', 60) || 60,
           auto_cover: document.getElementById('setup-auto-cover').checked,
           enable_danmaku_command: document.getElementById('setup-danmaku-command').checked,
@@ -4721,13 +4684,7 @@
         };
 
         try {
-          const response = await fetch('/api/setup/save-config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-          });
-
-          const data = await response.json();
+          const data = await postJsonApi('/api/setup/save-config', config);
 
           if (data.success) {
             showNotification('配置保存成功！正在加载控制面板...', 'success');
@@ -4744,15 +4701,17 @@
       }
 
       // Setup check functions
+      function setSetupPageVisible(visible) {
+        document.getElementById('setup-page')?.classList.toggle('active', visible);
+        document.getElementById('main-page')?.classList.toggle('hidden', visible);
+      }
+
       async function checkSetupStatus() {
         try {
-          const response = await fetch('/api/setup-status');
-          const data = await response.json();
+          const data = await getJson('/api/setup-status');
 
           if (data.needs_setup) {
-            // Show setup page
-            document.getElementById('setup-page').classList.add('active');
-            document.getElementById('main-page').classList.add('hidden');
+            setSetupPageVisible(true);
 
             // Load areas for dropdowns
             await loadAreasForSetup();
@@ -4763,38 +4722,28 @@
             // Check login status
             await checkLoginStatus();
           } else {
-            // Show main page
-            document.getElementById('setup-page').classList.remove('active');
-            document.getElementById('main-page').classList.remove('hidden');
+            setSetupPageVisible(false);
           }
 
           return data.needs_setup;
         } catch (error) {
           console.error('Failed to check setup status:', error);
           // On error, show main page
-          document.getElementById('setup-page').classList.remove('active');
-          document.getElementById('main-page').classList.remove('hidden');
+          setSetupPageVisible(false);
           return false;
         }
       }
 
       async function loadAreasForSetup() {
         try {
-          const response = await fetch('/api/areas');
-          const areasData = await response.json();
-
-          let areasList = [];
-          if (Array.isArray(areasData)) {
-            areasList = areasData;
-          } else if (areasData && areasData.areas) {
-            areasList = areasData.areas;
-          }
+          const areasList = getAreaList(await getJson('/api/areas'));
 
           if (areasList.length > 0) {
             const ytAreaSelect = document.getElementById('setup-yt-area');
             const twAreaSelect = document.getElementById('setup-tw-area');
 
             [ytAreaSelect, twAreaSelect].forEach(select => {
+              if (!select) return;
               select.replaceChildren();
               appendAreaOptions(select, areasList, true);
               if (areasList.some(area => area.id === 235)) {
@@ -4809,12 +4758,12 @@
 
       async function loadChannelsForSetup() {
         try {
-          const response = await fetch('/api/channels');
-          const channelsData = await response.json();
+          const channelsData = await getJson('/api/channels');
 
           if (channelsData && channelsData.channels) {
             const ytChannelSelect = document.getElementById('setup-yt-channel-select');
             const twChannelSelect = document.getElementById('setup-tw-channel-select');
+            if (!ytChannelSelect || !twChannelSelect) return;
 
             // Populate YouTube channels
             ytChannelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
@@ -4891,11 +4840,14 @@
       const GITHUB_REPO = 'Detteee/bilistream';
       let latestUpdateInfo = null;
 
+      function getUpdateInfo() {
+        return getJson('/api/update/check');
+      }
+
       // Fetch current version from API
       async function loadVersion() {
         try {
-          const response = await fetch('/api/version');
-          const data = await response.json();
+          const data = await getJson('/api/version');
           if (data.success && data.data) {
             CURRENT_VERSION = data.data.version;
             IS_TAURI = data.data.is_tauri === true;
@@ -4912,13 +4864,7 @@
           showNotification('正在检查更新...', 'success');
 
           // Use backend API to check for updates
-          const response = await fetch('/api/update/check');
-
-          if (!response.ok) {
-            throw new Error('无法获取版本信息');
-          }
-
-          const data = await response.json();
+          const data = await getUpdateInfo();
 
           if (!data.success) {
             throw new Error(data.message || '检查更新失败');
@@ -5001,13 +4947,7 @@
 
           showNotification('开始下载更新...', 'success');
 
-          const response = await fetch('/api/update/download', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ download_url: latestUpdateInfo.download_url })
-          });
-
-          const data = await response.json();
+          const data = await postJsonApi('/api/update/download', { download_url: latestUpdateInfo.download_url });
 
           if (data.success) {
             updateProgress.textContent = '✅ 更新下载完成！程序将自动重启...';
@@ -5048,22 +4988,20 @@
       }
 
       // Auto-check for updates on page load (only on main page)
-      function autoCheckUpdates() {
+      async function autoCheckUpdates() {
         const mainPage = document.getElementById('main-page');
         if (mainPage && !mainPage.classList.contains('hidden')) {
           // Check for updates silently (without notification)
-          fetch('/api/update/check')
-            .then(response => response.json())
-            .then(data => {
-              if (data.success && data.data && data.data.has_update) {
-                const updateInfo = data.data;
-                latestUpdateInfo = updateInfo;
-                renderUpdateNotification(updateInfo);
-              }
-            })
-            .catch(error => {
-              console.debug('Auto-update check failed (silent):', error);
-            });
+          try {
+            const data = await getUpdateInfo();
+            if (data.success && data.data && data.data.has_update) {
+              const updateInfo = data.data;
+              latestUpdateInfo = updateInfo;
+              renderUpdateNotification(updateInfo);
+            }
+          } catch (error) {
+            console.debug('Auto-update check failed (silent):', error);
+          }
         }
       }
 
@@ -5141,32 +5079,36 @@
           return;
         }
 
-        if (e.target.closest('.switch-button')) {
-          const button = e.target.closest('.switch-button');
-          const channelId = button.dataset.channelId;
-          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null;
-          const title = button.dataset.title;
-          const topicId = button.dataset.topicId;
-          const status = button.dataset.status;
-          const platform = button.dataset.platform || 'youtube';
-          const twitchChannelId = button.dataset.twitchId || '';
-          const externalLink = button.dataset.externalLink || '';
-
-          switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform, twitchChannelId, externalLink);
+        const switchButton = e.target.closest('.switch-button');
+        if (switchButton) {
+          const action = readHolodexStreamActionData(switchButton);
+          switchToHolodexStream(
+            action.channelId,
+            action.suggestedAreaId,
+            action.title,
+            action.topicId,
+            action.status,
+            action.platform,
+            action.twitchChannelId,
+            action.externalLink
+          );
+          return;
         }
 
-        if (e.target.closest('.crop-switch-button')) {
-          const button = e.target.closest('.crop-switch-button');
-          const channelId = button.dataset.channelId;
-          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null;
-          const title = button.dataset.title;
-          const topicId = button.dataset.topicId;
-          const status = button.dataset.status;
-          const platform = button.dataset.platform || 'youtube';
-          const twitchChannelId = button.dataset.twitchId || '';
-          const externalLink = button.dataset.externalLink || '';
-
-          cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform, twitchChannelId, externalLink);
+        const cropSwitchButton = e.target.closest('.crop-switch-button');
+        if (cropSwitchButton) {
+          const action = readHolodexStreamActionData(cropSwitchButton);
+          cropAndSwitchToHolodexStream(
+            action.channelId,
+            action.suggestedAreaId,
+            action.title,
+            action.topicId,
+            action.status,
+            action.platform,
+            action.twitchChannelId,
+            action.externalLink
+          );
+          return;
         }
       });
 
@@ -5193,16 +5135,16 @@
         const cookiesFile = fileInput.value.trim();
 
         try {
-          const response = await fetch('/api/channel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: 'youtube',
-              cookies_from_browser: cookiesFromBrowser,
-              cookies_file: cookiesFile
-            })
+          const data = await postChannelUpdate({
+            platform: 'youtube',
+            cookies_from_browser: cookiesFromBrowser,
+            cookies_file: cookiesFile
           });
-          const data = await response.json();
+          if (!data.success) {
+            showNotification(data.message || 'YouTube Cookies 更新失败', 'error');
+            return;
+          }
+
           showNotification(data.message || 'YouTube Cookies 已更新', 'success');
 
           // Update status display
@@ -5234,12 +5176,76 @@
       let cropCanvas = null;
       let cropCtx = null;
 
+      function readCropRect() {
+        return {
+          x: readIntegerInput('cropX', 0) || 0,
+          y: readIntegerInput('cropY', 0) || 0,
+          width: readIntegerInput('cropWidth', 0) || 0,
+          height: readIntegerInput('cropHeight', 0) || 0
+        };
+      }
+
+      function validateCropRect(rect) {
+        if (rect.x < 0 || rect.y < 0) {
+          return '裁剪区域坐标不能为负数';
+        }
+        if (rect.width <= 0 || rect.height <= 0) {
+          return '请先输入有效的裁剪区域尺寸';
+        }
+        return '';
+      }
+
+      function setCropRectInputs(rect) {
+        setInputValue('cropX', Math.round(rect.x));
+        setInputValue('cropY', Math.round(rect.y));
+        setInputValue('cropWidth', Math.round(rect.width));
+        setInputValue('cropHeight', Math.round(rect.height));
+      }
+
+      function positionCropBox(cropBox, rect, scaleX, scaleY) {
+        if (!cropBox) return;
+
+        setElementDisplay(cropBox, true);
+        cropBox.style.left = (rect.x / scaleX) + 'px';
+        cropBox.style.top = (rect.y / scaleY) + 'px';
+        cropBox.style.width = (rect.width / scaleX) + 'px';
+        cropBox.style.height = (rect.height / scaleY) + 'px';
+      }
+
+      function bindCropRectInputListeners() {
+        ['cropX', 'cropY', 'cropWidth', 'cropHeight'].forEach(id => {
+          const input = document.getElementById(id);
+          if (!input) {
+            return;
+          }
+          input.removeEventListener('input', updateCropBox);
+          input.addEventListener('input', updateCropBox);
+        });
+      }
+
       function showCropCanvasContainer() {
         document.getElementById('cropCanvasContainer')?.classList.remove('hidden');
       }
 
       function hideCropCanvasContainer() {
         document.getElementById('cropCanvasContainer')?.classList.add('hidden');
+      }
+
+      function setCropStatusLabel(platform, label) {
+        const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
+        setElementText(statusId, label);
+      }
+
+      function createCropUpdatePayload(platform, enabled, rect = {}) {
+        return {
+          platform,
+          enabled,
+          ...rect
+        };
+      }
+
+      function postCropUpdate(payload) {
+        return postJsonApi('/api/crop/update', payload);
       }
 
       function openCropConfig(platform) {
@@ -5267,22 +5273,11 @@
         }
 
         try {
-          const response = await fetch('/api/crop/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform,
-              enabled: false
-            })
-          });
-
-          const result = await response.json();
+          const result = await postCropUpdate(createCropUpdatePayload(platform, false));
 
           if (result.success) {
             showNotification('裁剪设置已清除', 'success');
-            // Update status display
-            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
-            document.getElementById(statusId).textContent = '关闭';
+            setCropStatusLabel(platform, '关闭');
           } else {
             showNotification(result.message || '清除失败', 'error');
           }
@@ -5297,11 +5292,7 @@
         showNotification('正在捕获直播帧...', 'info');
 
         try {
-          const response = await fetch(`/api/crop/capture/${platform}`, {
-            method: 'POST'
-          });
-
-          const result = await response.json();
+          const result = await postJsonApi(`/api/crop/capture/${platform}`);
 
           if (result.success && result.message) {
             // Load the captured image (base64 is in message field)
@@ -5349,13 +5340,9 @@
         if (!platform) return;
 
         try {
-          const response = await fetch(`/api/crop/${platform}`);
-          const result = await response.json();
+          const result = await getJson(`/api/crop/${platform}`);
           if (result.success && result.data && result.data.enabled) {
-            document.getElementById('cropX').value = result.data.x;
-            document.getElementById('cropY').value = result.data.y;
-            document.getElementById('cropWidth').value = result.data.width;
-            document.getElementById('cropHeight').value = result.data.height;
+            setCropRectInputs(result.data);
           }
         } catch (error) {
           console.error('Failed to load crop settings:', error);
@@ -5414,46 +5401,57 @@
       let boxStartWidth = 0;
       let boxStartHeight = 0;
 
+      const CROP_ASPECT_RATIOS = {
+        '1:1': 1,
+        '16:9': 16 / 9,
+        '16:10': 16 / 10,
+        '9:16': 9 / 16,
+        '10:16': 10 / 16
+      };
+
+      function getCropAspectRatioValue(ratio) {
+        return CROP_ASPECT_RATIOS[ratio] || 1;
+      }
+
+      function createCenteredCropRect(canvas, ratio) {
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+        const ratioValue = getCropAspectRatioValue(ratio);
+        const maxWidth = canvasWidth * 0.6;
+        const maxHeight = canvasHeight * 0.6;
+
+        let width;
+        let height;
+        if (ratioValue >= 1) {
+          width = maxWidth;
+          height = width / ratioValue;
+          if (height > maxHeight) {
+            height = maxHeight;
+            width = height * ratioValue;
+          }
+        } else {
+          height = maxHeight;
+          width = height * ratioValue;
+          if (width > maxWidth) {
+            width = maxWidth;
+            height = width / ratioValue;
+          }
+        }
+
+        return {
+          x: (canvasWidth - width) / 2,
+          y: (canvasHeight - height) / 2,
+          width,
+          height
+        };
+      }
+
       function applyAspectRatio() {
         currentAspectRatio = document.getElementById('cropAspectRatio').value;
 
         if (!cropCanvas || currentAspectRatio === 'free') return;
 
-        // Generate centered box with selected aspect ratio
-        const canvasWidth = cropCanvas.width;
-        const canvasHeight = cropCanvas.height;
-
-        let width, height;
-        const ratio = currentAspectRatio === '1:1' ? 1 :
-          currentAspectRatio === '16:9' ? 16 / 9 :
-            currentAspectRatio === '16:10' ? 16 / 10 :
-              currentAspectRatio === '9:16' ? 9 / 16 :
-                currentAspectRatio === '10:16' ? 10 / 16 : 1;
-
-        // Calculate size to fit 60% of canvas
-        if (ratio >= 1) {
-          width = canvasWidth * 0.6;
-          height = width / ratio;
-          if (height > canvasHeight * 0.6) {
-            height = canvasHeight * 0.6;
-            width = height * ratio;
-          }
-        } else {
-          height = canvasHeight * 0.6;
-          width = height * ratio;
-          if (width > canvasWidth * 0.6) {
-            width = canvasWidth * 0.6;
-            height = width / ratio;
-          }
-        }
-
-        const x = (canvasWidth - width) / 2;
-        const y = (canvasHeight - height) / 2;
-
-        document.getElementById('cropX').value = Math.round(x);
-        document.getElementById('cropY').value = Math.round(y);
-        document.getElementById('cropWidth').value = Math.round(width);
-        document.getElementById('cropHeight').value = Math.round(height);
+        setCropRectInputs(createCenteredCropRect(cropCanvas, currentAspectRatio));
 
         updateCropBox();
         showNotification(`已应用 ${currentAspectRatio} 比例`, 'success');
@@ -5517,10 +5515,7 @@
           const mouseX = (e.clientX - rect.left) * scaleX;
           const mouseY = (e.clientY - rect.top) * scaleY;
 
-          const x = parseInt(document.getElementById('cropX').value) || 0;
-          const y = parseInt(document.getElementById('cropY').value) || 0;
-          const width = parseInt(document.getElementById('cropWidth').value) || 0;
-          const height = parseInt(document.getElementById('cropHeight').value) || 0;
+          const { x, y, width, height } = readCropRect();
 
           // Check if clicking on edge for resizing
           if (mouseX >= x - edgeThreshold && mouseX <= x + width + edgeThreshold &&
@@ -5553,11 +5548,7 @@
             isDrawing = true;
             resizeEdge = null;
 
-            cropBox.style.display = 'block';
-            cropBox.style.left = (mouseX / scaleX) + 'px';
-            cropBox.style.top = (mouseY / scaleY) + 'px';
-            cropBox.style.width = '0px';
-            cropBox.style.height = '0px';
+            positionCropBox(cropBox, { x: mouseX, y: mouseY, width: 0, height: 0 }, scaleX, scaleY);
           }
         });
 
@@ -5569,10 +5560,7 @@
           const currentX = (e.clientX - rect.left) * scaleX;
           const currentY = (e.clientY - rect.top) * scaleY;
 
-          const x = parseInt(document.getElementById('cropX').value) || 0;
-          const y = parseInt(document.getElementById('cropY').value) || 0;
-          const width = parseInt(document.getElementById('cropWidth').value) || 0;
-          const height = parseInt(document.getElementById('cropHeight').value) || 0;
+          const { x, y, width, height } = readCropRect();
 
           // Update cursor based on position
           if (!isDrawing && !isDragging) {
@@ -5602,8 +5590,7 @@
             newX = Math.max(0, Math.min(newX, newCanvas.width - width));
             newY = Math.max(0, Math.min(newY, newCanvas.height - height));
 
-            document.getElementById('cropX').value = Math.round(newX);
-            document.getElementById('cropY').value = Math.round(newY);
+            setCropRectInputs({ x: newX, y: newY, width, height });
             updateCropBox();
           } else if (isDrawing && resizeEdge) {
             // Resize the box by edge
@@ -5641,11 +5628,7 @@
               if (newY + newHeight > newCanvas.height) newHeight = newCanvas.height - newY;
             } else {
               // Locked aspect ratio - resize proportionally
-              const ratio = currentAspectRatio === '1:1' ? 1 :
-                currentAspectRatio === '16:9' ? 16 / 9 :
-                  currentAspectRatio === '16:10' ? 16 / 10 :
-                    currentAspectRatio === '9:16' ? 9 / 16 :
-                      currentAspectRatio === '10:16' ? 10 / 16 : 1;
+              const ratio = getCropAspectRatioValue(currentAspectRatio);
 
               if (resizeEdge.includes('e') || resizeEdge.includes('w')) {
                 // Horizontal resize
@@ -5726,10 +5709,7 @@
               }
             }
 
-            document.getElementById('cropX').value = Math.round(newX);
-            document.getElementById('cropY').value = Math.round(newY);
-            document.getElementById('cropWidth').value = Math.round(newWidth);
-            document.getElementById('cropHeight').value = Math.round(newHeight);
+            setCropRectInputs({ x: newX, y: newY, width: newWidth, height: newHeight });
             updateCropBox();
           } else if (isDrawing) {
             // Draw new box
@@ -5738,11 +5718,7 @@
 
             // Apply aspect ratio if selected
             if (currentAspectRatio !== 'free') {
-              const ratio = currentAspectRatio === '1:1' ? 1 :
-                currentAspectRatio === '16:9' ? 16 / 9 :
-                  currentAspectRatio === '16:10' ? 16 / 10 :
-                    currentAspectRatio === '9:16' ? 9 / 16 :
-                      currentAspectRatio === '10:16' ? 10 / 16 : 1;
+              const ratio = getCropAspectRatioValue(currentAspectRatio);
               if (width / height > ratio) {
                 width = height * ratio;
               } else {
@@ -5753,15 +5729,8 @@
             const x = currentX > cropStartX ? cropStartX : cropStartX - width;
             const y = currentY > cropStartY ? cropStartY : cropStartY - height;
 
-            cropBox.style.left = (x / scaleX) + 'px';
-            cropBox.style.top = (y / scaleY) + 'px';
-            cropBox.style.width = (width / scaleX) + 'px';
-            cropBox.style.height = (height / scaleY) + 'px';
-
-            document.getElementById('cropX').value = Math.round(x);
-            document.getElementById('cropY').value = Math.round(y);
-            document.getElementById('cropWidth').value = Math.round(width);
-            document.getElementById('cropHeight').value = Math.round(height);
+            positionCropBox(cropBox, { x, y, width, height }, scaleX, scaleY);
+            setCropRectInputs({ x, y, width, height });
           }
         });
 
@@ -5780,11 +5749,7 @@
         });
 
         // Update crop box when inputs change
-        ['cropX', 'cropY', 'cropWidth', 'cropHeight'].forEach(id => {
-          const input = document.getElementById(id);
-          input.removeEventListener('input', updateCropBox);
-          input.addEventListener('input', updateCropBox);
-        });
+        bindCropRectInputListeners();
       }
 
       function updateCropBox() {
@@ -5793,52 +5758,27 @@
         const scaleX = cropCanvas.width / rect.width;
         const scaleY = cropCanvas.height / rect.height;
 
-        const x = parseInt(document.getElementById('cropX').value) || 0;
-        const y = parseInt(document.getElementById('cropY').value) || 0;
-        const width = parseInt(document.getElementById('cropWidth').value) || 0;
-        const height = parseInt(document.getElementById('cropHeight').value) || 0;
-
         const cropBox = document.getElementById('cropBox');
-        cropBox.style.display = 'block';
-        cropBox.style.left = (x / scaleX) + 'px';
-        cropBox.style.top = (y / scaleY) + 'px';
-        cropBox.style.width = (width / scaleX) + 'px';
-        cropBox.style.height = (height / scaleY) + 'px';
+        positionCropBox(cropBox, readCropRect(), scaleX, scaleY);
       }
 
       async function applyCrop() {
         const platform = document.getElementById('cropPlatform').value;
-        const x = parseInt(document.getElementById('cropX').value) || 0;
-        const y = parseInt(document.getElementById('cropY').value) || 0;
-        const width = parseInt(document.getElementById('cropWidth').value) || 0;
-        const height = parseInt(document.getElementById('cropHeight').value) || 0;
+        const cropRect = readCropRect();
+        const validationError = validateCropRect(cropRect);
 
-        if (width === 0 || height === 0) {
-          showNotification('请先输入裁剪区域尺寸', 'error');
+        if (validationError) {
+          showNotification(validationError, 'error');
           return;
         }
+        const { x, y, width, height } = cropRect;
 
         try {
-          const response = await fetch('/api/crop/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform,
-              enabled: true,
-              x,
-              y,
-              width,
-              height
-            })
-          });
-
-          const result = await response.json();
+          const result = await postCropUpdate(createCropUpdatePayload(platform, true, { x, y, width, height }));
 
           if (result.success) {
             showNotification('裁剪配置已保存', 'success');
-            // Update status display
-            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
-            document.getElementById(statusId).textContent = '开启';
+            setCropStatusLabel(platform, '开启');
 
             // Check if there's a pending Holodex switch
             if (window.pendingHolodexSwitch) {
@@ -5864,15 +5804,14 @@
 
       async function applyCropAndRestart() {
         const platform = document.getElementById('cropPlatform').value;
-        const x = parseInt(document.getElementById('cropX').value) || 0;
-        const y = parseInt(document.getElementById('cropY').value) || 0;
-        const width = parseInt(document.getElementById('cropWidth').value) || 0;
-        const height = parseInt(document.getElementById('cropHeight').value) || 0;
+        const cropRect = readCropRect();
+        const validationError = validateCropRect(cropRect);
 
-        if (width === 0 || height === 0) {
-          showNotification('请先输入裁剪区域尺寸', 'error');
+        if (validationError) {
+          showNotification(validationError, 'error');
           return;
         }
+        const { x, y, width, height } = cropRect;
 
         try {
           // Check if there's a pending Holodex switch
@@ -5889,35 +5828,16 @@
           }
 
           // Step 2: Apply the crop
-          const cropResponse = await fetch('/api/crop/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform,
-              enabled: true,
-              x,
-              y,
-              width,
-              height
-            })
-          });
-
-          const cropResult = await cropResponse.json();
+          const cropResult = await postCropUpdate(createCropUpdatePayload(platform, true, { x, y, width, height }));
 
           if (cropResult.success) {
             showNotification('裁剪配置已保存，正在重启流...', 'success');
-            // Update status display
-            const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
-            document.getElementById(statusId).textContent = '开启';
+            setCropStatusLabel(platform, '开启');
 
             closeCropModal();
 
             // Step 3: Restart the stream
-            const restartResponse = await fetch('/api/restart', {
-              method: 'POST'
-            });
-
-            const restartResult = await restartResponse.json();
+            const restartResult = await postJsonApi('/api/restart');
 
             if (restartResult.success) {
               showNotification('裁剪已应用并重启流', 'success');
@@ -5936,16 +5856,7 @@
         const platform = document.getElementById('cropPlatform').value;
 
         try {
-          const response = await fetch('/api/crop/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform,
-              enabled: false
-            })
-          });
-
-          const result = await response.json();
+          const result = await postCropUpdate(createCropUpdatePayload(platform, false));
 
           if (result.success) {
             showNotification('裁剪已禁用，请重启流使其生效', 'success');
@@ -5976,40 +5887,7 @@
 
         // If canvas is loaded, apply the aspect ratio
         if (cropCanvas && ratio !== 'free') {
-          const canvasWidth = cropCanvas.width;
-          const canvasHeight = cropCanvas.height;
-
-          let width, height;
-          const ratioValue = ratio === '1:1' ? 1 :
-            ratio === '16:9' ? 16 / 9 :
-              ratio === '16:10' ? 16 / 10 :
-                ratio === '9:16' ? 9 / 16 :
-                  ratio === '10:16' ? 10 / 16 : 1;
-
-          // Calculate size to fit 60% of canvas
-          if (ratioValue >= 1) {
-            width = canvasWidth * 0.6;
-            height = width / ratioValue;
-            if (height > canvasHeight * 0.6) {
-              height = canvasHeight * 0.6;
-              width = height * ratioValue;
-            }
-          } else {
-            height = canvasHeight * 0.6;
-            width = height * ratioValue;
-            if (width > canvasWidth * 0.6) {
-              width = canvasWidth * 0.6;
-              height = width / ratioValue;
-            }
-          }
-
-          const x = (canvasWidth - width) / 2;
-          const y = (canvasHeight - height) / 2;
-
-          document.getElementById('cropX').value = Math.round(x);
-          document.getElementById('cropY').value = Math.round(y);
-          document.getElementById('cropWidth').value = Math.round(width);
-          document.getElementById('cropHeight').value = Math.round(height);
+          setCropRectInputs(createCenteredCropRect(cropCanvas, ratio));
 
           updateCropBox();
         }

@@ -1306,6 +1306,18 @@
       text-transform: none;
     }
 
+    .bili-network-quality-smooth {
+      color: #10b981;
+    }
+
+    .bili-network-quality-unstable {
+      color: #f59e0b;
+    }
+
+    .bili-network-quality-stalled {
+      color: #ef4444;
+    }
+
     .bili-network-graph {
       position: relative;
       display: flex;
@@ -1877,6 +1889,16 @@
       background: #f0f0f0;
     }
 
+    .setup-login-status-success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .setup-login-status-error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
     .setup-qr-container {
       text-align: center;
       margin-bottom: 20px;
@@ -1905,6 +1927,10 @@
       color: #667eea;
       margin-top: 10px;
       font-weight: 600;
+    }
+
+    .setup-qr-status-error {
+      color: #ef4444;
     }
 
     .setup-checkbox-label {
