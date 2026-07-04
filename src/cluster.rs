@@ -1213,6 +1213,13 @@ pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
 }
 
 pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> bool {
+    if node.node_id == cfg.cluster.node_id {
+        tracing::debug!(
+            "Ignored heartbeat claiming local node identity {}",
+            node.node_id
+        );
+        return false;
+    }
     if !configured_node_id(cfg, &node.node_id) {
         tracing::debug!("Ignored heartbeat from unknown node {}", node.node_id);
         return false;
@@ -2733,6 +2740,33 @@ mod tests {
 
         assert!(!record_heartbeat(&cfg, node));
         assert!(!cluster_state_read().nodes.contains_key("unknown"));
+    }
+
+    #[test]
+    fn record_heartbeat_rejects_local_node_identity() {
+        let cfg = test_config("local", 0);
+        let now = now_secs();
+        let local = empty_node("local", "local", "http://local", 10, true, now);
+        update_node(local, &cfg.cluster.node_id);
+
+        let mut spoofed = empty_node("local", "spoofed", "http://spoofed", 99, false, now);
+        spoofed.draining = true;
+        spoofed.health = ClusterHealth::unhealthy("spoofed", false, false);
+
+        assert!(!record_heartbeat(&cfg, spoofed));
+
+        let stored = cluster_state_read()
+            .nodes
+            .get("local")
+            .cloned()
+            .expect("local node should remain stored");
+        assert_eq!(stored.name, "local");
+        assert_eq!(stored.api_url, "http://local");
+        assert_eq!(stored.priority, 10);
+        assert!(!stored.draining);
+        assert_ne!(stored.health.reason, "spoofed");
+
+        cluster_state_write().nodes.remove("local");
     }
 
     #[test]
