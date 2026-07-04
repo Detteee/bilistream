@@ -955,6 +955,18 @@ pub async fn toggle_youtube_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    if cfg.youtube.enable_monitor == payload.enabled {
+        refresh_status_cache_config_from(&cfg);
+        return Ok(ApiResponse {
+            success: true,
+            data: None,
+            message: Some(format!(
+                "YouTube监控已是{}",
+                if payload.enabled { "启用" } else { "禁用" }
+            )),
+        });
+    }
+
     cfg.youtube.enable_monitor = payload.enabled;
 
     crate::config::save_config(&cfg)
@@ -962,6 +974,7 @@ pub async fn toggle_youtube_monitor(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     set_config_updated();
+    refresh_status_cache_config_from(&cfg);
 
     Ok(ApiResponse {
         success: true,
@@ -980,6 +993,18 @@ pub async fn toggle_twitch_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    if cfg.twitch.enable_monitor == payload.enabled {
+        refresh_status_cache_config_from(&cfg);
+        return Ok(ApiResponse {
+            success: true,
+            data: None,
+            message: Some(format!(
+                "Twitch监控已是{}",
+                if payload.enabled { "启用" } else { "禁用" }
+            )),
+        });
+    }
+
     cfg.twitch.enable_monitor = payload.enabled;
 
     crate::config::save_config(&cfg)
@@ -987,6 +1012,7 @@ pub async fn toggle_twitch_monitor(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     set_config_updated();
+    refresh_status_cache_config_from(&cfg);
 
     Ok(ApiResponse {
         success: true,
