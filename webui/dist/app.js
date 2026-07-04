@@ -1541,13 +1541,14 @@
           favoritesToggle.checked = !!holodexUseFavorites;
         }
 
-        if (authBar) authBar.style.display = 'inline-flex';
-        if (loginBtn) loginBtn.style.display = 'none';
+        const loggedIn = holodexAuthState.logged_in && !holodexAuthState.expired;
+        setElementDisplay(authBar, true, 'inline-flex');
+        setElementDisplay(loginBtn, false);
+        setElementDisplay(heartIcon, loggedIn, 'inline-flex');
+        setElementDisplay(favoritesMode, loggedIn, 'inline-flex');
+        setElementDisplay(jwtSkip, false);
 
-        if (holodexAuthState.logged_in && !holodexAuthState.expired) {
-          if (heartIcon) heartIcon.style.display = 'inline-flex';
-          if (favoritesMode) favoritesMode.style.display = 'inline-flex';
-          if (jwtSkip) jwtSkip.style.display = 'none';
+        if (loggedIn) {
           if (favoritesLabel) {
             favoritesLabel.textContent = holodexAuthState.username
               ? `${holodexAuthState.username}的收藏`
@@ -1555,15 +1556,9 @@
           }
           if (favoritesBtn) favoritesBtn.title = '管理 Holodex 登录';
         } else if (holodexAuthState.expired) {
-          if (heartIcon) heartIcon.style.display = 'none';
-          if (favoritesMode) favoritesMode.style.display = 'none';
-          if (jwtSkip) jwtSkip.style.display = 'none';
           if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
           if (favoritesBtn) favoritesBtn.title = 'Holodex 登录已过期';
         } else {
-          if (heartIcon) heartIcon.style.display = 'none';
-          if (favoritesMode) favoritesMode.style.display = 'none';
-          if (jwtSkip) jwtSkip.style.display = 'none';
           if (favoritesLabel) favoritesLabel.textContent = '🔗 使用Holodex收藏夹';
           if (favoritesBtn) favoritesBtn.title = '登录后使用 Holodex 收藏夹';
         }
