@@ -105,7 +105,10 @@ lazy_static! {
 }
 
 fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
-    let mut cache = CHANNELS_CACHE.lock().unwrap();
+    let mut cache = CHANNELS_CACHE.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned danmaku channels cache");
+        poisoned.into_inner()
+    });
 
     // Check if cache is valid (less than 5 minutes old)
     if let Some((ref config, timestamp)) = *cache {
@@ -370,26 +373,26 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     let command = command.replace(" ", "").replace("　", "");
     let normalized_danmaku = command.replace("％", "%");
 
-    let cfg = load_config().await.unwrap();
+    let cfg = match load_config().await {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!("加载配置失败，忽略弹幕命令: {}", e);
+            return;
+        }
+    };
     // Add check for 查询 command
     if normalized_danmaku.contains("%查询") {
         // tracing::info!("🔍 查询命令收到");
         let channel_name = cfg.youtube.channel_name.clone();
-        let area_name = get_area_name(cfg.youtube.area_v2);
-        let _ = bilibili::send_danmaku(
-            &cfg,
-            &format!("YT: {} - {}", channel_name, area_name.unwrap()),
-        )
-        .await;
+        let area_name = area_name_or_unknown(cfg.youtube.area_v2);
+        let _ =
+            bilibili::send_danmaku(&cfg, &format!("YT: {} - {}", channel_name, area_name)).await;
         let channel_name = cfg.twitch.channel_name.clone();
-        let area_name = get_area_name(cfg.twitch.area_v2);
+        let area_name = area_name_or_unknown(cfg.twitch.area_v2);
         // bilibili 发送弹幕cooldown > 1秒
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        let _ = bilibili::send_danmaku(
-            &cfg,
-            &format!("TW: {} - {}", channel_name, area_name.unwrap()),
-        )
-        .await;
+        let _ =
+            bilibili::send_danmaku(&cfg, &format!("TW: {} - {}", channel_name, area_name)).await;
         return;
     }
 
@@ -466,10 +469,26 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             return;
         }
 
-        // Use a reference to the String inside channel_id without moving it
-        let channel_id_str = channel_id.as_ref().unwrap();
-        let channel_name = match get_channel_name(&platform, channel_id_str) {
-            Ok(name) => name,
+        let Some(channel_id_str) = channel_id.as_deref() else {
+            tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
+            let _ = bilibili::send_danmaku(
+                &cfg,
+                &format!("错误：频道 {} 未在{}列表中", channel_name, platform),
+            )
+            .await;
+            return;
+        };
+        let resolved_channel_name = match get_channel_name(&platform, channel_id_str) {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                tracing::error!("频道 ID {} 未在{}列表中", channel_id_str, platform);
+                let _ = bilibili::send_danmaku(
+                    &cfg,
+                    &format!("错误：频道 ID {} 未在{}列表中", channel_id_str, platform),
+                )
+                .await;
+                return;
+            }
             Err(e) => {
                 tracing::error!("获取频道名称时出错: {}", e);
                 return;
@@ -490,11 +509,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                     // Check if update is needed
                     let needs_update = if platform == "YT" {
                         &config.youtube.channel_id != channel_id_str
-                            || &config.youtube.channel_name != channel_name.as_deref().unwrap()
+                            || config.youtube.channel_name != resolved_channel_name
                             || config.youtube.area_v2 != area_id
                     } else if platform == "TW" {
                         &config.twitch.channel_id != channel_id_str
-                            || &config.twitch.channel_name != channel_name.as_deref().unwrap()
+                            || config.twitch.channel_name != resolved_channel_name
                             || config.twitch.area_v2 != area_id
                     } else {
                         false
@@ -512,16 +531,14 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                             &cfg,
                             &format!(
                                 "{} 监听对象已是：{} - {}",
-                                platform,
-                                channel_name.as_deref().unwrap(),
-                                area_name
+                                platform, resolved_channel_name, area_name
                             ),
                         )
                         .await;
                         tracing::info!(
                             "{} 监听对象已是：{} - {}",
                             platform,
-                            channel_name.as_deref().unwrap(),
+                            resolved_channel_name,
                             area_name
                         );
                         return;
@@ -567,10 +584,10 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             match get_twitch_status(channel_id_str).await {
                 Ok((is_live, topic, title, _)) => {
                     if !is_live {
-                        tracing::error!("TW频道 {:?} 未在直播", channel_name.clone().unwrap());
+                        tracing::error!("TW频道 {} 未在直播", resolved_channel_name);
                         let _ = bilibili::send_danmaku(
                             &cfg,
-                            &format!("错误: {:?} 未在直播", channel_name.unwrap()),
+                            &format!("错误: {} 未在直播", resolved_channel_name),
                         )
                         .await;
                         return;
@@ -632,8 +649,8 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
 
         match update_config(
             &platform,
-            channel_name.as_deref().unwrap(),
-            &channel_id_str,
+            &resolved_channel_name,
+            channel_id_str,
             updated_area_id,
         ) {
             Ok(_) => {
@@ -648,16 +665,14 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                     &cfg,
                     &format!(
                         "更新：{} - {} - {}",
-                        platform,
-                        channel_name.as_deref().unwrap(),
-                        updated_area_name
+                        platform, resolved_channel_name, updated_area_name
                     ),
                 )
                 .await;
                 tracing::info!(
                     "✅ 更新成功 {} 频道: {} 分区: {} (ID: {} )",
                     platform,
-                    channel_name.as_deref().unwrap(),
+                    resolved_channel_name,
                     updated_area_name,
                     updated_area_id
                 );
@@ -684,13 +699,26 @@ pub fn run_danmaku() {
     }
 
     std::thread::spawn(|| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("创建弹幕客户端运行时失败: {}", e);
+                return;
+            }
+        };
         rt.block_on(async {
             // Set running flag inside the async task to avoid race conditions
             set_danmaku_running(true);
             tracing::info!("🚀 启动弹幕客户端");
 
-            let cfg = load_config().await.unwrap();
+            let cfg = match load_config().await {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    tracing::error!("加载弹幕客户端配置失败: {}", e);
+                    set_danmaku_running(false);
+                    return;
+                }
+            };
             let room_id = cfg.bililive.room;
 
             // Create danmaku client config
@@ -850,6 +878,10 @@ pub fn get_area_name(area_id: u64) -> Option<String> {
     None
 }
 
+fn area_name_or_unknown(area_id: u64) -> String {
+    get_area_name(area_id).unwrap_or_else(|| format!("未知分区({})", area_id))
+}
+
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let area_name_trimmed = area_name.trim();
     let areas_path = std::env::current_exe()
@@ -887,4 +919,17 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
         .find(|c| c.name == target_name)
         .map(|c| c.aliases.clone())
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_area_name_uses_stable_fallback() {
+        assert_eq!(
+            area_name_or_unknown(u64::MAX),
+            "未知分区(18446744073709551615)"
+        );
+    }
 }
