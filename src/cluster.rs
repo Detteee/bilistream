@@ -9,7 +9,7 @@ use crate::webui::state::{get_status_cache, NetworkStatus, StatusData};
 use futures_util::future::join_all;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -1708,6 +1708,15 @@ fn configured_node_id(cfg: &Config, node_id: &str) -> bool {
     node_id == cfg.cluster.node_id || cfg.cluster.peers.iter().any(|peer| peer.node_id == node_id)
 }
 
+fn configured_node_ids(cfg: &Config) -> HashSet<&str> {
+    let mut configured = HashSet::with_capacity(cfg.cluster.peers.len() + 1);
+    configured.insert(cfg.cluster.node_id.as_str());
+    for peer in &cfg.cluster.peers {
+        configured.insert(peer.node_id.as_str());
+    }
+    configured
+}
+
 fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
     for node in state.nodes.values_mut() {
         if node.last_seen.is_none() {
@@ -1773,11 +1782,7 @@ fn last_seen_is_stale(last_seen: u64, cfg: &Config, now: u64) -> bool {
 }
 
 fn ensure_configured_nodes(state: &mut ClusterState, cfg: &Config, now: u64) {
-    let mut configured: std::collections::HashSet<&str> =
-        std::collections::HashSet::from([cfg.cluster.node_id.as_str()]);
-    for peer in &cfg.cluster.peers {
-        configured.insert(peer.node_id.as_str());
-    }
+    let configured = configured_node_ids(cfg);
     state
         .nodes
         .retain(|node_id, _| configured.contains(node_id.as_str()));
@@ -1965,6 +1970,7 @@ fn record_peer_observations(
     cfg: &Config,
     now: u64,
 ) {
+    let configured = configured_node_ids(cfg);
     for observations in state.peer_observations.values_mut() {
         observations.remove(observer_node_id);
     }
@@ -1973,7 +1979,7 @@ fn record_peer_observations(
         if node.node_id == cfg.cluster.node_id || node.node_id == observer_node_id {
             continue;
         }
-        if !configured_node_id(cfg, &node.node_id) {
+        if !configured.contains(node.node_id.as_str()) {
             continue;
         }
         if node.health.healthy && !node.health.stale && node.last_seen.is_some() {
@@ -1988,10 +1994,12 @@ fn record_peer_observations(
 
 fn prune_peer_observations(state: &mut ClusterState, cfg: &Config, now: u64) {
     let timeout = cfg.cluster.failover_timeout_secs.max(1);
+    let configured = configured_node_ids(cfg);
     state.peer_observations.retain(|node_id, observations| {
-        configured_node_id(cfg, node_id) && {
+        configured.contains(node_id.as_str()) && {
             observations.retain(|observer, observed_at| {
-                configured_node_id(cfg, observer) && now.saturating_sub(*observed_at) <= timeout
+                configured.contains(observer.as_str())
+                    && now.saturating_sub(*observed_at) <= timeout
             });
             !observations.is_empty()
         }
@@ -2825,6 +2833,50 @@ mod tests {
         assert!(node.health.stale);
         assert_eq!(node.health.reason, "indirectly_observed");
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
+    }
+
+    #[test]
+    fn peer_observation_prune_drops_stale_and_unconfigured_entries() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.failover_timeout_secs = 15;
+        cfg.cluster.peers = vec![
+            crate::config::ClusterPeer {
+                node_id: "b".to_string(),
+                name: "b".to_string(),
+                api_url: "http://b".to_string(),
+                priority: 10,
+            },
+            crate::config::ClusterPeer {
+                node_id: "c".to_string(),
+                name: "c".to_string(),
+                api_url: "http://c".to_string(),
+                priority: 5,
+            },
+        ];
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        state.peer_observations.insert(
+            "b".to_string(),
+            HashMap::from([
+                ("a".to_string(), now - cfg.cluster.failover_timeout_secs - 1),
+                ("c".to_string(), now),
+                ("removed-observer".to_string(), now),
+            ]),
+        );
+        state.peer_observations.insert(
+            "removed-target".to_string(),
+            HashMap::from([("c".to_string(), now)]),
+        );
+
+        prune_peer_observations(&mut state, &cfg, now);
+
+        assert!(!state.peer_observations.contains_key("removed-target"));
+        let observations = state
+            .peer_observations
+            .get("b")
+            .expect("configured target should keep fresh configured observer");
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations.get("c"), Some(&now));
     }
 
     #[test]
