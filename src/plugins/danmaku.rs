@@ -8,10 +8,10 @@ use crate::plugins::banned_keywords::{
 use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{fs, io};
 use tokio::sync::Notify;
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
