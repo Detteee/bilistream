@@ -590,7 +590,7 @@
       function setHolodexStatus(statusDiv, message, stateClass) {
         statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
         statusDiv.classList.add(stateClass);
-        statusDiv.style.display = '';
+        statusDiv.style.display = 'block';
         statusDiv.textContent = message;
       }
 

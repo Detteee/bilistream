@@ -2153,6 +2153,12 @@
       margin-left: auto;
     }
 
+    .holodex-container,
+    .holodex-api-config,
+    #holodex-streams-section {
+      display: none;
+    }
+
     /* Holodex-style stream cards */
     .holodex-stream-card {
       background: var(--card-bg);
@@ -2530,10 +2536,11 @@
     }
 
     .holodex-status {
+      display: none;
       padding: 15px;
       margin-bottom: 15px;
       border-radius: 8px;
-      background: #f0f0f0;
+      background: var(--card-bg);
       text-align: center;
     }
 
