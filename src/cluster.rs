@@ -12,13 +12,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
 }
+
+static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn recover_read_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
     lock.read().unwrap_or_else(|poisoned| {
@@ -2527,16 +2531,55 @@ fn read_json_file(name: &str) -> Option<serde_json::Value> {
 fn write_json_file(name: &str, value: &serde_json::Value) -> Result<(), String> {
     let path =
         executable_sibling(name).ok_or_else(|| "failed to resolve executable path".to_string())?;
-    let tmp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("json")
-    ));
     let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(&tmp_path, json).map_err(|e| e.to_string())?;
-    fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
-    Ok(())
+    write_json_file_atomic(&path, json.as_bytes()).map_err(|e| e.to_string())
+}
+
+fn write_json_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let (tmp_path, mut tmp_file) = create_unique_json_tmp_file(path)?;
+    let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
+    drop(tmp_file);
+
+    let result = write_result.and_then(|_| fs::rename(&tmp_path, path));
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+fn create_unique_json_tmp_file(path: &Path) -> std::io::Result<(PathBuf, fs::File)> {
+    const MAX_ATTEMPTS: usize = 16;
+    for _ in 0..MAX_ATTEMPTS {
+        let tmp_path = unique_json_tmp_path(path);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to reserve unique cluster json temporary file",
+    ))
+}
+
+fn unique_json_tmp_path(path: &Path) -> PathBuf {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("json");
+    let suffix = JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!(
+        "{}.tmp-{}-{}",
+        extension,
+        std::process::id(),
+        suffix
+    ))
 }
 
 #[cfg(test)]
@@ -2701,6 +2744,46 @@ mod tests {
             canonical_json(&value),
             r#"{"a":[true,null,{"x":"quote\"","z":2}],"b":1}"#
         );
+    }
+
+    #[test]
+    fn cluster_json_tmp_paths_are_unique_siblings() {
+        let path = std::env::temp_dir().join("bilistream-cluster-state.json");
+
+        let first = unique_json_tmp_path(&path);
+        let second = unique_json_tmp_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("bilistream-cluster-state.json.tmp-")));
+    }
+
+    #[test]
+    fn cluster_json_atomic_write_replaces_target_without_leftover_tmp() {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-cluster-json-test-{}-{}",
+            std::process::id(),
+            JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+
+        write_json_file_atomic(&path, br#"{"old":true}"#).unwrap();
+        write_json_file_atomic(&path, br#"{"new":true}"#).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"new":true}"#);
+        let entries = fs::read_dir(&dir)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), path);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
