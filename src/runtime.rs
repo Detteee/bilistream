@@ -68,6 +68,29 @@ fn area_label(area_id: u64) -> String {
     get_area_name(area_id).unwrap_or_else(|| format!("未知分区(ID: {})", area_id))
 }
 
+fn disable_monitors_after_bili_start_temp_ban(cfg: &mut Config) -> bool {
+    let mut config_changed = false;
+
+    if cfg.youtube.enable_monitor || cfg.enable_youtube_monitor {
+        cfg.youtube.enable_monitor = false;
+        cfg.enable_youtube_monitor = false;
+        config_changed = true;
+    }
+
+    if cfg.twitch.enable_monitor || cfg.enable_twitch_monitor {
+        cfg.twitch.enable_monitor = false;
+        cfg.enable_twitch_monitor = false;
+        config_changed = true;
+    }
+
+    if cfg.priority_channel.enabled {
+        cfg.priority_channel.enabled = false;
+        config_changed = true;
+    }
+
+    config_changed
+}
+
 #[derive(PartialEq)]
 enum CollisionResult {
     Continue,
@@ -1042,24 +1065,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             .unwrap_or(&error);
                         tracing::error!("B站开播失败: {}", message);
                         if error.starts_with(BILI_START_TEMP_BAN_PREFIX) {
-                            let mut config_changed = false;
-
-                            if cfg.youtube.enable_monitor {
-                                cfg.youtube.enable_monitor = false;
-                                config_changed = true;
-                            }
-
-                            if cfg.twitch.enable_monitor {
-                                cfg.twitch.enable_monitor = false;
-                                config_changed = true;
-                            }
-
-                            if cfg.priority_channel.enabled {
-                                cfg.priority_channel.enabled = false;
-                                config_changed = true;
-                            }
-
-                            if config_changed {
+                            if disable_monitors_after_bili_start_temp_ban(&mut cfg) {
                                 tracing::warn!(
                                     "检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控"
                                 );
@@ -2130,6 +2136,61 @@ mod tests {
         }
     }
 
+    fn test_config() -> Config {
+        Config {
+            auto_cover: false,
+            enable_anti_collision: false,
+            interval: 60,
+            bililive: BiliLive {
+                enable_danmaku_command: false,
+                room: 1,
+                bili_rtmp_url: String::new(),
+                bili_rtmp_key: String::new(),
+                credentials: Credentials::default(),
+            },
+            twitch: Twitch {
+                enable_monitor: true,
+                channel_name: "tw-channel".to_string(),
+                area_v2: 235,
+                channel_id: "twid".to_string(),
+                proxy_region: String::new(),
+                quality: "best".to_string(),
+                proxy: None,
+                crop: None,
+                ffmpeg_cache: bilistream::config::FfmpegCache::default(),
+            },
+            youtube: Youtube {
+                enable_monitor: true,
+                channel_name: "yt-channel".to_string(),
+                channel_id: "ytid".to_string(),
+                area_v2: 235,
+                quality: "best".to_string(),
+                cookies_file: None,
+                cookies_from_browser: None,
+                proxy: None,
+                deno_path: None,
+                crop: None,
+                ffmpeg_cache: bilistream::config::FfmpegCache::default(),
+            },
+            holodex_api_key: None,
+            holodex_jwt: None,
+            holodex_jwt_refreshed_at: None,
+            holodex_username: None,
+            holodex_skip_jwt_verify: false,
+            riot_api_key: None,
+            enable_lol_monitor: false,
+            lol_monitor_interval: None,
+            anti_collision_list: std::collections::HashMap::new(),
+            priority_channel: bilistream::config::PriorityChannel {
+                enabled: true,
+                ..Default::default()
+            },
+            enable_youtube_monitor: false,
+            enable_twitch_monitor: true,
+            cluster: bilistream::config::ClusterConfig::default(),
+        }
+    }
+
     #[test]
     fn a_skipped_youtube_stream_is_marked_and_refetches_once() {
         let mut stream = test_stream_candidate(StreamPlatform::Youtube, true);
@@ -2162,6 +2223,20 @@ mod tests {
         let selected = select_stream(&yt, &tw).expect("live stream should be selected");
 
         assert_eq!(selected.platform, StreamPlatform::Youtube);
+    }
+
+    #[test]
+    fn temp_ban_monitor_shutdown_clears_mirrored_toggle_flags() {
+        let mut cfg = test_config();
+
+        assert!(disable_monitors_after_bili_start_temp_ban(&mut cfg));
+
+        assert!(!cfg.youtube.enable_monitor);
+        assert!(!cfg.enable_youtube_monitor);
+        assert!(!cfg.twitch.enable_monitor);
+        assert!(!cfg.enable_twitch_monitor);
+        assert!(!cfg.priority_channel.enabled);
+        assert!(!disable_monitors_after_bili_start_temp_ban(&mut cfg));
     }
 
     #[test]
