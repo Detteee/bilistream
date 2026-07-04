@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -1111,9 +1111,15 @@ fn create_hls_cache_dir() -> std::io::Result<PathBuf> {
     Ok(cache_dir)
 }
 
+struct CacheFileSize {
+    size: u64,
+    seen_generation: u64,
+}
+
 struct CacheByteTracker {
     cache_dir: PathBuf,
-    file_sizes: HashMap<PathBuf, u64>,
+    file_sizes: HashMap<PathBuf, CacheFileSize>,
+    scan_generation: u64,
     last_sample_ms: Option<u64>,
     samples: VecDeque<(u64, u64)>,
 }
@@ -1123,15 +1129,39 @@ impl CacheByteTracker {
         Self {
             cache_dir,
             file_sizes: HashMap::new(),
+            scan_generation: 0,
             last_sample_ms: None,
             samples: VecDeque::new(),
         }
     }
 
+    fn record_file_size(&mut self, path: PathBuf, size: u64, generation: u64) -> u64 {
+        let cached = self.file_sizes.entry(path).or_insert(CacheFileSize {
+            size: 0,
+            seen_generation: generation,
+        });
+        let delta = size.saturating_sub(cached.size);
+        cached.size = size;
+        cached.seen_generation = generation;
+        delta
+    }
+
+    fn prune_unseen_files(&mut self, generation: u64) {
+        self.file_sizes
+            .retain(|_, cached| cached.seen_generation == generation);
+    }
+
     fn sample(&mut self) -> Option<(Option<f32>, u64)> {
         let now = now_millis();
         let mut delta_bytes = 0_u64;
-        let mut seen_paths = HashSet::new();
+        self.scan_generation = match self.scan_generation.checked_add(1) {
+            Some(generation) => generation,
+            None => {
+                self.file_sizes.clear();
+                1
+            }
+        };
+        let generation = self.scan_generation;
 
         let entries = std::fs::read_dir(&self.cache_dir).ok()?;
         for entry in entries.flatten() {
@@ -1143,12 +1173,10 @@ impl CacheByteTracker {
                 continue;
             }
             let size = metadata.len();
-            let previous = self.file_sizes.insert(path.clone(), size).unwrap_or(0);
-            seen_paths.insert(path);
-            delta_bytes = delta_bytes.saturating_add(size.saturating_sub(previous));
+            delta_bytes = delta_bytes.saturating_add(self.record_file_size(path, size, generation));
         }
 
-        self.file_sizes.retain(|path, _| seen_paths.contains(path));
+        self.prune_unseen_files(generation);
 
         if let Some(last_sample_ms) = self.last_sample_ms {
             if now.saturating_sub(last_sample_ms) > NETWORK_SAMPLE_GAP_LIMIT_MS {
@@ -1790,5 +1818,30 @@ mod tests {
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(u32::MAX as u64 + 1);
 
         assert_eq!(unix_time_secs_from(after_epoch), u32::MAX);
+    }
+
+    #[test]
+    fn cache_byte_tracker_records_growth_without_counting_shrink() {
+        let mut tracker = CacheByteTracker::new(PathBuf::from("/tmp/cache-byte-tracker-test"));
+        let path = PathBuf::from("segment.ts");
+
+        assert_eq!(tracker.record_file_size(path.clone(), 100, 1), 100);
+        assert_eq!(tracker.record_file_size(path.clone(), 175, 2), 75);
+        assert_eq!(tracker.record_file_size(path, 90, 3), 0);
+    }
+
+    #[test]
+    fn cache_byte_tracker_prunes_files_missing_from_current_scan() {
+        let mut tracker = CacheByteTracker::new(PathBuf::from("/tmp/cache-byte-tracker-test"));
+        let keep = PathBuf::from("keep.ts");
+        let remove = PathBuf::from("remove.ts");
+
+        tracker.record_file_size(keep.clone(), 100, 1);
+        tracker.record_file_size(remove.clone(), 100, 1);
+        tracker.record_file_size(keep.clone(), 120, 2);
+        tracker.prune_unseen_files(2);
+
+        assert!(tracker.file_sizes.contains_key(&keep));
+        assert!(!tracker.file_sizes.contains_key(&remove));
     }
 }
