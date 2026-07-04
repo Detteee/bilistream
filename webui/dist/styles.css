@@ -127,9 +127,9 @@
       --network-cache-bar-end: var(--accent-green);
       --network-bar-idle-opacity: 0.35;
       --network-bar-active-opacity: 0.9;
-      --network-graph-bg: rgba(15, 23, 42, 0.12);
-      --network-graph-border: rgba(15, 23, 42, 0.18);
-      --network-graph-guide: rgba(15, 23, 42, 0.16);
+      --network-graph-bg: rgba(15, 23, 42, 0.16);
+      --network-graph-border: rgba(15, 23, 42, 0.2);
+      --network-graph-guide: rgba(15, 23, 42, 0.18);
       --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
       --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
       --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
