@@ -27,11 +27,11 @@ static STATUS_REFRESH_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 // Update status cache with fresh configuration data (config fields only)
 pub async fn refresh_status_cache_config() {
     if let Ok(cfg) = load_config().await {
-        apply_status_cache_config(&cfg);
+        refresh_status_cache_config_from(&cfg);
     }
 }
 
-fn apply_status_cache_config(cfg: &Config) {
+pub fn refresh_status_cache_config_from(cfg: &Config) {
     update_status_cache_with(|cached_status| {
         cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
@@ -143,7 +143,7 @@ pub fn start_status_refresh_worker() {
 
 async fn refresh_status_snapshot() -> Result<u64, String> {
     let cfg = load_config().await.map_err(|e| e.to_string())?;
-    apply_status_cache_config(&cfg);
+    refresh_status_cache_config_from(&cfg);
 
     if let Err(e) = refresh_bilibili_status_cache_with_config(&cfg).await {
         tracing::warn!("WebUI Bilibili status refresh failed: {}", e);
@@ -606,10 +606,8 @@ pub async fn update_config(
     // Set config updated flag so main loop can detect the change
     set_config_updated();
 
-    // Spawn status cache refresh in background (lightweight operation)
-    tokio::spawn(async {
-        refresh_status_cache_config().await;
-    });
+    // Apply the exact saved config to the cache without re-reading config.json.
+    refresh_status_cache_config_from(&cfg);
 
     Ok(ApiResponse {
         success: true,
@@ -893,7 +891,7 @@ pub async fn update_channel(
     set_config_updated();
 
     // Refresh status cache with updated configuration
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     // Refresh live status in background for the specific platform only
     let platform = payload.platform.clone();
@@ -1308,7 +1306,7 @@ pub async fn save_setup_config(
     set_config_updated();
 
     // Refresh status cache with updated configuration
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     // Refresh live status in background for only the updated platforms
     tokio::spawn(async move {
@@ -3388,7 +3386,7 @@ pub async fn update_ffmpeg_cache(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     set_config_updated();
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     Ok(ApiResponse {
         success: true,
