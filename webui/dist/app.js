@@ -2508,8 +2508,12 @@
         return managementRequest(path, { method: 'DELETE' });
       }
 
+      function readInputValue(id) {
+        return document.getElementById(id)?.value?.trim() || '';
+      }
+
       function parseCommaSeparatedInput(id) {
-        return document.getElementById(id).value
+        return readInputValue(id)
           .split(',')
           .map(item => item.trim())
           .filter(Boolean);
@@ -2518,7 +2522,7 @@
       function readAreaForm() {
         return {
           id: readIntegerInput('area-id', 0),
-          name: document.getElementById('area-name').value.trim(),
+          name: readInputValue('area-name'),
           title_keywords: parseCommaSeparatedInput('area-keywords'),
           aliases: parseCommaSeparatedInput('area-aliases')
         };
@@ -2690,17 +2694,17 @@
       }
 
       function readChannelForm() {
-        const youtube = document.getElementById('channel-youtube').value.trim();
-        const twitch = document.getElementById('channel-twitch').value.trim();
+        const youtube = readInputValue('channel-youtube');
+        const twitch = readInputValue('channel-twitch');
         const platforms = {};
         if (youtube) platforms.youtube = youtube;
         if (twitch) platforms.twitch = twitch;
 
         return {
-          name: document.getElementById('channel-name').value.trim(),
+          name: readInputValue('channel-name'),
           aliases: parseCommaSeparatedInput('channel-aliases'),
           platforms,
-          riot_puuid: document.getElementById('channel-riot').value.trim() || null
+          riot_puuid: readInputValue('channel-riot') || null
         };
       }
 
