@@ -78,6 +78,21 @@
         document
           .getElementById('refreshBilibiliBtn')
           ?.addEventListener('click', refreshBilibiliStatus);
+        document
+          .getElementById('youtube-monitor-toggle')
+          ?.addEventListener('change', toggleYouTubeMonitor);
+        document
+          .getElementById('refreshYouTubeBtn')
+          ?.addEventListener('click', refreshYouTubeStatus);
+        document
+          .getElementById('twitch-monitor-toggle')
+          ?.addEventListener('change', toggleTwitchMonitor);
+        document
+          .getElementById('refreshTwitchBtn')
+          ?.addEventListener('click', refreshTwitchStatus);
+        document
+          .getElementById('refreshHolodexBtn')
+          ?.addEventListener('click', refreshHolodexStreams);
       }
 
       function initAntiCollisionControls() {
@@ -176,6 +191,28 @@
           ?.addEventListener('change', toggleHolodexSkipJwtVerify);
       }
 
+      function initFaceAuthModalControls() {
+        const modal = document.getElementById('face-auth-modal');
+        modal?.addEventListener('click', event => {
+          if (event.target === modal) {
+            closeFaceAuthModal();
+          }
+        });
+
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape' && modal?.classList.contains('active')) {
+            closeFaceAuthModal();
+          }
+        });
+
+        document
+          .getElementById('face-auth-retry-btn')
+          ?.addEventListener('click', retryStartStream);
+        document
+          .getElementById('face-auth-close-btn')
+          ?.addEventListener('click', closeFaceAuthModal);
+      }
+
       function startLogRefresh() {
         if (logRefreshIntervalId) {
           clearInterval(logRefreshIntervalId);
@@ -197,6 +234,7 @@
       initFooterUpdateControls();
       initAreaModalControls();
       initHolodexLoginModalControls();
+      initFaceAuthModalControls();
 
       document.addEventListener('visibilitychange', () => {
         if (isDashboardVisible()) {
@@ -822,26 +860,45 @@
         faceAuthUrl = qrUrl;
         const modal = document.getElementById('face-auth-modal');
         const container = document.getElementById('face-auth-qr-container');
+        if (!modal || !container) return;
 
-        // Clear previous content and generate QR code using QR Server API (same as login)
-        container.innerHTML = '';
+        // Generate QR code using QR Server API, with a clickable fallback if it fails.
+        container.replaceChildren();
 
         const qrImg = document.createElement('img');
+        qrImg.className = 'face-auth-qr-image';
         qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrUrl)}`;
-        qrImg.style.width = '256px';
-        qrImg.style.height = '256px';
-        qrImg.style.display = 'block';
-        qrImg.onerror = function () {
-          // Fallback if QR API fails
-          container.innerHTML = `<p style="color: var(--text-secondary); margin-bottom: 10px;">无法生成二维码，请点击下方链接：</p><a href="${qrUrl}" target="_blank" style="color: #89b4fa; word-break: break-all; text-decoration: underline; padding: 10px;">${qrUrl}</a>`;
-        };
+        qrImg.alt = 'Bilibili 人脸验证二维码';
+        qrImg.addEventListener('error', () => {
+          container.replaceChildren(createFaceAuthQrFallback(qrUrl));
+        }, { once: true });
 
         container.appendChild(qrImg);
-        modal.style.display = 'flex';
+        modal.classList.add('active');
+      }
+
+      function createFaceAuthQrFallback(qrUrl) {
+        const fallback = document.createElement('div');
+        fallback.className = 'face-auth-fallback';
+
+        const message = document.createElement('p');
+        message.textContent = '无法生成二维码，请点击下方链接：';
+
+        const link = document.createElement('a');
+        link.href = qrUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = qrUrl;
+
+        fallback.append(message, link);
+        return fallback;
       }
 
       function closeFaceAuthModal() {
-        document.getElementById('face-auth-modal').style.display = 'none';
+        const modal = document.getElementById('face-auth-modal');
+        if (modal) {
+          modal.classList.remove('active');
+        }
         faceAuthUrl = null;
       }
 
