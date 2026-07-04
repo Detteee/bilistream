@@ -14,7 +14,6 @@ pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Confi
     }
 
     let generation = next_active_monitor_sync_generation();
-    let cfg = cfg.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(MONITOR_TOGGLE_SYNC_DEBOUNCE_MS)).await;
         if !active_monitor_sync_generation_is_current(generation) {
@@ -33,6 +32,14 @@ pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Confi
             );
             return;
         }
+
+        let cfg = match load_config().await {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!("Cluster monitor toggle background sync skipped: {}", e);
+                return;
+            }
+        };
 
         match push_active_monitor_state_to_peers(&cfg).await {
             Ok(count) if count > 0 => {
