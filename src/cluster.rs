@@ -1110,7 +1110,7 @@ pub fn record_stream_exit(success: bool) {
     let now = now_secs();
     prune_failed_restart_times(&mut state.local_failed_restart_times, now);
     if !success {
-        state.local_failed_restart_times.push(now);
+        record_recent_time(&mut state.local_failed_restart_times, now);
     }
     state.local_failed_restarts = state.local_failed_restart_times.len() as u32;
 }
@@ -1128,7 +1128,7 @@ pub fn record_external_api_result(success: bool) {
         return;
     }
 
-    state.local_external_api_failure_times.push(now);
+    record_recent_time(&mut state.local_external_api_failure_times, now);
     state.local_external_api_failures = state.local_external_api_failure_times.len() as u32;
 }
 
@@ -2195,8 +2195,25 @@ fn prune_failed_restart_times(times: &mut Vec<u64>, now: u64) {
     prune_recent_times(times, now, FFMPEG_FAILURE_WINDOW_SECS);
 }
 
+fn record_recent_time(times: &mut Vec<u64>, time: u64) {
+    if times.last().is_none_or(|last| *last <= time) {
+        times.push(time);
+        return;
+    }
+
+    let insert_at = times.partition_point(|recorded| *recorded <= time);
+    times.insert(insert_at, time);
+}
+
 fn prune_recent_times(times: &mut Vec<u64>, now: u64, window_secs: u64) {
-    times.retain(|time| now.saturating_sub(*time) <= window_secs);
+    debug_assert!(
+        times.windows(2).all(|window| window[0] <= window[1]),
+        "recent timestamp windows must be sorted for prefix pruning"
+    );
+    let first_recent = times.partition_point(|time| now.saturating_sub(*time) > window_secs);
+    if first_recent > 0 {
+        times.drain(0..first_recent);
+    }
 }
 
 fn now_secs() -> u64 {
@@ -2528,6 +2545,27 @@ mod tests {
         prune_failed_restart_times(&mut failures, now);
 
         assert_eq!(failures, vec![now - FFMPEG_FAILURE_WINDOW_SECS, now - 10]);
+    }
+
+    #[test]
+    fn recent_time_pruning_keeps_inclusive_cutoff_and_future_samples() {
+        let now = 10_000;
+        let window = 60;
+        let mut failures = vec![now - window - 1, now - window, now - 1, now + 1];
+
+        prune_recent_times(&mut failures, now, window);
+
+        assert_eq!(failures, vec![now - window, now - 1, now + 1]);
+    }
+
+    #[test]
+    fn record_recent_time_preserves_chronological_order() {
+        let mut failures = vec![10, 30];
+
+        record_recent_time(&mut failures, 20);
+        record_recent_time(&mut failures, 40);
+
+        assert_eq!(failures, vec![10, 20, 30, 40]);
     }
 
     #[test]
