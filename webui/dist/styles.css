@@ -121,10 +121,10 @@
       --status-live-bg: #a6e3a1;
       --status-live-ring: rgba(166, 227, 161, 0.22);
       --status-offline-bg: #f38ba8;
-      --network-push-bar-start: var(--accent-teal);
-      --network-push-bar-end: var(--heading-color);
-      --network-cache-bar-start: var(--accent-yellow);
-      --network-cache-bar-end: var(--accent-green);
+      --network-push-bar-start: #94e2d5;
+      --network-push-bar-end: #89b4fa;
+      --network-cache-bar-start: #f9e2af;
+      --network-cache-bar-end: #a6e3a1;
       --network-bar-idle-opacity: 0.35;
       --network-bar-active-opacity: 0.9;
       --network-graph-bg: rgba(15, 23, 42, 0.22);
