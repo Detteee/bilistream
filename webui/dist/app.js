@@ -1944,8 +1944,7 @@
 
       async function loadSystemConfig() {
         try {
-          const response = await fetch('/api/config');
-          const config = await response.json();
+          const config = await getJson('/api/config');
           mergeConfigData(config);
 
           // Load basic settings
@@ -1996,8 +1995,7 @@
       async function loadMonitorToggleStates(config = window.configData) {
         try {
           if (typeof config.youtube?.enable_monitor !== 'boolean' || typeof config.twitch?.enable_monitor !== 'boolean') {
-            const response = await fetch('/api/config');
-            config = mergeConfigData(await response.json());
+            config = mergeConfigData(await getJson('/api/config'));
           }
 
           updateMonitorToggleStates(config);
@@ -2008,8 +2006,7 @@
 
       async function loadBannedKeywords() {
         try {
-          const response = await fetch('/api/banned-keywords');
-          const data = await response.json();
+          const data = await getJson('/api/banned-keywords');
 
           document.getElementById('streaming-banned-keywords').value =
             (data.streaming_banned_keywords || []).join('\n');
@@ -2024,8 +2021,7 @@
       async function loadDanmakuCommandState(config = window.configData) {
         try {
           if (!config.bilibili || typeof config.bilibili.enable_danmaku_command !== 'boolean') {
-            const response = await fetch('/api/config');
-            config = mergeConfigData(await response.json());
+            config = mergeConfigData(await getJson('/api/config'));
           }
 
           updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
@@ -2040,15 +2036,9 @@
         const enabled = toggle.checked;
 
         try {
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              enable_danmaku_command: enabled
-            })
+          const result = await postJsonApi('/api/config', {
+            enable_danmaku_command: enabled
           });
-
-          const result = await response.json();
           if (result.success) {
             window.configData.bilibili = {
               ...(window.configData.bilibili || {}),
@@ -2286,13 +2276,7 @@
         try {
           const config = getCurrentConfig();
 
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-          });
-
-          const result = await response.json();
+          const result = await postJsonApi('/api/config', config);
 
           if (result.success) {
             mergeConfigData({
@@ -2332,20 +2316,10 @@
       }
 
       async function saveBannedKeywords() {
-        const response = await fetch('/api/banned-keywords', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            streaming_banned_keywords: readBannedKeywordLines('streaming-banned-keywords'),
-            danmaku_banned_keywords: readBannedKeywordLines('danmaku-banned-keywords')
-          })
+        const result = await postJsonApi('/api/banned-keywords', {
+          streaming_banned_keywords: readBannedKeywordLines('streaming-banned-keywords'),
+          danmaku_banned_keywords: readBannedKeywordLines('danmaku-banned-keywords')
         });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const result = await response.json();
         if (!result.success) {
           throw new Error(result.message || '未知错误');
         }
