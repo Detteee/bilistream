@@ -6,6 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -1472,36 +1473,61 @@ pub async fn download_update(
 
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-                // Restart the program
-                #[cfg(target_os = "windows")]
-                {
-                    let exe_dir = std::env::current_exe()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf();
-                    let restart_script = exe_dir.join("restart_after_update.bat");
-                    if restart_script.exists() {
-                        let _ = std::process::Command::new("cmd")
-                            .args(&["/C", "start", "", restart_script.to_str().unwrap()])
-                            .spawn();
-                    }
+                match schedule_update_restart() {
+                    Ok(()) => std::process::exit(0),
+                    Err(e) => tracing::error!("❌ 更新后重启调度失败: {}", e),
                 }
+            }
+            Err(e) => {
+                tracing::error!("❌ 更新安装失败: {}", e);
+            }
+        }
+    });
 
-                #[cfg(not(target_os = "windows"))]
-                {
-                    // Create a restart script that kills old process and starts new one
-                    let exe_dir = std::env::current_exe()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf();
-                    let restart_script = exe_dir.join("restart_after_update.sh");
-                    let new_exe = exe_dir.join("bilistream");
-                    let old_exe = exe_dir.join("bilistream.old");
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some("更新下载已开始，请查看日志了解进度".to_string()),
+        message: Some("更新将在后台下载并自动安装".to_string()),
+    }))
+}
 
-                    let script_content = format!(
-                        r#"#!/bin/bash
+fn current_exe_dir() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("获取当前程序路径失败: {}", e))?;
+    executable_parent_dir(&exe)
+}
+
+fn executable_parent_dir(exe: &Path) -> Result<PathBuf, String> {
+    exe.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("当前程序路径没有有效父目录: {}", exe.display()))
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_update_restart() -> Result<(), String> {
+    let restart_script = current_exe_dir()?.join("restart_after_update.bat");
+    if !restart_script.exists() {
+        return Err(format!("重启脚本不存在: {}", restart_script.display()));
+    }
+    let restart_script = restart_script
+        .to_str()
+        .ok_or_else(|| format!("重启脚本路径不是有效 UTF-8: {}", restart_script.display()))?;
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", restart_script])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("启动重启脚本失败: {}", e))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn schedule_update_restart() -> Result<(), String> {
+    let exe_dir = current_exe_dir()?;
+    let restart_script = exe_dir.join("restart_after_update.sh");
+    let new_exe = exe_dir.join("bilistream");
+    let old_exe = exe_dir.join("bilistream.old");
+
+    let script_content = format!(
+        r#"#!/bin/bash
 # Wait for current process to exit
 sleep 2
 
@@ -1519,35 +1545,26 @@ sleep 1
 # Clean up this script
 rm "$0"
 "#,
-                        old_exe.display(),
-                        old_exe.display(),
-                        new_exe.display()
-                    );
+        old_exe.display(),
+        old_exe.display(),
+        new_exe.display()
+    );
 
-                    if let Ok(_) = std::fs::write(&restart_script, script_content) {
-                        let _ = std::process::Command::new("chmod")
-                            .arg("+x")
-                            .arg(&restart_script)
-                            .output();
-                        let _ = std::process::Command::new("sh")
-                            .arg(&restart_script)
-                            .spawn();
-                    }
-                }
-
-                std::process::exit(0);
-            }
-            Err(e) => {
-                tracing::error!("❌ 更新安装失败: {}", e);
-            }
-        }
-    });
-
-    Ok(Json(ApiResponse {
-        success: true,
-        data: Some("更新下载已开始，请查看日志了解进度".to_string()),
-        message: Some("更新将在后台下载并自动安装".to_string()),
-    }))
+    std::fs::write(&restart_script, script_content)
+        .map_err(|e| format!("写入重启脚本失败: {}", e))?;
+    let chmod_status = std::process::Command::new("chmod")
+        .arg("+x")
+        .arg(&restart_script)
+        .status()
+        .map_err(|e| format!("设置重启脚本权限失败: {}", e))?;
+    if !chmod_status.success() {
+        return Err(format!("设置重启脚本权限失败: {}", chmod_status));
+    }
+    std::process::Command::new("sh")
+        .arg(&restart_script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("启动重启脚本失败: {}", e))
 }
 
 // Version endpoint
@@ -3444,5 +3461,14 @@ mod tests {
         assert_eq!(crop.height, 720);
         assert_eq!(crop.x, 10);
         assert_eq!(crop.y, 20);
+    }
+
+    #[test]
+    fn executable_parent_dir_rejects_paths_without_parent() {
+        assert_eq!(
+            executable_parent_dir(Path::new("parent/bilistream")).unwrap(),
+            PathBuf::from("parent")
+        );
+        assert!(executable_parent_dir(Path::new("bilistream")).is_err());
     }
 }
