@@ -27,7 +27,7 @@ use regex::Regex;
 use riven::consts::PlatformRoute;
 use riven::RiotApi;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::{error::Error, thread, time::Duration};
 use textwrap;
 use tracing_subscriber::fmt;
@@ -48,6 +48,13 @@ static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
 // Track last banned keyword warning to prevent spam
 static LAST_BANNED_KEYWORD_WARNING: Mutex<Option<String>> = Mutex::new(None);
+
+fn recover_mutex_lock<'a, T>(lock: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    lock.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {name} mutex");
+        poisoned.into_inner()
+    })
+}
 
 #[derive(PartialEq)]
 enum CollisionResult {
@@ -482,7 +489,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .map_or(false, |t| t.contains(k.as_str()))
                 }) {
                     let should_warn = {
-                        let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
+                        let mut last_warning = recover_mutex_lock(
+                            &LAST_BANNED_KEYWORD_WARNING,
+                            "last banned keyword warning",
+                        );
                         let current_warning = format!("YT:{}:{}", keyword, title_str);
                         if last_warning.as_ref() != Some(&current_warning) {
                             *last_warning = Some(current_warning);
@@ -526,7 +536,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         .map_or(false, |t| t.contains(k.as_str()))
                 }) {
                     let should_warn = {
-                        let mut last_warning = LAST_BANNED_KEYWORD_WARNING.lock().unwrap();
+                        let mut last_warning = recover_mutex_lock(
+                            &LAST_BANNED_KEYWORD_WARNING,
+                            "last banned keyword warning",
+                        );
                         let current_warning = format!("TW:{}:{}", keyword, title_str);
                         if last_warning.as_ref() != Some(&current_warning) {
                             *last_warning = Some(current_warning);
@@ -580,7 +593,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Check if video/stream ID has changed
             let video_id_changed = {
-                let mut last_id = LAST_VIDEO_ID.lock().unwrap();
+                let mut last_id = recover_mutex_lock(&LAST_VIDEO_ID, "last video id");
                 let changed = last_id.as_ref() != current_video_id.as_ref();
                 if changed {
                     *last_id = current_video_id.clone();
@@ -634,7 +647,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             area_v2
                         );
                         // Clear banned keyword warning when successfully starting a new stream
-                        *LAST_BANNED_KEYWORD_WARNING.lock().unwrap() = None;
+                        *recover_mutex_lock(
+                            &LAST_BANNED_KEYWORD_WARNING,
+                            "last banned keyword warning",
+                        ) = None;
                     }
                     Err(e) => {
                         let error = e.to_string();
@@ -1066,7 +1082,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         cfg.twitch.enable_monitor,
                     );
 
-                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
                     let should_update = match last.as_ref() {
                         Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
                         Some(last_msg) => {
@@ -1099,7 +1115,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         cfg.twitch.enable_monitor,
                     );
 
-                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
                     let should_update = match last.as_ref() {
                         Some(last_msg) if last_msg.as_ref() == current_message.as_str() => false,
                         Some(last_msg) => {
@@ -1133,7 +1149,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         cfg.twitch.enable_monitor,
                     );
                     print!("{}", current_message);
-                    let mut last = LAST_MESSAGE.lock().unwrap();
+                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
                     *last = Some(current_message.into_boxed_str());
                     NO_LIVE.store(true, Ordering::SeqCst);
                 }
@@ -1775,7 +1791,7 @@ async fn handle_collisions(
     }
 
     // Collision handling logic
-    let mut last_collision = LAST_COLLISION.lock().unwrap();
+    let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
     if yt_collision.is_some() && tw_collision.is_some() {
         let yt_col = yt_collision.as_ref().unwrap();
         let current = (
@@ -3240,4 +3256,27 @@ fn show_windows_notification() -> Result<(), Box<dyn std::error::Error>> {
         .spawn()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recover_mutex_lock_returns_inner_after_poison() {
+        let lock = Mutex::new(1_u32);
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = lock.lock().unwrap();
+            *guard = 2;
+            panic!("poison test mutex");
+        });
+
+        {
+            let mut guard = recover_mutex_lock(&lock, "test mutex");
+            assert_eq!(*guard, 2);
+            *guard = 3;
+        }
+
+        assert_eq!(*recover_mutex_lock(&lock, "test mutex"), 3);
+    }
 }
