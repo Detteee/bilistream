@@ -1327,7 +1327,8 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
     loop {
         // Check if this monitor should continue (using channel name for precise control)
         {
-            let monitor_channel = CURRENT_MONITOR_CHANNEL.lock().unwrap();
+            let monitor_channel =
+                recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
             if monitor_channel.as_ref() != Some(&current_channel_name) {
                 tracing::debug!(
                     "优先频道监控已被新频道替换 (当前频道: {}, 优先频道: {:?})",
@@ -1538,7 +1539,8 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
 pub fn start_priority_monitoring(current_channel_name: String) {
     // Check if we're already monitoring this channel
     {
-        let monitor_channel = CURRENT_MONITOR_CHANNEL.lock().unwrap();
+        let monitor_channel =
+            recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
         if monitor_channel.as_ref() == Some(&current_channel_name) {
             tracing::debug!("🔍 已在监控频道 ({})，跳过启动新实例", current_channel_name);
             return;
@@ -1547,7 +1549,8 @@ pub fn start_priority_monitoring(current_channel_name: String) {
 
     // Set the new channel as the current monitor target
     {
-        let mut monitor_channel = CURRENT_MONITOR_CHANNEL.lock().unwrap();
+        let mut monitor_channel =
+            recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
         *monitor_channel = Some(current_channel_name.clone());
     }
 
@@ -1602,7 +1605,8 @@ fn finish_priority_monitoring(current_channel_name: &str) {
 pub fn stop_priority_monitoring() {
     // Clear the current monitor channel to invalidate any running monitors
     {
-        let mut monitor_channel = CURRENT_MONITOR_CHANNEL.lock().unwrap();
+        let mut monitor_channel =
+            recover_mutex_lock(&CURRENT_MONITOR_CHANNEL, "current monitor channel");
         *monitor_channel = None;
     }
     PRIORITY_MONITORING_ACTIVE.store(false, Ordering::SeqCst);
