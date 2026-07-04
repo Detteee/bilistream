@@ -578,6 +578,20 @@ pub fn monitored_config_version(cfg: &Config) -> String {
     monitored_config_version_from_payload(&monitored_config_from_config(cfg))
 }
 
+pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
+    if !cfg.cluster.enabled || !cfg.cluster.sync_monitored_channels {
+        return String::new();
+    }
+
+    match push_monitored_config_to_peers(cfg).await {
+        Ok(count) => format!("；已同步到 {} 个节点", count),
+        Err(e) => {
+            tracing::warn!("Cluster monitored config auto-sync failed: {}", e);
+            format!("；集群同步失败: {}", e)
+        }
+    }
+}
+
 pub fn monitored_config_version_from_payload(payload: &MonitoredConfig) -> String {
     let value = monitored_channel_target_value(payload);
     canonical_value_hash(&value)

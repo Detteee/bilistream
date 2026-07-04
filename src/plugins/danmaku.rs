@@ -1,7 +1,7 @@
 use super::twitch::get_twitch_status;
 use super::youtube::{get_youtube_area_topic, get_youtube_status};
-use crate::config::load_config;
-use crate::config::Config;
+use crate::cluster::{monitored_config_version, sync_monitored_config_after_change};
+use crate::config::{load_config, save_config, Config};
 use crate::plugins::banned_keywords::{
     banned_keyword_hit, danmaku_banned_keywords, danmaku_haystack,
 };
@@ -219,23 +219,20 @@ pub fn get_all_channels(
     Ok(channels)
 }
 
-/// Updates the configuration JSON file with new values.
+/// Updates the configuration JSON file with new channel values.
 async fn update_config(
     platform: &str,
     channel_name: &str,
     channel_id: &str,
     area_id: u64,
-) -> io::Result<bool> {
-    let mut config = load_config()
-        .await
-        .map_err(|error| io::Error::other(error.to_string()))?;
+) -> Result<Option<(String, Config)>, Box<dyn std::error::Error>> {
+    let mut config = load_config().await?;
+    let old_monitored_config_version = monitored_config_version(&config);
     if !apply_danmaku_target(&mut config, platform, channel_name, channel_id, area_id)? {
-        return Ok(false);
+        return Ok(None);
     }
-    crate::config::save_config(&mut config)
-        .await
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    Ok(true)
+    save_config(&mut config).await?;
+    Ok(Some((old_monitored_config_version, config)))
 }
 
 fn apply_danmaku_target(
@@ -643,15 +640,15 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             );
         }
 
-        match update_config(
+        let config_update = update_config(
             &platform,
             &resolved_channel_name,
             channel_id_str,
             updated_area_id,
         )
-        .await
-        {
-            Ok(false) => {
+        .await;
+        match config_update {
+            Ok(None) => {
                 let message = format!(
                     "{} 监听对象已是：{} - {}",
                     platform, resolved_channel_name, updated_area_name
@@ -659,12 +656,22 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 tracing::info!("{}", message);
                 let _ = bilibili::send_danmaku(&cfg, &message).await;
             }
-            Ok(true) => {
+            Ok(Some((old_monitored_config_version, updated_config))) => {
                 // Clear warning flag when user manually changes channel
                 clear_warning_stop();
 
                 // Set config updated flag to skip waiting interval
                 set_config_updated();
+
+                let sync_message =
+                    if old_monitored_config_version != monitored_config_version(&updated_config) {
+                        sync_monitored_config_after_change(&updated_config).await
+                    } else {
+                        String::new()
+                    };
+                if !sync_message.is_empty() {
+                    tracing::info!("弹幕切换频道{}", sync_message);
+                }
 
                 // Send success notification
                 let _ = bilibili::send_danmaku(

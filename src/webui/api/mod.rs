@@ -26,10 +26,11 @@ use crate::cluster::{
     last_known_active_channel_targets, last_known_active_toggles, monitor_toggle_state_from_config,
     monitor_toggle_state_from_monitored_config, monitor_toggles_any_enabled,
     monitored_config_integrity_version_from_payload, monitored_config_version,
-    push_active_monitor_state_to_peers, push_monitored_config_to_peers, ChannelTargetState,
-    ClusterActiveMonitorStateRequest, ClusterApplyNodeModeRequest, ClusterDrainRequest,
-    ClusterFailoverRequest, ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest,
-    MonitorToggleState, MonitoredConfig,
+    push_active_monitor_state_to_peers, push_monitored_config_to_peers,
+    sync_monitored_config_after_change, ChannelTargetState, ClusterActiveMonitorStateRequest,
+    ClusterApplyNodeModeRequest, ClusterDrainRequest, ClusterFailoverRequest,
+    ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest, MonitorToggleState,
+    MonitoredConfig,
 };
 use crate::config::{load_config, ClusterConfig, ClusterHealthThresholds, ClusterPeer, Config};
 use crate::plugins::{
