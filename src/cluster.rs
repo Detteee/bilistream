@@ -1377,12 +1377,13 @@ fn should_adopt_auto_failover_from_peer(
 }
 
 fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, cfg: &Config) -> bool {
+    let observed_at = now_secs();
     status.local_node_id == peer_node_id
         && status.nodes.iter().any(|node| {
             node.node_id == peer_node_id
                 && node
                     .last_seen
-                    .is_some_and(|last_seen| !last_seen_is_stale(last_seen, cfg, now_secs()))
+                    .is_some_and(|last_seen| !last_seen_is_stale(last_seen, cfg, observed_at))
         })
 }
 
@@ -1399,6 +1400,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         failed_restarts,
         external_api_failures,
         network_isolated,
+        observed_at,
     ) = {
         let mut state = CLUSTER_STATE.write().unwrap();
         let now = now_secs();
@@ -1428,6 +1430,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
                 state.local_external_api_failures,
                 now,
             ),
+            now,
         )
     };
 
@@ -1479,7 +1482,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         name: cfg.cluster.node_name.clone(),
         api_url: cfg.cluster.public_api_url.clone(),
         priority: cfg.cluster.priority,
-        last_seen: Some(now_secs()),
+        last_seen: Some(observed_at),
         is_local: true,
         role: ClusterNodeRole::Standby,
         health,
@@ -2010,6 +2013,7 @@ fn mark_peer_reachable(node_id: &str) {
 
 fn mark_peer_unreachable(node_id: String, cfg: &Config) {
     let mut state = CLUSTER_STATE.write().unwrap();
+    let now = now_secs();
     let failures = {
         let count = state.heartbeat_failures.entry(node_id.clone()).or_insert(0);
         *count = count.saturating_add(1);
@@ -2028,13 +2032,12 @@ fn mark_peer_unreachable(node_id: String, cfg: &Config) {
                 &peer.api_url,
                 peer.priority,
                 false,
-                now_secs(),
+                now,
             )
         } else {
-            empty_node(&node_id, &node_id, "", 0, false, now_secs())
+            empty_node(&node_id, &node_id, "", 0, false, now)
         }
     });
-    let now = now_secs();
     let stale = is_stale(node, cfg, now);
     if failures < HEARTBEAT_FAILURE_THRESHOLD && !stale {
         tracing::debug!(
