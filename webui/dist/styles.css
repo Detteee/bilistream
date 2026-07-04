@@ -420,6 +420,15 @@
       padding: 0 !important;
     }
 
+    .is-loading {
+      cursor: not-allowed !important;
+      opacity: 0.7;
+    }
+
+    .is-spinning {
+      animation: spin 1s linear infinite;
+    }
+
     .cluster-btn-icon {
       width: 18px;
       height: 18px;

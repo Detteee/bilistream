@@ -641,17 +641,14 @@
 
       async function refreshHolodexStreams() {
         // Start continuous spinning animation
+        const button = document.getElementById('refreshHolodexBtn');
         const icon = document.getElementById('refreshHolodexIcon');
-        if (icon) {
-          icon.style.animation = 'spin 1s linear infinite';
-        }
+        setButtonLoading(button, icon, true);
 
         const statusDiv = document.getElementById('holodex-status');
         const streamsDiv = document.getElementById('holodex-streams');
         if (!statusDiv || !streamsDiv) {
-          if (icon) {
-            icon.style.animation = '';
-          }
+          setButtonLoading(button, icon, false);
           return;
         }
 
@@ -724,9 +721,7 @@
           setHolodexStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'holodex-status-error');
         } finally {
           // Stop spinning animation when complete
-          if (icon) {
-            icon.style.animation = '';
-          }
+          setButtonLoading(button, icon, false);
         }
       }
 
@@ -2455,7 +2450,7 @@
           container.style.display = 'block';
           toggle.textContent = '▲';
           refreshBtn.style.display = 'flex';
-          if (container.innerHTML === '加载中...') {
+          if (container.dataset.loaded !== 'true') {
             loadAreas();
           }
         } else {
@@ -2475,7 +2470,7 @@
           container.style.display = 'block';
           toggle.textContent = '▲';
           refreshBtn.style.display = 'flex';
-          if (container.innerHTML === '加载中...') {
+          if (container.dataset.loaded !== 'true') {
             loadChannels();
           }
         } else {
@@ -2505,6 +2500,7 @@
           if (result.success) {
             const areasContent = document.getElementById('areas-content');
             if (!areasContent) return;
+            areasContent.dataset.loaded = 'true';
 
             if (result.data.areas.length === 0) {
               areasContent.replaceChildren(
@@ -2640,6 +2636,7 @@
           if (result.success) {
             const channelsContent = document.getElementById('channels-content');
             if (!channelsContent) return;
+            channelsContent.dataset.loaded = 'true';
 
             if (result.data.channels.length === 0) {
               channelsContent.replaceChildren(
@@ -3139,10 +3136,7 @@
         const icon = document.getElementById('refreshAreasIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           await loadAreas();
@@ -3152,10 +3146,7 @@
           showNotification('刷新分区列表失败', 'error');
         } finally {
           // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
+          setButtonLoading(btn, icon, false);
         }
       }
 
@@ -3164,10 +3155,7 @@
         const icon = document.getElementById('refreshChannelsIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           await loadChannels();
@@ -3177,10 +3165,7 @@
           showNotification('刷新频道列表失败', 'error');
         } finally {
           // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
+          setButtonLoading(btn, icon, false);
         }
       }
 
@@ -3271,15 +3256,22 @@
         }, 3000);
       }
 
+      function setButtonLoading(button, icon, loading) {
+        if (button) {
+          button.disabled = loading;
+          button.classList.toggle('is-loading', loading);
+        }
+        if (icon) {
+          icon.classList.toggle('is-spinning', loading);
+        }
+      }
+
       async function refreshBilibiliStatus() {
         const btn = document.getElementById('refreshBilibiliBtn');
         const icon = document.getElementById('refreshBilibiliIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           // Fetch status directly to check if server is responding
@@ -3297,10 +3289,7 @@
           showNotification('刷新失败: ' + (error.message || '服务器未响应'), 'error');
         } finally {
           // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
+          setButtonLoading(btn, icon, false);
         }
       }
 
@@ -3377,10 +3366,7 @@
         const icon = document.getElementById('refreshYouTubeIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           const response = await fetch('/api/refresh/youtube');
@@ -3397,10 +3383,7 @@
           showNotification('Failed to refresh YouTube status', 'error');
         } finally {
           // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
+          setButtonLoading(btn, icon, false);
         }
       }
 
@@ -3409,10 +3392,7 @@
         const icon = document.getElementById('refreshTwitchIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           const response = await fetch('/api/refresh/twitch');
@@ -3429,10 +3409,7 @@
           showNotification('Failed to refresh Twitch status', 'error');
         } finally {
           // Re-enable button and stop spinning
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-          icon.style.animation = '';
+          setButtonLoading(btn, icon, false);
         }
       }
 
@@ -3854,10 +3831,7 @@
         const icon = document.getElementById('restartStreamIcon');
 
         // Disable button and start spinning animation
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-        icon.style.animation = 'spin 1s linear infinite';
+        setButtonLoading(btn, icon, true);
 
         try {
           const response = await fetch('/api/restart', {
@@ -3871,10 +3845,7 @@
         } finally {
           // Re-enable button and stop spinning after a delay
           setTimeout(() => {
-            btn.disabled = false;
-            btn.style.opacity = '1';
-            btn.style.cursor = 'pointer';
-            icon.style.animation = '';
+            setButtonLoading(btn, icon, false);
           }, 2000);
         }
       }
@@ -4411,9 +4382,7 @@
       async function loadChannelData() {
         // Start continuous spinning animation
         const icon = document.getElementById('loadChannelIcon');
-        if (icon) {
-          icon.style.animation = 'spin 1s linear infinite';
-        }
+        setButtonLoading(null, icon, true);
 
         try {
           const [channelsResponse, areasResponse] = await Promise.all([
@@ -4468,9 +4437,7 @@
           showNotification('加载频道数据失败: ' + error.message, 'error');
         } finally {
           // Stop spinning animation when complete
-          if (icon) {
-            icon.style.animation = '';
-          }
+          setButtonLoading(null, icon, false);
         }
       }
 
@@ -4628,14 +4595,11 @@
         if (!selectElement) return;
 
         // Clear existing options
-        selectElement.innerHTML = '';
+        selectElement.replaceChildren();
 
         // Add empty option if requested
         if (includeEmpty) {
-          const emptyOption = document.createElement('option');
-          emptyOption.value = '';
-          emptyOption.textContent = '选择画质...';
-          selectElement.appendChild(emptyOption);
+          selectElement.appendChild(createSelectOption('', '选择画质...'));
         }
 
         // Get quality mappings for the platform
@@ -4819,7 +4783,7 @@
 
           // Generate QR code using external API
           const qrContainer = document.getElementById('qr-code-display');
-          qrContainer.innerHTML = '';
+          qrContainer.replaceChildren();
 
           // Create QR code using QR Server API
           const qrImg = document.createElement('img');
@@ -5020,22 +4984,12 @@
             const ytAreaSelect = document.getElementById('setup-yt-area');
             const twAreaSelect = document.getElementById('setup-tw-area');
 
-            // Sort areas: 其他单机 (235) first, then others
-            const sortedAreas = [...areasList].sort((a, b) => {
-              if (a.id === 235) return -1;
-              if (b.id === 235) return 1;
-              return 0;
-            });
-
             [ytAreaSelect, twAreaSelect].forEach(select => {
-              select.innerHTML = '';
-              sortedAreas.forEach(area => {
-                const option = document.createElement('option');
-                option.value = area.id;
-                option.textContent = `${area.name} (${area.id})`;
-                if (area.id === 235) option.selected = true;
-                select.appendChild(option);
-              });
+              select.replaceChildren();
+              appendAreaOptions(select, areasList, true);
+              if (areasList.some(area => area.id === 235)) {
+                select.value = '235';
+              }
             });
           }
         } catch (error) {
@@ -5048,43 +5002,25 @@
           const response = await fetch('/api/channels');
           const channelsData = await response.json();
 
-          console.log('Loaded channels data:', channelsData);
-
           if (channelsData && channelsData.channels) {
             const ytChannelSelect = document.getElementById('setup-yt-channel-select');
             const twChannelSelect = document.getElementById('setup-tw-channel-select');
 
-            console.log('Found', channelsData.channels.length, 'channels');
-
             // Populate YouTube channels
-            ytChannelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
+            ytChannelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
             channelsData.channels.forEach(channel => {
               if (channel.platforms && channel.platforms.youtube) {
-                const option = document.createElement('option');
-                option.value = JSON.stringify({
-                  id: channel.platforms.youtube,
-                  name: channel.name
-                });
-                option.textContent = channel.name;
-                ytChannelSelect.appendChild(option);
+                ytChannelSelect.appendChild(createPlatformChannelOption(channel, 'youtube'));
               }
             });
-            console.log('Populated YouTube channels:', ytChannelSelect.options.length - 1);
 
             // Populate Twitch channels
-            twChannelSelect.innerHTML = '<option value="">从 channels.json 选择或手动输入...</option>';
+            twChannelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
             channelsData.channels.forEach(channel => {
               if (channel.platforms && channel.platforms.twitch) {
-                const option = document.createElement('option');
-                option.value = JSON.stringify({
-                  id: channel.platforms.twitch,
-                  name: channel.name
-                });
-                option.textContent = channel.name;
-                twChannelSelect.appendChild(option);
+                twChannelSelect.appendChild(createPlatformChannelOption(channel, 'twitch'));
               }
             });
-            console.log('Populated Twitch channels:', twChannelSelect.options.length - 1);
           } else {
             console.warn('No channels data found or invalid format');
           }
@@ -5559,13 +5495,10 @@
 
           const result = await response.json();
 
-          console.log('Capture result:', result); // Debug log
-
           if (result.success && result.message) {
             // Load the captured image (base64 is in message field)
             cropImage = new Image();
             cropImage.onload = function () {
-              console.log('Image loaded:', cropImage.width, 'x', cropImage.height); // Debug log
               cropCanvas = document.getElementById('cropCanvas');
               cropCtx = cropCanvas.getContext('2d');
 
@@ -5576,7 +5509,7 @@
               cropCanvas.width = cropImage.width;
               cropCanvas.height = cropImage.height;
 
-              // Fill with white background first (for debugging)
+              // Fill with white background before drawing transparent sources.
               cropCtx.fillStyle = 'white';
               cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
 
@@ -5589,16 +5522,16 @@
               showNotification('直播帧已捕获，请在图片上选择裁剪区域', 'success');
             };
             cropImage.onerror = function (e) {
-              console.error('Image load error:', e); // Debug log
+              console.error('Image load error:', e);
               showNotification('图片加载失败', 'error');
             };
             cropImage.src = result.message;
           } else {
-            console.error('Capture failed:', result); // Debug log
+            console.error('Capture failed:', result);
             showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
           }
         } catch (error) {
-          console.error('Capture error:', error); // Debug log
+          console.error('Capture error:', error);
           showNotification('捕获失败: ' + error.message, 'error');
         }
       }
@@ -5625,14 +5558,10 @@
         const file = event.target.files?.[0];
         if (!file) return;
 
-        console.log('Loading image file:', file.name, file.size); // Debug log
-
         const reader = new FileReader();
         reader.onload = function (e) {
-          console.log('FileReader loaded, data length:', e.target.result.length); // Debug log
           cropImage = new Image();
           cropImage.onload = function () {
-            console.log('Image loaded:', cropImage.width, 'x', cropImage.height); // Debug log
             cropCanvas = document.getElementById('cropCanvas');
             cropCtx = cropCanvas.getContext('2d');
 
@@ -5643,21 +5572,12 @@
             cropCanvas.width = cropImage.width;
             cropCanvas.height = cropImage.height;
 
-            console.log('Canvas size set:', cropCanvas.width, 'x', cropCanvas.height); // Debug log
-
-            // Fill with white background first (for debugging)
+            // Fill with white background before drawing transparent sources.
             cropCtx.fillStyle = 'white';
             cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
 
             // Draw image
             cropCtx.drawImage(cropImage, 0, 0);
-
-            console.log('Image drawn to canvas'); // Debug log
-
-            // Check if canvas is visible
-            const rect = cropCanvas.getBoundingClientRect();
-            console.log('Canvas display size:', rect.width, 'x', rect.height); // Debug log
-            console.log('Canvas style:', window.getComputedStyle(cropCanvas).display); // Debug log
 
             // Setup canvas interaction
             setupCanvasInteraction();
@@ -5665,13 +5585,13 @@
             showNotification('图片已加载，请在图片上拖动鼠标选择裁剪区域', 'success');
           };
           cropImage.onerror = function (err) {
-            console.error('Image load error:', err); // Debug log
+            console.error('Image load error:', err);
             showNotification('图片加载失败', 'error');
           };
           cropImage.src = e.target.result;
         };
         reader.onerror = function (err) {
-          console.error('FileReader error:', err); // Debug log
+          console.error('FileReader error:', err);
           showNotification('文件读取失败', 'error');
         };
         reader.readAsDataURL(file);
