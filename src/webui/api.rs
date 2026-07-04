@@ -3226,26 +3226,15 @@ pub async fn update_crop(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let crop_config = if payload.enabled {
-        if payload.width.is_none()
-            || payload.height.is_none()
-            || payload.x.is_none()
-            || payload.y.is_none()
-        {
+    let crop_config = match crop_config_from_update(&payload) {
+        Ok(crop_config) => crop_config,
+        Err(message) => {
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Crop dimensions required when enabled".to_string()),
+                message: Some(message),
             });
         }
-        Some(crate::config::CropConfig {
-            width: payload.width.unwrap(),
-            height: payload.height.unwrap(),
-            x: payload.x.unwrap(),
-            y: payload.y.unwrap(),
-        })
-    } else {
-        None
     };
 
     match payload.platform.as_str() {
@@ -3275,6 +3264,31 @@ pub async fn update_crop(
         data: None,
         message: Some("Crop configuration updated".to_string()),
     })
+}
+
+fn crop_config_from_update(
+    payload: &UpdateCropRequest,
+) -> Result<Option<crate::config::CropConfig>, String> {
+    if !payload.enabled {
+        return Ok(None);
+    }
+
+    let (Some(width), Some(height), Some(x), Some(y)) =
+        (payload.width, payload.height, payload.x, payload.y)
+    else {
+        return Err("Crop dimensions required when enabled".to_string());
+    };
+
+    if width == 0 || height == 0 {
+        return Err("Crop width and height must be greater than 0".to_string());
+    }
+
+    Ok(Some(crate::config::CropConfig {
+        width,
+        height,
+        x,
+        y,
+    }))
 }
 
 // Get current crop configuration
@@ -3373,4 +3387,62 @@ pub async fn get_ffmpeg_cache(
         data: Some(cache),
         message: None,
     }))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn crop_update_validation_rejects_incomplete_or_zero_size() {
+        let disabled = UpdateCropRequest {
+            platform: "youtube".to_string(),
+            enabled: false,
+            width: None,
+            height: None,
+            x: None,
+            y: None,
+        };
+        assert!(crop_config_from_update(&disabled).unwrap().is_none());
+
+        let missing = UpdateCropRequest {
+            platform: "youtube".to_string(),
+            enabled: true,
+            width: Some(1920),
+            height: None,
+            x: Some(0),
+            y: Some(0),
+        };
+        assert_eq!(
+            crop_config_from_update(&missing).unwrap_err(),
+            "Crop dimensions required when enabled"
+        );
+
+        let zero_width = UpdateCropRequest {
+            platform: "youtube".to_string(),
+            enabled: true,
+            width: Some(0),
+            height: Some(1080),
+            x: Some(0),
+            y: Some(0),
+        };
+        assert_eq!(
+            crop_config_from_update(&zero_width).unwrap_err(),
+            "Crop width and height must be greater than 0"
+        );
+
+        let valid = UpdateCropRequest {
+            platform: "youtube".to_string(),
+            enabled: true,
+            width: Some(1280),
+            height: Some(720),
+            x: Some(10),
+            y: Some(20),
+        };
+        let crop = crop_config_from_update(&valid)
+            .unwrap()
+            .expect("valid crop should be returned");
+        assert_eq!(crop.width, 1280);
+        assert_eq!(crop.height, 720);
+        assert_eq!(crop.x, 10);
+        assert_eq!(crop.y, 20);
+    }
 }
