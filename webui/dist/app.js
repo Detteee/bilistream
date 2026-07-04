@@ -1886,8 +1886,7 @@
         showInfoRowEdit(fields.status, fields.editor);
 
         try {
-          const response = await fetch(`/api/ffmpeg-cache/${apiPlatform}`);
-          const result = await response.json();
+          const result = await getJson(`/api/ffmpeg-cache/${apiPlatform}`);
           setHlsCacheEditorValues(prefix, result.data || {});
         } catch {
           setHlsCacheEditorValues(prefix, { enabled: false, latency_secs: 8 });
@@ -1903,16 +1902,11 @@
         const { enabled, latencySecs } = readHlsCacheEditorValues(prefix);
 
         try {
-          const response = await fetch('/api/ffmpeg-cache/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              platform: apiPlatform,
-              enabled,
-              latency_secs: latencySecs
-            })
+          const result = await postJsonApi('/api/ffmpeg-cache/update', {
+            platform: apiPlatform,
+            enabled,
+            latency_secs: latencySecs
           });
-          const result = await response.json();
           if (!result.success) {
             showNotification(result.message || 'HLS 缓存配置保存失败', 'error');
             return;
@@ -3150,151 +3144,124 @@
         }
       }
 
-      async function refreshBilibiliStatus() {
-        const btn = document.getElementById('refreshBilibiliBtn');
-        const icon = document.getElementById('refreshBilibiliIcon');
+      async function readJsonApiResponse(response) {
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+        }
+        return result;
+      }
 
-        // Disable button and start spinning animation
+      async function getJson(path) {
+        const response = await fetch(path);
+        return readJsonApiResponse(response);
+      }
+
+      async function postJsonApi(path, payload) {
+        const request = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        };
+        if (payload !== undefined) {
+          request.body = JSON.stringify(payload);
+        }
+
+        const response = await fetch(path, request);
+        return readJsonApiResponse(response);
+      }
+
+      async function refreshDashboardStatusEndpoint(options) {
+        const btn = document.getElementById(options.buttonId);
+        const icon = document.getElementById(options.iconId);
         setButtonLoading(btn, icon, true);
 
         try {
-          // Fetch status directly to check if server is responding
-          const response = await fetch('/api/status');
-
-          if (!response.ok) {
-            throw new Error('服务器响应错误');
+          const result = await getJson(options.endpoint);
+          if (!result.success) {
+            throw new Error(result.message || options.defaultError);
           }
-
-          // Refresh the display
           await refreshStatus();
-          showNotification('Bilibili status refreshed', 'success');
+          showNotification(options.successMessage, 'success');
         } catch (error) {
-          console.error('Error refreshing Bilibili status:', error);
-          showNotification('刷新失败: ' + (error.message || '服务器未响应'), 'error');
+          console.error(options.logMessage, error);
+          showNotification(`${options.failureMessage}: ${error.message || options.defaultError}`, 'error');
         } finally {
-          // Re-enable button and stop spinning
           setButtonLoading(btn, icon, false);
         }
       }
 
-      // YouTube Monitor Toggle
-      async function toggleYouTubeMonitor() {
-        const toggle = document.getElementById('youtube-monitor-toggle');
+      function refreshBilibiliStatus() {
+        return refreshDashboardStatusEndpoint({
+          endpoint: '/api/status',
+          buttonId: 'refreshBilibiliBtn',
+          iconId: 'refreshBilibiliIcon',
+          successMessage: 'Bilibili status refreshed',
+          failureMessage: '刷新失败',
+          defaultError: '服务器未响应',
+          logMessage: 'Error refreshing Bilibili status:'
+        });
+      }
+
+      async function togglePlatformMonitor(platform, toggleId, endpoint) {
+        const toggle = document.getElementById(toggleId);
         const enabled = toggle.checked;
 
         try {
-          const response = await fetch('/api/toggle-youtube-monitor', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled })
-          });
-
-          const result = await response.json();
+          const result = await postJsonApi(endpoint, { enabled });
           if (result.success) {
-            window.configData.youtube = {
-              ...(window.configData.youtube || {}),
+            window.configData[platform] = {
+              ...(window.configData[platform] || {}),
               enable_monitor: enabled
             };
             showNotification(result.message, 'success');
-            // Refresh status to show updated state
             await refreshStatus();
           } else {
-            // Revert toggle if save failed
             toggle.checked = !enabled;
             showNotification(result.message || '保存失败', 'error');
           }
         } catch (error) {
-          console.error('Failed to toggle YouTube monitor:', error);
-          // Revert toggle if save failed
+          console.error(`Failed to toggle ${platform} monitor:`, error);
           toggle.checked = !enabled;
           showNotification('保存失败: ' + error.message, 'error');
         }
       }
 
-      // Twitch Monitor Toggle
-      async function toggleTwitchMonitor() {
-        const toggle = document.getElementById('twitch-monitor-toggle');
-        const enabled = toggle.checked;
-
-        try {
-          const response = await fetch('/api/toggle-twitch-monitor', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled })
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            window.configData.twitch = {
-              ...(window.configData.twitch || {}),
-              enable_monitor: enabled
-            };
-            showNotification(result.message, 'success');
-            // Refresh status to show updated state
-            await refreshStatus();
-          } else {
-            // Revert toggle if save failed
-            toggle.checked = !enabled;
-            showNotification(result.message || '保存失败', 'error');
-          }
-        } catch (error) {
-          console.error('Failed to toggle Twitch monitor:', error);
-          // Revert toggle if save failed
-          toggle.checked = !enabled;
-          showNotification('保存失败: ' + error.message, 'error');
-        }
+      function toggleYouTubeMonitor() {
+        return togglePlatformMonitor('youtube', 'youtube-monitor-toggle', '/api/toggle-youtube-monitor');
       }
 
-      async function refreshYouTubeStatus() {
-        const btn = document.getElementById('refreshYouTubeBtn');
-        const icon = document.getElementById('refreshYouTubeIcon');
+      function toggleTwitchMonitor() {
+        return togglePlatformMonitor('twitch', 'twitch-monitor-toggle', '/api/toggle-twitch-monitor');
+      }
 
-        // Disable button and start spinning animation
+      async function refreshPlatformStatus(label, endpoint, buttonId, iconId) {
+        const btn = document.getElementById(buttonId);
+        const icon = document.getElementById(iconId);
+
         setButtonLoading(btn, icon, true);
 
         try {
-          const response = await fetch('/api/refresh/youtube');
-          const data = await response.json();
+          const data = await getJson(endpoint);
           if (data.success) {
-            showNotification('YouTube status refreshed', 'success');
-            // Refresh the main status to show updated data
+            showNotification(`${label} status refreshed`, 'success');
             await refreshStatus();
           } else {
-            showNotification(data.message || 'Failed to refresh YouTube status', 'error');
+            showNotification(data.message || `Failed to refresh ${label} status`, 'error');
           }
         } catch (error) {
-          console.error('Error refreshing YouTube status:', error);
-          showNotification('Failed to refresh YouTube status', 'error');
+          console.error(`Error refreshing ${label} status:`, error);
+          showNotification(`Failed to refresh ${label} status: ${error.message}`, 'error');
         } finally {
-          // Re-enable button and stop spinning
           setButtonLoading(btn, icon, false);
         }
       }
 
-      async function refreshTwitchStatus() {
-        const btn = document.getElementById('refreshTwitchBtn');
-        const icon = document.getElementById('refreshTwitchIcon');
+      function refreshYouTubeStatus() {
+        return refreshPlatformStatus('YouTube', '/api/refresh/youtube', 'refreshYouTubeBtn', 'refreshYouTubeIcon');
+      }
 
-        // Disable button and start spinning animation
-        setButtonLoading(btn, icon, true);
-
-        try {
-          const response = await fetch('/api/refresh/twitch');
-          const data = await response.json();
-          if (data.success) {
-            showNotification('Twitch status refreshed', 'success');
-            // Refresh the main status to show updated data
-            await refreshStatus();
-          } else {
-            showNotification(data.message || 'Failed to refresh Twitch status', 'error');
-          }
-        } catch (error) {
-          console.error('Error refreshing Twitch status:', error);
-          showNotification('Failed to refresh Twitch status', 'error');
-        } finally {
-          // Re-enable button and stop spinning
-          setButtonLoading(btn, icon, false);
-        }
+      function refreshTwitchStatus() {
+        return refreshPlatformStatus('Twitch', '/api/refresh/twitch', 'refreshTwitchBtn', 'refreshTwitchIcon');
       }
 
       function syncInfoRowLabelCenter(rowElement, valueElement) {
