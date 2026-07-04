@@ -13,11 +13,33 @@ use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
+}
+
+fn recover_read_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
+    lock.read().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {name} read lock");
+        poisoned.into_inner()
+    })
+}
+
+fn recover_write_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
+    lock.write().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {name} write lock");
+        poisoned.into_inner()
+    })
+}
+
+fn cluster_state_read() -> RwLockReadGuard<'static, ClusterState> {
+    recover_read_lock(&CLUSTER_STATE, "cluster state")
+}
+
+fn cluster_state_write() -> RwLockWriteGuard<'static, ClusterState> {
+    recover_write_lock(&CLUSTER_STATE, "cluster state")
 }
 
 const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
@@ -384,7 +406,7 @@ pub fn cache_active_monitor_state_from_owner(
     toggles: &MonitorToggleState,
     channel_targets: Option<&ChannelTargetState>,
 ) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     cache_active_monitor_state(&mut state, toggles, channel_targets);
 }
 
@@ -788,7 +810,7 @@ pub fn start_cluster_worker() {
 }
 
 fn current_active_owner() -> Option<String> {
-    CLUSTER_STATE.read().unwrap().active_owner.clone()
+    cluster_state_read().active_owner.clone()
 }
 
 fn heartbeat_sleep_duration(cfg: &Config) -> Duration {
@@ -807,11 +829,11 @@ fn stable_node_jitter_ms(node_id: &str, max_ms: u64) -> u64 {
 }
 
 fn current_forced_owner() -> Option<String> {
-    CLUSTER_STATE.read().unwrap().forced_owner.clone()
+    cluster_state_read().forced_owner.clone()
 }
 
 pub fn local_ddos_state() -> bool {
-    CLUSTER_STATE.read().unwrap().local_ddos
+    cluster_state_read().local_ddos
 }
 
 fn local_effective_ddos_state(state: &ClusterState) -> bool {
@@ -1116,7 +1138,7 @@ pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>)
     }
 
     {
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         state.local_stream = stream;
     }
 
@@ -1124,12 +1146,12 @@ pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>)
 }
 
 pub fn clear_local_stream() {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     state.local_stream = None;
 }
 
 pub fn record_stream_exit(success: bool) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let now = now_secs();
     prune_failed_restart_times(&mut state.local_failed_restart_times, now);
     if !success {
@@ -1139,7 +1161,7 @@ pub fn record_stream_exit(success: bool) {
 }
 
 pub fn record_external_api_result(success: bool) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let now = now_secs();
     prune_recent_times(
         &mut state.local_external_api_failure_times,
@@ -1156,7 +1178,7 @@ pub fn record_external_api_result(success: bool) {
 }
 
 fn latch_local_fault(reason: impl Into<String>) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     state.local_fault_latched = true;
     state.local_fault_ddos = true;
     state.local_fault_reason = Some(reason.into());
@@ -1237,7 +1259,7 @@ fn set_drain_state_inner(
     clear_faults_when_enabled: bool,
 ) -> ClusterStatus {
     let target = node_id.unwrap_or_else(|| cfg.cluster.node_id.clone());
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let mut effective_ddos = ddos;
     if target == cfg.cluster.node_id {
         state.local_draining = draining;
@@ -1262,7 +1284,7 @@ fn set_drain_state_inner(
 
 pub fn force_failover(cfg: &Config, target_node_id: Option<String>) -> ClusterStatus {
     {
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         state.forced_owner = target_node_id;
         state.lease_until = 0;
     }
@@ -1430,7 +1452,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         network_isolated,
         observed_at,
     ) = {
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         let now = now_secs();
         prune_failed_restart_times(&mut state.local_failed_restart_times, now);
         prune_recent_times(
@@ -1468,7 +1490,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         && fault_reason.as_deref() == Some(NETWORK_ISOLATED_REASON)
         && !network_isolated
     {
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         if clear_recovered_local_network_isolation(&mut state, network_isolated) {
             fault_latched = false;
             fault_ddos = false;
@@ -1566,7 +1588,7 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
     }
 
     let now = now_secs();
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let configured = configured_node_ids(cfg);
     ensure_configured_nodes(&mut state, cfg, now, &configured);
     prune_peer_observations(&mut state, cfg, now, &configured);
@@ -1910,7 +1932,7 @@ fn empty_node(
 
 fn update_node(mut node: ClusterNodeSnapshot, local_node_id: &str) {
     node.last_seen = node.last_seen.or_else(|| Some(now_secs()));
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     node.is_local = node.node_id == local_node_id;
     if node.is_local {
         node.draining = state.local_draining;
@@ -1947,7 +1969,7 @@ fn merge_cluster_status_inner(
     direct_peer_id: Option<&str>,
     cfg: Option<&Config>,
 ) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let received_at = now_secs();
     if let (Some(peer_node_id), Some(cfg)) = (direct_peer_id, cfg) {
         record_peer_observations(&mut state, peer_node_id, &status.nodes, cfg, received_at);
@@ -2078,12 +2100,12 @@ fn snapshot_is_older(incoming: &ClusterNodeSnapshot, existing: &ClusterNodeSnaps
 }
 
 fn mark_peer_reachable(node_id: &str) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     state.heartbeat_failures.remove(node_id);
 }
 
 fn mark_peer_unreachable(node_id: &str, cfg: &Config) {
-    let mut state = CLUSTER_STATE.write().unwrap();
+    let mut state = cluster_state_write();
     let now = now_secs();
     let failures = if let Some(count) = state.heartbeat_failures.get_mut(node_id) {
         *count = count.saturating_add(1);
@@ -2294,17 +2316,35 @@ mod tests {
         BiliLive, ClusterHealthThresholds, Credentials, FfmpegCache, PriorityChannel,
     };
 
+    #[test]
+    fn recover_locks_return_inner_after_poison() {
+        let lock = RwLock::new(1_u32);
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = lock.write().unwrap();
+            *guard = 2;
+            panic!("poison test lock");
+        });
+
+        {
+            let mut guard = recover_write_lock(&lock, "test lock");
+            assert_eq!(*guard, 2);
+            *guard = 3;
+        }
+
+        assert_eq!(*recover_read_lock(&lock, "test lock"), 3);
+    }
+
     struct ClusterStateGuard(ClusterState);
 
     impl ClusterStateGuard {
         fn new() -> Self {
-            Self(CLUSTER_STATE.read().unwrap().clone())
+            Self(cluster_state_read().clone())
         }
     }
 
     impl Drop for ClusterStateGuard {
         fn drop(&mut self) {
-            *CLUSTER_STATE.write().unwrap() = self.0.clone();
+            *cluster_state_write() = self.0.clone();
         }
     }
 
@@ -2660,7 +2700,7 @@ mod tests {
         assert!(stored.draining);
         assert_eq!(stored.health.reason, "draining");
 
-        CLUSTER_STATE.write().unwrap().nodes.remove("remote");
+        cluster_state_write().nodes.remove("remote");
     }
 
     #[test]
@@ -2698,7 +2738,7 @@ mod tests {
         let node = empty_node("unknown", "unknown", "http://unknown", 1, false, now);
 
         assert!(!record_heartbeat(&cfg, node));
-        assert!(!CLUSTER_STATE.read().unwrap().nodes.contains_key("unknown"));
+        assert!(!cluster_state_read().nodes.contains_key("unknown"));
     }
 
     #[test]
@@ -2761,7 +2801,7 @@ mod tests {
         stale_owner.channel_targets = stale_targets;
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             *state = ClusterState::default();
             state.active_owner = Some("owner".to_string());
             state.lease_until = 1_000;
@@ -2784,7 +2824,7 @@ mod tests {
             None,
         );
 
-        let state = CLUSTER_STATE.read().unwrap();
+        let state = cluster_state_read();
         assert_eq!(state.active_owner.as_deref(), Some("owner"));
         assert_eq!(state.lease_until, 1_000);
         assert_eq!(state.last_known_active_toggles, Some(current_toggles));
@@ -2858,7 +2898,7 @@ mod tests {
         let now = now_secs();
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             let mut stale_peer =
                 empty_node(peer_id, peer_id, "http://direct-merge-peer", 1, false, now);
             stale_peer.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
@@ -2885,7 +2925,7 @@ mod tests {
         merge_cluster_status_from_direct_peer(status, peer_id, &cfg)
             .expect("direct peer status should merge");
 
-        let state = CLUSTER_STATE.read().unwrap();
+        let state = cluster_state_read();
         let stored = state
             .nodes
             .get(peer_id)
@@ -2895,7 +2935,7 @@ mod tests {
         assert!(!state.heartbeat_failures.contains_key(peer_id));
         drop(state);
 
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         state.nodes.remove(peer_id);
         state.heartbeat_failures.remove(peer_id);
     }
@@ -3551,14 +3591,14 @@ mod tests {
         };
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(previous.clone());
         }
 
         assert_eq!(last_known_active_toggles(), Some(previous));
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(all_monitor_toggles_off());
         }
         assert!(last_known_active_toggles().is_none());
@@ -3861,7 +3901,7 @@ mod tests {
         };
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             state.forced_owner = Some("b".to_string());
         }
 
@@ -3870,7 +3910,7 @@ mod tests {
             &status_remote_owner
         ));
 
-        CLUSTER_STATE.write().unwrap().forced_owner = None;
+        cluster_state_write().forced_owner = None;
     }
 
     #[test]
@@ -3886,7 +3926,7 @@ mod tests {
 
         let now = now_secs();
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             let mut node = empty_node(node_id, node_id, "http://fresh-inbound", 1, false, now);
             node.last_seen = Some(now);
             node.health = ClusterHealth::healthy();
@@ -3912,7 +3952,7 @@ mod tests {
         );
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             if let Some(node) = state.nodes.get_mut(node_id) {
                 node.last_seen = Some(now - cfg.cluster.failover_timeout_secs - 5);
             }
@@ -3929,7 +3969,7 @@ mod tests {
         assert!(!stored.health.healthy);
         assert_eq!(stored.health.reason, "api_unreachable");
 
-        let mut state = CLUSTER_STATE.write().unwrap();
+        let mut state = cluster_state_write();
         state.nodes.remove(node_id);
         state.heartbeat_failures.remove(node_id);
     }
@@ -3982,7 +4022,7 @@ mod tests {
         };
 
         {
-            let mut state = CLUSTER_STATE.write().unwrap();
+            let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(cached.clone());
         }
 
