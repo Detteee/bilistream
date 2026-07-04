@@ -43,6 +43,7 @@ static NO_LIVE: AtomicBool = AtomicBool::new(false);
 // Use compact representation to reduce memory footprint
 static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
 static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
+const DUAL_COLLISION_PLATFORM: &str = "双平台";
 static INVALID_ID_DETECTED: AtomicBool = AtomicBool::new(false);
 // Track last video/stream ID for cover change detection (works across platforms)
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
@@ -1813,136 +1814,140 @@ async fn handle_collisions(
         tw_collision = check_collision(target_name, &aliases).await?;
     }
 
-    // Collision handling logic
-    let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
-    if yt_collision.is_some() && tw_collision.is_some() {
-        let yt_col = yt_collision.as_ref().unwrap();
-        let current = (
-            yt_col.0.clone().into_boxed_str(),
-            yt_col.1,
-            "双平台".to_string().into_boxed_str(),
-        );
+    match (yt_collision, tw_collision) {
+        (Some(yt_collision), Some(tw_collision)) => {
+            let (yt_room_name, yt_room_id, yt_target_name) = yt_collision;
+            let (tw_room_name, tw_room_id, tw_target_name) = tw_collision;
 
-        // Check if we're already in a dual-platform collision state (regardless of specific room)
-        let already_in_dual_collision = last_collision
-            .as_ref()
-            .map(|(_, _, platform)| platform.as_ref() == "双平台")
-            .unwrap_or(false);
+            // Check if we're already in a dual-platform collision state (regardless of specific room)
+            let already_in_dual_collision = {
+                let last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
+                last_collision
+                    .as_ref()
+                    .map(|(_, _, platform)| platform.as_ref() == DUAL_COLLISION_PLATFORM)
+                    .unwrap_or(false)
+            };
 
-        if !already_in_dual_collision {
-            tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
-            // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
-            // tokio::time::sleep(Duration::from_secs(2)).await;
-            if let Err(e) = send_danmaku(
-                &cfg,
-                &format!(
-                    "{}({})正在转{}",
-                    yt_collision.as_ref().unwrap().0,
-                    yt_collision.as_ref().unwrap().1,
-                    yt_collision.as_ref().unwrap().2,
-                ),
-            )
-            .await
-            {
-                tracing::error!("Failed to send danmaku: {}", e);
-            }
-            if yt_collision.as_ref().unwrap().0 != tw_collision.as_ref().unwrap().0 {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+            if !already_in_dual_collision {
+                {
+                    let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
+                    *last_collision = Some((
+                        yt_room_name.clone().into_boxed_str(),
+                        yt_room_id,
+                        DUAL_COLLISION_PLATFORM.into(),
+                    ));
+                }
+
+                tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
+                // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
+                // tokio::time::sleep(Duration::from_secs(2)).await;
                 if let Err(e) = send_danmaku(
                     &cfg,
-                    &format!(
-                        "{}({})正在转{}",
-                        tw_collision.as_ref().unwrap().0,
-                        tw_collision.as_ref().unwrap().1,
-                        tw_collision.as_ref().unwrap().2,
-                    ),
+                    &format!("{}({})正在转{}", yt_room_name, yt_room_id, yt_target_name),
                 )
                 .await
                 {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                enable_danmaku_commands(true);
-            }
-            if cfg.bililive.enable_danmaku_command {
+                if yt_room_name != tw_room_name {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(
+                        &cfg,
+                        &format!("{}({})正在转{}", tw_room_name, tw_room_id, tw_target_name),
+                    )
+                    .await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                }
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                    enable_danmaku_commands(true);
+                }
+                if cfg.bililive.enable_danmaku_command {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            Ok(CollisionResult::Continue)
+        }
+        (Some(collision), None) | (None, Some(collision)) => {
+            let (room_name, room_id, target_name) = collision;
+            let is_youtube_collision = target_name == cfg.youtube.channel_name;
+            let other_live = if is_youtube_collision {
+                let ol = *tw_is_live;
+                *yt_is_live = false;
+                ol
+            } else {
+                let ol = *yt_is_live;
+                *tw_is_live = false;
+                ol
+            };
+
+            // Check if we're already in a collision state for this platform
+            let already_in_collision = {
+                let last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
+                last_collision
+                    .as_ref()
+                    .map(|(_, _, platform)| platform.as_ref() == target_name.as_str())
+                    .unwrap_or(false)
+            };
+
+            if !other_live && !already_in_collision {
+                {
+                    let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
+                    *last_collision = Some((
+                        room_name.clone().into_boxed_str(),
+                        room_id,
+                        target_name.clone().into_boxed_str(),
+                    ));
+                }
+
+                tracing::warn!(
+                    "{}（{}）撞车，{}（{}）未开播",
+                    room_name,
+                    room_id,
+                    if is_youtube_collision {
+                        "Twitch"
+                    } else {
+                        "YouTube"
+                    },
+                    if is_youtube_collision {
+                        cfg.twitch.channel_name.clone()
+                    } else {
+                        cfg.youtube.channel_name.clone()
+                    }
+                );
+                if let Err(e) = send_danmaku(
+                    &cfg,
+                    &format!("{}({})正在转{}", room_name, room_id, target_name,),
+                )
+                .await
                 {
                     tracing::error!("Failed to send danmaku: {}", e);
                 }
-            }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            *last_collision = Some(current);
-            Ok(CollisionResult::Continue)
-        } else {
-            Ok(CollisionResult::Continue)
-        }
-    } else if let Some(collision) = yt_collision.or(tw_collision) {
-        let other_live = if collision.2 == cfg.youtube.channel_name {
-            let ol = *tw_is_live;
-            *yt_is_live = false;
-            ol
-        } else {
-            let ol = *yt_is_live;
-            *tw_is_live = false;
-            ol
-        };
-
-        // Check if we're already in a collision state for this platform
-        let already_in_collision = last_collision
-            .as_ref()
-            .map(|(_, _, platform)| platform.as_ref() == collision.2.as_str())
-            .unwrap_or(false);
-
-        if !other_live && !already_in_collision {
-            tracing::warn!(
-                "{}（{}）撞车，{}（{}）未开播",
-                collision.0,
-                collision.1,
-                if collision.2 == cfg.youtube.channel_name {
-                    "Twitch"
-                } else {
-                    "YouTube"
-                },
-                if collision.2 == cfg.youtube.channel_name {
-                    cfg.twitch.channel_name.clone()
-                } else {
-                    cfg.youtube.channel_name.clone()
-                }
-            );
-            if let Err(e) = send_danmaku(
-                &cfg,
-                &format!("{}({})正在转{}", collision.0, collision.1, collision.2,),
-            )
-            .await
-            {
-                tracing::error!("Failed to send danmaku: {}", e);
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                enable_danmaku_commands(true);
-            }
-            if cfg.bililive.enable_danmaku_command {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
-                {
-                    tracing::error!("Failed to send danmaku: {}", e);
+                if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+                    enable_danmaku_commands(true);
                 }
+                if cfg.bililive.enable_danmaku_command {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
+                    {
+                        tracing::error!("Failed to send danmaku: {}", e);
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(CollisionResult::Continue)
+            } else {
+                Ok(CollisionResult::Proceed)
             }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            *last_collision = Some((
-                collision.0.into_boxed_str(),
-                collision.1,
-                collision.2.into_boxed_str(),
-            ));
-            Ok(CollisionResult::Continue)
-        } else {
-            Ok(CollisionResult::Proceed)
         }
-    } else {
-        Ok(CollisionResult::Proceed)
+        (None, None) => Ok(CollisionResult::Proceed),
     }
 }
 
