@@ -4,14 +4,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 lazy_static! {
-    static ref BILISTREAM_PATH: std::path::PathBuf = std::env::current_exe().unwrap();
-    static ref CONFIG_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("config.json");
-    static ref LEGACY_CONFIG_PATH: std::path::PathBuf =
-        BILISTREAM_PATH.with_file_name("config.yaml");
-    static ref COOKIES_PATH: std::path::PathBuf = BILISTREAM_PATH.with_file_name("cookies.json");
+    static ref BILISTREAM_PATH: PathBuf = executable_path();
+    static ref CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.json");
+    static ref LEGACY_CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.yaml");
+    static ref COOKIES_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "cookies.json");
+}
+
+fn executable_path() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("bilistream"))
+}
+
+fn sibling_file_path(base: &Path, file_name: &str) -> PathBuf {
+    base.with_file_name(file_name)
 }
 
 /// Struct representing the overall configuration.
@@ -396,4 +403,24 @@ async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sibling_file_path_keeps_executable_directory() {
+        assert_eq!(
+            sibling_file_path(Path::new("/opt/bilistream/bilistream"), "config.json"),
+            PathBuf::from("/opt/bilistream/config.json")
+        );
+    }
+
+    #[test]
+    fn sibling_file_path_falls_back_to_relative_file_for_relative_binary() {
+        assert_eq!(
+            sibling_file_path(Path::new("bilistream"), "config.json"),
+            PathBuf::from("config.json")
+        );
+    }
 }
