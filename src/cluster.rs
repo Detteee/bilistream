@@ -46,6 +46,7 @@ const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
 const EXTERNAL_API_FAILURE_RETENTION_SECS: u64 = 60 * 60;
 const HEARTBEAT_FAILURE_THRESHOLD: u32 = 3;
 const NETWORK_ISOLATED_REASON: &str = "network_isolated";
+const NETWORK_QUARANTINE_FILE: &str = "cluster-network-quarantine.json";
 
 #[derive(Clone, Debug, Default)]
 struct ClusterState {
@@ -276,6 +277,12 @@ struct PeerApiResponse<T> {
     success: bool,
     data: Option<T>,
     message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct NetworkQuarantineSnapshot {
+    node_id: String,
+    monitor_toggles: MonitorToggleState,
 }
 
 pub fn is_enabled(cfg: &Config) -> bool {
@@ -1031,31 +1038,43 @@ async fn enforce_local_network_quarantine(cfg: &Config, status: &ClusterStatus) 
         .is_some_and(|node| node.health.reason == NETWORK_ISOLATED_REASON);
 
     if local_is_network_isolated {
-        if let Err(e) = enter_local_network_quarantine().await {
+        if let Err(e) = enter_local_network_quarantine(&cfg.cluster.node_id).await {
             tracing::warn!("Failed to quarantine local network-isolated node: {}", e);
         }
         return;
     }
 
-    if status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str()) {
-        if let Err(e) = recover_local_network_quarantine().await {
+    let active_owner = status.active_owner.as_deref();
+    if active_owner == Some(cfg.cluster.node_id.as_str()) || active_owner.is_none() {
+        if let Err(e) = recover_local_network_quarantine(&cfg.cluster.node_id).await {
             tracing::warn!("Failed to recover local network quarantine: {}", e);
         }
         return;
     }
 
-    clear_local_network_quarantine();
+    if let Err(e) = clear_local_network_quarantine() {
+        tracing::warn!("Failed to clear local network quarantine snapshot: {}", e);
+    }
 }
 
-async fn enter_local_network_quarantine() -> Result<(), String> {
+async fn enter_local_network_quarantine(node_id: &str) -> Result<(), String> {
     let current_toggles = crate::config::load_config()
         .await
         .map_err(|e| e.to_string())
         .map(|cfg| monitor_toggle_state_from_config(&cfg))?;
-    let should_apply_quarantine = {
+    let persisted_toggles = read_network_quarantine_snapshot(node_id);
+    let (should_apply_quarantine, snapshot) = {
         let mut state = cluster_state_write();
-        enter_local_network_quarantine_state(&mut state, current_toggles)
+        enter_local_network_quarantine_state(
+            &mut state,
+            node_id,
+            current_toggles,
+            persisted_toggles,
+        )
     };
+    if let Some(snapshot) = snapshot {
+        write_network_quarantine_snapshot(&snapshot)?;
+    }
     if !should_apply_quarantine {
         return Ok(());
     }
@@ -1065,39 +1084,57 @@ async fn enter_local_network_quarantine() -> Result<(), String> {
     Ok(())
 }
 
-async fn recover_local_network_quarantine() -> Result<(), String> {
+async fn recover_local_network_quarantine(node_id: &str) -> Result<(), String> {
+    let persisted_toggles = read_network_quarantine_snapshot(node_id);
     let toggles = {
         let mut state = cluster_state_write();
-        let Some(toggles) = take_local_network_quarantine_recovery_toggles(&mut state) else {
+        let Some(toggles) =
+            take_local_network_quarantine_recovery_toggles(&mut state, persisted_toggles)
+        else {
             return Ok(());
         };
         toggles
     };
-    apply_monitor_toggle_state(toggles).await
+    apply_monitor_toggle_state(toggles).await?;
+    remove_network_quarantine_snapshot()
 }
 
-fn clear_local_network_quarantine() {
+fn clear_local_network_quarantine() -> Result<(), String> {
     let mut state = cluster_state_write();
     state.local_network_quarantined = false;
+    drop(state);
+    remove_network_quarantine_snapshot()
 }
 
 fn enter_local_network_quarantine_state(
     state: &mut ClusterState,
+    node_id: &str,
     current_toggles: MonitorToggleState,
-) -> bool {
+    persisted_toggles: Option<MonitorToggleState>,
+) -> (bool, Option<NetworkQuarantineSnapshot>) {
     let toggles_enabled = monitor_toggles_any_enabled(&current_toggles);
-    let should_apply = !state.local_network_quarantined || toggles_enabled;
-    if toggles_enabled {
-        state.last_known_active_toggles = Some(current_toggles);
-    }
+    let was_quarantined = state.local_network_quarantined;
+    let snapshot = if toggles_enabled {
+        state.last_known_active_toggles = Some(current_toggles.clone());
+        Some(NetworkQuarantineSnapshot {
+            node_id: node_id.to_string(),
+            monitor_toggles: current_toggles,
+        })
+    } else {
+        if let Some(persisted) = persisted_toggles {
+            state.last_known_active_toggles = Some(persisted);
+        }
+        None
+    };
     state.local_network_quarantined = true;
-    should_apply
+    (!was_quarantined || toggles_enabled, snapshot)
 }
 
 fn take_local_network_quarantine_recovery_toggles(
     state: &mut ClusterState,
+    persisted_toggles: Option<MonitorToggleState>,
 ) -> Option<MonitorToggleState> {
-    if !state.local_network_quarantined {
+    if !state.local_network_quarantined && persisted_toggles.is_none() {
         return None;
     }
     state.local_network_quarantined = false;
@@ -1106,8 +1143,34 @@ fn take_local_network_quarantine_recovery_toggles(
             .last_known_active_toggles
             .clone()
             .filter(monitor_toggles_any_enabled)
+            .or_else(|| persisted_toggles.filter(monitor_toggles_any_enabled))
             .unwrap_or_else(all_monitor_toggles_on),
     )
+}
+
+fn read_network_quarantine_snapshot(node_id: &str) -> Option<MonitorToggleState> {
+    let value = read_json_file(NETWORK_QUARANTINE_FILE)?;
+    let snapshot = serde_json::from_value::<NetworkQuarantineSnapshot>(value).ok()?;
+    if snapshot.node_id != node_id || !monitor_toggles_any_enabled(&snapshot.monitor_toggles) {
+        return None;
+    }
+    Some(snapshot.monitor_toggles)
+}
+
+fn write_network_quarantine_snapshot(snapshot: &NetworkQuarantineSnapshot) -> Result<(), String> {
+    let value = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
+    write_json_file(NETWORK_QUARANTINE_FILE, &value)
+}
+
+fn remove_network_quarantine_snapshot() -> Result<(), String> {
+    let Some(path) = executable_sibling(NETWORK_QUARANTINE_FILE) else {
+        return Ok(());
+    };
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
@@ -3603,22 +3666,47 @@ mod tests {
             ..all_monitor_toggles_off()
         };
 
-        assert!(enter_local_network_quarantine_state(
-            &mut state,
-            enabled.clone()
-        ));
+        let (should_apply, snapshot) =
+            enter_local_network_quarantine_state(&mut state, "a", enabled.clone(), None);
+        assert!(should_apply);
+        assert_eq!(
+            snapshot.map(|snapshot| snapshot.monitor_toggles),
+            Some(enabled.clone())
+        );
         assert!(state.local_network_quarantined);
         assert_eq!(state.last_known_active_toggles, Some(enabled.clone()));
 
-        assert!(!enter_local_network_quarantine_state(
-            &mut state,
-            all_monitor_toggles_off()
-        ));
+        let (should_apply, snapshot) =
+            enter_local_network_quarantine_state(&mut state, "a", all_monitor_toggles_off(), None);
+        assert!(!should_apply);
+        assert!(snapshot.is_none());
         assert_eq!(state.last_known_active_toggles, Some(enabled));
     }
 
     #[test]
-    fn network_quarantine_recovery_uses_cached_toggles_or_all_on() {
+    fn network_quarantine_hydrates_from_persisted_snapshot_after_restart() {
+        let mut state = ClusterState::default();
+        let persisted = MonitorToggleState {
+            enable_twitch_monitor: true,
+            twitch_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+
+        let (should_apply, snapshot) = enter_local_network_quarantine_state(
+            &mut state,
+            "a",
+            all_monitor_toggles_off(),
+            Some(persisted.clone()),
+        );
+
+        assert!(should_apply);
+        assert!(snapshot.is_none());
+        assert!(state.local_network_quarantined);
+        assert_eq!(state.last_known_active_toggles, Some(persisted));
+    }
+
+    #[test]
+    fn network_quarantine_recovery_uses_cached_persisted_or_all_on() {
         let cached = MonitorToggleState {
             enable_danmaku_command: true,
             priority_channel_enabled: true,
@@ -3631,13 +3719,27 @@ mod tests {
         };
 
         assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state),
+            take_local_network_quarantine_recovery_toggles(&mut state, None),
             Some(cached)
         );
         assert!(!state.local_network_quarantined);
         assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state),
+            take_local_network_quarantine_recovery_toggles(&mut state, None),
             None
+        );
+
+        let persisted = MonitorToggleState {
+            enable_youtube_monitor: true,
+            youtube_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+        let mut restarted_state = ClusterState::default();
+        assert_eq!(
+            take_local_network_quarantine_recovery_toggles(
+                &mut restarted_state,
+                Some(persisted.clone())
+            ),
+            Some(persisted)
         );
 
         let mut state_without_cache = ClusterState {
@@ -3645,7 +3747,7 @@ mod tests {
             ..ClusterState::default()
         };
         assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state_without_cache),
+            take_local_network_quarantine_recovery_toggles(&mut state_without_cache, None),
             Some(all_monitor_toggles_on())
         );
     }
