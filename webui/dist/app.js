@@ -2538,11 +2538,21 @@
       }
 
       function readIntegerInput(id, fallback = 0) {
-        return parseInteger(document.getElementById(id).value, fallback);
+        return parseInteger(document.getElementById(id)?.value, fallback);
       }
 
       function setInputValue(id, value) {
-        document.getElementById(id).value = value;
+        const input = document.getElementById(id);
+        if (input) {
+          input.value = value;
+        }
+      }
+
+      function setElementText(id, value) {
+        const element = document.getElementById(id);
+        if (element) {
+          element.textContent = value;
+        }
       }
 
       // Channel management functions
