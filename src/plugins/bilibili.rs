@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::config::Config;
+use crate::config::{save_config, Config};
 use chrono::TimeZone;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
@@ -16,17 +16,19 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
-    static ref CONFIG_PATH: PathBuf = BILISTREAM_PATH.with_file_name("config.json");
     static ref WBI_CACHE_DIR: PathBuf = wbi_cache_dir(&BILISTREAM_PATH);
 }
+static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
 pub const BILI_START_TEMP_BAN_PREFIX: &str = "BILI_START_TEMP_BAN:";
 
@@ -62,24 +64,59 @@ fn cookies_path() -> PathBuf {
     bilistream_path_from_env_or_executable().with_file_name("cookies.json")
 }
 
-fn atomic_json_tmp_path(path: &Path) -> PathBuf {
-    path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("json")
-    ))
-}
-
 fn write_json_pretty_atomic<T: Serialize + ?Sized>(
     path: &Path,
     value: &T,
 ) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string_pretty(value)?;
-    let tmp_path = atomic_json_tmp_path(path);
-    fs::write(&tmp_path, json)?;
-    fs::rename(&tmp_path, path)?;
+    write_file_atomic(path, json.as_bytes())?;
     Ok(())
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let (tmp_path, mut tmp_file) = create_unique_tmp_file(path)?;
+    let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
+    drop(tmp_file);
+
+    let result = write_result.and_then(|_| fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+fn create_unique_tmp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    const MAX_ATTEMPTS: usize = 16;
+    for _ in 0..MAX_ATTEMPTS {
+        let tmp_path = unique_json_tmp_path(path);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to reserve unique Bilibili json temporary file",
+    ))
+}
+
+fn unique_json_tmp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cookies.json");
+    let suffix = JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        "{}.tmp-{}-{}",
+        file_name,
+        std::process::id(),
+        suffix
+    ))
 }
 
 fn unix_time_secs(time: SystemTime) -> u64 {
@@ -532,9 +569,8 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                     cfg.bililive.bili_rtmp_url = rtmp_url.to_string();
                     cfg.bililive.bili_rtmp_key = rtmp_key.to_string();
 
-                    // Save the updated config to file
-                    let updated_json = serde_json::to_string_pretty(&cfg)?;
-                    std::fs::write(&*CONFIG_PATH, updated_json)?;
+                    // Save the updated config through the shared atomic path.
+                    save_config(cfg).await?;
 
                     // tracing::info!("Updated RTMP information in config");
                 }
@@ -1408,15 +1444,43 @@ mod tests {
     }
 
     #[test]
-    fn atomic_json_tmp_path_stays_next_to_target() {
-        assert_eq!(
-            atomic_json_tmp_path(Path::new("/opt/bilistream/cookies.json")),
-            PathBuf::from("/opt/bilistream/cookies.json.tmp")
-        );
-        assert_eq!(
-            atomic_json_tmp_path(Path::new("cookies")),
-            PathBuf::from("cookies.json.tmp")
-        );
+    fn unique_json_tmp_path_stays_next_to_target() {
+        let path = PathBuf::from("/opt/bilistream/cookies.json");
+
+        let first = unique_json_tmp_path(&path);
+        let second = unique_json_tmp_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("cookies.json.tmp-")));
+    }
+
+    #[test]
+    fn atomic_json_write_replaces_target_without_leftover_tmp() {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-bilibili-json-test-{}-{}",
+            std::process::id(),
+            JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cookies.json");
+
+        write_file_atomic(&path, br#"{"old":true}"#).unwrap();
+        write_file_atomic(&path, br#"{"new":true}"#).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"new":true}"#);
+        let entries = fs::read_dir(&dir)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), path);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
