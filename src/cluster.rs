@@ -2041,6 +2041,9 @@ fn record_peer_observations(
                 .insert(observer_node_id.to_string(), now);
         }
     }
+    state.peer_observations.retain(|node_id, observations| {
+        configured.contains(node_id.as_str()) && !observations.is_empty()
+    });
 }
 
 fn prune_peer_observations(
@@ -3038,6 +3041,38 @@ mod tests {
             .expect("configured target should keep fresh configured observer");
         assert_eq!(observations.len(), 1);
         assert_eq!(observations.get("c"), Some(&now));
+    }
+
+    #[test]
+    fn peer_observation_record_drops_empty_observer_buckets() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.peers = vec![
+            crate::config::ClusterPeer {
+                node_id: "b".to_string(),
+                name: "b".to_string(),
+                api_url: "http://b".to_string(),
+                priority: 10,
+            },
+            crate::config::ClusterPeer {
+                node_id: "c".to_string(),
+                name: "c".to_string(),
+                api_url: "http://c".to_string(),
+                priority: 5,
+            },
+        ];
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        state
+            .peer_observations
+            .insert("b".to_string(), HashMap::from([("c".to_string(), now - 1)]));
+        state.peer_observations.insert(
+            "removed-target".to_string(),
+            HashMap::from([("c".to_string(), now - 1)]),
+        );
+
+        record_peer_observations(&mut state, "c", &[], &cfg, now);
+
+        assert!(state.peer_observations.is_empty());
     }
 
     #[test]
