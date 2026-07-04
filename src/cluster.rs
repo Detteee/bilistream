@@ -1688,6 +1688,15 @@ fn choose_owner_with_configured(
         return forced_owner;
     }
 
+    if !cfg.cluster.auto_failover {
+        return state
+            .active_owner
+            .as_ref()
+            .filter(|owner| configured.contains(owner.as_str()))
+            .cloned()
+            .or_else(|| last_resort_local_owner(state, cfg));
+    }
+
     if let Some(current_owner) = state.active_owner.as_ref() {
         if state
             .nodes
@@ -1696,10 +1705,6 @@ fn choose_owner_with_configured(
         {
             return Some(current_owner.clone());
         }
-    }
-
-    if !cfg.cluster.auto_failover {
-        return last_resort_local_owner(state, cfg);
     }
 
     state
@@ -4072,6 +4077,40 @@ mod tests {
             ClusterHealth::unhealthy("ffmpeg_repeated_failures", false, true);
 
         assert_eq!(choose_owner(&state, &cfg, now), Some("a".to_string()));
+    }
+
+    #[test]
+    fn manual_mode_keeps_unhealthy_remote_owner() {
+        let mut cfg = test_config("a", 100);
+        cfg.cluster.auto_failover = false;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 1,
+        }];
+
+        let now = now_secs();
+        let mut state = ClusterState {
+            active_owner: Some("b".to_string()),
+            ..ClusterState::default()
+        };
+        state.nodes.insert(
+            "a".to_string(),
+            empty_node("a", "a", "http://a", 100, true, now),
+        );
+        state.nodes.insert(
+            "b".to_string(),
+            empty_node("b", "b", "http://b", 1, false, now),
+        );
+        state.nodes.get_mut("a").unwrap().health = ClusterHealth::healthy();
+        state.nodes.get_mut("a").unwrap().last_seen = Some(now);
+        state.nodes.get_mut("b").unwrap().ddos = true;
+        state.nodes.get_mut("b").unwrap().health =
+            ClusterHealth::unhealthy("ffmpeg_repeated_failures", false, true);
+        state.nodes.get_mut("b").unwrap().last_seen = Some(now);
+
+        assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
     }
 
     #[test]
