@@ -347,36 +347,35 @@
               Bilibili
             </h2>
             <div class="card-header-actions">
-              <button id="startLiveBtn" onclick="startStream()" title="开始直播"
-                style="padding: 8px; background: var(--accent-green); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
+              <button id="startLiveBtn" class="btn-secondary compact-btn icon-btn cluster-action-btn cluster-enable-btn" title="开始直播" aria-label="开始直播">
                 <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px"
-                  y="0px" viewBox="0 0 330 330" style="enable-background:new 0 0 330 330;" xml:space="preserve"
-                  width="14" height="14" fill="currentColor">
+                  y="0px" viewBox="0 0 330 330" xml:space="preserve"
+                  class="cluster-btn-icon" fill="currentColor">
                   <path
                     d="M37.728,328.12c2.266,1.256,4.77,1.88,7.272,1.88c2.763,0,5.522-0.763,7.95-2.28l240-149.999c4.386-2.741,7.05-7.548,7.05-12.72c0-5.172-2.664-9.979-7.05-12.72L52.95,2.28c-4.625-2.891-10.453-3.043-15.222-0.4C32.959,4.524,30,9.547,30,15v300C30,320.453,32.959,325.476,37.728,328.12z" />
                 </svg>
               </button>
-              <button id="stopLiveBtn" onclick="stopStream()" title="停止直播"
-                style="padding: 8px; background: var(--accent-red); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg width="14" height="14" viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+              <button id="stopLiveBtn" class="btn-secondary compact-btn icon-btn cluster-action-btn cluster-disable-btn" title="停止直播" aria-label="停止直播">
+                <svg class="cluster-btn-icon" viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
                   <path d="M30,43c0,1,0.9,2,2,2h4c1.1,0,2-1.1,2-2V9c0-1-0.9-2-2-2h-4c-1.1,0-2,1.1-2,2V43z" />
                   <path d="M14,43c0,1,0.9,2,2,2h4c1.1,0,2-1.1,2-2V9c0-1-0.9-2-2-2h-4c-1.1,0-2,1.1-2,2V43z" />
                 </svg>
               </button>
-              <button id="restartStreamBtn" onclick="restartStream()" title="重启流"
-                style="padding: 8px; background: var(--accent-yellow); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg id="restartStreamIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14"
-                  height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                  stroke-linejoin="round" style="transition: transform 0.6s ease;">
-                  <path
-                    d="M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8" />
-                  <path d="m7 17l-4-1l-1 4M17 7l4 1l1-4" />
+              <button id="restartStreamBtn" class="btn-secondary compact-btn icon-btn cluster-action-btn cluster-stream-restart-btn" title="重启流" aria-label="重启流">
+                <svg id="restartStreamIcon" class="cluster-btn-icon dashboard-spin-icon" fill="#000000" viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <g stroke-width="0"></g>
+                  <g stroke-linecap="round" stroke-linejoin="round"></g>
+                  <g>
+                    <path
+                      d="M1,12A11,11,0,0,1,17.882,2.7l1.411-1.41A1,1,0,0,1,21,2V6a1,1,0,0,1-1,1H16a1,1,0,0,1-.707-1.707l1.128-1.128A8.994,8.994,0,0,0,3,12a1,1,0,0,1-2,0Zm21-1a1,1,0,0,0-1,1,9.01,9.01,0,0,1-9,9,8.9,8.9,0,0,1-4.42-1.166l1.127-1.127A1,1,0,0,0,8,17H4a1,1,0,0,0-1,1v4a1,1,0,0,0,.617.924A.987.987,0,0,0,4,23a1,1,0,0,0,.707-.293L6.118,21.3A10.891,10.891,0,0,0,12,23,11.013,11.013,0,0,0,23,12,1,1,0,0,0,22,11Z">
+                    </path>
+                  </g>
                 </svg>
               </button>
-              <button id="refreshBilibiliBtn" onclick="refreshBilibiliStatus()" title="刷新状态"
-                style="padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                <svg id="refreshBilibiliIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+              <button id="refreshBilibiliBtn" class="btn-secondary compact-btn icon-btn cluster-action-btn cluster-refresh-btn" title="刷新状态" aria-label="刷新状态">
+                <svg id="refreshBilibiliIcon" class="cluster-btn-icon dashboard-spin-icon" fill="currentColor" viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg">
                   <path
                     d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
                 </svg>
@@ -942,7 +941,7 @@
             <div id="holodex-toolbar" class="holodex-toolbar">
               <div id="holodex-auth-bar" class="holodex-auth-bar">
                 <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn"
-                  onclick="openHolodexLoginModal()" title="使用 Holodex 收藏夹">
+                  title="使用 Holodex 收藏夹">
                   <span class="holodex-heart-icon" aria-hidden="true" style="display: none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                       <path fill="currentColor"
@@ -954,18 +953,18 @@
                 </button>
                 <label class="holodex-favorites-mode" title="开启: 使用 Holodex JWT 收藏夹；关闭: 使用 channels.json">
                   <span class="toggle-switch">
-                    <input type="checkbox" id="holodex-use-favorites-toggle" onchange="toggleHolodexFavoritesMode()">
+                    <input type="checkbox" id="holodex-use-favorites-toggle">
                     <span class="toggle-slider"></span>
                   </span>
                 </label>
                 <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期" style="display: none;">
                   <span class="toggle-switch">
-                    <input type="checkbox" id="holodex-skip-jwt-verify" onchange="toggleHolodexSkipJwtVerify()">
+                    <input type="checkbox" id="holodex-skip-jwt-verify">
                     <span class="toggle-slider"></span>
                   </span>
                 </label>
               </div>
-              <button type="button" id="holodex-login-btn" class="btn-secondary" onclick="openHolodexLoginModal()"
+              <button type="button" id="holodex-login-btn" class="btn-secondary"
                 style="display: none; padding: 8px 14px; font-size: 13px; align-items: center; gap: 6px; margin-left: auto;">
                 🔐 收藏夹登录
               </button>
@@ -1432,36 +1431,34 @@
         </div>
       </div>
 
-      <div class="controls" style="margin-top: 20px;">
-        <h2 style="cursor: pointer; user-select: none;" onclick="toggleLogs()">
+      <div class="controls system-log-card">
+        <h2 id="log-toggle-heading" class="collapsible-heading" role="button" tabindex="0">
           📋 系统日志 <span id="log-toggle">▼</span>
         </h2>
-        <div id="log-container" style="display: none;">
-          <div
-            style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; font-family: 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace; font-size: 14px; max-height: 400px; overflow-y: auto; line-height: 1.4; white-space: pre; overflow-x: auto;">
+        <div id="log-container" class="log-container hidden">
+          <div id="log-scroll" class="log-scroll">
             <div id="log-output">等待日志...</div>
           </div>
-          <div style="margin-top: 10px; display: flex; gap: 10px;">
-            <button class="btn-secondary" onclick="clearLogs()">清空日志</button>
-            <button class="btn-primary" onclick="refreshLogs()" style="display: flex; align-items: center; gap: 6px;">
+          <div class="log-actions">
+            <button id="clear-logs-btn" class="btn-secondary">清空日志</button>
+            <button id="refresh-logs-btn" class="btn-primary icon-text-btn">
               <svg fill="currentColor" width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
               </svg>
               <span>刷新日志</span>
             </button>
-            <label style="display: flex; align-items: center; gap: 5px; color: #666;">
+            <label class="log-auto-scroll">
               <input type="checkbox" id="auto-scroll-checkbox" checked> 自动滚动
             </label>
           </div>
         </div>
       </div>
 
-      <div style="text-align: center; color: white; margin-top: 40px; padding: 20px; opacity: 0.8;">
-        <p style="margin-bottom: 10px;">
+      <div class="app-footer">
+        <p class="app-footer-version">
           <span id="version-display">Bilistream</span>
-          <button onclick="checkForUpdates()"
-            style="margin-left: 10px; padding: 5px 15px; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.5); border-radius: 5px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 6px;">
+          <button id="check-updates-btn" class="footer-action-btn" type="button">
             <svg fill="currentColor" width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path
                 d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
@@ -1469,31 +1466,25 @@
             <span>检查更新</span>
           </button>
         </p>
-        <div id="update-notification"
-          style="display: none; margin: 15px auto; padding: 15px; max-width: 600px; background: rgba(16, 185, 129, 0.9); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-          <p style="margin: 0 0 10px 0; font-weight: 600; font-size: 16px;">🎉 发现新版本！</p>
-          <p id="update-message" style="margin: 0 0 10px 0; font-size: 14px;"></p>
-          <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button id="auto-update-btn" onclick="autoInstallUpdate()"
-              style="flex: 1; padding: 8px 20px; background: white; color: #667eea; border: none; border-radius: 5px; font-weight: 600; cursor: pointer;">
+        <div id="update-notification" class="update-notification hidden">
+          <p class="update-notification-title">🎉 发现新版本！</p>
+          <p id="update-message" class="update-message"></p>
+          <div class="update-actions">
+            <button id="auto-update-btn" class="update-auto-btn" type="button">
               🚀 自动更新
             </button>
-            <a id="update-link" href="#" target="_blank"
-              style="flex: 1; padding: 8px 20px; background: rgba(255,255,255,0.3); color: white; text-decoration: none; border-radius: 5px; font-weight: 600; text-align: center;">
+            <a id="update-link" class="update-download-link" href="#" target="_blank" rel="noopener noreferrer">
               📥 手动下载
             </a>
           </div>
-          <p id="update-progress"
-            style="margin: 10px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.9); display: none;"></p>
+          <p id="update-progress" class="update-progress hidden"></p>
         </div>
-        <p>
-          <a href="https://github.com/Detteee/bilistream" target="_blank"
-            style="color: white; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.5); padding-bottom: 2px;">
+        <p class="footer-links">
+          <a href="https://github.com/Detteee/bilistream" target="_blank" rel="noopener noreferrer">
             ⭐ GitHub
           </a>
-          <span style="margin: 0 10px;">|</span>
-          <a href="https://github.com/Detteee/bilistream/issues" target="_blank"
-            style="color: white; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.5); padding-bottom: 2px;">
+          <span class="footer-link-separator">|</span>
+          <a href="https://github.com/Detteee/bilistream/issues" target="_blank" rel="noopener noreferrer">
             🐛 报告问题
           </a>
         </p>
@@ -1501,23 +1492,18 @@
     </div>
 
     <!-- Area Selection Modal -->
-    <div id="area-modal"
-      style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-      <div
-        style="background: white; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
-        <h3 style="color: #667eea; margin-bottom: 20px;">选择分区</h3>
-        <p style="color: #666; margin-bottom: 20px;">未能自动检测分区，请手动选择：</p>
-        <select id="modal-area-select"
-          style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; margin-bottom: 20px;">
+    <div id="area-modal" class="area-modal hidden">
+      <div class="area-modal-content">
+        <h3 class="area-modal-title">选择分区</h3>
+        <p class="area-modal-message">未能自动检测分区，请手动选择：</p>
+        <select id="modal-area-select" class="area-modal-select">
           <option value="">加载中...</option>
         </select>
-        <div style="display: flex; gap: 10px;">
-          <button onclick="confirmAreaSelection()"
-            style="flex: 1; padding: 12px; background: #667eea; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+        <div class="area-modal-actions">
+          <button id="confirm-area-selection-btn" class="area-modal-confirm-btn" type="button">
             确认
           </button>
-          <button onclick="closeAreaModal()"
-            style="flex: 1; padding: 12px; background: #6b7280; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+          <button id="cancel-area-selection-btn" class="area-modal-cancel-btn" type="button">
             取消
           </button>
         </div>
@@ -1525,50 +1511,46 @@
     </div>
 
     <!-- Holodex Login Modal -->
-    <div id="holodex-login-modal"
-      style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.55); z-index: 1000; align-items: center; justify-content: center;"
-      onclick="if (event.target === this) closeHolodexLoginModal()">
-      <div
-        style="background: var(--card-bg); border-radius: 12px; padding: 24px; max-width: 520px; width: 92%; box-shadow: 0 20px 60px rgba(0,0,0,0.35); border: 1px solid var(--card-border);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <h3 style="color: var(--heading-color); margin: 0; font-size: 1.1em;">Holodex 收藏夹登录</h3>
-          <button type="button" onclick="closeHolodexLoginModal()"
-            style="background: none; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; line-height: 1;">×</button>
+    <div id="holodex-login-modal" class="holodex-login-modal" role="dialog" aria-modal="true"
+      aria-labelledby="holodex-login-modal-title">
+      <div class="holodex-login-dialog">
+        <div class="holodex-login-header">
+          <h3 id="holodex-login-modal-title">Holodex 收藏夹登录</h3>
+          <button id="holodex-login-close-btn" class="holodex-login-close-btn" type="button" aria-label="关闭">
+            ×
+          </button>
         </div>
-        <p style="color: var(--text-secondary); margin: 0 0 12px; line-height: 1.55; font-size: 13px;">
+        <p class="holodex-login-description">
           登录后显示 Holodex 收藏夹直播（含 Twitch 外部配信）。未登录时使用 <code>channels.json</code> 频道列表，可在下方「频道管理」中编辑。
         </p>
-        <div id="holodex-modal-auth-hint"
-          style="padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; background: var(--input-bg); color: var(--text-secondary); font-size: 13px;">
+        <div id="holodex-modal-auth-hint" class="holodex-login-hint">
         </div>
-        <div class="control-group" style="margin-bottom: 12px;">
-          <label style="color: var(--text-secondary); font-weight: 500;">JWT Token</label>
-          <input type="password" id="holodex-jwt-input" placeholder="粘贴 Holodex JWT"
-            style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); box-sizing: border-box;">
+        <div class="control-group holodex-login-field">
+          <label>JWT Token</label>
+          <input type="password" id="holodex-jwt-input" placeholder="粘贴 Holodex JWT">
         </div>
-        <details style="margin-bottom: 16px; color: var(--text-secondary); font-size: 13px;">
-          <summary style="cursor: pointer; color: var(--text-primary); font-weight: 500;">如何获取 JWT</summary>
-          <ol style="line-height: 1.5; padding-left: 20px; margin: 10px 0 0;">
+        <details class="holodex-login-help">
+          <summary>如何获取 JWT</summary>
+          <ol>
             <li>点击下方「打开 Holodex 登录」并完成登录</li>
             <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
             <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
           </ol>
-          <p style="margin: 10px 0 0; font-size: 12px; line-height: 1.5;">
+          <p>
             JWT 将在到期前 30 天内自动续期并写回 config.json。
           </p>
         </details>
-        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-          <button type="button" class="btn-secondary" onclick="openHolodexLogin()" style="flex: 1; min-width: 120px;">
+        <div class="holodex-login-actions">
+          <button id="holodex-open-login-btn" type="button" class="btn-secondary">
             🔗 打开 Holodex
           </button>
-          <button type="button" class="btn-success" onclick="saveHolodexJwt()" style="flex: 1; min-width: 120px;">
+          <button id="holodex-save-jwt-btn" type="button" class="btn-success">
             💾 保存
           </button>
-          <button type="button" id="holodex-logout-btn" class="btn-secondary" onclick="logoutHolodexJwt()"
-            style="flex: 1; min-width: 120px; display: none;">
+          <button type="button" id="holodex-logout-btn" class="btn-secondary holodex-login-logout-btn hidden">
             🚪 退出
           </button>
-          <button type="button" class="btn-secondary" onclick="closeHolodexLoginModal()" style="flex: 1; min-width: 120px;">
+          <button id="holodex-cancel-login-btn" type="button" class="btn-secondary">
             取消
           </button>
         </div>

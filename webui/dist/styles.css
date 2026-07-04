@@ -380,6 +380,10 @@
       vertical-align: -2px;
     }
 
+    .dashboard-spin-icon {
+      transition: transform 0.6s ease;
+    }
+
     .cluster-label-with-icon {
       display: inline-flex;
       align-items: center;
@@ -557,6 +561,236 @@
 
     .settings-actions {
       margin-top: 20px;
+    }
+
+    .collapsible-heading {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .system-log-card {
+      margin-top: 20px;
+    }
+
+    .log-container.hidden {
+      display: none;
+    }
+
+    .log-scroll {
+      max-height: 400px;
+      overflow: auto;
+      padding: 15px;
+      border-radius: var(--radius);
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.4;
+      white-space: pre;
+    }
+
+    .log-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+
+    .icon-text-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .log-auto-scroll {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--text-muted);
+    }
+
+    .log-line.error {
+      color: #f87171;
+    }
+
+    .log-line.warn {
+      color: #fbbf24;
+    }
+
+    .log-line.info {
+      color: #60a5fa;
+    }
+
+    .log-line.debug {
+      color: #a78bfa;
+    }
+
+    .app-footer {
+      margin-top: 40px;
+      padding: 20px;
+      text-align: center;
+      color: #ffffff;
+      opacity: 0.8;
+    }
+
+    .app-footer-version {
+      margin-bottom: 10px;
+    }
+
+    .footer-action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 10px;
+      padding: 5px 15px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.2);
+      color: #ffffff;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .update-notification {
+      max-width: 600px;
+      margin: 15px auto;
+      padding: 15px;
+      border-radius: var(--radius);
+      background: rgba(16, 185, 129, 0.9);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .update-notification.hidden,
+    .update-progress.hidden {
+      display: none;
+    }
+
+    .update-notification-title {
+      margin: 0 0 10px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .update-message {
+      margin: 0 0 10px;
+      font-size: 14px;
+      white-space: pre-line;
+    }
+
+    .update-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .update-auto-btn,
+    .update-download-link {
+      flex: 1;
+      padding: 8px 20px;
+      border-radius: 5px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .update-auto-btn {
+      border: 0;
+      background: #ffffff;
+      color: #667eea;
+      cursor: pointer;
+    }
+
+    .update-auto-btn.hidden {
+      display: none;
+    }
+
+    .update-download-link {
+      background: rgba(255, 255, 255, 0.3);
+      color: #ffffff;
+      text-decoration: none;
+    }
+
+    .update-progress {
+      margin: 10px 0 0;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 12px;
+    }
+
+    .footer-links a {
+      color: #ffffff;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+      padding-bottom: 2px;
+    }
+
+    .footer-link-separator {
+      margin: 0 10px;
+    }
+
+    .area-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    .area-modal.hidden {
+      display: none;
+    }
+
+    .area-modal-content {
+      width: 90%;
+      max-width: 500px;
+      padding: 30px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .area-modal-title {
+      margin-bottom: 20px;
+      color: #667eea;
+    }
+
+    .area-modal-message {
+      margin-bottom: 20px;
+      color: #666666;
+    }
+
+    .area-modal-select {
+      width: 100%;
+      margin-bottom: 20px;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: var(--radius);
+      font-size: 14px;
+    }
+
+    .area-modal-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .area-modal-confirm-btn,
+    .area-modal-cancel-btn {
+      flex: 1;
+      padding: 12px;
+      border: 0;
+      border-radius: var(--radius);
+      color: #ffffff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .area-modal-confirm-btn {
+      background: #667eea;
+    }
+
+    .area-modal-cancel-btn {
+      background: #6b7280;
     }
 
     .settings-grid {
@@ -1894,6 +2128,143 @@
 
     .holodex-favorites-mode .toggle-switch {
       margin-right: 0;
+    }
+
+    .holodex-login-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    .holodex-login-modal.active {
+      display: flex;
+    }
+
+    .holodex-login-dialog {
+      width: min(520px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      padding: 24px;
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-lg);
+      background: var(--card-bg);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .holodex-login-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .holodex-login-header h3 {
+      margin: 0;
+      color: var(--heading-color);
+      font-size: 1.1em;
+      line-height: 1.25;
+    }
+
+    .holodex-login-close-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .holodex-login-close-btn:hover {
+      background: var(--button-hover-bg);
+      color: var(--text-primary);
+    }
+
+    .holodex-login-description {
+      margin: 0 0 12px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .holodex-login-hint {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--info-border);
+      border-radius: 6px;
+      background: var(--input-bg);
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .holodex-login-hint.hidden {
+      display: none;
+    }
+
+    .holodex-login-hint.warning {
+      border-color: rgba(249, 226, 175, 0.36);
+      color: #f9e2af;
+    }
+
+    .holodex-login-field {
+      margin-bottom: 12px;
+    }
+
+    .holodex-login-field label {
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .holodex-login-field input {
+      border-width: 2px;
+    }
+
+    .holodex-login-help {
+      margin-bottom: 16px;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    .holodex-login-help summary {
+      color: var(--text-primary);
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .holodex-login-help ol {
+      margin: 10px 0 0;
+      padding-left: 20px;
+      line-height: 1.5;
+    }
+
+    .holodex-login-help p {
+      margin: 10px 0 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .holodex-login-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .holodex-login-logout-btn.hidden {
+      display: none;
     }
 
     /* Toggle Switch Styles */

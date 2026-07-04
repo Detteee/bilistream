@@ -65,6 +65,21 @@
         return document.visibilityState === 'visible' && mainPage && !mainPage.classList.contains('hidden');
       }
 
+      function initDashboardControls() {
+        document
+          .getElementById('startLiveBtn')
+          ?.addEventListener('click', startStream);
+        document
+          .getElementById('stopLiveBtn')
+          ?.addEventListener('click', stopStream);
+        document
+          .getElementById('restartStreamBtn')
+          ?.addEventListener('click', restartStream);
+        document
+          .getElementById('refreshBilibiliBtn')
+          ?.addEventListener('click', refreshBilibiliStatus);
+      }
+
       function initAntiCollisionControls() {
         document
           .getElementById('config-anti-collision-checkbox')
@@ -83,6 +98,84 @@
           ?.addEventListener('click', loadSystemConfig);
       }
 
+      function initLogControls() {
+        const logToggle = document.getElementById('log-toggle-heading');
+        logToggle?.addEventListener('click', toggleLogs);
+        logToggle?.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggleLogs();
+          }
+        });
+        document
+          .getElementById('clear-logs-btn')
+          ?.addEventListener('click', clearLogs);
+        document
+          .getElementById('refresh-logs-btn')
+          ?.addEventListener('click', refreshLogs);
+      }
+
+      function initFooterUpdateControls() {
+        document
+          .getElementById('check-updates-btn')
+          ?.addEventListener('click', checkForUpdates);
+        document
+          .getElementById('auto-update-btn')
+          ?.addEventListener('click', autoInstallUpdate);
+      }
+
+      function initAreaModalControls() {
+        document
+          .getElementById('confirm-area-selection-btn')
+          ?.addEventListener('click', confirmAreaSelection);
+        document
+          .getElementById('cancel-area-selection-btn')
+          ?.addEventListener('click', closeAreaModal);
+      }
+
+      function initHolodexLoginModalControls() {
+        const modal = document.getElementById('holodex-login-modal');
+        modal?.addEventListener('click', event => {
+          if (event.target === modal) {
+            closeHolodexLoginModal();
+          }
+        });
+
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape' && modal?.classList.contains('active')) {
+            closeHolodexLoginModal();
+          }
+        });
+
+        document
+          .getElementById('holodex-login-close-btn')
+          ?.addEventListener('click', closeHolodexLoginModal);
+        document
+          .getElementById('holodex-cancel-login-btn')
+          ?.addEventListener('click', closeHolodexLoginModal);
+        document
+          .getElementById('holodex-open-login-btn')
+          ?.addEventListener('click', openHolodexLogin);
+        document
+          .getElementById('holodex-save-jwt-btn')
+          ?.addEventListener('click', saveHolodexJwt);
+        document
+          .getElementById('holodex-logout-btn')
+          ?.addEventListener('click', logoutHolodexJwt);
+        document
+          .getElementById('holodex-favorites-btn')
+          ?.addEventListener('click', openHolodexLoginModal);
+        document
+          .getElementById('holodex-login-btn')
+          ?.addEventListener('click', openHolodexLoginModal);
+        document
+          .getElementById('holodex-use-favorites-toggle')
+          ?.addEventListener('change', toggleHolodexFavoritesMode);
+        document
+          .getElementById('holodex-skip-jwt-verify')
+          ?.addEventListener('change', toggleHolodexSkipJwtVerify);
+      }
+
       function startLogRefresh() {
         if (logRefreshIntervalId) {
           clearInterval(logRefreshIntervalId);
@@ -97,8 +190,13 @@
 
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
+      initDashboardControls();
       initAntiCollisionControls();
       initSystemSettingsActions();
+      initLogControls();
+      initFooterUpdateControls();
+      initAreaModalControls();
+      initHolodexLoginModalControls();
 
       document.addEventListener('visibilitychange', () => {
         if (isDashboardVisible()) {
@@ -683,6 +781,7 @@
       async function showAreaModal() {
         const modal = document.getElementById('area-modal');
         const select = document.getElementById('modal-area-select');
+        if (!modal || !select) return;
 
         // Load areas if not already loaded
         if (!areasData) {
@@ -697,22 +796,26 @@
         }
 
         // Populate select
-        select.innerHTML = '<option value="">选择分区...</option>';
+        select.replaceChildren(createAreaOption('', '选择分区...'));
         if (areasData && areasData.areas) {
           areasData.areas.forEach(area => {
-            const option = document.createElement('option');
-            option.value = area.id;
-            option.textContent = `${area.name} (${area.id})`;
-            select.appendChild(option);
+            select.appendChild(createAreaOption(area.id, `${area.name} (${area.id})`));
           });
         }
 
-        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
       }
 
       function closeAreaModal() {
-        document.getElementById('area-modal').style.display = 'none';
+        document.getElementById('area-modal')?.classList.add('hidden');
         pendingSwitchData = null;
+      }
+
+      function createAreaOption(value, label) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        return option;
       }
 
       function showFaceAuthModal(qrUrl) {
@@ -949,7 +1052,7 @@
         }
 
         if (logoutBtn) {
-          logoutBtn.style.display = holodexAuthState.logged_in ? 'inline-flex' : 'none';
+          logoutBtn.classList.toggle('hidden', !holodexAuthState.logged_in);
         }
       }
 
@@ -971,13 +1074,13 @@
         const modal = document.getElementById('holodex-login-modal');
         if (!modal) return;
         updateHolodexModalHint();
-        modal.style.display = 'flex';
+        modal.classList.add('active');
         loadHolodexAuthStatus();
       }
 
       function closeHolodexLoginModal() {
         const modal = document.getElementById('holodex-login-modal');
-        if (modal) modal.style.display = 'none';
+        modal?.classList.remove('active');
       }
 
       function updateHolodexLoginButton() {
@@ -989,20 +1092,19 @@
         if (!hint) return;
 
         if (holodexAuthState.logged_in && !holodexAuthState.expired) {
-          hint.style.display = 'none';
+          hint.classList.add('hidden');
+          hint.classList.remove('warning');
           return;
         }
 
-        hint.style.display = '';
+        hint.classList.remove('hidden');
 
         if (holodexAuthState.expired) {
           hint.textContent = '⚠️ JWT 已过期，请重新登录 Holodex 并保存新的 token';
-          hint.style.background = 'var(--input-bg)';
-          hint.style.color = '#f9e2af';
+          hint.classList.add('warning');
         } else {
           hint.textContent = '未登录 — 当前使用 channels.json 频道列表 (YouTube + Twitch 外部配信)';
-          hint.style.background = 'var(--input-bg)';
-          hint.style.color = 'var(--text-secondary)';
+          hint.classList.remove('warning');
         }
       }
 
@@ -1163,12 +1265,14 @@
       function toggleLogs() {
         const container = document.getElementById('log-container');
         const toggle = document.getElementById('log-toggle');
-        if (container.style.display === 'none') {
-          container.style.display = 'block';
+        if (!container || !toggle) return;
+
+        const opening = container.classList.contains('hidden');
+        container.classList.toggle('hidden', !opening);
+        if (opening) {
           toggle.textContent = '▲';
           refreshLogs();
         } else {
-          container.style.display = 'none';
           toggle.textContent = '▼';
         }
       }
@@ -2415,7 +2519,10 @@
 
       function clearLogs() {
         logLines = [];
-        document.getElementById('log-output').innerHTML = '日志已清空';
+        const logOutput = document.getElementById('log-output');
+        if (logOutput) {
+          logOutput.replaceChildren(document.createTextNode('日志已清空'));
+        }
       }
 
       async function refreshLogs() {
@@ -2438,39 +2545,52 @@
               logLines = logLines.slice(-maxLogLines);
             }
 
-            // Format and display logs
-            const logOutput = document.getElementById('log-output');
-            logOutput.innerHTML = logLines.map(line => {
-              // Escape HTML to prevent XSS
-              const escaped = line
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-              // Don't replace spaces - let white-space: pre handle it
-
-              // Color code log levels
-              let coloredLine = escaped;
-              if (line.includes('ERROR') || line.includes('❌')) {
-                coloredLine = `<span style="color: #f87171;">${escaped}</span>`;
-              } else if (line.includes('WARN') || line.includes('⚠️')) {
-                coloredLine = `<span style="color: #fbbf24;">${escaped}</span>`;
-              } else if (line.includes('INFO') || line.includes('✅') || line.includes('🚀')) {
-                coloredLine = `<span style="color: #60a5fa;">${escaped}</span>`;
-              } else if (line.includes('DEBUG') || line.includes('🔄')) {
-                coloredLine = `<span style="color: #a78bfa;">${escaped}</span>`;
-              }
-              return coloredLine;
-            }).join('\n');
+            renderLogs();
 
             // Auto scroll if enabled
-            if (document.getElementById('auto-scroll-checkbox').checked) {
-              logOutput.parentElement.scrollTop = logOutput.parentElement.scrollHeight;
+            const logScroll = document.getElementById('log-scroll');
+            if (document.getElementById('auto-scroll-checkbox')?.checked && logScroll) {
+              logScroll.scrollTop = logScroll.scrollHeight;
             }
           }
         } catch (error) {
           // Silently fail - logs are optional
           console.log('Failed to fetch logs:', error);
         }
+      }
+
+      function renderLogs() {
+        const logOutput = document.getElementById('log-output');
+        if (!logOutput) return;
+
+        const fragment = document.createDocumentFragment();
+        logLines.forEach((line, index) => {
+          if (index > 0) {
+            fragment.appendChild(document.createTextNode('\n'));
+          }
+
+          const lineElement = document.createElement('span');
+          lineElement.className = `log-line ${logLineLevel(line)}`.trim();
+          lineElement.textContent = line;
+          fragment.appendChild(lineElement);
+        });
+        logOutput.replaceChildren(fragment);
+      }
+
+      function logLineLevel(line) {
+        if (line.includes('ERROR') || line.includes('❌')) {
+          return 'error';
+        }
+        if (line.includes('WARN') || line.includes('⚠️')) {
+          return 'warn';
+        }
+        if (line.includes('INFO') || line.includes('✅') || line.includes('🚀')) {
+          return 'info';
+        }
+        if (line.includes('DEBUG') || line.includes('🔄')) {
+          return 'debug';
+        }
+        return '';
       }
 
       function showNotification(message, type = 'success') {
@@ -4464,43 +4584,59 @@
 
           // Compare versions
           if (updateInfo.has_update) {
-            // New version available
-            const updateNotification = document.getElementById('update-notification');
-            const updateMessage = document.getElementById('update-message');
-            const updateLink = document.getElementById('update-link');
-            const autoUpdateBtn = document.getElementById('auto-update-btn');
-
-            let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
-            if (updateInfo.asset_name) {
-              const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
-              const buildType = IS_TAURI ? '桌面版 (Tauri)' : '标准版';
-              message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB) — ${buildType}`;
-            }
-            updateMessage.textContent = message;
-            updateMessage.style.whiteSpace = 'pre-line';
-
-            // Set manual download link
-            if (updateInfo.download_url) {
-              updateLink.href = updateInfo.download_url;
-              autoUpdateBtn.style.display = 'block';
-            } else {
-              // No direct download available, hide auto-update button
-              autoUpdateBtn.style.display = 'none';
-              updateLink.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
-            }
-
-            updateNotification.style.display = 'block';
-
+            renderUpdateNotification(updateInfo, { includeBuildType: true });
             showNotification(`发现新版本 v${updateInfo.latest_version}！`, 'success');
           } else {
             showNotification('已是最新版本！', 'success');
-            // Hide update notification if it was shown before
-            document.getElementById('update-notification').style.display = 'none';
+            hideUpdateNotification();
           }
         } catch (error) {
           console.error('Failed to check for updates:', error);
           showNotification('检查更新失败: ' + error.message, 'error');
         }
+      }
+
+      function renderUpdateNotification(updateInfo, options = {}) {
+        const updateNotification = document.getElementById('update-notification');
+        const updateMessage = document.getElementById('update-message');
+        const updateLink = document.getElementById('update-link');
+        const autoUpdateBtn = document.getElementById('auto-update-btn');
+        const updateProgress = document.getElementById('update-progress');
+        if (!updateNotification || !updateMessage || !updateLink || !autoUpdateBtn) {
+          return;
+        }
+
+        updateMessage.textContent = formatUpdateMessage(updateInfo, options);
+        updateProgress?.classList.add('hidden');
+        if (updateProgress) {
+          updateProgress.textContent = '';
+        }
+        autoUpdateBtn.disabled = false;
+        autoUpdateBtn.textContent = '🚀 自动更新';
+        if (updateInfo.download_url) {
+          updateLink.href = updateInfo.download_url;
+          autoUpdateBtn.classList.remove('hidden');
+        } else {
+          updateLink.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
+          autoUpdateBtn.classList.add('hidden');
+        }
+        updateNotification.classList.remove('hidden');
+      }
+
+      function hideUpdateNotification() {
+        document.getElementById('update-notification')?.classList.add('hidden');
+      }
+
+      function formatUpdateMessage(updateInfo, options = {}) {
+        let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
+        if (updateInfo.asset_name) {
+          const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
+          const buildSuffix = options.includeBuildType
+            ? ` — ${IS_TAURI ? '桌面版 (Tauri)' : '标准版'}`
+            : '';
+          message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)${buildSuffix}`;
+        }
+        return message;
       }
 
       async function autoInstallUpdate() {
@@ -4515,7 +4651,7 @@
 
           autoUpdateBtn.disabled = true;
           autoUpdateBtn.textContent = '⏳ 下载中...';
-          updateProgress.style.display = 'block';
+          updateProgress.classList.remove('hidden');
           updateProgress.textContent = '正在下载更新，请稍候...';
 
           showNotification('开始下载更新...', 'success');
@@ -4577,29 +4713,7 @@
               if (data.success && data.data && data.data.has_update) {
                 const updateInfo = data.data;
                 latestUpdateInfo = updateInfo;
-
-                const updateNotification = document.getElementById('update-notification');
-                const updateMessage = document.getElementById('update-message');
-                const updateLink = document.getElementById('update-link');
-                const autoUpdateBtn = document.getElementById('auto-update-btn');
-
-                let message = `最新版本 v${updateInfo.latest_version} 已发布！当前版本：v${updateInfo.current_version}`;
-                if (updateInfo.asset_name) {
-                  const sizeMB = (updateInfo.asset_size / 1024 / 1024).toFixed(1);
-                  message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)`;
-                }
-                updateMessage.textContent = message;
-                updateMessage.style.whiteSpace = 'pre-line';
-
-                if (updateInfo.download_url) {
-                  updateLink.href = updateInfo.download_url;
-                  autoUpdateBtn.style.display = 'block';
-                } else {
-                  autoUpdateBtn.style.display = 'none';
-                  updateLink.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
-                }
-
-                updateNotification.style.display = 'block';
+                renderUpdateNotification(updateInfo);
               }
             })
             .catch(error => {
