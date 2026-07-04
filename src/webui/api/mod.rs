@@ -10,7 +10,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::state::{
@@ -772,6 +772,16 @@ mod tests {
         assert!(!twitch.is_live);
         assert_eq!(twitch.channel_name, "tw-channel");
         assert_eq!(twitch.channel_id, "twid");
+    }
+
+    #[test]
+    fn monitor_toggle_sync_generation_rejects_stale_work() {
+        let first = next_active_monitor_sync_generation();
+        assert!(active_monitor_sync_generation_is_current(first));
+
+        let second = next_active_monitor_sync_generation();
+        assert!(!active_monitor_sync_generation_is_current(first));
+        assert!(active_monitor_sync_generation_is_current(second));
     }
 
     #[test]

@@ -1,12 +1,39 @@
 use super::*;
 
+pub(crate) static ACTIVE_MONITOR_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+const MONITOR_TOGGLE_SYNC_DEBOUNCE_MS: u64 = 150;
+
+lazy_static::lazy_static! {
+    static ref ACTIVE_MONITOR_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+}
+
 pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Config) -> String {
     if !cfg.cluster.enabled {
         return String::new();
     }
 
+    let generation = next_active_monitor_sync_generation();
     let cfg = cfg.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(MONITOR_TOGGLE_SYNC_DEBOUNCE_MS)).await;
+        if !active_monitor_sync_generation_is_current(generation) {
+            tracing::debug!(
+                "Skipped stale cluster monitor toggle sync generation {}",
+                generation
+            );
+            return;
+        }
+
+        let _guard = ACTIVE_MONITOR_SYNC_LOCK.lock().await;
+        if !active_monitor_sync_generation_is_current(generation) {
+            tracing::debug!(
+                "Skipped superseded cluster monitor toggle sync generation {}",
+                generation
+            );
+            return;
+        }
+
         match push_active_monitor_state_to_peers(&cfg).await {
             Ok(count) if count > 0 => {
                 tracing::info!("Cluster monitor toggles synced to {} peer nodes", count);
@@ -19,6 +46,14 @@ pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Confi
     });
 
     "；监控开关同步已在后台执行".to_string()
+}
+
+pub(crate) fn next_active_monitor_sync_generation() -> u64 {
+    ACTIVE_MONITOR_SYNC_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+pub(crate) fn active_monitor_sync_generation_is_current(generation: u64) -> bool {
+    ACTIVE_MONITOR_SYNC_GENERATION.load(Ordering::Acquire) == generation
 }
 
 pub(crate) async fn local_node_can_enable_monitor_toggles(cfg: &Config) -> bool {
