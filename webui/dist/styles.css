@@ -522,6 +522,43 @@
       line-height: 1.25;
     }
 
+    .settings-field-label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .settings-field-help {
+      display: block;
+      margin-top: 5px;
+      color: var(--text-secondary);
+      font-weight: 400;
+    }
+
+    .settings-mono-textarea {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid var(--input-border);
+      border-radius: var(--radius);
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-family: 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.45;
+      resize: vertical;
+    }
+
+    .settings-mono-textarea:focus {
+      outline: none;
+      border-color: var(--input-focus);
+      box-shadow: var(--focus-ring);
+    }
+
+    .settings-actions {
+      margin-top: 20px;
+    }
+
     .settings-grid {
       display: grid;
       gap: 18px;
@@ -797,6 +834,10 @@
     .anti-collision-remove-btn .cluster-btn-icon {
       width: 14px;
       height: 14px;
+    }
+
+    .banned-keyword-field {
+      margin-bottom: 25px;
     }
 
     @media (max-width: 720px) {

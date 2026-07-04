@@ -1395,42 +1395,39 @@
           </div>
 
           <!-- Banned Keywords Settings Section -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+          <div class="settings-section banned-keywords-section">
+            <h3 class="settings-section-title">
               禁用关键词设置
             </h3>
 
             <!-- Streaming Banned Keywords -->
-            <div class="control-group" style="margin-bottom: 25px;">
-              <label style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px; display: block;">
+            <div class="control-group banned-keyword-field">
+              <label class="settings-field-label">
                 转播禁用关键词
-                <small style="color: var(--text-secondary); font-weight: normal; display: block; margin-top: 5px;">
+                <small class="settings-field-help">
                   包含这些关键词的直播将不会被转播（每行一个关键词）
                 </small>
               </label>
-              <textarea id="streaming-banned-keywords" rows="6"
-                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); font-family: monospace; resize: vertical;"
+              <textarea id="streaming-banned-keywords" class="settings-mono-textarea" rows="6"
                 placeholder="watchalong&#10;watchparty&#10;asmr"></textarea>
             </div>
 
             <!-- Danmaku Banned Keywords -->
             <div class="control-group">
-              <label style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px; display: block;">
+              <label class="settings-field-label">
                 弹幕命令禁用关键词
-                <small style="color: var(--text-secondary); font-weight: normal; display: block; margin-top: 5px;">
+                <small class="settings-field-help">
                   包含这些关键词的直播将禁用弹幕命令（每行一个关键词）
                 </small>
               </label>
-              <textarea id="danmaku-banned-keywords" rows="8"
-                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary); font-family: monospace; resize: vertical;"
+              <textarea id="danmaku-banned-keywords" class="settings-mono-textarea" rows="8"
                 placeholder="watchalong&#10;talk&#10;freechat"></textarea>
             </div>
           </div>
 
-          <div class="button-group" style="margin-top: 20px;">
-            <button class="btn-primary" onclick="saveSystemConfig()">保存配置</button>
-            <button class="btn-secondary" onclick="loadSystemConfig()">重新加载</button>
+          <div class="button-group settings-actions">
+            <button id="save-system-config-btn" class="btn-primary">保存配置</button>
+            <button id="reload-system-config-btn" class="btn-secondary">重新加载</button>
           </div>
         </div>
       </div>

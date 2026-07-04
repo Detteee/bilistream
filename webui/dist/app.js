@@ -74,6 +74,15 @@
           ?.addEventListener('click', addAntiCollisionEntry);
       }
 
+      function initSystemSettingsActions() {
+        document
+          .getElementById('save-system-config-btn')
+          ?.addEventListener('click', saveSystemConfig);
+        document
+          .getElementById('reload-system-config-btn')
+          ?.addEventListener('click', loadSystemConfig);
+      }
+
       function startLogRefresh() {
         if (logRefreshIntervalId) {
           clearInterval(logRefreshIntervalId);
@@ -89,6 +98,7 @@
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
       initAntiCollisionControls();
+      initSystemSettingsActions();
 
       document.addEventListener('visibilitychange', () => {
         if (isDashboardVisible()) {
@@ -1647,9 +1657,13 @@
               }
             });
             updateDanmakuCommandToggle(config.enable_danmaku_command);
-            // Save banned keywords separately
-            await saveBannedKeywords();
-            showNotification('配置保存成功', 'success');
+            try {
+              await saveBannedKeywords();
+              showNotification(result.message || '配置保存成功', 'success');
+            } catch (keywordError) {
+              console.error('Failed to save banned keywords:', keywordError);
+              showNotification(`配置已保存，但禁用关键词保存失败: ${keywordError.message}`, 'error');
+            }
           } else {
             showNotification('配置保存失败: ' + (result.error || '未知错误'), 'error');
           }
@@ -1660,33 +1674,31 @@
       }
 
       async function saveBannedKeywords() {
-        try {
-          const streamingKeywords = document.getElementById('streaming-banned-keywords').value
-            .split('\n')
-            .map(k => k.trim())
-            .filter(k => k.length > 0);
+        const response = await fetch('/api/banned-keywords', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            streaming_banned_keywords: readBannedKeywordLines('streaming-banned-keywords'),
+            danmaku_banned_keywords: readBannedKeywordLines('danmaku-banned-keywords')
+          })
+        });
 
-          const danmakuKeywords = document.getElementById('danmaku-banned-keywords').value
-            .split('\n')
-            .map(k => k.trim())
-            .filter(k => k.length > 0);
-
-          const response = await fetch('/api/banned-keywords', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              streaming_banned_keywords: streamingKeywords,
-              danmaku_banned_keywords: danmakuKeywords
-            })
-          });
-
-          const result = await response.json();
-          if (!result.success) {
-            console.error('Failed to save banned keywords:', result.message);
-          }
-        } catch (error) {
-          console.error('Failed to save banned keywords:', error);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.message || '未知错误');
+        }
+      }
+
+      function readBannedKeywordLines(elementId) {
+        const value = document.getElementById(elementId)?.value || '';
+        return value
+          .split('\n')
+          .map(keyword => keyword.trim())
+          .filter(Boolean);
       }
 
       function toggleManagement() {
