@@ -515,26 +515,10 @@
             updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
 
-            // Show/hide Holodex sections based on API key configuration
-            const holodexSection = document.getElementById('holodex-section');
-            const holodexApiConfig = document.getElementById('holodex-api-config');
-            const holodexLoginBtn = document.getElementById('holodex-login-btn');
-            const holodexStreamsSection = document.getElementById('holodex-streams-section');
-
-            // Always show the Holodex section
-            holodexSection.style.display = 'block';
-
-            if (config.holodex_api_key && config.holodex_api_key.trim() !== '') {
-              // API key is configured - show streams section, hide api key setup
-              holodexApiConfig.style.display = 'none';
-              holodexStreamsSection.style.display = 'block';
-              if (holodexLoginBtn) holodexLoginBtn.style.display = 'inline-flex';
+            const holodexApiKeyConfigured = !!config.holodex_api_key?.trim();
+            applyHolodexSectionVisibility(holodexApiKeyConfigured);
+            if (holodexApiKeyConfigured) {
               loadHolodexAuthStatus();
-            } else {
-              // No API key - show config section, hide streams
-              holodexApiConfig.style.display = 'block';
-              holodexStreamsSection.style.display = 'none';
-              if (holodexLoginBtn) holodexLoginBtn.style.display = 'none';
             }
 
             if (config.interval) {
@@ -576,30 +560,27 @@
 
       }
 
-      function toggleChannelManagement() {
-        const container = document.getElementById('channel-management-container');
-        const toggle = document.getElementById('channel-toggle');
-        if (container.style.display === 'none') {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
+      function setElementDisplay(element, visible, display = 'block') {
+        if (element) {
+          element.style.display = visible ? display : 'none';
         }
       }
 
-      function toggleHolodex() {
-        const container = document.getElementById('holodex-container');
-        const toggle = document.getElementById('holodex-toggle');
-        if (!container || !toggle) return;
+      function applyHolodexSectionVisibility(apiKeyConfigured) {
+        setElementDisplay(document.getElementById('holodex-section'), true);
+        setElementDisplay(document.getElementById('holodex-api-config'), !apiKeyConfigured);
+        setElementDisplay(document.getElementById('holodex-streams-section'), apiKeyConfigured);
+        setElementDisplay(document.getElementById('holodex-login-btn'), apiKeyConfigured, 'inline-flex');
+      }
 
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
+      function toggleChannelManagement() {
+        toggleFold('channel-management-container', 'channel-toggle');
+      }
+
+      function toggleHolodex() {
+        const result = toggleFold('holodex-container', 'holodex-toggle');
+        if (result?.open) {
           refreshHolodexStreams();
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
         }
       }
 
@@ -2381,105 +2362,71 @@
           .filter(Boolean);
       }
 
-      function toggleManagement() {
-        const container = document.getElementById('management-container');
-        const toggle = document.getElementById('management-toggle');
-        if (!container || !toggle) return;
+      function setFoldState(container, toggle, open) {
+        container.style.display = open ? 'block' : 'none';
+        toggle.textContent = open ? '▲' : '▼';
+      }
 
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-          // Don't auto-load since subsections are collapsed by default
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
+      function toggleFold(containerId, toggleId) {
+        const container = document.getElementById(containerId);
+        const toggle = document.getElementById(toggleId);
+        if (!container || !toggle) {
+          return null;
         }
+
+        const open = isElementHidden(container);
+        setFoldState(container, toggle, open);
+        return { container, open };
+      }
+
+      function toggleManagement() {
+        toggleFold('management-container', 'management-toggle');
       }
 
       function toggleAreaManagement() {
-        const container = document.getElementById('area-management-content');
-        const toggle = document.getElementById('area-management-toggle');
-        if (!container || !toggle) return;
-
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
-        }
+        toggleFold('area-management-content', 'area-management-toggle');
       }
 
       function toggleChannelConfig() {
-        const container = document.getElementById('channel-management-content');
-        const toggle = document.getElementById('channel-management-toggle');
-        if (!container || !toggle) return;
+        toggleFold('channel-management-content', 'channel-management-toggle');
+      }
 
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
+      function toggleManagementList(containerId, toggleId, refreshBtnId, loadItems) {
+        const result = toggleFold(containerId, toggleId);
+        const refreshBtn = document.getElementById(refreshBtnId);
+        if (!result || !refreshBtn) {
+          return;
+        }
+
+        refreshBtn.style.display = result.open ? 'flex' : 'none';
+        if (result.open && result.container.dataset.loaded !== 'true') {
+          loadItems();
         }
       }
 
       function toggleAreasList() {
-        const container = document.getElementById('areas-content');
-        const toggle = document.getElementById('areas-list-toggle');
-        const refreshBtn = document.getElementById('refreshAreasBtn');
-        if (!container || !toggle || !refreshBtn) return;
-
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-          refreshBtn.style.display = 'flex';
-          if (container.dataset.loaded !== 'true') {
-            loadAreas();
-          }
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
-          refreshBtn.style.display = 'none';
-        }
+        toggleManagementList(
+          'areas-content',
+          'areas-list-toggle',
+          'refreshAreasBtn',
+          loadAreas
+        );
       }
 
       function toggleChannelsList() {
-        const container = document.getElementById('channels-content');
-        const toggle = document.getElementById('channels-list-toggle');
-        const refreshBtn = document.getElementById('refreshChannelsBtn');
-        if (!container || !toggle || !refreshBtn) return;
-
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
-          refreshBtn.style.display = 'flex';
-          if (container.dataset.loaded !== 'true') {
-            loadChannels();
-          }
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
-          refreshBtn.style.display = 'none';
-        }
+        toggleManagementList(
+          'channels-content',
+          'channels-list-toggle',
+          'refreshChannelsBtn',
+          loadChannels
+        );
       }
 
       // Area management functions
       async function loadAreas() {
         try {
           const response = await fetch('/api/manage/areas');
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-          }
-
-          const result = await response.json();
+          const result = await readManagementResponse(response);
 
           if (result.success) {
             const areasContent = document.getElementById('areas-content');
@@ -2550,13 +2497,10 @@
       }
 
       async function addArea() {
-        const id = parseInt(document.getElementById('area-id').value);
-        const name = document.getElementById('area-name').value.trim();
-        const keywords = document.getElementById('area-keywords').value.split(',').map(k => k.trim()).filter(k => k);
-        const aliases = document.getElementById('area-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+        const area = readAreaForm();
 
-        if (!id || !name) {
-          alert('请填写分区ID和名称');
+        if (!area.id || !area.name) {
+          showNotification('请填写分区ID和名称', 'error');
           return;
         }
 
@@ -2564,58 +2508,62 @@
           const response = await fetch('/api/manage/areas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: id,
-              name: name,
-              title_keywords: keywords,
-              aliases: aliases
-            })
+            body: JSON.stringify(area)
           });
 
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-          }
-
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('分区添加成功');
-            // Clear form
-            document.getElementById('area-id').value = '';
-            document.getElementById('area-name').value = '';
-            document.getElementById('area-keywords').value = '';
-            document.getElementById('area-aliases').value = '';
+            showNotification('分区添加成功', 'success');
+            clearAreaForm();
             loadAreas();
           } else {
-            alert(`添加失败: ${result.message}`);
+            showNotification(`添加失败: ${result.message}`, 'error');
           }
         } catch (error) {
           console.error('Add area error:', error);
-          alert(`添加失败: ${error.message}`);
+          showNotification(`添加失败: ${error.message}`, 'error');
         }
+      }
+
+      async function readManagementResponse(response) {
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const text = await response.text();
+          throw new Error(`Expected JSON, got: ${contentType || 'unknown'}. Response: ${text}`);
+        }
+
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.message || `HTTP error! status: ${response.status}`);
+        }
+        return result;
+      }
+
+      function parseCommaSeparatedInput(id) {
+        return document.getElementById(id).value
+          .split(',')
+          .map(item => item.trim())
+          .filter(Boolean);
+      }
+
+      function readAreaForm() {
+        return {
+          id: parseInt(document.getElementById('area-id').value, 10),
+          name: document.getElementById('area-name').value.trim(),
+          title_keywords: parseCommaSeparatedInput('area-keywords'),
+          aliases: parseCommaSeparatedInput('area-aliases')
+        };
+      }
+
+      function setInputValue(id, value) {
+        document.getElementById(id).value = value;
       }
 
       // Channel management functions
       async function loadChannels() {
         try {
           const response = await fetch('/api/manage/channels');
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-          }
-
-          const result = await response.json();
+          const result = await readManagementResponse(response);
 
           if (result.success) {
             const channelsContent = document.getElementById('channels-content');
@@ -2692,24 +2640,15 @@
       }
 
       async function addChannel() {
-        const name = document.getElementById('channel-name').value.trim();
-        const aliases = document.getElementById('channel-aliases').value.split(',').map(a => a.trim()).filter(a => a);
-        const youtube = document.getElementById('channel-youtube').value.trim();
-        const twitch = document.getElementById('channel-twitch').value.trim();
-        const riot = document.getElementById('channel-riot').value.trim();
+        const payload = readChannelForm();
 
-        if (!name) {
-          alert('请填写频道名称');
+        if (!payload.name) {
+          showNotification('请填写频道名称', 'error');
           return;
         }
 
-        const platforms = {};
-        if (youtube) platforms.youtube = youtube;
-        if (twitch) platforms.twitch = twitch;
-
-        // Validate that at least one platform is provided
-        if (Object.keys(platforms).length === 0) {
-          alert('请至少填写一个平台的频道ID（YouTube或Twitch）');
+        if (Object.keys(payload.platforms).length === 0) {
+          showNotification('请至少填写一个平台的频道ID（YouTube或Twitch）', 'error');
           return;
         }
 
@@ -2717,57 +2656,33 @@
           const response = await fetch('/api/manage/channels', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: name,
-              aliases: aliases,
-              platforms: platforms,
-              riot_puuid: riot || null
-            })
+            body: JSON.stringify(payload)
           });
 
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-          }
-
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('频道添加成功');
+            showNotification('频道添加成功', 'success');
             clearChannelForm();
             loadChannels();
           } else {
-            alert(`添加失败: ${result.message}`);
+            showNotification(`添加失败: ${result.message}`, 'error');
           }
         } catch (error) {
           console.error('Add channel error:', error);
-          alert(`添加失败: ${error.message}`);
+          showNotification(`添加失败: ${error.message}`, 'error');
         }
       }
 
       async function updateChannel() {
-        const name = document.getElementById('channel-name').value.trim();
-        const aliases = document.getElementById('channel-aliases').value.split(',').map(a => a.trim()).filter(a => a);
-        const youtube = document.getElementById('channel-youtube').value.trim();
-        const twitch = document.getElementById('channel-twitch').value.trim();
-        const riot = document.getElementById('channel-riot').value.trim();
+        const payload = readChannelForm();
 
-        if (!name) {
-          alert('请填写频道名称');
+        if (!payload.name) {
+          showNotification('请填写频道名称', 'error');
           return;
         }
 
-        const platforms = {};
-        if (youtube) platforms.youtube = youtube;
-        if (twitch) platforms.twitch = twitch;
-
-        // Validate that at least one platform is provided
-        if (Object.keys(platforms).length === 0) {
-          alert('请至少填写一个平台的频道ID（YouTube或Twitch）');
+        if (Object.keys(payload.platforms).length === 0) {
+          showNotification('请至少填写一个平台的频道ID（YouTube或Twitch）', 'error');
           return;
         }
 
@@ -2775,64 +2690,78 @@
           const response = await fetch('/api/manage/channels', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: name,
-              aliases: aliases,
-              platforms: platforms,
-              riot_puuid: riot || null
-            })
+            body: JSON.stringify(payload)
           });
 
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('频道更新成功');
+            showNotification('频道更新成功', 'success');
             clearChannelForm();
             loadChannels();
           } else {
-            alert(`更新失败: ${result.message}`);
+            showNotification(`更新失败: ${result.message}`, 'error');
           }
         } catch (error) {
-          alert(`更新失败: ${error.message}`);
+          showNotification(`更新失败: ${error.message}`, 'error');
         }
       }
 
-      function editChannel(channelName) {
-        // Load channel data into form for editing
-        fetch('/api/manage/channels')
-          .then(response => response.json())
-          .then(result => {
-            if (result.success) {
-              const channel = result.data.channels.find(c => c.name === channelName);
-              if (channel) {
-                document.getElementById('channel-name').value = channel.name;
-                document.getElementById('channel-aliases').value = channel.aliases.join(', ');
-                document.getElementById('channel-youtube').value = channel.platforms.youtube || '';
-                document.getElementById('channel-twitch').value = channel.platforms.twitch || '';
-                document.getElementById('channel-riot').value = channel.riot_puuid || '';
+      function readChannelForm() {
+        const youtube = document.getElementById('channel-youtube').value.trim();
+        const twitch = document.getElementById('channel-twitch').value.trim();
+        const platforms = {};
+        if (youtube) platforms.youtube = youtube;
+        if (twitch) platforms.twitch = twitch;
 
-                // Change form to edit mode
-                isEditingChannel = true;
-                document.getElementById('channel-form-title').textContent = '编辑频道';
-                document.getElementById('channel-submit-btn').textContent = '更新频道';
+        return {
+          name: document.getElementById('channel-name').value.trim(),
+          aliases: parseCommaSeparatedInput('channel-aliases'),
+          platforms,
+          riot_puuid: document.getElementById('channel-riot').value.trim() || null
+        };
+      }
 
-                // Scroll to form
-                document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
-              }
-            }
-          });
+      async function editChannel(channelName) {
+        try {
+          const response = await fetch('/api/manage/channels');
+          const result = await readManagementResponse(response);
+          if (!result.success) {
+            showNotification(`加载失败: ${result.message}`, 'error');
+            return;
+          }
+
+          const channel = result.data.channels.find(c => c.name === channelName);
+          if (!channel) {
+            showNotification('未找到频道配置', 'error');
+            return;
+          }
+
+          const platforms = channel.platforms || {};
+          setInputValue('channel-name', channel.name);
+          setInputValue('channel-aliases', (channel.aliases || []).join(', '));
+          setInputValue('channel-youtube', platforms.youtube || '');
+          setInputValue('channel-twitch', platforms.twitch || '');
+          setInputValue('channel-riot', channel.riot_puuid || '');
+
+          isEditingChannel = true;
+          setElementText('channel-form-title', '编辑频道');
+          setElementText('channel-submit-btn', '更新频道');
+          document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
+        } catch (error) {
+          showNotification(`加载失败: ${error.message}`, 'error');
+        }
       }
 
       function clearChannelForm() {
-        document.getElementById('channel-name').value = '';
-        document.getElementById('channel-aliases').value = '';
-        document.getElementById('channel-youtube').value = '';
-        document.getElementById('channel-twitch').value = '';
-        document.getElementById('channel-riot').value = '';
+        setInputValue('channel-name', '');
+        setInputValue('channel-aliases', '');
+        setInputValue('channel-youtube', '');
+        setInputValue('channel-twitch', '');
+        setInputValue('channel-riot', '');
 
-        // Reset form to add mode
         isEditingChannel = false;
-        document.getElementById('channel-form-title').textContent = '添加频道';
-        document.getElementById('channel-submit-btn').textContent = '添加频道';
+        setElementText('channel-form-title', '添加频道');
+        setElementText('channel-submit-btn', '添加频道');
       }
 
       function readHolodexAddChannelData(control) {
@@ -2940,95 +2869,81 @@
         }
       }
 
-      function editArea(areaId) {
-        // Load area data into form for editing
-        fetch('/api/manage/areas')
-          .then(response => response.json())
-          .then(result => {
-            if (result.success) {
-              const area = result.data.areas.find(a => a.id === areaId);
-              if (area) {
-                document.getElementById('area-id').value = area.id;
-                document.getElementById('area-name').value = area.name;
-                document.getElementById('area-keywords').value = area.title_keywords.join(', ');
-                document.getElementById('area-aliases').value = area.aliases.join(', ');
+      async function editArea(areaId) {
+        try {
+          const response = await fetch('/api/manage/areas');
+          const result = await readManagementResponse(response);
+          if (!result.success) {
+            showNotification(`加载失败: ${result.message}`, 'error');
+            return;
+          }
 
-                // Change form to edit mode
-                editingAreaId = areaId;
-                document.getElementById('area-form-title').textContent = '编辑分区';
-                document.getElementById('area-submit-btn').textContent = '更新分区';
+          const area = result.data.areas.find(item => item.id === areaId);
+          if (!area) {
+            showNotification('未找到分区配置', 'error');
+            return;
+          }
 
-                // Scroll to form
-                document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
-              }
-            }
-          });
+          setInputValue('area-id', area.id);
+          setInputValue('area-name', area.name);
+          setInputValue('area-keywords', (area.title_keywords || []).join(', '));
+          setInputValue('area-aliases', (area.aliases || []).join(', '));
+
+          editingAreaId = areaId;
+          setElementText('area-form-title', '编辑分区');
+          setElementText('area-submit-btn', '更新分区');
+          document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
+        } catch (error) {
+          showNotification(`加载失败: ${error.message}`, 'error');
+        }
       }
 
       function clearAreaForm() {
-        document.getElementById('area-id').value = '';
-        document.getElementById('area-name').value = '';
-        document.getElementById('area-keywords').value = '';
-        document.getElementById('area-aliases').value = '';
+        setInputValue('area-id', '');
+        setInputValue('area-name', '');
+        setInputValue('area-keywords', '');
+        setInputValue('area-aliases', '');
 
-        // Reset form to add mode
         editingAreaId = null;
-        document.getElementById('area-form-title').textContent = '添加新分区';
-        document.getElementById('area-submit-btn').textContent = '添加分区';
+        setElementText('area-form-title', '添加新分区');
+        setElementText('area-submit-btn', '添加分区');
       }
 
       async function updateArea(originalId) {
-        const id = parseInt(document.getElementById('area-id').value);
-        const name = document.getElementById('area-name').value.trim();
-        const keywords = document.getElementById('area-keywords').value.split(',').map(k => k.trim()).filter(k => k);
-        const aliases = document.getElementById('area-aliases').value.split(',').map(a => a.trim()).filter(a => a);
+        const area = readAreaForm();
 
-        if (!id || !name) {
-          alert('请填写分区ID和名称');
+        if (!area.id || !area.name) {
+          showNotification('请填写分区ID和名称', 'error');
           return;
         }
 
         try {
           // If ID changed, we need to delete the old one and add the new one
-          if (originalId !== id) {
+          if (originalId !== area.id) {
             // Delete old area
             const deleteResponse = await fetch(`/api/manage/areas/${originalId}`, {
               method: 'DELETE'
             });
 
-            if (!deleteResponse.ok) {
-              throw new Error(`删除原分区失败: ${deleteResponse.status}`);
+            const deleteResult = await readManagementResponse(deleteResponse);
+            if (!deleteResult.success) {
+              throw new Error(deleteResult.message || '删除原分区失败');
             }
 
             // Add new area with new ID
             const response = await fetch('/api/manage/areas', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                id: id,
-                name: name,
-                title_keywords: keywords,
-                aliases: aliases
-              })
+              body: JSON.stringify(area)
             });
 
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const contentType = response.headers.get('content-type');
-            if (!contentType || !contentType.includes('application/json')) {
-              const text = await response.text();
-              throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-            }
-
-            const result = await response.json();
+            const result = await readManagementResponse(response);
             if (result.success) {
-              alert('分区更新成功');
+              showNotification('分区更新成功', 'success');
               clearAreaForm();
               loadAreas();
             } else {
-              alert(`更新失败: ${result.message}`);
+              showNotification(`更新失败: ${result.message}`, 'error');
             }
             return;
           }
@@ -3037,35 +2952,20 @@
           const response = await fetch('/api/manage/areas', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: id,
-              name: name,
-              title_keywords: keywords,
-              aliases: aliases
-            })
+            body: JSON.stringify(area)
           });
 
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Expected JSON, got: ${contentType}. Response: ${text}`);
-          }
-
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('分区更新成功');
+            showNotification('分区更新成功', 'success');
             clearAreaForm();
             loadAreas();
           } else {
-            alert(`更新失败: ${result.message}`);
+            showNotification(`更新失败: ${result.message}`, 'error');
           }
         } catch (error) {
           console.error('Update area error:', error);
-          alert(`更新失败: ${error.message}`);
+          showNotification(`更新失败: ${error.message}`, 'error');
         }
       }
 
@@ -3080,15 +2980,15 @@
             method: 'DELETE'
           });
 
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('分区删除成功');
+            showNotification('分区删除成功', 'success');
             loadAreas();
           } else {
-            alert(`删除失败: ${result.message}`);
+            showNotification(`删除失败: ${result.message}`, 'error');
           }
         } catch (error) {
-          alert(`删除失败: ${error.message}`);
+          showNotification(`删除失败: ${error.message}`, 'error');
         }
       }
 
@@ -3102,15 +3002,15 @@
             method: 'DELETE'
           });
 
-          const result = await response.json();
+          const result = await readManagementResponse(response);
           if (result.success) {
-            alert('频道删除成功');
+            showNotification('频道删除成功', 'success');
             loadChannels();
           } else {
-            alert(`删除失败: ${result.message}`);
+            showNotification(`删除失败: ${result.message}`, 'error');
           }
         } catch (error) {
-          alert(`删除失败: ${error.message}`);
+          showNotification(`删除失败: ${error.message}`, 'error');
         }
       }
 
@@ -3572,9 +3472,11 @@
         quality.textContent = lastBiliNetworkQuality || 'Live';
         applyBiliStreamQualityColor(quality, lastBiliNetworkQuality);
 
-        document.getElementById('bili-network-push-rate').textContent = formatNetworkRate(bili.stream_bitrate_kbps);
-        document.getElementById('bili-network-push-speed-ratio').textContent = formatSpeedRatio(bili.stream_speed);
-        document.getElementById('bili-network-push-total').textContent = `Total ${formatBytes(bili.stream_total_bytes)}`;
+        updateBiliNetworkMeter('push', {
+          bitrateKbps: bili.stream_bitrate_kbps,
+          speed: bili.stream_speed,
+          totalBytes: bili.stream_total_bytes
+        });
         const pushFrame = document.getElementById('bili-network-push-frame');
         if (pushFrame) {
           pushFrame.textContent = `FPS ${formatFps(bili.stream_fps)} / Frame ${formatFrameCount(bili.stream_frame)}`;
@@ -3583,12 +3485,20 @@
         const cacheMeter = document.getElementById('bili-network-cache-meter');
         cacheMeter.style.display = hasCache ? '' : 'none';
         if (hasCache) {
-          document.getElementById('bili-network-cache-rate').textContent = formatNetworkRate(bili.stream_cache_bitrate_kbps);
-          document.getElementById('bili-network-cache-speed-ratio').textContent = formatSpeedRatio(bili.stream_cache_speed);
-          document.getElementById('bili-network-cache-total').textContent = `Total ${formatBytes(bili.stream_cache_total_bytes)}`;
+          updateBiliNetworkMeter('cache', {
+            bitrateKbps: bili.stream_cache_bitrate_kbps,
+            speed: bili.stream_cache_speed,
+            totalBytes: bili.stream_cache_total_bytes
+          });
         }
 
         renderBiliNetworkGraph(hasCache);
+      }
+
+      function updateBiliNetworkMeter(kind, metrics) {
+        setElementText(`bili-network-${kind}-rate`, formatNetworkRate(metrics.bitrateKbps));
+        setElementText(`bili-network-${kind}-speed-ratio`, formatSpeedRatio(metrics.speed));
+        setElementText(`bili-network-${kind}-total`, `Total ${formatBytes(metrics.totalBytes)}`);
       }
 
       async function refreshNetworkStatus() {
