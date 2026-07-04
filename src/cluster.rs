@@ -992,9 +992,7 @@ pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
 }
 
 pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
-    CLUSTER_STATE
-        .read()
-        .unwrap()
+    cluster_state_read()
         .last_known_active_toggles
         .as_ref()
         .filter(|toggles| monitor_toggles_any_enabled(toggles))
@@ -1002,9 +1000,7 @@ pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
 }
 
 pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
-    CLUSTER_STATE
-        .read()
-        .unwrap()
+    cluster_state_read()
         .last_known_active_channel_targets
         .as_ref()
         .filter(|targets| channel_targets_configured(targets))
@@ -1021,9 +1017,7 @@ async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
 }
 
 fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) -> bool {
-    if CLUSTER_STATE
-        .read()
-        .unwrap()
+    if cluster_state_read()
         .forced_owner
         .as_deref()
         .is_some_and(|owner| owner == cfg.cluster.node_id)
