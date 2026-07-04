@@ -93,6 +93,120 @@
         document
           .getElementById('refreshHolodexBtn')
           ?.addEventListener('click', refreshHolodexStreams);
+        document
+          .getElementById('bili-title-edit-btn')
+          ?.addEventListener('click', toggleTitleEdit);
+        document
+          .getElementById('bili-title-save-btn')
+          ?.addEventListener('click', saveTitleEdit);
+        document
+          .getElementById('bili-title-cancel-btn')
+          ?.addEventListener('click', cancelTitleEdit);
+        document
+          .getElementById('title-edit-input')
+          ?.addEventListener('keydown', handleTitleEditKeydown);
+        document
+          .getElementById('bili-area-edit-btn')
+          ?.addEventListener('click', toggleAreaEdit);
+        document
+          .getElementById('bili-area-save-btn')
+          ?.addEventListener('click', saveAreaEdit);
+        document
+          .getElementById('bili-area-cancel-btn')
+          ?.addEventListener('click', cancelAreaEdit);
+        document
+          .getElementById('bili-danmaku-command-toggle')
+          ?.addEventListener('change', toggleDanmakuCommand);
+        document
+          .getElementById('yt-channel-edit-btn')
+          ?.addEventListener('click', toggleYtChannelEdit);
+        document
+          .getElementById('yt-channel-save-btn')
+          ?.addEventListener('click', saveYtChannelEdit);
+        document
+          .getElementById('yt-channel-cancel-btn')
+          ?.addEventListener('click', cancelYtChannelEdit);
+        document
+          .getElementById('yt-area-edit-btn')
+          ?.addEventListener('click', toggleYtAreaEdit);
+        document
+          .getElementById('yt-area-save-btn')
+          ?.addEventListener('click', saveYtAreaEdit);
+        document
+          .getElementById('yt-area-cancel-btn')
+          ?.addEventListener('click', cancelYtAreaEdit);
+        document
+          .getElementById('yt-quality-edit-btn')
+          ?.addEventListener('click', toggleYtQualityEdit);
+        document
+          .getElementById('yt-quality-save-btn')
+          ?.addEventListener('click', saveYtQualityEdit);
+        document
+          .getElementById('yt-quality-cancel-btn')
+          ?.addEventListener('click', cancelYtQualityEdit);
+        document
+          .getElementById('yt-crop-edit-btn')
+          ?.addEventListener('click', () => openCropConfig('youtube'));
+        document
+          .getElementById('yt-crop-clear-btn')
+          ?.addEventListener('click', () => clearCropConfig('youtube'));
+        document
+          .getElementById('yt-hls-cache-edit-btn')
+          ?.addEventListener('click', toggleYtHlsCacheEdit);
+        document
+          .getElementById('yt-hls-cache-save-btn')
+          ?.addEventListener('click', saveYtHlsCacheEdit);
+        document
+          .getElementById('yt-hls-cache-cancel-btn')
+          ?.addEventListener('click', cancelYtHlsCacheEdit);
+        document
+          .getElementById('yt-hls-cache-enabled')
+          ?.addEventListener('change', event => setHlsCacheLatencyInputState('yt', event.currentTarget.checked));
+        document
+          .getElementById('tw-channel-edit-btn')
+          ?.addEventListener('click', toggleTwChannelEdit);
+        document
+          .getElementById('tw-channel-save-btn')
+          ?.addEventListener('click', saveTwChannelEdit);
+        document
+          .getElementById('tw-channel-cancel-btn')
+          ?.addEventListener('click', cancelTwChannelEdit);
+        document
+          .getElementById('tw-area-edit-btn')
+          ?.addEventListener('click', toggleTwAreaEdit);
+        document
+          .getElementById('tw-area-save-btn')
+          ?.addEventListener('click', saveTwAreaEdit);
+        document
+          .getElementById('tw-area-cancel-btn')
+          ?.addEventListener('click', cancelTwAreaEdit);
+        document
+          .getElementById('tw-quality-edit-btn')
+          ?.addEventListener('click', toggleTwQualityEdit);
+        document
+          .getElementById('tw-quality-save-btn')
+          ?.addEventListener('click', saveTwQualityEdit);
+        document
+          .getElementById('tw-quality-cancel-btn')
+          ?.addEventListener('click', cancelTwQualityEdit);
+        document
+          .getElementById('tw-crop-edit-btn')
+          ?.addEventListener('click', () => openCropConfig('twitch'));
+        document
+          .getElementById('tw-crop-clear-btn')
+          ?.addEventListener('click', () => clearCropConfig('twitch'));
+        document
+          .getElementById('tw-hls-cache-edit-btn')
+          ?.addEventListener('click', toggleTwHlsCacheEdit);
+        document
+          .getElementById('tw-hls-cache-save-btn')
+          ?.addEventListener('click', saveTwHlsCacheEdit);
+        document
+          .getElementById('tw-hls-cache-cancel-btn')
+          ?.addEventListener('click', cancelTwHlsCacheEdit);
+        document
+          .getElementById('tw-hls-cache-enabled')
+          ?.addEventListener('change', event => setHlsCacheLatencyInputState('tw', event.currentTarget.checked));
       }
 
       function initAntiCollisionControls() {
@@ -105,12 +219,16 @@
       }
 
       function initSystemSettingsActions() {
+        bindClickActivation('system-config-heading', toggleSystemConfig);
         document
           .getElementById('save-system-config-btn')
           ?.addEventListener('click', saveSystemConfig);
         document
           .getElementById('reload-system-config-btn')
           ?.addEventListener('click', loadSystemConfig);
+        document
+          .getElementById('config-lol-monitor-checkbox')
+          ?.addEventListener('change', toggleConfigRiotApiKey);
       }
 
       function initLogControls() {
@@ -148,7 +266,79 @@
           ?.addEventListener('click', closeAreaModal);
       }
 
+      function isElementHidden(element) {
+        return !element || getComputedStyle(element).display === 'none';
+      }
+
+      function bindClickActivation(elementId, handler) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+
+        element.setAttribute('role', 'button');
+        element.tabIndex = 0;
+        element.addEventListener('click', handler);
+        element.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handler();
+          }
+        });
+      }
+
+      let editingAreaId = null;
+      let isEditingChannel = false;
+
+      function submitAreaForm() {
+        if (editingAreaId !== null) {
+          return updateArea(editingAreaId);
+        }
+        return addArea();
+      }
+
+      function submitChannelForm() {
+        if (isEditingChannel) {
+          return updateChannel();
+        }
+        return addChannel();
+      }
+
+      function initManagementControls() {
+        bindClickActivation('management-heading', toggleManagement);
+        bindClickActivation('area-management-heading', toggleAreaManagement);
+        bindClickActivation('channel-management-heading', toggleChannelConfig);
+        bindClickActivation('areas-list-heading', toggleAreasList);
+        bindClickActivation('channels-list-heading', toggleChannelsList);
+        document
+          .getElementById('area-submit-btn')
+          ?.addEventListener('click', submitAreaForm);
+        document
+          .getElementById('area-clear-btn')
+          ?.addEventListener('click', clearAreaForm);
+        document
+          .getElementById('channel-submit-btn')
+          ?.addEventListener('click', submitChannelForm);
+        document
+          .getElementById('channel-clear-btn')
+          ?.addEventListener('click', clearChannelForm);
+        document
+          .getElementById('refreshAreasBtn')
+          ?.addEventListener('click', refreshAreas);
+        document
+          .getElementById('refreshChannelsBtn')
+          ?.addEventListener('click', refreshChannels);
+      }
+
       function initHolodexLoginModalControls() {
+        document
+          .getElementById('holodex-heading')
+          ?.addEventListener('click', toggleHolodex);
+        document
+          .getElementById('holodex-save-api-key-btn')
+          ?.addEventListener('click', saveHolodexApiKey);
+        document
+          .getElementById('holodex-test-api-key-btn')
+          ?.addEventListener('click', testHolodexApiKey);
+
         const modal = document.getElementById('holodex-login-modal');
         modal?.addEventListener('click', event => {
           if (event.target === modal) {
@@ -233,6 +423,7 @@
       initLogControls();
       initFooterUpdateControls();
       initAreaModalControls();
+      initManagementControls();
       initHolodexLoginModalControls();
       initFaceAuthModalControls();
 
@@ -336,7 +527,9 @@
       function toggleHolodex() {
         const container = document.getElementById('holodex-container');
         const toggle = document.getElementById('holodex-toggle');
-        if (container.style.display === 'none') {
+        if (!container || !toggle) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
           refreshHolodexStreams();
@@ -1337,7 +1530,9 @@
       function toggleSystemConfig() {
         const container = document.getElementById('system-config-container');
         const toggle = document.getElementById('system-config-toggle');
-        if (container.style.display === 'none') {
+        if (!container || !toggle) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
           loadSystemConfig();
@@ -1351,6 +1546,7 @@
         const checkbox = document.getElementById('config-lol-monitor-checkbox');
         const riotGroup = document.getElementById('config-riot-api-group');
         const intervalGroup = document.getElementById('config-lol-interval-group');
+        if (!checkbox || !riotGroup || !intervalGroup) return;
 
         if (checkbox.checked) {
           riotGroup.style.display = 'block';
@@ -1377,7 +1573,12 @@
         const latencyGroup = document.getElementById(`${platform}-hls-cache-latency-group`);
         const latencyInput = document.getElementById(`${platform}-hls-cache-latency`);
         if (latencyGroup) {
-          latencyGroup.style.display = enabled ? 'flex' : 'none';
+          if (latencyGroup.classList.contains('hls-cache-latency-group')) {
+            latencyGroup.classList.toggle('hidden', !enabled);
+            latencyGroup.style.display = '';
+          } else {
+            latencyGroup.style.display = enabled ? 'flex' : 'none';
+          }
         }
         if (latencyInput) {
           latencyInput.disabled = !enabled;
@@ -1403,10 +1604,6 @@
             document.getElementById('yt-hls-cache-latency').value = 8;
             setHlsCacheLatencyInputState('yt', false);
           });
-
-        document.getElementById('yt-hls-cache-enabled').onchange = () => {
-          setHlsCacheLatencyInputState('yt', document.getElementById('yt-hls-cache-enabled').checked);
-        };
       }
 
       function cancelYtHlsCacheEdit() {
@@ -1463,10 +1660,6 @@
             document.getElementById('tw-hls-cache-latency').value = 8;
             setHlsCacheLatencyInputState('tw', false);
           });
-
-        document.getElementById('tw-hls-cache-enabled').onchange = () => {
-          setHlsCacheLatencyInputState('tw', document.getElementById('tw-hls-cache-enabled').checked);
-        };
       }
 
       function cancelTwHlsCacheEdit() {
@@ -1598,6 +1791,7 @@
 
       async function toggleDanmakuCommand() {
         const toggle = document.getElementById('bili-danmaku-command-toggle');
+        if (!toggle) return;
         const enabled = toggle.checked;
 
         try {
@@ -1865,7 +2059,9 @@
       function toggleManagement() {
         const container = document.getElementById('management-container');
         const toggle = document.getElementById('management-toggle');
-        if (container.style.display === 'none') {
+        if (!container || !toggle) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
           // Don't auto-load since subsections are collapsed by default
@@ -1878,7 +2074,9 @@
       function toggleAreaManagement() {
         const container = document.getElementById('area-management-content');
         const toggle = document.getElementById('area-management-toggle');
-        if (container.style.display === 'none') {
+        if (!container || !toggle) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
         } else {
@@ -1890,7 +2088,9 @@
       function toggleChannelConfig() {
         const container = document.getElementById('channel-management-content');
         const toggle = document.getElementById('channel-management-toggle');
-        if (container.style.display === 'none') {
+        if (!container || !toggle) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
         } else {
@@ -1903,7 +2103,9 @@
         const container = document.getElementById('areas-content');
         const toggle = document.getElementById('areas-list-toggle');
         const refreshBtn = document.getElementById('refreshAreasBtn');
-        if (container.style.display === 'none') {
+        if (!container || !toggle || !refreshBtn) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
           refreshBtn.style.display = 'flex';
@@ -1921,7 +2123,9 @@
         const container = document.getElementById('channels-content');
         const toggle = document.getElementById('channels-list-toggle');
         const refreshBtn = document.getElementById('refreshChannelsBtn');
-        if (container.style.display === 'none') {
+        if (!container || !toggle || !refreshBtn) return;
+
+        if (isElementHidden(container)) {
           container.style.display = 'block';
           toggle.textContent = '▲';
           refreshBtn.style.display = 'flex';
@@ -2228,9 +2432,9 @@
                 document.getElementById('channel-riot').value = channel.riot_puuid || '';
 
                 // Change form to edit mode
+                isEditingChannel = true;
                 document.getElementById('channel-form-title').textContent = '编辑频道';
                 document.getElementById('channel-submit-btn').textContent = '更新频道';
-                document.getElementById('channel-submit-btn').onclick = () => updateChannel();
 
                 // Scroll to form
                 document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
@@ -2247,9 +2451,9 @@
         document.getElementById('channel-riot').value = '';
 
         // Reset form to add mode
+        isEditingChannel = false;
         document.getElementById('channel-form-title').textContent = '添加频道';
         document.getElementById('channel-submit-btn').textContent = '添加频道';
-        document.getElementById('channel-submit-btn').onclick = addChannel;
       }
 
       function readHolodexAddChannelData(control) {
@@ -2363,9 +2567,9 @@
                 document.getElementById('area-aliases').value = area.aliases.join(', ');
 
                 // Change form to edit mode
+                editingAreaId = areaId;
                 document.getElementById('area-form-title').textContent = '编辑分区';
                 document.getElementById('area-submit-btn').textContent = '更新分区';
-                document.getElementById('area-submit-btn').onclick = () => updateArea(areaId);
 
                 // Scroll to form
                 document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
@@ -2381,9 +2585,9 @@
         document.getElementById('area-aliases').value = '';
 
         // Reset form to add mode
+        editingAreaId = null;
         document.getElementById('area-form-title').textContent = '添加新分区';
         document.getElementById('area-submit-btn').textContent = '添加分区';
-        document.getElementById('area-submit-btn').onclick = addArea;
       }
 
       async function updateArea(originalId) {
@@ -3287,13 +3491,25 @@
 
       // Inline row edit helpers
       function showInfoRowEdit(valueEl, editContainer) {
-        valueEl.parentElement.style.display = 'none';
-        editContainer.style.display = 'flex';
+        valueEl.parentElement.classList.add('hidden');
+        valueEl.parentElement.style.display = '';
+        editContainer.classList.remove('hidden');
+        editContainer.style.display = '';
       }
 
       function hideInfoRowEdit(valueEl, editContainer) {
-        editContainer.style.display = 'none';
-        valueEl.parentElement.style.display = 'flex';
+        editContainer.classList.add('hidden');
+        editContainer.style.display = '';
+        valueEl.parentElement.classList.remove('hidden');
+        valueEl.parentElement.style.display = '';
+      }
+
+      function handleTitleEditKeydown(event) {
+        if (event.key === 'Enter') {
+          saveTitleEdit();
+        } else if (event.key === 'Escape') {
+          cancelTitleEdit();
+        }
       }
 
       // Inline title editing functions
@@ -3308,15 +3524,6 @@
         editInput.value = titleSpan.textContent === '-' ? '' : titleSpan.textContent;
         editInput.focus();
         editInput.select();
-
-        // Add keyboard event listener
-        editInput.onkeydown = function (event) {
-          if (event.key === 'Enter') {
-            saveTitleEdit();
-          } else if (event.key === 'Escape') {
-            cancelTitleEdit();
-          }
-        };
       }
 
       function cancelTitleEdit() {

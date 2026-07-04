@@ -386,11 +386,8 @@
           <div class="info-row">
             <span class="info-label">标题</span>
             <div class="info-row-view">
-              <span class="info-value" id="bili-title" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleTitleEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="编辑标题">
+              <span class="info-value info-value-right" id="bili-title">-</span>
+              <button id="bili-title-edit-btn" class="info-row-edit-btn" type="button" title="编辑标题" aria-label="编辑标题">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -398,16 +395,13 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit input -->
-            <div id="title-edit-container" style="display: none;">
+            <div id="title-edit-container" class="info-edit-container hidden">
               <div>
                 <input type="text" id="title-edit-input">
-                <button onclick="saveTitleEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="bili-title-save-btn" class="info-edit-save-btn" type="button" aria-label="保存标题">
                   ✓
                 </button>
-                <button onclick="cancelTitleEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="bili-title-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消标题编辑">
                   ✕
                 </button>
               </div>
@@ -416,11 +410,8 @@
           <div class="info-row">
             <span class="info-label">分区</span>
             <div class="info-row-view">
-              <span class="info-value" id="bili-area" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleAreaEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改分区">
+              <span class="info-value info-value-right" id="bili-area">-</span>
+              <button id="bili-area-edit-btn" class="info-row-edit-btn" type="button" title="更改分区" aria-label="更改分区">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -428,18 +419,15 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="area-edit-container" style="display: none;">
+            <div id="area-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
-                <button onclick="saveAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="bili-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存分区">
                   ✓
                 </button>
-                <button onclick="cancelAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="bili-area-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消分区编辑">
                   ✕
                 </button>
               </div>
@@ -447,10 +435,10 @@
           </div>
           <div class="info-row">
             <span class="info-label">弹幕指令</span>
-            <div class="info-row-view" style="justify-content: flex-end;">
-              <label class="toggle-label" style="margin: 0;">
+            <div class="info-row-view info-row-view-end">
+              <label class="toggle-label info-row-toggle-label">
                 <div class="toggle-switch">
-                  <input type="checkbox" id="bili-danmaku-command-toggle" onchange="toggleDanmakuCommand()">
+                  <input type="checkbox" id="bili-danmaku-command-toggle">
                   <span class="toggle-slider"></span>
                 </div>
               </label>
@@ -511,11 +499,8 @@
           <div class="info-row">
             <span class="info-label">频道</span>
             <div class="info-row-view">
-              <span class="info-value" id="yt-channel-name" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleYtChannelEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改频道">
+              <span class="info-value info-value-right" id="yt-channel-name">-</span>
+              <button id="yt-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道" aria-label="更改 YouTube 频道">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -523,18 +508,15 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="yt-channel-edit-container" style="display: none;">
+            <div id="yt-channel-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="yt-channel-edit-select">
                   <option value="">选择频道...</option>
                 </select>
-                <button onclick="saveYtChannelEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="yt-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 频道">
                   ✓
                 </button>
-                <button onclick="cancelYtChannelEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="yt-channel-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 YouTube 频道编辑">
                   ✕
                 </button>
               </div>
@@ -542,20 +524,17 @@
           </div>
           <div class="info-row" id="yt-title-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="yt-title" style="flex: 1; text-align: right;">-</span>
+            <span class="info-value info-value-right" id="yt-title">-</span>
           </div>
           <div class="info-row" id="yt-topic-row">
             <span class="info-label">分区</span>
-            <span class="info-value" id="yt-topic" style="text-align: right;">-</span>
+            <span class="info-value info-value-right" id="yt-topic">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">配置分区</span>
             <div class="info-row-view">
-              <span class="info-value" id="yt-area" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleYtAreaEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改配置分区">
+              <span class="info-value info-value-right" id="yt-area">-</span>
+              <button id="yt-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区" aria-label="更改 YouTube 配置分区">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -563,18 +542,15 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="yt-area-edit-container" style="display: none;">
+            <div id="yt-area-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="yt-area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
-                <button onclick="saveYtAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="yt-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 配置分区">
                   ✓
                 </button>
-                <button onclick="cancelYtAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="yt-area-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 YouTube 配置分区编辑">
                   ✕
                 </button>
               </div>
@@ -583,11 +559,8 @@
           <div class="info-row">
             <span class="info-label">画质</span>
             <div class="info-row-view">
-              <span class="info-value" id="yt-quality" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleYtQualityEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改画质">
+              <span class="info-value info-value-right" id="yt-quality">-</span>
+              <button id="yt-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质" aria-label="更改 YouTube 画质">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -595,17 +568,14 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="yt-quality-edit-container" style="display: none;">
+            <div id="yt-quality-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="yt-quality-edit-select">
                 </select>
-                <button onclick="saveYtQualityEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="yt-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 画质">
                   ✓
                 </button>
-                <button onclick="cancelYtQualityEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="yt-quality-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 YouTube 画质编辑">
                   ✕
                 </button>
               </div>
@@ -614,21 +584,15 @@
           <div class="info-row">
             <span class="info-label">裁剪</span>
             <div class="info-row-view">
-              <span class="info-value" id="yt-crop-status" style="flex: 1; text-align: right;">关闭</span>
-              <button onclick="openCropConfig('youtube')"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置裁剪">
+              <span class="info-value info-value-right" id="yt-crop-status">关闭</span>
+              <button id="yt-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪" aria-label="配置 YouTube 裁剪">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
                     d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
                 </svg>
               </button>
-              <button onclick="clearCropConfig('youtube')"
-                style="background: none; border: none; color: var(--accent-red); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="清除裁剪设置">
+              <button id="yt-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button" title="清除裁剪设置" aria-label="清除 YouTube 裁剪设置">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="3 6 5 6 21 6"></polyline>
@@ -640,11 +604,8 @@
           <div class="info-row">
             <span class="info-label">HLS缓存</span>
             <div class="info-row-view">
-              <span class="info-value" id="yt-hls-cache-status" style="flex: 1; text-align: right;">关闭</span>
-              <button onclick="toggleYtHlsCacheEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置 HLS 缓存">
+              <span class="info-value info-value-right" id="yt-hls-cache-status">关闭</span>
+              <button id="yt-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存" aria-label="配置 YouTube HLS 缓存">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -652,25 +613,22 @@
                 </svg>
               </button>
             </div>
-            <div id="yt-hls-cache-edit-container" style="display: none;">
+            <div id="yt-hls-cache-edit-container" class="info-edit-container hidden">
               <div>
-                <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
-                  <div class="toggle-switch" style="transform: scale(0.85);">
+                <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                  <div class="toggle-switch hls-cache-toggle-switch">
                     <input type="checkbox" id="yt-hls-cache-enabled">
                     <span class="toggle-slider"></span>
                   </div>
                 </label>
-                <span id="yt-hls-cache-latency-group" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
-                  <input type="number" id="yt-hls-cache-latency" min="1" max="60" placeholder="8"
-                    style="width: 48px; padding: 4px 6px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px; text-align: center;">
-                  <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                <span id="yt-hls-cache-latency-group" class="hls-cache-latency-group">
+                  <input type="number" id="yt-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60" placeholder="8">
+                  <span class="hls-cache-latency-unit">秒</span>
                 </span>
-                <button onclick="saveYtHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="yt-hls-cache-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube HLS 缓存">
                   ✓
                 </button>
-                <button onclick="cancelYtHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="yt-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 YouTube HLS 缓存编辑">
                   ✕
                 </button>
               </div>
@@ -704,11 +662,8 @@
           <div class="info-row">
             <span class="info-label">频道</span>
             <div class="info-row-view">
-              <span class="info-value" id="tw-channel-name" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleTwChannelEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改频道">
+              <span class="info-value info-value-right" id="tw-channel-name">-</span>
+              <button id="tw-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道" aria-label="更改 Twitch 频道">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -716,18 +671,15 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="tw-channel-edit-container" style="display: none;">
+            <div id="tw-channel-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="tw-channel-edit-select">
                   <option value="">选择频道...</option>
                 </select>
-                <button onclick="saveTwChannelEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="tw-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 频道">
                   ✓
                 </button>
-                <button onclick="cancelTwChannelEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="tw-channel-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 Twitch 频道编辑">
                   ✕
                 </button>
               </div>
@@ -735,20 +687,17 @@
           </div>
           <div class="info-row" id="tw-title-row">
             <span class="info-label">标题</span>
-            <span class="info-value" id="tw-title" style="flex: 1; text-align: right;">-</span>
+            <span class="info-value info-value-right" id="tw-title">-</span>
           </div>
           <div class="info-row" id="tw-game-row">
             <span class="info-label">游戏</span>
-            <span class="info-value" id="tw-game" style="text-align: right;">-</span>
+            <span class="info-value info-value-right" id="tw-game">-</span>
           </div>
           <div class="info-row">
             <span class="info-label">配置分区</span>
             <div class="info-row-view">
-              <span class="info-value" id="tw-area" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleTwAreaEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改配置分区">
+              <span class="info-value info-value-right" id="tw-area">-</span>
+              <button id="tw-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区" aria-label="更改 Twitch 配置分区">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -756,18 +705,15 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="tw-area-edit-container" style="display: none;">
+            <div id="tw-area-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="tw-area-edit-select">
                   <option value="">选择分区...</option>
                 </select>
-                <button onclick="saveTwAreaEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="tw-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 配置分区">
                   ✓
                 </button>
-                <button onclick="cancelTwAreaEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="tw-area-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 Twitch 配置分区编辑">
                   ✕
                 </button>
               </div>
@@ -776,11 +722,8 @@
           <div class="info-row">
             <span class="info-label">画质</span>
             <div class="info-row-view">
-              <span class="info-value" id="tw-quality" style="flex: 1; text-align: right;">-</span>
-              <button onclick="toggleTwQualityEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="更改画质">
+              <span class="info-value info-value-right" id="tw-quality">-</span>
+              <button id="tw-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质" aria-label="更改 Twitch 画质">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -788,17 +731,14 @@
                 </svg>
               </button>
             </div>
-            <!-- Hidden edit dropdown -->
-            <div id="tw-quality-edit-container" style="display: none;">
+            <div id="tw-quality-edit-container" class="info-edit-container hidden">
               <div>
                 <select id="tw-quality-edit-select">
                 </select>
-                <button onclick="saveTwQualityEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="tw-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 画质">
                   ✓
                 </button>
-                <button onclick="cancelTwQualityEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="tw-quality-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 Twitch 画质编辑">
                   ✕
                 </button>
               </div>
@@ -807,21 +747,15 @@
           <div class="info-row">
             <span class="info-label">裁剪</span>
             <div class="info-row-view">
-              <span class="info-value" id="tw-crop-status" style="flex: 1; text-align: right;">关闭</span>
-              <button onclick="openCropConfig('twitch')"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置裁剪">
+              <span class="info-value info-value-right" id="tw-crop-status">关闭</span>
+              <button id="tw-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪" aria-label="配置 Twitch 裁剪">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
                     d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
                 </svg>
               </button>
-              <button onclick="clearCropConfig('twitch')"
-                style="background: none; border: none; color: var(--accent-red); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="清除裁剪设置">
+              <button id="tw-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button" title="清除裁剪设置" aria-label="清除 Twitch 裁剪设置">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="3 6 5 6 21 6"></polyline>
@@ -833,11 +767,8 @@
           <div class="info-row">
             <span class="info-label">HLS缓存</span>
             <div class="info-row-view">
-              <span class="info-value" id="tw-hls-cache-status" style="flex: 1; text-align: right;">关闭</span>
-              <button onclick="toggleTwHlsCacheEdit()"
-                style="background: none; border: none; color: var(--heading-color); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; transition: background 0.2s;"
-                onmouseover="this.style.background='var(--button-hover-bg)'" onmouseout="this.style.background='none'"
-                title="配置 HLS 缓存">
+              <span class="info-value info-value-right" id="tw-hls-cache-status">关闭</span>
+              <button id="tw-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存" aria-label="配置 Twitch HLS 缓存">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round">
                   <path
@@ -845,25 +776,22 @@
                 </svg>
               </button>
             </div>
-            <div id="tw-hls-cache-edit-container" style="display: none;">
+            <div id="tw-hls-cache-edit-container" class="info-edit-container hidden">
               <div>
-                <label class="toggle-label" style="margin: 0; flex-shrink: 0;">
-                  <div class="toggle-switch" style="transform: scale(0.85);">
+                <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                  <div class="toggle-switch hls-cache-toggle-switch">
                     <input type="checkbox" id="tw-hls-cache-enabled">
                     <span class="toggle-slider"></span>
                   </div>
                 </label>
-                <span id="tw-hls-cache-latency-group" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
-                  <input type="number" id="tw-hls-cache-latency" min="1" max="60" placeholder="8"
-                    style="width: 48px; padding: 4px 6px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-bg); color: var(--text-primary); font-size: 13px; text-align: center;">
-                  <span style="font-size: 12px; color: var(--text-secondary);">秒</span>
+                <span id="tw-hls-cache-latency-group" class="hls-cache-latency-group">
+                  <input type="number" id="tw-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60" placeholder="8">
+                  <span class="hls-cache-latency-unit">秒</span>
                 </span>
-                <button onclick="saveTwHlsCacheEdit()"
-                  style="background: var(--accent-green); color: #1e1e2e;">
+                <button id="tw-hls-cache-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch HLS 缓存">
                   ✓
                 </button>
-                <button onclick="cancelTwHlsCacheEdit()"
-                  style="background: var(--accent-red); color: #1e1e2e;">
+                <button id="tw-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消 Twitch HLS 缓存编辑">
                   ✕
                 </button>
               </div>
@@ -872,10 +800,9 @@
         </div>
       </div>
 
-      <div class="controls" id="holodex-section" style="margin-top: 20px;">
-        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
-          onclick="toggleHolodex()">
-          <svg viewBox="0 0 24 24" focusable="false" style="width: 24px; height: 24px;">
+      <div class="controls holodex-section" id="holodex-section">
+        <h2 id="holodex-heading" class="holodex-heading">
+          <svg class="holodex-heading-logo" viewBox="0 0 24 24" focusable="false">
             <g>
               <path d="M4.5 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z"
                 fill="url(#holodex-a)">
@@ -898,35 +825,32 @@
           <span>Holodex 直播监控</span>
           <span id="holodex-toggle">▼</span>
         </h2>
-        <div id="holodex-container" style="display: none;">
+        <div id="holodex-container" class="holodex-container">
           <!-- API Key Configuration Section -->
-          <div id="holodex-api-config"
-            style="display: none; padding: 20px; background: var(--input-bg); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
-            <h3 style="color: var(--heading-color); margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+          <div id="holodex-api-config" class="holodex-api-config">
+            <h3 class="holodex-api-title">
               🔑 配置 Holodex API Key
             </h3>
-            <p style="color: var(--text-secondary); margin-bottom: 15px; line-height: 1.6;">
+            <p class="holodex-api-description">
               Holodex API 用于获取 YouTube 直播状态
             </p>
-            <div class="control-group" style="margin-bottom: 15px;">
-              <label style="color: var(--text-secondary); font-weight: 500;">API Key</label>
-              <input type="text" id="holodex-api-input" placeholder="输入你的 Holodex API Key"
-                style="width: 100%; padding: 12px; border: 2px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--input-bg); color: var(--text-primary);">
+            <div class="control-group holodex-api-field">
+              <label class="holodex-api-label">API Key</label>
+              <input type="text" id="holodex-api-input" class="holodex-api-input" placeholder="输入你的 Holodex API Key">
             </div>
-            <div
-              style="background: var(--card-bg); padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid var(--info-border);">
-              <h4 style="color: var(--text-primary); margin-bottom: 10px; font-size: 14px;">📋 如何获取 API Key:</h4>
-              <ol style="color: var(--text-secondary); font-size: 13px; line-height: 1.5; padding-left: 20px;">
+            <div class="holodex-api-help">
+              <h4>📋 如何获取 API Key:</h4>
+              <ol>
                 <li>访问 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
-                    style="color: var(--heading-color);">holodex.net/login</a></li>
+                    class="holodex-api-link">holodex.net/login</a></li>
                 <li>登录, 复制 API Key 至上方输入框</li>
               </ol>
             </div>
-            <div style="display: flex; gap: 10px;">
-              <button class="btn-success" onclick="saveHolodexApiKey()" style="flex: 1;">
+            <div class="holodex-api-actions">
+              <button id="holodex-save-api-key-btn" class="btn-success holodex-api-action" type="button">
                 💾 保存配置
               </button>
-              <button class="btn-secondary" onclick="testHolodexApiKey()" style="flex: 1;">
+              <button id="holodex-test-api-key-btn" class="btn-secondary holodex-api-action" type="button">
                 🧪 测试连接
               </button>
             </div>
@@ -940,7 +864,7 @@
               <div id="holodex-auth-bar" class="holodex-auth-bar">
                 <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn"
                   title="使用 Holodex 收藏夹">
-                  <span class="holodex-heart-icon" aria-hidden="true" style="display: none;">
+                  <span class="holodex-heart-icon" aria-hidden="true">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                       <path fill="currentColor"
                         d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z">
@@ -955,24 +879,21 @@
                     <span class="toggle-slider"></span>
                   </span>
                 </label>
-                <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期" style="display: none;">
+                <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期">
                   <span class="toggle-switch">
                     <input type="checkbox" id="holodex-skip-jwt-verify">
                     <span class="toggle-slider"></span>
                   </span>
                 </label>
               </div>
-              <button type="button" id="holodex-login-btn" class="btn-secondary"
-                style="display: none; padding: 8px 14px; font-size: 13px; align-items: center; gap: 6px; margin-left: auto;">
+              <button type="button" id="holodex-login-btn" class="btn-secondary holodex-login-btn">
                 🔐 收藏夹登录
               </button>
             </div>
-            <div id="holodex-status"
-              style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+            <div id="holodex-status" class="holodex-status">
               加载中...
             </div>
-            <div id="holodex-streams"
-              style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 15px; margin-bottom: 15px;">
+            <div id="holodex-streams" class="holodex-streams-grid">
               <!-- Streams will be populated here -->
             </div>
             <button id="refreshHolodexBtn" class="btn-primary holodex-refresh-btn" type="button">
@@ -989,204 +910,174 @@
       </div>
 
       <!-- Area and Channel Management Section -->
-      <div class="controls" style="margin-top: 20px;">
-        <h2 style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px;"
-          onclick="toggleManagement()">
+      <div class="controls management-section">
+        <h2 id="management-heading" class="management-heading">
           🗃️ 配置管理 <span id="management-toggle">▼</span>
         </h2>
-        <div id="management-container" style="display: none;">
+        <div id="management-container" class="management-container">
 
           <!-- Area Management -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary); margin-bottom: 15px; font-size: 1.2em; font-weight: 600; padding: 12px 0; border-bottom: 1px solid var(--card-border);"
-              onclick="toggleAreaManagement()">
-              <svg viewBox="0 0 24 24" focusable="false" style="width: 20px; height: 20px;">
+          <div class="management-group">
+            <h3 id="area-management-heading" class="management-subheading">
+              <svg class="management-subheading-icon" viewBox="0 0 24 24" focusable="false">
                 <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" fill="url(#area-gradient)" />
                 <defs>
                   <linearGradient id="area-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" style="stop-color:#f38ba8;stop-opacity:1" />
-                    <stop offset="100%" style="stop-color:#fab387;stop-opacity:1" />
+                    <stop offset="0%" stop-color="#f38ba8" stop-opacity="1" />
+                    <stop offset="100%" stop-color="#fab387" stop-opacity="1" />
                   </linearGradient>
                 </defs>
               </svg>
               分区管理 <span id="area-management-toggle">▼</span>
             </h3>
-            <div id="area-management-content" style="display: none;">
+            <div id="area-management-content" class="management-subcontent">
 
               <!-- Add Area Form -->
-              <div
-                style="background: var(--input-bg); padding: 20px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
-                <h4 id="area-form-title" style="margin-bottom: 15px; color: var(--text-primary);">添加新分区</h4>
+              <div class="management-form-card">
+                <h4 id="area-form-title" class="management-form-title">添加新分区</h4>
 
                 <!-- Bilibili API Hint -->
-                <div
-                  style="background: var(--input-bg); padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 3px solid var(--heading-color);">
-                  <small style="color: var(--text-secondary);">
+                <div class="management-hint">
+                  <small>
                     💡 B站分区ID可从
                     <a href="https://api.live.bilibili.com/room/v1/Area/getList" target="_blank"
-                      style="color: var(--heading-color); text-decoration: none; font-weight: 500;">
+                      class="management-hint-link">
                       B站直播分区API
                     </a>
                     获取，输入对应的分区ID和名称
                   </small>
                 </div>
 
-                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; margin-bottom: 15px;">
+                <div class="management-form-grid management-area-grid">
                   <div>
-                    <label
-                      style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区ID</label>
-                    <input type="number" id="area-id" placeholder=""
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <label class="management-field-label">分区ID</label>
+                    <input type="number" id="area-id" class="management-field-input" placeholder="">
                   </div>
                   <div>
-                    <label
-                      style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">分区名称</label>
-                    <input type="text" id="area-name" placeholder=""
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <label class="management-field-label">分区名称</label>
+                    <input type="text" id="area-name" class="management-field-input" placeholder="">
                   </div>
                 </div>
-                <div style="margin-bottom: 15px;">
-                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                <div class="management-field-group">
+                  <label class="management-field-label">
                     标题关键词 (用", "分隔)
-                    <small
-                      style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于自动检测直播分区，匹配YouTube分区/Twitch游戏或直播标题中的关键词</small>
+                    <small class="management-field-note">用于自动检测直播分区，匹配YouTube分区/Twitch游戏或直播标题中的关键词</small>
                   </label>
-                  <input type="text" id="area-keywords" placeholder="例: league of legends, lol, ろる"
-                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  <input type="text" id="area-keywords" class="management-field-input" placeholder="例: league of legends, lol, ろる">
                 </div>
-                <div style="margin-bottom: 15px;">
-                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                <div class="management-field-group">
+                  <label class="management-field-label">
                     别名 (用", "分隔)
-                    <small
-                      style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于弹幕指令识别，观众可以通过这些别名切换到此分区</small>
+                    <small class="management-field-note">用于弹幕指令识别，观众可以通过这些别名切换到此分区</small>
                   </label>
-                  <input type="text" id="area-aliases" placeholder="例: lol, 瓦"
-                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  <input type="text" id="area-aliases" class="management-field-input" placeholder="例: lol, 瓦">
                 </div>
-                <div style="display: flex; gap: 10px;">
-                  <button id="area-submit-btn" class="btn-primary" onclick="addArea()">添加分区</button>
-                  <button class="btn-secondary" onclick="clearAreaForm()">清空表单</button>
+                <div class="management-form-actions">
+                  <button id="area-submit-btn" class="btn-primary" type="button">添加分区</button>
+                  <button id="area-clear-btn" class="btn-secondary" type="button">清空表单</button>
                 </div>
               </div>
 
               <!-- Areas List -->
-              <div id="areas-list"
-                style="background: var(--input-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--card-border);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                  <h4
-                    style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary);"
-                    onclick="toggleAreasList()">
+              <div id="areas-list" class="management-list-panel">
+                <div class="management-list-header">
+                  <h4 id="areas-list-heading" class="management-list-heading">
                     现有分区 <span id="areas-list-toggle">▼</span>
                   </h4>
-                  <button id="refreshAreasBtn" onclick="refreshAreas()" title="刷新分区列表"
-                    style="display: none; padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; align-items: center; justify-content: center;">
+                  <button id="refreshAreasBtn" class="management-refresh-btn" type="button" title="刷新分区列表">
                     <svg id="refreshAreasIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                      xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                      xmlns="http://www.w3.org/2000/svg">
                       <path
                         d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
                     </svg>
                   </button>
                 </div>
-                <div id="areas-content" style="display: none;">加载中...</div>
+                <div id="areas-content" class="management-list-content">加载中...</div>
               </div>
             </div>
           </div>
 
           <!-- Channel Management -->
           <div>
-            <h3
-              style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary); margin-bottom: 15px; font-size: 1.2em; font-weight: 600; padding: 12px 0; border-bottom: 1px solid var(--card-border);"
-              onclick="toggleChannelConfig()">
-              <svg viewBox="0 0 24 24" focusable="false" style="width: 20px; height: 20px;">
+            <h3 id="channel-management-heading" class="management-subheading">
+              <svg class="management-subheading-icon" viewBox="0 0 24 24" focusable="false">
                 <path
                   d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h11c.55 0 1-.45 1-1z"
                   fill="url(#channel-gradient)" />
                 <defs>
                   <linearGradient id="channel-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" style="stop-color:#a6e3a1;stop-opacity:1" />
-                    <stop offset="100%" style="stop-color:#94e2d5;stop-opacity:1" />
+                    <stop offset="0%" stop-color="#a6e3a1" stop-opacity="1" />
+                    <stop offset="100%" stop-color="#94e2d5" stop-opacity="1" />
                   </linearGradient>
                 </defs>
               </svg>
               频道配置管理 <span id="channel-management-toggle">▼</span>
             </h3>
-            <div id="channel-management-content" style="display: none;">
+            <div id="channel-management-content" class="management-subcontent">
 
               <!-- Add Channel Form -->
-              <div
-                style="background: var(--input-bg); padding: 20px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--card-border);">
-                <h4 id="channel-form-title" style="margin-bottom: 15px; color: var(--text-primary);">添加频道</h4>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div class="management-form-card">
+                <h4 id="channel-form-title" class="management-form-title">添加频道</h4>
+                <div class="management-form-grid management-channel-grid">
                   <div>
-                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    <label class="management-field-label">
                       频道名称
-                      <small style="color: #888; font-weight: normal; display: block; margin-top: 2px;">将出现于转播标题</small>
+                      <small class="management-field-note">将出现于转播标题</small>
                     </label>
 
-                    <input type="text" id="channel-name" placeholder=""
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <input type="text" id="channel-name" class="management-field-input" placeholder="">
                   </div>
                   <div>
-                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    <label class="management-field-label">
                       别名 (用", "分隔)
-                      <small style="color: #888; font-weight: normal; display: block; margin-top: 2px;">用于弹幕指令识别</small>
+                      <small class="management-field-note">用于弹幕指令识别</small>
                     </label>
-                    <input type="text" id="channel-aliases" placeholder="例: 昵称1, 昵称2"
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <input type="text" id="channel-aliases" class="management-field-input" placeholder="例: 昵称1, 昵称2">
                   </div>
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                <div class="management-form-grid management-channel-grid">
                   <div>
-                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    <label class="management-field-label">
                       YouTube 频道ID (可选)
                     </label>
-                    <input type="text" id="channel-youtube" placeholder="UC开头的频道ID"
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <input type="text" id="channel-youtube" class="management-field-input" placeholder="UC开头的频道ID">
                   </div>
                   <div>
-                    <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">
+                    <label class="management-field-label">
                       Twitch 频道ID (可选)
                     </label>
-                    <input type="text" id="channel-twitch" placeholder="ID in Twitch url"
-                      style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                    <input type="text" id="channel-twitch" class="management-field-input" placeholder="ID in Twitch url">
                   </div>
                 </div>
-                <div style="margin-bottom: 15px;">
-                  <div
-                    style="background: var(--input-bg); padding: 10px; border-radius: 6px; margin-bottom: 10px; border-left: 3px solid var(--heading-color);">
-                    <small style="color: var(--text-secondary);">💡 至少填写一个平台的频道ID</small>
+                <div class="management-field-group">
+                  <div class="management-hint management-compact-hint">
+                    <small>💡 至少填写一个平台的频道ID</small>
                   </div>
-                  <label style="color: var(--text-primary); font-weight: 500; margin-bottom: 5px; display: block;">Riot
+                  <label class="management-field-label">Riot
                     PUUID (可选)</label>
-                  <input type="text" id="channel-riot" placeholder="英雄联盟PUUID"
-                    style="width: 100%; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px;">
+                  <input type="text" id="channel-riot" class="management-field-input" placeholder="英雄联盟PUUID">
                 </div>
-                <div style="display: flex; gap: 10px;">
-                  <button id="channel-submit-btn" class="btn-primary" onclick="addChannel()">添加频道</button>
-                  <button class="btn-secondary" onclick="clearChannelForm()">清空表单</button>
+                <div class="management-form-actions">
+                  <button id="channel-submit-btn" class="btn-primary" type="button">添加频道</button>
+                  <button id="channel-clear-btn" class="btn-secondary" type="button">清空表单</button>
                 </div>
               </div>
 
               <!-- Channels List -->
-              <div id="channels-list"
-                style="background: var(--input-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--card-border);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                  <h4
-                    style="cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; color: var(--text-primary);"
-                    onclick="toggleChannelsList()">
+              <div id="channels-list" class="management-list-panel">
+                <div class="management-list-header">
+                  <h4 id="channels-list-heading" class="management-list-heading">
                     现有频道 <span id="channels-list-toggle">▼</span>
                   </h4>
-                  <button id="refreshChannelsBtn" onclick="refreshChannels()" title="刷新频道列表"
-                    style="display: none; padding: 8px; background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%); color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; transition: all 0.3s ease; align-items: center; justify-content: center;">
+                  <button id="refreshChannelsBtn" class="management-refresh-btn" type="button" title="刷新频道列表">
                     <svg id="refreshChannelsIcon" fill="currentColor" width="16" height="16" viewBox="0 0 24 24"
-                      xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.6s ease;">
+                      xmlns="http://www.w3.org/2000/svg">
                       <path
                         d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
                     </svg>
                   </button>
                 </div>
-                <div id="channels-content" style="display: none;">加载中...</div>
+                <div id="channels-content" class="management-list-content">加载中...</div>
               </div>
             </div>
           </div>
@@ -1194,19 +1085,18 @@
       </div>
 
       <!-- System Configuration Section -->
-      <div class="controls" style="margin-top: 20px;">
-        <h2 style="cursor: pointer; user-select: none;" onclick="toggleSystemConfig()">
+      <div class="controls settings-card">
+        <h2 id="system-config-heading" class="settings-heading">
           ⚙️ 系统设置 <span id="system-config-toggle">▼</span>
         </h2>
-        <div id="system-config-container" style="display: none;">
+        <div id="system-config-container" class="system-config-container">
 
           <!-- Basic Settings Section -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+          <div class="settings-section">
+            <h3 class="settings-section-title">
               基础设置
             </h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 25px;">
+            <div class="settings-grid settings-grid-wide">
               <div class="control-group">
                 <label>检测间隔 (秒)</label>
                 <input type="number" id="config-interval" min="10" max="300" placeholder="30">
@@ -1233,37 +1123,36 @@
           </div>
 
           <!-- API Keys Section -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+          <div class="settings-section">
+            <h3 class="settings-section-title">
               API 密钥
             </h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 25px;">
+            <div class="settings-grid settings-grid-wide">
               <div class="control-group">
                 <label>Holodex API Key (可选)</label>
                 <input type="text" id="config-holodex-key" placeholder="用于 YouTube 直播状态检测">
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   获取: <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
-                    style="color: var(--accent-pink);">holodex.net</a>
+                    class="settings-help-link">holodex.net</a>
                 </small>
               </div>
               <div class="control-group">
-                <label class="toggle-label" style="margin-bottom: 15px;">
+                <label class="toggle-label settings-toggle-row">
                   <div class="toggle-switch">
-                    <input type="checkbox" id="config-lol-monitor-checkbox" onchange="toggleConfigRiotApiKey()">
+                    <input type="checkbox" id="config-lol-monitor-checkbox">
                     <span class="toggle-slider"></span>
                   </div>
                   <span>启用英雄联盟玩家ID监控</span>
                 </label>
-                <div id="config-riot-api-group" style="display: none;">
+                <div id="config-riot-api-group" class="settings-dependent-group">
                   <label>Riot API Key</label>
                   <input type="text" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
-                  <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                  <small class="settings-help-text">
                     获取: <a href="https://developer.riotgames.com/" target="_blank" rel="noopener noreferrer"
-                      style="color: var(--accent-pink);">developer.riotgames.com</a>
+                      class="settings-help-link">developer.riotgames.com</a>
                   </small>
                 </div>
-                <div id="config-lol-interval-group" style="display: none; margin-top: 15px;">
+                <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
                   <label>LoL 监控间隔 (分钟)</label>
                   <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
                 </div>
@@ -1272,12 +1161,11 @@
           </div>
 
           <!-- Platform Settings Section -->
-          <div style="margin-bottom: 30px;">
-            <h3
-              style="color: var(--text-primary); margin-bottom: 20px; font-size: 1.1em; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--card-border);">
+          <div class="settings-section">
+            <h3 class="settings-section-title">
               平台设置
             </h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 25px;">
+            <div class="settings-grid settings-grid-wide">
               <!-- YouTube Cookies Settings -->
               <div class="control-group">
                 <label>YouTube Cookies - 从浏览器导入</label>
@@ -1291,35 +1179,35 @@
                   <option value="opera">Opera</option>
                   <option value="vivaldi">Vivaldi</option>
                 </select>
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   用于访问会员专属或年龄限制内容
                 </small>
               </div>
               <div class="control-group">
                 <label>YouTube Cookies - 文件路径</label>
                 <input type="text" id="config-yt-cookies-file" placeholder="cookies.txt 文件路径 (可选)">
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   浏览器导入优先级高于文件路径
                 </small>
               </div>
               <div class="control-group">
                 <label>YouTube Deno 路径 (可选)</label>
                 <input type="text" id="config-yt-deno-path" placeholder="Windows默认路径可留空">
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   用于解决 YouTube n challenge 的 Deno 路径
                 </small>
               </div>
               <div class="control-group">
                 <label>YouTube 代理地址 (可选)</label>
                 <input type="text" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   YouTube 专用代理，留空则不使用代理<br>
                 </small>
               </div>
               <div class="control-group">
                 <label>Twitch 代理地址 (可选)</label>
                 <input type="text" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
-                <small style="color: var(--text-secondary); display: block; margin-top: 8px;">
+                <small class="settings-help-text">
                   Twitch 专用代理，留空则不使用代理<br>
                 </small>
               </div>

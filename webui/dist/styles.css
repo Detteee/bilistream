@@ -186,6 +186,48 @@
       min-width: 0;
     }
 
+    .info-row-view.hidden,
+    .info-row > [id$="-edit-container"].hidden {
+      display: none;
+    }
+
+    .info-row-view-end {
+      justify-content: flex-end;
+    }
+
+    .info-value-right {
+      flex: 1;
+      text-align: right;
+    }
+
+    .info-row-toggle-label {
+      margin: 0;
+    }
+
+    .info-row-edit-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      padding: 4px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--heading-color);
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .info-row-edit-btn:hover,
+    .info-row-edit-btn:focus-visible {
+      background: var(--button-hover-bg);
+      outline: none;
+    }
+
+    .info-row-danger-btn {
+      color: var(--accent-red);
+    }
+
     .info-row > [id$="-edit-container"] {
       width: 100%;
     }
@@ -230,9 +272,55 @@
       cursor: pointer;
     }
 
+    .info-edit-save-btn {
+      background: var(--accent-green);
+      color: #1e1e2e;
+    }
+
+    .info-edit-cancel-btn {
+      background: var(--accent-red);
+      color: #1e1e2e;
+    }
+
     .info-row > [id$="-hls-cache-edit-container"] > div {
       justify-content: flex-end;
       flex-wrap: nowrap;
+    }
+
+    .hls-cache-toggle-label {
+      flex-shrink: 0;
+    }
+
+    .hls-cache-toggle-switch {
+      margin-right: 0;
+      transform: scale(0.85);
+    }
+
+    .hls-cache-latency-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .hls-cache-latency-group.hidden {
+      display: none;
+    }
+
+    .hls-cache-latency-input {
+      width: 48px;
+      padding: 4px 6px;
+      border: 1px solid var(--input-border);
+      border-radius: 4px;
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .hls-cache-latency-unit {
+      color: var(--text-secondary);
+      font-size: 12px;
     }
 
     .card-header-actions {
@@ -508,6 +596,20 @@
       margin-bottom: 30px;
     }
 
+    .settings-card {
+      margin-top: 20px;
+    }
+
+    .settings-heading {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .system-config-container,
+    .settings-dependent-group {
+      display: none;
+    }
+
     .settings-section-title {
       color: var(--text-primary);
       margin-bottom: 20px;
@@ -538,6 +640,24 @@
       margin-top: 5px;
       color: var(--text-secondary);
       font-weight: 400;
+    }
+
+    .settings-help-text {
+      display: block;
+      margin-top: 8px;
+      color: var(--text-secondary);
+    }
+
+    .settings-help-link {
+      color: var(--accent-pink);
+    }
+
+    .settings-toggle-row {
+      margin-bottom: 15px;
+    }
+
+    .settings-dependent-spaced {
+      margin-top: 15px;
     }
 
     .settings-mono-textarea {
@@ -2035,8 +2155,121 @@
       color: var(--accent-foreground);
     }
 
+    .holodex-section {
+      margin-top: 20px;
+    }
+
+    .holodex-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .holodex-heading-logo {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .holodex-container {
+      display: none;
+    }
+
+    .holodex-api-config {
+      display: none;
+      padding: 20px;
+      margin-bottom: 15px;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: var(--input-bg);
+    }
+
+    .holodex-api-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--heading-color);
+      margin-bottom: 15px;
+    }
+
+    .holodex-api-description {
+      color: var(--text-secondary);
+      line-height: 1.6;
+      margin-bottom: 15px;
+    }
+
+    .holodex-api-field {
+      margin-bottom: 15px;
+    }
+
+    .holodex-api-label {
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .holodex-api-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid var(--input-border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    .holodex-api-help {
+      padding: 15px;
+      margin-bottom: 15px;
+      border: 1px solid var(--info-border);
+      border-radius: 6px;
+      background: var(--card-bg);
+    }
+
+    .holodex-api-help h4 {
+      color: var(--text-primary);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .holodex-api-help ol {
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.5;
+      padding-left: 20px;
+    }
+
+    .holodex-api-link {
+      color: var(--heading-color);
+    }
+
+    .holodex-api-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .holodex-api-action {
+      flex: 1;
+    }
+
     #holodex-streams {
       align-items: stretch;
+    }
+
+    .holodex-streams-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+
+    .holodex-status {
+      padding: 15px;
+      margin-bottom: 15px;
+      border-radius: 8px;
+      background: #f0f0f0;
+      text-align: center;
     }
 
     .holodex-stream-status {
@@ -2099,7 +2332,7 @@
     }
 
     .holodex-heart-icon {
-      display: inline-flex;
+      display: none;
       align-items: center;
       justify-content: center;
       color: #f38ba8;
@@ -2113,7 +2346,7 @@
     }
 
     .holodex-jwt-skip {
-      display: inline-flex;
+      display: none;
       align-items: center;
       gap: 8px;
       color: var(--text-secondary);
@@ -2136,6 +2369,184 @@
 
     .holodex-favorites-mode .toggle-switch {
       margin-right: 0;
+    }
+
+    .holodex-login-btn {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      padding: 8px 14px;
+      font-size: 13px;
+    }
+
+    .management-section {
+      margin-top: 20px;
+    }
+
+    .management-heading,
+    .management-subheading,
+    .management-list-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .management-subheading {
+      padding: 12px 0;
+      margin-bottom: 15px;
+      border-bottom: 1px solid var(--card-border);
+      color: var(--text-primary);
+      font-size: 1.2em;
+      font-weight: 600;
+    }
+
+    .management-subheading-icon {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .management-container,
+    .management-subcontent,
+    .management-list-content {
+      display: none;
+    }
+
+    .management-group {
+      margin-bottom: 30px;
+    }
+
+    .management-list-panel {
+      padding: 15px;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: var(--input-bg);
+    }
+
+    .management-list-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .management-list-heading {
+      color: var(--text-primary);
+    }
+
+    .management-refresh-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%);
+      color: #1e1e2e;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .management-refresh-btn svg {
+      transition: transform 0.6s ease;
+    }
+
+    .management-form-card {
+      padding: 20px;
+      margin-bottom: 15px;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: var(--input-bg);
+    }
+
+    .management-form-title {
+      margin-bottom: 15px;
+      color: var(--text-primary);
+    }
+
+    .management-hint {
+      padding: 12px;
+      margin-bottom: 15px;
+      border-left: 3px solid var(--heading-color);
+      border-radius: 6px;
+      background: var(--input-bg);
+    }
+
+    .management-hint small {
+      color: var(--text-secondary);
+    }
+
+    .management-hint-link {
+      color: var(--heading-color);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .management-form-grid {
+      display: grid;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+
+    .management-area-grid {
+      grid-template-columns: 1fr 2fr;
+    }
+
+    .management-channel-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .management-compact-hint {
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+
+    .management-field-group {
+      margin-bottom: 15px;
+    }
+
+    .management-field-label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .management-field-note {
+      display: block;
+      margin-top: 2px;
+      color: #888;
+      font-weight: 400;
+    }
+
+    .management-field-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      background: var(--card-bg);
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    .management-form-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    @media (max-width: 640px) {
+      .management-area-grid,
+      .management-channel-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .management-form-actions {
+        flex-direction: column;
+      }
     }
 
     .holodex-login-modal {
