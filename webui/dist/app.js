@@ -505,25 +505,21 @@
       // Load config and set up status refresh interval
       async function initStatusRefresh() {
         try {
-          const response = await fetch('/api/config');
-          if (response.ok) {
-            const config = await response.json();
+          const config = await getJson('/api/config');
 
-            // Store config globally and apply config-driven controls once.
-            mergeConfigData(config);
-            updateMonitorToggleStates(config);
-            updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
+          // Store config globally and apply config-driven controls once.
+          mergeConfigData(config);
+          updateMonitorToggleStates(config);
+          updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
+          const holodexApiKeyConfigured = !!config.holodex_api_key?.trim();
+          applyHolodexSectionVisibility(holodexApiKeyConfigured);
+          if (holodexApiKeyConfigured) {
+            loadHolodexAuthStatus();
+          }
 
-            const holodexApiKeyConfigured = !!config.holodex_api_key?.trim();
-            applyHolodexSectionVisibility(holodexApiKeyConfigured);
-            if (holodexApiKeyConfigured) {
-              loadHolodexAuthStatus();
-            }
-
-            if (config.interval) {
-              statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
-            }
+          if (config.interval) {
+            statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
           }
         } catch (error) {
           console.warn('Failed to load config, using default interval:', error);
@@ -634,8 +630,8 @@
         streamsDiv.replaceChildren();
 
         try {
-          const response = await fetch(`/api/holodex/streams?favorites=${holodexUseFavorites ? 'true' : 'false'}`);
-          const data = await response.json();
+          const favoritesParam = holodexUseFavorites ? 'true' : 'false';
+          const data = await getJson(`/api/holodex/streams?favorites=${favoritesParam}`);
 
           if (!data.success) {
             setHolodexStatus(statusDiv, `⚠️ ${data.message}`, 'holodex-status-warning');
@@ -1625,12 +1621,7 @@
         if (!toggle) return;
 
         try {
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ holodex_skip_jwt_verify: toggle.checked })
-          });
-          const data = await response.json();
+          const data = await postJsonApi('/api/config', { holodex_skip_jwt_verify: toggle.checked });
           if (data.success) {
             holodexAuthState.skip_jwt_verify = toggle.checked;
             showNotification(toggle.checked ? '已跳过 JWT 校验' : '已启用 JWT 校验', 'success');
@@ -1652,8 +1643,7 @@
 
       async function loadHolodexAuthStatus() {
         try {
-          const response = await fetch('/api/holodex/auth/status');
-          const data = await response.json();
+          const data = await getJson('/api/holodex/auth/status');
           if (!data.success) {
             holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
             holodexUseFavorites = false;
@@ -1695,12 +1685,7 @@
           return;
         }
         try {
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ holodex_jwt: jwt })
-          });
-          const data = await response.json();
+          const data = await postJsonApi('/api/config', { holodex_jwt: jwt });
           if (data.success) {
             showNotification('Holodex 登录已保存', 'success');
             jwtInput.value = '';
@@ -1719,12 +1704,7 @@
 
       async function logoutHolodexJwt() {
         try {
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ holodex_jwt: '' })
-          });
-          const data = await response.json();
+          const data = await postJsonApi('/api/config', { holodex_jwt: '' });
           if (data.success) {
             showNotification('已退出 Holodex 登录', 'success');
             holodexUseFavorites = false;
@@ -1752,15 +1732,7 @@
 
         try {
           // Save the API key to config
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              holodex_api_key: apiKey
-            })
-          });
-
-          const data = await response.json();
+          const data = await postJsonApi('/api/config', { holodex_api_key: apiKey });
           if (data.success) {
             showNotification('Holodex API Key 保存成功！', 'success');
             // Refresh the page to update the UI
@@ -1790,17 +1762,11 @@
       }
 
       function toggleSystemConfig() {
-        const container = document.getElementById('system-config-container');
-        const toggle = document.getElementById('system-config-toggle');
-        if (!container || !toggle) return;
+        const fold = toggleFold('system-config-container', 'system-config-toggle');
+        if (!fold) return;
 
-        if (isElementHidden(container)) {
-          container.style.display = 'block';
-          toggle.textContent = '▲';
+        if (fold.open) {
           loadSystemConfig();
-        } else {
-          container.style.display = 'none';
-          toggle.textContent = '▼';
         }
       }
 
@@ -1810,13 +1776,8 @@
         const intervalGroup = document.getElementById('config-lol-interval-group');
         if (!checkbox || !riotGroup || !intervalGroup) return;
 
-        if (checkbox.checked) {
-          riotGroup.style.display = 'block';
-          intervalGroup.style.display = 'block';
-        } else {
-          riotGroup.style.display = 'none';
-          intervalGroup.style.display = 'none';
-        }
+        setElementDisplay(riotGroup, checkbox.checked);
+        setElementDisplay(intervalGroup, checkbox.checked);
       }
 
       function toggleAntiCollisionList() {
@@ -2215,7 +2176,7 @@
       function readAntiCollisionEntryForm() {
         return {
           username: document.getElementById('anti-collision-username').value.trim(),
-          roomId: parseInt(document.getElementById('anti-collision-roomid').value, 10)
+          roomId: readIntegerInput('anti-collision-roomid', NaN)
         };
       }
 
@@ -4497,7 +4458,7 @@
           };
 
           if (areaId) {
-            channelPayload.area_id = parseInt(areaId);
+            channelPayload.area_id = parseInteger(areaId, 0);
 
             // Include Riot API Key if area is 86 and key is provided
             if (areaId === '86' && riotApiKey) {
@@ -4719,8 +4680,8 @@
 
         // Collect all configuration
         const config = {
-          room: parseInt(room),
-          interval: parseInt(document.getElementById('setup-interval').value) || 60,
+          room: parseInteger(room, 0),
+          interval: readIntegerInput('setup-interval', 60) || 60,
           auto_cover: document.getElementById('setup-auto-cover').checked,
           enable_danmaku_command: document.getElementById('setup-danmaku-command').checked,
           anti_collision: document.getElementById('setup-anti-collision').checked,
@@ -4728,14 +4689,14 @@
           // YouTube
           youtube_channel_name: document.getElementById('setup-yt-name').value || null,
           youtube_channel_id: document.getElementById('setup-yt-id').value || null,
-          youtube_area_v2: parseInt(document.getElementById('setup-yt-area').value) || null,
+          youtube_area_v2: readIntegerInput('setup-yt-area', 0) || null,
           youtube_quality: document.getElementById('setup-yt-quality').value || null,
           youtube_proxy: document.getElementById('setup-yt-proxy').value || null,
 
           // Twitch
           twitch_channel_name: document.getElementById('setup-tw-name').value || null,
           twitch_channel_id: document.getElementById('setup-tw-id').value || null,
-          twitch_area_v2: parseInt(document.getElementById('setup-tw-area').value) || null,
+          twitch_area_v2: readIntegerInput('setup-tw-area', 0) || null,
           twitch_proxy_region: document.getElementById('setup-tw-region').value || null,
           twitch_quality: document.getElementById('setup-tw-quality').value || null,
           twitch_proxy: document.getElementById('setup-tw-proxy').value || null,
@@ -5174,7 +5135,7 @@
         if (e.target.closest('.switch-button')) {
           const button = e.target.closest('.switch-button');
           const channelId = button.dataset.channelId;
-          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInt(button.dataset.suggestedAreaId) : null;
+          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null;
           const title = button.dataset.title;
           const topicId = button.dataset.topicId;
           const status = button.dataset.status;
@@ -5188,7 +5149,7 @@
         if (e.target.closest('.crop-switch-button')) {
           const button = e.target.closest('.crop-switch-button');
           const channelId = button.dataset.channelId;
-          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInt(button.dataset.suggestedAreaId) : null;
+          const suggestedAreaId = button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null;
           const title = button.dataset.title;
           const topicId = button.dataset.topicId;
           const status = button.dataset.status;
