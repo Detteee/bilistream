@@ -699,7 +699,7 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
 ) {
     let client = reqwest::Client::new();
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
-    let peers = cfg
+    let tasks = cfg
         .cluster
         .peers
         .iter()
@@ -709,9 +709,6 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
                 .map(|target| peer.node_id == target)
                 .unwrap_or(true)
         })
-        .collect::<Vec<_>>();
-    let tasks = peers
-        .into_iter()
         .map(|peer| post_cluster_control_to_peer(&client, cfg, peer, path, payload, timeout));
     join_all(tasks).await;
 }
