@@ -558,10 +558,10 @@ pub(crate) async fn apply_cluster_node_mode_locally(
     payload: ClusterApplyNodeModeRequest,
 ) -> Result<ClusterStatus, String> {
     let has_monitored_config = payload.monitored_config.is_some();
+    let active = payload.active;
+    let restart = payload.restart;
     let monitor_toggles = payload.monitor_toggles;
     let channel_targets = payload.channel_targets;
-    let monitor_toggles_for_cache = monitor_toggles.clone();
-    let channel_targets_for_cache = channel_targets.clone();
     if let Some(monitored_config) = payload.monitored_config {
         apply_monitored_config(monitored_config).await?;
     }
@@ -570,15 +570,15 @@ pub(crate) async fn apply_cluster_node_mode_locally(
     if let Some(channel_targets) = channel_targets.as_ref() {
         apply_channel_target_state_to_config(&mut cfg, channel_targets);
     }
-    if let Some(monitor_toggles) = monitor_toggles {
-        apply_monitor_toggle_state_to_config(&mut cfg, &monitor_toggles);
+    if let Some(monitor_toggles) = monitor_toggles.as_ref() {
+        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
     } else if !has_monitored_config {
-        cfg.enable_youtube_monitor = payload.active;
-        cfg.enable_twitch_monitor = payload.active;
-        cfg.youtube.enable_monitor = payload.active;
-        cfg.twitch.enable_monitor = payload.active;
-        cfg.priority_channel.enabled = payload.active;
-        cfg.bililive.enable_danmaku_command = payload.active;
+        cfg.enable_youtube_monitor = active;
+        cfg.enable_twitch_monitor = active;
+        cfg.youtube.enable_monitor = active;
+        cfg.twitch.enable_monitor = active;
+        cfg.priority_channel.enabled = active;
+        cfg.bililive.enable_danmaku_command = active;
     }
 
     crate::config::save_config(&cfg)
@@ -587,7 +587,7 @@ pub(crate) async fn apply_cluster_node_mode_locally(
 
     // Promoting to active clears drain/ddos locks. Demoting to standby only
     // clears draining so the node stays eligible; disabled state is /drain only.
-    if payload.active {
+    if active {
         crate::cluster::set_drain_state(&cfg, None, false, false);
     } else {
         let ddos = crate::cluster::local_ddos_state();
@@ -598,10 +598,10 @@ pub(crate) async fn apply_cluster_node_mode_locally(
     set_config_updated();
     refresh_status_cache_config().await;
 
-    if payload.active {
-        if let Some(monitor_toggles) = monitor_toggles_for_cache.as_ref() {
+    if active {
+        if let Some(monitor_toggles) = monitor_toggles.as_ref() {
             let cache_targets =
-                channel_targets_for_cache.unwrap_or_else(|| channel_target_state_from_config(&cfg));
+                channel_targets.unwrap_or_else(|| channel_target_state_from_config(&cfg));
             crate::cluster::cache_active_monitor_state_from_owner(
                 monitor_toggles,
                 Some(&cache_targets),
@@ -609,7 +609,7 @@ pub(crate) async fn apply_cluster_node_mode_locally(
         }
     }
 
-    if !payload.active || payload.restart {
+    if !active || restart {
         crate::plugins::set_manual_restart();
         crate::plugins::stop_ffmpeg().await;
     }
