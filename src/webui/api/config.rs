@@ -507,7 +507,7 @@ pub async fn update_priority_channel(
     set_config_updated();
 
     // Refresh status cache with updated configuration
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     // Refresh priority channel status in background (independent of main loop)
     tokio::spawn(async {

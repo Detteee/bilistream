@@ -585,7 +585,7 @@ pub async fn switch_to_holodex_stream(
         if twitch_monitor_reload_needed(&previous_cfg, &cfg) {
             set_config_updated();
         }
-        refresh_status_cache_config().await;
+        refresh_status_cache_config_from(&cfg);
 
         let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
             sync_monitored_config_after_change(&cfg).await
@@ -663,7 +663,7 @@ pub async fn switch_to_holodex_stream(
     if youtube_monitor_reload_needed(&previous_cfg, &cfg) {
         set_config_updated();
     }
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
         sync_monitored_config_after_change(&cfg).await

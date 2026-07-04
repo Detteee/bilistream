@@ -646,7 +646,7 @@ pub(crate) async fn apply_cluster_node_mode_locally(
 
     apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
     set_config_updated();
-    refresh_status_cache_config().await;
+    refresh_status_cache_config_from(&cfg);
 
     if active {
         if let Some(monitor_toggles) = monitor_toggles.as_ref() {
