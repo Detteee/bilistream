@@ -1,8 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
-use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
@@ -20,16 +19,6 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::plugins::{bili_stop_live, send_danmaku};
-
-// Aknowledgement: Isoheptane/bilibili-live-danmaku-cli
-lazy_static! {
-    static ref WBI_CACHE_DIR: PathBuf = {
-        let exe_path = std::env::current_exe().unwrap();
-        let mut path = exe_path;
-        path.pop(); // Go up one directory from the executable
-        path.join(".wbi_cache")
-    };
-}
 
 const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
 
@@ -53,6 +42,45 @@ const OP_AUTH_REPLY: u32 = 8;
 const PROTOVER_NORMAL: u8 = 1;
 #[allow(dead_code)]
 const PROTOVER_BROTLI: u8 = 3;
+
+fn executable_cache_dir() -> Option<PathBuf> {
+    let mut path = std::env::current_exe().ok()?;
+    if !path.pop() {
+        return None;
+    }
+    Some(path.join(".wbi_cache"))
+}
+
+fn wbi_cache_dir() -> PathBuf {
+    executable_cache_dir().unwrap_or_else(|| std::env::temp_dir().join("bilistream-wbi-cache"))
+}
+
+fn unix_time_secs(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn current_unix_time_secs() -> u64 {
+    unix_time_secs(SystemTime::now())
+}
+
+fn danmaku_packet_body_length(packet_length: u32, header_length: u16) -> Result<u32> {
+    if header_length as u32 != HEADER_LENGTH {
+        return Err(anyhow!(
+            "unsupported danmaku packet header length: {}",
+            header_length
+        ));
+    }
+    if packet_length < HEADER_LENGTH {
+        return Err(anyhow!(
+            "invalid danmaku packet length: packet={} header={}",
+            packet_length,
+            header_length
+        ));
+    }
+    Ok(packet_length - HEADER_LENGTH)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DanmakuConfig {
@@ -128,7 +156,7 @@ impl BilibiliDanmakuClient {
 
         // Start heartbeat task
         let mut heartbeat_interval = interval(Duration::from_secs(30));
-        let heartbeat_packet = self.create_heartbeat_packet();
+        let heartbeat_packet = Self::create_heartbeat_packet()?;
 
         // Track last activity for connection health monitoring
         let mut last_activity = Instant::now();
@@ -203,7 +231,7 @@ impl BilibiliDanmakuClient {
     }
 
     // WBI signature helper functions (same as in bilibili.rs)
-    fn gen_mixin_key(raw_wbi_key: &str) -> String {
+    fn gen_mixin_key(raw_wbi_key: &str) -> Result<String> {
         const MIXIN_KEY_ENC_TAB: [u8; 64] = [
             46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42,
             19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60,
@@ -211,12 +239,18 @@ impl BilibiliDanmakuClient {
         ];
 
         let raw_bytes = raw_wbi_key.as_bytes();
-        let mixin_key: String = MIXIN_KEY_ENC_TAB
-            .iter()
-            .take(32)
-            .map(|&n| raw_bytes[n as usize] as char)
-            .collect();
-        mixin_key
+        let mut mixin_key = String::with_capacity(32);
+        for &index in MIXIN_KEY_ENC_TAB.iter().take(32) {
+            let byte = raw_bytes.get(index as usize).ok_or_else(|| {
+                anyhow!(
+                    "invalid WBI key length: {} bytes, missing index {}",
+                    raw_bytes.len(),
+                    index
+                )
+            })?;
+            mixin_key.push(*byte as char);
+        }
+        Ok(mixin_key)
     }
 
     fn url_encode(s: &str) -> String {
@@ -240,23 +274,21 @@ impl BilibiliDanmakuClient {
     }
 
     async fn get_wbi_keys(&self) -> Result<(String, String)> {
+        let cache_dir = wbi_cache_dir();
         // Create cache directory if it doesn't exist
-        fs::create_dir_all(&*WBI_CACHE_DIR)?;
+        fs::create_dir_all(&cache_dir)?;
 
-        let img_key_path = WBI_CACHE_DIR.join("img_key");
-        let sub_key_path = WBI_CACHE_DIR.join("sub_key");
-        let timestamp_path = WBI_CACHE_DIR.join("timestamp");
+        let img_key_path = cache_dir.join("img_key");
+        let sub_key_path = cache_dir.join("sub_key");
+        let timestamp_path = cache_dir.join("timestamp");
 
         // Check if we have cached keys and if they're still valid
         if img_key_path.exists() && sub_key_path.exists() && timestamp_path.exists() {
             if let Ok(timestamp_str) = fs::read_to_string(&timestamp_path) {
                 if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                    let current_time = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
+                    let current_time = current_unix_time_secs();
 
-                    if current_time - timestamp < WBI_CACHE_DURATION {
+                    if current_time >= timestamp && current_time - timestamp < WBI_CACHE_DURATION {
                         // Cache is still valid, read the keys
                         if let (Ok(img_key), Ok(sub_key)) = (
                             fs::read_to_string(&img_key_path),
@@ -305,10 +337,7 @@ impl BilibiliDanmakuClient {
             .to_string();
 
         // Cache the keys
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let current_time = current_unix_time_secs();
 
         fs::write(&img_key_path, &img_key)?;
         fs::write(&sub_key_path, &sub_key)?;
@@ -324,13 +353,10 @@ impl BilibiliDanmakuClient {
         // info!("Getting WBI keys for signed request...");
         let (img_key, sub_key) = self.get_wbi_keys().await?;
         let raw_wbi_key = format!("{}{}", img_key, sub_key);
-        let mixin_key = Self::gen_mixin_key(&raw_wbi_key);
+        let mixin_key = Self::gen_mixin_key(&raw_wbi_key)?;
 
         // Get current timestamp
-        let wts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs()
-            .to_string();
+        let wts = current_unix_time_secs().to_string();
 
         // Build parameters for WBI signature
         let mut params = BTreeMap::new();
@@ -431,18 +457,23 @@ impl BilibiliDanmakuClient {
         });
 
         let body = serde_json::to_vec(&auth_data)?;
-        self.create_packet(OP_AUTH, &body)
+        Self::create_packet(OP_AUTH, &body)
     }
 
-    fn create_heartbeat_packet(&self) -> Vec<u8> {
-        self.create_packet(OP_HEARTBEAT, &[]).unwrap()
+    fn create_heartbeat_packet() -> Result<Vec<u8>> {
+        Self::create_packet(OP_HEARTBEAT, &[])
     }
 
-    fn create_packet(&self, operation: u32, body: &[u8]) -> Result<Vec<u8>> {
-        let mut packet = Vec::new();
+    fn create_packet(operation: u32, body: &[u8]) -> Result<Vec<u8>> {
+        let body_len =
+            u32::try_from(body.len()).map_err(|_| anyhow!("danmaku packet body too large"))?;
+        let packet_len = HEADER_LENGTH
+            .checked_add(body_len)
+            .ok_or_else(|| anyhow!("danmaku packet length overflow"))?;
+        let mut packet = Vec::with_capacity(packet_len as usize);
 
         // Packet length (header + body)
-        packet.write_u32::<BigEndian>(HEADER_LENGTH + body.len() as u32)?;
+        packet.write_u32::<BigEndian>(packet_len)?;
 
         // Header length
         packet.write_u16::<BigEndian>(HEADER_LENGTH as u16)?;
@@ -473,10 +504,18 @@ impl BilibiliDanmakuClient {
             let operation = cursor.read_u32::<BigEndian>()?;
             let _sequence = cursor.read_u32::<BigEndian>()?;
 
-            let body_length = packet_length - header_length as u32;
+            let body_length = danmaku_packet_body_length(packet_length, header_length)?;
 
             // Limit body size to prevent excessive memory allocation
             const MAX_BODY_SIZE: u32 = 10 * 1024 * 1024; // 10MB limit
+            let remaining = data.len() as u64 - cursor.position();
+            if body_length as u64 > remaining {
+                return Err(anyhow!(
+                    "truncated danmaku packet body: need {} bytes, have {}",
+                    body_length,
+                    remaining
+                ));
+            }
             if body_length > MAX_BODY_SIZE {
                 warn!("Skipping oversized packet: {} bytes", body_length);
                 cursor.set_position(cursor.position() + body_length as u64);
@@ -862,4 +901,57 @@ pub async fn run_native_danmaku_client(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_time_secs_returns_zero_before_epoch() {
+        assert_eq!(
+            unix_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1)),
+            0
+        );
+    }
+
+    #[test]
+    fn mixin_key_rejects_short_wbi_key() {
+        assert!(BilibiliDanmakuClient::gen_mixin_key("short").is_err());
+    }
+
+    #[test]
+    fn mixin_key_accepts_full_wbi_key() {
+        let key = BilibiliDanmakuClient::gen_mixin_key(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab",
+        )
+        .expect("64-byte WBI key should be accepted");
+
+        assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn heartbeat_packet_has_valid_header() {
+        let packet = BilibiliDanmakuClient::create_heartbeat_packet()
+            .expect("heartbeat packet should be created");
+        let mut cursor = Cursor::new(packet.as_slice());
+
+        assert_eq!(cursor.read_u32::<BigEndian>().unwrap(), HEADER_LENGTH);
+        assert_eq!(
+            cursor.read_u16::<BigEndian>().unwrap(),
+            HEADER_LENGTH as u16
+        );
+        assert_eq!(cursor.read_u16::<BigEndian>().unwrap(), PROTOCOL_COMMAND);
+        assert_eq!(cursor.read_u32::<BigEndian>().unwrap(), OP_HEARTBEAT);
+    }
+
+    #[test]
+    fn packet_body_length_rejects_malformed_header() {
+        assert!(danmaku_packet_body_length(HEADER_LENGTH, 12).is_err());
+        assert!(danmaku_packet_body_length(HEADER_LENGTH - 1, HEADER_LENGTH as u16).is_err());
+        assert_eq!(
+            danmaku_packet_body_length(HEADER_LENGTH + 8, HEADER_LENGTH as u16).unwrap(),
+            8
+        );
+    }
 }
