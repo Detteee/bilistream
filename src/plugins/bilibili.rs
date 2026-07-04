@@ -911,31 +911,30 @@ struct StatefulClient {
 }
 
 impl StatefulClient {
-    fn new(headers: reqwest::header::HeaderMap) -> Self {
+    fn new(headers: reqwest::header::HeaderMap) -> Result<Self, reqwest::Error> {
         let cookie_store = Arc::new(Jar::default());
         let client = reqwest::Client::builder()
             .cookie_provider(cookie_store.clone())
             .default_headers(headers)
-            .build()
-            .unwrap();
+            .build()?;
 
-        Self {
+        Ok(Self {
             client,
             cookie_store,
-        }
+        })
     }
 }
 
 pub struct Credential(StatefulClient);
 
 impl Credential {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, reqwest::Error> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "Referer",
             reqwest::header::HeaderValue::from_static("https://www.bilibili.com/"),
         );
-        Self(StatefulClient::new(headers))
+        StatefulClient::new(headers).map(Self)
     }
 
     pub async fn get_qrcode(&self) -> Result<Value, Box<dyn Error>> {
@@ -1078,7 +1077,7 @@ impl Credential {
 
 /// Get QR code for web-based login
 pub async fn get_login_qrcode() -> Result<(String, String), Box<dyn Error>> {
-    let credential = Credential::new();
+    let credential = Credential::new()?;
     let qrcode_res = credential.get_qrcode().await?;
 
     let qr_url = qrcode_res["data"]["url"]
@@ -1096,7 +1095,7 @@ pub async fn get_login_qrcode() -> Result<(String, String), Box<dyn Error>> {
 
 /// Poll login status for web-based login
 pub async fn poll_login_status(auth_code: &str) -> Result<String, Box<dyn Error>> {
-    let credential = Credential::new();
+    let credential = Credential::new()?;
 
     let mut form = json!({
         "appkey": "4409e2ce8ffd12b8",
@@ -1205,7 +1204,7 @@ async fn save_login_info(credential: &Credential, info: LoginInfo) -> Result<(),
 
 /// Login to Bilibili using QR code and save cookies
 pub async fn login() -> Result<(), Box<dyn Error>> {
-    let credential = Credential::new();
+    let credential = Credential::new()?;
 
     // Get QR code
     let qrcode_res = credential.get_qrcode().await?;
@@ -1281,7 +1280,7 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
 /// Renews the authentication tokens using the existing login info
 pub async fn renew() -> Result<(), Box<dyn Error>> {
     let cookies_path = cookies_path();
-    let credential = Credential::new();
+    let credential = Credential::new()?;
     let mut file = std::fs::File::options()
         .read(true)
         .write(true)
@@ -1394,5 +1393,10 @@ mod tests {
             wbi_cache_dir(Path::new("bilistream")),
             std::env::temp_dir().join("bilistream-wbi-cache")
         );
+    }
+
+    #[test]
+    fn credential_constructor_returns_result() {
+        assert!(Credential::new().is_ok());
     }
 }
