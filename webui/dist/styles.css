@@ -1360,7 +1360,14 @@
     }
 
     body.light-theme .bili-network-panel {
-      background: rgba(15, 23, 42, 0.07);
+      --info-border: #313244;
+      --text-primary: #cdd6f4;
+      --text-secondary: #bac2de;
+      --text-muted: #6c7086;
+      --network-graph-bg: transparent;
+      --network-graph-border: #313244;
+      --network-graph-guide: #313244;
+      background: rgba(49, 50, 68, 0.42);
     }
 
     .bili-network-header {
