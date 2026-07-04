@@ -810,11 +810,12 @@ pub fn start_cluster_worker() {
                 continue;
             }
 
-            let local = collect_local_snapshot(&cfg).await;
+            let config_version = monitored_config_version(&cfg);
+            let local = collect_local_snapshot(&cfg, config_version.clone()).await;
             let previous_owner = current_active_owner();
             update_node(local.clone(), &cfg.cluster.node_id);
             send_heartbeats(&client, &cfg, local).await;
-            let status = get_cluster_status_for_config(&cfg).await;
+            let status = compute_cluster_status_with_version(&cfg, config_version);
             handle_auto_owner_transition(&client, &cfg, previous_owner, &status).await;
             enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_toggles(&cfg, &status).await;
@@ -1378,9 +1379,10 @@ pub async fn get_cluster_status() -> Result<ClusterStatus, String> {
 }
 
 pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
-    let local = collect_local_snapshot(cfg).await;
+    let config_version = monitored_config_version(cfg);
+    let local = collect_local_snapshot(cfg, config_version.clone()).await;
     update_node(local, &cfg.cluster.node_id);
-    compute_cluster_status(cfg)
+    compute_cluster_status_with_version(cfg, config_version)
 }
 
 pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> bool {
@@ -1609,7 +1611,7 @@ fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, cfg: 
         })
 }
 
-async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
+async fn collect_local_snapshot(cfg: &Config, config_version: String) -> ClusterNodeSnapshot {
     let network = collect_network_status();
     let status = get_status_cache();
     let (
@@ -1714,7 +1716,7 @@ async fn collect_local_snapshot(cfg: &Config) -> ClusterNodeSnapshot {
         active_stream,
         status,
         network: Some(network),
-        config_version: monitored_config_version(cfg),
+        config_version,
         failed_restarts,
         monitor_toggles: monitor_toggle_state_from_config(cfg),
         channel_targets: channel_target_state_from_config(cfg),
@@ -1747,13 +1749,17 @@ fn collect_network_status() -> NetworkStatus {
 }
 
 fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
+    compute_cluster_status_with_version(cfg, monitored_config_version(cfg))
+}
+
+fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> ClusterStatus {
     if !cfg.cluster.enabled {
         return ClusterStatus {
             enabled: false,
             local_node_id: cfg.cluster.node_id.clone(),
             active_owner: None,
             lease_until: None,
-            config_version: monitored_config_version(cfg),
+            config_version,
             auto_failover: cfg.cluster.auto_failover,
             nodes: Vec::new(),
         };
@@ -1796,7 +1802,7 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
         local_node_id: cfg.cluster.node_id.clone(),
         active_owner: state.active_owner.clone(),
         lease_until: (state.lease_until > 0).then_some(state.lease_until),
-        config_version: monitored_config_version(cfg),
+        config_version,
         auto_failover: cfg.cluster.auto_failover,
         nodes,
     }
