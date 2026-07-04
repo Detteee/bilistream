@@ -583,7 +583,7 @@ fn apply_danmaku_command_runtime_state(enabled: bool) {
 }
 
 pub fn monitored_config_version(cfg: &Config) -> String {
-    monitored_config_version_from_payload(&monitored_config_from_config(cfg))
+    canonical_value_hash(&monitored_channel_target_value_from_config(cfg))
 }
 
 pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
@@ -628,6 +628,24 @@ fn monitored_channel_target_value(payload: &MonitoredConfig) -> serde_json::Valu
             "channel_name": payload.priority_channel.channel_name,
             "youtube_channel_id": payload.priority_channel.youtube_channel_id,
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
+        },
+    })
+}
+
+fn monitored_channel_target_value_from_config(cfg: &Config) -> serde_json::Value {
+    serde_json::json!({
+        "youtube": {
+            "channel_name": cfg.youtube.channel_name,
+            "channel_id": cfg.youtube.channel_id,
+        },
+        "twitch": {
+            "channel_name": cfg.twitch.channel_name,
+            "channel_id": cfg.twitch.channel_id,
+        },
+        "priority_channel": {
+            "channel_name": cfg.priority_channel.channel_name,
+            "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
+            "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
         },
     })
 }
@@ -2626,6 +2644,19 @@ mod tests {
         assert_eq!(
             monitored_config_version(&cfg_a),
             monitored_config_version(&cfg_b)
+        );
+    }
+
+    #[test]
+    fn monitored_config_version_matches_payload_target_hash() {
+        let mut cfg = test_config("a", 0);
+        cfg.priority_channel.channel_name = "priority".to_string();
+        cfg.priority_channel.youtube_channel_id = "priority-yt".to_string();
+        let payload = monitored_config_from_config(&cfg);
+
+        assert_eq!(
+            monitored_config_version(&cfg),
+            monitored_config_version_from_payload(&payload)
         );
     }
 
