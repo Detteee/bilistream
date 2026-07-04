@@ -68,6 +68,10 @@ fn normalized_api_key(key: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn area_label(area_id: u64) -> String {
+    get_area_name(area_id).unwrap_or_else(|| format!("未知分区(ID: {})", area_id))
+}
+
 #[derive(PartialEq)]
 enum CollisionResult {
     Continue,
@@ -670,7 +674,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
             if !bili_is_live && (area_v2 != 86 || !INVALID_ID_DETECTED.load(Ordering::SeqCst)) {
                 tracing::info!("B站未直播");
-                let area_name = get_area_name(area_v2);
+                let area_name = area_label(area_v2);
 
                 // Try to start live, but don't crash on error
                 match bili_start_live(&mut cfg, area_v2).await {
@@ -683,7 +687,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         tracing::info!(
                             "B站已开播，标题为 {}，分区为 {} （ID: {}）",
                             cfg_title,
-                            area_name.unwrap(),
+                            area_name,
                             area_v2
                         );
                         // Clear banned keyword warning when successfully starting a new stream
@@ -1261,11 +1265,10 @@ async fn get_live_status(
             let cfg = load_config().await?;
             let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
             if is_live {
-                let area_name = get_area_name(area_id);
                 println!(
                     "B站直播中, 标题: {}, 分区: {} （ID: {}）",
                     title,
-                    area_name.unwrap(),
+                    area_label(area_id),
                     area_id,
                 );
             } else {
@@ -1350,11 +1353,10 @@ async fn get_live_status(
             let cfg = load_config().await?;
             let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
             if is_live {
-                let area_name = get_area_name(area_id);
                 println!(
                     "B站直播中, 标题: {}, 分区: {} （ID: {}）",
                     title,
-                    area_name.unwrap(),
+                    area_label(area_id),
                     area_id,
                 );
             } else {
@@ -1594,17 +1596,13 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
 
 async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Error>> {
     if current_area != new_area {
-        let to_area_name = get_area_name(new_area);
-        let area_name = get_area_name(current_area);
-        if area_name.is_some() && to_area_name.is_some() {
-            tracing::info!(
-                "分区改变（{}->{})",
-                area_name.unwrap(),
-                to_area_name.unwrap()
-            );
-            let cfg = load_config().await?;
-            bili_update_area(&cfg, new_area).await?;
-        }
+        tracing::info!(
+            "分区改变（{}->{})",
+            area_label(current_area),
+            area_label(new_area)
+        );
+        let cfg = load_config().await?;
+        bili_update_area(&cfg, new_area).await?;
     }
     Ok(())
 }
@@ -2691,17 +2689,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if current_area != *area_id {
                     println!("直播间分区更新失败");
                 } else {
-                    let current_area_name = get_area_name(current_area);
-                    let area_name = get_area_name(*area_id);
-                    if current_area_name.is_some() && area_name.is_some() {
-                        println!(
-                            "直播间分区更新成功, {} -> {}",
-                            current_area_name.unwrap(),
-                            area_name.unwrap()
-                        );
-                    } else {
-                        println!("直播间分区更新成功, {} -> {}", current_area, area_id);
-                    }
+                    println!(
+                        "直播间分区更新成功, {} -> {}",
+                        area_label(current_area),
+                        area_label(*area_id)
+                    );
                 }
             } else {
                 println!("分区相同，无须更新");
@@ -3401,6 +3393,11 @@ mod tests {
         assert_eq!(normalized_api_key(Some("  key  ")).as_deref(), Some("key"));
         assert_eq!(normalized_api_key(Some("   ")), None);
         assert_eq!(normalized_api_key(None), None);
+    }
+
+    #[test]
+    fn area_label_falls_back_to_area_id() {
+        assert_eq!(area_label(u64::MAX), format!("未知分区(ID: {})", u64::MAX));
     }
 
     #[test]
