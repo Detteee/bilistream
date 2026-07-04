@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
-use std::io::{self, Seek};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -60,6 +60,26 @@ fn bilistream_path_from_env_or_executable() -> PathBuf {
 
 fn cookies_path() -> PathBuf {
     bilistream_path_from_env_or_executable().with_file_name("cookies.json")
+}
+
+fn atomic_json_tmp_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json")
+    ))
+}
+
+fn write_json_pretty_atomic<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), Box<dyn Error>> {
+    let json = serde_json::to_string_pretty(value)?;
+    let tmp_path = atomic_json_tmp_path(path);
+    fs::write(&tmp_path, json)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 fn unix_time_secs(time: SystemTime) -> u64 {
@@ -1195,9 +1215,8 @@ async fn save_login_info(credential: &Credential, info: LoginInfo) -> Result<(),
         "platform": "BiliTV"
     });
 
-    // Save to file
     let cookies_path = cookies_path();
-    fs::write(cookies_path, serde_json::to_string_pretty(&final_info)?)?;
+    write_json_pretty_atomic(&cookies_path, &final_info)?;
 
     Ok(())
 }
@@ -1269,9 +1288,8 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
         "platform": "BiliTV"
     });
 
-    // Save to file
     let cookies_path = cookies_path();
-    fs::write(cookies_path, serde_json::to_string_pretty(&final_info)?)?;
+    write_json_pretty_atomic(&cookies_path, &final_info)?;
     println!("登录成功! Cookies saved to cookies.json");
 
     Ok(())
@@ -1281,17 +1299,11 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
 pub async fn renew() -> Result<(), Box<dyn Error>> {
     let cookies_path = cookies_path();
     let credential = Credential::new()?;
-    let mut file = std::fs::File::options()
-        .read(true)
-        .write(true)
-        .open(&cookies_path)?;
+    let file = std::fs::File::open(&cookies_path)?;
 
-    let login_info: LoginInfo = serde_json::from_reader(&file)?;
+    let login_info: LoginInfo = serde_json::from_reader(file)?;
     let new_info = credential.renew_tokens(login_info).await?;
-
-    file.rewind()?;
-    file.set_len(0)?;
-    serde_json::to_writer_pretty(std::io::BufWriter::new(&file), &new_info)?;
+    write_json_pretty_atomic(&cookies_path, &new_info)?;
     // tracing::info!("{new_info:?}");
 
     Ok(())
@@ -1392,6 +1404,18 @@ mod tests {
         assert_eq!(
             wbi_cache_dir(Path::new("bilistream")),
             std::env::temp_dir().join("bilistream-wbi-cache")
+        );
+    }
+
+    #[test]
+    fn atomic_json_tmp_path_stays_next_to_target() {
+        assert_eq!(
+            atomic_json_tmp_path(Path::new("/opt/bilistream/cookies.json")),
+            PathBuf::from("/opt/bilistream/cookies.json.tmp")
+        );
+        assert_eq!(
+            atomic_json_tmp_path(Path::new("cookies")),
+            PathBuf::from("cookies.json.tmp")
         );
     }
 
