@@ -661,6 +661,14 @@ pub struct ToggleMonitorRequest {
     enabled: bool,
 }
 
+pub(crate) fn youtube_monitor_toggle_matches(cfg: &Config, enabled: bool) -> bool {
+    cfg.youtube.enable_monitor == enabled && cfg.enable_youtube_monitor == enabled
+}
+
+pub(crate) fn twitch_monitor_toggle_matches(cfg: &Config, enabled: bool) -> bool {
+    cfg.twitch.enable_monitor == enabled && cfg.enable_twitch_monitor == enabled
+}
+
 pub async fn toggle_youtube_monitor(
     Json(payload): Json<ToggleMonitorRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
@@ -668,7 +676,11 @@ pub async fn toggle_youtube_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if cfg.youtube.enable_monitor == payload.enabled {
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
+
+    if youtube_monitor_toggle_matches(&cfg, payload.enabled) {
         refresh_status_cache_config_from(&cfg);
         return Ok(ApiResponse {
             success: true,
@@ -678,10 +690,6 @@ pub async fn toggle_youtube_monitor(
                 if payload.enabled { "启用" } else { "禁用" }
             )),
         });
-    }
-
-    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
-        return Ok(monitor_toggle_enable_rejected_response());
     }
 
     cfg.youtube.enable_monitor = payload.enabled;
@@ -714,7 +722,11 @@ pub async fn toggle_twitch_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if cfg.twitch.enable_monitor == payload.enabled {
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
+
+    if twitch_monitor_toggle_matches(&cfg, payload.enabled) {
         refresh_status_cache_config_from(&cfg);
         return Ok(ApiResponse {
             success: true,
@@ -724,10 +736,6 @@ pub async fn toggle_twitch_monitor(
                 if payload.enabled { "启用" } else { "禁用" }
             )),
         });
-    }
-
-    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
-        return Ok(monitor_toggle_enable_rejected_response());
     }
 
     cfg.twitch.enable_monitor = payload.enabled;

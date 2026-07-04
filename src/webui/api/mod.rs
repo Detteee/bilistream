@@ -582,6 +582,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn monitor_toggle_match_requires_legacy_and_platform_flags() {
+        let mut cfg = status_cache_test_config();
+        cfg.youtube.enable_monitor = true;
+        cfg.enable_youtube_monitor = false;
+        cfg.twitch.enable_monitor = false;
+        cfg.enable_twitch_monitor = true;
+
+        assert!(!youtube_monitor_toggle_matches(&cfg, true));
+        assert!(!twitch_monitor_toggle_matches(&cfg, false));
+
+        cfg.enable_youtube_monitor = true;
+        cfg.enable_twitch_monitor = false;
+
+        assert!(youtube_monitor_toggle_matches(&cfg, true));
+        assert!(twitch_monitor_toggle_matches(&cfg, false));
+    }
+
     fn healthy_cluster_node(
         node_id: &str,
         monitor_toggles: MonitorToggleState,
