@@ -12,6 +12,7 @@ use chrono::{DateTime, Local};
 use regex::Regex;
 use std::error::Error;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 // Helper function to get yt-dlp command path
@@ -20,6 +21,38 @@ fn get_yt_dlp_command() -> String {
 }
 
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn scheduled_title_suffix_regex() -> Option<&'static Regex> {
+    static SCHEDULED_TITLE_SUFFIX_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    SCHEDULED_TITLE_SUFFIX_RE
+        .get_or_init(|| Regex::new(r"\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$").ok())
+        .as_ref()
+}
+
+fn strip_scheduled_title_suffix(line: &str) -> String {
+    let trimmed = line.trim();
+    match scheduled_title_suffix_regex() {
+        Some(regex) => regex.replace(trimmed, "").trim().to_string(),
+        None => trimmed.to_string(),
+    }
+}
+
+fn optional_channel_name_for_holodex<E: std::fmt::Display>(
+    lookup: Result<Option<String>, E>,
+    channel_id: &str,
+) -> Option<String> {
+    match lookup {
+        Ok(channel_name) => channel_name,
+        Err(e) => {
+            tracing::debug!(
+                "Unable to resolve YouTube channel name for {}: {}",
+                channel_id,
+                e
+            );
+            None
+        }
+    }
+}
 
 pub struct Youtube {
     pub channel_name: String,
@@ -325,7 +358,8 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
     let proxy = cfg.youtube.proxy.clone();
     let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
-    let channel_name = get_channel_name("YT", channel_id).unwrap();
+    let channel_name =
+        optional_channel_name_for_holodex(get_channel_name("YT", channel_id), channel_id);
 
     // Helper function to get title using yt-dlp
     let get_title_with_ytdlp = || -> Result<Option<String>, Box<dyn Error>> {
@@ -351,10 +385,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                     && !line.starts_with("ERROR")
             })
             .last()
-            .map(|line| {
-                let re = regex::Regex::new(r"\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$").unwrap();
-                re.replace(line, "").trim().to_string()
-            })
+            .map(strip_scheduled_title_suffix)
             .filter(|s| !s.is_empty());
 
         Ok(title)
@@ -374,4 +405,41 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 
     // Fallback to yt-dlp
     get_title_with_ytdlp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_scheduled_title_suffix_removes_yt_dlp_date_suffix() {
+        assert_eq!(
+            strip_scheduled_title_suffix("Stream Title 2026-07-04 20:30"),
+            "Stream Title"
+        );
+    }
+
+    #[test]
+    fn strip_scheduled_title_suffix_preserves_normal_title() {
+        assert_eq!(
+            strip_scheduled_title_suffix("Stream Title 20:30"),
+            "Stream Title 20:30"
+        );
+    }
+
+    #[test]
+    fn optional_channel_name_for_holodex_drops_lookup_errors() {
+        let result: Option<String> =
+            optional_channel_name_for_holodex(Err("channels unavailable"), "channel-id");
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn optional_channel_name_for_holodex_preserves_lookup_value() {
+        let result =
+            optional_channel_name_for_holodex(Ok::<_, &str>(Some("Channel".to_string())), "id");
+
+        assert_eq!(result.as_deref(), Some("Channel"));
+    }
 }
