@@ -1370,7 +1370,7 @@
 
       async function confirmAreaSelection() {
         const select = document.getElementById('modal-area-select');
-        const areaId = parseInt(select.value);
+        const areaId = parseInteger(select.value, 0);
 
         if (!areaId) {
           showNotification('请选择分区', 'error');
@@ -1877,7 +1877,7 @@
         const fields = hlsCacheDom(prefix);
         return {
           enabled: !!fields.enabled?.checked,
-          latencySecs: Math.min(60, Math.max(1, parseInt(fields.latency?.value) || 8))
+          latencySecs: Math.min(60, Math.max(1, parseInteger(fields.latency?.value, 8)))
         };
       }
 
@@ -2269,14 +2269,14 @@
 
       function getCurrentConfig() {
         return {
-          interval: parseInt(document.getElementById('config-interval').value) || 30,
+          interval: readIntegerInput('config-interval', 30),
           auto_cover: document.getElementById('config-auto-cover-checkbox').checked,
           enable_danmaku_command: document.getElementById('config-danmaku-command-checkbox').checked,
           enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
           holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
           riot_api_key: document.getElementById('config-riot-key').value.trim(),
           enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
-          lol_monitor_interval: parseInt(document.getElementById('config-lol-interval').value) || 1,
+          lol_monitor_interval: readIntegerInput('config-lol-interval', 1),
           youtube_proxy: document.getElementById('config-yt-proxy').value.trim(),
           twitch_proxy: document.getElementById('config-tw-proxy').value.trim(),
           twitch_proxy_region: document.getElementById('config-tw-region').value,
@@ -2550,11 +2550,20 @@
 
       function readAreaForm() {
         return {
-          id: parseInt(document.getElementById('area-id').value, 10),
+          id: readIntegerInput('area-id', 0),
           name: document.getElementById('area-name').value.trim(),
           title_keywords: parseCommaSeparatedInput('area-keywords'),
           aliases: parseCommaSeparatedInput('area-aliases')
         };
+      }
+
+      function parseInteger(value, fallback = 0) {
+        const parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      }
+
+      function readIntegerInput(id, fallback = 0) {
+        return parseInteger(document.getElementById(id).value, fallback);
       }
 
       function setInputValue(id, value) {
@@ -3884,7 +3893,7 @@
 
       async function saveYtAreaEdit() {
         const editSelect = document.getElementById('yt-area-edit-select');
-        const areaId = parseInt(editSelect.value);
+        const areaId = parseInteger(editSelect.value, 0);
 
         if (!areaId) {
           showNotification('请选择分区', 'error');
@@ -4127,7 +4136,7 @@
 
       async function saveTwAreaEdit() {
         const editSelect = document.getElementById('tw-area-edit-select');
-        const areaId = parseInt(editSelect.value);
+        const areaId = parseInteger(editSelect.value, 0);
 
         if (!areaId) {
           showNotification('请选择分区', 'error');
@@ -4191,7 +4200,7 @@
 
       async function saveAreaEdit() {
         const editSelect = document.getElementById('area-edit-select');
-        const areaId = parseInt(editSelect.value);
+        const areaId = parseInteger(editSelect.value, 0);
 
         if (!areaId) {
           showNotification('请选择分区', 'error');
