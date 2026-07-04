@@ -4723,6 +4723,7 @@
       function setSetupPageVisible(visible) {
         document.getElementById('setup-page')?.classList.toggle('active', visible);
         document.getElementById('main-page')?.classList.toggle('hidden', visible);
+        document.documentElement.classList.add('app-ready');
       }
 
       async function checkSetupStatus() {
