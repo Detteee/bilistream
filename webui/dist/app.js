@@ -257,6 +257,71 @@
           ?.addEventListener('click', autoInstallUpdate);
       }
 
+      function initThemeControls() {
+        document
+          .getElementById('theme-toggle')
+          ?.addEventListener('click', toggleTheme);
+      }
+
+      function initSetupControls() {
+        document
+          .getElementById('show-qr-btn')
+          ?.addEventListener('click', showQrCode);
+        document
+          .getElementById('check-login-status-btn')
+          ?.addEventListener('click', checkLoginStatus);
+        document
+          .getElementById('setup-step-1-next-btn')
+          ?.addEventListener('click', () => goToStep(2));
+        document
+          .getElementById('setup-step-2-prev-btn')
+          ?.addEventListener('click', () => goToStep(1));
+        document
+          .getElementById('setup-step-2-next-btn')
+          ?.addEventListener('click', () => goToStep(3));
+        document
+          .getElementById('setup-step-3-prev-btn')
+          ?.addEventListener('click', () => goToStep(2));
+        document
+          .getElementById('setup-save-btn')
+          ?.addEventListener('click', saveSetupConfig);
+        document
+          .getElementById('setup-yt-channel-select')
+          ?.addEventListener('change', updateSetupYouTubeChannel);
+        document
+          .getElementById('setup-tw-channel-select')
+          ?.addEventListener('change', updateSetupTwitchChannel);
+        document
+          .getElementById('setup-lol-monitor')
+          ?.addEventListener('change', toggleRiotApiKey);
+      }
+
+      function initCropModalControls() {
+        document
+          .getElementById('cropPlatform')
+          ?.addEventListener('change', loadCurrentCropSettings);
+        document
+          .getElementById('cropImageUpload')
+          ?.addEventListener('change', loadCropImage);
+        document
+          .querySelectorAll('[data-crop-ratio]')
+          .forEach(button => {
+            button.addEventListener('click', () => selectAspectRatio(button.dataset.cropRatio));
+          });
+        document
+          .getElementById('crop-disable-btn')
+          ?.addEventListener('click', disableCrop);
+        document
+          .getElementById('crop-apply-restart-btn')
+          ?.addEventListener('click', applyCropAndRestart);
+        document
+          .getElementById('crop-apply-btn')
+          ?.addEventListener('click', applyCrop);
+        document
+          .getElementById('crop-close-btn')
+          ?.addEventListener('click', closeCropModal);
+      }
+
       function initAreaModalControls() {
         document
           .getElementById('confirm-area-selection-btn')
@@ -422,6 +487,9 @@
       initSystemSettingsActions();
       initLogControls();
       initFooterUpdateControls();
+      initThemeControls();
+      initSetupControls();
+      initCropModalControls();
       initAreaModalControls();
       initManagementControls();
       initHolodexLoginModalControls();
@@ -1178,7 +1246,7 @@
               cropCtx = cropCanvas.getContext('2d');
 
               // Show container FIRST so canvas has dimensions
-              document.getElementById('cropCanvasContainer').style.display = 'block';
+              showCropCanvasContainer();
 
               // Set canvas size to image size
               cropCanvas.width = cropImage.width;
@@ -3183,11 +3251,11 @@
           || Number.isFinite(bili.stream_frame);
         const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
         if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
-          panel.style.display = 'none';
+          panel.classList.add('hidden');
           return;
         }
 
-        panel.style.display = '';
+        panel.classList.remove('hidden');
         pushBiliNetworkSample(biliNetworkHistory.push, bili.stream_bitrate_kbps);
         pushBiliNetworkSample(biliNetworkHistory.cache, hasCache ? bili.stream_cache_bitrate_kbps : 0);
 
@@ -4417,13 +4485,13 @@
       function goToStep(step) {
         // Hide all steps
         for (let i = 1; i <= 3; i++) {
-          document.getElementById(`setup-step-${i}`).style.display = 'none';
-          document.getElementById(`step-dot-${i}`).classList.remove('active');
+          document.getElementById(`setup-step-${i}`)?.classList.add('hidden');
+          document.getElementById(`step-dot-${i}`)?.classList.remove('active');
         }
 
         // Show target step
-        document.getElementById(`setup-step-${step}`).style.display = 'block';
-        document.getElementById(`step-dot-${step}`).classList.add('active');
+        document.getElementById(`setup-step-${step}`)?.classList.remove('hidden');
+        document.getElementById(`step-dot-${step}`)?.classList.add('active');
         currentStep = step;
 
         // Reload channels and areas when entering step 3
@@ -4436,7 +4504,9 @@
       function toggleRiotApiKey() {
         const checkbox = document.getElementById('setup-lol-monitor');
         const group = document.getElementById('riot-api-group');
-        group.style.display = checkbox.checked ? 'block' : 'none';
+        if (!checkbox || !group) return;
+
+        group.classList.toggle('hidden', !checkbox.checked);
       }
 
       async function checkLoginStatus() {
@@ -4486,12 +4556,11 @@
           // Create QR code using QR Server API
           const qrImg = document.createElement('img');
           qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qr_url)}`;
-          qrImg.style.width = '200px';
-          qrImg.style.height = '200px';
+          qrImg.className = 'setup-qr-image';
           qrContainer.appendChild(qrImg);
 
           // Show QR code container
-          document.getElementById('qr-code-container').style.display = 'block';
+          document.getElementById('qr-code-container')?.classList.remove('hidden');
           document.getElementById('show-qr-btn').textContent = '🔄 刷新二维码';
 
           // Start polling for login status
@@ -4530,7 +4599,7 @@
                 clearInterval(loginPollInterval);
                 loginPollInterval = null;
                 showNotification('登录成功！', 'success');
-                document.getElementById('qr-code-container').style.display = 'none';
+                document.getElementById('qr-code-container')?.classList.add('hidden');
                 await checkLoginStatus();
               } else if (status === 'expired') {
                 clearInterval(loginPollInterval);
@@ -4990,6 +5059,7 @@
       function toggleTheme() {
         const body = document.body;
         const themeToggle = document.getElementById('theme-toggle');
+        if (!themeToggle) return;
 
         if (body.classList.contains('light-theme')) {
           // Switch to dark theme (Dracula)
@@ -5152,6 +5222,14 @@
       let cropCanvas = null;
       let cropCtx = null;
 
+      function showCropCanvasContainer() {
+        document.getElementById('cropCanvasContainer')?.classList.remove('hidden');
+      }
+
+      function hideCropCanvasContainer() {
+        document.getElementById('cropCanvasContainer')?.classList.add('hidden');
+      }
+
       function openCropConfig(platform) {
         document.getElementById('cropModal').classList.add('active');
         if (platform) {
@@ -5167,8 +5245,7 @@
       function closeCropModal() {
         document.getElementById('cropModal').classList.remove('active');
         // Reset canvas
-        const container = document.getElementById('cropCanvasContainer');
-        if (container) container.style.display = 'none';
+        hideCropCanvasContainer();
         cropImage = null;
       }
 
@@ -5225,7 +5302,7 @@
               cropCtx = cropCanvas.getContext('2d');
 
               // Show container FIRST so canvas has dimensions
-              document.getElementById('cropCanvasContainer').style.display = 'block';
+              showCropCanvasContainer();
 
               // Set canvas size to image size
               cropCanvas.width = cropImage.width;
@@ -5259,7 +5336,9 @@
       }
 
       async function loadCurrentCropSettings() {
-        const platform = document.getElementById('cropPlatform').value;
+        const platform = document.getElementById('cropPlatform')?.value;
+        if (!platform) return;
+
         try {
           const response = await fetch(`/api/crop/${platform}`);
           const result = await response.json();
@@ -5275,7 +5354,7 @@
       }
 
       function loadCropImage(event) {
-        const file = event.target.files[0];
+        const file = event.target.files?.[0];
         if (!file) return;
 
         console.log('Loading image file:', file.name, file.size); // Debug log
@@ -5290,7 +5369,7 @@
             cropCtx = cropCanvas.getContext('2d');
 
             // Show container FIRST so canvas has dimensions
-            document.getElementById('cropCanvasContainer').style.display = 'block';
+            showCropCanvasContainer();
 
             // Set canvas size to image size
             cropCanvas.width = cropImage.width;
@@ -5884,24 +5963,19 @@
       }
 
       function selectAspectRatio(ratio) {
+        if (!ratio) return;
+
         // Update currentAspectRatio
         currentAspectRatio = ratio;
 
-        // Update button styles - reset all buttons
+        // Update selected ratio state.
         document.querySelectorAll('.ratio-button').forEach(btn => {
           btn.classList.remove('active');
-          btn.style.background = 'var(--input-bg)';
-          btn.style.color = 'var(--text-primary)';
-          btn.style.border = '2px solid var(--input-border)';
-          btn.style.boxShadow = 'none';
         });
 
-        // Highlight the selected button with a border
         const activeBtn = document.getElementById(`ratio-${ratio.replace(':', '-')}`);
         if (activeBtn) {
           activeBtn.classList.add('active');
-          activeBtn.style.border = '2px solid #89b4fa';
-          activeBtn.style.boxShadow = '0 0 0 2px rgba(137, 180, 250, 0.2)';
         }
 
         // If canvas is loaded, apply the aspect ratio

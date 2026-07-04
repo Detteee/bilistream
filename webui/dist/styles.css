@@ -85,6 +85,43 @@
       margin-bottom: 28px;
     }
 
+    .header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 10px;
+    }
+
+    .header-title {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-logo {
+      flex-shrink: 0;
+    }
+
+    .theme-toggle-btn {
+      padding: 10px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(10px);
+      flex-shrink: 0;
+    }
+
+    .header-subtitle {
+      color: var(--header-text);
+    }
+
     .header h1 {
       font-size: 2.5rem;
       line-height: 1.15;
@@ -132,6 +169,20 @@
       align-items: center;
       gap: 10px;
       letter-spacing: 0;
+    }
+
+    .dashboard-card-header,
+    .cluster-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+    }
+
+    .card h2.dashboard-card-title {
+      margin: 0;
     }
 
     .status-indicator {
@@ -1220,6 +1271,10 @@
       background: rgba(49, 50, 68, 0.42);
     }
 
+    .bili-network-panel.hidden {
+      display: none;
+    }
+
     body.light-theme .bili-network-panel {
       background: rgba(102, 126, 234, 0.06);
     }
@@ -1563,6 +1618,11 @@
         padding: 12px;
       }
 
+      .header-bar {
+        flex-direction: column;
+        justify-content: center;
+      }
+
       .header h1 {
         font-size: 2rem;
       }
@@ -1753,6 +1813,13 @@
     }
 
     /* Setup wizard styles */
+    .setup-step-indicator {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+
     .step-dot {
       width: 40px;
       height: 40px;
@@ -1776,6 +1843,166 @@
 
     .setup-step {
       animation: fadeIn 0.3s ease;
+    }
+
+    .setup-step-title {
+      color: #667eea;
+      margin-bottom: 20px;
+    }
+
+    .setup-step-description {
+      color: #666;
+      margin-bottom: 20px;
+    }
+
+    .setup-step.hidden,
+    .setup-dependent-group.hidden,
+    .setup-qr-container.hidden {
+      display: none;
+    }
+
+    .setup-login-status {
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      background: #f0f0f0;
+    }
+
+    .setup-qr-container {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .setup-qr-card {
+      display: inline-block;
+      padding: 20px;
+      border-radius: 8px;
+      background: white;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .setup-qr-image {
+      width: 200px;
+      height: 200px;
+    }
+
+    .setup-qr-instruction {
+      color: #666;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+
+    .setup-qr-status {
+      color: #667eea;
+      margin-top: 10px;
+      font-weight: 600;
+    }
+
+    .setup-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .setup-step-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .setup-step-actions-spaced {
+      margin-top: 20px;
+    }
+
+    .setup-action-btn {
+      flex: 1;
+    }
+
+    .setup-icon-action {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .setup-next-btn {
+      width: 100%;
+      margin-top: 15px;
+    }
+
+    .setup-platform-card {
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+    }
+
+    .setup-platform-title {
+      margin-bottom: 15px;
+    }
+
+    .setup-platform-title-youtube {
+      color: #667eea;
+    }
+
+    .setup-platform-title-twitch {
+      color: #9146ff;
+    }
+
+    .setup-help-text {
+      display: block;
+      margin-top: 5px;
+      color: var(--text-muted);
+    }
+
+    .setup-inline-code {
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: var(--card-border);
+      color: var(--accent-pink);
+    }
+
+    .setup-muted-help,
+    .setup-jwt-details {
+      color: #888;
+    }
+
+    .setup-block-help {
+      display: block;
+      margin-top: 5px;
+    }
+
+    .setup-jwt-details {
+      margin-top: 8px;
+      font-size: 13px;
+    }
+
+    .setup-jwt-summary {
+      color: #667eea;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .setup-jwt-steps {
+      line-height: 1.5;
+      padding-left: 20px;
+      margin: 10px 0 0;
+    }
+
+    .setup-jwt-note {
+      margin: 10px 0 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .setup-footer-help {
+      margin-top: 20px;
+      color: #999;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .setup-footer-link {
+      color: #667eea;
     }
 
     @keyframes fadeIn {
@@ -2897,4 +3124,170 @@
         max-height: 90vh;
         overflow: auto;
         border: 1px solid var(--card-border);
+      }
+
+      .crop-modal-title {
+        color: var(--heading-color);
+        margin-bottom: 20px;
+      }
+
+      .crop-section {
+        margin-bottom: 20px;
+      }
+
+      .crop-platform-label {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 15px;
+      }
+
+      .crop-platform-label span,
+      .crop-field-label,
+      .crop-canvas-help,
+      .crop-capture-title {
+        color: var(--text-secondary);
+      }
+
+      .crop-select,
+      .crop-file-input,
+      .crop-number-input {
+        padding: 8px;
+        border: 1px solid var(--input-border);
+        border-radius: 6px;
+        background: var(--input-bg);
+        color: var(--text-primary);
+      }
+
+      .crop-file-input,
+      .crop-number-input {
+        width: 100%;
+      }
+
+      .crop-file-input {
+        background: var(--card-bg);
+        cursor: pointer;
+      }
+
+      .crop-capture-panel {
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+        background: var(--input-bg);
+      }
+
+      .crop-capture-title {
+        margin-bottom: 10px;
+        line-height: 1.6;
+      }
+
+      .crop-capture-help {
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .crop-canvas-section {
+        margin-bottom: 20px;
+      }
+
+      .crop-canvas-section.hidden {
+        display: none;
+      }
+
+      .crop-canvas-help {
+        margin-bottom: 10px;
+      }
+
+      .crop-ratio-toolbar {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+        margin-bottom: 15px;
+        flex-wrap: wrap;
+      }
+
+      .ratio-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px;
+        border: 2px solid var(--input-border);
+        border-radius: 6px;
+        background: var(--input-bg);
+        color: var(--text-primary);
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .ratio-button.active {
+        border-color: #89b4fa;
+        box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+      }
+
+      .crop-canvas-frame {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        border: 2px solid var(--card-border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .crop-canvas {
+        display: block;
+        max-width: 100%;
+        background: #ff0000;
+        cursor: crosshair;
+      }
+
+      .crop-box {
+        position: absolute;
+        display: none;
+        border: 2px solid #89b4fa;
+        background: rgba(137, 180, 250, 0.2);
+        pointer-events: none;
+      }
+
+      .crop-field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+      }
+
+      .crop-field-label {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .crop-action-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+      }
+
+      .crop-action-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+      }
+
+      .crop-restart-btn {
+        background: #f9e2af;
+        color: #1e1e2e;
+      }
+
+      .crop-close-btn {
+        width: 100%;
+        margin-top: 15px;
+      }
+
+      @media (max-width: 640px) {
+        .crop-field-grid,
+        .crop-action-row {
+          grid-template-columns: 1fr;
+          flex-direction: column;
+        }
       }

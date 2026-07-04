@@ -25,7 +25,7 @@
         </p>
 
         <!-- Step Indicator -->
-        <div style="display: flex; justify-content: center; gap: 10px; margin-bottom: 30px;">
+        <div class="setup-step-indicator">
           <div class="step-dot active" id="step-dot-1">1</div>
           <div class="step-dot" id="step-dot-2">2</div>
           <div class="step-dot" id="step-dot-3">3</div>
@@ -33,30 +33,28 @@
 
         <!-- Step 1: Login -->
         <div class="setup-step" id="setup-step-1">
-          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 1: 登录 Bilibili</h3>
-          <p style="color: #666; margin-bottom: 20px;">
+          <h3 class="setup-step-title">步骤 1: 登录 Bilibili</h3>
+          <p class="setup-step-description">
             使用 Bilibili APP 扫描下方二维码登录
           </p>
-          <div id="login-status" style="padding: 15px; background: #f0f0f0; border-radius: 8px; margin-bottom: 20px;">
+          <div id="login-status" class="setup-login-status">
             <span id="login-status-text">检查登录状态...</span>
           </div>
 
           <!-- QR Code Display -->
-          <div id="qr-code-container" style="display: none; text-align: center; margin-bottom: 20px;">
-            <div
-              style="background: white; padding: 20px; border-radius: 8px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+          <div id="qr-code-container" class="setup-qr-container hidden">
+            <div class="setup-qr-card">
               <div id="qr-code-display"></div>
-              <p style="color: #666; margin-top: 15px; font-size: 14px;">请使用 Bilibili APP 扫码登录</p>
-              <p id="qr-status" style="color: #667eea; margin-top: 10px; font-weight: 600;">等待扫码...</p>
+              <p class="setup-qr-instruction">请使用 Bilibili APP 扫码登录</p>
+              <p id="qr-status" class="setup-qr-status">等待扫码...</p>
             </div>
           </div>
 
-          <div style="display: flex; gap: 10px;">
-            <button class="btn-primary" onclick="showQrCode()" id="show-qr-btn" style="flex: 1;">
+          <div class="setup-step-actions">
+            <button class="btn-primary setup-action-btn" id="show-qr-btn" type="button">
               🔐 显示登录二维码
             </button>
-            <button class="btn-secondary" onclick="checkLoginStatus()"
-              style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <button class="btn-secondary setup-action-btn setup-icon-action" id="check-login-status-btn" type="button">
               <svg fill="currentColor" width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path
                   d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
@@ -64,14 +62,14 @@
               <span>刷新状态</span>
             </button>
           </div>
-          <button class="btn-success" onclick="goToStep(2)" style="width: 100%; margin-top: 15px;">
+          <button id="setup-step-1-next-btn" class="btn-success setup-next-btn" type="button">
             下一步 →
           </button>
         </div>
 
         <!-- Step 2: Basic Config -->
-        <div class="setup-step" id="setup-step-2" style="display: none;">
-          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 2: 基础配置</h3>
+        <div class="setup-step hidden" id="setup-step-2">
+          <h3 class="setup-step-title">步骤 2: 基础配置</h3>
 
           <div class="control-group">
             <label>B站直播间号 *</label>
@@ -84,47 +82,47 @@
           </div>
 
           <div class="control-group">
-            <label style="display: flex; align-items: center; gap: 10px;">
+            <label class="setup-checkbox-label">
               <input type="checkbox" id="setup-auto-cover" checked>
               <span>自动更换封面</span>
             </label>
           </div>
 
           <div class="control-group">
-            <label style="display: flex; align-items: center; gap: 10px;">
+            <label class="setup-checkbox-label">
               <input type="checkbox" id="setup-danmaku-command" checked>
               <span>启用弹幕指令</span>
             </label>
           </div>
 
           <div class="control-group">
-            <label style="display: flex; align-items: center; gap: 10px;">
+            <label class="setup-checkbox-label">
               <input type="checkbox" id="setup-anti-collision">
               <span>启用撞车监控</span>
             </label>
           </div>
 
-          <div style="display: flex; gap: 10px; margin-top: 20px;">
-            <button class="btn-secondary" onclick="goToStep(1)" style="flex: 1;">
+          <div class="setup-step-actions setup-step-actions-spaced">
+            <button id="setup-step-2-prev-btn" class="btn-secondary setup-action-btn" type="button">
               ← 上一步
             </button>
-            <button class="btn-success" onclick="goToStep(3)" style="flex: 1;">
+            <button id="setup-step-2-next-btn" class="btn-success setup-action-btn" type="button">
               下一步 →
             </button>
           </div>
         </div>
 
         <!-- Step 3: Platform Config -->
-        <div class="setup-step" id="setup-step-3" style="display: none;">
-          <h3 style="color: #667eea; margin-bottom: 20px;">步骤 3: 平台配置 (可选)</h3>
+        <div class="setup-step hidden" id="setup-step-3">
+          <h3 class="setup-step-title">步骤 3: 平台配置 (可选)</h3>
 
           <!-- YouTube Config -->
-          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
-            <h4 style="color: #667eea; margin-bottom: 15px;">📺 YouTube</h4>
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title setup-platform-title-youtube">📺 YouTube</h4>
 
             <div class="control-group">
               <label>从 channels.json 选择 (可选)</label>
-              <select id="setup-yt-channel-select" onchange="updateSetupYouTubeChannel()">
+              <select id="setup-yt-channel-select">
                 <option value="">从 channels.json 选择或手动输入...</option>
               </select>
             </div>
@@ -161,22 +159,21 @@
             <div class="control-group">
               <label>YouTube 代理地址 (可选)</label>
               <input type="text" id="setup-yt-proxy" placeholder="http://127.0.0.1:7890">
-              <small style="color: var(--text-muted); display: block; margin-top: 5px;">
+              <small class="setup-help-text">
                 YouTube 专用代理，留空则不使用代理<br>
                 常用默认端口: Clash (7890) | V2Ray (10808)<br>
-                示例: <code
-                  style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
+                示例: <code class="setup-inline-code">http://127.0.0.1:7890</code>
               </small>
             </div>
           </div>
 
           <!-- Twitch Config -->
-          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
-            <h4 style="color: #9146ff; margin-bottom: 15px;">🎮 Twitch</h4>
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title setup-platform-title-twitch">🎮 Twitch</h4>
 
             <div class="control-group">
               <label>从 channels.json 选择 (可选)</label>
-              <select id="setup-tw-channel-select" onchange="updateSetupTwitchChannel()">
+              <select id="setup-tw-channel-select">
                 <option value="">从 channels.json 选择或手动输入...</option>
               </select>
             </div>
@@ -232,40 +229,39 @@
             <div class="control-group">
               <label>Twitch 代理地址 (可选)</label>
               <input type="text" id="setup-tw-proxy" placeholder="http://127.0.0.1:7890">
-              <small style="color: var(--text-muted); display: block; margin-top: 5px;">
+              <small class="setup-help-text">
                 Twitch 专用代理，留空则不使用代理<br>
                 常用默认端口: Clash (7890) | V2Ray (10808)<br>
-                示例: <code
-                  style="background: var(--card-border); padding: 2px 6px; border-radius: 3px; color: var(--accent-pink);">http://127.0.0.1:7890</code>
+                示例: <code class="setup-inline-code">http://127.0.0.1:7890</code>
               </small>
             </div>
           </div>
 
           <!-- Advanced Options -->
-          <div style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
-            <h4 style="color: #667eea; margin-bottom: 15px;">⚙️ 高级选项</h4>
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title setup-platform-title-youtube">⚙️ 高级选项</h4>
 
             <div class="control-group">
               <label>Holodex API Key (可选)</label>
               <input type="text" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
-              <small style="color: #888;">获取: <a href="https://holodex.net/login"
+              <small class="setup-muted-help">获取: <a href="https://holodex.net/login"
                   target="_blank">holodex.net</a></small>
             </div>
 
             <div class="control-group">
               <label>Holodex JWT (可选)</label>
               <input type="password" id="setup-holodex-jwt" placeholder="收藏夹 + Twitch 外部配信，留空跳过">
-              <small style="color: #888; display: block; margin-top: 5px;">
+              <small class="setup-muted-help setup-block-help">
                 留空则 Holodex 监控使用 channels.json；可稍后在控制面板配置
               </small>
-              <details style="margin-top: 8px; color: #888; font-size: 13px;">
-                <summary style="cursor: pointer; color: #667eea; font-weight: 500;">如何获取 JWT</summary>
-                <ol style="line-height: 1.5; padding-left: 20px; margin: 10px 0 0;">
+              <details class="setup-jwt-details">
+                <summary class="setup-jwt-summary">如何获取 JWT</summary>
+                <ol class="setup-jwt-steps">
                   <li>打开 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer">holodex.net/login</a> 并完成登录</li>
                   <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
                   <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
                 </ol>
-                <p style="margin: 10px 0 0; font-size: 12px; line-height: 1.5;">
+                <p class="setup-jwt-note">
                   JWT 将在到期前 30 天内自动续期并写回 config.json。
                 </p>
               </details>
@@ -274,33 +270,33 @@
             <div class="control-group">
               <label class="toggle-label">
                 <div class="toggle-switch">
-                  <input type="checkbox" id="setup-lol-monitor" onchange="toggleRiotApiKey()">
+                  <input type="checkbox" id="setup-lol-monitor">
                   <span class="toggle-slider"></span>
                 </div>
                 <span>启用英雄联盟玩家ID监控</span>
               </label>
             </div>
 
-            <div class="control-group" id="riot-api-group" style="display: none;">
+            <div class="control-group setup-dependent-group hidden" id="riot-api-group">
               <label>Riot API Key</label>
               <input type="text" id="setup-riot" placeholder="用于监控游戏内违禁词汇">
-              <small style="color: #888;">获取: <a href="https://developer.riotgames.com/"
+              <small class="setup-muted-help">获取: <a href="https://developer.riotgames.com/"
                   target="_blank">developer.riotgames.com</a></small>
             </div>
           </div>
 
-          <div style="display: flex; gap: 10px; margin-top: 20px;">
-            <button class="btn-secondary" onclick="goToStep(2)" style="flex: 1;">
+          <div class="setup-step-actions setup-step-actions-spaced">
+            <button id="setup-step-3-prev-btn" class="btn-secondary setup-action-btn" type="button">
               ← 上一步
             </button>
-            <button class="btn-success" onclick="saveSetupConfig()" style="flex: 1;">
+            <button id="setup-save-btn" class="btn-success setup-action-btn" type="button">
               ✅ 完成设置
             </button>
           </div>
         </div>
 
-        <p style="text-align: center; color: #999; margin-top: 20px; font-size: 14px;">
-          需要帮助？查看 <a href="https://github.com/Detteee/bilistream" target="_blank" style="color: #667eea;">文档</a>
+        <p class="setup-footer-help">
+          需要帮助？查看 <a href="https://github.com/Detteee/bilistream" target="_blank" class="setup-footer-link">文档</a>
         </p>
       </div>
     </div>
@@ -310,10 +306,9 @@
   <div class="main-page" id="main-page">
     <div class="container">
       <div class="header">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <h1 style="margin: 0;">
-            <svg width="48" height="48" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
-              style="vertical-align: middle; margin-right: 10px;">
+        <div class="header-bar">
+          <h1 class="header-title">
+            <svg class="header-logo" width="48" height="48" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <g>
                 <path d="M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z" fill="url(#b)" />
                 <path d="M4.57 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z" fill="url(#a)" />
@@ -331,18 +326,17 @@
             </svg>
             Bilistream
           </h1>
-          <button onclick="toggleTheme()" id="theme-toggle"
-            style="padding: 10px 20px; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.3s ease; backdrop-filter: blur(10px);">
+          <button id="theme-toggle" class="theme-toggle-btn" type="button">
             🌙 暗色
           </button>
         </div>
-        <p style="color: var(--header-text);">实时监控和控制你的转播</p>
+        <p class="header-subtitle">实时监控和控制你的转播</p>
       </div>
 
       <div class="dashboard">
         <div class="card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h2 style="margin: 0;">
+          <div class="dashboard-card-header">
+            <h2 class="dashboard-card-title">
               <span class="status-indicator" id="bili-status"></span>
               Bilibili
             </h2>
@@ -444,7 +438,7 @@
               </label>
             </div>
           </div>
-          <div class="bili-network-panel" id="bili-network-panel" style="display: none;">
+          <div class="bili-network-panel hidden" id="bili-network-panel">
             <div class="bili-network-header">
               <span>Network</span>
               <span id="bili-network-scale">Scale -</span>
@@ -474,8 +468,8 @@
         </div>
 
         <div class="card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h2 style="margin: 0;">
+          <div class="dashboard-card-header">
+            <h2 class="dashboard-card-title">
               <span class="status-indicator" id="yt-status"></span>
               YouTube
             </h2>
@@ -637,8 +631,8 @@
         </div>
 
         <div class="card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h2 style="margin: 0;">
+          <div class="dashboard-card-header">
+            <h2 class="dashboard-card-title">
               <span class="status-indicator" id="tw-status"></span>
               Twitch
             </h2>
@@ -1470,113 +1464,97 @@
     <!-- Crop Configuration Modal -->
     <div id="cropModal" class="crop-modal">
       <div class="crop-modal-content">
-        <h2 style="color: var(--heading-color); margin-bottom: 20px;">🎬 视频裁剪配置</h2>
+        <h2 class="crop-modal-title">🎬 视频裁剪配置</h2>
 
-        <div style="margin-bottom: 20px;">
-          <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-            <span style="color: var(--text-secondary);">平台:</span>
-            <select id="cropPlatform" onchange="loadCurrentCropSettings()"
-              style="padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+        <div class="crop-section">
+          <label class="crop-platform-label">
+            <span>平台:</span>
+            <select id="cropPlatform" class="crop-select">
               <option value="youtube">YouTube</option>
               <option value="twitch">Twitch</option>
             </select>
           </label>
 
-          <div style="background: var(--input-bg); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-            <p style="color: var(--text-secondary); margin-bottom: 10px; line-height: 1.6;">
+          <div class="crop-capture-panel">
+            <p class="crop-capture-title">
               📸 自动捕获直播帧中...
             </p>
-            <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+            <p class="crop-capture-help">
               系统将自动捕获当前直播画面。如果自动捕获失败，可以手动上传图片:
             </p>
-            <input type="file" id="cropImageUpload" accept="image/*" onchange="loadCropImage(event)"
-              style="width: 100%; padding: 8px; border-radius: 6px; background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--input-border); cursor: pointer;">
+            <input type="file" id="cropImageUpload" class="crop-file-input" accept="image/*">
           </div>
         </div>
 
         <!-- Image Canvas for Bbox Selection -->
-        <div id="cropCanvasContainer" style="display: none; margin-bottom: 20px;">
-          <p style="color: var(--text-secondary); margin-bottom: 10px;">
+        <div id="cropCanvasContainer" class="crop-canvas-section hidden">
+          <p class="crop-canvas-help">
             🖱️ 选择裁剪区域 (拖动角点或边调整大小，点击内部拖动):
           </p>
 
-          <div style="display: flex; gap: 6px; justify-content: center; margin-bottom: 15px;">
-            <button onclick="selectAspectRatio('free')" id="ratio-free" class="ratio-button active" title="自由比例"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid #89b4fa; box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+          <div class="crop-ratio-toolbar">
+            <button id="ratio-free" class="ratio-button active" type="button" title="自由比例" data-crop-ratio="free">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="3" width="18" height="18" rx="2"></rect>
                 <path d="M9 3v18M15 3v18M3 9h18M3 15h18"></path>
               </svg>
             </button>
-            <button onclick="selectAspectRatio('1:1')" id="ratio-1-1" class="ratio-button" title="1:1"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <button id="ratio-1-1" class="ratio-button" type="button" title="1:1" data-crop-ratio="1:1">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="5" y="5" width="14" height="14" rx="2"></rect>
               </svg>
             </button>
-            <button onclick="selectAspectRatio('16:9')" id="ratio-16-9" class="ratio-button" title="16:9"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <button id="ratio-16-9" class="ratio-button" type="button" title="16:9" data-crop-ratio="16:9">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="2" y="7" width="20" height="10" rx="2"></rect>
               </svg>
             </button>
-            <button onclick="selectAspectRatio('16:10')" id="ratio-16-10" class="ratio-button" title="16:10"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <button id="ratio-16-10" class="ratio-button" type="button" title="16:10" data-crop-ratio="16:10">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="2" y="6" width="20" height="12" rx="2"></rect>
               </svg>
             </button>
-            <button onclick="selectAspectRatio('9:16')" id="ratio-9-16" class="ratio-button" title="9:16"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <button id="ratio-9-16" class="ratio-button" type="button" title="9:16" data-crop-ratio="9:16">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="7" y="2" width="10" height="20" rx="2"></rect>
               </svg>
             </button>
-            <button onclick="selectAspectRatio('10:16')" id="ratio-10-16" class="ratio-button" title="10:16"
-              style="padding: 8px; background: var(--input-bg); color: var(--text-primary); border: 2px solid var(--input-border); border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <button id="ratio-10-16" class="ratio-button" type="button" title="10:16" data-crop-ratio="10:16">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="6" y="2" width="12" height="20" rx="2"></rect>
               </svg>
             </button>
           </div>
 
-          <div
-            style="position: relative; display: inline-block; max-width: 100%; border: 2px solid var(--card-border); border-radius: 8px; overflow: hidden;">
-            <canvas id="cropCanvas"
-              style="max-width: 100%; display: block; cursor: crosshair; background: #ff0000;"></canvas>
-            <div id="cropBox"
-              style="position: absolute; border: 2px solid #89b4fa; background: rgba(137, 180, 250, 0.2); pointer-events: none; display: none;">
+          <div class="crop-canvas-frame">
+            <canvas id="cropCanvas" class="crop-canvas"></canvas>
+            <div id="cropBox" class="crop-box">
             </div>
           </div>
         </div>
 
-        <div style="margin-bottom: 20px;">
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+        <div class="crop-section">
+          <div class="crop-field-grid">
             <div>
-              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">X 坐标:</label>
-              <input type="number" id="cropX" value="0" min="0"
-                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <label class="crop-field-label">X 坐标:</label>
+              <input type="number" id="cropX" class="crop-number-input" value="0" min="0">
             </div>
             <div>
-              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">Y 坐标:</label>
-              <input type="number" id="cropY" value="0" min="0"
-                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <label class="crop-field-label">Y 坐标:</label>
+              <input type="number" id="cropY" class="crop-number-input" value="0" min="0">
             </div>
             <div>
-              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">宽度:</label>
-              <input type="number" id="cropWidth" value="0" min="0"
-                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <label class="crop-field-label">宽度:</label>
+              <input type="number" id="cropWidth" class="crop-number-input" value="0" min="0">
             </div>
             <div>
-              <label style="color: var(--text-secondary); display: block; margin-bottom: 5px;">高度:</label>
-              <input type="number" id="cropHeight" value="0" min="0"
-                style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border);">
+              <label class="crop-field-label">高度:</label>
+              <input type="number" id="cropHeight" class="crop-number-input" value="0" min="0">
             </div>
           </div>
 
-          <div style="margin-top: 15px; display: flex; gap: 10px;">
-            <button onclick="disableCrop()" class="btn-danger"
-              style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;">
+          <div class="crop-action-row">
+            <button id="crop-disable-btn" class="btn-danger crop-action-btn" type="button">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -1584,8 +1562,7 @@
               </svg>
               禁用裁剪
             </button>
-            <button onclick="applyCropAndRestart()" class="btn-success"
-              style="flex: 1; background: #f9e2af; color: #1e1e2e; display: flex; align-items: center; justify-content: center; gap: 4px;">
+            <button id="crop-apply-restart-btn" class="btn-success crop-action-btn crop-restart-btn" type="button">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path
@@ -1594,8 +1571,7 @@
               </svg>
               应用并重启流
             </button>
-            <button onclick="applyCrop()" class="btn-success"
-              style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;">
+            <button id="crop-apply-btn" class="btn-success crop-action-btn" type="button">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -1605,7 +1581,7 @@
           </div>
         </div>
 
-        <button onclick="closeCropModal()" class="btn-secondary" style="width: 100%; margin-top: 15px;">
+        <button id="crop-close-btn" class="btn-secondary crop-close-btn" type="button">
           关闭
         </button>
       </div>
