@@ -68,7 +68,7 @@ enum CollisionResult {
     Proceed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StreamPlatform {
     Youtube,
     Twitch,
@@ -586,7 +586,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Clear warning stop since we have a valid channel to stream
             clear_warning_stop();
 
-            let mut selected_stream = select_stream(&yt_stream, &tw_stream).unwrap();
+            let Some(mut selected_stream) = select_stream(&yt_stream, &tw_stream) else {
+                tracing::warn!("未找到可转播的直播候选，等待下一轮检查");
+                tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
+                continue 'outer;
+            };
 
             let platform = selected_stream.platform.code();
             let channel_name = selected_stream.channel_name.clone();
@@ -3292,6 +3296,39 @@ fn show_windows_notification() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_stream_candidate(platform: StreamPlatform, is_live: bool) -> StreamCandidate {
+        StreamCandidate {
+            platform,
+            is_live,
+            topic: None,
+            title: Some("title".to_string()),
+            m3u8_url: Some("https://example.com/live.m3u8".to_string()),
+            stream_id: Some("stream-id".to_string()),
+            channel_name: platform.code().to_string(),
+            channel_id: "channel-id".to_string(),
+            area_v2: 235,
+            is_priority: false,
+        }
+    }
+
+    #[test]
+    fn select_stream_prefers_youtube_when_both_live() {
+        let yt = test_stream_candidate(StreamPlatform::Youtube, true);
+        let tw = test_stream_candidate(StreamPlatform::Twitch, true);
+
+        let selected = select_stream(&yt, &tw).expect("live stream should be selected");
+
+        assert_eq!(selected.platform, StreamPlatform::Youtube);
+    }
+
+    #[test]
+    fn select_stream_returns_none_when_no_live_candidate() {
+        let yt = test_stream_candidate(StreamPlatform::Youtube, false);
+        let tw = test_stream_candidate(StreamPlatform::Twitch, false);
+
+        assert!(select_stream(&yt, &tw).is_none());
+    }
 
     #[test]
     fn recover_mutex_lock_returns_inner_after_poison() {
