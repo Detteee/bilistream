@@ -48,6 +48,15 @@
       --holodex-channel-color: #89b4fa;
       --holodex-channel-hover-color: #b4befe;
       --holodex-area-hint-color: #a6e3a1;
+      --status-live-bg: #a6e3a1;
+      --status-live-ring: rgba(166, 227, 161, 0.14);
+      --status-offline-bg: #f38ba8;
+      --network-push-bar-start: var(--accent-teal);
+      --network-push-bar-end: var(--heading-color);
+      --network-cache-bar-start: var(--accent-yellow);
+      --network-cache-bar-end: var(--accent-green);
+      --network-bar-idle-opacity: 0.35;
+      --network-bar-active-opacity: 0.9;
       --radius: 8px;
       --radius-lg: 10px;
       --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
@@ -106,6 +115,15 @@
       --holodex-channel-color: #284eb8;
       --holodex-channel-hover-color: #1d3f9c;
       --holodex-area-hint-color: #176534;
+      --status-live-bg: #a6e3a1;
+      --status-live-ring: rgba(166, 227, 161, 0.22);
+      --status-offline-bg: #f38ba8;
+      --network-push-bar-start: #67e8f9;
+      --network-push-bar-end: #93c5fd;
+      --network-cache-bar-start: #fde68a;
+      --network-cache-bar-end: #86efac;
+      --network-bar-idle-opacity: 0.28;
+      --network-bar-active-opacity: 0.72;
       --shadow: 0 12px 26px rgba(35, 38, 59, 0.16);
       --shadow-hover: 0 16px 34px rgba(35, 38, 59, 0.22);
       --focus-ring: 0 0 0 3px rgba(102, 126, 234, 0.22);
@@ -244,12 +262,12 @@
     }
 
     .status-live {
-      background: #a6e3a1;
-      box-shadow: 0 0 0 4px rgba(166, 227, 161, 0.14);
+      background: var(--status-live-bg);
+      box-shadow: 0 0 0 4px var(--status-live-ring);
     }
 
     .status-offline {
-      background: #f38ba8;
+      background: var(--status-offline-bg);
     }
 
     .info-row {
@@ -1402,14 +1420,14 @@
       left: 0;
       right: 0;
       min-height: 2px;
-      background: linear-gradient(180deg, var(--accent-teal), var(--heading-color));
-      opacity: 0.35;
+      background: linear-gradient(180deg, var(--network-push-bar-start), var(--network-push-bar-end));
+      opacity: var(--network-bar-idle-opacity);
     }
 
     .bili-network-bar.cache {
       bottom: 50%;
       border-radius: 2px 2px 0 0;
-      background: linear-gradient(180deg, var(--accent-yellow), var(--accent-green));
+      background: linear-gradient(180deg, var(--network-cache-bar-start), var(--network-cache-bar-end));
     }
 
     .bili-network-bar.push {
@@ -1418,7 +1436,7 @@
     }
 
     .bili-network-bar.active {
-      opacity: 0.9;
+      opacity: var(--network-bar-active-opacity);
     }
 
     .bili-network-meters {
