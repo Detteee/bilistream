@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -1625,12 +1625,35 @@ pub struct HolodexStreamWithArea {
     pub thumbnail: Option<String>,
 }
 
+#[derive(Default)]
+struct OrderedChannelIds {
+    ordered: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl OrderedChannelIds {
+    fn insert(&mut self, channel_id: &str) -> bool {
+        let channel_id = channel_id.trim();
+        if channel_id.is_empty() || !self.seen.insert(channel_id.to_string()) {
+            return false;
+        }
+        self.ordered.push(channel_id.to_string());
+        true
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+
+    fn into_parts(self) -> (Vec<String>, HashSet<String>) {
+        (self.ordered, self.seen)
+    }
+}
+
 fn filter_holodex_streams(
     streams: Vec<crate::plugins::holodex::HolodexStream>,
-    allowed_channel_ids: std::collections::HashSet<String>,
+    allowed_channel_ids: HashSet<String>,
 ) -> Vec<crate::plugins::holodex::HolodexStream> {
-    use std::collections::HashSet;
-
     let mut live_channels: HashSet<String> = HashSet::new();
     for stream in &streams {
         if stream.status == "live" {
@@ -1986,7 +2009,7 @@ pub async fn api_get_holodex_streams(
     }
 
     // channels.json preset list (YouTube + Twitch placeholders via ?channels=...&includePlaceholder=true)
-    let mut channel_ids = Vec::new();
+    let mut channel_ids = OrderedChannelIds::default();
 
     // Load channels.json for all channels
     let channels_path = std::env::current_exe()
@@ -2002,9 +2025,7 @@ pub async fn api_get_holodex_streams(
                     for channel in channels {
                         if let Some(platforms) = channel.get("platforms") {
                             if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
-                                if !yt_id.is_empty() && !channel_ids.contains(&yt_id.to_string()) {
-                                    channel_ids.push(yt_id.to_string());
-                                }
+                                channel_ids.insert(yt_id);
                             }
                         }
                     }
@@ -2015,9 +2036,7 @@ pub async fn api_get_holodex_streams(
                 {
                     for channel in yt_channels {
                         if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
-                            if !id.is_empty() && !channel_ids.contains(&id.to_string()) {
-                                channel_ids.push(id.to_string());
-                            }
+                            channel_ids.insert(id);
                         }
                     }
                 }
@@ -2026,9 +2045,7 @@ pub async fn api_get_holodex_streams(
     }
 
     // Also add the currently configured channel if not already in list
-    if !cfg.youtube.channel_id.is_empty() && !channel_ids.contains(&cfg.youtube.channel_id) {
-        channel_ids.push(cfg.youtube.channel_id.clone());
-    }
+    channel_ids.insert(&cfg.youtube.channel_id);
 
     if channel_ids.is_empty() {
         return Json(json!({
@@ -2037,19 +2054,19 @@ pub async fn api_get_holodex_streams(
         }));
     }
 
-    // Call Holodex directly for configured YouTube channels.
-    let streams =
-        match crate::plugins::holodex::get_holodex_streams(channel_ids.clone(), true).await {
-            Ok(s) => s,
-            Err(e) => {
-                return Json(json!({
-                    "success": false,
-                    "message": format!("Failed to fetch from Holodex: {}", e)
-                }));
-            }
-        };
+    let (channel_ids, queried_channels) = channel_ids.into_parts();
 
-    let queried_channels: std::collections::HashSet<String> = channel_ids.iter().cloned().collect();
+    // Call Holodex directly for configured YouTube channels.
+    let streams = match crate::plugins::holodex::get_holodex_streams(channel_ids, true).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(json!({
+                "success": false,
+                "message": format!("Failed to fetch from Holodex: {}", e)
+            }));
+        }
+    };
+
     let filtered_streams = filter_holodex_streams(streams, queried_channels);
     let streams_with_area = map_holodex_streams_with_area(filtered_streams);
 
@@ -3470,5 +3487,21 @@ mod tests {
             PathBuf::from("parent")
         );
         assert!(executable_parent_dir(Path::new("bilistream")).is_err());
+    }
+
+    #[test]
+    fn ordered_channel_ids_deduplicates_without_losing_order() {
+        let mut channel_ids = OrderedChannelIds::default();
+
+        assert!(channel_ids.insert(" first "));
+        assert!(channel_ids.insert("second"));
+        assert!(!channel_ids.insert("first"));
+        assert!(!channel_ids.insert("  "));
+
+        let (ordered, seen) = channel_ids.into_parts();
+        assert_eq!(ordered, vec!["first".to_string(), "second".to_string()]);
+        assert!(seen.contains("first"));
+        assert!(seen.contains("second"));
+        assert_eq!(seen.len(), 2);
     }
 }
