@@ -577,34 +577,42 @@ fn canonical_value_hash(value: &serde_json::Value) -> String {
 }
 
 fn canonical_json(value: &serde_json::Value) -> String {
+    let mut output = String::new();
+    write_canonical_json(value, &mut output);
+    output
+}
+
+fn write_canonical_json(value: &serde_json::Value, output: &mut String) {
     match value {
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Bool(value) => value.to_string(),
-        serde_json::Value::Number(value) => value.to_string(),
-        serde_json::Value::String(value) => serde_json::to_string(value).unwrap_or_default(),
+        serde_json::Value::Null => output.push_str("null"),
+        serde_json::Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+        serde_json::Value::Number(value) => output.push_str(&value.to_string()),
+        serde_json::Value::String(value) => {
+            output.push_str(&serde_json::to_string(value).unwrap_or_default());
+        }
         serde_json::Value::Array(values) => {
-            let items = values
-                .iter()
-                .map(canonical_json)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("[{}]", items)
+            output.push('[');
+            for (index, item) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_canonical_json(item, output);
+            }
+            output.push(']');
         }
         serde_json::Value::Object(map) => {
             let mut keys = map.keys().collect::<Vec<_>>();
             keys.sort();
-            let items = keys
-                .into_iter()
-                .map(|key| {
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(key).unwrap_or_default(),
-                        canonical_json(&map[key])
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{{{}}}", items)
+            output.push('{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                output.push_str(&serde_json::to_string(key).unwrap_or_default());
+                output.push(':');
+                write_canonical_json(&map[key], output);
+            }
+            output.push('}');
         }
     }
 }
@@ -2282,6 +2290,26 @@ mod tests {
         assert_eq!(
             monitored_config_integrity_version(&cfg_a),
             monitored_config_integrity_version(&cfg_b)
+        );
+    }
+
+    #[test]
+    fn canonical_json_sorts_keys_without_changing_shape() {
+        let value = serde_json::json!({
+            "b": 1,
+            "a": [
+                true,
+                null,
+                {
+                    "z": 2,
+                    "x": "quote\"",
+                }
+            ],
+        });
+
+        assert_eq!(
+            canonical_json(&value),
+            r#"{"a":[true,null,{"x":"quote\"","z":2}],"b":1}"#
         );
     }
 
