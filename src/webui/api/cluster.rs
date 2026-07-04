@@ -326,6 +326,21 @@ pub struct ClusterMembershipRequest {
     pub nodes: Vec<ClusterMembershipNode>,
 }
 
+#[derive(Serialize)]
+pub(crate) struct ClusterMembershipTargetRequest<'a> {
+    #[serde(default)]
+    target_node_id: Option<&'a str>,
+    enabled: bool,
+    sync_monitored_channels: bool,
+    #[serde(default = "default_membership_auto_failover")]
+    auto_failover: bool,
+    heartbeat_interval_secs: u64,
+    failover_timeout_secs: u64,
+    lease_ttl_secs: u64,
+    thresholds: &'a ClusterHealthThresholds,
+    nodes: &'a [ClusterMembershipNode],
+}
+
 pub(crate) async fn finalize_cluster_node_switch(
     cfg: &Config,
     before: &ClusterStatus,
@@ -958,8 +973,7 @@ pub(crate) async fn push_cluster_membership_to_target(
     timeout: Duration,
 ) -> Result<(), String> {
     let url = format!("{}/api/cluster/sync-membership", api_url);
-    let mut targeted_request = request.clone();
-    targeted_request.target_node_id = Some(node_id.clone());
+    let targeted_request = cluster_membership_target_request(request, &node_id);
     let response = client
         .post(url)
         .json(&targeted_request)
@@ -981,5 +995,22 @@ pub(crate) async fn push_cluster_membership_to_target(
             envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
         )),
         Err(e) => Err(format!("{} 响应解析失败: {}", node_id, e)),
+    }
+}
+
+pub(crate) fn cluster_membership_target_request<'a>(
+    request: &'a ClusterMembershipRequest,
+    target_node_id: &'a str,
+) -> ClusterMembershipTargetRequest<'a> {
+    ClusterMembershipTargetRequest {
+        target_node_id: Some(target_node_id),
+        enabled: request.enabled,
+        sync_monitored_channels: request.sync_monitored_channels,
+        auto_failover: request.auto_failover,
+        heartbeat_interval_secs: request.heartbeat_interval_secs,
+        failover_timeout_secs: request.failover_timeout_secs,
+        lease_ttl_secs: request.lease_ttl_secs,
+        thresholds: &request.thresholds,
+        nodes: &request.nodes,
     }
 }

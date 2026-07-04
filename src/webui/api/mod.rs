@@ -436,6 +436,19 @@ mod tests {
         assert!(!targets.contains_key("empty"));
     }
 
+    #[test]
+    fn membership_target_request_matches_owned_payload_shape() {
+        let request = membership_payload(None);
+        let borrowed = cluster_membership_target_request(&request, "ca");
+        let mut owned = request.clone();
+        owned.target_node_id = Some("ca".to_string());
+
+        assert_eq!(
+            serde_json::to_value(&borrowed).unwrap(),
+            serde_json::to_value(&owned).unwrap()
+        );
+    }
+
     fn status_cache_test_config() -> Config {
         Config {
             auto_cover: false,
