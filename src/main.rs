@@ -56,6 +56,12 @@ fn recover_mutex_lock<'a, T>(lock: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T
     })
 }
 
+fn normalized_api_key(key: Option<&str>) -> Option<String> {
+    key.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 #[derive(PartialEq)]
 enum CollisionResult {
     Continue,
@@ -1516,72 +1522,85 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
     let cfg = load_config().await?;
 
     let interval = cfg.lol_monitor_interval.unwrap_or(1);
-    let riot_api = RiotApi::new(cfg.riot_api_key.clone().unwrap());
+    let Some(riot_api_key) = normalized_api_key(cfg.riot_api_key.as_deref()) else {
+        tracing::warn!("LOL 监控已启用，但 Riot API Key 未配置，跳过本次检测");
+        return Ok(());
+    };
+    let riot_api = RiotApi::new(riot_api_key);
     thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                tracing::error!("LOL 监控运行时创建失败: {}", e);
+                return;
+            }
+        };
         loop {
             rt.block_on(async {
-                if let Ok(game_data) = riot_api
+                if let Ok(Some(game_data)) = riot_api
                     .spectator_v5()
                     .get_current_game_info_by_puuid(PlatformRoute::JP1, &puuid)
                     .await
                 {
-                    if game_data.is_some() {
-                        let riot_ids: Vec<String> = game_data
-                            .unwrap()
-                            .participants
-                            .iter()
-                            .filter_map(|p| p.riot_id.clone())
-                            .collect();
-                        let ids = format!("{:?}", riot_ids);
-                        // tracing::info!("In game players: {}", ids);
-                        let invalid_words_path = std::env::current_exe()
-                            .ok()
-                            .and_then(|p| p.parent().map(|p| p.join("invalid_words.txt")));
-                        if let Some(path) = invalid_words_path {
-                            if let Ok(invalid_words) = std::fs::read_to_string(path) {
-                                if let Some(word) =
-                                    invalid_words.lines().find(|word| ids.contains(word))
-                                {
-                                    INVALID_ID_DETECTED.store(true, Ordering::SeqCst);
-                                    let is_live =
-                                        get_bili_live_status(cfg.bililive.room).await.unwrap().0;
-                                    if is_live {
-                                        tracing::error!("检测到非法词汇:{}，停止直播", word);
-                                        bili_stop_live(&cfg).await.unwrap();
-                                        // Stop ffmpeg using supervisor
-                                        rt.block_on(stop_ffmpeg());
+                    let riot_ids: Vec<String> = game_data
+                        .participants
+                        .iter()
+                        .filter_map(|p| p.riot_id.clone())
+                        .collect();
+                    let ids = format!("{:?}", riot_ids);
+                    // tracing::info!("In game players: {}", ids);
+                    let invalid_words_path = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|p| p.join("invalid_words.txt")));
+                    if let Some(path) = invalid_words_path {
+                        if let Ok(invalid_words) = std::fs::read_to_string(path) {
+                            if let Some(word) =
+                                invalid_words.lines().find(|word| ids.contains(word))
+                            {
+                                INVALID_ID_DETECTED.store(true, Ordering::SeqCst);
+                                let is_live = match get_bili_live_status(cfg.bililive.room).await {
+                                    Ok((is_live, _, _)) => is_live,
+                                    Err(e) => {
+                                        tracing::error!("获取 B 站直播状态失败: {}", e);
+                                        false
+                                    }
+                                };
+                                if is_live {
+                                    tracing::error!("检测到非法词汇:{}，停止直播", word);
+                                    if let Err(e) = bili_stop_live(&cfg).await {
+                                        tracing::error!("停止 B 站直播失败: {}", e);
+                                    }
+                                    stop_ffmpeg().await;
+                                    if let Err(e) =
+                                        send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
+                                            .await
+                                    {
+                                        tracing::error!("Failed to send danmaku: {}", e);
+                                    }
+                                    if cfg.bililive.enable_danmaku_command
+                                        && !is_danmaku_commands_enabled()
+                                    {
+                                        enable_danmaku_commands(true);
+                                        thread::sleep(Duration::from_secs(2));
                                         if let Err(e) =
-                                            send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播")
-                                                .await
+                                            send_danmaku(&cfg, "可使用弹幕指令进行换台").await
                                         {
                                             tracing::error!("Failed to send danmaku: {}", e);
                                         }
-                                        if cfg.bililive.enable_danmaku_command
-                                            && !is_danmaku_commands_enabled()
-                                        {
-                                            enable_danmaku_commands(true);
-                                            thread::sleep(Duration::from_secs(2));
-                                            if let Err(e) =
-                                                send_danmaku(&cfg, "可使用弹幕指令进行换台").await
-                                            {
-                                                tracing::error!("Failed to send danmaku: {}", e);
-                                            }
-                                        }
-                                        return;
-                                    } else {
-                                        tracing::error!("检测到非法词汇:{}，不转播", word);
                                     }
+                                    return;
                                 } else {
-                                    INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
+                                    tracing::error!("检测到非法词汇:{}，不转播", word);
                                 }
+                            } else {
+                                INVALID_ID_DETECTED.store(false, Ordering::SeqCst);
                             }
                         }
                     }
                 }
 
                 // Check if ffmpeg is still running
-                if !rt.block_on(ffmpeg::is_ffmpeg_running()) {
+                if !ffmpeg::is_ffmpeg_running().await {
                     return;
                 }
             });
@@ -3278,5 +3297,11 @@ mod tests {
         }
 
         assert_eq!(*recover_mutex_lock(&lock, "test mutex"), 3);
+    }
+    #[test]
+    fn normalized_api_key_trims_and_rejects_empty_values() {
+        assert_eq!(normalized_api_key(Some("  key  ")).as_deref(), Some("key"));
+        assert_eq!(normalized_api_key(Some("   ")), None);
+        assert_eq!(normalized_api_key(None), None);
     }
 }
