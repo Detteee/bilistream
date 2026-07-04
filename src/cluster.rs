@@ -1332,10 +1332,18 @@ pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>)
 
     {
         let mut state = cluster_state_write();
-        state.local_stream = stream;
+        state.local_stream = stream.clone();
     }
 
-    local_has_active_lease(cfg).await
+    let may_push = local_has_active_lease(cfg).await;
+    if !may_push {
+        let mut state = cluster_state_write();
+        if state.local_stream == stream {
+            state.local_stream = None;
+        }
+    }
+
+    may_push
 }
 
 pub fn clear_local_stream() {
@@ -4496,6 +4504,41 @@ mod tests {
             .expect("peer should exist");
         assert!(!stored.health.healthy);
         assert_eq!(stored.health.reason, "api_unreachable");
+    }
+
+    #[tokio::test]
+    async fn standby_denied_push_does_not_keep_candidate_stream() {
+        let _guard = ClusterStateGuard::new();
+        let peer_id = "active-peer";
+        let mut cfg = test_config("standby-local", 0);
+        cfg.cluster.auto_failover = false;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: peer_id.to_string(),
+            name: peer_id.to_string(),
+            api_url: "http://active-peer".to_string(),
+            priority: 1,
+        }];
+
+        {
+            let now = now_secs();
+            let mut state = cluster_state_write();
+            state.active_owner = Some(peer_id.to_string());
+            state.nodes.insert(
+                peer_id.to_string(),
+                empty_node(peer_id, peer_id, "http://active-peer", 1, false, now),
+            );
+        }
+
+        let stream = ClusterStreamIdentity {
+            platform: "YT".to_string(),
+            channel_name: "standby-channel".to_string(),
+            channel_id: "standby-channel-id".to_string(),
+            stream_id: Some("video-id".to_string()),
+            title: Some("standby title".to_string()),
+        };
+
+        assert!(!local_may_push(&cfg, Some(stream)).await);
+        assert_eq!(cluster_state_read().local_stream, None);
     }
 
     #[test]
