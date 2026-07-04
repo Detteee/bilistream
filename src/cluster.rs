@@ -412,14 +412,21 @@ fn cache_current_owner_monitor_state(state: &mut ClusterState) {
     let Some(owner) = state.active_owner.as_deref() else {
         return;
     };
-    let Some((toggles, channel_targets)) = state
-        .nodes
-        .get(owner)
-        .map(|node| (node.monitor_toggles.clone(), node.channel_targets.clone()))
-    else {
+    let Some(node) = state.nodes.get(owner) else {
         return;
     };
-    cache_active_monitor_state(state, &toggles, Some(&channel_targets));
+
+    let toggles =
+        monitor_toggles_any_enabled(&node.monitor_toggles).then(|| node.monitor_toggles.clone());
+    let channel_targets =
+        channel_targets_configured(&node.channel_targets).then(|| node.channel_targets.clone());
+
+    if let Some(toggles) = toggles {
+        state.last_known_active_toggles = Some(toggles);
+    }
+    if let Some(channel_targets) = channel_targets {
+        state.last_known_active_channel_targets = Some(channel_targets);
+    }
 }
 
 pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, String> {
@@ -2760,6 +2767,41 @@ mod tests {
         assert_eq!(
             state.last_known_active_channel_targets,
             Some(current_targets)
+        );
+    }
+
+    #[test]
+    fn empty_active_snapshot_does_not_overwrite_cached_monitor_state() {
+        let now = now_secs();
+        let cached_toggles = MonitorToggleState {
+            enable_youtube_monitor: true,
+            youtube_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+        let cached_targets = ChannelTargetState {
+            youtube_channel_name: "cached".to_string(),
+            youtube_channel_id: "cached-yt".to_string(),
+            ..ChannelTargetState::default()
+        };
+
+        let mut state = ClusterState {
+            active_owner: Some("owner".to_string()),
+            last_known_active_toggles: Some(cached_toggles.clone()),
+            last_known_active_channel_targets: Some(cached_targets.clone()),
+            ..ClusterState::default()
+        };
+        let mut owner = empty_node("owner", "owner", "http://owner", 10, false, now);
+        owner.last_seen = Some(now);
+        owner.monitor_toggles = all_monitor_toggles_off();
+        owner.channel_targets = ChannelTargetState::default();
+        state.nodes.insert("owner".to_string(), owner);
+
+        cache_current_owner_monitor_state(&mut state);
+
+        assert_eq!(state.last_known_active_toggles, Some(cached_toggles));
+        assert_eq!(
+            state.last_known_active_channel_targets,
+            Some(cached_targets)
         );
     }
 
