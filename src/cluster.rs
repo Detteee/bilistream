@@ -183,6 +183,18 @@ pub struct ClusterApplyNodeModeRequest {
     pub channel_targets: Option<ChannelTargetState>,
 }
 
+#[derive(Serialize)]
+struct ClusterApplyNodeModeTargetRequest<'a> {
+    pub monitored_config: Option<&'a MonitoredConfig>,
+    pub active: bool,
+    #[serde(default)]
+    pub restart: bool,
+    #[serde(default)]
+    pub monitor_toggles: Option<&'a MonitorToggleState>,
+    #[serde(default)]
+    pub channel_targets: Option<&'a ChannelTargetState>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MonitoredConfig {
     pub interval: u64,
@@ -856,8 +868,8 @@ async fn handle_auto_owner_transition(
         client,
         cfg,
         new_owner,
-        toggles,
-        channel_targets.clone(),
+        &toggles,
+        channel_targets.as_ref(),
         true,
         "enable_new_active",
     )
@@ -869,11 +881,12 @@ async fn handle_auto_owner_transition(
     let should_disable_previous =
         previous_node.is_none_or(|node| !node.health.healthy || node.draining || node.ddos);
     if should_disable_previous {
+        let off_toggles = all_monitor_toggles_off();
         if let Err(e) = apply_monitor_toggles_to_node_with_retry(
             client,
             cfg,
             &previous_owner,
-            all_monitor_toggles_off(),
+            &off_toggles,
             None,
             false,
             "disable_previous_active",
@@ -893,8 +906,8 @@ async fn apply_monitor_toggles_to_node_with_retry(
     client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
-    monitor_toggles: MonitorToggleState,
-    channel_targets: Option<ChannelTargetState>,
+    monitor_toggles: &MonitorToggleState,
+    channel_targets: Option<&ChannelTargetState>,
     active: bool,
     phase: &str,
 ) -> Result<(), String> {
@@ -905,8 +918,8 @@ async fn apply_monitor_toggles_to_node_with_retry(
             client,
             cfg,
             node_id,
-            monitor_toggles.clone(),
-            channel_targets.clone(),
+            monitor_toggles,
+            channel_targets,
             active,
         )
         .await
@@ -1004,24 +1017,27 @@ async fn apply_monitor_toggles_to_node(
     client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
-    monitor_toggles: MonitorToggleState,
-    channel_targets: Option<ChannelTargetState>,
+    monitor_toggles: &MonitorToggleState,
+    channel_targets: Option<&ChannelTargetState>,
     active: bool,
 ) -> Result<(), String> {
     if node_id == cfg.cluster.node_id {
         let mut cfg = crate::config::load_config()
             .await
             .map_err(|e| e.to_string())?;
-        if let Some(channel_targets) = channel_targets.as_ref() {
+        if let Some(channel_targets) = channel_targets {
             apply_channel_target_state_to_config(&mut cfg, channel_targets);
         }
-        apply_monitor_toggle_state_to_config(&mut cfg, &monitor_toggles);
+        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
         save_config(&cfg).await.map_err(|e| e.to_string())?;
         apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
         if active {
-            let cache_targets =
-                channel_targets.unwrap_or_else(|| channel_target_state_from_config(&cfg));
-            cache_active_monitor_state_from_owner(&monitor_toggles, Some(&cache_targets));
+            if let Some(channel_targets) = channel_targets {
+                cache_active_monitor_state_from_owner(monitor_toggles, Some(channel_targets));
+            } else {
+                let cache_targets = channel_target_state_from_config(&cfg);
+                cache_active_monitor_state_from_owner(monitor_toggles, Some(&cache_targets));
+            }
         }
         set_config_updated();
         return Ok(());
@@ -1037,7 +1053,7 @@ async fn apply_monitor_toggles_to_node(
         "{}/api/cluster/apply-node-mode",
         peer.api_url.trim_end_matches('/')
     );
-    let payload = ClusterApplyNodeModeRequest {
+    let payload = ClusterApplyNodeModeTargetRequest {
         monitored_config: None,
         active,
         restart: false,
@@ -2391,6 +2407,31 @@ mod tests {
         assert_eq!(
             request.config_version,
             monitored_config_integrity_version_from_payload(&request.monitored_config)
+        );
+    }
+
+    #[test]
+    fn borrowed_node_mode_request_matches_owned_payload_shape() {
+        let monitor_toggles = all_monitor_toggles_on();
+        let channel_targets = channel_target_state_from_config(&test_config("a", 0));
+        let owned = ClusterApplyNodeModeRequest {
+            monitored_config: None,
+            active: true,
+            restart: false,
+            monitor_toggles: Some(monitor_toggles.clone()),
+            channel_targets: Some(channel_targets.clone()),
+        };
+        let borrowed = ClusterApplyNodeModeTargetRequest {
+            monitored_config: None,
+            active: true,
+            restart: false,
+            monitor_toggles: Some(&monitor_toggles),
+            channel_targets: Some(&channel_targets),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&borrowed).unwrap(),
+            serde_json::to_value(&owned).unwrap()
         );
     }
 
