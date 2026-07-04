@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::{Mutex, RwLock};
+use std::sync::{LockResult, Mutex, RwLock};
 
 lazy_static! {
     static ref LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
@@ -78,12 +78,12 @@ pub struct TwStatus {
 }
 
 pub fn init_log_buffer() {
-    let mut buffer = LOG_BUFFER.lock().unwrap();
+    let mut buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
     *buffer = Some(VecDeque::with_capacity(500));
 }
 
 pub fn add_log_line(line: String) {
-    let mut buffer = LOG_BUFFER.lock().unwrap();
+    let mut buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
     if let Some(ref mut buf) = *buffer {
         buf.push_back(line);
         if buf.len() > 500 {
@@ -93,7 +93,7 @@ pub fn add_log_line(line: String) {
 }
 
 pub fn get_logs() -> Vec<String> {
-    let buffer = LOG_BUFFER.lock().unwrap();
+    let buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
     if let Some(ref buf) = *buffer {
         buf.iter().cloned().collect()
     } else {
@@ -102,17 +102,44 @@ pub fn get_logs() -> Vec<String> {
 }
 
 pub fn update_status_cache(status: StatusData) {
-    let mut cache = STATUS_CACHE.write().unwrap();
+    let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
     *cache = Some(status);
 }
 
 pub fn update_status_cache_with(update: impl FnOnce(&mut StatusData)) {
-    let mut cache = STATUS_CACHE.write().unwrap();
+    let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
     let status = cache.get_or_insert_with(StatusData::default);
     update(status);
 }
 
 pub fn get_status_cache() -> Option<StatusData> {
-    let cache = STATUS_CACHE.read().unwrap();
+    let cache = recover_lock(STATUS_CACHE.read(), "webui status cache");
     cache.clone()
+}
+
+fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
+    lock.unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {}", name);
+        poisoned.into_inner()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn recover_lock_returns_inner_after_poison() {
+        let lock = Mutex::new(7);
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lock.lock().unwrap();
+            panic!("poison test lock");
+        }));
+
+        let mut guard = recover_lock(lock.lock(), "test lock");
+        *guard += 1;
+
+        assert_eq!(*guard, 8);
+    }
 }
