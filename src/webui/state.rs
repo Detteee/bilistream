@@ -274,3 +274,99 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
 pub(crate) fn platform_channel_configured(channel_name: &str, channel_id: &str) -> bool {
     !channel_name.trim().is_empty() || !channel_id.trim().is_empty()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        BiliLive, ClusterConfig, Config, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube,
+    };
+    use std::collections::HashMap;
+
+    fn status_cache_test_config() -> Config {
+        Config {
+            auto_cover: false,
+            enable_anti_collision: false,
+            interval: 60,
+            bililive: BiliLive {
+                enable_danmaku_command: true,
+                room: 1,
+                bili_rtmp_url: String::new(),
+                bili_rtmp_key: String::new(),
+                credentials: Credentials::default(),
+            },
+            twitch: Twitch {
+                enable_monitor: false,
+                channel_name: "tw-channel".to_string(),
+                area_v2: 235,
+                channel_id: "twid".to_string(),
+                proxy_region: String::new(),
+                quality: "best".to_string(),
+                proxy: None,
+                crop: None,
+                ffmpeg_cache: FfmpegCache::default(),
+            },
+            youtube: Youtube {
+                enable_monitor: false,
+                channel_name: "yt-channel".to_string(),
+                channel_id: "ytid".to_string(),
+                area_v2: 235,
+                quality: "best".to_string(),
+                cookies_file: None,
+                cookies_from_browser: None,
+                proxy: None,
+                deno_path: None,
+                crop: None,
+                ffmpeg_cache: FfmpegCache::default(),
+            },
+            holodex_api_key: None,
+            holodex_jwt: None,
+            holodex_jwt_refreshed_at: None,
+            holodex_username: None,
+            holodex_skip_jwt_verify: false,
+            riot_api_key: None,
+            enable_lol_monitor: false,
+            lol_monitor_interval: None,
+            anti_collision_list: HashMap::new(),
+            priority_channel: PriorityChannel {
+                enabled: true,
+                auto_restart: true,
+                channel_name: "priority-channel".to_string(),
+                default_area: 235,
+                youtube_channel_id: "priority-yt".to_string(),
+                twitch_channel_id: "priority-tw".to_string(),
+            },
+            enable_youtube_monitor: false,
+            enable_twitch_monitor: false,
+            cluster: ClusterConfig::default(),
+        }
+    }
+
+    #[test]
+    fn config_refresh_preserves_configured_disabled_platforms() {
+        update_status_cache(StatusData::default());
+
+        refresh_status_cache_config_from(&status_cache_test_config());
+
+        let status = get_status_cache().expect("status cache should be initialized");
+        assert!(status.bilibili.enable_danmaku_command);
+
+        let youtube = status.youtube.expect("youtube status should be present");
+        assert!(!youtube.enable_monitor);
+        assert_eq!(youtube.channel_name, "yt-channel");
+        assert_eq!(youtube.channel_id, "ytid");
+
+        let twitch = status.twitch.expect("twitch status should be present");
+        assert!(!twitch.enable_monitor);
+        assert_eq!(twitch.channel_name, "tw-channel");
+        assert_eq!(twitch.channel_id, "twid");
+
+        let priority = status
+            .priority_channel
+            .expect("priority status should be present");
+        assert!(priority.enabled);
+        assert!(priority.auto_restart);
+        assert_eq!(priority.channel_name, "priority-channel");
+        assert_eq!(priority.default_area, 235);
+    }
+}
