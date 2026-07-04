@@ -1364,10 +1364,10 @@
       --text-primary: #cdd6f4;
       --text-secondary: #bac2de;
       --text-muted: #6c7086;
-      --network-graph-bg: transparent;
+      --network-graph-bg: #1e1e2e;
       --network-graph-border: #313244;
       --network-graph-guide: #313244;
-      background: rgba(49, 50, 68, 0.42);
+      background: #313244;
     }
 
     .bili-network-header {
