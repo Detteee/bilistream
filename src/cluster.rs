@@ -1720,9 +1720,13 @@ fn choose_owner_with_configured(
         .or_else(|| last_resort_local_owner(state, cfg))
 }
 
-/// When every peer is disabled/unavailable, keep the local node active so
-/// streaming does not stop with no failover target.
+/// When every peer is disabled/unavailable, keep an active local node running,
+/// but never let an all-off standby self-elect.
 fn last_resort_local_owner(state: &ClusterState, cfg: &Config) -> Option<String> {
+    if !monitor_toggles_any_enabled(&monitor_toggle_state_from_config(cfg)) {
+        return None;
+    }
+
     state
         .nodes
         .get(&cfg.cluster.node_id)
@@ -4111,6 +4115,36 @@ mod tests {
         state.nodes.get_mut("b").unwrap().last_seen = Some(now);
 
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
+    }
+
+    #[test]
+    fn manual_mode_standby_without_toggles_does_not_self_elect() {
+        let mut cfg = test_config("a", 100);
+        cfg.cluster.auto_failover = false;
+        cfg.bililive.enable_danmaku_command = false;
+        cfg.enable_youtube_monitor = false;
+        cfg.enable_twitch_monitor = false;
+        cfg.youtube.enable_monitor = false;
+        cfg.twitch.enable_monitor = false;
+        cfg.priority_channel.enabled = false;
+        cfg.priority_channel.auto_restart = false;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 1,
+        }];
+
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        state.nodes.insert(
+            "a".to_string(),
+            empty_node("a", "a", "http://a", 100, true, now),
+        );
+        state.nodes.get_mut("a").unwrap().health = ClusterHealth::healthy();
+        state.nodes.get_mut("a").unwrap().last_seen = Some(now);
+
+        assert_eq!(choose_owner(&state, &cfg, now), None);
     }
 
     #[test]
