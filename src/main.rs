@@ -905,28 +905,26 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let (current_is_live, _, _, new_m3u8_url, _, _) = if selected_stream
-                    .platform
-                    .is_youtube()
-                {
-                    if let Some(ref client) = yt_live {
-                        client
-                            .get_status()
-                            .await
-                            .unwrap_or((false, None, None, None, None, None))
+                let (current_is_live, _, _, new_m3u8_url, _, _) =
+                    if selected_stream.platform.is_youtube() {
+                        if let Some(ref client) = yt_live {
+                            client
+                                .get_status()
+                                .await
+                                .unwrap_or((false, None, None, None, None, None))
+                        } else {
+                            (false, None, None, None, None, None)
+                        }
                     } else {
-                        (false, None, None, None, None, None)
-                    }
-                } else {
-                    if let Some(ref client) = tw_live {
-                        client
-                            .get_status()
-                            .await
-                            .unwrap_or((false, None, None, None, None, None))
-                    } else {
-                        (false, None, None, None, None, None)
-                    }
-                };
+                        if let Some(ref client) = tw_live {
+                            client
+                                .get_status()
+                                .await
+                                .unwrap_or((false, None, None, None, None, None))
+                        } else {
+                            (false, None, None, None, None, None)
+                        }
+                    };
                 let (bili_is_live, _, _) = match get_bili_live_status(cfg.bililive.room).await {
                     Ok(status) => status,
                     Err(e) => {
