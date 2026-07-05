@@ -22,6 +22,12 @@ fn get_yt_dlp_command() -> String {
 
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
 
+fn add_youtube_extractor_args(command: &mut Command) {
+    command
+        .arg("--extractor-args")
+        .arg("youtube:formats=duplicate;player-client=default,web_embedded");
+}
+
 fn scheduled_title_suffix_regex() -> Option<&'static Regex> {
     static SCHEDULED_TITLE_SUFFIX_RE: OnceLock<Option<Regex>> = OnceLock::new();
     SCHEDULED_TITLE_SUFFIX_RE
@@ -325,6 +331,7 @@ async fn get_status_with_yt_dlp(
 
     // Add cookies arguments
     add_yt_dlp_cookies_args(&mut command, cookies_file, cookies_from_browser);
+    add_youtube_extractor_args(&mut command);
 
     command.arg("-f");
     command.arg(quality);
@@ -395,6 +402,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             command.arg("--proxy").arg(p);
         }
         add_yt_dlp_cookies_args(&mut command, cookies_file, cookies_from_browser);
+        add_youtube_extractor_args(&mut command);
         command.arg("-e").arg(format!(
             "https://www.youtube.com/channel/{}/live",
             channel_id
