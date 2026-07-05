@@ -208,21 +208,11 @@ pub struct ClusterApplyNodeModeRequest {
     #[serde(default)]
     pub restart: bool,
     #[serde(default)]
+    pub preserve_drain: bool,
+    #[serde(default)]
     pub monitor_toggles: Option<MonitorToggleState>,
     #[serde(default)]
     pub channel_targets: Option<ChannelTargetState>,
-}
-
-#[derive(Serialize)]
-struct ClusterApplyNodeModeTargetRequest<'a> {
-    pub monitored_config: Option<&'a MonitoredConfig>,
-    pub active: bool,
-    #[serde(default)]
-    pub restart: bool,
-    #[serde(default)]
-    pub monitor_toggles: Option<&'a MonitorToggleState>,
-    #[serde(default)]
-    pub channel_targets: Option<&'a ChannelTargetState>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -407,7 +397,9 @@ pub async fn apply_monitor_toggle_state(payload: MonitorToggleState) -> Result<(
     save_config(&cfg).await.map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
     apply_danmaku_command_runtime_state(payload.enable_danmaku_command);
-    if monitor_toggles_any_enabled(&payload) {
+    if monitor_toggles_any_enabled(&payload)
+        || current_active_owner().as_deref() == Some(cfg.cluster.node_id.as_str())
+    {
         cache_active_monitor_state_from_owner(
             &payload,
             Some(&channel_target_state_from_config(&cfg)),
@@ -437,9 +429,7 @@ fn cache_active_monitor_state(
     toggles: &MonitorToggleState,
     channel_targets: Option<&ChannelTargetState>,
 ) {
-    if monitor_toggles_any_enabled(toggles) {
-        state.last_known_active_toggles = Some(toggles.clone());
-    }
+    state.last_known_active_toggles = Some(toggles.clone());
     if let Some(targets) = channel_targets.filter(|targets| channel_targets_configured(targets)) {
         state.last_known_active_channel_targets = Some(targets.clone());
     }
@@ -453,13 +443,11 @@ fn cache_current_owner_monitor_state(state: &mut ClusterState) {
         return;
     };
 
-    let toggles =
-        monitor_toggles_any_enabled(&node.monitor_toggles).then(|| node.monitor_toggles.clone());
     let channel_targets =
         channel_targets_configured(&node.channel_targets).then(|| node.channel_targets.clone());
 
-    if let Some(toggles) = toggles {
-        state.last_known_active_toggles = Some(toggles);
+    if node_monitor_toggles_are_known(node) {
+        state.last_known_active_toggles = Some(node.monitor_toggles.clone());
     }
     if let Some(channel_targets) = channel_targets {
         state.last_known_active_channel_targets = Some(channel_targets);
@@ -814,6 +802,463 @@ async fn push_monitored_config_to_peer(
     Ok(())
 }
 
+struct SourceConfigSnapshot {
+    payload: ClusterSyncConfigRequest,
+    toggle_state_authoritative: bool,
+}
+
+pub async fn finalize_cluster_node_switch(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    target_node_id: &str,
+    preserve_source_drain: bool,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
+        Ok(payload) => SourceConfigSnapshot {
+            payload,
+            toggle_state_authoritative: true,
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to export active source config from {}; using local synced config and cached active state: {}",
+                source_node_id,
+                e
+            );
+            SourceConfigSnapshot {
+                payload: cluster_sync_config_from_config(cfg),
+                toggle_state_authoritative: false,
+            }
+        }
+    };
+    let source_toggles = resolve_source_monitor_toggles(
+        cfg,
+        before,
+        source_node_id,
+        &source_config.payload.monitored_config,
+        source_config.toggle_state_authoritative,
+    );
+    let source_channel_targets = resolve_source_channel_targets(
+        cfg,
+        before,
+        source_node_id,
+        &source_config.payload.monitored_config,
+    );
+
+    apply_cluster_node_mode_to_node_with_retry(
+        &client,
+        cfg,
+        target_node_id,
+        ClusterApplyNodeModeRequest {
+            monitored_config: Some(source_config.payload.monitored_config),
+            active: true,
+            restart: false,
+            preserve_drain: false,
+            monitor_toggles: Some(source_toggles),
+            channel_targets: Some(source_channel_targets),
+        },
+        "enable_new_active",
+    )
+    .await?;
+
+    let target_enable = ClusterDrainRequest {
+        node_id: Some(target_node_id.to_string()),
+        draining: false,
+        ddos: false,
+        propagate: Some(false),
+    };
+    post_cluster_drain_control(cfg, &target_enable, None).await;
+
+    if source_node_id != target_node_id {
+        if !preserve_source_drain {
+            let source_standby = ClusterDrainRequest {
+                node_id: Some(source_node_id.to_string()),
+                draining: false,
+                ddos: false,
+                propagate: Some(false),
+            };
+            post_cluster_drain_control(cfg, &source_standby, None).await;
+        }
+
+        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
+            &client,
+            cfg,
+            source_node_id,
+            ClusterApplyNodeModeRequest {
+                monitored_config: None,
+                active: false,
+                restart: false,
+                preserve_drain: preserve_source_drain,
+                monitor_toggles: Some(all_monitor_toggles_off()),
+                channel_targets: None,
+            },
+            "disable_previous_active",
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to disable previous active {}; it will reconcile from the new active owner on recovery: {}",
+                source_node_id,
+                e
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn resolve_source_monitor_toggles(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+    monitored_config_toggles_known: bool,
+) -> MonitorToggleState {
+    resolve_source_monitor_toggles_with_cache(
+        cfg,
+        before,
+        source_node_id,
+        monitored_config,
+        monitored_config_toggles_known,
+        last_known_active_toggles(),
+    )
+}
+
+pub(crate) fn resolve_source_monitor_toggles_with_cache(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+    monitored_config_toggles_known: bool,
+    cached_toggles: Option<MonitorToggleState>,
+) -> MonitorToggleState {
+    if source_node_id == cfg.cluster.node_id {
+        return monitor_toggle_state_from_config(cfg);
+    }
+
+    if let Some(node) = before
+        .nodes
+        .iter()
+        .find(|node| node.node_id == source_node_id)
+    {
+        if node_monitor_toggles_are_known(node) {
+            return node.monitor_toggles.clone();
+        }
+    }
+
+    if let Some(cached) = cached_toggles {
+        return cached;
+    }
+
+    let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
+    if monitored_config_toggles_known || monitor_toggles_any_enabled(&from_config) {
+        return from_config;
+    }
+
+    all_monitor_toggles_on()
+}
+
+pub(crate) fn resolve_source_channel_targets(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    monitored_config: &MonitoredConfig,
+) -> ChannelTargetState {
+    if source_node_id == cfg.cluster.node_id {
+        let local_targets = channel_target_state_from_config(cfg);
+        if channel_targets_configured(&local_targets) {
+            return local_targets;
+        }
+    }
+
+    let from_config = channel_target_state_from_monitored_config(monitored_config);
+    if channel_targets_configured(&from_config) {
+        return from_config;
+    }
+
+    if let Some(node) = before
+        .nodes
+        .iter()
+        .find(|node| node.node_id == source_node_id)
+    {
+        if channel_targets_configured(&node.channel_targets) {
+            return node.channel_targets.clone();
+        }
+    }
+
+    last_known_active_channel_targets().unwrap_or(from_config)
+}
+
+async fn export_cluster_config_from_node(
+    client: &reqwest::Client,
+    cfg: &Config,
+    node_id: &str,
+) -> Result<ClusterSyncConfigRequest, String> {
+    if node_id == cfg.cluster.node_id {
+        return Ok(cluster_sync_config_from_config(cfg));
+    }
+
+    let peer = cfg
+        .cluster
+        .peers
+        .iter()
+        .find(|peer| peer.node_id == node_id)
+        .ok_or_else(|| format!("未找到源节点 {}", node_id))?;
+    let url = format!(
+        "{}/api/cluster/export-config",
+        peer.api_url.trim_end_matches('/')
+    );
+    let response = client
+        .get(url)
+        .timeout(Duration::from_secs(
+            cfg.cluster.heartbeat_interval_secs.max(5),
+        ))
+        .send()
+        .await
+        .map_err(|e| format!("读取源节点配置失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("读取源节点配置失败: HTTP {}", response.status()));
+    }
+
+    let envelope = response
+        .json::<PeerApiResponse<ClusterSyncConfigRequest>>()
+        .await
+        .map_err(|e| format!("解析源节点配置失败: {}", e))?;
+
+    if envelope.success {
+        envelope.data.ok_or_else(|| "源节点未返回配置".to_string())
+    } else {
+        Err(envelope
+            .message
+            .unwrap_or_else(|| "源节点拒绝导出配置".to_string()))
+    }
+}
+
+async fn apply_cluster_node_mode_to_node_with_retry(
+    client: &reqwest::Client,
+    cfg: &Config,
+    node_id: &str,
+    payload: ClusterApplyNodeModeRequest,
+    phase: &str,
+) -> Result<(), String> {
+    let max_attempts = 3;
+    let mut last_error = String::new();
+    for attempt in 1..=max_attempts {
+        match apply_cluster_node_mode_to_node(client, cfg, node_id, &payload).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_error = e;
+                tracing::warn!(
+                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                    phase,
+                    attempt,
+                    max_attempts,
+                    node_id,
+                    last_error
+                );
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+async fn apply_cluster_node_mode_to_node(
+    client: &reqwest::Client,
+    cfg: &Config,
+    node_id: &str,
+    payload: &ClusterApplyNodeModeRequest,
+) -> Result<(), String> {
+    if node_id == cfg.cluster.node_id {
+        apply_cluster_node_mode_locally(payload.clone()).await?;
+        return Ok(());
+    }
+
+    let peer = cfg
+        .cluster
+        .peers
+        .iter()
+        .find(|peer| peer.node_id == node_id)
+        .ok_or_else(|| format!("未找到目标节点 {}", node_id))?;
+    let url = format!(
+        "{}/api/cluster/apply-node-mode",
+        peer.api_url.trim_end_matches('/')
+    );
+    let response = client
+        .post(url)
+        .json(payload)
+        .timeout(Duration::from_secs(
+            cfg.cluster.heartbeat_interval_secs.max(5),
+        ))
+        .send()
+        .await
+        .map_err(|e| format!("更新节点 {} 模式失败: {}", node_id, e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "更新节点 {} 模式失败: HTTP {}",
+            node_id,
+            response.status()
+        ));
+    }
+
+    let envelope = response
+        .json::<PeerApiResponse<ClusterStatus>>()
+        .await
+        .map_err(|e| format!("解析节点 {} 模式响应失败: {}", node_id, e))?;
+
+    if envelope.success {
+        if let Some(status) = envelope.data {
+            merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
+        }
+        Ok(())
+    } else {
+        Err(envelope
+            .message
+            .unwrap_or_else(|| format!("节点 {} 拒绝模式更新", node_id)))
+    }
+}
+
+pub async fn apply_cluster_node_mode_locally(
+    payload: ClusterApplyNodeModeRequest,
+) -> Result<ClusterStatus, String> {
+    let has_monitored_config = payload.monitored_config.is_some();
+    let active = payload.active;
+    let restart = payload.restart;
+    let preserve_drain = payload.preserve_drain;
+    let monitor_toggles = payload.monitor_toggles;
+    let channel_targets = payload.channel_targets;
+    if let Some(monitored_config) = payload.monitored_config {
+        apply_monitored_config(monitored_config).await?;
+    }
+
+    let mut cfg = load_config().await.map_err(|e| e.to_string())?;
+    if let Some(channel_targets) = channel_targets.as_ref() {
+        apply_channel_target_state_to_config(&mut cfg, channel_targets);
+    }
+    if let Some(monitor_toggles) = monitor_toggles.as_ref() {
+        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
+    } else if !has_monitored_config {
+        cfg.enable_youtube_monitor = active;
+        cfg.enable_twitch_monitor = active;
+        cfg.youtube.enable_monitor = active;
+        cfg.twitch.enable_monitor = active;
+        cfg.priority_channel.enabled = active;
+        cfg.bililive.enable_danmaku_command = active;
+    }
+
+    save_config(&cfg).await.map_err(|e| e.to_string())?;
+
+    // Promoting to active clears drain/ddos locks. Demoting to standby only
+    // clears draining so the node stays eligible; disabled state is /drain only.
+    if active {
+        set_drain_state(&cfg, None, false, false);
+    } else if !preserve_drain {
+        let ddos = local_ddos_state();
+        set_local_drain_state_preserving_fault(&cfg, false, ddos);
+    }
+
+    apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
+    set_config_updated();
+    refresh_status_cache_config_from(&cfg);
+
+    if active {
+        if let Some(monitor_toggles) = monitor_toggles.as_ref() {
+            let cache_targets =
+                channel_targets.unwrap_or_else(|| channel_target_state_from_config(&cfg));
+            cache_active_monitor_state_from_owner(monitor_toggles, Some(&cache_targets));
+        }
+    }
+
+    if !active || restart {
+        set_manual_restart();
+        clear_local_stream();
+        stop_ffmpeg().await;
+    }
+
+    get_cluster_status().await
+}
+
+async fn post_cluster_drain_control(
+    cfg: &Config,
+    payload: &ClusterDrainRequest,
+    target_node_id: Option<&str>,
+) {
+    let client = reqwest::Client::new();
+    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+    let tasks = cfg
+        .cluster
+        .peers
+        .iter()
+        .filter(|peer| peer.node_id != cfg.cluster.node_id)
+        .filter(|peer| {
+            target_node_id
+                .map(|target| peer.node_id == target)
+                .unwrap_or(true)
+        })
+        .map(|peer| post_cluster_drain_control_to_peer(&client, cfg, peer, payload, timeout));
+    join_all(tasks).await;
+}
+
+async fn post_cluster_drain_control_to_peer(
+    client: &reqwest::Client,
+    cfg: &Config,
+    peer: &crate::config::ClusterPeer,
+    payload: &ClusterDrainRequest,
+    timeout: Duration,
+) {
+    let url = format!("{}/api/cluster/drain", peer.api_url.trim_end_matches('/'));
+    match client.post(url).json(payload).timeout(timeout).send().await {
+        Ok(response) if !response.status().is_success() => {
+            tracing::warn!(
+                "Cluster drain propagation failed for {}: HTTP {}",
+                peer.node_id,
+                response.status()
+            );
+        }
+        Ok(response) => match response.json::<PeerApiResponse<ClusterStatus>>().await {
+            Ok(envelope) if envelope.success => {
+                if let Some(status) = envelope.data {
+                    if let Err(e) =
+                        merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
+                    {
+                        tracing::warn!(
+                            "Cluster drain response from {} ignored: {}",
+                            peer.node_id,
+                            e
+                        );
+                    }
+                }
+            }
+            Ok(envelope) => {
+                tracing::warn!(
+                    "Cluster drain rejected by {}: {:?}",
+                    peer.node_id,
+                    envelope.message
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Cluster drain response parse failed for {}: {}",
+                    peer.node_id,
+                    e
+                );
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Cluster drain propagation failed for {}: {}",
+                peer.node_id,
+                e
+            );
+        }
+    }
+}
+
 pub fn start_cluster_worker() {
     tokio::spawn(async {
         let client = reqwest::Client::new();
@@ -842,7 +1287,7 @@ pub fn start_cluster_worker() {
             update_node(local.clone(), &cfg.cluster.node_id);
             send_heartbeats(&client, &cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
-            handle_auto_owner_transition(&client, &cfg, previous_owner, &status).await;
+            handle_auto_owner_transition(&cfg, previous_owner, &status).await;
             enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_toggles(&cfg, &status).await;
 
@@ -892,7 +1337,6 @@ fn local_effective_ddos_state(state: &ClusterState) -> bool {
 }
 
 async fn handle_auto_owner_transition(
-    client: &reqwest::Client,
     cfg: &Config,
     previous_owner: Option<String>,
     status: &ClusterStatus,
@@ -913,115 +1357,33 @@ async fn handle_auto_owner_transition(
         return;
     }
 
-    let previous_node = status
+    let preserve_source_drain = status
         .nodes
         .iter()
-        .find(|node| node.node_id == previous_owner);
+        .find(|node| node.node_id == previous_owner)
+        .is_some_and(|node| node.draining);
     tracing::warn!(
-        "集群自动故障转移: {} -> {}, transfer active channel targets and monitor toggles",
+        "集群自动故障转移: {} -> {}, transfer active config and monitor state",
         previous_owner,
         new_owner
     );
 
-    let mut toggles = previous_node
-        .map(|node| node.monitor_toggles.clone())
-        .unwrap_or_else(all_monitor_toggles_off);
-    if monitor_toggles_all_off(&toggles) {
-        if let Some(cached) = last_known_active_toggles() {
-            tracing::info!(
-                "previous owner toggles are all off, using cached last-known active toggles"
-            );
-            toggles = cached;
-        } else {
-            tracing::warn!(
-                "previous owner toggles unavailable, enabling all monitor toggles on fallback active node"
-            );
-            toggles = all_monitor_toggles_on();
-        }
-    }
-    let channel_targets = previous_node
-        .map(|node| node.channel_targets.clone())
-        .filter(channel_targets_configured)
-        .or_else(last_known_active_channel_targets);
-
-    if let Err(e) = apply_monitor_toggles_to_node_with_retry(
-        client,
+    if let Err(e) = finalize_cluster_node_switch(
         cfg,
+        status,
+        &previous_owner,
         new_owner,
-        &toggles,
-        channel_targets.as_ref(),
-        true,
-        "enable_new_active",
+        preserve_source_drain,
     )
     .await
     {
-        tracing::warn!("Failed to transfer monitor toggles to {}: {}", new_owner, e);
+        tracing::warn!(
+            "Failed to finalize automatic cluster failover {} -> {}: {}",
+            previous_owner,
+            new_owner,
+            e
+        );
     }
-
-    let should_disable_previous =
-        previous_node.is_none_or(|node| !node.health.healthy || node.draining || node.ddos);
-    if should_disable_previous {
-        let off_toggles = all_monitor_toggles_off();
-        if let Err(e) = apply_monitor_toggles_to_node_with_retry(
-            client,
-            cfg,
-            &previous_owner,
-            &off_toggles,
-            None,
-            false,
-            "disable_previous_active",
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to disable monitor toggles on {}: {}",
-                previous_owner,
-                e
-            );
-        }
-    }
-}
-
-async fn apply_monitor_toggles_to_node_with_retry(
-    client: &reqwest::Client,
-    cfg: &Config,
-    node_id: &str,
-    monitor_toggles: &MonitorToggleState,
-    channel_targets: Option<&ChannelTargetState>,
-    active: bool,
-    phase: &str,
-) -> Result<(), String> {
-    let max_attempts = 3;
-    let mut last_error = String::new();
-    for attempt in 1..=max_attempts {
-        match apply_monitor_toggles_to_node(
-            client,
-            cfg,
-            node_id,
-            monitor_toggles,
-            channel_targets,
-            active,
-        )
-        .await
-        {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_error = e;
-                tracing::warn!(
-                    "Monitor toggle transfer {} attempt {}/{} failed for {}: {}",
-                    phase,
-                    attempt,
-                    max_attempts,
-                    node_id,
-                    last_error
-                );
-                if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
-                }
-            }
-        }
-    }
-    Err(last_error)
 }
 
 fn monitor_toggles_all_off(toggles: &MonitorToggleState) -> bool {
@@ -1030,6 +1392,14 @@ fn monitor_toggles_all_off(toggles: &MonitorToggleState) -> bool {
 
 pub(crate) fn monitor_toggles_any_enabled(toggles: &MonitorToggleState) -> bool {
     !monitor_toggles_all_off(toggles)
+}
+
+pub(crate) fn node_monitor_toggles_are_known(node: &ClusterNodeSnapshot) -> bool {
+    monitor_toggles_any_enabled(&node.monitor_toggles)
+        || node.last_seen.is_some()
+        || node.is_local
+        || node.status.is_some()
+        || !node.config_version.is_empty()
 }
 
 pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
@@ -1043,11 +1413,7 @@ pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
 }
 
 pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
-    cluster_state_read()
-        .last_known_active_toggles
-        .as_ref()
-        .filter(|toggles| monitor_toggles_any_enabled(toggles))
-        .cloned()
+    cluster_state_read().last_known_active_toggles.clone()
 }
 
 pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
@@ -1148,7 +1514,9 @@ fn enter_local_network_quarantine_state(
 ) -> (bool, Option<NetworkQuarantineSnapshot>) {
     let toggles_enabled = monitor_toggles_any_enabled(&current_toggles);
     let was_quarantined = state.local_network_quarantined;
-    let snapshot = if toggles_enabled {
+    let has_persisted_toggles = persisted_toggles.is_some();
+    let should_capture = toggles_enabled || (!was_quarantined && !has_persisted_toggles);
+    let snapshot = if should_capture {
         state.last_known_active_toggles = Some(current_toggles.clone());
         Some(NetworkQuarantineSnapshot {
             node_id: node_id.to_string(),
@@ -1176,8 +1544,7 @@ fn take_local_network_quarantine_recovery_toggles(
         state
             .last_known_active_toggles
             .clone()
-            .filter(monitor_toggles_any_enabled)
-            .or_else(|| persisted_toggles.filter(monitor_toggles_any_enabled))
+            .or(persisted_toggles)
             .unwrap_or_else(all_monitor_toggles_on),
     )
 }
@@ -1185,7 +1552,7 @@ fn take_local_network_quarantine_recovery_toggles(
 fn read_network_quarantine_snapshot(node_id: &str) -> Option<MonitorToggleState> {
     let value = read_json_file(NETWORK_QUARANTINE_FILE)?;
     let snapshot = serde_json::from_value::<NetworkQuarantineSnapshot>(value).ok()?;
-    if snapshot.node_id != node_id || !monitor_toggles_any_enabled(&snapshot.monitor_toggles) {
+    if snapshot.node_id != node_id {
         return None;
     }
     Some(snapshot.monitor_toggles)
@@ -1234,88 +1601,6 @@ fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) ->
         return false;
     }
     monitor_toggle_state_from_config(cfg) != all_monitor_toggles_off()
-}
-
-async fn apply_monitor_toggles_to_node(
-    client: &reqwest::Client,
-    cfg: &Config,
-    node_id: &str,
-    monitor_toggles: &MonitorToggleState,
-    channel_targets: Option<&ChannelTargetState>,
-    active: bool,
-) -> Result<(), String> {
-    if node_id == cfg.cluster.node_id {
-        let mut cfg = crate::config::load_config()
-            .await
-            .map_err(|e| e.to_string())?;
-        if let Some(channel_targets) = channel_targets {
-            apply_channel_target_state_to_config(&mut cfg, channel_targets);
-        }
-        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
-        save_config(&cfg).await.map_err(|e| e.to_string())?;
-        refresh_status_cache_config_from(&cfg);
-        apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
-        if active {
-            if let Some(channel_targets) = channel_targets {
-                cache_active_monitor_state_from_owner(monitor_toggles, Some(channel_targets));
-            } else {
-                let cache_targets = channel_target_state_from_config(&cfg);
-                cache_active_monitor_state_from_owner(monitor_toggles, Some(&cache_targets));
-            }
-        }
-        set_config_updated();
-        return Ok(());
-    }
-
-    let peer = cfg
-        .cluster
-        .peers
-        .iter()
-        .find(|peer| peer.node_id == node_id)
-        .ok_or_else(|| format!("未找到目标节点 {}", node_id))?;
-    let url = format!(
-        "{}/api/cluster/apply-node-mode",
-        peer.api_url.trim_end_matches('/')
-    );
-    let payload = ClusterApplyNodeModeTargetRequest {
-        monitored_config: None,
-        active,
-        restart: false,
-        monitor_toggles: Some(monitor_toggles),
-        channel_targets,
-    };
-    let response = client
-        .post(url)
-        .json(&payload)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(5),
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("更新节点 {} 监控开关失败: {}", node_id, e))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "更新节点 {} 监控开关失败: HTTP {}",
-            node_id,
-            response.status()
-        ));
-    }
-
-    let envelope = response
-        .json::<PeerApiResponse<ClusterStatus>>()
-        .await
-        .map_err(|e| format!("解析节点 {} 监控开关响应失败: {}", node_id, e))?;
-    if envelope.success {
-        if let Some(status) = envelope.data {
-            merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
-        }
-        Ok(())
-    } else {
-        Err(envelope
-            .message
-            .unwrap_or_else(|| format!("节点 {} 拒绝监控开关更新", node_id)))
-    }
 }
 
 pub async fn local_has_active_lease(cfg: &Config) -> bool {
@@ -1644,15 +1929,9 @@ fn should_adopt_auto_failover_from_peer(
     cfg.cluster.enabled && peer_is_active_owner && peer_auto_failover != cfg.cluster.auto_failover
 }
 
-fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, cfg: &Config) -> bool {
-    let observed_at = now_secs();
+fn heartbeat_response_is_valid(status: &ClusterStatus, peer_node_id: &str, _cfg: &Config) -> bool {
     status.local_node_id == peer_node_id
-        && status.nodes.iter().any(|node| {
-            node.node_id == peer_node_id
-                && node
-                    .last_seen
-                    .is_some_and(|last_seen| !last_seen_is_stale(last_seen, cfg, observed_at))
-        })
+        && status.nodes.iter().any(|node| node.node_id == peer_node_id)
 }
 
 async fn collect_local_snapshot(cfg: &Config, config_version: String) -> ClusterNodeSnapshot {
@@ -2827,31 +3106,6 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_node_mode_request_matches_owned_payload_shape() {
-        let monitor_toggles = all_monitor_toggles_on();
-        let channel_targets = channel_target_state_from_config(&test_config("a", 0));
-        let owned = ClusterApplyNodeModeRequest {
-            monitored_config: None,
-            active: true,
-            restart: false,
-            monitor_toggles: Some(monitor_toggles.clone()),
-            channel_targets: Some(channel_targets.clone()),
-        };
-        let borrowed = ClusterApplyNodeModeTargetRequest {
-            monitored_config: None,
-            active: true,
-            restart: false,
-            monitor_toggles: Some(&monitor_toggles),
-            channel_targets: Some(&channel_targets),
-        };
-
-        assert_eq!(
-            serde_json::to_value(&borrowed).unwrap(),
-            serde_json::to_value(&owned).unwrap()
-        );
-    }
-
-    #[test]
     fn monitored_config_version_ignores_monitor_toggles() {
         let cfg_a = test_config("a", 0);
         let mut cfg_b = test_config("b", 10);
@@ -3059,7 +3313,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_response_requires_peer_identity_and_fresh_snapshot() {
+    fn heartbeat_response_requires_peer_identity_and_snapshot() {
         let mut cfg = test_config("local", 0);
         cfg.cluster.failover_timeout_secs = 15;
         let now = now_secs();
@@ -3081,9 +3335,17 @@ mod tests {
         wrong_identity.local_node_id = "other".to_string();
         assert!(!heartbeat_response_is_valid(&wrong_identity, "peer", &cfg));
 
-        let mut stale = valid;
-        stale.nodes[0].last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
-        assert!(!heartbeat_response_is_valid(&stale, "peer", &cfg));
+        let mut skewed = valid.clone();
+        skewed.nodes[0].last_seen = Some(now - cfg.cluster.failover_timeout_secs - 1);
+        assert!(heartbeat_response_is_valid(&skewed, "peer", &cfg));
+
+        let mut missing_snapshot = valid;
+        missing_snapshot.nodes[0].node_id = "other".to_string();
+        assert!(!heartbeat_response_is_valid(
+            &missing_snapshot,
+            "peer",
+            &cfg
+        ));
     }
 
     #[test]
@@ -3243,7 +3505,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_active_snapshot_does_not_overwrite_cached_monitor_state() {
+    fn unknown_active_snapshot_does_not_overwrite_cached_monitor_state() {
         let now = now_secs();
         let cached_toggles = MonitorToggleState {
             enable_youtube_monitor: true,
@@ -3263,7 +3525,7 @@ mod tests {
             ..ClusterState::default()
         };
         let mut owner = empty_node("owner", "owner", "http://owner", 10, false, now);
-        owner.last_seen = Some(now);
+        owner.last_seen = None;
         owner.monitor_toggles = all_monitor_toggles_off();
         owner.channel_targets = ChannelTargetState::default();
         state.nodes.insert("owner".to_string(), owner);
@@ -3274,6 +3536,32 @@ mod tests {
         assert_eq!(
             state.last_known_active_channel_targets,
             Some(cached_targets)
+        );
+    }
+
+    #[test]
+    fn known_active_all_off_snapshot_updates_cached_monitor_state() {
+        let now = now_secs();
+        let cached_toggles = MonitorToggleState {
+            enable_youtube_monitor: true,
+            youtube_enable_monitor: true,
+            ..all_monitor_toggles_off()
+        };
+        let mut state = ClusterState {
+            active_owner: Some("owner".to_string()),
+            last_known_active_toggles: Some(cached_toggles),
+            ..ClusterState::default()
+        };
+        let mut owner = empty_node("owner", "owner", "http://owner", 10, false, now);
+        owner.last_seen = Some(now);
+        owner.monitor_toggles = all_monitor_toggles_off();
+        state.nodes.insert("owner".to_string(), owner);
+
+        cache_current_owner_monitor_state(&mut state);
+
+        assert_eq!(
+            state.last_known_active_toggles,
+            Some(all_monitor_toggles_off())
         );
     }
 
@@ -3893,6 +4181,24 @@ mod tests {
     }
 
     #[test]
+    fn network_quarantine_preserves_all_off_as_known_active_state() {
+        let mut state = ClusterState::default();
+
+        let (should_apply, snapshot) =
+            enter_local_network_quarantine_state(&mut state, "a", all_monitor_toggles_off(), None);
+
+        assert!(should_apply);
+        assert_eq!(
+            snapshot.map(|snapshot| snapshot.monitor_toggles),
+            Some(all_monitor_toggles_off())
+        );
+        assert_eq!(
+            take_local_network_quarantine_recovery_toggles(&mut state, None),
+            Some(all_monitor_toggles_off())
+        );
+    }
+
+    #[test]
     fn network_quarantine_recovery_uses_cached_persisted_or_all_on() {
         let cached = MonitorToggleState {
             enable_danmaku_command: true,
@@ -4082,7 +4388,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_transition_uses_cached_active_toggles_when_previous_snapshot_is_off() {
+    fn last_known_active_toggles_preserves_all_off() {
         let previous = MonitorToggleState {
             enable_danmaku_command: true,
             enable_youtube_monitor: true,
@@ -4104,7 +4410,7 @@ mod tests {
             let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(all_monitor_toggles_off());
         }
-        assert!(last_known_active_toggles().is_none());
+        assert_eq!(last_known_active_toggles(), Some(all_monitor_toggles_off()));
     }
 
     #[test]

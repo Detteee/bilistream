@@ -11,57 +11,6 @@ pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
     }
 }
 
-pub(crate) fn resolve_source_monitor_toggles(
-    cfg: &Config,
-    before: &ClusterStatus,
-    source_node_id: &str,
-    monitored_config: &MonitoredConfig,
-) -> MonitorToggleState {
-    resolve_source_monitor_toggles_with_cache(
-        cfg,
-        before,
-        source_node_id,
-        monitored_config,
-        last_known_active_toggles(),
-    )
-}
-
-pub(crate) fn resolve_source_monitor_toggles_with_cache(
-    cfg: &Config,
-    before: &ClusterStatus,
-    source_node_id: &str,
-    monitored_config: &MonitoredConfig,
-    cached_toggles: Option<MonitorToggleState>,
-) -> MonitorToggleState {
-    if source_node_id == cfg.cluster.node_id {
-        let local_toggles = monitor_toggle_state_from_config(cfg);
-        if monitor_toggles_any_enabled(&local_toggles) {
-            return local_toggles;
-        }
-    }
-
-    if let Some(node) = before
-        .nodes
-        .iter()
-        .find(|node| node.node_id == source_node_id)
-    {
-        if monitor_toggles_any_enabled(&node.monitor_toggles) {
-            return node.monitor_toggles.clone();
-        }
-    }
-
-    if let Some(cached) = cached_toggles {
-        return cached;
-    }
-
-    let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
-    if monitor_toggles_any_enabled(&from_config) {
-        return from_config;
-    }
-
-    all_monitor_toggles_on()
-}
-
 #[derive(Deserialize)]
 pub struct StartStreamRequest {
     platform: Option<String>,

@@ -19,19 +19,13 @@ use super::state::{
     PriorityChannelStatus, TwStatus, YtStatus,
 };
 use crate::cluster::{
-    all_monitor_toggles_off, all_monitor_toggles_on, apply_channel_target_state_to_config,
-    apply_monitor_toggle_state_to_config, apply_monitored_config,
-    cache_active_monitor_state_from_peer, channel_target_state_from_config,
-    channel_target_state_from_monitored_config, channel_targets_configured,
-    cluster_sync_config_from_config, get_cluster_status as load_cluster_status,
-    last_known_active_channel_targets, last_known_active_toggles, monitor_toggle_state_from_config,
-    monitor_toggle_state_from_monitored_config, monitor_toggles_any_enabled,
-    monitored_config_integrity_version_from_payload, monitored_config_version,
-    push_active_monitor_state_to_peers, push_monitored_config_to_peers,
-    sync_monitored_config_after_change, ChannelTargetState, ClusterActiveMonitorStateRequest,
+    apply_cluster_node_mode_locally, apply_monitored_config, cache_active_monitor_state_from_peer,
+    cluster_sync_config_from_config, finalize_cluster_node_switch,
+    get_cluster_status as load_cluster_status, monitored_config_integrity_version_from_payload,
+    monitored_config_version, push_active_monitor_state_to_peers, push_monitored_config_to_peers,
+    sync_monitored_config_after_change, ClusterActiveMonitorStateRequest,
     ClusterApplyNodeModeRequest, ClusterDrainRequest, ClusterFailoverRequest,
-    ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest, MonitorToggleState,
-    MonitoredConfig,
+    ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest,
 };
 use crate::config::{load_config, ClusterConfig, ClusterHealthThresholds, ClusterPeer, Config};
 use crate::plugins::{
@@ -84,42 +78,15 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
-fn resolve_source_channel_targets(
-    cfg: &Config,
-    before: &ClusterStatus,
-    source_node_id: &str,
-    monitored_config: &MonitoredConfig,
-) -> ChannelTargetState {
-    if source_node_id == cfg.cluster.node_id {
-        let local_targets = channel_target_state_from_config(cfg);
-        if channel_targets_configured(&local_targets) {
-            return local_targets;
-        }
-    }
-
-    let from_config = channel_target_state_from_monitored_config(monitored_config);
-    if channel_targets_configured(&from_config) {
-        return from_config;
-    }
-
-    if let Some(node) = before
-        .nodes
-        .iter()
-        .find(|node| node.node_id == source_node_id)
-    {
-        if channel_targets_configured(&node.channel_targets) {
-            return node.channel_targets.clone();
-        }
-    }
-
-    last_known_active_channel_targets().unwrap_or(from_config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cluster::{
-        monitored_config_from_config, ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot,
+        all_monitor_toggles_off, all_monitor_toggles_on, monitor_toggle_state_from_config,
+        monitored_config_from_config, resolve_source_channel_targets,
+        resolve_source_monitor_toggles, resolve_source_monitor_toggles_with_cache,
+        ChannelTargetState, ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot,
+        MonitorToggleState,
     };
     use crate::config::{
         BiliLive, ClusterPeer, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube,
@@ -679,9 +646,24 @@ mod tests {
         ));
         let exported = monitored_config_from_config(&status_cache_test_config());
 
-        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported);
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported, true);
 
         assert_eq!(resolved, expected_toggles);
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_preserves_known_all_off_source() {
+        let cfg = status_cache_test_config();
+        let before = cluster_status_with_node(healthy_cluster_node(
+            "source",
+            all_monitor_toggles_off(),
+            ChannelTargetState::default(),
+        ));
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported, true);
+
+        assert_eq!(resolved, all_monitor_toggles_off());
     }
 
     #[test]
@@ -703,7 +685,7 @@ mod tests {
         };
         let exported = monitored_config_from_config(&status_cache_test_config());
 
-        let resolved = resolve_source_monitor_toggles(&cfg, &before, "local", &exported);
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "local", &exported, true);
 
         assert_eq!(resolved, monitor_toggle_state_from_config(&cfg));
     }
@@ -722,10 +704,32 @@ mod tests {
         };
         let exported = monitored_config_from_config(&status_cache_test_config());
 
-        let resolved =
-            resolve_source_monitor_toggles_with_cache(&cfg, &before, "source", &exported, None);
+        let resolved = resolve_source_monitor_toggles_with_cache(
+            &cfg, &before, "source", &exported, false, None,
+        );
 
         assert_eq!(resolved, all_monitor_toggles_on());
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_accepts_authoritative_exported_all_off() {
+        let cfg = status_cache_test_config();
+        let before = ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: Some("source".to_string()),
+            lease_until: Some(30),
+            config_version: String::new(),
+            auto_failover: true,
+            nodes: Vec::new(),
+        };
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved = resolve_source_monitor_toggles_with_cache(
+            &cfg, &before, "source", &exported, true, None,
+        );
+
+        assert_eq!(resolved, all_monitor_toggles_off());
     }
 
     #[test]

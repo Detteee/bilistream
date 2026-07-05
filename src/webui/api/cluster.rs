@@ -120,6 +120,18 @@ pub async fn cluster_drain(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let should_propagate = payload.propagate.unwrap_or(true);
     let target_node_id = payload.node_id.clone();
+    let active_drain_plan = if should_propagate && cfg.cluster.enabled && payload.draining {
+        let before = load_cluster_status().await.ok();
+        before.and_then(|before| {
+            let source_node_id = target_node_id
+                .clone()
+                .unwrap_or_else(|| cfg.cluster.node_id.clone());
+            (before.active_owner.as_deref() == Some(source_node_id.as_str()))
+                .then_some((before, source_node_id))
+        })
+    } else {
+        None
+    };
     let status =
         crate::cluster::set_drain_state(&cfg, payload.node_id, payload.draining, payload.ddos);
 
@@ -134,6 +146,29 @@ pub async fn cluster_drain(
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/drain", &forwarded, propagation_target).await;
+    }
+
+    if let Some((before, source_node_id)) = active_drain_plan {
+        let new_owner = status.active_owner.clone();
+        if let Some(target_node_id) = new_owner.as_deref() {
+            if target_node_id != source_node_id {
+                if let Err(e) = finalize_cluster_node_switch(
+                    &cfg,
+                    &before,
+                    &source_node_id,
+                    target_node_id,
+                    true,
+                )
+                .await
+                {
+                    return Ok(Json(ApiResponse {
+                        success: false,
+                        data: Some(status),
+                        message: Some(format!("集群节点禁用后状态同步失败: {}", e)),
+                    }));
+                }
+            }
+        }
     }
 
     Ok(Json(ApiResponse {
@@ -273,7 +308,8 @@ pub async fn cluster_failover(
     }
 
     if let Some((before, source_node_id, target)) = transfer_plan {
-        if let Err(e) = finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target).await
+        if let Err(e) =
+            finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target, false).await
         {
             return Ok(Json(ApiResponse {
                 success: false,
@@ -445,292 +481,6 @@ pub(crate) struct ClusterMembershipTargetRequest<'a> {
     lease_ttl_secs: u64,
     thresholds: &'a ClusterHealthThresholds,
     nodes: &'a [ClusterMembershipNode],
-}
-
-pub(crate) async fn finalize_cluster_node_switch(
-    cfg: &Config,
-    before: &ClusterStatus,
-    source_node_id: &str,
-    target_node_id: &str,
-) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
-        Ok(source_config) => source_config,
-        Err(e) => {
-            tracing::warn!(
-                "Failed to export active source config from {}; using local synced config and cached active state: {}",
-                source_node_id,
-                e
-            );
-            cluster_sync_config_from_config(cfg)
-        }
-    };
-    let source_toggles = resolve_source_monitor_toggles(
-        cfg,
-        before,
-        source_node_id,
-        &source_config.monitored_config,
-    );
-    let source_channel_targets = resolve_source_channel_targets(
-        cfg,
-        before,
-        source_node_id,
-        &source_config.monitored_config,
-    );
-
-    apply_cluster_node_mode_to_node_with_retry(
-        &client,
-        cfg,
-        target_node_id,
-        ClusterApplyNodeModeRequest {
-            monitored_config: Some(source_config.monitored_config),
-            active: true,
-            restart: false,
-            monitor_toggles: Some(source_toggles),
-            channel_targets: Some(source_channel_targets),
-        },
-        "enable_new_active",
-    )
-    .await?;
-
-    let target_enable = ClusterDrainRequest {
-        node_id: Some(target_node_id.to_string()),
-        draining: false,
-        ddos: false,
-        propagate: Some(false),
-    };
-    post_cluster_control(cfg, "/api/cluster/drain", &target_enable, None).await;
-
-    if source_node_id != target_node_id {
-        let source_standby = ClusterDrainRequest {
-            node_id: Some(source_node_id.to_string()),
-            draining: false,
-            ddos: false,
-            propagate: Some(false),
-        };
-        post_cluster_control(cfg, "/api/cluster/drain", &source_standby, None).await;
-
-        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
-            &client,
-            cfg,
-            source_node_id,
-            ClusterApplyNodeModeRequest {
-                monitored_config: None,
-                active: false,
-                restart: false,
-                monitor_toggles: Some(all_monitor_toggles_off()),
-                channel_targets: None,
-            },
-            "disable_previous_active",
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to disable previous active {}; it will reconcile from the new active owner on recovery: {}",
-                source_node_id,
-                e
-            );
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) async fn export_cluster_config_from_node(
-    client: &reqwest::Client,
-    cfg: &Config,
-    node_id: &str,
-) -> Result<ClusterSyncConfigRequest, String> {
-    if node_id == cfg.cluster.node_id {
-        return Ok(cluster_sync_config_from_config(cfg));
-    }
-
-    let peer = cfg
-        .cluster
-        .peers
-        .iter()
-        .find(|peer| peer.node_id == node_id)
-        .ok_or_else(|| format!("未找到源节点 {}", node_id))?;
-    let url = format!(
-        "{}/api/cluster/export-config",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .get(url)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(5),
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("读取源节点配置失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("读取源节点配置失败: HTTP {}", response.status()));
-    }
-
-    let envelope = response
-        .json::<ClusterPeerApiResponse<ClusterSyncConfigRequest>>()
-        .await
-        .map_err(|e| format!("解析源节点配置失败: {}", e))?;
-
-    if envelope.success {
-        envelope.data.ok_or_else(|| "源节点未返回配置".to_string())
-    } else {
-        Err(envelope
-            .message
-            .unwrap_or_else(|| "源节点拒绝导出配置".to_string()))
-    }
-}
-
-pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
-    client: &reqwest::Client,
-    cfg: &Config,
-    node_id: &str,
-    payload: ClusterApplyNodeModeRequest,
-    phase: &str,
-) -> Result<(), String> {
-    let max_attempts = 3;
-    let mut last_error = String::new();
-    for attempt in 1..=max_attempts {
-        match apply_cluster_node_mode_to_node(client, cfg, node_id, &payload).await {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_error = e;
-                tracing::warn!(
-                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
-                    phase,
-                    attempt,
-                    max_attempts,
-                    node_id,
-                    last_error
-                );
-                if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
-                }
-            }
-        }
-    }
-    Err(last_error)
-}
-
-pub(crate) async fn apply_cluster_node_mode_to_node(
-    client: &reqwest::Client,
-    cfg: &Config,
-    node_id: &str,
-    payload: &ClusterApplyNodeModeRequest,
-) -> Result<(), String> {
-    if node_id == cfg.cluster.node_id {
-        apply_cluster_node_mode_locally(payload.clone()).await?;
-        return Ok(());
-    }
-
-    let peer = cfg
-        .cluster
-        .peers
-        .iter()
-        .find(|peer| peer.node_id == node_id)
-        .ok_or_else(|| format!("未找到目标节点 {}", node_id))?;
-    let url = format!(
-        "{}/api/cluster/apply-node-mode",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .post(url)
-        .json(payload)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(5),
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("更新节点 {} 模式失败: {}", node_id, e))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "更新节点 {} 模式失败: HTTP {}",
-            node_id,
-            response.status()
-        ));
-    }
-
-    let envelope = response
-        .json::<ClusterPeerApiResponse<ClusterStatus>>()
-        .await
-        .map_err(|e| format!("解析节点 {} 模式响应失败: {}", node_id, e))?;
-
-    if envelope.success {
-        if let Some(status) = envelope.data {
-            crate::cluster::merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
-        }
-        Ok(())
-    } else {
-        Err(envelope
-            .message
-            .unwrap_or_else(|| format!("节点 {} 拒绝模式更新", node_id)))
-    }
-}
-
-pub(crate) async fn apply_cluster_node_mode_locally(
-    payload: ClusterApplyNodeModeRequest,
-) -> Result<ClusterStatus, String> {
-    let has_monitored_config = payload.monitored_config.is_some();
-    let active = payload.active;
-    let restart = payload.restart;
-    let monitor_toggles = payload.monitor_toggles;
-    let channel_targets = payload.channel_targets;
-    if let Some(monitored_config) = payload.monitored_config {
-        apply_monitored_config(monitored_config).await?;
-    }
-
-    let mut cfg = load_config().await.map_err(|e| e.to_string())?;
-    if let Some(channel_targets) = channel_targets.as_ref() {
-        apply_channel_target_state_to_config(&mut cfg, channel_targets);
-    }
-    if let Some(monitor_toggles) = monitor_toggles.as_ref() {
-        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
-    } else if !has_monitored_config {
-        cfg.enable_youtube_monitor = active;
-        cfg.enable_twitch_monitor = active;
-        cfg.youtube.enable_monitor = active;
-        cfg.twitch.enable_monitor = active;
-        cfg.priority_channel.enabled = active;
-        cfg.bililive.enable_danmaku_command = active;
-    }
-
-    crate::config::save_config(&cfg)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Promoting to active clears drain/ddos locks. Demoting to standby only
-    // clears draining so the node stays eligible; disabled state is /drain only.
-    if active {
-        crate::cluster::set_drain_state(&cfg, None, false, false);
-    } else {
-        let ddos = crate::cluster::local_ddos_state();
-        crate::cluster::set_local_drain_state_preserving_fault(&cfg, false, ddos);
-    }
-
-    apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
-    set_config_updated();
-    refresh_status_cache_config_from(&cfg);
-
-    if active {
-        if let Some(monitor_toggles) = monitor_toggles.as_ref() {
-            let cache_targets =
-                channel_targets.unwrap_or_else(|| channel_target_state_from_config(&cfg));
-            crate::cluster::cache_active_monitor_state_from_owner(
-                monitor_toggles,
-                Some(&cache_targets),
-            );
-        }
-    }
-
-    if !active || restart {
-        crate::plugins::set_manual_restart();
-        crate::cluster::clear_local_stream();
-        crate::plugins::stop_ffmpeg().await;
-    }
-
-    load_cluster_status().await
 }
 
 pub async fn cluster_sync_config(
