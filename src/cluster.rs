@@ -578,7 +578,7 @@ fn apply_danmaku_command_runtime_state(enabled: bool) {
 }
 
 pub fn monitored_config_version(cfg: &Config) -> String {
-    canonical_value_hash(&monitored_channel_target_value_from_config(cfg))
+    canonical_value_hash(&monitored_sync_value_from_config(cfg))
 }
 
 pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
@@ -596,7 +596,7 @@ pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
 }
 
 pub fn monitored_config_version_from_payload(payload: &MonitoredConfig) -> String {
-    let value = monitored_channel_target_value(payload);
+    let value = monitored_sync_value(payload);
     canonical_value_hash(&value)
 }
 
@@ -609,7 +609,7 @@ pub fn monitored_config_integrity_version_from_payload(payload: &MonitoredConfig
     canonical_value_hash(&value)
 }
 
-fn monitored_channel_target_value(payload: &MonitoredConfig) -> serde_json::Value {
+fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
     serde_json::json!({
         "youtube": {
             "channel_name": payload.youtube.channel_name,
@@ -624,10 +624,12 @@ fn monitored_channel_target_value(payload: &MonitoredConfig) -> serde_json::Valu
             "youtube_channel_id": payload.priority_channel.youtube_channel_id,
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
         },
+        "channels_json": payload.channels_json,
+        "areas_json": payload.areas_json,
     })
 }
 
-fn monitored_channel_target_value_from_config(cfg: &Config) -> serde_json::Value {
+fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Value {
     serde_json::json!({
         "youtube": {
             "channel_name": cfg.youtube.channel_name,
@@ -642,6 +644,8 @@ fn monitored_channel_target_value_from_config(cfg: &Config) -> serde_json::Value
             "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
             "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
         },
+        "channels_json": read_json_file("channels.json"),
+        "areas_json": read_json_file("areas.json"),
     })
 }
 
@@ -3128,6 +3132,45 @@ mod tests {
         assert_ne!(
             monitored_config_integrity_version(&cfg_a),
             monitored_config_integrity_version(&cfg_b)
+        );
+    }
+
+    #[test]
+    fn monitored_config_version_changes_for_managed_json_payloads() {
+        let mut base = monitored_config_from_config(&test_config("a", 0));
+        base.channels_json = Some(serde_json::json!({ "channels": [] }));
+        base.areas_json = Some(serde_json::json!({ "areas": [] }));
+
+        let mut changed_channels = base.clone();
+        changed_channels.channels_json = Some(serde_json::json!({
+            "channels": [
+                {
+                    "name": "new",
+                    "aliases": [],
+                    "platforms": { "youtube": "yt" }
+                }
+            ]
+        }));
+
+        let mut changed_areas = base.clone();
+        changed_areas.areas_json = Some(serde_json::json!({
+            "areas": [
+                {
+                    "id": 1,
+                    "name": "area",
+                    "title_keywords": [],
+                    "aliases": []
+                }
+            ]
+        }));
+
+        assert_ne!(
+            monitored_config_version_from_payload(&base),
+            monitored_config_version_from_payload(&changed_channels)
+        );
+        assert_ne!(
+            monitored_config_version_from_payload(&base),
+            monitored_config_version_from_payload(&changed_areas)
         );
     }
 

@@ -77,12 +77,42 @@ pub(crate) fn managed_json_error(message: String) -> Json<ApiResponse<()>> {
     })
 }
 
-pub(crate) fn managed_json_success(success_message: &str) -> Json<ApiResponse<()>> {
+pub(crate) fn schedule_managed_json_sync_after_change(file_name: &str) -> String {
+    let file_name = file_name.to_string();
+    tokio::spawn(async move {
+        let cfg = match load_config().await {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(
+                    "Skipped cluster sync after {} change because config failed to load: {}",
+                    file_name,
+                    e
+                );
+                return;
+            }
+        };
+
+        refresh_status_cache_config_from(&cfg);
+        let sync_message = sync_monitored_config_after_change(&cfg).await;
+        if !sync_message.is_empty() {
+            tracing::info!("{} change{}", file_name, sync_message);
+        }
+    });
+
+    "；集群同步已在后台执行".to_string()
+}
+
+pub(crate) fn managed_json_success(
+    file_name: &str,
+    success_message: &str,
+) -> Json<ApiResponse<()>> {
     set_config_updated();
+    let sync_message = schedule_managed_json_sync_after_change(file_name);
+
     Json(ApiResponse {
         success: true,
         data: Some(()),
-        message: Some(success_message.to_string()),
+        message: Some(format!("{}{}", success_message, sync_message)),
     })
 }
 
@@ -118,7 +148,7 @@ pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<(
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "分区添加成功")
+    managed_mutation_response(result, "areas.json", "分区添加成功")
 }
 
 pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
@@ -136,11 +166,12 @@ pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
     }
 }
 
-fn managed_mutation_response(result: Result<(), String>, message: &str) -> Json<ApiResponse<()>> {
+fn managed_mutation_response(result: Result<(), String>, file_name: &str, message: &str) -> Json<ApiResponse<()>> {
     match result {
-        Ok(()) => managed_json_success(message),
+        Ok(()) => managed_json_success(file_name, message),
         Err(error) => managed_json_error(error),
     }
+
 }
 
 pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
@@ -164,7 +195,7 @@ pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResp
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "频道添加成功")
+    managed_mutation_response(result, "channels.json", "频道添加成功")
 }
 
 pub async fn update_channel_manage(
@@ -185,7 +216,7 @@ pub async fn update_channel_manage(
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "频道更新成功")
+    managed_mutation_response(result, "channels.json", "频道更新成功")
 }
 
 pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
@@ -201,7 +232,7 @@ pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<Api
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "分区更新成功")
+    managed_mutation_response(result, "areas.json", "分区更新成功")
 }
 
 pub async fn delete_area(
@@ -216,7 +247,7 @@ pub async fn delete_area(
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "分区删除成功")
+    managed_mutation_response(result, "areas.json", "分区删除成功")
 }
 
 pub async fn delete_channel(
@@ -231,5 +262,5 @@ pub async fn delete_channel(
         Ok(())
     })
     .await;
-    managed_mutation_response(result, "频道删除成功")
+    managed_mutation_response(result, "channels.json", "频道删除成功")
 }
