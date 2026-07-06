@@ -534,6 +534,7 @@ const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
 const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 9;
 const NETWORK_HISTORY_LIMIT: usize = 60;
 const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
+const NETWORK_MIN_SAMPLE_INTERVAL_MS: u64 = 250;
 const NETWORK_HISTORY_SAMPLE_MS: u64 = 1000;
 const CACHE_BYTE_SAMPLE_INTERVAL_MS: u64 = 1000;
 const CACHE_RATE_WINDOW_MS: u64 = 5_000;
@@ -609,7 +610,8 @@ impl FfmpegStatsDisplay {
                 }
             }
             FfmpegStatsRole::Push => {
-                self.push = Some(sample);
+                let merged = self.push.get_or_insert_with(FfmpegStatsSample::default);
+                merge_stats_sample(merged, sample);
             }
         }
         self.render();
@@ -750,6 +752,29 @@ impl FfmpegStatsDisplay {
                 GraphDirection::Down
             )
         )
+    }
+}
+
+fn merge_stats_sample(target: &mut FfmpegStatsSample, sample: FfmpegStatsSample) {
+    if sample.time.is_some() {
+        target.time = sample.time;
+        target.stream_time_secs = sample.stream_time_secs;
+    }
+    if sample.output_size_bytes.is_some() {
+        target.output_size_bytes = sample.output_size_bytes;
+    }
+    if sample.speed.is_some() {
+        target.speed = sample.speed;
+    }
+    if sample.frame.is_some() {
+        target.frame = sample.frame;
+    }
+    if sample.fps.is_some() {
+        target.fps = sample.fps;
+    }
+    if sample.bitrate_kbps.is_some() {
+        target.bitrate = sample.bitrate;
+        target.bitrate_kbps = sample.bitrate_kbps;
     }
 }
 
@@ -935,24 +960,41 @@ fn update_network_counters_from_total_bytes(
         ),
     };
 
-    let previous_total = total.swap(total_bytes, Ordering::Relaxed);
-    let previous_sample = last_sample.swap(now, Ordering::Relaxed);
+    let previous_bitrate = f32_from_atomic_bits(bitrate);
+    let previous_total = total.load(Ordering::Relaxed);
+    let previous_sample = last_sample.load(Ordering::Relaxed);
     if previous_total == 0 || previous_sample == 0 {
-        return None;
+        total.store(total_bytes, Ordering::Relaxed);
+        last_sample.store(now, Ordering::Relaxed);
+        return previous_bitrate;
+    }
+
+    if total_bytes < previous_total {
+        tracing::debug!(
+            "Ignoring non-monotonic ffmpeg output size sample: {} < {}",
+            total_bytes,
+            previous_total
+        );
+        return previous_bitrate;
     }
 
     let elapsed_ms = now.saturating_sub(previous_sample);
-    if elapsed_ms == 0 || elapsed_ms > NETWORK_SAMPLE_GAP_LIMIT_MS {
-        return None;
+    if !(NETWORK_MIN_SAMPLE_INTERVAL_MS..=NETWORK_SAMPLE_GAP_LIMIT_MS).contains(&elapsed_ms) {
+        total.store(total_bytes, Ordering::Relaxed);
+        last_sample.store(now, Ordering::Relaxed);
+        return previous_bitrate;
     }
 
-    let delta_bytes = total_bytes.saturating_sub(previous_total);
+    total.store(total_bytes, Ordering::Relaxed);
+    last_sample.store(now, Ordering::Relaxed);
+
+    let delta_bytes = total_bytes - previous_total;
     let kbps = delta_bytes as f32 * 8.0 / elapsed_ms as f32;
     if kbps.is_finite() {
         bitrate.store(kbps.to_bits(), Ordering::Relaxed);
         Some(kbps)
     } else {
-        None
+        previous_bitrate
     }
 }
 
@@ -1789,6 +1831,10 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
 mod tests {
     use super::*;
 
+    lazy_static::lazy_static! {
+        static ref FFMPEG_COUNTER_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    }
+
     #[test]
     fn network_idle_requires_both_paths_in_cache_mode() {
         assert!(!is_network_transfer_idle(true, false, 0.0, 0.0));
@@ -1816,6 +1862,71 @@ mod tests {
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(u32::MAX as u64 + 1);
 
         assert_eq!(unix_time_secs_from(after_epoch), u32::MAX);
+    }
+
+    #[test]
+    fn push_stats_update_preserves_previous_bitrate_when_sparse() {
+        let mut display = FfmpegStatsDisplay::default();
+
+        display.update(
+            FfmpegStatsRole::Push,
+            FfmpegStatsSample {
+                frame: Some(60),
+                fps: Some(60.0),
+                time: Some("00:00:01.00".to_string()),
+                bitrate: Some("6.00 Mb/s".to_string()),
+                bitrate_kbps: Some(6_000.0),
+                speed: Some(1.0),
+                stream_time_secs: Some(1),
+                ..FfmpegStatsSample::default()
+            },
+        );
+        display.update(
+            FfmpegStatsRole::Push,
+            FfmpegStatsSample {
+                frame: Some(120),
+                fps: Some(60.0),
+                time: Some("00:00:02.00".to_string()),
+                speed: Some(1.0),
+                stream_time_secs: Some(2),
+                ..FfmpegStatsSample::default()
+            },
+        );
+
+        let push = display.push.expect("push stats should be initialized");
+        assert_eq!(push.frame, Some(120));
+        assert_eq!(push.bitrate.as_deref(), Some("6.00 Mb/s"));
+        assert_eq!(push.bitrate_kbps, Some(6_000.0));
+    }
+
+    #[test]
+    fn total_byte_counter_ignores_non_monotonic_push_samples() {
+        let _guard = FFMPEG_COUNTER_TEST_LOCK.lock().unwrap();
+        reset_ffmpeg_tracking_state();
+        FFMPEG_TOTAL_BYTES.store(2_000, Ordering::Relaxed);
+        FFMPEG_LAST_SAMPLE_MS.store(now_millis().saturating_sub(1_000), Ordering::Relaxed);
+        FFMPEG_BITRATE_KBPS.store(6_000.0_f32.to_bits(), Ordering::Relaxed);
+
+        let bitrate = update_network_counters_from_total_bytes(FfmpegStatsRole::Push, 1_500);
+
+        assert_eq!(bitrate, Some(6_000.0));
+        assert_eq!(FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed), 2_000);
+        assert_eq!(f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS), Some(6_000.0));
+    }
+
+    #[test]
+    fn total_byte_counter_ignores_too_fast_push_samples() {
+        let _guard = FFMPEG_COUNTER_TEST_LOCK.lock().unwrap();
+        reset_ffmpeg_tracking_state();
+        FFMPEG_TOTAL_BYTES.store(1_000, Ordering::Relaxed);
+        FFMPEG_LAST_SAMPLE_MS.store(now_millis(), Ordering::Relaxed);
+        FFMPEG_BITRATE_KBPS.store(6_000.0_f32.to_bits(), Ordering::Relaxed);
+
+        let bitrate = update_network_counters_from_total_bytes(FfmpegStatsRole::Push, 2_000);
+
+        assert_eq!(bitrate, Some(6_000.0));
+        assert_eq!(FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed), 2_000);
+        assert_eq!(f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS), Some(6_000.0));
     }
 
     #[test]
