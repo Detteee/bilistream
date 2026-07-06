@@ -667,6 +667,28 @@ mod tests {
     }
 
     #[test]
+    fn node_switch_ignores_stale_all_off_snapshot_and_cache() {
+        let cfg = status_cache_test_config();
+        let before = cluster_status_with_node(healthy_cluster_node(
+            "source",
+            all_monitor_toggles_off(),
+            ChannelTargetState::default(),
+        ));
+        let exported = monitored_config_from_config(&status_cache_test_config());
+
+        let resolved = resolve_source_monitor_toggles_with_cache(
+            &cfg,
+            &before,
+            "source",
+            &exported,
+            false,
+            Some(all_monitor_toggles_off()),
+        );
+
+        assert_eq!(resolved, all_monitor_toggles_on());
+    }
+
+    #[test]
     fn node_switch_toggle_resolution_uses_current_local_toggles() {
         let mut cfg = status_cache_test_config();
         cfg.cluster.node_id = "local".to_string();

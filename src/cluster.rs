@@ -942,12 +942,12 @@ pub(crate) fn resolve_source_monitor_toggles_with_cache(
         .iter()
         .find(|node| node.node_id == source_node_id)
     {
-        if node_monitor_toggles_are_known(node) {
+        if monitor_toggles_any_enabled(&node.monitor_toggles) {
             return node.monitor_toggles.clone();
         }
     }
 
-    if let Some(cached) = cached_toggles {
+    if let Some(cached) = cached_toggles.filter(monitor_toggles_any_enabled) {
         return cached;
     }
 
@@ -1413,7 +1413,11 @@ pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
 }
 
 pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
-    cluster_state_read().last_known_active_toggles.clone()
+    cluster_state_read()
+        .last_known_active_toggles
+        .as_ref()
+        .filter(|toggles| monitor_toggles_any_enabled(toggles))
+        .cloned()
 }
 
 pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
@@ -4388,7 +4392,7 @@ mod tests {
     }
 
     #[test]
-    fn last_known_active_toggles_preserves_all_off() {
+    fn last_known_active_toggles_filters_all_off_cache() {
         let previous = MonitorToggleState {
             enable_danmaku_command: true,
             enable_youtube_monitor: true,
@@ -4410,7 +4414,7 @@ mod tests {
             let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(all_monitor_toggles_off());
         }
-        assert_eq!(last_known_active_toggles(), Some(all_monitor_toggles_off()));
+        assert!(last_known_active_toggles().is_none());
     }
 
     #[test]
