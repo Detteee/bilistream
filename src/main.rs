@@ -85,6 +85,22 @@ enum StreamPlatform {
     Twitch,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FfmpegLoopExitReason {
+    SourceEnded,
+    BiliStopped,
+    IntentionalRestart { target_m3u8_available: bool },
+}
+
+fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
+    matches!(
+        reason,
+        FfmpegLoopExitReason::IntentionalRestart {
+            target_m3u8_available: true
+        }
+    )
+}
+
 impl StreamPlatform {
     fn code(self) -> &'static str {
         match self {
@@ -850,7 +866,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Execute ffmpeg with platform-specific locks
             // Main ffmpeg monitoring loop - blocks until stream ends
-            loop {
+            let ffmpeg_loop_exit_reason = loop {
                 let proxy = if platform == "YT" {
                     cfg.youtube.proxy.clone()
                 } else {
@@ -935,15 +951,23 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     }
                 };
 
-                if !current_is_live || !bili_is_live {
+                if !current_is_live {
                     tracing::info!("直播已结束，停止ffmpeg监控循环");
-                    break;
+                    break FfmpegLoopExitReason::SourceEnded;
+                }
+
+                if !bili_is_live {
+                    tracing::info!("直播已结束，停止ffmpeg监控循环");
+                    break FfmpegLoopExitReason::BiliStopped;
                 }
 
                 // Check if manual restart was requested (force immediate restart)
                 if was_manual_restart() {
+                    let exit_reason = FfmpegLoopExitReason::IntentionalRestart {
+                        target_m3u8_available: new_m3u8_url.is_some(),
+                    };
                     tracing::info!("🔄 检测到手动重启请求，立即退出ffmpeg监控循环");
-                    break;
+                    break exit_reason;
                 }
 
                 // Check if config was updated (channel switch)
@@ -964,21 +988,28 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Stream is still live but ffmpeg exited, restart it
                 tracing::info!("🔄 流仍在进行，重启ffmpeg...");
                 tokio::time::sleep(Duration::from_secs(1)).await;
-            }
+            };
 
             // Check the actual reason for ffmpeg loop exit
             let manual_stop = was_manual_stop();
             let manual_restart = was_manual_restart();
-            let config_updated = is_config_updated();
             let warning_skip = should_skip_due_to_warning(&channel_name);
+            let restart_exit_should_skip_danmaku =
+                restart_exit_should_skip_end_danmaku(ffmpeg_loop_exit_reason);
 
             if manual_restart {
                 clear_manual_restart();
             }
+            if manual_stop
+                && !restart_exit_should_skip_danmaku
+                && !matches!(ffmpeg_loop_exit_reason, FfmpegLoopExitReason::BiliStopped)
+            {
+                clear_manual_stop();
+            }
 
             // Clear crop settings for both platforms when stream ends
             // Don't clear on manual restart - let it apply for the restarted stream
-            if !manual_restart {
+            if !restart_exit_should_skip_danmaku {
                 let mut config_changed = false;
 
                 if cfg.youtube.crop.is_some() {
@@ -1030,17 +1061,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             };
 
             // Determine what happened and send appropriate message
-            if manual_restart {
+            if restart_exit_should_skip_danmaku {
                 if manual_stop {
                     clear_manual_stop();
                 }
                 tracing::info!("Stream was manually restarted, skipping end danmaku");
-            } else if config_updated {
-                if manual_stop {
-                    clear_manual_stop();
-                }
-                tracing::info!("Stream stopped due to config update/restart, skipping end danmaku");
-            } else if manual_stop {
+            } else if manual_stop
+                && matches!(ffmpeg_loop_exit_reason, FfmpegLoopExitReason::BiliStopped)
+            {
                 clear_manual_stop();
                 tracing::info!("Stream was stopped manually, skipping end danmaku");
             } else if warning_skip {
@@ -3361,6 +3389,24 @@ mod tests {
         tw.m3u8_url = None;
 
         assert!(select_stream(&yt, &tw).is_none());
+    }
+
+    #[test]
+    fn restart_skip_requires_replacement_m3u8() {
+        assert!(restart_exit_should_skip_end_danmaku(
+            FfmpegLoopExitReason::IntentionalRestart {
+                target_m3u8_available: true,
+            }
+        ));
+
+        assert!(!restart_exit_should_skip_end_danmaku(
+            FfmpegLoopExitReason::IntentionalRestart {
+                target_m3u8_available: false,
+            }
+        ));
+        assert!(!restart_exit_should_skip_end_danmaku(
+            FfmpegLoopExitReason::SourceEnded
+        ));
     }
 
     #[test]
