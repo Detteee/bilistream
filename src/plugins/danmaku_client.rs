@@ -82,6 +82,24 @@ fn danmaku_packet_body_length(packet_length: u32, header_length: u16) -> Result<
     Ok(packet_length - HEADER_LENGTH)
 }
 
+fn decode_danmaku_body(protocol_version: u16, body: &[u8]) -> Result<(Vec<u8>, bool)> {
+    match protocol_version {
+        PROTOCOL_COMMAND_ZLIB => {
+            let mut decoder = ZlibDecoder::new(body);
+            let mut decompressed = Vec::with_capacity(body.len() * 2);
+            decoder.read_to_end(&mut decompressed)?;
+            Ok((decompressed, true))
+        }
+        PROTOCOL_COMMAND_BROTLI => {
+            let mut decoder = brotli::Decompressor::new(body, 4096);
+            let mut decompressed = Vec::with_capacity(body.len() * 2);
+            decoder.read_to_end(&mut decompressed)?;
+            Ok((decompressed, true))
+        }
+        _ => Ok((body.to_vec(), false)),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DanmakuConfig {
     pub room_id: u64,
@@ -170,6 +188,10 @@ impl BilibiliDanmakuClient {
             }
 
             tokio::select! {
+                _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
+                    info!("🛑 收到停止信号，断开弹幕连接");
+                    break;
+                }
                 // Handle incoming messages with timeout
                 msg = timeout(Duration::from_secs(60), ws_receiver.next()) => {
                     match msg {
@@ -549,23 +571,10 @@ impl BilibiliDanmakuClient {
     }
 
     async fn handle_danmaku_message(&self, protocol_version: u16, body: &[u8]) -> Result<()> {
-        let decompressed_data = match protocol_version {
-            PROTOCOL_COMMAND_ZLIB => {
-                let mut decoder = ZlibDecoder::new(body);
-                let mut decompressed = Vec::with_capacity(body.len() * 2); // Pre-allocate with estimate
-                decoder.read_to_end(&mut decompressed)?;
-                decompressed
-            }
-            PROTOCOL_COMMAND_BROTLI => {
-                // For now, skip brotli decompression as it requires additional dependency
-                // You can add brotli support later if needed
-                return Ok(());
-            }
-            _ => body.to_vec(),
-        };
+        let (decompressed_data, is_nested_packet) = decode_danmaku_body(protocol_version, body)?;
 
         // Parse nested messages
-        if protocol_version == PROTOCOL_COMMAND_ZLIB {
+        if is_nested_packet {
             Box::pin(self.handle_message(&decompressed_data)).await?;
         } else {
             // Parse JSON message - use from_slice to avoid UTF-8 conversion overhead
@@ -878,7 +887,13 @@ pub async fn run_native_danmaku_client(
 
                 // Otherwise it was unexpected - try to reconnect
                 warn!("Unexpected disconnection, attempting to reconnect...");
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::select! {
+                    _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
+                        info!("🛑 收到停止信号，退出弹幕客户端");
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                }
             }
             Err(e) => {
                 reconnect_attempts += 1;
@@ -895,7 +910,13 @@ pub async fn run_native_danmaku_client(
                 // Exponential backoff with jitter
                 let delay = std::cmp::min(5 * reconnect_attempts, 60);
                 info!("Reconnecting in {} seconds...", delay);
-                tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+                tokio::select! {
+                    _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
+                        info!("🛑 收到停止信号，退出弹幕客户端");
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(delay as u64)) => {}
+                }
             }
         }
     }
@@ -906,6 +927,7 @@ pub async fn run_native_danmaku_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn unix_time_secs_returns_zero_before_epoch() {
@@ -953,5 +975,20 @@ mod tests {
             danmaku_packet_body_length(HEADER_LENGTH + 8, HEADER_LENGTH as u16).unwrap(),
             8
         );
+    }
+
+    #[test]
+    fn brotli_danmaku_body_is_decoded() {
+        let payload = br#"{"cmd":"DANMU_MSG","info":[[],"hello",[1,"user"]]}"#;
+        let mut compressed = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut compressed, 4096, 5, 22);
+            writer.write_all(payload).unwrap();
+        }
+
+        let (decoded, nested) = decode_danmaku_body(PROTOCOL_COMMAND_BROTLI, &compressed).unwrap();
+
+        assert!(nested);
+        assert_eq!(decoded, payload);
     }
 }

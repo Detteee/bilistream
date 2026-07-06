@@ -50,6 +50,7 @@ tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 futures-util = "0.3"
 byteorder = "1.5"
 flate2 = "1.0"
+brotli = "8.0.2"
 anyhow = "1.0"
 # Web UI dependencies
 axum = "0.8"

@@ -16,6 +16,7 @@ static DANMAKU_STOP_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 lazy_static! {
     static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    static ref DANMAKU_STOP_NOTIFY: Notify = Notify::new();
     static ref WARNING_STOP: AtomicBool = AtomicBool::new(false);
     static ref LAST_WARNING_CHANNEL: Mutex<Option<String>> = Mutex::new(None);
     static ref CONFIG_UPDATED: AtomicBool = AtomicBool::new(false);
@@ -41,10 +42,25 @@ pub fn set_danmaku_commands_enabled(enabled: bool) {
 
 pub fn set_danmaku_stop_signal(stop: bool) {
     DANMAKU_STOP_SIGNAL.store(stop, Ordering::Relaxed);
+    if stop {
+        DANMAKU_STOP_NOTIFY.notify_waiters();
+    }
 }
 
 pub fn should_stop_danmaku() -> bool {
     DANMAKU_STOP_SIGNAL.load(Ordering::Relaxed)
+}
+
+pub async fn wait_danmaku_stop_signal() {
+    if should_stop_danmaku() {
+        return;
+    }
+
+    let notified = DANMAKU_STOP_NOTIFY.notified();
+    if should_stop_danmaku() {
+        return;
+    }
+    notified.await;
 }
 fn load_banned_keywords() -> Vec<String> {
     let areas_path = match std::env::current_exe() {
@@ -696,10 +712,15 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
 /// The client runs continuously and monitors for WARNING/CUT_OFF messages.
 /// Danmaku commands are only processed when enabled via set_danmaku_commands_enabled().
 pub fn run_danmaku() {
-    if is_danmaku_running() {
+    if DANMAKU_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         tracing::warn!("弹幕客户端已在运行");
         return;
     }
+
+    set_danmaku_stop_signal(false);
 
     std::thread::spawn(|| {
         let rt = match tokio::runtime::Runtime::new() {
@@ -710,8 +731,6 @@ pub fn run_danmaku() {
             }
         };
         rt.block_on(async {
-            // Set running flag inside the async task to avoid race conditions
-            set_danmaku_running(true);
             tracing::info!("🚀 启动弹幕客户端");
 
             let cfg = match load_config().await {
@@ -785,13 +804,11 @@ pub fn stop_danmaku() {
     }
 
     if is_danmaku_running() {
-        tracing::warn!("弹幕客户端停止超时，但继续执行");
+        tracing::warn!("弹幕客户端停止超时，保持停止信号等待后台退出");
     } else {
         tracing::info!("✅ 弹幕客户端已成功停止");
+        set_danmaku_stop_signal(false);
     }
-
-    // Reset the stop signal for next time
-    set_danmaku_stop_signal(false);
 }
 
 /// Set the warning stop flag and store the channel that was stopped
