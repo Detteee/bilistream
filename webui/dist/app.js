@@ -2470,7 +2470,7 @@
         try {
           const result = await managementJsonRequest('/api/manage/areas', 'POST', area);
           if (result.success) {
-            showNotification('分区添加成功', 'success');
+            showManagementSuccess(result, '分区添加成功');
             clearAreaForm();
             loadAreas();
           } else {
@@ -2520,6 +2520,10 @@
 
       function deleteManagementResource(path) {
         return managementRequest(path, { method: 'DELETE' });
+      }
+
+      function showManagementSuccess(result, fallbackMessage) {
+        showNotification(result.message || fallbackMessage, 'success');
       }
 
       function readInputValue(id) {
@@ -2675,7 +2679,7 @@
         try {
           const result = await managementJsonRequest('/api/manage/channels', 'POST', payload);
           if (result.success) {
-            showNotification('频道添加成功', 'success');
+            showManagementSuccess(result, '频道添加成功');
             clearChannelForm();
             loadChannels();
           } else {
@@ -2703,7 +2707,7 @@
         try {
           const result = await managementJsonRequest('/api/manage/channels', 'PUT', payload);
           if (result.success) {
-            showNotification('频道更新成功', 'success');
+            showManagementSuccess(result, '频道更新成功');
             clearChannelForm();
             loadChannels();
           } else {
@@ -2861,7 +2865,10 @@
           if (result.success || alreadyExists) {
             addHolodexChannelToCache(payload);
             markHolodexChannelAdded(channelData);
-            showNotification(alreadyExists ? 'channels.json 已有该频道' : '已添加到 channels.json', 'success');
+            showNotification(
+              alreadyExists ? 'channels.json 已有该频道' : (result.message || '已添加到 channels.json'),
+              'success'
+            );
 
             const channelsContent = document.getElementById('channels-content');
             if (channelsContent && !isElementHidden(channelsContent)) {
@@ -2936,7 +2943,7 @@
             // Add new area with new ID
             const result = await managementJsonRequest('/api/manage/areas', 'POST', area);
             if (result.success) {
-              showNotification('分区更新成功', 'success');
+              showManagementSuccess(result, '分区更新成功');
               clearAreaForm();
               loadAreas();
             } else {
@@ -2948,7 +2955,7 @@
           // Update existing area (ID unchanged)
           const result = await managementJsonRequest('/api/manage/areas', 'PUT', area);
           if (result.success) {
-            showNotification('分区更新成功', 'success');
+            showManagementSuccess(result, '分区更新成功');
             clearAreaForm();
             loadAreas();
           } else {
@@ -2969,7 +2976,7 @@
         try {
           const result = await deleteManagementResource(`/api/manage/areas/${areaId}`);
           if (result.success) {
-            showNotification('分区删除成功', 'success');
+            showManagementSuccess(result, '分区删除成功');
             loadAreas();
           } else {
             showNotification(`删除失败: ${result.message}`, 'error');
@@ -2987,7 +2994,7 @@
         try {
           const result = await deleteManagementResource(`/api/manage/channels/${encodeURIComponent(channelName)}`);
           if (result.success) {
-            showNotification('频道删除成功', 'success');
+            showManagementSuccess(result, '频道删除成功');
             loadChannels();
           } else {
             showNotification(`删除失败: ${result.message}`, 'error');

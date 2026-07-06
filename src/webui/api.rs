@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -2471,25 +2472,55 @@ pub struct AddChannelRequest {
     pub riot_puuid: Option<String>,
 }
 
+fn managed_json_path(file_name: &str) -> Result<PathBuf, String> {
+    std::env::current_exe()
+        .map(|path| path.with_file_name(file_name))
+        .map_err(|e| format!("Failed to resolve {} path: {}", file_name, e))
+}
+
+fn read_managed_json<T: DeserializeOwned>(file_name: &str) -> Result<T, String> {
+    let path = managed_json_path(file_name)?;
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
+    serde_json::from_str::<T>(&data).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
+}
+
+fn write_managed_json<T: Serialize>(file_name: &str, data: &T) -> Result<(), String> {
+    let json_str = serde_json::to_string_pretty(data)
+        .map_err(|e| format!("Failed to serialize {} data: {}", file_name, e))?;
+    let path = managed_json_path(file_name)?;
+    std::fs::write(path, json_str).map_err(|e| format!("Failed to write {}: {}", file_name, e))
+}
+
+fn managed_json_error(message: String) -> Json<ApiResponse<()>> {
+    Json(ApiResponse {
+        success: false,
+        data: None,
+        message: Some(message),
+    })
+}
+
+fn managed_json_success(success_message: &str) -> Json<ApiResponse<()>> {
+    set_config_updated();
+    Json(ApiResponse {
+        success: true,
+        data: Some(()),
+        message: Some(success_message.to_string()),
+    })
+}
+
 // Get all areas
 pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
-    match std::fs::read_to_string("areas.json") {
-        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
-            Ok(areas) => Json(ApiResponse {
-                success: true,
-                data: Some(areas),
-                message: None,
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to parse areas.json: {}", e)),
-            }),
-        },
+    match read_managed_json::<AreasData>("areas.json") {
+        Ok(areas) => Json(ApiResponse {
+            success: true,
+            data: Some(areas),
+            message: None,
+        }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to read areas.json: {}", e)),
+            message: Some(e),
         }),
     }
 }
@@ -2497,24 +2528,9 @@ pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
 // Add new area
 pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
     // Read current areas
-    let mut areas_data = match std::fs::read_to_string("areas.json") {
-        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
-            Ok(areas) => areas,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse areas.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read areas.json: {}", e)),
-            });
-        }
+    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
+        Ok(areas) => areas,
+        Err(e) => return managed_json_error(e),
     };
 
     // Check if area ID already exists
@@ -2537,47 +2553,24 @@ pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<(
     // Sort areas by ID
     areas_data.areas.sort_by_key(|a| a.id);
 
-    // Write back to file
-    match serde_json::to_string_pretty(&areas_data) {
-        Ok(json_str) => match std::fs::write("areas.json", json_str) {
-            Ok(_) => Json(ApiResponse {
-                success: true,
-                data: Some(()),
-                message: Some("Area added successfully".to_string()),
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to write areas.json: {}", e)),
-            }),
-        },
-        Err(e) => Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Failed to serialize areas data: {}", e)),
-        }),
+    if let Err(e) = write_managed_json("areas.json", &areas_data) {
+        return managed_json_error(e);
     }
+    managed_json_success("分区添加成功")
 }
 
 // Get all channels
 pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
-    match std::fs::read_to_string("channels.json") {
-        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
-            Ok(channels) => Json(ApiResponse {
-                success: true,
-                data: Some(channels),
-                message: None,
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to parse channels.json: {}", e)),
-            }),
-        },
+    match read_managed_json::<ChannelsData>("channels.json") {
+        Ok(channels) => Json(ApiResponse {
+            success: true,
+            data: Some(channels),
+            message: None,
+        }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to read channels.json: {}", e)),
+            message: Some(e),
         }),
     }
 }
@@ -2596,24 +2589,9 @@ pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResp
     }
 
     // Read current channels
-    let mut channels_data = match std::fs::read_to_string("channels.json") {
-        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
-            Ok(channels) => channels,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse channels.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read channels.json: {}", e)),
-            });
-        }
+    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
+        Ok(channels) => channels,
+        Err(e) => return managed_json_error(e),
     };
 
     // Check if channel name already exists
@@ -2637,26 +2615,10 @@ pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResp
         riot_puuid: payload.riot_puuid,
     });
 
-    // Write back to file
-    match serde_json::to_string_pretty(&channels_data) {
-        Ok(json_str) => match std::fs::write("channels.json", json_str) {
-            Ok(_) => Json(ApiResponse {
-                success: true,
-                data: Some(()),
-                message: Some("Channel added successfully".to_string()),
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to write channels.json: {}", e)),
-            }),
-        },
-        Err(e) => Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Failed to serialize channels data: {}", e)),
-        }),
+    if let Err(e) = write_managed_json("channels.json", &channels_data) {
+        return managed_json_error(e);
     }
+    managed_json_success("频道添加成功")
 }
 
 // Update existing channel
@@ -2675,24 +2637,9 @@ pub async fn update_channel_manage(
     }
 
     // Read current channels
-    let mut channels_data = match std::fs::read_to_string("channels.json") {
-        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
-            Ok(channels) => channels,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse channels.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read channels.json: {}", e)),
-            });
-        }
+    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
+        Ok(channels) => channels,
+        Err(e) => return managed_json_error(e),
     };
 
     // Find and update the channel
@@ -2705,26 +2652,10 @@ pub async fn update_channel_manage(
         channel.platforms = payload.platforms;
         channel.riot_puuid = payload.riot_puuid;
 
-        // Write back to file
-        match serde_json::to_string_pretty(&channels_data) {
-            Ok(json_str) => match std::fs::write("channels.json", json_str) {
-                Ok(_) => Json(ApiResponse {
-                    success: true,
-                    data: Some(()),
-                    message: Some("Channel updated successfully".to_string()),
-                }),
-                Err(e) => Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to write channels.json: {}", e)),
-                }),
-            },
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to serialize channels data: {}", e)),
-            }),
+        if let Err(e) = write_managed_json("channels.json", &channels_data) {
+            return managed_json_error(e);
         }
+        managed_json_success("频道更新成功")
     } else {
         Json(ApiResponse {
             success: false,
@@ -2736,24 +2667,9 @@ pub async fn update_channel_manage(
 // Update existing area
 pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
     // Read current areas
-    let mut areas_data = match std::fs::read_to_string("areas.json") {
-        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
-            Ok(areas) => areas,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse areas.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read areas.json: {}", e)),
-            });
-        }
+    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
+        Ok(areas) => areas,
+        Err(e) => return managed_json_error(e),
     };
 
     // Find and update the area
@@ -2762,26 +2678,10 @@ pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<Api
         area.title_keywords = payload.title_keywords;
         area.aliases = payload.aliases;
 
-        // Write back to file
-        match serde_json::to_string_pretty(&areas_data) {
-            Ok(json_str) => match std::fs::write("areas.json", json_str) {
-                Ok(_) => Json(ApiResponse {
-                    success: true,
-                    data: Some(()),
-                    message: Some("Area updated successfully".to_string()),
-                }),
-                Err(e) => Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to write areas.json: {}", e)),
-                }),
-            },
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to serialize areas data: {}", e)),
-            }),
+        if let Err(e) = write_managed_json("areas.json", &areas_data) {
+            return managed_json_error(e);
         }
+        managed_json_success("分区更新成功")
     } else {
         Json(ApiResponse {
             success: false,
@@ -2796,24 +2696,9 @@ pub async fn delete_area(
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Json<ApiResponse<()>> {
     // Read current areas
-    let mut areas_data = match std::fs::read_to_string("areas.json") {
-        Ok(data) => match serde_json::from_str::<AreasData>(&data) {
-            Ok(areas) => areas,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse areas.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read areas.json: {}", e)),
-            });
-        }
+    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
+        Ok(areas) => areas,
+        Err(e) => return managed_json_error(e),
     };
 
     // Find and remove the area
@@ -2828,26 +2713,10 @@ pub async fn delete_area(
         });
     }
 
-    // Write back to file
-    match serde_json::to_string_pretty(&areas_data) {
-        Ok(json_str) => match std::fs::write("areas.json", json_str) {
-            Ok(_) => Json(ApiResponse {
-                success: true,
-                data: Some(()),
-                message: Some("Area deleted successfully".to_string()),
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to write areas.json: {}", e)),
-            }),
-        },
-        Err(e) => Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Failed to serialize areas data: {}", e)),
-        }),
+    if let Err(e) = write_managed_json("areas.json", &areas_data) {
+        return managed_json_error(e);
     }
+    managed_json_success("分区删除成功")
 }
 
 // Delete channel by name
@@ -2855,24 +2724,9 @@ pub async fn delete_channel(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Json<ApiResponse<()>> {
     // Read current channels
-    let mut channels_data = match std::fs::read_to_string("channels.json") {
-        Ok(data) => match serde_json::from_str::<ChannelsData>(&data) {
-            Ok(channels) => channels,
-            Err(e) => {
-                return Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Failed to parse channels.json: {}", e)),
-                });
-            }
-        },
-        Err(e) => {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read channels.json: {}", e)),
-            });
-        }
+    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
+        Ok(channels) => channels,
+        Err(e) => return managed_json_error(e),
     };
 
     // Find and remove the channel
@@ -2889,26 +2743,10 @@ pub async fn delete_channel(
         });
     }
 
-    // Write back to file
-    match serde_json::to_string_pretty(&channels_data) {
-        Ok(json_str) => match std::fs::write("channels.json", json_str) {
-            Ok(_) => Json(ApiResponse {
-                success: true,
-                data: Some(()),
-                message: Some("Channel deleted successfully".to_string()),
-            }),
-            Err(e) => Json(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to write channels.json: {}", e)),
-            }),
-        },
-        Err(e) => Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Failed to serialize channels data: {}", e)),
-        }),
+    if let Err(e) = write_managed_json("channels.json", &channels_data) {
+        return managed_json_error(e);
     }
+    managed_json_success("频道删除成功")
 }
 
 // Capture frame from stream for crop selection
