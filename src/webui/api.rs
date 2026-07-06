@@ -402,6 +402,47 @@ pub struct UpdateConfigRequest {
     youtube_cookies_file: Option<String>,
 }
 
+fn monitor_target_reload_needed(
+    previous_enabled: bool,
+    current_enabled: bool,
+    previous_channel_name: &str,
+    current_channel_name: &str,
+    previous_channel_id: &str,
+    current_channel_id: &str,
+) -> bool {
+    previous_enabled != current_enabled
+        || (current_enabled
+            && (previous_channel_name != current_channel_name
+                || previous_channel_id != current_channel_id))
+}
+
+fn youtube_monitor_reload_needed(previous: &Config, current: &Config) -> bool {
+    monitor_target_reload_needed(
+        previous.youtube.enable_monitor,
+        current.youtube.enable_monitor,
+        &previous.youtube.channel_name,
+        &current.youtube.channel_name,
+        &previous.youtube.channel_id,
+        &current.youtube.channel_id,
+    )
+}
+
+fn twitch_monitor_reload_needed(previous: &Config, current: &Config) -> bool {
+    monitor_target_reload_needed(
+        previous.twitch.enable_monitor,
+        current.twitch.enable_monitor,
+        &previous.twitch.channel_name,
+        &current.twitch.channel_name,
+        &previous.twitch.channel_id,
+        &current.twitch.channel_id,
+    )
+}
+
+fn monitor_reload_needed(previous: &Config, current: &Config) -> bool {
+    youtube_monitor_reload_needed(previous, current)
+        || twitch_monitor_reload_needed(previous, current)
+}
+
 pub async fn update_config(
     Json(payload): Json<UpdateConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
@@ -409,6 +450,7 @@ pub async fn update_config(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let previous_cfg = cfg.clone();
 
     let mut holodex_jwt_saved = false;
 
@@ -525,8 +567,9 @@ pub async fn update_config(
         }
     }
 
-    // Set config updated flag so main loop can detect the change
-    set_config_updated();
+    if monitor_reload_needed(&previous_cfg, &cfg) {
+        set_config_updated();
+    }
 
     // Apply the exact saved config to the cache without re-reading config.json.
     refresh_status_cache_config_from(&cfg);
@@ -741,6 +784,7 @@ pub async fn update_channel(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let previous_cfg = cfg.clone();
 
     match payload.platform.as_str() {
         "youtube" => {
@@ -809,25 +853,27 @@ pub async fn update_channel(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Set config updated flag so main loop can detect the change
-    set_config_updated();
+    let refresh_youtube = youtube_monitor_reload_needed(&previous_cfg, &cfg);
+    let refresh_twitch = twitch_monitor_reload_needed(&previous_cfg, &cfg);
+
+    if refresh_youtube || refresh_twitch {
+        set_config_updated();
+    }
 
     // Refresh status cache with updated configuration
     refresh_status_cache_config_from(&cfg);
 
-    // Refresh live status in background for the specific platform only
-    let platform = payload.platform.clone();
-    tokio::spawn(async move {
-        match platform.as_str() {
-            "youtube" => {
+    // Refresh live status in background only when the active monitor target changed.
+    if refresh_youtube || refresh_twitch {
+        tokio::spawn(async move {
+            if refresh_youtube {
                 let _ = refresh_youtube_status().await;
             }
-            "twitch" => {
+            if refresh_twitch {
                 let _ = refresh_twitch_status().await;
             }
-            _ => {}
-        }
-    });
+        });
+    }
 
     Ok(ApiResponse {
         success: true,
@@ -1159,6 +1205,7 @@ pub async fn save_setup_config(
             anti_collision_list: std::collections::HashMap::new(),
         }
     };
+    let previous_cfg = cfg.clone();
 
     // Update only the fields from payload
     cfg.auto_cover = payload.auto_cover;
@@ -1185,20 +1232,6 @@ pub async fn save_setup_config(
     }
     cfg.riot_api_key = payload.riot_api_key.filter(|key| !key.is_empty());
     cfg.enable_lol_monitor = payload.enable_lol_monitor;
-
-    // Track which platforms were updated
-    let youtube_updated = payload.youtube_channel_name.is_some()
-        || payload.youtube_channel_id.is_some()
-        || payload.youtube_area_v2.is_some()
-        || payload.youtube_quality.is_some()
-        || payload.youtube_proxy.is_some();
-
-    let twitch_updated = payload.twitch_channel_name.is_some()
-        || payload.twitch_channel_id.is_some()
-        || payload.twitch_area_v2.is_some()
-        || payload.twitch_proxy_region.is_some()
-        || payload.twitch_quality.is_some()
-        || payload.twitch_proxy.is_some();
 
     // Update YouTube config if provided
     if let Some(yt_name) = payload.youtube_channel_name {
@@ -1250,21 +1283,27 @@ pub async fn save_setup_config(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Set config updated flag so main loop can detect the change
-    set_config_updated();
+    let youtube_updated = youtube_monitor_reload_needed(&previous_cfg, &cfg);
+    let twitch_updated = twitch_monitor_reload_needed(&previous_cfg, &cfg);
+
+    if youtube_updated || twitch_updated {
+        set_config_updated();
+    }
 
     // Refresh status cache with updated configuration
     refresh_status_cache_config_from(&cfg);
 
-    // Refresh live status in background for only the updated platforms
-    tokio::spawn(async move {
-        if youtube_updated {
-            let _ = refresh_youtube_status().await;
-        }
-        if twitch_updated {
-            let _ = refresh_twitch_status().await;
-        }
-    });
+    // Refresh live status in background only when active monitor targets changed.
+    if youtube_updated || twitch_updated {
+        tokio::spawn(async move {
+            if youtube_updated {
+                let _ = refresh_youtube_status().await;
+            }
+            if twitch_updated {
+                let _ = refresh_twitch_status().await;
+            }
+        });
+    }
 
     Ok(ApiResponse {
         success: true,
@@ -2097,6 +2136,7 @@ pub async fn switch_to_holodex_stream(
             });
         }
     };
+    let previous_cfg = cfg.clone();
 
     // Get channel info from channels.json
     let channels_path = std::env::current_exe()
@@ -2240,7 +2280,9 @@ pub async fn switch_to_holodex_stream(
             cfg.twitch.channel_id
         );
 
-        set_config_updated();
+        if twitch_monitor_reload_needed(&previous_cfg, &cfg) {
+            set_config_updated();
+        }
 
         let is_live = payload
             .status
@@ -2307,8 +2349,9 @@ pub async fn switch_to_holodex_stream(
         cfg.youtube.channel_id
     );
 
-    // Notify main loop to reload config
-    set_config_updated();
+    if youtube_monitor_reload_needed(&previous_cfg, &cfg) {
+        set_config_updated();
+    }
 
     // Use stream data from Holodex monitor (passed from frontend)
     let is_live = payload
@@ -3208,6 +3251,29 @@ pub async fn get_ffmpeg_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_target_reload_needed_only_for_enable_or_enabled_channel_change() {
+        assert!(!monitor_target_reload_needed(
+            true, true, "Channel", "Channel", "id", "id",
+        ));
+        assert!(monitor_target_reload_needed(
+            true, false, "Channel", "Channel", "id", "id",
+        ));
+        assert!(monitor_target_reload_needed(
+            false, true, "Channel", "Channel", "id", "id",
+        ));
+        assert!(monitor_target_reload_needed(
+            true, true, "Channel", "Other", "id", "id",
+        ));
+        assert!(monitor_target_reload_needed(
+            true, true, "Channel", "Channel", "id", "other-id",
+        ));
+        assert!(!monitor_target_reload_needed(
+            false, false, "Channel", "Other", "id", "other-id",
+        ));
+    }
+
     #[test]
     fn crop_update_validation_rejects_incomplete_or_zero_size() {
         let disabled = UpdateCropRequest {
