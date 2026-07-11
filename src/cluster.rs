@@ -84,6 +84,7 @@ struct ClusterState {
     local_external_api_failure_times: Vec<u64>,
     local_network_quarantined: bool,
     heartbeat_failures: HashMap<String, u32>,
+    peer_heartbeat_acks: HashMap<String, u64>,
     peer_observations: HashMap<String, HashMap<String, u64>>,
     last_known_active_toggles: Option<MonitorToggleState>,
     last_known_active_channel_targets: Option<ChannelTargetState>,
@@ -1349,13 +1350,14 @@ pub fn start_cluster_worker() {
             enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_toggles(&cfg, &status).await;
 
-            if let Some(owner) = status.active_owner.as_deref() {
-                if owner != cfg.cluster.node_id.as_str() && is_ffmpeg_running().await {
-                    tracing::warn!("集群租约已转移，停止本节点 ffmpeg 推流");
-                    set_manual_restart();
-                    clear_local_stream();
-                    stop_ffmpeg().await;
-                }
+            let local_may_run = status.active_owner.as_deref()
+                == Some(cfg.cluster.node_id.as_str())
+                && local_has_fresh_quorum(&cfg);
+            if !local_may_run && is_ffmpeg_running().await {
+                tracing::warn!("集群租约或心跳多数派已丢失，停止本节点 ffmpeg 推流");
+                set_manual_restart();
+                clear_local_stream();
+                stop_ffmpeg().await;
             }
 
             tokio::time::sleep(heartbeat_sleep_duration(&cfg)).await;
@@ -1412,6 +1414,10 @@ fn schedule_auto_owner_transition(
         return;
     }
     if cfg.cluster.node_id != new_owner {
+        return;
+    }
+    if !local_has_fresh_quorum(cfg) {
+        tracing::warn!("Cluster owner transition deferred: no fresh heartbeat quorum");
         return;
     }
 
@@ -1689,6 +1695,7 @@ pub async fn local_has_active_lease(cfg: &Config) -> bool {
 
     let status = get_cluster_status_for_config(cfg).await;
     status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
+        && local_has_fresh_quorum(cfg)
 }
 
 pub fn local_monitoring_allowed(cfg: &Config) -> bool {
@@ -1698,6 +1705,35 @@ pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     let state = cluster_state_read();
     state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
         && !state.local_network_quarantined
+        && state_has_fresh_quorum(&state, cfg, now_secs())
+}
+
+fn local_has_fresh_quorum(cfg: &Config) -> bool {
+    if !cfg.cluster.enabled {
+        return true;
+    }
+    state_has_fresh_quorum(&cluster_state_read(), cfg, now_secs())
+}
+
+fn state_has_fresh_quorum(state: &ClusterState, cfg: &Config, now: u64) -> bool {
+    let configured = configured_node_ids(cfg);
+    let required = configured.len() / 2 + 1;
+    let timeout = cfg.cluster.failover_timeout_secs.max(1);
+    let fresh_peers = state
+        .peer_heartbeat_acks
+        .iter()
+        .filter(|(node_id, acknowledged_at)| {
+            configured.contains(node_id.as_str())
+                && now.saturating_sub(**acknowledged_at) <= timeout
+        })
+        .count();
+    1 + fresh_peers >= required
+}
+
+fn record_peer_heartbeat_ack(node_id: &str) {
+    cluster_state_write()
+        .peer_heartbeat_acks
+        .insert(node_id.to_string(), now_secs());
 }
 
 pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {
@@ -1928,6 +1964,7 @@ async fn send_heartbeat_to_peer(
                     if heartbeat_response_is_valid(&status, &peer.node_id, cfg) {
                         let peer_auto_failover = status.auto_failover;
                         mark_peer_reachable(&peer.node_id);
+                        record_peer_heartbeat_ack(&peer.node_id);
                         merge_cluster_status_from_peer(status, &peer.node_id, cfg);
                         let peer_is_active_owner =
                             current_active_owner().as_deref() == Some(peer.node_id.as_str());
@@ -2466,6 +2503,9 @@ fn ensure_configured_nodes(
         .retain(|node_id, _| configured.contains(node_id.as_str()));
     state
         .heartbeat_failures
+        .retain(|node_id, _| configured.contains(node_id.as_str()));
+    state
+        .peer_heartbeat_acks
         .retain(|node_id, _| configured.contains(node_id.as_str()));
 
     state
@@ -3483,6 +3523,54 @@ mod tests {
         cfg.cluster.heartbeat_interval_secs = 3_600;
         assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(10));
         assert_eq!(cluster_control_timeout(&cfg), Duration::from_secs(15));
+    }
+
+    #[test]
+    fn execution_quorum_requires_fresh_direct_heartbeat_acks() {
+        let mut cfg = test_config("a", 0);
+        cfg.cluster.failover_timeout_secs = 10;
+        cfg.cluster.peers = ["b", "c", "d"]
+            .into_iter()
+            .map(|node_id| crate::config::ClusterPeer {
+                node_id: node_id.to_string(),
+                name: node_id.to_string(),
+                api_url: format!("http://{node_id}"),
+                priority: 0,
+            })
+            .collect();
+        let now = 100;
+        let mut state = ClusterState::default();
+
+        assert!(!state_has_fresh_quorum(&state, &cfg, now));
+        state.peer_heartbeat_acks.insert("b".to_string(), now);
+        assert!(!state_has_fresh_quorum(&state, &cfg, now));
+        state.peer_heartbeat_acks.insert("c".to_string(), now);
+        assert!(state_has_fresh_quorum(&state, &cfg, now));
+
+        state.peer_heartbeat_acks.clear();
+        state.peer_heartbeat_acks.insert("b".to_string(), now - 11);
+        state.peer_heartbeat_acks.insert("c".to_string(), now);
+        state.peer_heartbeat_acks.insert("d".to_string(), now);
+        assert!(state_has_fresh_quorum(&state, &cfg, now));
+        state.peer_heartbeat_acks.remove("d");
+        assert!(!state_has_fresh_quorum(&state, &cfg, now));
+    }
+
+    #[test]
+    fn two_node_partition_fails_closed_after_ack_expiry() {
+        let mut cfg = test_config("a", 0);
+        cfg.cluster.failover_timeout_secs = 10;
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 0,
+        }];
+        let mut state = ClusterState::default();
+        state.peer_heartbeat_acks.insert("b".to_string(), 100);
+
+        assert!(state_has_fresh_quorum(&state, &cfg, 110));
+        assert!(!state_has_fresh_quorum(&state, &cfg, 111));
     }
 
     #[test]
