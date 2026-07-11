@@ -1485,7 +1485,9 @@ async fn enter_local_network_quarantine(node_id: &str) -> Result<(), String> {
     if !should_apply_quarantine {
         return Ok(());
     }
-    apply_monitor_toggle_state(all_monitor_toggles_off()).await?;
+    // Quarantine is an execution fence, not a configuration change. Persisting
+    // all-off here destroys the desired state that a later owner must inherit.
+    apply_danmaku_command_runtime_state(false);
     set_manual_restart();
     clear_local_stream();
     stop_ffmpeg().await;
@@ -1503,7 +1505,8 @@ async fn recover_local_network_quarantine(node_id: &str) -> Result<(), String> {
         };
         toggles
     };
-    apply_monitor_toggle_state(toggles).await?;
+    apply_danmaku_command_runtime_state(toggles.enable_danmaku_command);
+    set_config_updated();
     remove_network_quarantine_snapshot()
 }
 
@@ -1586,9 +1589,10 @@ async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
     if !should_disable_local_standby_toggles(cfg, status) {
         return;
     }
-    if let Err(e) = apply_monitor_toggle_state(all_monitor_toggles_off()).await {
-        tracing::warn!("Failed to disable local standby monitor toggles: {}", e);
-    }
+    // Lease checks already prevent standby nodes from pushing. Only disable the
+    // command runtime here; the configured toggles remain the desired handoff
+    // state and must not be overwritten by a transient ownership change.
+    apply_danmaku_command_runtime_state(false);
 }
 
 fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) -> bool {
