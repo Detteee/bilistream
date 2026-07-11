@@ -846,6 +846,7 @@ pub async fn finalize_cluster_node_switch(
             target_node_id
         ));
     }
+    ensure_handoff_target_is_eligible(cfg, target_node_id)?;
     let client = CLUSTER_HTTP_CLIENT.clone();
     let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
         Ok(payload) => SourceConfigSnapshot {
@@ -937,16 +938,18 @@ pub async fn finalize_cluster_node_switch(
     Ok(())
 }
 
-fn ensure_switch_target_is_current(target_node_id: &str) -> Result<(), String> {
-    let current_owner = current_active_owner();
-    if current_owner.as_deref() == Some(target_node_id) {
-        return Ok(());
+fn ensure_handoff_target_is_eligible(cfg: &Config, target_node_id: &str) -> Result<(), String> {
+    let state = cluster_state_read();
+    let configured = configured_node_ids(cfg);
+    let eligible = state
+        .nodes
+        .get(target_node_id)
+        .is_some_and(|node| node_is_eligible(node, &state, cfg, now_secs(), &configured));
+    if eligible {
+        Ok(())
+    } else {
+        Err(format!("目标节点 {} 当前不可接管", target_node_id))
     }
-    Err(format!(
-        "取消过期集群切换: 当前活跃节点为 {}, 请求目标为 {}",
-        current_owner.as_deref().unwrap_or("none"),
-        target_node_id
-    ))
 }
 
 pub(crate) fn resolve_source_monitor_toggles(
@@ -1519,12 +1522,6 @@ fn state_has_fresh_quorum(state: &ClusterState, cfg: &Config, now: u64) -> bool 
     1 + fresh_peers >= required
 }
 
-fn record_peer_heartbeat_ack(node_id: &str) {
-    cluster_state_write()
-        .peer_heartbeat_acks
-        .insert(node_id.to_string(), now_secs());
-}
-
 pub fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {
     if !cfg.cluster.enabled {
         return true;
@@ -1772,11 +1769,8 @@ async fn send_heartbeat_to_peer(
                 if let Some(status) = envelope.data {
                     if heartbeat_response_is_valid(&status, &peer.node_id, cfg) {
                         let peer_auto_failover = status.auto_failover;
-                        mark_peer_reachable(&peer.node_id);
-                        record_peer_heartbeat_ack(&peer.node_id);
-                        merge_cluster_status_from_peer(status, &peer.node_id, cfg);
                         let peer_is_active_owner =
-                            current_active_owner().as_deref() == Some(peer.node_id.as_str());
+                            merge_successful_heartbeat(status, &peer.node_id, cfg);
                         adopt_auto_failover_from_peer_view(
                             peer_auto_failover,
                             peer_is_active_owner,
@@ -2390,13 +2384,8 @@ pub(crate) fn merge_cluster_status_from_direct_peer(
         ));
     }
 
-    mark_peer_reachable(peer_node_id);
-    merge_cluster_status_from_peer(status, peer_node_id, cfg);
+    merge_direct_peer_status(status, peer_node_id, cfg, false);
     Ok(())
-}
-
-fn merge_cluster_status_from_peer(status: ClusterStatus, peer_node_id: &str, cfg: &Config) {
-    merge_cluster_status_inner(status, Some(peer_node_id), Some(cfg));
 }
 
 fn merge_cluster_status_inner(
@@ -2406,8 +2395,46 @@ fn merge_cluster_status_inner(
 ) {
     let mut state = cluster_state_write();
     let received_at = now_secs();
+    merge_cluster_status_into(&mut state, status, direct_peer_id, cfg, received_at);
+}
+
+fn merge_successful_heartbeat(status: ClusterStatus, peer_node_id: &str, cfg: &Config) -> bool {
+    merge_direct_peer_status(status, peer_node_id, cfg, true)
+}
+
+fn merge_direct_peer_status(
+    status: ClusterStatus,
+    peer_node_id: &str,
+    cfg: &Config,
+    heartbeat_ack: bool,
+) -> bool {
+    let mut state = cluster_state_write();
+    let received_at = now_secs();
+    state.heartbeat_failures.remove(peer_node_id);
+    if heartbeat_ack {
+        state
+            .peer_heartbeat_acks
+            .insert(peer_node_id.to_string(), received_at);
+    }
+    merge_cluster_status_into(
+        &mut state,
+        status,
+        Some(peer_node_id),
+        Some(cfg),
+        received_at,
+    );
+    state.active_owner.as_deref() == Some(peer_node_id)
+}
+
+fn merge_cluster_status_into(
+    state: &mut ClusterState,
+    status: ClusterStatus,
+    direct_peer_id: Option<&str>,
+    cfg: Option<&Config>,
+    received_at: u64,
+) {
     if let (Some(peer_node_id), Some(cfg)) = (direct_peer_id, cfg) {
-        record_peer_observations(&mut state, peer_node_id, &status.nodes, cfg, received_at);
+        record_peer_observations(state, peer_node_id, &status.nodes, cfg, received_at);
     }
     for mut node in status.nodes {
         if let Some(cfg) = cfg {
@@ -2433,13 +2460,13 @@ fn merge_cluster_status_inner(
         state.nodes.insert(node.node_id.clone(), node);
     }
     adopt_owner_view(
-        &mut state,
+        state,
         status.active_owner,
         status.lease_until.unwrap_or(0),
         cfg.map(|cfg| cfg.cluster.auto_failover).unwrap_or(true),
         direct_peer_id,
     );
-    cache_current_owner_monitor_state(&mut state);
+    cache_current_owner_monitor_state(state);
 }
 
 /// Adopts a peer's active-owner view only when it does not regress ours.
@@ -2557,11 +2584,6 @@ fn snapshot_is_older(incoming: &ClusterNodeSnapshot, existing: &ClusterNodeSnaps
         (None, Some(_)) => true,
         _ => false,
     }
-}
-
-fn mark_peer_reachable(node_id: &str) {
-    let mut state = cluster_state_write();
-    state.heartbeat_failures.remove(node_id);
 }
 
 fn mark_peer_unreachable(node_id: &str, cfg: &Config) {
@@ -5073,11 +5095,24 @@ mod tests {
     }
 
     #[test]
-    fn stale_switch_target_is_rejected_before_side_effects() {
+    fn drained_handoff_target_is_rejected_before_side_effects() {
         let _guard = ClusterStateGuard::new();
-        cluster_state_write().active_owner = Some("new-owner".to_string());
+        let mut cfg = test_config("source", 10);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "target".to_string(),
+            name: "target".to_string(),
+            api_url: "http://target".to_string(),
+            priority: 5,
+        }];
+        let now = now_secs();
+        let mut target = empty_node("target", "target", "http://target", 5, false, now);
+        target.health = ClusterHealth::healthy();
+        target.last_seen = Some(now);
+        target.draining = true;
+        cluster_state_write()
+            .nodes
+            .insert("target".to_string(), target);
 
-        assert!(ensure_switch_target_is_current("old-target").is_err());
-        assert!(ensure_switch_target_is_current("new-owner").is_ok());
+        assert!(ensure_handoff_target_is_eligible(&cfg, "target").is_err());
     }
 }
