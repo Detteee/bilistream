@@ -64,7 +64,6 @@ const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
 const EXTERNAL_API_FAILURE_RETENTION_SECS: u64 = 60 * 60;
 const HEARTBEAT_FAILURE_THRESHOLD: u32 = 3;
 const NETWORK_ISOLATED_REASON: &str = "network_isolated";
-const NETWORK_QUARANTINE_FILE: &str = "cluster-network-quarantine.json";
 
 #[derive(Clone, Debug, Default)]
 struct ClusterState {
@@ -290,12 +289,6 @@ struct PeerApiResponse<T> {
     message: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct NetworkQuarantineSnapshot {
-    node_id: String,
-    monitor_toggles: MonitorToggleState,
-}
-
 pub fn is_enabled(cfg: &Config) -> bool {
     cfg.cluster.enabled
 }
@@ -356,18 +349,6 @@ pub fn monitor_toggle_state_from_monitored_config(payload: &MonitoredConfig) -> 
 
 pub fn all_monitor_toggles_off() -> MonitorToggleState {
     MonitorToggleState::default()
-}
-
-pub fn all_monitor_toggles_on() -> MonitorToggleState {
-    MonitorToggleState {
-        enable_danmaku_command: true,
-        enable_youtube_monitor: true,
-        enable_twitch_monitor: true,
-        youtube_enable_monitor: true,
-        twitch_enable_monitor: true,
-        priority_channel_enabled: true,
-        priority_channel_auto_restart: true,
-    }
 }
 
 pub fn channel_target_state_from_config(cfg: &Config) -> ChannelTargetState {
@@ -991,21 +972,21 @@ pub(crate) fn resolve_source_monitor_toggles_with_cache(
         .iter()
         .find(|node| node.node_id == source_node_id)
     {
-        if monitor_toggles_any_enabled(&node.monitor_toggles) {
+        if node_monitor_toggles_are_known(node) {
             return node.monitor_toggles.clone();
         }
     }
 
-    if let Some(cached) = cached_toggles.filter(monitor_toggles_any_enabled) {
+    if let Some(cached) = cached_toggles {
         return cached;
     }
 
     let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
-    if monitored_config_toggles_known || monitor_toggles_any_enabled(&from_config) {
+    if monitored_config_toggles_known {
         return from_config;
     }
 
-    all_monitor_toggles_on()
+    monitor_toggle_state_from_config(cfg)
 }
 
 pub(crate) fn resolve_source_channel_targets(
@@ -1499,11 +1480,7 @@ pub(crate) fn channel_targets_configured(targets: &ChannelTargetState) -> bool {
 }
 
 pub(crate) fn last_known_active_toggles() -> Option<MonitorToggleState> {
-    cluster_state_read()
-        .last_known_active_toggles
-        .as_ref()
-        .filter(|toggles| monitor_toggles_any_enabled(toggles))
-        .cloned()
+    cluster_state_read().last_known_active_toggles.clone()
 }
 
 pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> {
@@ -1522,149 +1499,32 @@ async fn enforce_local_network_quarantine(cfg: &Config, status: &ClusterStatus) 
         .is_some_and(|node| node.health.reason == NETWORK_ISOLATED_REASON);
 
     if local_is_network_isolated {
-        if let Err(e) = enter_local_network_quarantine(&cfg.cluster.node_id).await {
-            tracing::warn!("Failed to quarantine local network-isolated node: {}", e);
+        if set_local_network_quarantined(true) {
+            apply_danmaku_command_runtime_state(false);
+            set_manual_restart();
+            clear_local_stream();
+            stop_ffmpeg().await;
         }
         return;
     }
 
     let active_owner = status.active_owner.as_deref();
     if active_owner == Some(cfg.cluster.node_id.as_str()) || active_owner.is_none() {
-        if let Err(e) = recover_local_network_quarantine(&cfg.cluster.node_id).await {
-            tracing::warn!("Failed to recover local network quarantine: {}", e);
+        if set_local_network_quarantined(false) {
+            apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
+            set_config_updated();
         }
         return;
     }
 
-    if let Err(e) = clear_local_network_quarantine() {
-        tracing::warn!("Failed to clear local network quarantine snapshot: {}", e);
-    }
+    set_local_network_quarantined(false);
 }
 
-async fn enter_local_network_quarantine(node_id: &str) -> Result<(), String> {
-    let current_toggles = crate::config::load_config()
-        .await
-        .map_err(|e| e.to_string())
-        .map(|cfg| monitor_toggle_state_from_config(&cfg))?;
-    let persisted_toggles = read_network_quarantine_snapshot(node_id);
-    let (should_apply_quarantine, snapshot) = {
-        let mut state = cluster_state_write();
-        enter_local_network_quarantine_state(
-            &mut state,
-            node_id,
-            current_toggles,
-            persisted_toggles,
-        )
-    };
-    if let Some(snapshot) = snapshot {
-        if let Err(e) = write_network_quarantine_snapshot(&snapshot) {
-            tracing::warn!(
-                "Failed to persist local network quarantine snapshot; continuing quarantine: {}",
-                e
-            );
-        }
-    }
-    if !should_apply_quarantine {
-        return Ok(());
-    }
-    // Quarantine is an execution fence, not a configuration change. Persisting
-    // all-off here destroys the desired state that a later owner must inherit.
-    apply_danmaku_command_runtime_state(false);
-    set_manual_restart();
-    clear_local_stream();
-    stop_ffmpeg().await;
-    Ok(())
-}
-
-async fn recover_local_network_quarantine(node_id: &str) -> Result<(), String> {
-    let persisted_toggles = read_network_quarantine_snapshot(node_id);
-    let toggles = {
-        let mut state = cluster_state_write();
-        let Some(toggles) =
-            take_local_network_quarantine_recovery_toggles(&mut state, persisted_toggles)
-        else {
-            return Ok(());
-        };
-        toggles
-    };
-    apply_danmaku_command_runtime_state(toggles.enable_danmaku_command);
-    set_config_updated();
-    remove_network_quarantine_snapshot()
-}
-
-fn clear_local_network_quarantine() -> Result<(), String> {
+fn set_local_network_quarantined(quarantined: bool) -> bool {
     let mut state = cluster_state_write();
-    state.local_network_quarantined = false;
-    drop(state);
-    remove_network_quarantine_snapshot()
-}
-
-fn enter_local_network_quarantine_state(
-    state: &mut ClusterState,
-    node_id: &str,
-    current_toggles: MonitorToggleState,
-    persisted_toggles: Option<MonitorToggleState>,
-) -> (bool, Option<NetworkQuarantineSnapshot>) {
-    let toggles_enabled = monitor_toggles_any_enabled(&current_toggles);
-    let was_quarantined = state.local_network_quarantined;
-    let has_persisted_toggles = persisted_toggles.is_some();
-    let should_capture = toggles_enabled || (!was_quarantined && !has_persisted_toggles);
-    let snapshot = if should_capture {
-        state.last_known_active_toggles = Some(current_toggles.clone());
-        Some(NetworkQuarantineSnapshot {
-            node_id: node_id.to_string(),
-            monitor_toggles: current_toggles,
-        })
-    } else {
-        if let Some(persisted) = persisted_toggles {
-            state.last_known_active_toggles = Some(persisted);
-        }
-        None
-    };
-    state.local_network_quarantined = true;
-    (!was_quarantined || toggles_enabled, snapshot)
-}
-
-fn take_local_network_quarantine_recovery_toggles(
-    state: &mut ClusterState,
-    persisted_toggles: Option<MonitorToggleState>,
-) -> Option<MonitorToggleState> {
-    if !state.local_network_quarantined && persisted_toggles.is_none() {
-        return None;
-    }
-    state.local_network_quarantined = false;
-    Some(
-        state
-            .last_known_active_toggles
-            .clone()
-            .or(persisted_toggles)
-            .unwrap_or_else(all_monitor_toggles_on),
-    )
-}
-
-fn read_network_quarantine_snapshot(node_id: &str) -> Option<MonitorToggleState> {
-    let value = read_json_file(NETWORK_QUARANTINE_FILE)?;
-    let snapshot = serde_json::from_value::<NetworkQuarantineSnapshot>(value).ok()?;
-    if snapshot.node_id != node_id {
-        return None;
-    }
-    Some(snapshot.monitor_toggles)
-}
-
-fn write_network_quarantine_snapshot(snapshot: &NetworkQuarantineSnapshot) -> Result<(), String> {
-    let value = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
-    write_json_file(NETWORK_QUARANTINE_FILE, &value)
-}
-
-fn remove_network_quarantine_snapshot() -> Result<(), String> {
-    let Some(path) = executable_sibling(NETWORK_QUARANTINE_FILE) else {
-        return Ok(());
-    };
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    let changed = state.local_network_quarantined != quarantined;
+    state.local_network_quarantined = quarantined;
+    changed
 }
 
 async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
@@ -2226,7 +2086,7 @@ fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> 
     let configured = configured_node_ids(cfg);
     ensure_configured_nodes(&mut state, cfg, now, &configured);
     prune_peer_observations(&mut state, cfg, now, &configured);
-    normalize_node_health(&mut state, cfg, now, &configured);
+    normalize_node_health(&mut state, cfg, now);
     clear_invalid_forced_owner(&mut state, cfg, now, &configured);
 
     let chosen = choose_owner_with_configured(&state, cfg, now, &configured);
@@ -2237,8 +2097,10 @@ fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> 
     } else {
         0
     };
-
+    let active_owner = state.active_owner.clone();
+    let lease_until = (state.lease_until > 0).then_some(state.lease_until);
     let mut nodes: Vec<_> = state.nodes.values().cloned().collect();
+    drop(state);
     for node in &mut nodes {
         node.is_local = node.node_id == cfg.cluster.node_id;
         node.role = if node.draining || node.ddos {
@@ -2256,8 +2118,8 @@ fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> 
     ClusterStatus {
         enabled: true,
         local_node_id: cfg.cluster.node_id.clone(),
-        active_owner: state.active_owner.clone(),
-        lease_until: (state.lease_until > 0).then_some(state.lease_until),
+        active_owner,
+        lease_until,
         config_version,
         auto_failover: cfg.cluster.auto_failover,
         nodes,
@@ -2432,12 +2294,7 @@ fn configured_node_ids(cfg: &Config) -> HashSet<&str> {
     configured
 }
 
-fn normalize_node_health(
-    state: &mut ClusterState,
-    cfg: &Config,
-    now: u64,
-    configured: &HashSet<&str>,
-) {
+fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
     for node in state.nodes.values_mut() {
         if node.last_seen.is_none() {
             node.health = ClusterHealth::unhealthy("waiting_for_heartbeat", true, false);
@@ -2459,34 +2316,6 @@ fn normalize_node_health(
         } else if node.health.stream_degraded {
             node.health.healthy = false;
             node.health.reason = "stream_metrics_degraded".to_string();
-        }
-    }
-
-    let indirectly_observed_nodes = state
-        .nodes
-        .iter()
-        .filter(|(node_id, node)| {
-            node.node_id != cfg.cluster.node_id
-                && !node.draining
-                && !node.ddos
-                && node.health.stale
-                && matches!(
-                    node.health.reason.as_str(),
-                    "api_unreachable" | "heartbeat_timeout" | "waiting_for_heartbeat"
-                )
-                && indirectly_observed_by_quorum(state, node_id, cfg, now, configured)
-        })
-        .map(|(node_id, _)| node_id.clone())
-        .collect::<Vec<_>>();
-
-    for node_id in indirectly_observed_nodes {
-        if let Some(node) = state.nodes.get_mut(&node_id) {
-            node.health = ClusterHealth {
-                healthy: true,
-                reason: "indirectly_observed".to_string(),
-                stale: true,
-                stream_degraded: false,
-            };
         }
     }
 }
@@ -4074,13 +3903,12 @@ mod tests {
                 .insert(node_id.to_string(), now);
         }
 
-        let configured = configured_node_ids(&cfg);
-        normalize_node_health(&mut state, &cfg, now, &configured);
+        normalize_node_health(&mut state, &cfg, now);
 
         let node = state.nodes.get("b").unwrap();
-        assert!(node.health.healthy);
+        assert!(!node.health.healthy);
         assert!(node.health.stale);
-        assert_eq!(node.health.reason, "indirectly_observed");
+        assert_eq!(node.health.reason, "heartbeat_timeout");
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
     }
 
@@ -4268,8 +4096,7 @@ mod tests {
             empty_node("b", "b", "http://b", 1, false, now),
         );
 
-        let configured = configured_node_ids(&cfg);
-        normalize_node_health(&mut state, &cfg, now + 1_000, &configured);
+        normalize_node_health(&mut state, &cfg, now + 1_000);
 
         let node = state.nodes.get("b").unwrap();
         assert!(!node.health.healthy);
@@ -4503,116 +4330,14 @@ mod tests {
     }
 
     #[test]
-    fn network_quarantine_caches_enabled_toggles_and_stays_idempotent_after_off() {
-        let mut state = ClusterState::default();
-        let enabled = MonitorToggleState {
-            enable_youtube_monitor: true,
-            youtube_enable_monitor: true,
-            ..all_monitor_toggles_off()
-        };
+    fn network_quarantine_latch_reports_only_transitions() {
+        let _guard = ClusterStateGuard::new();
+        cluster_state_write().local_network_quarantined = false;
 
-        let (should_apply, snapshot) =
-            enter_local_network_quarantine_state(&mut state, "a", enabled.clone(), None);
-        assert!(should_apply);
-        assert_eq!(
-            snapshot.map(|snapshot| snapshot.monitor_toggles),
-            Some(enabled.clone())
-        );
-        assert!(state.local_network_quarantined);
-        assert_eq!(state.last_known_active_toggles, Some(enabled.clone()));
-
-        let (should_apply, snapshot) =
-            enter_local_network_quarantine_state(&mut state, "a", all_monitor_toggles_off(), None);
-        assert!(!should_apply);
-        assert!(snapshot.is_none());
-        assert_eq!(state.last_known_active_toggles, Some(enabled));
-    }
-
-    #[test]
-    fn network_quarantine_hydrates_from_persisted_snapshot_after_restart() {
-        let mut state = ClusterState::default();
-        let persisted = MonitorToggleState {
-            enable_twitch_monitor: true,
-            twitch_enable_monitor: true,
-            ..all_monitor_toggles_off()
-        };
-
-        let (should_apply, snapshot) = enter_local_network_quarantine_state(
-            &mut state,
-            "a",
-            all_monitor_toggles_off(),
-            Some(persisted.clone()),
-        );
-
-        assert!(should_apply);
-        assert!(snapshot.is_none());
-        assert!(state.local_network_quarantined);
-        assert_eq!(state.last_known_active_toggles, Some(persisted));
-    }
-
-    #[test]
-    fn network_quarantine_preserves_all_off_as_known_active_state() {
-        let mut state = ClusterState::default();
-
-        let (should_apply, snapshot) =
-            enter_local_network_quarantine_state(&mut state, "a", all_monitor_toggles_off(), None);
-
-        assert!(should_apply);
-        assert_eq!(
-            snapshot.map(|snapshot| snapshot.monitor_toggles),
-            Some(all_monitor_toggles_off())
-        );
-        assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state, None),
-            Some(all_monitor_toggles_off())
-        );
-    }
-
-    #[test]
-    fn network_quarantine_recovery_uses_cached_persisted_or_all_on() {
-        let cached = MonitorToggleState {
-            enable_danmaku_command: true,
-            priority_channel_enabled: true,
-            ..all_monitor_toggles_off()
-        };
-        let mut state = ClusterState {
-            local_network_quarantined: true,
-            last_known_active_toggles: Some(cached.clone()),
-            ..ClusterState::default()
-        };
-
-        assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state, None),
-            Some(cached)
-        );
-        assert!(!state.local_network_quarantined);
-        assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state, None),
-            None
-        );
-
-        let persisted = MonitorToggleState {
-            enable_youtube_monitor: true,
-            youtube_enable_monitor: true,
-            ..all_monitor_toggles_off()
-        };
-        let mut restarted_state = ClusterState::default();
-        assert_eq!(
-            take_local_network_quarantine_recovery_toggles(
-                &mut restarted_state,
-                Some(persisted.clone())
-            ),
-            Some(persisted)
-        );
-
-        let mut state_without_cache = ClusterState {
-            local_network_quarantined: true,
-            ..ClusterState::default()
-        };
-        assert_eq!(
-            take_local_network_quarantine_recovery_toggles(&mut state_without_cache, None),
-            Some(all_monitor_toggles_on())
-        );
+        assert!(set_local_network_quarantined(true));
+        assert!(!set_local_network_quarantined(true));
+        assert!(set_local_network_quarantined(false));
+        assert!(!set_local_network_quarantined(false));
     }
 
     #[test]
@@ -4659,8 +4384,7 @@ mod tests {
             heartbeat_failures.insert(peer.node_id.clone(), HEARTBEAT_FAILURE_THRESHOLD);
         }
 
-        let configured = configured_node_ids(&cfg);
-        normalize_node_health(&mut state, &cfg, now, &configured);
+        normalize_node_health(&mut state, &cfg, now);
 
         let peer_last_seen = state
             .nodes
@@ -4758,7 +4482,7 @@ mod tests {
     }
 
     #[test]
-    fn last_known_active_toggles_filters_all_off_cache() {
+    fn last_known_active_toggles_preserves_all_off_cache() {
         let previous = MonitorToggleState {
             enable_danmaku_command: true,
             enable_youtube_monitor: true,
@@ -4780,7 +4504,7 @@ mod tests {
             let mut state = cluster_state_write();
             state.last_known_active_toggles = Some(all_monitor_toggles_off());
         }
-        assert!(last_known_active_toggles().is_none());
+        assert_eq!(last_known_active_toggles(), Some(all_monitor_toggles_off()));
     }
 
     #[test]

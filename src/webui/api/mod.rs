@@ -82,11 +82,10 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
 mod tests {
     use super::*;
     use crate::cluster::{
-        all_monitor_toggles_off, all_monitor_toggles_on, monitor_toggle_state_from_config,
-        monitored_config_from_config, resolve_source_channel_targets,
-        resolve_source_monitor_toggles, resolve_source_monitor_toggles_with_cache,
-        ChannelTargetState, ClusterHealth, ClusterNodeRole, ClusterNodeSnapshot,
-        MonitorToggleState,
+        all_monitor_toggles_off, monitor_toggle_state_from_config, monitored_config_from_config,
+        resolve_source_channel_targets, resolve_source_monitor_toggles,
+        resolve_source_monitor_toggles_with_cache, ChannelTargetState, ClusterHealth,
+        ClusterNodeRole, ClusterNodeSnapshot, MonitorToggleState,
     };
     use crate::config::{
         BiliLive, ClusterPeer, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube,
@@ -667,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn node_switch_ignores_stale_all_off_snapshot_and_cache() {
+    fn node_switch_preserves_known_all_off_cache() {
         let cfg = status_cache_test_config();
         let before = cluster_status_with_node(healthy_cluster_node(
             "source",
@@ -685,7 +684,7 @@ mod tests {
             Some(all_monitor_toggles_off()),
         );
 
-        assert_eq!(resolved, all_monitor_toggles_on());
+        assert_eq!(resolved, all_monitor_toggles_off());
     }
 
     #[test]
@@ -713,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn node_switch_toggle_resolution_defaults_new_active_to_all_on() {
+    fn node_switch_toggle_resolution_falls_back_to_local_desired_state() {
         let cfg = status_cache_test_config();
         let before = ClusterStatus {
             enabled: true,
@@ -730,7 +729,7 @@ mod tests {
             &cfg, &before, "source", &exported, false, None,
         );
 
-        assert_eq!(resolved, all_monitor_toggles_on());
+        assert_eq!(resolved, monitor_toggle_state_from_config(&cfg));
     }
 
     #[test]
