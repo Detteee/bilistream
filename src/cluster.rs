@@ -566,6 +566,19 @@ pub fn apply_monitor_toggle_state_to_config(cfg: &mut Config, payload: &MonitorT
     cfg.priority_channel.auto_restart = payload.priority_channel_auto_restart;
 }
 
+fn apply_node_mode_config_state(
+    cfg: &mut Config,
+    channel_targets: Option<&ChannelTargetState>,
+    monitor_toggles: Option<&MonitorToggleState>,
+) {
+    if let Some(channel_targets) = channel_targets {
+        apply_channel_target_state_to_config(cfg, channel_targets);
+    }
+    if let Some(monitor_toggles) = monitor_toggles {
+        apply_monitor_toggle_state_to_config(cfg, monitor_toggles);
+    }
+}
+
 fn apply_danmaku_command_runtime_state(enabled: bool) {
     crate::plugins::enable_danmaku_commands(enabled);
     if enabled {
@@ -894,7 +907,7 @@ pub async fn finalize_cluster_node_switch(
                 active: false,
                 restart: false,
                 preserve_drain: preserve_source_drain,
-                monitor_toggles: Some(all_monitor_toggles_off()),
+                monitor_toggles: None,
                 channel_targets: None,
             },
             "disable_previous_active",
@@ -1130,7 +1143,6 @@ async fn apply_cluster_node_mode_to_node(
 pub async fn apply_cluster_node_mode_locally(
     payload: ClusterApplyNodeModeRequest,
 ) -> Result<ClusterStatus, String> {
-    let has_monitored_config = payload.monitored_config.is_some();
     let active = payload.active;
     let restart = payload.restart;
     let preserve_drain = payload.preserve_drain;
@@ -1141,19 +1153,7 @@ pub async fn apply_cluster_node_mode_locally(
     }
 
     let mut cfg = load_config().await.map_err(|e| e.to_string())?;
-    if let Some(channel_targets) = channel_targets.as_ref() {
-        apply_channel_target_state_to_config(&mut cfg, channel_targets);
-    }
-    if let Some(monitor_toggles) = monitor_toggles.as_ref() {
-        apply_monitor_toggle_state_to_config(&mut cfg, monitor_toggles);
-    } else if !has_monitored_config {
-        cfg.enable_youtube_monitor = active;
-        cfg.enable_twitch_monitor = active;
-        cfg.youtube.enable_monitor = active;
-        cfg.twitch.enable_monitor = active;
-        cfg.priority_channel.enabled = active;
-        cfg.bililive.enable_danmaku_command = active;
-    }
+    apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
     save_config(&cfg).await.map_err(|e| e.to_string())?;
 
@@ -1166,7 +1166,7 @@ pub async fn apply_cluster_node_mode_locally(
         set_local_drain_state_preserving_fault(&cfg, false, ddos);
     }
 
-    apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
+    apply_danmaku_command_runtime_state(active && cfg.bililive.enable_danmaku_command);
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
 
@@ -1624,6 +1624,15 @@ pub async fn local_has_active_lease(cfg: &Config) -> bool {
     status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
 }
 
+pub fn local_monitoring_allowed(cfg: &Config) -> bool {
+    if !cfg.cluster.enabled {
+        return true;
+    }
+    let state = cluster_state_read();
+    state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
+        && !state.local_network_quarantined
+}
+
 pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {
     if !cfg.cluster.enabled {
         return true;
@@ -1738,6 +1747,7 @@ pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> b
         tracing::debug!("Ignored heartbeat from unknown node {}", node.node_id);
         return false;
     }
+    canonicalize_node_membership(&mut node, cfg);
     node.last_seen = Some(now_secs());
     mark_peer_reachable(&node.node_id);
     update_node(node, &cfg.cluster.node_id);
@@ -1852,10 +1862,10 @@ async fn send_heartbeat_to_peer(
                 if let Some(status) = envelope.data {
                     if heartbeat_response_is_valid(&status, &peer.node_id, cfg) {
                         let peer_auto_failover = status.auto_failover;
-                        let peer_is_active_owner =
-                            status.active_owner.as_deref() == Some(peer.node_id.as_str());
                         mark_peer_reachable(&peer.node_id);
                         merge_cluster_status_from_peer(status, &peer.node_id, cfg);
+                        let peer_is_active_owner =
+                            current_active_owner().as_deref() == Some(peer.node_id.as_str());
                         adopt_auto_failover_from_peer_view(
                             peer_auto_failover,
                             peer_is_active_owner,
@@ -2221,6 +2231,9 @@ fn choose_owner_with_configured(
 /// When every peer is disabled/unavailable, keep an active local node running,
 /// but never let an all-off standby self-elect.
 fn last_resort_local_owner(state: &ClusterState, cfg: &Config) -> Option<String> {
+    if state.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
+        return None;
+    }
     if !monitor_toggles_any_enabled(&monitor_toggle_state_from_config(cfg)) {
         return None;
     }
@@ -2452,6 +2465,27 @@ fn empty_node(
     }
 }
 
+fn canonicalize_node_membership(node: &mut ClusterNodeSnapshot, cfg: &Config) -> bool {
+    if node.node_id == cfg.cluster.node_id {
+        node.name = cfg.cluster.node_name.clone();
+        node.api_url = cfg.cluster.public_api_url.clone();
+        node.priority = cfg.cluster.priority;
+        return true;
+    }
+    let Some(peer) = cfg
+        .cluster
+        .peers
+        .iter()
+        .find(|peer| peer.node_id == node.node_id)
+    else {
+        return false;
+    };
+    node.name = peer.name.clone();
+    node.api_url = peer.api_url.clone();
+    node.priority = peer.priority;
+    true
+}
+
 fn update_node(mut node: ClusterNodeSnapshot, local_node_id: &str) {
     node.last_seen = node.last_seen.or_else(|| Some(now_secs()));
     let mut state = cluster_state_write();
@@ -2497,6 +2531,11 @@ fn merge_cluster_status_inner(
         record_peer_observations(&mut state, peer_node_id, &status.nodes, cfg, received_at);
     }
     for mut node in status.nodes {
+        if let Some(cfg) = cfg {
+            if !canonicalize_node_membership(&mut node, cfg) {
+                continue;
+            }
+        }
         if let Some(local) = state.nodes.get(&node.node_id) {
             if local.is_local {
                 continue;
@@ -2538,13 +2577,19 @@ fn adopt_owner_view(
         // Peer has no owner opinion: keep ours.
         return;
     };
+    let direct_owner_claim = direct_peer_id == Some(incoming_owner.as_str());
+    let directly_reported_owner_is_eligible = direct_owner_claim
+        && state
+            .nodes
+            .get(&incoming_owner)
+            .is_some_and(|node| node.health.healthy && !node.draining && !node.ddos);
     match state.active_owner.as_deref() {
         Some(local_owner) if local_owner == incoming_owner => {
             state.lease_until = state.lease_until.max(incoming_lease);
         }
         Some(_) => {
             if !auto_failover {
-                if direct_peer_id == Some(incoming_owner.as_str()) {
+                if directly_reported_owner_is_eligible {
                     if state.forced_owner.as_deref() != Some(incoming_owner.as_str()) {
                         state.forced_owner = None;
                     }
@@ -2556,14 +2601,16 @@ fn adopt_owner_view(
             // Conflicting views: adopt the peer's owner only if its lease is
             // at least as fresh as ours; otherwise keep the local view and let
             // the next election round converge.
-            if incoming_lease >= state.lease_until {
+            if directly_reported_owner_is_eligible && incoming_lease >= state.lease_until {
                 state.active_owner = Some(incoming_owner);
                 state.lease_until = incoming_lease;
             }
         }
         None => {
-            state.active_owner = Some(incoming_owner);
-            state.lease_until = incoming_lease;
+            if directly_reported_owner_is_eligible {
+                state.active_owner = Some(incoming_owner);
+                state.lease_until = incoming_lease;
+            }
         }
     }
 }
@@ -3296,6 +3343,18 @@ mod tests {
     }
 
     #[test]
+    fn node_mode_without_explicit_state_preserves_desired_config() {
+        let mut cfg = test_config("local", 0);
+        let toggles = monitor_toggle_state_from_config(&cfg);
+        let targets = channel_target_state_from_config(&cfg);
+
+        apply_node_mode_config_state(&mut cfg, None, None);
+
+        assert_eq!(monitor_toggle_state_from_config(&cfg), toggles);
+        assert_eq!(channel_target_state_from_config(&cfg), targets);
+    }
+
+    #[test]
     fn failed_restart_window_prunes_old_failures() {
         let now = 10_000;
         let mut failures = vec![
@@ -3407,6 +3466,35 @@ mod tests {
 
         assert!(!record_heartbeat(&cfg, node));
         assert!(!cluster_state_read().nodes.contains_key("unknown"));
+    }
+
+    #[test]
+    fn record_heartbeat_uses_locally_configured_membership_metadata() {
+        let _guard = ClusterStateGuard::new();
+        let mut cfg = test_config("local", 0);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "peer".to_string(),
+            name: "Configured peer".to_string(),
+            api_url: "https://configured.invalid".to_string(),
+            priority: 7,
+        }];
+        let mut node = empty_node(
+            "peer",
+            "Forged",
+            "https://forged.invalid",
+            999,
+            false,
+            now_secs(),
+        );
+        node.health = ClusterHealth::healthy();
+
+        assert!(record_heartbeat(&cfg, node));
+
+        let state = cluster_state_read();
+        let stored = state.nodes.get("peer").expect("peer should be stored");
+        assert_eq!(stored.name, "Configured peer");
+        assert_eq!(stored.api_url, "https://configured.invalid");
+        assert_eq!(stored.priority, 7);
     }
 
     #[test]
@@ -4148,6 +4236,41 @@ mod tests {
     }
 
     #[test]
+    fn last_resort_does_not_promote_faulted_standby_with_preserved_toggles() {
+        let mut cfg = test_config("a", 1);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 10,
+        }];
+
+        let now = now_secs();
+        let mut state = ClusterState {
+            active_owner: Some("b".to_string()),
+            ..ClusterState::default()
+        };
+        state.nodes.insert(
+            "a".to_string(),
+            empty_node("a", "a", "http://a", 1, true, now),
+        );
+        state.nodes.insert(
+            "b".to_string(),
+            empty_node("b", "b", "http://b", 10, false, now),
+        );
+        for node in state.nodes.values_mut() {
+            node.ddos = true;
+            node.health = ClusterHealth::unhealthy(NETWORK_ISOLATED_REASON, false, true);
+            node.last_seen = Some(now);
+        }
+
+        assert!(monitor_toggles_any_enabled(
+            &monitor_toggle_state_from_config(&cfg)
+        ));
+        assert_eq!(choose_owner(&state, &cfg, now), None);
+    }
+
+    #[test]
     fn recovered_network_isolation_latch_clears_only_fault_quarantine() {
         let mut state = ClusterState {
             local_ddos: true,
@@ -4630,7 +4753,10 @@ mod tests {
         }];
 
         let now = now_secs();
-        let mut state = ClusterState::default();
+        let mut state = ClusterState {
+            active_owner: Some("a".to_string()),
+            ..ClusterState::default()
+        };
         state.nodes.insert(
             "a".to_string(),
             empty_node("a", "a", "http://a", 1, true, now),
@@ -4691,11 +4817,19 @@ mod tests {
             ..ClusterState::default()
         };
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 900, true, None);
+        let mut b = empty_node("b", "b", "http://b", 1, false, now_secs());
+        b.health = ClusterHealth::healthy();
+        state.nodes.insert("b".to_string(), b);
+
+        adopt_owner_view(&mut state, Some("b".to_string()), 900, true, Some("c"));
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 1_000);
 
-        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, None);
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, Some("c"));
+        assert_eq!(state.active_owner.as_deref(), Some("a"));
+        assert_eq!(state.lease_until, 1_000);
+
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, Some("b"));
         assert_eq!(state.active_owner.as_deref(), Some("b"));
         assert_eq!(state.lease_until, 1_100);
 
@@ -4709,7 +4843,10 @@ mod tests {
     #[test]
     fn adopt_owner_view_accepts_first_owner_opinion() {
         let mut state = ClusterState::default();
-        adopt_owner_view(&mut state, Some("a".to_string()), 42, false, None);
+        let mut a = empty_node("a", "a", "http://a", 1, false, now_secs());
+        a.health = ClusterHealth::healthy();
+        state.nodes.insert("a".to_string(), a);
+        adopt_owner_view(&mut state, Some("a".to_string()), 42, false, Some("a"));
         assert_eq!(state.active_owner.as_deref(), Some("a"));
         assert_eq!(state.lease_until, 42);
     }
@@ -4736,6 +4873,9 @@ mod tests {
             lease_until: 1_000,
             ..ClusterState::default()
         };
+        let mut b = empty_node("b", "b", "http://b", 1, false, now_secs());
+        b.health = ClusterHealth::healthy();
+        state.nodes.insert("b".to_string(), b);
 
         adopt_owner_view(&mut state, Some("b".to_string()), 1_100, false, Some("b"));
 
@@ -5018,5 +5158,32 @@ mod tests {
 
         let from_cache = last_known_active_toggles().expect("cached toggles should be available");
         assert_eq!(from_cache, cached);
+    }
+
+    #[test]
+    fn monitoring_requires_local_ownership_and_no_quarantine() {
+        let _guard = ClusterStateGuard::new();
+        let cfg = test_config("a", 1);
+
+        {
+            let mut state = cluster_state_write();
+            state.active_owner = Some("b".to_string());
+            state.local_network_quarantined = false;
+        }
+        assert!(!local_monitoring_allowed(&cfg));
+
+        {
+            let mut state = cluster_state_write();
+            state.active_owner = Some("a".to_string());
+            state.local_network_quarantined = true;
+        }
+        assert!(!local_monitoring_allowed(&cfg));
+
+        cluster_state_write().local_network_quarantined = false;
+        assert!(local_monitoring_allowed(&cfg));
+
+        let mut standalone = cfg;
+        standalone.cluster.enabled = false;
+        assert!(local_monitoring_allowed(&standalone));
     }
 }

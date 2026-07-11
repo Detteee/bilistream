@@ -459,7 +459,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     let initial_cfg = load_config().await?;
 
     // Start danmaku client in background if not already running and if danmaku commands are enabled
-    if !is_danmaku_running() && initial_cfg.bililive.enable_danmaku_command {
+    if !is_danmaku_running()
+        && initial_cfg.bililive.enable_danmaku_command
+        && cluster::local_monitoring_allowed(&initial_cfg)
+    {
         run_danmaku();
         // Give the client a moment to start
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -483,6 +486,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // This pass checks the target anyway, so a go-live wake from before it adds nothing.
         bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id);
         bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
+
+        if !cluster::local_monitoring_allowed(&cfg) {
+            if is_danmaku_running() {
+                tracing::info!("⏸️ 集群备用或隔离节点停止弹幕客户端");
+                stop_danmaku();
+            }
+            let retry_secs = cfg
+                .cluster
+                .heartbeat_interval_secs
+                .max(1)
+                .min(cfg.interval.max(1));
+            wait_config_update_or_timeout(Duration::from_secs(retry_secs)).await;
+            continue 'outer;
+        }
 
         // Handle danmaku client based on enable_danmaku_command setting
         if cfg.bililive.enable_danmaku_command {
