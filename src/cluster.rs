@@ -23,10 +23,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
     static ref NODE_MODE_APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+    static ref CLUSTER_SWITCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+    static ref CLUSTER_HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
 }
 
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+fn cluster_control_timeout(cfg: &Config) -> Duration {
+    Duration::from_secs(cfg.cluster.heartbeat_interval_secs.clamp(5, 15))
+}
+
+fn cluster_heartbeat_timeout(cfg: &Config) -> Duration {
+    Duration::from_secs(cfg.cluster.heartbeat_interval_secs.clamp(3, 10))
+}
 
 fn recover_read_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
     lock.read().unwrap_or_else(|poisoned| {
@@ -476,8 +486,8 @@ pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, S
         monitor_toggles: toggles,
         channel_targets: Some(channel_targets),
     };
-    let client = reqwest::Client::new();
-    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+    let client = CLUSTER_HTTP_CLIENT.clone();
+    let timeout = cluster_control_timeout(cfg);
 
     let tasks = cfg
         .cluster
@@ -769,8 +779,8 @@ pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, Strin
     }
 
     let request = cluster_sync_config_from_config(cfg);
-    let client = reqwest::Client::new();
-    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+    let client = CLUSTER_HTTP_CLIENT.clone();
+    let timeout = cluster_control_timeout(cfg);
 
     let tasks = cfg
         .cluster
@@ -835,7 +845,9 @@ pub async fn finalize_cluster_node_switch(
     target_node_id: &str,
     preserve_source_drain: bool,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let _switch_guard = CLUSTER_SWITCH_LOCK.lock().await;
+    ensure_switch_target_is_current(target_node_id)?;
+    let client = CLUSTER_HTTP_CLIENT.clone();
     let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
         Ok(payload) => SourceConfigSnapshot {
             payload,
@@ -893,6 +905,7 @@ pub async fn finalize_cluster_node_switch(
     post_cluster_drain_control(cfg, &target_enable, None).await;
 
     if source_node_id != target_node_id {
+        ensure_switch_target_is_current(target_node_id)?;
         if !preserve_source_drain {
             let source_standby = ClusterDrainRequest {
                 node_id: Some(source_node_id.to_string()),
@@ -929,6 +942,18 @@ pub async fn finalize_cluster_node_switch(
     }
 
     Ok(())
+}
+
+fn ensure_switch_target_is_current(target_node_id: &str) -> Result<(), String> {
+    let current_owner = current_active_owner();
+    if current_owner.as_deref() == Some(target_node_id) {
+        return Ok(());
+    }
+    Err(format!(
+        "取消过期集群切换: 当前活跃节点为 {}, 请求目标为 {}",
+        current_owner.as_deref().unwrap_or("none"),
+        target_node_id
+    ))
 }
 
 pub(crate) fn resolve_source_monitor_toggles(
@@ -1034,9 +1059,7 @@ async fn export_cluster_config_from_node(
     );
     let response = client
         .get(url)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(5),
-        ))
+        .timeout(cluster_control_timeout(cfg))
         .send()
         .await
         .map_err(|e| format!("读取源节点配置失败: {}", e))?;
@@ -1114,9 +1137,7 @@ async fn apply_cluster_node_mode_to_node(
     let response = client
         .post(url)
         .json(payload)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(5),
-        ))
+        .timeout(cluster_control_timeout(cfg))
         .send()
         .await
         .map_err(|e| format!("更新节点 {} 模式失败: {}", node_id, e))?;
@@ -1225,8 +1246,8 @@ async fn post_cluster_drain_control(
     payload: &ClusterDrainRequest,
     target_node_id: Option<&str>,
 ) {
-    let client = reqwest::Client::new();
-    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+    let client = CLUSTER_HTTP_CLIENT.clone();
+    let timeout = cluster_control_timeout(cfg);
     let tasks = cfg
         .cluster
         .peers
@@ -1298,7 +1319,7 @@ async fn post_cluster_drain_control_to_peer(
 
 pub fn start_cluster_worker() {
     tokio::spawn(async {
-        let client = reqwest::Client::new();
+        let client = CLUSTER_HTTP_CLIENT.clone();
 
         loop {
             let cfg = match crate::config::load_config()
@@ -1888,9 +1909,7 @@ async fn send_heartbeat_to_peer(
     let result = client
         .post(url)
         .json(&request)
-        .timeout(Duration::from_secs(
-            cfg.cluster.heartbeat_interval_secs.max(3),
-        ))
+        .timeout(cluster_heartbeat_timeout(cfg))
         .send()
         .await;
 
@@ -3451,6 +3470,19 @@ mod tests {
 
         assert!(!ffmpeg_restart_degraded(&cfg.cluster, 2));
         assert!(ffmpeg_restart_degraded(&cfg.cluster, 3));
+    }
+
+    #[test]
+    fn cluster_request_timeouts_are_bounded() {
+        let mut cfg = test_config("a", 0);
+
+        cfg.cluster.heartbeat_interval_secs = 1;
+        assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(3));
+        assert_eq!(cluster_control_timeout(&cfg), Duration::from_secs(5));
+
+        cfg.cluster.heartbeat_interval_secs = 3_600;
+        assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(10));
+        assert_eq!(cluster_control_timeout(&cfg), Duration::from_secs(15));
     }
 
     #[test]
@@ -5240,5 +5272,14 @@ mod tests {
         let mut standalone = cfg;
         standalone.cluster.enabled = false;
         assert!(local_monitoring_allowed(&standalone));
+    }
+
+    #[test]
+    fn stale_switch_target_is_rejected_before_side_effects() {
+        let _guard = ClusterStateGuard::new();
+        cluster_state_write().active_owner = Some("new-owner".to_string());
+
+        assert!(ensure_switch_target_is_current("old-target").is_err());
+        assert!(ensure_switch_target_is_current("new-owner").is_ok());
     }
 }
