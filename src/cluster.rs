@@ -81,7 +81,6 @@ struct ClusterState {
     local_failed_restart_times: Vec<u64>,
     local_external_api_failures: u32,
     local_external_api_failure_times: Vec<u64>,
-    local_network_quarantined: bool,
     heartbeat_failures: HashMap<String, u32>,
     peer_heartbeat_acks: HashMap<String, u64>,
     peer_observations: HashMap<String, HashMap<String, u64>>,
@@ -1271,9 +1270,6 @@ pub fn start_cluster_worker() {
             send_heartbeats(&client, &cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
             schedule_auto_owner_transition(&cfg, previous_owner, &status);
-            enforce_local_network_quarantine(&cfg, &status).await;
-            enforce_local_standby_runtime(&cfg, &status);
-
             let local_may_run = local_monitoring_allowed(&cfg);
             if !local_may_run && is_ffmpeg_running().await {
                 tracing::warn!("集群租约或心跳多数派已丢失，停止本节点 ffmpeg 推流");
@@ -1431,70 +1427,12 @@ pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> 
         .cloned()
 }
 
-async fn enforce_local_network_quarantine(cfg: &Config, status: &ClusterStatus) {
-    let local_is_network_isolated = status
-        .nodes
-        .iter()
-        .find(|node| node.node_id == cfg.cluster.node_id)
-        .is_some_and(|node| node.health.reason == NETWORK_ISOLATED_REASON);
-
-    if local_is_network_isolated {
-        if set_local_network_quarantined(true) {
-            apply_danmaku_command_runtime_state(false);
-            set_manual_restart();
-            clear_local_stream();
-            stop_ffmpeg().await;
-        }
-        return;
-    }
-
-    let active_owner = status.active_owner.as_deref();
-    if active_owner == Some(cfg.cluster.node_id.as_str()) || active_owner.is_none() {
-        if set_local_network_quarantined(false) {
-            apply_danmaku_command_runtime_state(cfg.bililive.enable_danmaku_command);
-            set_config_updated();
-        }
-        return;
-    }
-
-    set_local_network_quarantined(false);
-}
-
-fn set_local_network_quarantined(quarantined: bool) -> bool {
-    let mut state = cluster_state_write();
-    let changed = state.local_network_quarantined != quarantined;
-    state.local_network_quarantined = quarantined;
-    changed
-}
-
-fn enforce_local_standby_runtime(cfg: &Config, status: &ClusterStatus) {
-    if local_runtime_is_standby(cfg, status) {
-        apply_danmaku_command_runtime_state(false);
-    }
-}
-
-fn local_runtime_is_standby(cfg: &Config, status: &ClusterStatus) -> bool {
-    if cluster_state_read()
-        .forced_owner
-        .as_deref()
-        .is_some_and(|owner| owner == cfg.cluster.node_id)
-    {
-        return false;
-    }
-
-    status
-        .active_owner
-        .as_deref()
-        .is_some_and(|owner| owner != cfg.cluster.node_id)
-}
-
 pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     if !cfg.cluster.enabled {
         return true;
     }
     let state = cluster_state_read();
     state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
-        && !state.local_network_quarantined
         && !state.local_draining
         && !local_effective_ddos_state(&state)
         && state_has_fresh_quorum(&state, cfg, now_secs())
@@ -4281,17 +4219,6 @@ mod tests {
     }
 
     #[test]
-    fn network_quarantine_latch_reports_only_transitions() {
-        let _guard = ClusterStateGuard::new();
-        cluster_state_write().local_network_quarantined = false;
-
-        assert!(set_local_network_quarantined(true));
-        assert!(!set_local_network_quarantined(true));
-        assert!(set_local_network_quarantined(false));
-        assert!(!set_local_network_quarantined(false));
-    }
-
-    #[test]
     fn four_node_last_survivor_stays_healthy_and_active() {
         let mut cfg = test_config("a", 1);
         cfg.cluster.peers = vec![
@@ -4795,53 +4722,6 @@ mod tests {
     }
 
     #[test]
-    fn standby_toggles_are_kept_when_no_owner_is_elected() {
-        let cfg = test_config("a", 0);
-        let status_without_owner = ClusterStatus {
-            enabled: true,
-            local_node_id: "a".to_string(),
-            active_owner: None,
-            lease_until: None,
-            config_version: String::new(),
-            auto_failover: true,
-            nodes: Vec::new(),
-        };
-        assert!(!local_runtime_is_standby(&cfg, &status_without_owner));
-
-        let mut status_local_owner = status_without_owner.clone();
-        status_local_owner.active_owner = Some("a".to_string());
-        assert!(!local_runtime_is_standby(&cfg, &status_local_owner));
-
-        let mut status_remote_owner = status_without_owner;
-        status_remote_owner.active_owner = Some("b".to_string());
-        // test_config enables youtube/twitch monitors, so toggles are non-empty.
-        assert!(local_runtime_is_standby(&cfg, &status_remote_owner));
-    }
-
-    #[test]
-    fn forced_owner_keeps_local_toggles_before_ownership_applies() {
-        let cfg = test_config("b", 0);
-        let status_remote_owner = ClusterStatus {
-            enabled: true,
-            local_node_id: "b".to_string(),
-            active_owner: Some("a".to_string()),
-            lease_until: Some(now_secs() + 30),
-            config_version: String::new(),
-            auto_failover: true,
-            nodes: Vec::new(),
-        };
-
-        {
-            let mut state = cluster_state_write();
-            state.forced_owner = Some("b".to_string());
-        }
-
-        assert!(!local_runtime_is_standby(&cfg, &status_remote_owner));
-
-        cluster_state_write().forced_owner = None;
-    }
-
-    #[test]
     fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
         let _guard = ClusterStateGuard::new();
         let node_id = "fresh-inbound-guard-peer";
@@ -5059,25 +4939,17 @@ mod tests {
     }
 
     #[test]
-    fn monitoring_requires_local_ownership_and_no_quarantine() {
+    fn monitoring_requires_local_ownership_and_healthy_runtime() {
         let _guard = ClusterStateGuard::new();
         let cfg = test_config("a", 1);
 
         {
             let mut state = cluster_state_write();
             state.active_owner = Some("b".to_string());
-            state.local_network_quarantined = false;
         }
         assert!(!local_monitoring_allowed(&cfg));
 
-        {
-            let mut state = cluster_state_write();
-            state.active_owner = Some("a".to_string());
-            state.local_network_quarantined = true;
-        }
-        assert!(!local_monitoring_allowed(&cfg));
-
-        cluster_state_write().local_network_quarantined = false;
+        cluster_state_write().active_owner = Some("a".to_string());
         assert!(local_monitoring_allowed(&cfg));
 
         cluster_state_write().local_draining = true;
