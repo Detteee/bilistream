@@ -2427,15 +2427,9 @@ fn adopt_owner_view(
                     state.active_owner = Some(incoming_owner);
                     state.lease_until = incoming_lease;
                 }
-                return;
             }
-            // Conflicting views: adopt the peer's owner only if its lease is
-            // at least as fresh as ours; otherwise keep the local view and let
-            // the next election round converge.
-            if directly_reported_owner_is_eligible && incoming_lease >= state.lease_until {
-                state.active_owner = Some(incoming_owner);
-                state.lease_until = incoming_lease;
-            }
+            // Automatic mode resolves conflicting views in the local election
+            // pass. Remote wall-clock lease values are not ordering evidence.
         }
         None => {
             if directly_reported_owner_is_eligible {
@@ -3438,6 +3432,7 @@ mod tests {
 
     #[test]
     fn record_heartbeat_rejects_local_node_identity() {
+        let _guard = ClusterStateGuard::new();
         let cfg = test_config("local", 0);
         let now = now_secs();
         let local = empty_node("local", "local", "http://local", 10, true, now);
@@ -3459,8 +3454,6 @@ mod tests {
         assert_eq!(stored.priority, 10);
         assert!(!stored.draining);
         assert_ne!(stored.health.reason, "spoofed");
-
-        cluster_state_write().nodes.remove("local");
     }
 
     #[test]
@@ -4638,14 +4631,18 @@ mod tests {
         assert_eq!(state.lease_until, 1_000);
 
         adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, Some("b"));
-        assert_eq!(state.active_owner.as_deref(), Some("b"));
-        assert_eq!(state.lease_until, 1_100);
+        assert_eq!(state.active_owner.as_deref(), Some("a"));
+        assert_eq!(state.lease_until, 1_000);
 
         adopt_owner_view(&mut state, None, 0, true, None);
-        assert_eq!(state.active_owner.as_deref(), Some("b"));
+        assert_eq!(state.active_owner.as_deref(), Some("a"));
 
         adopt_owner_view(&mut state, Some("b".to_string()), 1_500, true, None);
-        assert_eq!(state.lease_until, 1_500);
+        assert_eq!(state.lease_until, 1_000);
+
+        state.active_owner = None;
+        adopt_owner_view(&mut state, Some("b".to_string()), 1_100, true, Some("b"));
+        assert_eq!(state.active_owner.as_deref(), Some("b"));
     }
 
     #[test]
