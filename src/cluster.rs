@@ -878,27 +878,9 @@ pub async fn finalize_cluster_node_switch(
     )
     .await?;
 
-    let target_enable = ClusterDrainRequest {
-        node_id: Some(target_node_id.to_string()),
-        draining: false,
-        ddos: false,
-        propagate: Some(false),
-    };
-    post_cluster_drain_control(cfg, &target_enable, None).await;
-
     if source_node_id != target_node_id {
         ensure_switch_target_is_current(target_node_id)?;
-        if !preserve_source_drain {
-            let source_standby = ClusterDrainRequest {
-                node_id: Some(source_node_id.to_string()),
-                draining: false,
-                ddos: false,
-                propagate: Some(false),
-            };
-            post_cluster_drain_control(cfg, &source_standby, None).await;
-        }
-
-        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
+        apply_cluster_node_mode_to_node_with_retry(
             &client,
             cfg,
             source_node_id,
@@ -913,14 +895,7 @@ pub async fn finalize_cluster_node_switch(
             },
             "disable_previous_active",
         )
-        .await
-        {
-            tracing::warn!(
-                "Failed to disable previous active {}; it will reconcile from the new active owner on recovery: {}",
-                source_node_id,
-                e
-            );
-        }
+        .await?;
     }
 
     Ok(())
@@ -1158,6 +1133,7 @@ pub async fn apply_cluster_node_mode_locally(
     let preserve_drain = payload.preserve_drain;
     let monitor_toggles = payload.monitor_toggles;
     let channel_targets = payload.channel_targets;
+    let explicit_config_changed = monitor_toggles.is_some() || channel_targets.is_some();
     let mut cfg = load_config().await.map_err(|e| e.to_string())?;
     validate_node_mode_precondition(
         current_active_owner().as_deref(),
@@ -1172,7 +1148,11 @@ pub async fn apply_cluster_node_mode_locally(
 
     apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
-    save_config(&cfg).await.map_err(|e| e.to_string())?;
+    if explicit_config_changed {
+        save_config(&cfg).await.map_err(|e| e.to_string())?;
+        refresh_status_cache_config_from(&cfg);
+        set_config_updated();
+    }
 
     // Promoting to active clears drain/ddos locks. Demoting to standby only
     // clears draining so the node stays eligible; disabled state is /drain only.
@@ -1184,8 +1164,6 @@ pub async fn apply_cluster_node_mode_locally(
     }
 
     apply_danmaku_command_runtime_state(active && cfg.bililive.enable_danmaku_command);
-    set_config_updated();
-    refresh_status_cache_config_from(&cfg);
 
     if active {
         if let Some(monitor_toggles) = monitor_toggles.as_ref() {
@@ -1221,82 +1199,6 @@ fn validate_node_mode_precondition(
         current_owner.unwrap_or("none"),
         expected_owner
     ))
-}
-
-async fn post_cluster_drain_control(
-    cfg: &Config,
-    payload: &ClusterDrainRequest,
-    target_node_id: Option<&str>,
-) {
-    let client = CLUSTER_HTTP_CLIENT.clone();
-    let timeout = cluster_control_timeout(cfg);
-    let tasks = cfg
-        .cluster
-        .peers
-        .iter()
-        .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .filter(|peer| {
-            target_node_id
-                .map(|target| peer.node_id == target)
-                .unwrap_or(true)
-        })
-        .map(|peer| post_cluster_drain_control_to_peer(&client, cfg, peer, payload, timeout));
-    join_all(tasks).await;
-}
-
-async fn post_cluster_drain_control_to_peer(
-    client: &reqwest::Client,
-    cfg: &Config,
-    peer: &crate::config::ClusterPeer,
-    payload: &ClusterDrainRequest,
-    timeout: Duration,
-) {
-    let url = format!("{}/api/cluster/drain", peer.api_url.trim_end_matches('/'));
-    match client.post(url).json(payload).timeout(timeout).send().await {
-        Ok(response) if !response.status().is_success() => {
-            tracing::warn!(
-                "Cluster drain propagation failed for {}: HTTP {}",
-                peer.node_id,
-                response.status()
-            );
-        }
-        Ok(response) => match response.json::<PeerApiResponse<ClusterStatus>>().await {
-            Ok(envelope) if envelope.success => {
-                if let Some(status) = envelope.data {
-                    if let Err(e) =
-                        merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
-                    {
-                        tracing::warn!(
-                            "Cluster drain response from {} ignored: {}",
-                            peer.node_id,
-                            e
-                        );
-                    }
-                }
-            }
-            Ok(envelope) => {
-                tracing::warn!(
-                    "Cluster drain rejected by {}: {:?}",
-                    peer.node_id,
-                    envelope.message
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Cluster drain response parse failed for {}: {}",
-                    peer.node_id,
-                    e
-                );
-            }
-        },
-        Err(e) => {
-            tracing::warn!(
-                "Cluster drain propagation failed for {}: {}",
-                peer.node_id,
-                e
-            );
-        }
-    }
 }
 
 pub fn start_cluster_worker() {
