@@ -102,7 +102,13 @@ pub async fn cluster_heartbeat(
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    crate::cluster::record_heartbeat(&cfg, payload.node);
+    if !crate::cluster::record_heartbeat(&cfg, payload.node) {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("集群心跳节点未被本机成员配置接受".to_string()),
+        }));
+    }
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
 
     Ok(Json(ApiResponse {
@@ -527,11 +533,18 @@ pub async fn cluster_sync_config(
 pub async fn cluster_cache_active_monitor_state(
     Json(payload): Json<ClusterActiveMonitorStateRequest>,
 ) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
-    cache_active_monitor_state_from_peer(payload.monitor_toggles, payload.channel_targets);
-
-    let status = load_cluster_status()
+    let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
+    if status.active_owner.as_deref() != Some(payload.sender_node_id.as_str()) {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: Some(status),
+            message: Some("监控状态缓存请求不是来自当前活跃节点".to_string()),
+        }));
+    }
+    cache_active_monitor_state_from_peer(payload.monitor_toggles, payload.channel_targets);
 
     Ok(Json(ApiResponse {
         success: true,

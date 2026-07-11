@@ -208,6 +208,8 @@ pub struct ClusterSyncConfigRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterActiveMonitorStateRequest {
+    #[serde(default)]
+    pub sender_node_id: String,
     pub monitor_toggles: MonitorToggleState,
     #[serde(default)]
     pub channel_targets: Option<ChannelTargetState>,
@@ -455,8 +457,7 @@ pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, S
         return Ok(0);
     }
 
-    let status = get_cluster_status_for_config(cfg).await;
-    if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
+    if !local_monitoring_allowed(cfg) {
         return Ok(0);
     }
 
@@ -465,6 +466,7 @@ pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, S
     cache_active_monitor_state_from_owner(&toggles, Some(&channel_targets));
 
     let request = ClusterActiveMonitorStateRequest {
+        sender_node_id: cfg.cluster.node_id.clone(),
         monitor_toggles: toggles,
         channel_targets: Some(channel_targets),
     };
@@ -711,12 +713,7 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Some(channels_json) = &payload.channels_json {
-        write_json_file("channels.json", channels_json)?;
-    }
-    if let Some(areas_json) = &payload.areas_json {
-        write_json_file("areas.json", areas_json)?;
-    }
+    write_monitored_json_files(&payload)?;
 
     apply_monitored_config_to_config(&mut cfg, payload);
 
@@ -724,6 +721,16 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
     refresh_status_cache_config_from(&cfg);
 
     set_config_updated();
+    Ok(())
+}
+
+fn write_monitored_json_files(payload: &MonitoredConfig) -> Result<(), String> {
+    if let Some(channels_json) = &payload.channels_json {
+        write_json_file("channels.json", channels_json)?;
+    }
+    if let Some(areas_json) = &payload.areas_json {
+        write_json_file("areas.json", areas_json)?;
+    }
     Ok(())
 }
 
@@ -1133,7 +1140,7 @@ pub async fn apply_cluster_node_mode_locally(
     let preserve_drain = payload.preserve_drain;
     let monitor_toggles = payload.monitor_toggles;
     let channel_targets = payload.channel_targets;
-    let explicit_config_changed = monitor_toggles.is_some() || channel_targets.is_some();
+    let mut config_changed = monitor_toggles.is_some() || channel_targets.is_some();
     let mut cfg = load_config().await.map_err(|e| e.to_string())?;
     validate_node_mode_precondition(
         current_active_owner().as_deref(),
@@ -1142,13 +1149,14 @@ pub async fn apply_cluster_node_mode_locally(
         &cfg.cluster.node_id,
     )?;
     if let Some(monitored_config) = payload.monitored_config {
-        apply_monitored_config(monitored_config).await?;
-        cfg = load_config().await.map_err(|e| e.to_string())?;
+        write_monitored_json_files(&monitored_config)?;
+        apply_monitored_config_to_config(&mut cfg, monitored_config);
+        config_changed = true;
     }
 
     apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
-    if explicit_config_changed {
+    if config_changed {
         save_config(&cfg).await.map_err(|e| e.to_string())?;
         refresh_status_cache_config_from(&cfg);
         set_config_updated();
@@ -1234,9 +1242,7 @@ pub fn start_cluster_worker() {
             enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_runtime(&cfg, &status);
 
-            let local_may_run = status.active_owner.as_deref()
-                == Some(cfg.cluster.node_id.as_str())
-                && local_has_fresh_quorum(&cfg);
+            let local_may_run = local_monitoring_allowed(&cfg);
             if !local_may_run && is_ffmpeg_running().await {
                 tracing::warn!("集群租约或心跳多数派已丢失，停止本节点 ffmpeg 推流");
                 set_manual_restart();
@@ -1457,6 +1463,8 @@ pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     let state = cluster_state_read();
     state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
         && !state.local_network_quarantined
+        && !state.local_draining
+        && !local_effective_ddos_state(&state)
         && state_has_fresh_quorum(&state, cfg, now_secs())
 }
 
@@ -4969,6 +4977,15 @@ mod tests {
 
         cluster_state_write().local_network_quarantined = false;
         assert!(local_monitoring_allowed(&cfg));
+
+        cluster_state_write().local_draining = true;
+        assert!(!local_monitoring_allowed(&cfg));
+        {
+            let mut state = cluster_state_write();
+            state.local_draining = false;
+            state.local_fault_ddos = true;
+        }
+        assert!(!local_monitoring_allowed(&cfg));
 
         let mut standalone = cfg;
         standalone.cluster.enabled = false;
