@@ -903,8 +903,12 @@ pub async fn finalize_cluster_node_switch(
     }
 
     if source_node_id != target_node_id {
-        ensure_switch_target_is_current(target_node_id)?;
-        apply_cluster_node_mode_to_node_with_retry(
+        let expected_source_owner = if source_node_id == cfg.cluster.node_id {
+            target_node_id
+        } else {
+            source_node_id
+        };
+        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
             &client,
             cfg,
             source_node_id,
@@ -915,11 +919,19 @@ pub async fn finalize_cluster_node_switch(
                 preserve_drain: preserve_source_drain,
                 monitor_toggles: None,
                 channel_targets: None,
-                expected_active_owner: Some(target_node_id.to_string()),
+                expected_active_owner: Some(expected_source_owner.to_string()),
             },
             "disable_previous_active",
         )
-        .await?;
+        .await
+        {
+            tracing::warn!(
+                "Failed to disable previous active {} after ownership moved to {}: {}",
+                source_node_id,
+                target_node_id,
+                e
+            );
+        }
     }
 
     Ok(())
@@ -1695,6 +1707,25 @@ pub fn force_failover(cfg: &Config, target_node_id: Option<String>) -> ClusterSt
         state.lease_until = 0;
     }
     compute_cluster_status(cfg)
+}
+
+pub(crate) fn replacement_owner_for_drain(cfg: &Config, source_node_id: &str) -> Option<String> {
+    if !cfg.cluster.auto_failover {
+        return None;
+    }
+
+    let mut state = cluster_state_read().clone();
+    state.forced_owner = None;
+    if source_node_id == cfg.cluster.node_id {
+        state.local_draining = true;
+    }
+    if let Some(source) = state.nodes.get_mut(source_node_id) {
+        source.draining = true;
+    }
+
+    let configured = configured_node_ids(cfg);
+    choose_owner_with_configured(&state, cfg, now_secs(), &configured)
+        .filter(|owner| owner != source_node_id)
 }
 
 async fn send_heartbeats(client: &reqwest::Client, cfg: &Config, local: ClusterNodeSnapshot) {
@@ -4482,6 +4513,41 @@ mod tests {
 
         assert!(state.forced_owner.is_none());
         assert_eq!(choose_owner(&state, &cfg, now), Some("b".to_string()));
+    }
+
+    #[test]
+    fn drain_replacement_is_planned_without_mutating_live_state() {
+        let _guard = ClusterStateGuard::new();
+        let mut cfg = test_config("a", 10);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "b".to_string(),
+            name: "b".to_string(),
+            api_url: "http://b".to_string(),
+            priority: 5,
+        }];
+
+        let now = now_secs();
+        let mut state = ClusterState {
+            active_owner: Some("a".to_string()),
+            forced_owner: Some("a".to_string()),
+            ..ClusterState::default()
+        };
+        for (node_id, priority, is_local) in [("a", 10, true), ("b", 5, false)] {
+            let mut node = empty_node(node_id, node_id, "", priority, is_local, now);
+            node.health = ClusterHealth::healthy();
+            node.last_seen = Some(now);
+            state.nodes.insert(node_id.to_string(), node);
+        }
+        *cluster_state_write() = state;
+
+        assert_eq!(
+            replacement_owner_for_drain(&cfg, "a"),
+            Some("b".to_string())
+        );
+        let state = cluster_state_read();
+        assert_eq!(state.forced_owner.as_deref(), Some("a"));
+        assert!(!state.local_draining);
+        assert!(!state.nodes["a"].draining);
     }
 
     #[test]

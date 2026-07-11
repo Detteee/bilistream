@@ -132,14 +132,35 @@ pub async fn cluster_drain(
             let source_node_id = target_node_id
                 .clone()
                 .unwrap_or_else(|| cfg.cluster.node_id.clone());
-            (before.active_owner.as_deref() == Some(source_node_id.as_str()))
-                .then_some((before, source_node_id))
+            if before.active_owner.as_deref() != Some(source_node_id.as_str()) {
+                return None;
+            }
+            crate::cluster::replacement_owner_for_drain(&cfg, &source_node_id)
+                .map(|target| (before, source_node_id, target))
         })
     } else {
         None
     };
-    let status =
-        crate::cluster::set_drain_state(&cfg, payload.node_id, payload.draining, payload.ddos);
+
+    if let Some((before, source_node_id, target_node_id)) = active_drain_plan {
+        if let Err(e) =
+            finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target_node_id, true)
+                .await
+        {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: load_cluster_status().await.ok(),
+                message: Some(format!("集群节点禁用前切换失败: {}", e)),
+            }));
+        }
+    }
+
+    let status = crate::cluster::set_drain_state(
+        &cfg,
+        target_node_id.clone(),
+        payload.draining,
+        payload.ddos,
+    );
 
     if should_propagate && cfg.cluster.enabled {
         let propagation_target = target_node_id
@@ -152,29 +173,6 @@ pub async fn cluster_drain(
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/drain", &forwarded, propagation_target).await;
-    }
-
-    if let Some((before, source_node_id)) = active_drain_plan {
-        let new_owner = status.active_owner.clone();
-        if let Some(target_node_id) = new_owner.as_deref() {
-            if target_node_id != source_node_id {
-                if let Err(e) = finalize_cluster_node_switch(
-                    &cfg,
-                    &before,
-                    &source_node_id,
-                    target_node_id,
-                    true,
-                )
-                .await
-                {
-                    return Ok(Json(ApiResponse {
-                        success: false,
-                        data: Some(status),
-                        message: Some(format!("集群节点禁用后状态同步失败: {}", e)),
-                    }));
-                }
-            }
-        }
     }
 
     Ok(Json(ApiResponse {
