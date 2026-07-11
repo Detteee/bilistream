@@ -296,7 +296,21 @@ pub async fn cluster_failover(
         None
     };
 
-    let mut status = crate::cluster::force_failover(&cfg, target_node_id.clone());
+    let performed_transfer = transfer_plan.is_some();
+    let mut status = if let Some((before, source_node_id, target)) = transfer_plan {
+        if let Err(e) =
+            finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target, false).await
+        {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: load_cluster_status().await.ok(),
+                message: Some(format!("集群节点切换失败: {}", e)),
+            }));
+        }
+        crate::cluster::get_cluster_status_for_config(&cfg).await
+    } else {
+        crate::cluster::force_failover(&cfg, target_node_id.clone())
+    };
 
     if let Some(target) = target_node_id.as_deref() {
         if status.active_owner.as_deref() != Some(target) {
@@ -308,7 +322,7 @@ pub async fn cluster_failover(
         }
     }
 
-    if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
+    if !performed_transfer && status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         crate::plugins::set_manual_restart();
         crate::cluster::clear_local_stream();
         crate::plugins::stop_ffmpeg().await;
@@ -321,18 +335,6 @@ pub async fn cluster_failover(
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/failover", &forwarded, None).await;
-    }
-
-    if let Some((before, source_node_id, target)) = transfer_plan {
-        if let Err(e) =
-            finalize_cluster_node_switch(&cfg, &before, &source_node_id, &target, false).await
-        {
-            return Ok(Json(ApiResponse {
-                success: false,
-                data: Some(status),
-                message: Some(format!("集群节点切换后状态同步失败: {}", e)),
-            }));
-        }
     }
 
     Ok(Json(ApiResponse {

@@ -835,7 +835,17 @@ pub async fn finalize_cluster_node_switch(
     preserve_source_drain: bool,
 ) -> Result<(), String> {
     let _switch_guard = CLUSTER_SWITCH_LOCK.lock().await;
-    ensure_switch_target_is_current(target_node_id)?;
+    let current_owner = current_active_owner();
+    if current_owner.as_deref() != Some(source_node_id)
+        && current_owner.as_deref() != Some(target_node_id)
+    {
+        return Err(format!(
+            "取消过期集群切换: 当前活跃节点为 {}, 请求源/目标为 {}/{}",
+            current_owner.as_deref().unwrap_or("none"),
+            source_node_id,
+            target_node_id
+        ));
+    }
     let client = CLUSTER_HTTP_CLIENT.clone();
     let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
         Ok(payload) => SourceConfigSnapshot {
@@ -884,6 +894,13 @@ pub async fn finalize_cluster_node_switch(
         "enable_new_active",
     )
     .await?;
+
+    if current_active_owner().as_deref() != Some(target_node_id) {
+        let status = force_failover(cfg, Some(target_node_id.to_string()));
+        if status.active_owner.as_deref() != Some(target_node_id) {
+            return Err(format!("目标节点 {} 当前不可接管", target_node_id));
+        }
+    }
 
     if source_node_id != target_node_id {
         ensure_switch_target_is_current(target_node_id)?;
