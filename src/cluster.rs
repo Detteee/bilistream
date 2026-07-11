@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
@@ -1323,6 +1323,7 @@ pub fn start_cluster_worker() {
         let client = CLUSTER_HTTP_CLIENT.clone();
 
         loop {
+            let cycle_started = Instant::now();
             let cfg = match crate::config::load_config()
                 .await
                 .map_err(|e| e.to_string())
@@ -1360,9 +1361,17 @@ pub fn start_cluster_worker() {
                 stop_ffmpeg().await;
             }
 
-            tokio::time::sleep(heartbeat_sleep_duration(&cfg)).await;
+            tokio::time::sleep(heartbeat_cycle_delay(
+                heartbeat_sleep_duration(&cfg),
+                cycle_started.elapsed(),
+            ))
+            .await;
         }
     });
+}
+
+fn heartbeat_cycle_delay(period: Duration, elapsed: Duration) -> Duration {
+    period.saturating_sub(elapsed)
 }
 
 fn current_active_owner() -> Option<String> {
@@ -3523,6 +3532,18 @@ mod tests {
         cfg.cluster.heartbeat_interval_secs = 3_600;
         assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(10));
         assert_eq!(cluster_control_timeout(&cfg), Duration::from_secs(15));
+    }
+
+    #[test]
+    fn heartbeat_cycle_accounts_for_request_time() {
+        assert_eq!(
+            heartbeat_cycle_delay(Duration::from_secs(10), Duration::from_secs(4)),
+            Duration::from_secs(6)
+        );
+        assert_eq!(
+            heartbeat_cycle_delay(Duration::from_secs(10), Duration::from_secs(12)),
+            Duration::ZERO
+        );
     }
 
     #[test]
