@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
+    static ref NODE_MODE_APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
 
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -213,6 +214,8 @@ pub struct ClusterApplyNodeModeRequest {
     pub monitor_toggles: Option<MonitorToggleState>,
     #[serde(default)]
     pub channel_targets: Option<ChannelTargetState>,
+    #[serde(default)]
+    pub expected_active_owner: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -874,6 +877,7 @@ pub async fn finalize_cluster_node_switch(
             preserve_drain: false,
             monitor_toggles: Some(source_toggles),
             channel_targets: Some(source_channel_targets),
+            expected_active_owner: Some(source_node_id.to_string()),
         },
         "enable_new_active",
     )
@@ -909,6 +913,7 @@ pub async fn finalize_cluster_node_switch(
                 preserve_drain: preserve_source_drain,
                 monitor_toggles: None,
                 channel_targets: None,
+                expected_active_owner: Some(target_node_id.to_string()),
             },
             "disable_previous_active",
         )
@@ -1143,16 +1148,24 @@ async fn apply_cluster_node_mode_to_node(
 pub async fn apply_cluster_node_mode_locally(
     payload: ClusterApplyNodeModeRequest,
 ) -> Result<ClusterStatus, String> {
+    let _apply_guard = NODE_MODE_APPLY_LOCK.lock().await;
     let active = payload.active;
     let restart = payload.restart;
     let preserve_drain = payload.preserve_drain;
     let monitor_toggles = payload.monitor_toggles;
     let channel_targets = payload.channel_targets;
+    let mut cfg = load_config().await.map_err(|e| e.to_string())?;
+    validate_node_mode_precondition(
+        current_active_owner().as_deref(),
+        payload.expected_active_owner.as_deref(),
+        active,
+        &cfg.cluster.node_id,
+    )?;
     if let Some(monitored_config) = payload.monitored_config {
         apply_monitored_config(monitored_config).await?;
+        cfg = load_config().await.map_err(|e| e.to_string())?;
     }
 
-    let mut cfg = load_config().await.map_err(|e| e.to_string())?;
     apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
     save_config(&cfg).await.map_err(|e| e.to_string())?;
@@ -1185,6 +1198,25 @@ pub async fn apply_cluster_node_mode_locally(
     }
 
     get_cluster_status().await
+}
+
+fn validate_node_mode_precondition(
+    current_owner: Option<&str>,
+    expected_owner: Option<&str>,
+    active: bool,
+    local_node_id: &str,
+) -> Result<(), String> {
+    let Some(expected_owner) = expected_owner else {
+        return Ok(());
+    };
+    if current_owner == Some(expected_owner) || (active && current_owner == Some(local_node_id)) {
+        return Ok(());
+    }
+    Err(format!(
+        "拒绝过期节点模式更新: 当前活跃节点为 {}, 请求期望 {}",
+        current_owner.unwrap_or("none"),
+        expected_owner
+    ))
 }
 
 async fn post_cluster_drain_control(
@@ -3352,6 +3384,15 @@ mod tests {
 
         assert_eq!(monitor_toggle_state_from_config(&cfg), toggles);
         assert_eq!(channel_target_state_from_config(&cfg), targets);
+    }
+
+    #[test]
+    fn node_mode_precondition_rejects_delayed_reverse_transition() {
+        assert!(validate_node_mode_precondition(Some("a"), Some("b"), false, "a").is_err());
+        assert!(validate_node_mode_precondition(Some("b"), Some("b"), false, "a").is_ok());
+        assert!(validate_node_mode_precondition(Some("b"), Some("a"), true, "b").is_ok());
+        assert!(validate_node_mode_precondition(Some("a"), Some("a"), true, "b").is_ok());
+        assert!(validate_node_mode_precondition(Some("c"), Some("a"), true, "b").is_err());
     }
 
     #[test]
