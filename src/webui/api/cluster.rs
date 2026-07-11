@@ -292,6 +292,16 @@ pub async fn cluster_failover(
 
     let mut status = crate::cluster::force_failover(&cfg, target_node_id.clone());
 
+    if let Some(target) = target_node_id.as_deref() {
+        if status.active_owner.as_deref() != Some(target) {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: Some(status),
+                message: Some(format!("目标节点 {} 当前不可接管", target)),
+            }));
+        }
+    }
+
     if status.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         crate::plugins::set_manual_restart();
         crate::cluster::clear_local_stream();
