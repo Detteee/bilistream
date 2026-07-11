@@ -16,7 +16,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +26,7 @@ lazy_static! {
 }
 
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 fn recover_read_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
     lock.read().unwrap_or_else(|poisoned| {
@@ -1323,7 +1324,7 @@ pub fn start_cluster_worker() {
             update_node(local.clone(), &cfg.cluster.node_id);
             send_heartbeats(&client, &cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
-            handle_auto_owner_transition(&cfg, previous_owner, &status).await;
+            schedule_auto_owner_transition(&cfg, previous_owner, &status);
             enforce_local_network_quarantine(&cfg, &status).await;
             enforce_local_standby_toggles(&cfg, &status).await;
 
@@ -1372,7 +1373,7 @@ fn local_effective_ddos_state(state: &ClusterState) -> bool {
     state.local_ddos || state.local_fault_ddos
 }
 
-async fn handle_auto_owner_transition(
+fn schedule_auto_owner_transition(
     cfg: &Config,
     previous_owner: Option<String>,
     status: &ClusterStatus,
@@ -1393,33 +1394,46 @@ async fn handle_auto_owner_transition(
         return;
     }
 
+    if AUTO_TRANSITION_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!("Cluster owner transition already in progress");
+        return;
+    }
+
     let preserve_source_drain = status
         .nodes
         .iter()
         .find(|node| node.node_id == previous_owner)
         .is_some_and(|node| node.draining);
-    tracing::warn!(
-        "集群自动故障转移: {} -> {}, transfer active config and monitor state",
-        previous_owner,
-        new_owner
-    );
-
-    if let Err(e) = finalize_cluster_node_switch(
-        cfg,
-        status,
-        &previous_owner,
-        new_owner,
-        preserve_source_drain,
-    )
-    .await
-    {
+    let cfg = cfg.clone();
+    let status = status.clone();
+    let new_owner = new_owner.to_string();
+    tokio::spawn(async move {
         tracing::warn!(
-            "Failed to finalize automatic cluster failover {} -> {}: {}",
+            "集群自动故障转移: {} -> {}, transfer active config and monitor state",
             previous_owner,
-            new_owner,
-            e
+            new_owner
         );
-    }
+        if let Err(e) = finalize_cluster_node_switch(
+            &cfg,
+            &status,
+            &previous_owner,
+            &new_owner,
+            preserve_source_drain,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to finalize automatic cluster failover {} -> {}: {}",
+                previous_owner,
+                new_owner,
+                e
+            );
+        }
+        AUTO_TRANSITION_IN_FLIGHT.store(false, Ordering::Release);
+    });
 }
 
 fn monitor_toggles_all_off(toggles: &MonitorToggleState) -> bool {
