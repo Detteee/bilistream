@@ -1330,7 +1330,7 @@ pub fn start_cluster_worker() {
             let status = compute_cluster_status_with_version(&cfg, config_version);
             schedule_auto_owner_transition(&cfg, previous_owner, &status);
             enforce_local_network_quarantine(&cfg, &status).await;
-            enforce_local_standby_toggles(&cfg, &status).await;
+            enforce_local_standby_runtime(&cfg, &status);
 
             let local_may_run = status.active_owner.as_deref()
                 == Some(cfg.cluster.node_id.as_str())
@@ -1527,17 +1527,13 @@ fn set_local_network_quarantined(quarantined: bool) -> bool {
     changed
 }
 
-async fn enforce_local_standby_toggles(cfg: &Config, status: &ClusterStatus) {
-    if !should_disable_local_standby_toggles(cfg, status) {
-        return;
+fn enforce_local_standby_runtime(cfg: &Config, status: &ClusterStatus) {
+    if local_runtime_is_standby(cfg, status) {
+        apply_danmaku_command_runtime_state(false);
     }
-    // Lease checks already prevent standby nodes from pushing. Only disable the
-    // command runtime here; the configured toggles remain the desired handoff
-    // state and must not be overwritten by a transient ownership change.
-    apply_danmaku_command_runtime_state(false);
 }
 
-fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) -> bool {
+fn local_runtime_is_standby(cfg: &Config, status: &ClusterStatus) -> bool {
     if cluster_state_read()
         .forced_owner
         .as_deref()
@@ -1546,15 +1542,10 @@ fn should_disable_local_standby_toggles(cfg: &Config, status: &ClusterStatus) ->
         return false;
     }
 
-    let Some(owner) = status.active_owner.as_deref() else {
-        // No elected owner (startup / transient partition): keep local toggles
-        // untouched so the last-active node does not lose its configuration.
-        return false;
-    };
-    if owner == cfg.cluster.node_id {
-        return false;
-    }
-    monitor_toggle_state_from_config(cfg) != all_monitor_toggles_off()
+    status
+        .active_owner
+        .as_deref()
+        .is_some_and(|owner| owner != cfg.cluster.node_id)
 }
 
 pub async fn local_has_active_lease(cfg: &Config) -> bool {
@@ -1715,14 +1706,15 @@ pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> b
         );
         return false;
     }
-    if !configured_node_id(cfg, &node.node_id) {
+    if !canonicalize_node_membership(&mut node, cfg) {
         tracing::debug!("Ignored heartbeat from unknown node {}", node.node_id);
         return false;
     }
-    canonicalize_node_membership(&mut node, cfg);
     node.last_seen = Some(now_secs());
-    mark_peer_reachable(&node.node_id);
-    update_node(node, &cfg.cluster.node_id);
+    node.is_local = false;
+    let mut state = cluster_state_write();
+    state.heartbeat_failures.remove(&node.node_id);
+    state.nodes.insert(node.node_id.clone(), node);
     true
 }
 
@@ -2279,10 +2271,6 @@ fn observer_node_is_reliable(
 fn indirect_observer_threshold(cfg: &Config) -> usize {
     let cluster_size = cfg.cluster.peers.len() + 1;
     (cluster_size / 2).max(1)
-}
-
-fn configured_node_id(cfg: &Config, node_id: &str) -> bool {
-    node_id == cfg.cluster.node_id || cfg.cluster.peers.iter().any(|peer| peer.node_id == node_id)
 }
 
 fn configured_node_ids(cfg: &Config) -> HashSet<&str> {
@@ -4816,25 +4804,16 @@ mod tests {
             auto_failover: true,
             nodes: Vec::new(),
         };
-        assert!(!should_disable_local_standby_toggles(
-            &cfg,
-            &status_without_owner
-        ));
+        assert!(!local_runtime_is_standby(&cfg, &status_without_owner));
 
         let mut status_local_owner = status_without_owner.clone();
         status_local_owner.active_owner = Some("a".to_string());
-        assert!(!should_disable_local_standby_toggles(
-            &cfg,
-            &status_local_owner
-        ));
+        assert!(!local_runtime_is_standby(&cfg, &status_local_owner));
 
         let mut status_remote_owner = status_without_owner;
         status_remote_owner.active_owner = Some("b".to_string());
         // test_config enables youtube/twitch monitors, so toggles are non-empty.
-        assert!(should_disable_local_standby_toggles(
-            &cfg,
-            &status_remote_owner
-        ));
+        assert!(local_runtime_is_standby(&cfg, &status_remote_owner));
     }
 
     #[test]
@@ -4855,10 +4834,7 @@ mod tests {
             state.forced_owner = Some("b".to_string());
         }
 
-        assert!(!should_disable_local_standby_toggles(
-            &cfg,
-            &status_remote_owner
-        ));
+        assert!(!local_runtime_is_standby(&cfg, &status_remote_owner));
 
         cluster_state_write().forced_owner = None;
     }
