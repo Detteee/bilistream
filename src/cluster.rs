@@ -1548,16 +1548,6 @@ fn local_runtime_is_standby(cfg: &Config, status: &ClusterStatus) -> bool {
         .is_some_and(|owner| owner != cfg.cluster.node_id)
 }
 
-pub async fn local_has_active_lease(cfg: &Config) -> bool {
-    if !cfg.cluster.enabled {
-        return true;
-    }
-
-    let status = get_cluster_status_for_config(cfg).await;
-    status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
-        && local_has_fresh_quorum(cfg)
-}
-
 pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     if !cfg.cluster.enabled {
         return true;
@@ -1596,7 +1586,7 @@ fn record_peer_heartbeat_ack(node_id: &str) {
         .insert(node_id.to_string(), now_secs());
 }
 
-pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {
+pub fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {
     if !cfg.cluster.enabled {
         return true;
     }
@@ -1606,7 +1596,7 @@ pub async fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>)
         state.local_stream = stream.clone();
     }
 
-    let may_push = local_has_active_lease(cfg).await;
+    let may_push = local_monitoring_allowed(cfg);
     if !may_push {
         let mut state = cluster_state_write();
         if state.local_stream == stream {
@@ -4932,7 +4922,7 @@ mod tests {
             title: Some("standby title".to_string()),
         };
 
-        assert!(!local_may_push(&cfg, Some(stream)).await);
+        assert!(!local_may_push(&cfg, Some(stream)));
         assert_eq!(cluster_state_read().local_stream, None);
     }
 

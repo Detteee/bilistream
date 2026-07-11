@@ -1015,7 +1015,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 title = selected_stream.stream_title();
                 selected_stream.title = title.clone();
             }
-            if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())).await {
+            if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
                 tracing::info!(
                     "集群备用节点已监测到 {} 正在直播，等待当前活跃节点推流",
                     channel_name
@@ -1157,7 +1157,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Main ffmpeg monitoring loop - blocks until stream ends
             let ffmpeg_loop_exit_reason = loop {
-                if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())).await {
+                if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
                     tracing::warn!("集群租约已转移，停止本节点推流循环");
                     set_manual_restart();
                     stop_ffmpeg().await;
