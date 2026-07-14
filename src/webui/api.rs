@@ -2854,6 +2854,11 @@ pub async fn capture_frame(
                 .arg(&cfg.youtube.quality)
                 .arg("-g")
                 .arg(&channel_url);
+            crate::plugins::utils::add_yt_dlp_cookies_args(
+                cmd.as_std_mut(),
+                &cfg.youtube.cookies_file,
+                &cfg.youtube.cookies_from_browser,
+            );
 
             if let Some(ref proxy_url) = cfg.youtube.proxy {
                 cmd.arg("--proxy").arg(proxy_url);
