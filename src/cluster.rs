@@ -2184,6 +2184,12 @@ fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now: u64) {
         } else if node.health.stream_degraded {
             node.health.healthy = false;
             node.health.reason = "stream_metrics_degraded".to_string();
+        } else {
+            // Operator-controlled drain/fault flags can be cleared immediately
+            // before a manual handoff. Recover the cached snapshot here so the
+            // takeover eligibility check does not keep rejecting the freshly
+            // enabled node until its next heartbeat.
+            node.health = ClusterHealth::healthy();
         }
     }
 }
@@ -2326,6 +2332,7 @@ pub(crate) fn merge_cluster_status_from_direct_peer(
     Ok(())
 }
 
+#[cfg(test)]
 fn merge_cluster_status_inner(
     status: ClusterStatus,
     direct_peer_id: Option<&str>,
@@ -2427,25 +2434,33 @@ fn adopt_owner_view(
             .nodes
             .get(&incoming_owner)
             .is_some_and(|node| node.health.healthy && !node.draining && !node.ddos);
+    let peer_confirms_restarted_local_owner = direct_peer_id
+        .and_then(|peer_node_id| state.nodes.get(peer_node_id))
+        .is_some_and(|node| node.health.healthy && !node.draining && !node.ddos)
+        && state.nodes.get(&incoming_owner).is_some_and(|node| {
+            node.is_local && node.health.healthy && !node.draining && !node.ddos
+        });
     match state.active_owner.as_deref() {
         Some(local_owner) if local_owner == incoming_owner => {
             state.lease_until = state.lease_until.max(incoming_lease);
         }
         Some(_) => {
-            if !auto_failover {
-                if directly_reported_owner_is_eligible {
-                    if state.forced_owner.as_deref() != Some(incoming_owner.as_str()) {
-                        state.forced_owner = None;
-                    }
-                    state.active_owner = Some(incoming_owner);
-                    state.lease_until = incoming_lease;
+            if !auto_failover && directly_reported_owner_is_eligible {
+                if state.forced_owner.as_deref() != Some(incoming_owner.as_str()) {
+                    state.forced_owner = None;
                 }
+                state.active_owner = Some(incoming_owner);
+                state.lease_until = incoming_lease;
             }
             // Automatic mode resolves conflicting views in the local election
             // pass. Remote wall-clock lease values are not ordering evidence.
         }
         None => {
-            if directly_reported_owner_is_eligible {
+            // After a process restart, the active node has no in-memory owner.
+            // A healthy configured peer can restore the peer's existing view
+            // that this local node is still active. Claims about a third node
+            // still have to come directly from that owner.
+            if directly_reported_owner_is_eligible || peer_confirms_restarted_local_owner {
                 state.active_owner = Some(incoming_owner);
                 state.lease_until = incoming_lease;
             }
@@ -4689,6 +4704,38 @@ mod tests {
     }
 
     #[test]
+    fn peer_view_restores_restarted_local_owner() {
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        let mut local = empty_node("a", "a", "http://a", 1, true, now);
+        local.health = ClusterHealth::healthy();
+        let mut peer = empty_node("b", "b", "http://b", 1, false, now);
+        peer.health = ClusterHealth::healthy();
+        state.nodes.insert("a".to_string(), local);
+        state.nodes.insert("b".to_string(), peer);
+
+        adopt_owner_view(&mut state, Some("a".to_string()), 42, false, Some("b"));
+
+        assert_eq!(state.active_owner.as_deref(), Some("a"));
+        assert_eq!(state.lease_until, 42);
+    }
+
+    #[test]
+    fn peer_view_does_not_restore_unhealthy_local_owner() {
+        let now = now_secs();
+        let mut state = ClusterState::default();
+        let local = empty_node("a", "a", "http://a", 1, true, now);
+        let mut peer = empty_node("b", "b", "http://b", 1, false, now);
+        peer.health = ClusterHealth::healthy();
+        state.nodes.insert("a".to_string(), local);
+        state.nodes.insert("b".to_string(), peer);
+
+        adopt_owner_view(&mut state, Some("a".to_string()), 42, false, Some("b"));
+
+        assert_eq!(state.active_owner, None);
+    }
+
+    #[test]
     fn manual_mode_peer_owner_view_does_not_replace_existing_owner() {
         let mut state = ClusterState {
             active_owner: Some("a".to_string()),
@@ -4986,5 +5033,31 @@ mod tests {
             .insert("target".to_string(), target);
 
         assert!(ensure_handoff_target_is_eligible(&cfg, "target").is_err());
+    }
+
+    #[test]
+    fn freshly_enabled_handoff_target_becomes_eligible_immediately() {
+        let _guard = ClusterStateGuard::new();
+        let mut cfg = test_config("source", 10);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "target".to_string(),
+            name: "target".to_string(),
+            api_url: "http://target".to_string(),
+            priority: 5,
+        }];
+        let now = now_secs();
+        let mut target = empty_node("target", "target", "http://target", 5, false, now);
+        target.last_seen = Some(now);
+        target.draining = true;
+        target.ddos = false;
+        target.health = ClusterHealth::unhealthy("draining", false, false);
+        cluster_state_write()
+            .nodes
+            .insert("target".to_string(), target);
+
+        set_drain_state(&cfg, Some("target".to_string()), false, false);
+
+        assert!(ensure_handoff_target_is_eligible(&cfg, "target").is_ok());
+        assert!(cluster_state_read().nodes["target"].health.healthy);
     }
 }

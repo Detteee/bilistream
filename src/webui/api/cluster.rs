@@ -280,13 +280,7 @@ pub async fn cluster_failover(
     let transfer_plan = if should_propagate && cfg.cluster.enabled {
         if let Some(target) = target_node_id.as_deref() {
             let before = load_cluster_status().await.ok();
-            before.map(|status| {
-                let source_node_id = status
-                    .active_owner
-                    .clone()
-                    .unwrap_or_else(|| cfg.cluster.node_id.clone());
-                (status, source_node_id, target.to_string())
-            })
+            before.and_then(|status| cluster_transfer_plan(status, target))
         } else {
             None
         }
@@ -340,6 +334,14 @@ pub async fn cluster_failover(
         data: Some(status),
         message: Some("集群节点切换已触发".to_string()),
     }))
+}
+
+pub(crate) fn cluster_transfer_plan(
+    status: ClusterStatus,
+    target_node_id: &str,
+) -> Option<(ClusterStatus, String, String)> {
+    let source_node_id = status.active_owner.clone()?;
+    Some((status, source_node_id, target_node_id.to_string()))
 }
 
 pub(crate) fn normalize_cluster_failover_target(

@@ -282,8 +282,11 @@ pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
 }
 
 pub async fn get_status() -> impl IntoResponse {
-    match load_config().await {
-        Ok(cfg) => refresh_status_cache_config_from(&cfg),
+    let local_monitoring_allowed = match load_config().await {
+        Ok(cfg) => {
+            refresh_status_cache_config_from(&cfg);
+            crate::cluster::local_monitoring_allowed(&cfg)
+        }
         Err(e) => {
             if get_status_cache().is_some() {
                 tracing::debug!("Skipped status config refresh: {}", e);
@@ -311,10 +314,16 @@ pub async fn get_status() -> impl IntoResponse {
                 )
                     .into_response();
             }
+
+            // Keep the last known status when config cannot be reloaded. Without
+            // a current cluster config, there is no reliable way to determine
+            // whether this node is the active monitor owner.
+            true
         }
-    }
+    };
 
     let mut status = get_status_cache().unwrap_or_default();
+    apply_effective_local_monitor_state(&mut status, local_monitoring_allowed);
     apply_realtime_stream_metrics(&mut status.bilibili).await;
 
     (
@@ -326,6 +335,27 @@ pub async fn get_status() -> impl IntoResponse {
         }),
     )
         .into_response()
+}
+
+pub(crate) fn apply_effective_local_monitor_state(
+    status: &mut StatusData,
+    monitoring_allowed: bool,
+) {
+    if monitoring_allowed {
+        return;
+    }
+
+    status.bilibili.enable_danmaku_command = false;
+    if let Some(youtube) = status.youtube.as_mut() {
+        youtube.enable_monitor = false;
+    }
+    if let Some(twitch) = status.twitch.as_mut() {
+        twitch.enable_monitor = false;
+    }
+    if let Some(priority_channel) = status.priority_channel.as_mut() {
+        priority_channel.enabled = false;
+        priority_channel.auto_restart = false;
+    }
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {

@@ -16,7 +16,7 @@ use std::time::Duration;
 use super::state::{
     get_logs, get_status_cache, platform_channel_configured, refresh_status_cache_config_from,
     update_status_cache, update_status_cache_with, BiliStatus, NetworkStatus,
-    PriorityChannelStatus, TwStatus, YtStatus,
+    PriorityChannelStatus, StatusData, TwStatus, YtStatus,
 };
 use crate::cluster::{
     apply_cluster_node_mode_locally, apply_monitored_config, cache_active_monitor_state_from_peer,
@@ -771,6 +771,39 @@ mod tests {
         assert_eq!(normalize_cluster_failover_target(&cfg, None).unwrap(), None);
         assert!(normalize_cluster_failover_target(&cfg, Some(" ".to_string())).is_err());
         assert!(normalize_cluster_failover_target(&cfg, Some("missing".to_string())).is_err());
+    }
+
+    #[test]
+    fn failover_without_an_owner_skips_handoff_and_can_force_recovery() {
+        let status = ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: None,
+            lease_until: None,
+            config_version: String::new(),
+            auto_failover: false,
+            nodes: Vec::new(),
+        };
+
+        assert!(cluster_transfer_plan(status, "target").is_none());
+    }
+
+    #[test]
+    fn failover_with_an_owner_prepares_normal_handoff() {
+        let status = ClusterStatus {
+            enabled: true,
+            local_node_id: "local".to_string(),
+            active_owner: Some("source".to_string()),
+            lease_until: Some(30),
+            config_version: String::new(),
+            auto_failover: false,
+            nodes: Vec::new(),
+        };
+
+        let (_, source, target) =
+            cluster_transfer_plan(status, "target").expect("owner should produce a handoff");
+        assert_eq!(source, "source");
+        assert_eq!(target, "target");
     }
 
     #[test]
