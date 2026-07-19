@@ -352,10 +352,9 @@ pub(crate) fn apply_effective_local_monitor_state(
     if let Some(twitch) = status.twitch.as_mut() {
         twitch.enable_monitor = false;
     }
-    if let Some(priority_channel) = status.priority_channel.as_mut() {
-        priority_channel.enabled = false;
-        priority_channel.auto_restart = false;
-    }
+    // Priority-channel switches are shared desired configuration. Keep them
+    // visible on standby nodes; local_monitoring_allowed still fences runtime
+    // monitoring and stream execution on those nodes.
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {

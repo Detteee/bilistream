@@ -169,6 +169,28 @@ mod tests {
     }
 
     #[test]
+    fn standby_status_keeps_synced_priority_channel_switches_visible() {
+        let mut status = StatusData {
+            priority_channel: Some(PriorityChannelStatus {
+                enabled: true,
+                auto_restart: true,
+                channel_name: "priority".to_string(),
+                is_live: false,
+                platform: None,
+                title: None,
+                default_area: 235,
+            }),
+            ..StatusData::default()
+        };
+
+        apply_effective_local_monitor_state(&mut status, false);
+
+        let priority = status.priority_channel.expect("priority status");
+        assert!(priority.enabled);
+        assert!(priority.auto_restart);
+    }
+
+    #[test]
     fn monitor_target_reload_needed_only_for_enable_or_enabled_channel_change() {
         assert!(!monitor_target_reload_needed(
             true, true, "Channel", "Channel", "id", "id",

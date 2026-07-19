@@ -630,9 +630,11 @@ fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
             "channel_id": payload.twitch.channel_id,
         },
         "priority_channel": {
+            "enabled": payload.priority_channel.enabled,
             "channel_name": payload.priority_channel.channel_name,
             "youtube_channel_id": payload.priority_channel.youtube_channel_id,
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
+            "auto_restart": payload.priority_channel.auto_restart,
         },
         "channels_json": payload.channels_json,
         "areas_json": payload.areas_json,
@@ -650,9 +652,11 @@ fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Value {
             "channel_id": cfg.twitch.channel_id,
         },
         "priority_channel": {
+            "enabled": cfg.priority_channel.enabled,
             "channel_name": cfg.priority_channel.channel_name,
             "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
             "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
+            "auto_restart": cfg.priority_channel.auto_restart,
         },
         "channels_json": read_json_file("channels.json"),
         "areas_json": read_json_file("areas.json"),
@@ -739,9 +743,6 @@ fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) 
     let local_enable_twitch_monitor = cfg.enable_twitch_monitor;
     let local_youtube_enable_monitor = cfg.youtube.enable_monitor;
     let local_twitch_enable_monitor = cfg.twitch.enable_monitor;
-    let local_priority_enabled = cfg.priority_channel.enabled;
-    let local_priority_auto_restart = cfg.priority_channel.auto_restart;
-
     cfg.interval = payload.interval;
     cfg.auto_cover = payload.auto_cover;
     cfg.enable_anti_collision = payload.enable_anti_collision;
@@ -755,9 +756,6 @@ fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) 
     cfg.enable_twitch_monitor = local_enable_twitch_monitor;
     cfg.youtube.enable_monitor = local_youtube_enable_monitor;
     cfg.twitch.enable_monitor = local_twitch_enable_monitor;
-    cfg.priority_channel.enabled = local_priority_enabled;
-    cfg.priority_channel.auto_restart = local_priority_auto_restart;
-
     crate::config::update_priority_channel_from_channels(cfg);
 }
 
@@ -3013,7 +3011,7 @@ mod tests {
     }
 
     #[test]
-    fn monitored_config_version_ignores_monitor_toggles() {
+    fn monitored_config_version_ignores_runtime_monitor_toggles() {
         let cfg_a = test_config("a", 0);
         let mut cfg_b = test_config("b", 10);
         cfg_b.bililive.enable_danmaku_command = !cfg_a.bililive.enable_danmaku_command;
@@ -3021,8 +3019,6 @@ mod tests {
         cfg_b.enable_twitch_monitor = !cfg_a.enable_twitch_monitor;
         cfg_b.youtube.enable_monitor = !cfg_a.youtube.enable_monitor;
         cfg_b.twitch.enable_monitor = !cfg_a.twitch.enable_monitor;
-        cfg_b.priority_channel.enabled = !cfg_a.priority_channel.enabled;
-        cfg_b.priority_channel.auto_restart = !cfg_a.priority_channel.auto_restart;
 
         assert_eq!(
             monitored_config_version(&cfg_a),
@@ -3031,6 +3027,26 @@ mod tests {
         assert_ne!(
             monitored_config_integrity_version(&cfg_a),
             monitored_config_integrity_version(&cfg_b)
+        );
+    }
+
+    #[test]
+    fn monitored_config_version_changes_for_priority_channel_switches() {
+        let cfg_a = test_config("a", 0);
+        let mut cfg_b = test_config("b", 10);
+        cfg_b.priority_channel.enabled = !cfg_a.priority_channel.enabled;
+
+        assert_ne!(
+            monitored_config_version(&cfg_a),
+            monitored_config_version(&cfg_b)
+        );
+
+        let mut cfg_c = test_config("c", 20);
+        cfg_c.priority_channel.auto_restart = !cfg_a.priority_channel.auto_restart;
+
+        assert_ne!(
+            monitored_config_version(&cfg_a),
+            monitored_config_version(&cfg_c)
         );
     }
 
@@ -3106,7 +3122,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_monitored_config_preserves_local_monitor_toggles() {
+    fn applying_monitored_config_syncs_priority_switches_and_preserves_runtime_toggles() {
         let mut local = test_config("local", 0);
         local.bililive.enable_danmaku_command = false;
         local.enable_youtube_monitor = false;
@@ -3139,8 +3155,8 @@ mod tests {
         assert!(local.enable_twitch_monitor);
         assert!(!local.youtube.enable_monitor);
         assert!(local.twitch.enable_monitor);
-        assert!(local.priority_channel.enabled);
-        assert!(!local.priority_channel.auto_restart);
+        assert!(!local.priority_channel.enabled);
+        assert!(local.priority_channel.auto_restart);
 
         assert_eq!(local.youtube.channel_name, "remote yt");
         assert_eq!(local.youtube.channel_id, "remote-yt-id");
