@@ -625,7 +625,7 @@ pub async fn toggle_youtube_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg) {
         return Ok(monitor_toggle_enable_rejected_response());
     }
 
@@ -671,7 +671,7 @@ pub async fn toggle_twitch_monitor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg).await {
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg) {
         return Ok(monitor_toggle_enable_rejected_response());
     }
 

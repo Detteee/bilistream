@@ -978,6 +978,14 @@ pub(crate) fn resolve_source_monitor_toggles_with_cache(
         return monitor_toggle_state_from_config(cfg);
     }
 
+    let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
+    if monitored_config_toggles_known {
+        // A successful source export is the freshest view available. Heartbeat
+        // snapshots and the local cache can lag behind a just-saved toggle
+        // change when an operator immediately switches the active node.
+        return from_config;
+    }
+
     if let Some(node) = before
         .nodes
         .iter()
@@ -990,11 +998,6 @@ pub(crate) fn resolve_source_monitor_toggles_with_cache(
 
     if let Some(cached) = cached_toggles {
         return cached;
-    }
-
-    let from_config = monitor_toggle_state_from_monitored_config(monitored_config);
-    if monitored_config_toggles_known {
-        return from_config;
     }
 
     monitor_toggle_state_from_config(cfg)
@@ -1291,6 +1294,14 @@ fn heartbeat_cycle_delay(period: Duration, elapsed: Duration) -> Duration {
 
 fn current_active_owner() -> Option<String> {
     cluster_state_read().active_owner.clone()
+}
+
+pub fn local_node_is_active_owner(cfg: &Config) -> bool {
+    if !cfg.cluster.enabled {
+        return true;
+    }
+
+    current_active_owner().as_deref() == Some(cfg.cluster.node_id.as_str())
 }
 
 fn heartbeat_sleep_duration(cfg: &Config) -> Duration {
@@ -3219,6 +3230,30 @@ mod tests {
     }
 
     #[test]
+    fn handoff_preserves_source_toggles_and_applies_them_to_target() {
+        let mut source = test_config("source", 10);
+        let source_toggles = MonitorToggleState {
+            enable_danmaku_command: true,
+            enable_youtube_monitor: true,
+            enable_twitch_monitor: false,
+            youtube_enable_monitor: true,
+            twitch_enable_monitor: false,
+            priority_channel_enabled: true,
+            priority_channel_auto_restart: true,
+        };
+        apply_monitor_toggle_state_to_config(&mut source, &source_toggles);
+
+        let mut target = test_config("target", 5);
+        apply_monitor_toggle_state_to_config(&mut target, &all_monitor_toggles_off());
+
+        apply_node_mode_config_state(&mut source, None, None);
+        apply_node_mode_config_state(&mut target, None, Some(&source_toggles));
+
+        assert_eq!(monitor_toggle_state_from_config(&source), source_toggles);
+        assert_eq!(monitor_toggle_state_from_config(&target), source_toggles);
+    }
+
+    #[test]
     fn node_mode_precondition_rejects_delayed_reverse_transition() {
         assert!(validate_node_mode_precondition(Some("a"), Some("b"), false, "a").is_err());
         assert!(validate_node_mode_precondition(Some("b"), Some("b"), false, "a").is_ok());
@@ -5010,22 +5045,27 @@ mod tests {
             let mut state = cluster_state_write();
             state.active_owner = Some("b".to_string());
         }
+        assert!(!local_node_is_active_owner(&cfg));
         assert!(!local_monitoring_allowed(&cfg));
 
         cluster_state_write().active_owner = Some("a".to_string());
+        assert!(local_node_is_active_owner(&cfg));
         assert!(local_monitoring_allowed(&cfg));
 
         cluster_state_write().local_draining = true;
+        assert!(local_node_is_active_owner(&cfg));
         assert!(!local_monitoring_allowed(&cfg));
         {
             let mut state = cluster_state_write();
             state.local_draining = false;
             state.local_fault_ddos = true;
         }
+        assert!(local_node_is_active_owner(&cfg));
         assert!(!local_monitoring_allowed(&cfg));
 
         let mut standalone = cfg;
         standalone.cluster.enabled = false;
+        assert!(local_node_is_active_owner(&standalone));
         assert!(local_monitoring_allowed(&standalone));
     }
 

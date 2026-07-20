@@ -343,10 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn config_refresh_preserves_configured_disabled_platforms() {
+    fn config_refresh_preserves_configured_monitor_toggles_for_webui() {
         update_status_cache(StatusData::default());
 
-        refresh_status_cache_config_from(&status_cache_test_config());
+        let mut cfg = status_cache_test_config();
+        refresh_status_cache_config_from(&cfg);
 
         let status = get_status_cache().expect("status cache should be initialized");
         assert!(status.bilibili.enable_danmaku_command);
@@ -368,5 +369,17 @@ mod tests {
         assert!(priority.auto_restart);
         assert_eq!(priority.channel_name, "priority-channel");
         assert_eq!(priority.default_area, 235);
+
+        cfg.youtube.enable_monitor = true;
+        cfg.twitch.enable_monitor = true;
+        refresh_status_cache_config_from(&cfg);
+
+        let status = get_status_cache().expect("status cache should be refreshed");
+        assert!(status.bilibili.enable_danmaku_command);
+        assert!(status.youtube.expect("youtube status").enable_monitor);
+        assert!(status.twitch.expect("twitch status").enable_monitor);
+        let priority = status.priority_channel.expect("priority status");
+        assert!(priority.enabled);
+        assert!(priority.auto_restart);
     }
 }

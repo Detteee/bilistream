@@ -82,7 +82,8 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
 mod tests {
     use super::*;
     use crate::cluster::{
-        all_monitor_toggles_off, monitor_toggle_state_from_config, monitored_config_from_config,
+        all_monitor_toggles_off, apply_monitor_toggle_state_to_config,
+        monitor_toggle_state_from_config, monitored_config_from_config,
         resolve_source_channel_targets, resolve_source_monitor_toggles,
         resolve_source_monitor_toggles_with_cache, ChannelTargetState, ClusterHealth,
         ClusterNodeRole, ClusterNodeSnapshot, MonitorToggleState,
@@ -169,8 +170,82 @@ mod tests {
     }
 
     #[test]
-    fn standby_status_keeps_synced_priority_channel_switches_visible() {
-        let mut status = StatusData {
+    fn active_owner_status_preserves_configured_monitor_toggles() {
+        let expected = enabled_status_toggles();
+        let mut status = expected.clone();
+
+        apply_effective_local_monitor_state(&mut status, true);
+
+        assert_eq!(
+            status.bilibili.enable_danmaku_command,
+            expected.bilibili.enable_danmaku_command
+        );
+        assert_eq!(
+            status.youtube.as_ref().unwrap().enable_monitor,
+            expected.youtube.as_ref().unwrap().enable_monitor
+        );
+        assert_eq!(
+            status.twitch.as_ref().unwrap().enable_monitor,
+            expected.twitch.as_ref().unwrap().enable_monitor
+        );
+        assert_eq!(
+            status.priority_channel.as_ref().unwrap().enabled,
+            expected.priority_channel.as_ref().unwrap().enabled
+        );
+        assert_eq!(
+            status.priority_channel.as_ref().unwrap().auto_restart,
+            expected.priority_channel.as_ref().unwrap().auto_restart
+        );
+    }
+
+    #[test]
+    fn standby_status_hides_all_local_monitor_toggles() {
+        let mut status = enabled_status_toggles();
+
+        apply_effective_local_monitor_state(&mut status, false);
+
+        assert!(!status.bilibili.enable_danmaku_command);
+        assert!(!status.youtube.unwrap().enable_monitor);
+        assert!(!status.twitch.unwrap().enable_monitor);
+        let priority = status.priority_channel.unwrap();
+        assert!(!priority.enabled);
+        assert!(!priority.auto_restart);
+    }
+
+    fn enabled_status_toggles() -> StatusData {
+        StatusData {
+            bilibili: BiliStatus {
+                enable_danmaku_command: true,
+                ..BiliStatus::default()
+            },
+            youtube: Some(YtStatus {
+                is_live: false,
+                enable_monitor: true,
+                title: None,
+                topic: None,
+                channel_name: "youtube".to_string(),
+                channel_id: "youtube-id".to_string(),
+                quality: "best".to_string(),
+                area_id: 1,
+                area_name: "area".to_string(),
+                crop_enabled: false,
+                ffmpeg_cache_enabled: false,
+                ffmpeg_cache_latency_secs: 0,
+            }),
+            twitch: Some(TwStatus {
+                is_live: false,
+                enable_monitor: true,
+                title: None,
+                game: None,
+                channel_name: "twitch".to_string(),
+                channel_id: "twitch-id".to_string(),
+                quality: "best".to_string(),
+                area_id: 1,
+                area_name: "area".to_string(),
+                crop_enabled: false,
+                ffmpeg_cache_enabled: false,
+                ffmpeg_cache_latency_secs: 0,
+            }),
             priority_channel: Some(PriorityChannelStatus {
                 enabled: true,
                 auto_restart: true,
@@ -178,16 +253,9 @@ mod tests {
                 is_live: false,
                 platform: None,
                 title: None,
-                default_area: 235,
+                default_area: 1,
             }),
-            ..StatusData::default()
-        };
-
-        apply_effective_local_monitor_state(&mut status, false);
-
-        let priority = status.priority_channel.expect("priority status");
-        assert!(priority.enabled);
-        assert!(priority.auto_restart);
+        }
     }
 
     #[test]
@@ -657,27 +725,11 @@ mod tests {
     }
 
     #[test]
-    fn node_switch_toggle_resolution_uses_snapshot_before_exported_off_toggles() {
-        let cfg = status_cache_test_config();
-        let expected_toggles = enabled_monitor_toggles();
-        let before = cluster_status_with_node(healthy_cluster_node(
-            "source",
-            expected_toggles.clone(),
-            ChannelTargetState::default(),
-        ));
-        let exported = monitored_config_from_config(&status_cache_test_config());
-
-        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported, true);
-
-        assert_eq!(resolved, expected_toggles);
-    }
-
-    #[test]
-    fn node_switch_toggle_resolution_preserves_known_all_off_source() {
+    fn node_switch_toggle_resolution_prefers_authoritative_export_over_stale_snapshot() {
         let cfg = status_cache_test_config();
         let before = cluster_status_with_node(healthy_cluster_node(
             "source",
-            all_monitor_toggles_off(),
+            enabled_monitor_toggles(),
             ChannelTargetState::default(),
         ));
         let exported = monitored_config_from_config(&status_cache_test_config());
@@ -685,6 +737,24 @@ mod tests {
         let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported, true);
 
         assert_eq!(resolved, all_monitor_toggles_off());
+    }
+
+    #[test]
+    fn node_switch_toggle_resolution_applies_freshly_enabled_export() {
+        let cfg = status_cache_test_config();
+        let before = cluster_status_with_node(healthy_cluster_node(
+            "source",
+            all_monitor_toggles_off(),
+            ChannelTargetState::default(),
+        ));
+        let expected_toggles = enabled_monitor_toggles();
+        let mut source_cfg = status_cache_test_config();
+        apply_monitor_toggle_state_to_config(&mut source_cfg, &expected_toggles);
+        let exported = monitored_config_from_config(&source_cfg);
+
+        let resolved = resolve_source_monitor_toggles(&cfg, &before, "source", &exported, true);
+
+        assert_eq!(resolved, expected_toggles);
     }
 
     #[test]

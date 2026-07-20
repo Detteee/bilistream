@@ -282,10 +282,10 @@ pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
 }
 
 pub async fn get_status() -> impl IntoResponse {
-    let local_monitoring_allowed = match load_config().await {
+    let local_node_is_active_owner = match load_config().await {
         Ok(cfg) => {
             refresh_status_cache_config_from(&cfg);
-            crate::cluster::local_monitoring_allowed(&cfg)
+            crate::cluster::local_node_is_active_owner(&cfg)
         }
         Err(e) => {
             if get_status_cache().is_some() {
@@ -315,15 +315,14 @@ pub async fn get_status() -> impl IntoResponse {
                     .into_response();
             }
 
-            // Keep the last known status when config cannot be reloaded. Without
-            // a current cluster config, there is no reliable way to determine
-            // whether this node is the active monitor owner.
+            // Preserve the cached view if config cannot be loaded, since the
+            // local cluster identity cannot be resolved reliably.
             true
         }
     };
 
     let mut status = get_status_cache().unwrap_or_default();
-    apply_effective_local_monitor_state(&mut status, local_monitoring_allowed);
+    apply_effective_local_monitor_state(&mut status, local_node_is_active_owner);
     apply_realtime_stream_metrics(&mut status.bilibili).await;
 
     (
@@ -337,11 +336,8 @@ pub async fn get_status() -> impl IntoResponse {
         .into_response()
 }
 
-pub(crate) fn apply_effective_local_monitor_state(
-    status: &mut StatusData,
-    monitoring_allowed: bool,
-) {
-    if monitoring_allowed {
+pub(crate) fn apply_effective_local_monitor_state(status: &mut StatusData, is_active_owner: bool) {
+    if is_active_owner {
         return;
     }
 
@@ -352,9 +348,10 @@ pub(crate) fn apply_effective_local_monitor_state(
     if let Some(twitch) = status.twitch.as_mut() {
         twitch.enable_monitor = false;
     }
-    // Priority-channel switches are shared desired configuration. Keep them
-    // visible on standby nodes; local_monitoring_allowed still fences runtime
-    // monitoring and stream execution on those nodes.
+    if let Some(priority_channel) = status.priority_channel.as_mut() {
+        priority_channel.enabled = false;
+        priority_channel.auto_restart = false;
+    }
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {

@@ -63,14 +63,11 @@ pub(crate) fn active_monitor_sync_generation_is_current(generation: u64) -> bool
     ACTIVE_MONITOR_SYNC_GENERATION.load(Ordering::Acquire) == generation
 }
 
-pub(crate) async fn local_node_can_enable_monitor_toggles(cfg: &Config) -> bool {
+pub(crate) fn local_node_can_enable_monitor_toggles(cfg: &Config) -> bool {
     if !cfg.cluster.enabled {
         return true;
     }
-    load_cluster_status()
-        .await
-        .map(|status| status.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str()))
-        .unwrap_or(false)
+    crate::cluster::local_node_is_active_owner(cfg)
 }
 
 pub(crate) fn monitor_toggle_enable_rejected_response() -> ApiResponse<()> {

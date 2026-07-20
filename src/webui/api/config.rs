@@ -226,7 +226,7 @@ pub async fn update_config(
         || payload.youtube_enable_monitor == Some(true)
         || payload.twitch_enable_monitor == Some(true);
 
-    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg).await {
+    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg) {
         return Ok(monitor_toggle_enable_rejected_response());
     }
 
@@ -460,7 +460,7 @@ pub async fn update_priority_channel(
     let old_monitored_config_version = monitored_config_version(&cfg);
     let requests_monitor_toggle_enable =
         payload.enabled == Some(true) || payload.auto_restart == Some(true);
-    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg).await {
+    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg) {
         return Ok(monitor_toggle_enable_rejected_response());
     }
 
