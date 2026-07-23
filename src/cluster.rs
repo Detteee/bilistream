@@ -634,6 +634,7 @@ fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
             "channel_name": payload.priority_channel.channel_name,
             "youtube_channel_id": payload.priority_channel.youtube_channel_id,
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
+            "default_area": payload.priority_channel.default_area,
             "auto_restart": payload.priority_channel.auto_restart,
         },
         "channels_json": payload.channels_json,
@@ -656,6 +657,7 @@ fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Value {
             "channel_name": cfg.priority_channel.channel_name,
             "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
             "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
+            "default_area": cfg.priority_channel.default_area,
             "auto_restart": cfg.priority_channel.auto_restart,
         },
         "channels_json": read_json_file("channels.json"),
@@ -3058,6 +3060,14 @@ mod tests {
         assert_ne!(
             monitored_config_version(&cfg_a),
             monitored_config_version(&cfg_c)
+        );
+
+        let mut cfg_d = test_config("d", 30);
+        cfg_d.priority_channel.default_area = cfg_a.priority_channel.default_area.wrapping_add(1);
+
+        assert_ne!(
+            monitored_config_version(&cfg_a),
+            monitored_config_version(&cfg_d)
         );
     }
 

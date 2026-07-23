@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn standby_status_hides_all_local_monitor_toggles() {
+    fn standby_status_hides_runtime_monitor_toggles_but_keeps_priority_switches() {
         let mut status = enabled_status_toggles();
 
         apply_effective_local_monitor_state(&mut status, false);
@@ -208,8 +208,8 @@ mod tests {
         assert!(!status.youtube.unwrap().enable_monitor);
         assert!(!status.twitch.unwrap().enable_monitor);
         let priority = status.priority_channel.unwrap();
-        assert!(!priority.enabled);
-        assert!(!priority.auto_restart);
+        assert!(priority.enabled);
+        assert!(priority.auto_restart);
     }
 
     fn enabled_status_toggles() -> StatusData {

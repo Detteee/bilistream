@@ -1564,6 +1564,7 @@ async fn monitor_priority_channel_background(
         updated_cfg.youtube.area_v2 = cfg.priority_channel.default_area;
         updated_cfg.twitch.area_v2 = cfg.priority_channel.default_area;
 
+        let old_monitored_config_version = cluster::monitored_config_version(&cfg);
         // The session lock covers the conditional commit and stop. Failed or
         // stale preparation leaves the current stream running.
         if ffmpeg::transition_ffmpeg_session(session, async move {
@@ -1575,6 +1576,19 @@ async fn monitor_priority_channel_background(
                 store_prefetched_playable_stream(prefetched, &updated_cfg);
                 set_manual_restart();
                 bilistream::plugins::set_config_updated();
+                if old_monitored_config_version != cluster::monitored_config_version(&updated_cfg) {
+                    let sync_cfg = updated_cfg.clone();
+                    // The session is about to stop and abort this monitor. Let the
+                    // sync outlive it, without awaiting peer I/O under the supervisor lock.
+                    tokio::spawn(async move {
+                        if bilistream::config::config_is_current(&sync_cfg) {
+                            let message = cluster::sync_monitored_config_after_change(&sync_cfg).await;
+                            if !message.is_empty() {
+                                tracing::info!("优先频道自动切换{}", message);
+                            }
+                        }
+                    });
+                }
                 tracing::info!(
                     "✅ 已切换到优先频道: {}",
                     updated_cfg.priority_channel.channel_name
