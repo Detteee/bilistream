@@ -723,7 +723,7 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
         .await
         .map_err(|e| e.to_string())?;
 
-    write_monitored_json_files(&payload)?;
+    write_monitored_json_files(payload.channels_json.clone(), payload.areas_json.clone()).await?;
 
     apply_monitored_config_to_config(&mut cfg, payload);
 
@@ -735,14 +735,23 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
     Ok(())
 }
 
-fn write_monitored_json_files(payload: &MonitoredConfig) -> Result<(), String> {
-    if let Some(channels_json) = &payload.channels_json {
-        write_json_file("channels.json", channels_json)?;
-    }
-    if let Some(areas_json) = &payload.areas_json {
-        write_json_file("areas.json", areas_json)?;
-    }
-    Ok(())
+/// Writes the managed JSON files off the async runtime (the atomic writes
+/// fsync).
+async fn write_monitored_json_files(
+    channels_json: Option<serde_json::Value>,
+    areas_json: Option<serde_json::Value>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        if let Some(channels_json) = &channels_json {
+            write_json_file("channels.json", channels_json)?;
+        }
+        if let Some(areas_json) = &areas_json {
+            write_json_file("areas.json", areas_json)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("monitored JSON write task failed: {}", e))?
 }
 
 fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) {
@@ -1189,7 +1198,11 @@ pub async fn apply_cluster_node_mode_locally(
         &cfg.cluster.node_id,
     )?;
     if let Some(monitored_config) = payload.monitored_config {
-        write_monitored_json_files(&monitored_config)?;
+        write_monitored_json_files(
+            monitored_config.channels_json.clone(),
+            monitored_config.areas_json.clone(),
+        )
+        .await?;
         apply_monitored_config_to_config(&mut cfg, monitored_config);
         config_changed = true;
     }
@@ -1569,11 +1582,11 @@ pub async fn get_cluster_status() -> Result<ClusterStatus, String> {
 pub async fn get_cluster_status_for_config(cfg: &Config) -> ClusterStatus {
     let config_version = monitored_config_version(cfg);
     if !cfg.cluster.enabled {
-        return compute_cluster_status_with_version(cfg, config_version);
+        return compute_cluster_status_view(cfg, config_version);
     }
     let local = collect_local_snapshot(cfg, config_version.clone()).await;
     update_node(local, &cfg.cluster.node_id);
-    compute_cluster_status_with_version(cfg, config_version)
+    compute_cluster_status_view(cfg, config_version)
 }
 
 pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> bool {
@@ -1964,6 +1977,12 @@ fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> 
     status
 }
 
+fn compute_cluster_status_view(cfg: &Config, config_version: String) -> ClusterStatus {
+    let status = build_cluster_status_view(cfg, config_version);
+    publish_cluster_status_change(&status);
+    status
+}
+
 /// Hash of the fields the WebUI cluster panel renders. Volatile fields that
 /// change every heartbeat (last_seen, lease, network metrics, embedded status
 /// snapshots) are excluded so an event only fires on a meaningful change.
@@ -2002,28 +2021,54 @@ fn publish_cluster_status_change(status: &ClusterStatus) {
 
 fn build_cluster_status_with_version(cfg: &Config, config_version: String) -> ClusterStatus {
     if !cfg.cluster.enabled {
-        return ClusterStatus {
-            enabled: false,
-            local_node_id: cfg.cluster.node_id.clone(),
-            active_owner: None,
-            lease_until: None,
-            config_version,
-            auto_failover: cfg.cluster.auto_failover,
-            nodes: Vec::new(),
-        };
+        return disabled_cluster_status(cfg, config_version);
     }
 
     let now = now_secs();
     let mut state = cluster_state_write();
-    let configured = configured_node_ids(cfg);
-    ensure_configured_nodes(&mut state, cfg, now, &configured);
-    prune_peer_observations(&mut state, cfg, now, &configured);
-    normalize_node_health(&mut state, cfg, now);
-    clear_invalid_forced_owner(&mut state, cfg, now, &configured);
+    build_status_from_state(&mut state, cfg, config_version, now)
+}
 
-    let chosen = choose_owner_with_configured(&state, cfg, now, &configured);
+/// Same status pipeline on a cloned state: no write lock and no persisted
+/// election/lease updates. The worker, heartbeat, and mutation paths own the
+/// authoritative state; read paths only need a consistent view of it.
+fn build_cluster_status_view(cfg: &Config, config_version: String) -> ClusterStatus {
+    if !cfg.cluster.enabled {
+        return disabled_cluster_status(cfg, config_version);
+    }
+
+    let now = now_secs();
+    let mut state = cluster_state_read().clone();
+    build_status_from_state(&mut state, cfg, config_version, now)
+}
+
+fn disabled_cluster_status(cfg: &Config, config_version: String) -> ClusterStatus {
+    ClusterStatus {
+        enabled: false,
+        local_node_id: cfg.cluster.node_id.clone(),
+        active_owner: None,
+        lease_until: None,
+        config_version,
+        auto_failover: cfg.cluster.auto_failover,
+        nodes: Vec::new(),
+    }
+}
+
+fn build_status_from_state(
+    state: &mut ClusterState,
+    cfg: &Config,
+    config_version: String,
+    now: u64,
+) -> ClusterStatus {
+    let configured = configured_node_ids(cfg);
+    ensure_configured_nodes(state, cfg, now, &configured);
+    prune_peer_observations(state, cfg, now, &configured);
+    normalize_node_health(state, cfg, now);
+    clear_invalid_forced_owner(state, cfg, now, &configured);
+
+    let chosen = choose_owner_with_configured(state, cfg, now, &configured);
     state.active_owner = chosen.clone();
-    cache_current_owner_monitor_state(&mut state);
+    cache_current_owner_monitor_state(state);
     state.lease_until = if chosen.is_some() {
         now + cfg.cluster.lease_ttl_secs.max(1)
     } else {
@@ -2032,7 +2077,6 @@ fn build_cluster_status_with_version(cfg: &Config, config_version: String) -> Cl
     let active_owner = state.active_owner.clone();
     let lease_until = (state.lease_until > 0).then_some(state.lease_until);
     let mut nodes: Vec<_> = state.nodes.values().cloned().collect();
-    drop(state);
     for node in &mut nodes {
         node.is_local = node.node_id == cfg.cluster.node_id;
         node.role = if node.draining || node.ddos {
