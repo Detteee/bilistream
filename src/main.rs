@@ -108,10 +108,6 @@ impl StreamPlatform {
             StreamPlatform::Twitch => "TW",
         }
     }
-
-    fn is_youtube(self) -> bool {
-        self == StreamPlatform::Youtube
-    }
 }
 
 #[derive(Clone)]
@@ -152,6 +148,179 @@ fn select_stream(yt: &StreamCandidate, tw: &StreamCandidate) -> Option<StreamCan
     } else {
         None
     }
+}
+
+/// (is_live, topic, title, m3u8_url, scheduled_start, stream_id) as returned by
+/// both platform clients' get_status().
+type SourceStatus = (
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<chrono::DateTime<Local>>,
+    Option<String>,
+);
+
+const OFFLINE_SOURCE_STATUS: SourceStatus = (false, None, None, None, None, None);
+
+/// The live-status client backing the currently selected stream candidate.
+enum SourceClient<'a> {
+    Youtube(&'a YoutubeClient),
+    Twitch(&'a TwitchClient),
+}
+
+impl SourceClient<'_> {
+    async fn get_status(&self) -> SourceStatus {
+        match self {
+            SourceClient::Youtube(client) => client.get_status().await,
+            SourceClient::Twitch(client) => client.get_status().await,
+        }
+        .unwrap_or(OFFLINE_SOURCE_STATUS)
+    }
+}
+
+fn selected_source_client<'a>(
+    selected: &StreamCandidate,
+    yt: &'a Option<YoutubeClient>,
+    tw: &'a Option<TwitchClient>,
+) -> Option<SourceClient<'a>> {
+    match selected.platform {
+        StreamPlatform::Youtube => yt.as_ref().map(SourceClient::Youtube),
+        StreamPlatform::Twitch => tw.as_ref().map(SourceClient::Twitch),
+    }
+}
+
+async fn source_client_status(client: &Option<SourceClient<'_>>) -> SourceStatus {
+    match client {
+        Some(client) => client.get_status().await,
+        None => OFFLINE_SOURCE_STATUS,
+    }
+}
+
+/// Fetches Bilibili live status, logging failures. Callers decide the fallback.
+async fn fetch_bili_live_status_logged(
+    room: i32,
+) -> Result<(bool, String, u64), Box<dyn std::error::Error>> {
+    match get_bili_live_status(room).await {
+        Ok(status) => Ok(status),
+        Err(e) => {
+            tracing::error!("获取B站直播状态失败: {}", e);
+            Err(e)
+        }
+    }
+}
+
+/// Marks a candidate offline when its channel was previously stopped due to a
+/// warning/cut-off, announcing the skip once via danmaku.
+async fn skip_stream_if_previously_warned(stream: &mut StreamCandidate, cfg: &Config) {
+    if !stream.is_live || !should_skip_due_to_warning(&stream.channel_name) {
+        return;
+    }
+
+    if should_skip_due_to_warned(&stream.channel_name) {
+        tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", stream.channel_name);
+        if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
+            enable_danmaku_commands(true);
+            if let Err(e) = send_danmaku(
+                cfg,
+                &format!(
+                    "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
+                    stream.channel_name
+                ),
+            )
+            .await
+            {
+                tracing::error!("Failed to send danmaku: {}", e);
+            }
+        }
+    }
+
+    stream.is_live = false;
+}
+
+/// Marks a candidate offline when its title/topic contains a banned streaming
+/// keyword, warning once per (platform, keyword, title) combination.
+async fn skip_stream_if_banned_keyword(
+    stream: &mut StreamCandidate,
+    keywords: &[String],
+    cfg: &Config,
+) {
+    if !stream.is_live {
+        return;
+    }
+
+    let stream_title = stream.stream_title();
+    let default_title = "无标题".to_string();
+    let title_str = stream_title.as_ref().unwrap_or(&default_title);
+    let Some(keyword) = keywords.iter().find(|k| {
+        stream_title
+            .as_ref()
+            .map_or(false, |t| t.contains(k.as_str()))
+    }) else {
+        return;
+    };
+
+    let platform = stream.platform.code();
+    let should_warn = {
+        let mut last_warning =
+            recover_mutex_lock(&LAST_BANNED_KEYWORD_WARNING, "last banned keyword warning");
+        let current_warning = format!("{}:{}:{}", platform, keyword, title_str);
+        if last_warning.as_ref() != Some(&current_warning) {
+            *last_warning = Some(current_warning);
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_warn {
+        tracing::error!("{}直播标题/分区包含不支持的关键词: {}", platform, keyword);
+        if let Err(e) = send_danmaku(cfg, &format!("错误：{}标题/分区含:{}", platform, keyword)).await
+        {
+            tracing::error!("Failed to send danmaku: {}", e);
+        }
+        if cfg.bililive.enable_danmaku_command {
+            if !is_danmaku_commands_enabled() {
+                enable_danmaku_commands(true);
+            }
+            thread::sleep(Duration::from_secs(2));
+            if let Err(e) = send_danmaku(cfg, "可使用弹幕指令进行换台").await {
+                tracing::error!("Failed to send danmaku: {}", e);
+            }
+        }
+    }
+
+    stream.is_live = false;
+}
+
+/// Updates the Bilibili live cover from the source stream's thumbnail in the
+/// background.
+fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id: Option<String>) {
+    let cfg = cfg.clone();
+    let platform = platform.to_string();
+    let channel_id = channel_id.to_string();
+    tokio::spawn(async move {
+        let proxy = if platform == "YT" {
+            cfg.youtube.proxy.clone()
+        } else {
+            cfg.twitch.proxy.clone()
+        };
+        match get_thumbnail(&platform, &channel_id, stream_id.as_deref(), proxy).await {
+            Ok(cover_path) if !cover_path.is_empty() => {
+                if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
+                    tracing::error!("B站直播间封面替换失败: {}", e);
+                } else {
+                    tracing::info!("B站直播间封面替换成功");
+                }
+            }
+            Ok(_) => {
+                tracing::warn!("跳过封面更新：缩略图下载失败");
+            }
+            Err(e) => {
+                tracing::error!("获取缩略图失败: {}", e);
+            }
+        }
+    });
 }
 
 fn load_streaming_banned_keywords() -> Vec<String> {
@@ -337,10 +506,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         }
         // Get Bilibili status
         let (bili_is_live, bili_title, bili_area_id) =
-            match get_bili_live_status(cfg.bililive.room).await {
+            match fetch_bili_live_status_logged(cfg.bililive.room).await {
                 Ok(status) => status,
-                Err(e) => {
-                    tracing::error!("获取B站直播状态失败: {}", e);
+                Err(_) => {
                     tracing::warn!("⚠️ 将在下次循环重试");
                     wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                     continue 'outer;
@@ -446,59 +614,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         if yt_stream.is_live || tw_stream.is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
 
-            // Check if YouTube channel should be skipped due to warning
-            if yt_stream.is_live && should_skip_due_to_warning(&yt_stream.channel_name) {
-                // Only log warning message once
-                if should_skip_due_to_warned(&yt_stream.channel_name) {
-                    tracing::warn!(
-                        "⚠️ 跳过频道 {} - 之前因警告/切断停止",
-                        yt_stream.channel_name
-                    );
-                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                        enable_danmaku_commands(true);
-                        if let Err(e) = send_danmaku(
-                            &cfg,
-                            &format!(
-                                "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                                yt_stream.channel_name
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        }
-                    }
-                }
-                // Set YouTube as not live so Twitch can be used if available
-                yt_stream.is_live = false;
-            }
-
-            // Check if Twitch channel should be skipped due to warning
-            if tw_stream.is_live && should_skip_due_to_warning(&tw_stream.channel_name) {
-                // Only log warning message once
-                if should_skip_due_to_warned(&tw_stream.channel_name) {
-                    tracing::warn!(
-                        "⚠️ 跳过频道 {} - 之前因警告/切断停止",
-                        tw_stream.channel_name
-                    );
-                    if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
-                        enable_danmaku_commands(true);
-                        if let Err(e) = send_danmaku(
-                            &cfg,
-                            &format!(
-                                "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
-                                tw_stream.channel_name
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        }
-                    }
-                }
-                // Set Twitch as not live
-                tw_stream.is_live = false;
-            }
+            // Skip channels previously stopped due to a warning/cut-off.
+            skip_stream_if_previously_warned(&mut yt_stream, &cfg).await;
+            skip_stream_if_previously_warned(&mut tw_stream, &cfg).await;
 
             // Check if config was updated by danmaku command after warning filtering
             if is_config_updated() {
@@ -514,100 +632,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             let streaming_banned_keywords = load_streaming_banned_keywords();
-
-            if yt_stream.is_live {
-                let yt_stream_title = yt_stream.stream_title();
-                let default_title = "无标题".to_string();
-                let title_str = yt_stream_title.as_ref().unwrap_or(&default_title);
-
-                if let Some(keyword) = streaming_banned_keywords.iter().find(|k| {
-                    yt_stream_title
-                        .as_ref()
-                        .map_or(false, |t| t.contains(k.as_str()))
-                }) {
-                    let should_warn = {
-                        let mut last_warning = recover_mutex_lock(
-                            &LAST_BANNED_KEYWORD_WARNING,
-                            "last banned keyword warning",
-                        );
-                        let current_warning = format!("YT:{}:{}", keyword, title_str);
-                        if last_warning.as_ref() != Some(&current_warning) {
-                            *last_warning = Some(current_warning);
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if should_warn {
-                        tracing::error!("YT直播标题/分区包含不支持的关键词: {}", keyword);
-                        if let Err(e) =
-                            send_danmaku(&cfg, &format!("错误：YT标题/分区含:{}", keyword)).await
-                        {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        }
-                        if cfg.bililive.enable_danmaku_command {
-                            if !is_danmaku_commands_enabled() {
-                                enable_danmaku_commands(true);
-                            }
-                            thread::sleep(Duration::from_secs(2));
-                            if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
-                            {
-                                tracing::error!("Failed to send danmaku: {}", e);
-                            }
-                        }
-                    }
-
-                    yt_stream.is_live = false;
-                }
-            }
-
-            if tw_stream.is_live {
-                let tw_stream_title = tw_stream.stream_title();
-                let default_title = "无标题".to_string();
-                let title_str = tw_stream_title.as_ref().unwrap_or(&default_title);
-
-                if let Some(keyword) = streaming_banned_keywords.iter().find(|k| {
-                    tw_stream_title
-                        .as_ref()
-                        .map_or(false, |t| t.contains(k.as_str()))
-                }) {
-                    let should_warn = {
-                        let mut last_warning = recover_mutex_lock(
-                            &LAST_BANNED_KEYWORD_WARNING,
-                            "last banned keyword warning",
-                        );
-                        let current_warning = format!("TW:{}:{}", keyword, title_str);
-                        if last_warning.as_ref() != Some(&current_warning) {
-                            *last_warning = Some(current_warning);
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if should_warn {
-                        tracing::error!("TW直播标题/分区包含不支持的关键词: {}", keyword);
-                        if let Err(e) =
-                            send_danmaku(&cfg, &format!("错误：TW标题/分区含:{}", keyword)).await
-                        {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        }
-                        if cfg.bililive.enable_danmaku_command {
-                            if !is_danmaku_commands_enabled() {
-                                enable_danmaku_commands(true);
-                            }
-                            thread::sleep(Duration::from_secs(2));
-                            if let Err(e) = send_danmaku(&cfg, "可使用弹幕指令进行换台").await
-                            {
-                                tracing::error!("Failed to send danmaku: {}", e);
-                            }
-                        }
-                    }
-
-                    tw_stream.is_live = false;
-                }
-            }
+            skip_stream_if_banned_keyword(&mut yt_stream, &streaming_banned_keywords, &cfg).await;
+            skip_stream_if_banned_keyword(&mut tw_stream, &streaming_banned_keywords, &cfg).await;
 
             if !yt_stream.is_live && !tw_stream.is_live {
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
@@ -751,42 +777,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let cfg_clone = cfg.clone();
-                    let platform_clone = platform.to_string();
-                    let channel_id_clone = channel_id.clone();
-
-                    let stream_id_clone = current_video_id.clone();
-                    tokio::spawn(async move {
-                        let proxy = if platform_clone == "YT" {
-                            cfg_clone.youtube.proxy.clone()
-                        } else {
-                            cfg_clone.twitch.proxy.clone()
-                        };
-                        match get_thumbnail(
-                            &platform_clone,
-                            &channel_id_clone,
-                            stream_id_clone.as_deref(),
-                            proxy,
-                        )
-                        .await
-                        {
-                            Ok(cover_path) if !cover_path.is_empty() => {
-                                if let Err(e) =
-                                    bilibili::bili_change_cover(&cfg_clone, &cover_path).await
-                                {
-                                    tracing::error!("B站直播间封面替换失败: {}", e);
-                                } else {
-                                    tracing::info!("B站直播间封面替换成功");
-                                }
-                            }
-                            Ok(_) => {
-                                tracing::warn!("跳过封面更新：缩略图下载失败");
-                            }
-                            Err(e) => {
-                                tracing::error!("获取缩略图失败: {}", e);
-                            }
-                        }
-                    });
+                    spawn_cover_update(&cfg, platform, &channel_id, current_video_id.clone());
                 }
             } else {
                 // 如果target channel改变，则变更B站直播标题
@@ -825,44 +816,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if cfg.auto_cover
                     && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
                 {
-                    let cfg_clone = cfg.clone();
-                    let platform_clone = platform.to_string();
-                    let channel_id_clone = channel_id.clone();
-
-                    let stream_id_clone = current_video_id.clone();
-                    tokio::spawn(async move {
-                        let proxy = if platform_clone == "YT" {
-                            cfg_clone.youtube.proxy.clone()
-                        } else {
-                            cfg_clone.twitch.proxy.clone()
-                        };
-                        match get_thumbnail(
-                            &platform_clone,
-                            &channel_id_clone,
-                            stream_id_clone.as_deref(),
-                            proxy,
-                        )
-                        .await
-                        {
-                            Ok(cover_path) if !cover_path.is_empty() => {
-                                if let Err(e) =
-                                    bilibili::bili_change_cover(&cfg_clone, &cover_path).await
-                                {
-                                    tracing::error!("B站直播间封面替换失败: {}", e);
-                                } else {
-                                    tracing::info!("B站直播间封面替换成功");
-                                }
-                            }
-                            Ok(_) => {
-                                tracing::warn!("跳过封面更新：缩略图下载失败");
-                            }
-                            Err(e) => {
-                                tracing::error!("获取缩略图失败: {}", e);
-                            }
-                        }
-                    });
+                    spawn_cover_update(&cfg, platform, &channel_id, current_video_id.clone());
                 }
             }
+
+            let source_client = selected_source_client(&selected_stream, &yt_live, &tw_live);
 
             // Execute ffmpeg with platform-specific locks
             // Main ffmpeg monitoring loop - blocks until stream ends
@@ -923,33 +881,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
                 let (current_is_live, _, _, new_m3u8_url, _, _) =
-                    if selected_stream.platform.is_youtube() {
-                        if let Some(ref client) = yt_live {
-                            client
-                                .get_status()
-                                .await
-                                .unwrap_or((false, None, None, None, None, None))
-                        } else {
-                            (false, None, None, None, None, None)
-                        }
-                    } else {
-                        if let Some(ref client) = tw_live {
-                            client
-                                .get_status()
-                                .await
-                                .unwrap_or((false, None, None, None, None, None))
-                        } else {
-                            (false, None, None, None, None, None)
-                        }
-                    };
-                let (bili_is_live, _, _) = match get_bili_live_status(cfg.bililive.room).await {
-                    Ok(status) => status,
-                    Err(e) => {
-                        tracing::error!("获取B站直播状态失败: {}", e);
-                        // Assume still live and continue, will retry next iteration
-                        (true, String::new(), 0)
-                    }
-                };
+                    source_client_status(&source_client).await;
+                // On error, assume still live and retry next iteration.
+                let (bili_is_live, _, _) = fetch_bili_live_status_logged(cfg.bililive.room)
+                    .await
+                    .unwrap_or((true, String::new(), 0));
 
                 if !current_is_live {
                     tracing::info!("直播已结束，停止ffmpeg监控循环");
@@ -1032,33 +968,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Check current live status to determine what actually happened
-            let (current_is_live, _, _, _, _, _) = if selected_stream.platform.is_youtube() {
-                if let Some(ref client) = yt_live {
-                    client
-                        .get_status()
-                        .await
-                        .unwrap_or((false, None, None, None, None, None))
-                } else {
-                    (false, None, None, None, None, None)
-                }
-            } else {
-                if let Some(ref client) = tw_live {
-                    client
-                        .get_status()
-                        .await
-                        .unwrap_or((false, None, None, None, None, None))
-                } else {
-                    (false, None, None, None, None, None)
-                }
-            };
-            let (bili_is_live, _, _) = match get_bili_live_status(cfg.bililive.room).await {
-                Ok(status) => status,
-                Err(e) => {
-                    tracing::error!("获取B站直播状态失败: {}", e);
-                    // Assume still live to avoid incorrect status messages
-                    (true, String::new(), 0)
-                }
-            };
+            let (current_is_live, _, _, _, _, _) = source_client_status(&source_client).await;
+            // On error, assume still live to avoid incorrect status messages.
+            let (bili_is_live, _, _) = fetch_bili_live_status_logged(cfg.bililive.room)
+                .await
+                .unwrap_or((true, String::new(), 0));
 
             // Determine what happened and send appropriate message
             if restart_exit_should_skip_danmaku {
