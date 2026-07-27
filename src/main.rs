@@ -409,7 +409,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Stop danmaku client if running and commands are disabled
             if is_danmaku_running() {
                 tracing::info!("⏸️ 弹幕命令已禁用，停止弹幕客户端");
-                stop_danmaku();
+                stop_danmaku().await;
             }
         }
 

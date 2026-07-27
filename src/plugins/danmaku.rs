@@ -787,7 +787,7 @@ pub fn enable_danmaku_commands(enabled: bool) {
 }
 
 /// Stop the danmaku client
-pub fn stop_danmaku() {
+pub async fn stop_danmaku() {
     if !is_danmaku_running() {
         tracing::warn!("弹幕客户端未在运行");
         return;
@@ -796,10 +796,10 @@ pub fn stop_danmaku() {
     tracing::info!("🛑 停止弹幕客户端");
     set_danmaku_stop_signal(true);
 
-    // Wait for the client to stop gracefully (check status periodically)
+    // Wait for the client to stop gracefully without blocking the runtime.
     let mut attempts = 0;
     while is_danmaku_running() && attempts < 20 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         attempts += 1;
     }
 
