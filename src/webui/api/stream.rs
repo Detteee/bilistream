@@ -1,16 +1,5 @@
 use super::*;
 
-pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
-    crate::plugins::enable_danmaku_commands(enabled);
-    if enabled {
-        if !crate::plugins::is_danmaku_running() {
-            crate::plugins::run_danmaku();
-        }
-    } else if crate::plugins::is_danmaku_running() {
-        crate::plugins::stop_danmaku();
-    }
-}
-
 #[derive(Deserialize)]
 pub struct StartStreamRequest {
     platform: Option<String>,

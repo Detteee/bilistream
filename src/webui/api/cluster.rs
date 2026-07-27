@@ -413,7 +413,7 @@ pub async fn cluster_restart_node(
 
 pub(crate) async fn restart_peer_server(peer: &ClusterPeer) -> Result<String, String> {
     let url = format!("{}/api/server/restart", peer.api_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = crate::cluster::cluster_http_client()
         .post(url)
         .timeout(Duration::from_secs(5))
         .send()
@@ -593,7 +593,7 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
     payload: &T,
     target_node_id: Option<&str>,
 ) {
-    let client = reqwest::Client::new();
+    let client = crate::cluster::cluster_http_client();
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
     let tasks = cfg
         .cluster
@@ -814,7 +814,7 @@ pub(crate) async fn propagate_cluster_membership(
 ) -> Result<usize, String> {
     let request = cluster_membership_from_config(new_cluster);
     let targets = cluster_membership_propagation_targets(old_cluster, new_cluster, &request);
-    let client = reqwest::Client::new();
+    let client = crate::cluster::cluster_http_client();
     let timeout = Duration::from_secs(new_cluster.heartbeat_interval_secs.max(5));
 
     let tasks = targets.into_iter().map(|(node_id, api_url)| {

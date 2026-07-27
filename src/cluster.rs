@@ -27,6 +27,10 @@ lazy_static! {
     static ref CLUSTER_HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
 }
 
+pub(crate) fn cluster_http_client() -> reqwest::Client {
+    CLUSTER_HTTP_CLIENT.clone()
+}
+
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static LAST_CLUSTER_UI_SIG: AtomicU64 = AtomicU64::new(0);
@@ -577,7 +581,7 @@ fn apply_node_mode_config_state(
     }
 }
 
-fn apply_danmaku_command_runtime_state(enabled: bool) {
+pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
     crate::plugins::enable_danmaku_commands(enabled);
     if enabled {
         if !crate::plugins::is_danmaku_running() {

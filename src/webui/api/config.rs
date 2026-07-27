@@ -386,7 +386,7 @@ pub async fn update_config(
         .map_err(config_save_status)?;
 
     if let Some(enabled) = danmaku_command_changed {
-        apply_danmaku_command_runtime_state(enabled);
+        crate::cluster::apply_danmaku_command_runtime_state(enabled);
     }
 
     if holodex_jwt_saved {
