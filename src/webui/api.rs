@@ -58,7 +58,12 @@ pub fn start_status_refresh_worker() {
                 }
             };
 
-            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+            // Sleep until the poll interval elapses or a state change asks for
+            // an immediate refresh.
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {}
+                _ = super::state::status_refresh_requested() => {}
+            }
         }
     });
 }
@@ -1022,6 +1027,7 @@ pub async fn toggle_youtube_monitor(
 
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
+    super::state::request_status_refresh();
 
     Ok(ApiResponse {
         success: true,
@@ -1060,6 +1066,7 @@ pub async fn toggle_twitch_monitor(
 
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
+    super::state::request_status_refresh();
 
     Ok(ApiResponse {
         success: true,

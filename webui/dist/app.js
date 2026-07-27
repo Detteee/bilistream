@@ -496,8 +496,52 @@
         }, 5000);
       }
 
+      // Re-apply server config to the config-driven controls without touching
+      // refresh timers (used when the server signals a config change).
+      async function reloadServerConfig() {
+        try {
+          const config = await getJson('/api/config');
+          mergeConfigData(config);
+          updateMonitorToggleStates(config);
+          updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
+        } catch (error) {
+          console.debug('Failed to reload config:', error);
+        }
+      }
+
+      // Server-sent events: the backend pushes named events whenever state
+      // changes, so the dashboard updates immediately instead of waiting for
+      // the next poll. Polling stays active as a fallback.
+      let dashboardEventSource = null;
+
+      function initEventStream() {
+        if (!window.EventSource || dashboardEventSource) {
+          return;
+        }
+
+        dashboardEventSource = new EventSource('/api/events');
+        dashboardEventSource.addEventListener('status', () => {
+          if (isDashboardVisible()) {
+            refreshStatus();
+          }
+        });
+        dashboardEventSource.addEventListener('config', () => {
+          if (isDashboardVisible()) {
+            reloadServerConfig();
+            refreshStatus();
+          }
+        });
+        dashboardEventSource.addEventListener('refresh', () => {
+          if (isDashboardVisible()) {
+            reloadServerConfig();
+            refreshStatus();
+          }
+        });
+      }
+
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
+      initEventStream();
       initDashboardControls();
       initAntiCollisionControls();
       initSystemSettingsActions();

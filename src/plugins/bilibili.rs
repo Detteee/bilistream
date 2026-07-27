@@ -578,6 +578,13 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         }
     }
 
+    // Reflect the new live state in the WebUI immediately; the periodic
+    // refresh fills in title/area details afterwards.
+    crate::webui::state::update_status_cache_with(|status| {
+        status.bilibili.is_live = true;
+    });
+    crate::webui::state::request_status_refresh();
+
     Ok(())
 }
 
@@ -716,6 +723,12 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     // tracing::info!("{:#?}", _res);
     // Optionally, handle the response if needed
     // println!("{:#?}", res);
+
+    // Reflect the new live state in the WebUI immediately.
+    crate::webui::state::update_status_cache_with(|status| {
+        status.bilibili.is_live = false;
+    });
+    crate::webui::state::request_status_refresh();
 
     Ok(())
 }

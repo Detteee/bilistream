@@ -11,7 +11,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use super::{api, state};
+use super::{api, events, state};
 
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
@@ -28,6 +28,7 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health_check))
         .route("/version", get(api::get_version))
         .route("/status", get(api::get_status))
+        .route("/events", get(events::sse_events))
         .route("/network-status", get(api::get_network_status))
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/start", post(api::start_stream))

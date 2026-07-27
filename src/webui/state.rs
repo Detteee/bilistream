@@ -2,22 +2,25 @@ use lazy_static::lazy_static;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::{LockResult, Mutex, RwLock};
+use tokio::sync::Notify;
 
+use super::events;
 use crate::config::Config;
 
 lazy_static! {
     static ref LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
     static ref STATUS_CACHE: RwLock<Option<StatusData>> = RwLock::new(None);
+    static ref STATUS_REFRESH_NOTIFY: Notify = Notify::new();
 }
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Clone, Default, PartialEq)]
 pub struct StatusData {
     pub bilibili: BiliStatus,
     pub youtube: Option<YtStatus>,
     pub twitch: Option<TwStatus>,
 }
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Clone, Default, PartialEq)]
 pub struct BiliStatus {
     pub is_live: bool,
     pub title: String,
@@ -36,7 +39,7 @@ pub struct BiliStatus {
     pub enable_danmaku_command: bool,
 }
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Clone, Default, PartialEq)]
 pub struct NetworkStatus {
     pub stream_speed: Option<f32>,
     pub stream_cache_speed: Option<f32>,
@@ -49,7 +52,7 @@ pub struct NetworkStatus {
     pub hls_cache_active: bool,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq)]
 pub struct YtStatus {
     pub is_live: bool,
     pub title: Option<String>,
@@ -64,7 +67,7 @@ pub struct YtStatus {
     pub ffmpeg_cache_latency_secs: u64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq)]
 pub struct TwStatus {
     pub is_live: bool,
     pub title: Option<String>,
@@ -105,13 +108,37 @@ pub fn get_logs() -> Vec<String> {
 
 pub fn update_status_cache(status: StatusData) {
     let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
+    let changed = cache.as_ref() != Some(&status);
     *cache = Some(status);
+    drop(cache);
+
+    if changed {
+        events::publish(events::STATUS);
+    }
 }
 
 pub fn update_status_cache_with(update: impl FnOnce(&mut StatusData)) {
     let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
     let status = cache.get_or_insert_with(StatusData::default);
+    let before = status.clone();
     update(status);
+    let changed = *status != before;
+    drop(cache);
+
+    if changed {
+        events::publish(events::STATUS);
+    }
+}
+
+/// Wake the status refresh worker so external live status is re-fetched now
+/// instead of at the next poll interval (used right after state changes).
+pub fn request_status_refresh() {
+    STATUS_REFRESH_NOTIFY.notify_one();
+}
+
+/// Resolves when someone calls [`request_status_refresh`].
+pub async fn status_refresh_requested() {
+    STATUS_REFRESH_NOTIFY.notified().await;
 }
 
 pub fn get_status_cache() -> Option<StatusData> {
