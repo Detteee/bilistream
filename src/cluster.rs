@@ -29,6 +29,7 @@ lazy_static! {
 
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static LAST_CLUSTER_UI_SIG: AtomicU64 = AtomicU64::new(0);
 
 fn cluster_control_timeout(cfg: &Config) -> Duration {
     Duration::from_secs(cfg.cluster.heartbeat_interval_secs.clamp(5, 15))
@@ -124,7 +125,7 @@ pub struct ClusterNodeSnapshot {
     pub channel_targets: ChannelTargetState,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ClusterNodeRole {
     Active,
@@ -133,7 +134,7 @@ pub enum ClusterNodeRole {
     Unhealthy,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Hash)]
 pub struct ClusterHealth {
     pub healthy: bool,
     pub reason: String,
@@ -161,7 +162,7 @@ impl ClusterHealth {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ClusterStreamIdentity {
     pub platform: String,
     pub channel_name: String,
@@ -247,7 +248,7 @@ pub struct MonitoredConfig {
     pub areas_json: Option<serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct MonitorToggleState {
     #[serde(default)]
     pub enable_danmaku_command: bool,
@@ -265,7 +266,7 @@ pub struct MonitorToggleState {
     pub priority_channel_auto_restart: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChannelTargetState {
     #[serde(default)]
     pub youtube_channel_name: String,
@@ -724,6 +725,7 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
 
     save_config(&cfg).await.map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
+    crate::webui::state::request_status_refresh();
 
     set_config_updated();
     Ok(())
@@ -1194,6 +1196,7 @@ pub async fn apply_cluster_node_mode_locally(
         save_config(&cfg).await.map_err(|e| e.to_string())?;
         refresh_status_cache_config_from(&cfg);
         set_config_updated();
+        crate::webui::state::request_status_refresh();
     }
 
     // Promoting to active clears drain/ddos locks. Demoting to standby only
@@ -1952,6 +1955,48 @@ fn compute_cluster_status(cfg: &Config) -> ClusterStatus {
 }
 
 fn compute_cluster_status_with_version(cfg: &Config, config_version: String) -> ClusterStatus {
+    let status = build_cluster_status_with_version(cfg, config_version);
+    publish_cluster_status_change(&status);
+    status
+}
+
+/// Hash of the fields the WebUI cluster panel renders. Volatile fields that
+/// change every heartbeat (last_seen, lease, network metrics, embedded status
+/// snapshots) are excluded so an event only fires on a meaningful change.
+fn cluster_ui_signature(status: &ClusterStatus) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    status.enabled.hash(&mut hasher);
+    status.local_node_id.hash(&mut hasher);
+    status.active_owner.hash(&mut hasher);
+    status.auto_failover.hash(&mut hasher);
+    status.config_version.hash(&mut hasher);
+    for node in &status.nodes {
+        node.node_id.hash(&mut hasher);
+        node.name.hash(&mut hasher);
+        node.api_url.hash(&mut hasher);
+        node.priority.hash(&mut hasher);
+        node.role.hash(&mut hasher);
+        node.health.hash(&mut hasher);
+        node.draining.hash(&mut hasher);
+        node.ddos.hash(&mut hasher);
+        node.ffmpeg_running.hash(&mut hasher);
+        node.last_seen.is_some().hash(&mut hasher);
+        node.active_stream.hash(&mut hasher);
+        node.config_version.hash(&mut hasher);
+        node.monitor_toggles.hash(&mut hasher);
+        node.channel_targets.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn publish_cluster_status_change(status: &ClusterStatus) {
+    let signature = cluster_ui_signature(status);
+    if LAST_CLUSTER_UI_SIG.swap(signature, Ordering::AcqRel) != signature {
+        crate::webui::events::publish(crate::webui::events::CLUSTER);
+    }
+}
+
+fn build_cluster_status_with_version(cfg: &Config, config_version: String) -> ClusterStatus {
     if !cfg.cluster.enabled {
         return ClusterStatus {
             enabled: false,
