@@ -284,8 +284,8 @@ impl Credentials {
 }
 
 /// Loads credentials from the specified cookies.json file.
-fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Error>> {
-    let file_content = fs::read_to_string(path)?;
+async fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Error>> {
+    let file_content = tokio::fs::read_to_string(path.as_ref()).await?;
     let cookies_file: CookiesFile = serde_json::from_str(&file_content)?;
     Credentials::from_cookies(&cookies_file.cookie_info.cookies)
 }
@@ -301,7 +301,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
 
     // Try to load config.json first
     let mut config = if CONFIG_PATH.exists() {
-        let config_content = fs::read_to_string(&*CONFIG_PATH)?;
+        let config_content = tokio::fs::read_to_string(&*CONFIG_PATH).await?;
         serde_json::from_str(&config_content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
     } else if LEGACY_CONFIG_PATH.exists() {
@@ -447,7 +447,7 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     check_cookies().await?;
 
     // Load credentials from cookies.json
-    let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path);
+    let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path).await;
     config.bililive.credentials = credentials?;
 
     store_cached_config(source_keys, &config);
@@ -458,7 +458,11 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
 /// Saves the configuration to config.json
 pub async fn save_config(config: &Config) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string_pretty(config)?;
-    write_file_atomic(&CONFIG_PATH, json.as_bytes())?;
+    // write_file_atomic fsyncs; run it off the async runtime.
+    let path: &'static Path = &CONFIG_PATH;
+    tokio::task::spawn_blocking(move || write_file_atomic(path, json.as_bytes()))
+        .await
+        .map_err(|e| -> Box<dyn Error> { e.to_string().into() })??;
     invalidate_config_cache();
     crate::webui::events::publish(crate::webui::events::CONFIG);
     Ok(())

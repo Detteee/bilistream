@@ -892,8 +892,9 @@ pub async fn get_channels() -> Result<Json<serde_json::Value>, StatusCode> {
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("channels.json");
 
-    let content =
-        std::fs::read_to_string(channels_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let content = tokio::fs::read_to_string(channels_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let channels: serde_json::Value =
         serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -906,8 +907,9 @@ pub async fn get_areas() -> Result<Json<serde_json::Value>, StatusCode> {
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("areas.json");
 
-    let content =
-        std::fs::read_to_string(areas_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let content = tokio::fs::read_to_string(areas_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let areas: serde_json::Value =
         serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -926,8 +928,9 @@ pub async fn get_banned_keywords() -> Result<Json<BannedKeywordsResponse>, Statu
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("areas.json");
 
-    let content =
-        std::fs::read_to_string(areas_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let content = tokio::fs::read_to_string(areas_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let data: serde_json::Value =
         serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -969,8 +972,9 @@ pub async fn update_banned_keywords(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("areas.json");
 
-    let content =
-        std::fs::read_to_string(&areas_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let content = tokio::fs::read_to_string(&areas_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut data: serde_json::Value =
         serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -986,7 +990,9 @@ pub async fn update_banned_keywords(
     let updated_content =
         serde_json::to_string_pretty(&data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    std::fs::write(&areas_path, updated_content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tokio::fs::write(&areas_path, updated_content)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(ApiResponse {
         success: true,

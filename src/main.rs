@@ -283,7 +283,7 @@ async fn skip_stream_if_banned_keyword(
             if !is_danmaku_commands_enabled() {
                 enable_danmaku_commands(true);
             }
-            thread::sleep(Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_secs(2)).await;
             if let Err(e) = send_danmaku(cfg, "可使用弹幕指令进行换台").await {
                 tracing::error!("Failed to send danmaku: {}", e);
             }
