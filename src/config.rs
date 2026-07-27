@@ -7,12 +7,74 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
+use std::time::SystemTime;
 
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
     static ref CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.json");
     static ref LEGACY_CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.yaml");
     static ref COOKIES_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "cookies.json");
+    static ref CONFIG_CACHE: RwLock<Option<ConfigCacheEntry>> = RwLock::new(None);
+}
+
+const COOKIE_REFRESH_AGE_SECS: u64 = 3600 * 24 * 3;
+
+type FileCacheKey = Option<(SystemTime, u64)>;
+
+/// Parsed-config cache keyed on the source files' (mtime, len). load_config()
+/// is called on every WebUI request and worker cycle; re-reading and re-parsing
+/// the JSON sources each time is wasted work while nothing changed.
+struct ConfigCacheEntry {
+    source_keys: Vec<FileCacheKey>,
+    config: Config,
+}
+
+fn file_cache_key(path: &Path) -> FileCacheKey {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+/// Keys of every file load_config() derives the Config from, in fixed order.
+fn config_source_keys() -> Vec<FileCacheKey> {
+    vec![file_cache_key(&CONFIG_PATH), file_cache_key(&COOKIES_PATH)]
+}
+
+fn cookies_need_refresh() -> bool {
+    match file_cache_key(&COOKIES_PATH) {
+        // Refresh is due when the file is older than the renewal window.
+        Some((modified, _)) => modified
+            .elapsed()
+            .map(|age| age.as_secs() > COOKIE_REFRESH_AGE_SECS)
+            .unwrap_or(false),
+        // Missing cookies file requires the login flow in the full load path.
+        None => true,
+    }
+}
+
+fn cached_config(source_keys: &[FileCacheKey]) -> Option<Config> {
+    if source_keys.first()?.is_none() || cookies_need_refresh() {
+        return None;
+    }
+
+    let cache = CONFIG_CACHE.read().ok()?;
+    let entry = cache.as_ref()?;
+    (entry.source_keys == source_keys).then(|| entry.config.clone())
+}
+
+fn store_cached_config(source_keys: Vec<FileCacheKey>, config: &Config) {
+    if let Ok(mut cache) = CONFIG_CACHE.write() {
+        *cache = Some(ConfigCacheEntry {
+            source_keys,
+            config: config.clone(),
+        });
+    }
+}
+
+fn invalidate_config_cache() {
+    if let Ok(mut cache) = CONFIG_CACHE.write() {
+        *cache = None;
+    }
 }
 
 static CONFIG_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -230,6 +292,13 @@ fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Erro
 
 /// Loads the configuration along with credentials from cookies.json.
 pub async fn load_config() -> Result<Config, Box<dyn Error>> {
+    // The keys are captured before reading: a file swapped mid-load produces a
+    // key mismatch on the next call, which forces a fresh parse.
+    let source_keys = config_source_keys();
+    if let Some(config) = cached_config(&source_keys) {
+        return Ok(config);
+    }
+
     // Try to load config.json first
     let mut config = if CONFIG_PATH.exists() {
         let config_content = fs::read_to_string(&*CONFIG_PATH)?;
@@ -381,6 +450,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path);
     config.bililive.credentials = credentials?;
 
+    store_cached_config(source_keys, &config);
+
     Ok(config)
 }
 
@@ -388,6 +459,8 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
 pub async fn save_config(config: &Config) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string_pretty(config)?;
     write_file_atomic(&CONFIG_PATH, json.as_bytes())?;
+    invalidate_config_cache();
+    crate::webui::events::publish(crate::webui::events::CONFIG);
     Ok(())
 }
 
