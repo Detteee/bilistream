@@ -513,6 +513,14 @@
       // changes, so the dashboard updates immediately instead of waiting for
       // the next poll. Polling stays active as a fallback.
       let dashboardEventSource = null;
+      let lastStatusRefreshMs = 0;
+
+      // While the event stream is healthy the server pushes changes, so the
+      // status poll only acts as a slow safety net.
+      function eventStreamHealthy() {
+        return !!dashboardEventSource
+          && dashboardEventSource.readyState === EventSource.OPEN;
+      }
 
       function initEventStream() {
         if (!window.EventSource || dashboardEventSource) {
@@ -590,9 +598,14 @@
           clearInterval(statusIntervalId);
         }
         statusIntervalId = setInterval(() => {
-          if (isDashboardVisible()) {
-            refreshStatus();
+          if (!isDashboardVisible()) {
+            return;
           }
+          if (eventStreamHealthy()
+            && Date.now() - lastStatusRefreshMs < statusRefreshInterval * 5) {
+            return;
+          }
+          refreshStatus();
         }, statusRefreshInterval);
 
         if (networkRefreshIntervalId) {
@@ -3610,6 +3623,7 @@
 
         statusRefreshInFlight = true;
         statusRefreshQueued = false;
+        lastStatusRefreshMs = Date.now();
 
         try {
           const data = await getJson('/api/status');
