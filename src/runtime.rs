@@ -490,7 +490,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         if !cluster::local_monitoring_allowed(&cfg) {
             if is_danmaku_running() {
                 tracing::info!("⏸️ 集群备用或隔离节点停止弹幕客户端");
-                stop_danmaku();
+                stop_danmaku().await;
             }
             let retry_secs = cfg
                 .cluster

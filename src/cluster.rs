@@ -398,7 +398,7 @@ pub async fn apply_monitor_toggle_state(payload: MonitorToggleState) -> Result<(
     apply_monitor_toggle_state_to_config(&mut cfg, &payload);
     save_config(&cfg).await.map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
-    apply_danmaku_command_runtime_state(payload.enable_danmaku_command);
+    apply_danmaku_command_runtime_state(payload.enable_danmaku_command).await;
     if monitor_toggles_any_enabled(&payload)
         || current_active_owner().as_deref() == Some(cfg.cluster.node_id.as_str())
     {
@@ -581,14 +581,14 @@ fn apply_node_mode_config_state(
     }
 }
 
-pub(crate) fn apply_danmaku_command_runtime_state(enabled: bool) {
+pub(crate) async fn apply_danmaku_command_runtime_state(enabled: bool) {
     crate::plugins::enable_danmaku_commands(enabled);
     if enabled {
         if !crate::plugins::is_danmaku_running() {
             crate::plugins::run_danmaku();
         }
     } else if crate::plugins::is_danmaku_running() {
-        crate::plugins::stop_danmaku();
+        crate::plugins::stop_danmaku().await;
     }
 }
 
@@ -1225,7 +1225,7 @@ pub async fn apply_cluster_node_mode_locally(
         set_local_drain_state_preserving_fault(&cfg, false, ddos);
     }
 
-    apply_danmaku_command_runtime_state(active && cfg.bililive.enable_danmaku_command);
+    apply_danmaku_command_runtime_state(active && cfg.bililive.enable_danmaku_command).await;
 
     if active {
         if let Some(monitor_toggles) = monitor_toggles.as_ref() {
