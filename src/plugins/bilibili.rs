@@ -19,13 +19,86 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
     static ref WBI_CACHE_DIR: PathBuf = wbi_cache_dir(&BILISTREAM_PATH);
+    static ref BILI_PLAIN_CLIENT: reqwest::Client = reqwest::Client::new();
+}
+
+/// Shared (raw, retrying) client pair for credential-free live-status calls.
+static BILI_STATUS_CLIENTS: OnceLock<(reqwest::Client, reqwest_middleware::ClientWithMiddleware)> =
+    OnceLock::new();
+
+fn bili_status_clients(
+) -> Result<(reqwest::Client, reqwest_middleware::ClientWithMiddleware), reqwest::Error> {
+    if let Some((raw, retrying)) = BILI_STATUS_CLIENTS.get() {
+        return Ok((raw.clone(), retrying.clone()));
+    }
+
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+    let raw = reqwest::Client::builder()
+        .cookie_store(true)
+        .timeout(Duration::new(30, 0))
+        .build()?;
+    let retrying = ClientBuilder::new(raw.clone())
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build();
+    let (raw, retrying) = BILI_STATUS_CLIENTS.get_or_init(|| (raw, retrying));
+    Ok((raw.clone(), retrying.clone()))
+}
+
+/// Reuse the shared plain HTTP client (no cookie store, default timeouts).
+pub(crate) fn bili_plain_http_client() -> reqwest::Client {
+    BILI_PLAIN_CLIENT.clone()
+}
+
+/// The live-client (version, build) pair changes rarely; cache successful
+/// probes for a day instead of fetching on every stream start.
+static BILI_LIVE_VERSION_CACHE: Mutex<Option<(Instant, (String, i64))>> = Mutex::new(None);
+const BILI_LIVE_VERSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+async fn bili_live_version() -> Result<(String, i64), Box<dyn Error>> {
+    if let Ok(cache) = BILI_LIVE_VERSION_CACHE.lock() {
+        if let Some((fetched_at, version)) = cache.as_ref() {
+            if fetched_at.elapsed() < BILI_LIVE_VERSION_TTL {
+                return Ok(version.clone());
+            }
+        }
+    }
+
+    let version_api =
+        "https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion";
+    let version_ts = chrono::Utc::now().timestamp().to_string();
+    let version_query = format!("system_version=2&ts={}&appKey=aae92bc66f3edfab&sign=", version_ts);
+    let version_url = format!("{}?{}", version_api, version_query);
+
+    let version_resp: serde_json::Value = BILI_PLAIN_CLIENT
+        .get(&version_url)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if version_resp["code"].as_i64() == Some(0) {
+        let data = &version_resp["data"];
+        let version = (
+            data["curr_version"]
+                .as_str()
+                .unwrap_or("7.19.0.9432")
+                .to_string(),
+            data["build"].as_i64().unwrap_or(9432),
+        );
+        if let Ok(mut cache) = BILI_LIVE_VERSION_CACHE.lock() {
+            *cache = Some((Instant::now(), version.clone()));
+        }
+        Ok(version)
+    } else {
+        Ok(("7.19.0.9432".to_string(), 9432))
+    }
 }
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -281,19 +354,8 @@ impl AppKeyStore {
 /// * `String` - The title of the room.
 /// * `u64` - The area ID of the room.
 pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<dyn Error>> {
-    // Define the retry policy with a very high number of retries
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-
-    // Build the raw HTTP client with cookie storage and timeout
-    let raw_client = reqwest::Client::builder()
-        .cookie_store(true)
-        .timeout(Duration::new(30, 0))
-        .build()?;
-
-    // Wrap the client with retry middleware
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
+    // Reuse the shared clients; this runs every monitor cycle.
+    let (raw_client, client) = bili_status_clients()?;
 
     // Get WBI keys
     let (img_key, sub_key) = get_wbi_keys(&raw_client).await?;
@@ -402,38 +464,8 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
     let platform = "pc_link";
     let ts = chrono::Utc::now().timestamp().to_string();
 
-    // 获取直播姬版本号和 build
-    let version_api =
-        "https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion";
-    let version_appkey = "aae92bc66f3edfab";
-    let version_ts = chrono::Utc::now().timestamp().to_string();
-
-    let version_query = format!(
-        "system_version=2&ts={}&appKey={}&sign=",
-        version_ts, version_appkey
-    );
-
-    let version_url = format!("{}?{}", version_api, version_query);
-
-    let version_resp: serde_json::Value = reqwest::Client::new()
-        .get(&version_url)
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    let (version, build) = if version_resp["code"].as_i64() == Some(0) {
-        let data = &version_resp["data"];
-        (
-            data["curr_version"]
-                .as_str()
-                .unwrap_or("7.19.0.9432")
-                .to_string(),
-            data["build"].as_i64().unwrap_or(9432),
-        )
-    } else {
-        ("7.19.0.9432".to_string(), 9432)
-    };
+    // 获取直播姬版本号和 build（缓存有效期内直接复用）
+    let (version, build) = bili_live_version().await?;
 
     // 构造开播参数
     let mut params = BTreeMap::new();
@@ -737,7 +769,7 @@ pub async fn send_danmaku(
     cfg: &Config,
     message: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = bili_plain_http_client();
     let cookie = format!(
         "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
         cfg.bililive.credentials.sessdata,

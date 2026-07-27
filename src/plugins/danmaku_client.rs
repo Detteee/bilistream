@@ -326,7 +326,7 @@ impl BilibiliDanmakuClient {
 
         // Cache miss or expired, fetch new keys
         // info!("Fetching fresh WBI keys from Bilibili API...");
-        let client = reqwest::Client::new();
+        let client = crate::plugins::bilibili::bili_plain_http_client();
         let response: Value = client
             .get("https://api.bilibili.com/x/web-interface/nav")
             .send()
@@ -394,7 +394,7 @@ impl BilibiliDanmakuClient {
 
         // info!("Requesting getDanmuInfo with WBI signature...");
 
-        let client = reqwest::Client::new();
+        let client = crate::plugins::bilibili::bili_plain_http_client();
         let cookie = if !self.config.buvid3.is_empty() {
             format!(
                 "SESSDATA={}; bili_jct={}; DedeUserID={}; DedeUserID__ckMd5={}; buvid3={}",
