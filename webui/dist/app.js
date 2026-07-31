@@ -17,6 +17,7 @@
       const biliNetworkHistoryLimit = 48;
       let faceAuthUrl = null;
       let holodexCurrentSource = 'channels';
+      let holodexStreamsRequested = false;
       const monitorToggleSaveDebounceMs = 160;
       const monitorToggleSaveState = new Map();
 
@@ -235,7 +236,6 @@
       }
 
       function initSystemSettingsActions() {
-        bindClickActivation('system-config-heading', toggleSystemConfig);
         document
           .getElementById('save-system-config-btn')
           ?.addEventListener('click', saveSystemConfig);
@@ -248,14 +248,6 @@
       }
 
       function initLogControls() {
-        const logToggle = document.getElementById('log-toggle-heading');
-        logToggle?.addEventListener('click', toggleLogs);
-        logToggle?.addEventListener('keydown', event => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            toggleLogs();
-          }
-        });
         document
           .getElementById('clear-logs-btn')
           ?.addEventListener('click', clearLogs);
@@ -351,21 +343,6 @@
         return !element || getComputedStyle(element).display === 'none';
       }
 
-      function bindClickActivation(elementId, handler) {
-        const element = document.getElementById(elementId);
-        if (!element) return;
-
-        element.setAttribute('role', 'button');
-        element.tabIndex = 0;
-        element.addEventListener('click', handler);
-        element.addEventListener('keydown', event => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            handler();
-          }
-        });
-      }
-
       let editingAreaId = null;
       let isEditingChannel = false;
 
@@ -384,11 +361,6 @@
       }
 
       function initManagementControls() {
-        bindClickActivation('management-heading', toggleManagement);
-        bindClickActivation('area-management-heading', toggleAreaManagement);
-        bindClickActivation('channel-management-heading', toggleChannelConfig);
-        bindClickActivation('areas-list-heading', toggleAreasList);
-        bindClickActivation('channels-list-heading', toggleChannelsList);
         document
           .getElementById('area-submit-btn')
           ?.addEventListener('click', submitAreaForm);
@@ -410,9 +382,6 @@
       }
 
       function initHolodexLoginModalControls() {
-        document
-          .getElementById('holodex-heading')
-          ?.addEventListener('click', toggleHolodex);
         document
           .getElementById('holodex-save-api-key-btn')
           ?.addEventListener('click', saveHolodexApiKey);
@@ -490,7 +459,7 @@
         }
 
         logRefreshIntervalId = setInterval(() => {
-          if (isDashboardVisible()) {
+          if (isDashboardVisible() && isViewActive('logs')) {
             refreshLogs();
           }
         }, 5000);
@@ -547,9 +516,96 @@
         });
       }
 
+      // Top-level navigation. Each view owns its data, so switching to one
+      // loads whatever it needs the first time it is shown.
+      const VIEW_IDS = ['overview', 'manage', 'settings', 'logs'];
+      const viewsLoaded = new Set();
+      let activeView = 'overview';
+
+      function isViewActive(name) {
+        return activeView === name;
+      }
+
+      function loadViewData(name) {
+        switch (name) {
+          case 'overview':
+            maybeLoadHolodexStreams();
+            break;
+          case 'manage':
+            loadManagementListsOnce();
+            break;
+          case 'settings':
+            loadSystemConfig();
+            break;
+          case 'logs':
+            refreshLogs();
+            break;
+        }
+      }
+
+      function activateView(name, options = {}) {
+        if (!VIEW_IDS.includes(name)) {
+          name = 'overview';
+        }
+
+        activeView = name;
+
+        for (const id of VIEW_IDS) {
+          const panel = document.getElementById(`view-${id}`);
+          const tab = document.getElementById(`tab-${id}`);
+          const selected = id === name;
+
+          panel?.classList.toggle('is-active', selected);
+          if (tab) {
+            tab.classList.toggle('is-active', selected);
+            tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+          }
+        }
+
+        try {
+          localStorage.setItem('activeView', name);
+        } catch (error) {
+          // Storage can be unavailable in private windows; navigation still works.
+        }
+
+        if (!viewsLoaded.has(name)) {
+          viewsLoaded.add(name);
+          loadViewData(name);
+        } else if (options.reload) {
+          loadViewData(name);
+        }
+      }
+
+      function initViewRouter() {
+        const tabs = Array.from(document.querySelectorAll('.tab[data-view]'));
+
+        tabs.forEach((tab, index) => {
+          tab.addEventListener('click', () => activateView(tab.dataset.view));
+          tab.addEventListener('keydown', event => {
+            const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+            if (!offset) return;
+
+            event.preventDefault();
+            const next = tabs[(index + offset + tabs.length) % tabs.length];
+            next.focus();
+            activateView(next.dataset.view);
+          });
+        });
+
+        let saved = null;
+        try {
+          saved = localStorage.getItem('activeView');
+        } catch (error) {
+          // Ignore unavailable storage and fall back to the default view.
+        }
+
+        activateView(saved || 'overview');
+      }
+
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
       initEventStream();
+      initViewRouter();
       initDashboardControls();
       initAntiCollisionControls();
       initSystemSettingsActions();
@@ -565,7 +621,9 @@
 
       document.addEventListener('visibilitychange', () => {
         if (isDashboardVisible()) {
-          refreshLogs();
+          if (isViewActive('logs')) {
+            refreshLogs();
+          }
           refreshStatus();
         }
       });
@@ -637,20 +695,27 @@
 
       function applyHolodexSectionVisibility(apiKeyConfigured) {
         setElementDisplay(document.getElementById('holodex-section'), true);
+        setElementDisplay(document.getElementById('holodex-init-hint'), false);
         setElementDisplay(document.getElementById('holodex-api-config'), !apiKeyConfigured);
         setElementDisplay(document.getElementById('holodex-streams-section'), apiKeyConfigured);
         setElementDisplay(document.getElementById('holodex-login-btn'), apiKeyConfigured, 'inline-flex');
+        maybeLoadHolodexStreams();
       }
 
-      function toggleChannelManagement() {
-        toggleFold('channel-management-container', 'channel-toggle');
-      }
-
-      function toggleHolodex() {
-        const result = toggleFold('holodex-container', 'holodex-toggle');
-        if (result?.open) {
-          refreshHolodexStreams();
+      // The stream list is only worth fetching once the API key is known to be
+      // configured and the overview is the visible view.
+      function maybeLoadHolodexStreams() {
+        if (holodexStreamsRequested || !isViewActive('overview')) {
+          return;
         }
+
+        const section = document.getElementById('holodex-streams-section');
+        if (!section || getComputedStyle(section).display === 'none') {
+          return;
+        }
+
+        holodexStreamsRequested = true;
+        refreshHolodexStreams();
       }
 
       const HOLODEX_STATUS_STATE_CLASSES = [
@@ -1837,38 +1902,14 @@
         }
       }
 
-      function toggleLogs() {
-        const container = document.getElementById('log-container');
-        const toggle = document.getElementById('log-toggle');
-        if (!container || !toggle) return;
-
-        const opening = container.classList.contains('hidden');
-        container.classList.toggle('hidden', !opening);
-        if (opening) {
-          toggle.textContent = '▲';
-          refreshLogs();
-        } else {
-          toggle.textContent = '▼';
-        }
-      }
-
-      function toggleSystemConfig() {
-        const fold = toggleFold('system-config-container', 'system-config-toggle');
-        if (!fold) return;
-
-        if (fold.open) {
-          loadSystemConfig();
-        }
-      }
-
       function toggleConfigRiotApiKey() {
         const checkbox = document.getElementById('config-lol-monitor-checkbox');
         const riotGroup = document.getElementById('config-riot-api-group');
         const intervalGroup = document.getElementById('config-lol-interval-group');
         if (!checkbox || !riotGroup || !intervalGroup) return;
 
-        setElementDisplay(riotGroup, checkbox.checked);
-        setElementDisplay(intervalGroup, checkbox.checked);
+        setElementDisplay(riotGroup, checkbox.checked, 'grid');
+        setElementDisplay(intervalGroup, checkbox.checked, 'grid');
       }
 
       function toggleAntiCollisionList() {
@@ -2383,64 +2424,18 @@
           .filter(Boolean);
       }
 
-      function setFoldState(container, toggle, open) {
-        container.style.display = open ? 'block' : 'none';
-        toggle.textContent = open ? '▲' : '▼';
-      }
-
-      function toggleFold(containerId, toggleId) {
-        const container = document.getElementById(containerId);
-        const toggle = document.getElementById(toggleId);
-        if (!container || !toggle) {
-          return null;
+      // Areas and channels are fetched the first time the management view is
+      // opened, then only on explicit refresh.
+      function loadManagementListsOnce() {
+        const areasContent = document.getElementById('areas-content');
+        if (areasContent && areasContent.dataset.loaded !== 'true') {
+          loadAreas();
         }
 
-        const open = isElementHidden(container);
-        setFoldState(container, toggle, open);
-        return { container, open };
-      }
-
-      function toggleManagement() {
-        toggleFold('management-container', 'management-toggle');
-      }
-
-      function toggleAreaManagement() {
-        toggleFold('area-management-content', 'area-management-toggle');
-      }
-
-      function toggleChannelConfig() {
-        toggleFold('channel-management-content', 'channel-management-toggle');
-      }
-
-      function toggleManagementList(containerId, toggleId, refreshBtnId, loadItems) {
-        const result = toggleFold(containerId, toggleId);
-        const refreshBtn = document.getElementById(refreshBtnId);
-        if (!result || !refreshBtn) {
-          return;
+        const channelsContent = document.getElementById('channels-content');
+        if (channelsContent && channelsContent.dataset.loaded !== 'true') {
+          loadChannels();
         }
-
-        refreshBtn.style.display = result.open ? 'flex' : 'none';
-        if (result.open && result.container.dataset.loaded !== 'true') {
-          loadItems();
-        }
-      }
-
-      function toggleAreasList() {
-        toggleManagementList(
-          'areas-content',
-          'areas-list-toggle',
-          'refreshAreasBtn',
-          loadAreas
-        );
-      }
-
-      function toggleChannelsList() {
-        toggleManagementList(
-          'channels-content',
-          'channels-list-toggle',
-          'refreshChannelsBtn',
-          loadChannels
-        );
       }
 
       // Area management functions
@@ -3177,7 +3172,9 @@
         const notification = document.createElement('div');
         notification.className = `notification ${type}`;
         notification.textContent = message;
-        document.body.appendChild(notification);
+        // Toasts go into a dedicated stack so several at once queue up
+        // instead of drawing on top of each other.
+        (document.getElementById('toast-region') || document.body).appendChild(notification);
 
         setTimeout(() => {
           notification.remove();
@@ -3416,8 +3413,19 @@
           document.getElementById('tw-title-row'),
           document.getElementById('tw-title')
         );
-        syncInfoRowLabelCenter(
-        );
+      }
+
+      // Mirrors the Bilibili room state into the top bar so the current state
+      // is readable from every view.
+      function updateAppLiveBadge(isLive) {
+        const badge = document.getElementById('app-live-badge');
+        const text = document.getElementById('app-live-badge-text');
+        if (!badge) return;
+
+        badge.classList.toggle('is-live', !!isLive);
+        if (text) {
+          text.textContent = isLive ? '直播中' : '未开播';
+        }
       }
 
       function setPlatformLiveInfoVisibility(platform, isLive) {
@@ -3638,6 +3646,7 @@
             const bili = data.data.bilibili;
             document.getElementById('bili-status').className =
               `status-indicator ${bili.is_live ? 'status-live' : 'status-offline'}`;
+            updateAppLiveBadge(bili.is_live);
             document.getElementById('bili-title').textContent = bili.title || '-';
             document.getElementById('bili-area').textContent =
               bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
@@ -5170,37 +5179,43 @@
       }
 
       // Theme toggle function
-      function toggleTheme() {
-        const body = document.body;
-        const themeToggle = document.getElementById('theme-toggle');
-        if (!themeToggle) return;
+      // The theme class lives on <html> so the inline head script can apply it
+      // before first paint; this only keeps the button icon in sync.
+      function applyThemeIcon(isLight) {
+        const button = document.getElementById('theme-toggle');
+        const icon = document.querySelector('#theme-toggle-icon use');
+        if (icon) {
+          icon.setAttribute('href', isLight ? '#i-sun' : '#i-moon');
+        }
+        if (button) {
+          const label = isLight ? '切换到暗色主题' : '切换到亮色主题';
+          button.title = label;
+          button.setAttribute('aria-label', label);
+        }
+      }
 
-        if (body.classList.contains('light-theme')) {
-          // Switch to dark theme (Dracula)
-          body.classList.remove('light-theme');
-          themeToggle.textContent = '🌙 暗色';
-          localStorage.setItem('theme', 'dark');
-        } else {
-          // Switch to light theme
-          body.classList.add('light-theme');
-          themeToggle.textContent = '☀️ 亮色';
-          localStorage.setItem('theme', 'light');
+      function toggleTheme() {
+        const isLight = document.documentElement.classList.toggle('light-theme');
+        applyThemeIcon(isLight);
+        try {
+          localStorage.setItem('theme', isLight ? 'light' : 'dark');
+        } catch (error) {
+          // Preference simply will not persist when storage is blocked.
         }
       }
 
       // Load saved theme preference
       function loadTheme() {
-        const savedTheme = localStorage.getItem('theme');
-        const themeToggle = document.getElementById('theme-toggle');
-
-        if (savedTheme === 'light') {
-          document.body.classList.add('light-theme');
-          if (themeToggle) themeToggle.textContent = '☀️ 亮色';
-        } else {
-          // Default to dark theme (Dracula)
-          document.body.classList.remove('light-theme');
-          if (themeToggle) themeToggle.textContent = '🌙 暗色';
+        let savedTheme = null;
+        try {
+          savedTheme = localStorage.getItem('theme');
+        } catch (error) {
+          // Ignore unavailable storage and keep the default dark theme.
         }
+
+        const isLight = savedTheme === 'light';
+        document.documentElement.classList.toggle('light-theme', isLight);
+        applyThemeIcon(isLight);
       }
 
       // Load theme on page load
