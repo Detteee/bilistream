@@ -158,6 +158,11 @@
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
     </symbol>
 
+    <symbol id="i-star" viewBox="0 0 24 24">
+      <path
+        d="M12 2.5a1 1 0 0 1 .9.56l2.42 4.9 5.41.79a1 1 0 0 1 .56 1.7l-3.92 3.82.93 5.39a1 1 0 0 1-1.46 1.06L12 18.17l-4.84 2.55a1 1 0 0 1-1.45-1.06l.92-5.39-3.91-3.82a1 1 0 0 1 .55-1.7l5.41-.79 2.42-4.9A1 1 0 0 1 12 2.5Z" />
+    </symbol>
+
     <symbol id="i-bilibili" viewBox="0 0 24 24">
       <path
         d="M18.223 3.086a1.25 1.25 0 0 1 0 1.768L17.08 5.996h1.17A3.75 3.75 0 0 1 22 9.747v7.5A3.75 3.75 0 0 1 18.25 21H5.75A3.75 3.75 0 0 1 2 17.247v-7.5a3.75 3.75 0 0 1 3.75-3.751h1.166L5.775 4.855a1.25 1.25 0 1 1 1.767-1.768l2.652 2.652c.079.079.144.166.196.257h3.222c.052-.09.117-.178.196-.257l2.651-2.652a1.25 1.25 0 0 1 1.768 0Zm.027 5.42H5.75a1.25 1.25 0 0 0-1.247 1.184l-.003.066v7.5c0 .659.51 1.199 1.157 1.246l.093.004h12.5a1.25 1.25 0 0 0 1.247-1.157l.003-.093v-7.5c0-.69-.56-1.25-1.25-1.25Zm-10 2.5c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Zm7.5 0c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Z" />
@@ -910,6 +915,105 @@
                       <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Priority channel ----------------------------------------- -->
+          <article class="card" data-platform="priority" id="priority-channel-card">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-star" /></svg>
+                优先频道
+                <span class="status-indicator" id="priority-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用优先频道监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="priority-toggle" aria-label="启用优先频道监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshPriorityBtn" class="action-btn action-btn--refresh icon-btn compact-btn"
+                  type="button" title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshPriorityIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="priority-channel-name">未配置</span>
+                  <button id="priority-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改优先频道">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="priority-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="priority-channel-edit-select" aria-label="优先频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="priority-channel-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存优先频道">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="priority-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消优先频道编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">状态</span>
+                <span class="info-value info-value-right" id="priority-live-status">未启用</span>
+              </div>
+
+              <div class="info-row" id="priority-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="priority-title">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">默认分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="priority-default-area">-</span>
+                  <button id="priority-area-edit-btn" class="info-row-edit-btn" type="button" title="更改默认分区"
+                    aria-label="更改优先频道默认分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="priority-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="priority-area-edit-select" aria-label="优先频道默认分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="priority-area-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存优先频道默认分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="priority-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消优先频道默认分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">自动重启流</span>
+                <div class="info-row-view info-row-view-end">
+                  <label class="toggle-label info-row-toggle-label">
+                    <span class="toggle-switch">
+                      <input type="checkbox" id="priority-auto-restart-toggle" aria-label="自动重启流">
+                      <span class="toggle-slider"></span>
+                    </span>
+                  </label>
                 </div>
               </div>
             </div>

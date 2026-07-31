@@ -1309,6 +1309,10 @@ input[type="checkbox"] {
   --platform: var(--twitch);
 }
 
+.card[data-platform="priority"] {
+  --platform: var(--warn);
+}
+
 .dashboard-card-header {
   display: flex;
   align-items: center;
