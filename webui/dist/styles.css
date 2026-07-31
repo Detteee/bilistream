@@ -1873,11 +1873,9 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
    9b. Multi-server cluster
    ========================================================================== */
 
-/* The cluster panel summarises every node, so it spans the full width above
-   the per-platform cards rather than packing into one of their columns. */
+/* The cluster panel already fills the dashboard's single column; its node
+   cards do the wrapping instead. */
 .cluster-card {
-  column-span: all;
-  margin-bottom: var(--sp-4);
   --platform: var(--teal);
 }
 
