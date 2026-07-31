@@ -171,6 +171,14 @@ code {
   --teal: #94e2d5;
   --live: #ff5c7a;
 
+  /* Network graph spectrum: amber -> green across the cache series, then
+     teal -> blue across the push series, so the two run as one sweep
+     through the centre axis. */
+  --net-cache-start: var(--warn);
+  --net-cache-end: var(--ok);
+  --net-push-start: var(--teal);
+  --net-push-end: var(--brand);
+
   /* Platform hues */
   --bilibili: #fb7299;
   --youtube: #ff4757;
@@ -255,6 +263,13 @@ html.light-theme {
   --bilibili: #e0558a;
   --youtube: #e0313f;
   --twitch: #7d4ce0;
+
+  /* Mid-tone stops, not the darker text accents, so the sweep stays legible
+     on the pale panel without going muddy. */
+  --net-cache-start: #f0a92a;
+  --net-cache-end: #2aa36b;
+  --net-push-start: #12a594;
+  --net-push-end: #4763d6;
 
   --sh-1: 0 1px 2px rgba(27, 33, 56, 0.08);
   --sh-2: 0 4px 16px rgba(27, 33, 56, 0.09);
@@ -1568,7 +1583,7 @@ input[type="checkbox"] {
   inset-inline: 0;
   min-height: 2px;
   border-radius: 2px;
-  background: linear-gradient(180deg, var(--teal), var(--brand));
+  background: linear-gradient(180deg, var(--net-push-start), var(--net-push-end));
   opacity: 0.35;
   transition: opacity var(--dur) var(--ease);
 }
@@ -1576,7 +1591,7 @@ input[type="checkbox"] {
 .bili-network-bar.cache {
   bottom: 50%;
   border-radius: 2px 2px 0 0;
-  background: linear-gradient(180deg, var(--warn), var(--ok));
+  background: linear-gradient(180deg, var(--net-cache-start), var(--net-cache-end));
 }
 
 .bili-network-bar.push {
