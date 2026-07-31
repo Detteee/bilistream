@@ -625,6 +625,8 @@ pub fn monitored_config_integrity_version_from_payload(payload: &MonitoredConfig
 }
 
 fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
+    // Must stay field-for-field identical to monitored_sync_value_from_config
+    // so a node's own version hash matches the one derived from a peer payload.
     serde_json::json!({
         "youtube": {
             "channel_name": payload.youtube.channel_name,
@@ -635,12 +637,10 @@ fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
             "channel_id": payload.twitch.channel_id,
         },
         "priority_channel": {
-            "enabled": payload.priority_channel.enabled,
             "channel_name": payload.priority_channel.channel_name,
             "youtube_channel_id": payload.priority_channel.youtube_channel_id,
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
             "default_area": payload.priority_channel.default_area,
-            "auto_restart": payload.priority_channel.auto_restart,
         },
         "channels_json": payload.channels_json,
         "areas_json": payload.areas_json,
@@ -648,6 +648,10 @@ fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Value {
 }
 
 fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Value {
+    // Only shared configuration belongs here. The priority channel's enabled
+    // and auto_restart flags are per-node monitor toggles, so including them
+    // both pushed one node's toggle onto its peers and made nodes that merely
+    // differ by a toggle report as out of sync.
     serde_json::json!({
         "youtube": {
             "channel_name": cfg.youtube.channel_name,
@@ -658,12 +662,10 @@ fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Value {
             "channel_id": cfg.twitch.channel_id,
         },
         "priority_channel": {
-            "enabled": cfg.priority_channel.enabled,
             "channel_name": cfg.priority_channel.channel_name,
             "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
             "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
             "default_area": cfg.priority_channel.default_area,
-            "auto_restart": cfg.priority_channel.auto_restart,
         },
         "channels_json": read_json_file("channels.json"),
         "areas_json": read_json_file("areas.json"),
@@ -755,11 +757,17 @@ async fn write_monitored_json_files(
 }
 
 fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) {
+    // Monitor toggles are per-node runtime state, not shared configuration:
+    // only the active node runs monitors, so a pushed config must never flip
+    // them on a standby. Channel targets below are shared, so a standby can
+    // take over the same channel on failover.
     let local_enable_danmaku_command = cfg.bililive.enable_danmaku_command;
     let local_enable_youtube_monitor = cfg.enable_youtube_monitor;
     let local_enable_twitch_monitor = cfg.enable_twitch_monitor;
     let local_youtube_enable_monitor = cfg.youtube.enable_monitor;
     let local_twitch_enable_monitor = cfg.twitch.enable_monitor;
+    let local_priority_channel_enabled = cfg.priority_channel.enabled;
+    let local_priority_channel_auto_restart = cfg.priority_channel.auto_restart;
     cfg.interval = payload.interval;
     cfg.auto_cover = payload.auto_cover;
     cfg.enable_anti_collision = payload.enable_anti_collision;
@@ -773,6 +781,8 @@ fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) 
     cfg.enable_twitch_monitor = local_enable_twitch_monitor;
     cfg.youtube.enable_monitor = local_youtube_enable_monitor;
     cfg.twitch.enable_monitor = local_twitch_enable_monitor;
+    cfg.priority_channel.enabled = local_priority_channel_enabled;
+    cfg.priority_channel.auto_restart = local_priority_channel_auto_restart;
     crate::config::update_priority_channel_from_channels(cfg);
 }
 
@@ -3137,12 +3147,14 @@ mod tests {
     }
 
     #[test]
-    fn monitored_config_version_changes_for_priority_channel_switches() {
+    fn monitored_config_version_ignores_priority_channel_switches() {
+        // enabled/auto_restart are per-node monitor toggles, so two nodes that
+        // differ only by them are still in sync and must not trigger a push.
         let cfg_a = test_config("a", 0);
         let mut cfg_b = test_config("b", 10);
         cfg_b.priority_channel.enabled = !cfg_a.priority_channel.enabled;
 
-        assert_ne!(
+        assert_eq!(
             monitored_config_version(&cfg_a),
             monitored_config_version(&cfg_b)
         );
@@ -3150,17 +3162,26 @@ mod tests {
         let mut cfg_c = test_config("c", 20);
         cfg_c.priority_channel.auto_restart = !cfg_a.priority_channel.auto_restart;
 
-        assert_ne!(
+        assert_eq!(
             monitored_config_version(&cfg_a),
             monitored_config_version(&cfg_c)
         );
 
+        // The shared channel target fields still take part in the version.
         let mut cfg_d = test_config("d", 30);
         cfg_d.priority_channel.default_area = cfg_a.priority_channel.default_area.wrapping_add(1);
 
         assert_ne!(
             monitored_config_version(&cfg_a),
             monitored_config_version(&cfg_d)
+        );
+
+        let mut cfg_e = test_config("e", 40);
+        cfg_e.priority_channel.channel_name = "another priority".to_string();
+
+        assert_ne!(
+            monitored_config_version(&cfg_a),
+            monitored_config_version(&cfg_e)
         );
     }
 
@@ -3236,7 +3257,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_monitored_config_syncs_priority_switches_and_preserves_runtime_toggles() {
+    fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
         let mut local = test_config("local", 0);
         local.bililive.enable_danmaku_command = false;
         local.enable_youtube_monitor = false;
@@ -3269,8 +3290,10 @@ mod tests {
         assert!(local.enable_twitch_monitor);
         assert!(!local.youtube.enable_monitor);
         assert!(local.twitch.enable_monitor);
-        assert!(!local.priority_channel.enabled);
-        assert!(local.priority_channel.auto_restart);
+        // The priority switches are node-local runtime state like the other
+        // monitor toggles: a pushed config must not flip them on this node.
+        assert!(local.priority_channel.enabled);
+        assert!(!local.priority_channel.auto_restart);
 
         assert_eq!(local.youtube.channel_name, "remote yt");
         assert_eq!(local.youtube.channel_id, "remote-yt-id");
