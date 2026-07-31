@@ -1153,7 +1153,6 @@ input[type="checkbox"] {
 .dashboard {
   display: grid;
   grid-template-columns: 1fr;
-  align-items: start;
   gap: var(--sp-4);
 }
 
