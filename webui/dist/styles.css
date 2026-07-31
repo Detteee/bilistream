@@ -1020,6 +1020,22 @@ input[type="checkbox"] {
   outline-offset: 2px;
 }
 
+/* A toggle the current node is not allowed to flip reads as unavailable
+   rather than simply unresponsive. */
+.toggle-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toggle-label:has(input:disabled) {
+  cursor: not-allowed;
+  color: var(--text-mute);
+}
+
 .toggle-label {
   display: inline-flex;
   align-items: center;
