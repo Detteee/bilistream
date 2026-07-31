@@ -605,6 +605,7 @@
       // Refresh logs only while the dashboard is visible.
       startLogRefresh();
       initEventStream();
+      initHolodexFold();
       initViewRouter();
       initDashboardControls();
       initAntiCollisionControls();
@@ -703,19 +704,73 @@
       }
 
       // The stream list is only worth fetching once the API key is known to be
-      // configured and the overview is the visible view.
+      // configured, the overview is the visible view, and the panel is open.
       function maybeLoadHolodexStreams() {
         if (holodexStreamsRequested || !isViewActive('overview')) {
           return;
         }
 
-        const section = document.getElementById('holodex-streams-section');
-        if (!section || getComputedStyle(section).display === 'none') {
+        const section = document.getElementById('holodex-section');
+        if (section?.classList.contains('is-collapsed')) {
+          return;
+        }
+
+        const streams = document.getElementById('holodex-streams-section');
+        if (!streams || getComputedStyle(streams).display === 'none') {
           return;
         }
 
         holodexStreamsRequested = true;
         refreshHolodexStreams();
+      }
+
+      function setHolodexCollapsed(collapsed) {
+        const section = document.getElementById('holodex-section');
+        const button = document.getElementById('holodexFoldBtn');
+        if (!section) return;
+
+        section.classList.toggle('is-collapsed', collapsed);
+        if (button) {
+          const label = collapsed ? '展开' : '折叠';
+          button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          button.setAttribute('aria-label', label);
+          button.title = label;
+        }
+      }
+
+      function toggleHolodexFold() {
+        const section = document.getElementById('holodex-section');
+        if (!section) return;
+
+        const collapsed = !section.classList.contains('is-collapsed');
+        setHolodexCollapsed(collapsed);
+        try {
+          localStorage.setItem('holodexCollapsed', collapsed ? 'true' : 'false');
+        } catch (error) {
+          // The fold still works; it just will not be remembered.
+        }
+
+        if (!collapsed) {
+          // Opening the panel is what triggers the first fetch.
+          maybeLoadHolodexStreams();
+        }
+      }
+
+      function initHolodexFold() {
+        let collapsed = false;
+        try {
+          collapsed = localStorage.getItem('holodexCollapsed') === 'true';
+        } catch (error) {
+          // Ignore unavailable storage and start expanded.
+        }
+        setHolodexCollapsed(collapsed);
+
+        document
+          .getElementById('holodexFoldBtn')
+          ?.addEventListener('click', toggleHolodexFold);
+
+        const heading = document.getElementById('holodex-heading');
+        heading?.addEventListener('click', toggleHolodexFold);
       }
 
       const HOLODEX_STATUS_STATE_CLASSES = [

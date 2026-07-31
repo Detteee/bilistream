@@ -1103,6 +1103,29 @@ input[type="checkbox"] {
   padding: 0;
 }
 
+/* Foldable panels ------------------------------------------------------- */
+
+.panel.is-foldable .panel__title {
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel__fold-btn svg {
+  transition: transform var(--dur-slow) var(--ease);
+}
+
+.panel.is-collapsed .panel__body {
+  display: none;
+}
+
+.panel.is-collapsed .panel__head {
+  border-bottom: 0;
+}
+
+.panel.is-collapsed .panel__fold-btn svg {
+  transform: rotate(-90deg);
+}
+
 .section-title {
   margin-bottom: var(--sp-4);
   padding-bottom: var(--sp-2);
