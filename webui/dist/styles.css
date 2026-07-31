@@ -1146,14 +1146,27 @@ input[type="checkbox"] {
    8. Dashboard platform cards
    ========================================================================== */
 
-/* Platforms expose very different numbers of fields — three for Bilibili,
-   seven for YouTube — so side-by-side cards could never line up and always
-   left dead space under the short one. Each platform instead gets a
-   full-width section whose fields flow in a wrapping tile grid, which takes
-   exactly the height its content needs. */
+/* Explicit column counts rather than auto-fit: the card count is known, so
+   each step divides them evenly and never strands a half-empty row.
+   1 column, then 2x2, then 3 across (the priority layer gives that step its
+   own full-width row) and finally all four side by side. */
 .dashboard {
   display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
   gap: var(--sp-4);
+}
+
+@media (min-width: 700px) {
+  .dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1000px) {
+  .dashboard {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .card {
@@ -1256,39 +1269,34 @@ input[type="checkbox"] {
 
 /* Info rows -------------------------------------------------------------- */
 
-/* Fields flow as tiles: they wrap to as many rows as needed and never leave
-   a half-empty column. */
 .card-body {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr));
-  gap: var(--sp-2);
+  display: flex;
+  flex-direction: column;
   padding: 0 var(--sp-4) var(--sp-4);
 }
 
 .info-row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: var(--sp-1);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  min-height: 40px;
+  padding-block: var(--sp-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
   min-width: 0;
-  min-height: 58px;
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
 }
 
-/* Long free-text values get room before they wrap. */
-.info-row-wide {
-  grid-column: span 2;
+.info-row:last-child {
+  border-bottom: 0;
 }
 
-.bili-network-panel {
-  grid-column: 1 / -1;
+/* Keeps the label centred against a value that wrapped to two lines. */
+.info-row-label-center {
+  align-items: center;
 }
 
 .info-label {
+  grid-column: 1;
   color: var(--text-mute);
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -1299,6 +1307,7 @@ input[type="checkbox"] {
 .info-value,
 .info-row-view,
 .info-edit-container {
+  grid-column: 2;
   min-width: 0;
 }
 
@@ -1307,7 +1316,7 @@ input[type="checkbox"] {
   font-weight: 600;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  text-align: left;
+  text-align: right;
 }
 
 .info-row-view {
@@ -1317,13 +1326,13 @@ input[type="checkbox"] {
 }
 
 .info-row-view-end {
-  justify-content: flex-start;
+  justify-content: flex-end;
 }
 
 .info-value-right {
   flex: 1;
   min-width: 0;
-  text-align: left;
+  text-align: right;
 }
 
 .info-row-toggle-label {
@@ -1432,6 +1441,7 @@ input[type="checkbox"] {
 
 #yt-hls-cache-edit-container > div,
 #tw-hls-cache-edit-container > div {
+  justify-content: flex-end;
   flex-wrap: nowrap;
 }
 
