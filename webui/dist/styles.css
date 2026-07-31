@@ -1313,6 +1313,66 @@ input[type="checkbox"] {
   --platform: var(--warn);
 }
 
+/* With the priority card there are four cards, so a wide viewport can put
+   them all on one row. */
+@media (min-width: 1360px) {
+  .dashboard {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Between the 3-across and 4-across steps the priority card would be a lone
+   fourth cell, so it takes a full row of its own and lays its fields out
+   horizontally instead of leaving three quarters of the row empty. */
+@media (min-width: 1000px) and (max-width: 1359.98px) {
+  #priority-channel-card {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--sp-3);
+    padding: var(--sp-3);
+  }
+
+  #priority-channel-card .dashboard-card-header {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: 0;
+  }
+
+  #priority-channel-card .card-body {
+    flex: 1 1 auto;
+    flex-direction: row;
+    gap: var(--sp-2);
+    padding: 0;
+  }
+
+  #priority-channel-card .info-row {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: var(--sp-1);
+    min-width: 0;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-3);
+  }
+
+  #priority-channel-card .info-value,
+  #priority-channel-card .info-value-right {
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #priority-channel-card .info-row-view-end {
+    justify-content: flex-start;
+  }
+}
+
 .dashboard-card-header {
   display: flex;
   align-items: center;
