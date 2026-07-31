@@ -304,6 +304,14 @@ body::before {
   pointer-events: none;
 }
 
+/* Sprite symbols carry no fill of their own, so without this they paint
+   black in both themes. Setting it on <use> lets the colour inherit into the
+   shadow tree while symbols that declare their own fill/stroke (the gradient
+   logos, the outline glyphs) still win. */
+use {
+  fill: currentColor;
+}
+
 .stack {
   display: grid;
   gap: var(--sp-5);
@@ -1055,6 +1063,7 @@ input[type="checkbox"] {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
+  fill: currentColor;
 }
 
 .panel__sub {
@@ -1121,11 +1130,19 @@ input[type="checkbox"] {
    8. Dashboard platform cards
    ========================================================================== */
 
+/* Cards differ a lot in height — Bilibili carries three rows while YouTube
+   carries seven — so equal-height grid rows left dead space under the short
+   cards and an empty tail wherever the last row was not full. Multi-column
+   packing lets each card take only the height it needs and fills the columns
+   bottom-up instead. */
 .dashboard {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  align-items: start;
-  gap: var(--sp-4);
+  columns: 3 320px;
+  column-gap: var(--sp-4);
+}
+
+.dashboard > .card {
+  break-inside: avoid;
+  margin-bottom: var(--sp-4);
 }
 
 .card {
@@ -1194,6 +1211,7 @@ input[type="checkbox"] {
   height: 18px;
   flex: 0 0 18px;
   color: var(--platform);
+  fill: currentColor;
 }
 
 .card-header-actions {
@@ -3268,7 +3286,7 @@ input[type="checkbox"] {
   }
 
   .dashboard {
-    grid-template-columns: 1fr;
+    columns: 1;
   }
 
   .management-area-grid,
