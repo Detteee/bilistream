@@ -698,14 +698,22 @@ button:disabled {
   opacity: 0.5;
 }
 
-.btn-icon,
+.btn-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  display: block;
+  fill: currentColor;
+}
+
+/* Icons built in app.js carry their own fill/stroke attributes — size them
+   only, so a blanket fill does not flatten the outline glyphs. */
 .cluster-btn-icon,
 .cluster-inline-icon {
   width: 17px;
   height: 17px;
   flex: 0 0 auto;
   display: block;
-  fill: currentColor;
 }
 
 /* Variants --------------------------------------------------------------- */
@@ -1859,6 +1867,442 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   9b. Multi-server cluster
+   ========================================================================== */
+
+/* The cluster card spans the dashboard: it summarises every node, so it reads
+   as a header above the per-platform cards rather than a peer of them. */
+.cluster-card {
+  grid-column: 1 / -1;
+  --platform: var(--teal);
+}
+
+.cluster-header {
+  flex-wrap: wrap;
+}
+
+.cluster-node-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
+.cluster-card.cluster-collapsed .cluster-node-list {
+  display: none;
+}
+
+.cluster-card.cluster-collapsed .dashboard-card-header {
+  padding-bottom: var(--sp-4);
+}
+
+.cluster-card.cluster-collapsed #clusterFoldIcon {
+  transform: rotate(-90deg);
+}
+
+#clusterFoldIcon {
+  transition: transform var(--dur-slow) var(--ease);
+}
+
+.action-btn--sync {
+  --tone: var(--teal);
+}
+
+.cluster-auto-failover-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 32px;
+  padding-inline: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.cluster-auto-failover-toggle input {
+  margin: 0;
+  accent-color: var(--brand-2);
+}
+
+.cluster-auto-failover-toggle:has(input:checked) {
+  border-color: color-mix(in srgb, var(--brand-2) 46%, transparent);
+  background: color-mix(in srgb, var(--brand-2) 12%, transparent);
+  color: var(--brand-2);
+}
+
+/* Node cards ------------------------------------------------------------- */
+
+.cluster-node-card {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.cluster-node-card:hover {
+  border-color: var(--line-strong);
+}
+
+.cluster-node-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-node-name {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.cluster-node-name-link {
+  color: var(--brand);
+}
+
+.cluster-node-meta {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.cluster-node-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.cluster-node-meta-label {
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+
+.cluster-node-meta-value {
+  min-width: 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.cluster-node-network {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+
+.cluster-node-network .bili-network-meters {
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: var(--sp-2);
+  margin-top: 0;
+}
+
+.cluster-node-network .bili-network-meter-value {
+  font-size: var(--fs-base);
+}
+
+.cluster-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.cluster-empty,
+.cluster-peer-empty {
+  padding: var(--sp-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-mute);
+  text-align: center;
+}
+
+.cluster-peer-empty {
+  grid-column: 1 / -1;
+}
+
+/* Status badges ---------------------------------------------------------- */
+
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cluster-badge .cluster-inline-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.cluster-badge.active {
+  border-color: color-mix(in srgb, var(--teal) 44%, transparent);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+  color: var(--teal);
+}
+
+.cluster-badge.unhealthy,
+.cluster-badge.draining,
+.cluster-badge.disabled {
+  border-color: color-mix(in srgb, var(--danger) 44%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.cluster-badge.fault,
+.cluster-badge.sync-warning {
+  border-color: color-mix(in srgb, var(--warn) 44%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.cluster-label-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* Cluster settings ------------------------------------------------------- */
+
+.cluster-settings-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-5);
+}
+
+.cluster-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--sp-4);
+}
+
+.cluster-settings-panel {
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+}
+
+.cluster-settings-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cluster-settings-panel-mark,
+.cluster-peer-node-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+
+.cluster-settings-panel-mark {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
+.cluster-settings-panel-mark-add {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+
+.cluster-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: var(--sp-4);
+}
+
+.cluster-settings-fields-compact {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+}
+
+.cluster-settings-field-wide {
+  grid-column: 1 / -1;
+}
+
+.cluster-settings-add {
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+}
+
+.cluster-settings-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  align-items: end;
+  gap: var(--sp-3);
+}
+
+.cluster-settings-add-url {
+  grid-column: span 2;
+}
+
+.cluster-settings-add-action {
+  align-self: end;
+}
+
+.cluster-settings-add-btn {
+  width: 100%;
+}
+
+/* Peer cards ------------------------------------------------------------- */
+
+.cluster-peer-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+
+.cluster-peer-card {
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+}
+
+.cluster-peer-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.cluster-peer-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-peer-title-block {
+  min-width: 0;
+}
+
+.cluster-peer-name {
+  color: var(--text);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cluster-peer-id {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cluster-peer-header-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+}
+
+.cluster-peer-priority {
+  padding: 2px var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  color: var(--brand);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.cluster-peer-remove-btn.cluster-peer-remove-btn {
+  --tone: var(--danger);
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+}
+
+.cluster-peer-fields {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.8fr) minmax(112px, 1fr);
+  gap: var(--sp-2);
+}
+
+.cluster-peer-field {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.cluster-peer-field span {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.cluster-peer-field input {
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+}
+
+.cluster-peer-field-url {
+  grid-column: span 2;
+}
+
+.cluster-peer-field-priority input {
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .cluster-peer-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .cluster-peer-field-url,
+  .cluster-settings-add-url {
+    grid-column: auto;
+  }
 }
 
 /* ==========================================================================

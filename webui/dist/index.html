@@ -158,6 +158,21 @@
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
     </symbol>
 
+    <symbol id="i-servers" viewBox="0 0 24 24">
+      <path
+        d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-5 7h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" />
+    </symbol>
+
+    <symbol id="i-sync" viewBox="0 0 24 24">
+      <path
+        d="M12 4a8 8 0 0 1 7.42 5.02 1 1 0 1 1-1.86.72A6 6 0 0 0 7.1 9H9a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1V6a1 1 0 0 1 2 0v1.13A7.98 7.98 0 0 1 12 4Zm-7.42 9.26a1 1 0 0 1 1.3.56A6 6 0 0 0 16.9 15H15a1 1 0 1 1 0-2h4a1 1 0 0 1 1 1v4a1 1 0 1 1-2 0v-1.13A8 8 0 0 1 4.02 14.56a1 1 0 0 1 .56-1.3Z" />
+    </symbol>
+
+    <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </symbol>
+
     <symbol id="i-star" viewBox="0 0 24 24">
       <path
         d="M12 2.5a1 1 0 0 1 .9.56l2.42 4.9 5.41.79a1 1 0 0 1 .56 1.7l-3.92 3.82.93 5.39a1 1 0 0 1-1.46 1.06L12 18.17l-4.84 2.55a1 1 0 0 1-1.45-1.06l.92-5.39-3.91-3.82a1 1 0 0 1 .55-1.7l5.41-.79 2.42-4.9A1 1 0 0 1 12 2.5Z" />
@@ -483,6 +498,38 @@
       <section class="view is-active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
 
         <div class="dashboard">
+
+          <!-- Multi-server cluster ------------------------------------- -->
+          <article class="card cluster-card" data-platform="cluster" id="cluster-card">
+            <div class="dashboard-card-header cluster-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-servers" /></svg>
+                多服务器
+                <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="cluster-auto-failover-toggle" title="启用后故障时按优先级自动切换；关闭后仅手动切换">
+                  <input type="checkbox" id="clusterAutoFailoverToggle">
+                  <span>自动转移</span>
+                </label>
+                <button id="clusterFoldBtn" class="action-btn action-btn--accent icon-btn compact-btn cluster-fold-btn"
+                  type="button" title="折叠" aria-label="折叠">
+                  <svg class="btn-icon" id="clusterFoldIcon" aria-hidden="true"><use href="#i-chevron" /></svg>
+                </button>
+                <button id="clusterRefreshBtn" class="action-btn action-btn--refresh icon-btn compact-btn"
+                  type="button" title="刷新" aria-label="刷新">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+                <button id="clusterSyncBtn" class="action-btn action-btn--sync icon-btn compact-btn" type="button"
+                  title="同步频道配置" aria-label="同步频道配置">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-sync" /></svg>
+                </button>
+              </div>
+            </div>
+            <div id="cluster-node-list" class="cluster-node-list">
+              <div class="cluster-empty">集群未启用或暂无节点心跳</div>
+            </div>
+          </article>
 
           <!-- Bilibili ------------------------------------------------- -->
           <article class="card" data-platform="bilibili">
@@ -1423,6 +1470,121 @@
                   <option value="perf">perf - TTV-LOL-PRO 全部</option>
                 </select>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel cluster-settings-section">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-servers" /></svg>
+              多服务器节点
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="cluster-settings-switches">
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-enabled">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>启用多服务器</span>
+              </label>
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-sync-channels">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>同步频道配置</span>
+              </label>
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-auto-failover" checked>
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>自动故障转移</span>
+              </label>
+            </div>
+
+            <div class="cluster-settings-grid">
+              <div class="cluster-settings-panel cluster-settings-panel-local">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-peer-node-dot" aria-hidden="true"></span>
+                  <span>本节点</span>
+                </div>
+                <div class="cluster-settings-fields">
+                  <div class="control-group">
+                    <label for="config-cluster-node-id">本节点 ID</label>
+                    <input type="text" id="config-cluster-node-id" placeholder="ca">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-node-name">本节点名称</label>
+                    <input type="text" id="config-cluster-node-name" placeholder="Canada">
+                  </div>
+                  <div class="control-group cluster-settings-field-wide">
+                    <label for="config-cluster-api-url">本节点 API 地址</label>
+                    <input type="text" id="config-cluster-api-url" placeholder="http://ca.example.com:3150">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-priority">本节点优先级</label>
+                    <input type="number" id="config-cluster-priority" placeholder="0">
+                  </div>
+                </div>
+              </div>
+
+              <div class="cluster-settings-panel">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                  <span>故障检测</span>
+                </div>
+                <div class="cluster-settings-fields cluster-settings-fields-compact">
+                  <div class="control-group">
+                    <label for="config-cluster-heartbeat">心跳间隔 (秒)</label>
+                    <input type="number" id="config-cluster-heartbeat" min="1" placeholder="5">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-failover-timeout">故障超时 (秒)</label>
+                    <input type="number" id="config-cluster-failover-timeout" min="1" placeholder="15">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-lease-ttl">租约 TTL (秒)</label>
+                    <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="cluster-settings-add">
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark cluster-settings-panel-mark-add" aria-hidden="true"></span>
+                <span>添加节点</span>
+              </div>
+              <div class="cluster-settings-add-grid">
+                <div class="control-group">
+                  <label for="cluster-peer-node-id">节点 ID</label>
+                  <input type="text" id="cluster-peer-node-id" placeholder="us">
+                </div>
+                <div class="control-group">
+                  <label for="cluster-peer-name">节点名称</label>
+                  <input type="text" id="cluster-peer-name" placeholder="United States">
+                </div>
+                <div class="control-group cluster-settings-add-url">
+                  <label for="cluster-peer-api-url">API 地址</label>
+                  <input type="text" id="cluster-peer-api-url" placeholder="http://us.example.com:3150">
+                </div>
+                <div class="control-group">
+                  <label for="cluster-peer-priority">优先级</label>
+                  <input type="number" id="cluster-peer-priority" placeholder="0">
+                </div>
+                <div class="control-group cluster-settings-add-action">
+                  <button id="cluster-peer-add-btn" type="button"
+                    class="btn-secondary cluster-settings-add-btn">添加节点</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="cluster-peer-list" class="cluster-peer-list">
+              <div class="cluster-peer-empty">暂无其他节点</div>
             </div>
           </div>
         </section>
