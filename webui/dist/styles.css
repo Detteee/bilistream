@@ -2158,9 +2158,16 @@ a.cluster-node-name-link {
   min-width: 0;
 }
 
+/* The platform's own mark, tinted with the same --platform token the dashboard
+   cards use. An icon is a graphical object, so the brand hue clears the 3:1
+   non-text bar at full strength; only the text fallback below needs more. */
 .cluster-stream-platform {
   flex: 0 0 auto;
-  padding: 1px var(--sp-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border-radius: var(--r-xs);
   background: var(--surface-4);
   color: var(--text-dim);
@@ -2169,17 +2176,24 @@ a.cluster-node-name-link {
   letter-spacing: 0.02em;
 }
 
-/* The chip text is 11px bold, so it needs full text contrast: a lighter step of
-   the platform hue clears 4.5:1 on the tinted background where the raw hue
-   does not (#ff4757 lands at 3.9:1). */
+.cluster-stream-platform svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.cluster-stream-platform[data-platform="youtube"],
+.cluster-stream-platform[data-platform="twitch"] {
+  background: color-mix(in srgb, var(--platform) 22%, transparent);
+  color: var(--platform);
+}
+
 .cluster-stream-platform[data-platform="youtube"] {
-  background: color-mix(in srgb, var(--youtube) 22%, transparent);
-  color: color-mix(in srgb, var(--youtube) 65%, var(--text));
+  --platform: var(--youtube);
 }
 
 .cluster-stream-platform[data-platform="twitch"] {
-  background: color-mix(in srgb, var(--twitch) 22%, transparent);
-  color: color-mix(in srgb, var(--twitch) 65%, var(--text));
+  --platform: var(--twitch);
 }
 
 .cluster-stream-channel {
