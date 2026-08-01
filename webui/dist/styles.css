@@ -1884,16 +1884,100 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   flex-wrap: wrap;
 }
 
+/* Two stacked regions, not one uniform grid: a full-width card for each node
+   with stream detail, then a tile grid for the rest. A uniform grid forced
+   every card to the tallest one's height, leaving a band of dead space beside
+   the only node that had anything to show. */
 .cluster-node-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  /* Nodes carry very different amounts of detail - only the active one has a
-     stream and meters. Without this every card in a row is stretched to the
-     tallest, and each card's own grid then spreads its handful of rows across
-     that height. */
-  align-items: start;
+  grid-template-columns: 1fr;
+  align-content: start;
   gap: var(--sp-3);
   padding: 0 var(--sp-4) var(--sp-4);
+}
+
+.cluster-node-others {
+  /* Flex rather than grid: a wrapped last row stretches its tiles to fill,
+     where grid would hold the empty tracks open and reopen the dead space. */
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  gap: var(--sp-2);
+}
+
+.cluster-node-tile {
+  flex: 1 1 252px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.cluster-node-tile:hover {
+  border-color: var(--line-strong);
+}
+
+.cluster-node-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cluster-node-tile-seen {
+  flex: 0 0 auto;
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.cluster-node-tile .cluster-node-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+  margin-left: auto;
+}
+
+/* Given the full width, the featured card lays its parts out across the row
+   rather than stacking them into a tall column that nothing sits beside. */
+@media (min-width: 900px) {
+  .cluster-node-card-featured {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title actions"
+      "meta meta";
+    column-gap: var(--sp-3);
+  }
+
+  .cluster-node-card-featured > .cluster-node-title {
+    grid-area: title;
+    justify-content: flex-start;
+  }
+
+  .cluster-node-card-featured > .cluster-node-actions {
+    grid-area: actions;
+    margin-top: 0;
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta {
+    grid-area: meta;
+    grid-template-columns: minmax(140px, auto) minmax(220px, 1fr) minmax(300px, 1.7fr);
+    align-items: start;
+    gap: var(--sp-4);
+  }
+
+  .cluster-node-card-featured .cluster-node-network {
+    margin-top: 0;
+    padding-top: 0;
+    padding-left: var(--sp-4);
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
 }
 
 .cluster-card.cluster-collapsed .cluster-node-list {
