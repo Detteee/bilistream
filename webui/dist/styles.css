@@ -2009,14 +2009,108 @@ a.cluster-node-name-link {
   border-top: 1px solid var(--line);
 }
 
+/* Only pair the meters up once both fit without wrapping their detail rows;
+   below that a single full-width column reads better than two cramped ones. */
 .cluster-node-network .bili-network-meters {
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: var(--sp-2);
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
   margin-top: 0;
 }
 
 .cluster-node-network .bili-network-meter-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
   font-size: var(--fs-base);
+}
+
+.bili-network-meter-speed {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bili-network-meter-speed[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.bili-network-meter-speed[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.bili-network-meter-speed[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.bili-network-meter-speed[data-tone="stopped"] {
+  color: var(--text-mute);
+}
+
+.bili-network-total-sep {
+  margin: 0 var(--sp-1);
+  color: color-mix(in srgb, var(--text-mute) 55%, transparent);
+}
+
+/* What the remote active node is streaming. */
+.cluster-node-stream {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.cluster-node-stream-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-stream-platform {
+  flex: 0 0 auto;
+  padding: 1px var(--sp-1);
+  border-radius: var(--r-xs);
+  background: var(--surface-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* The chip text is 11px bold, so it needs full text contrast: a lighter step of
+   the platform hue clears 4.5:1 on the tinted background where the raw hue
+   does not (#ff4757 lands at 3.9:1). */
+.cluster-stream-platform[data-platform="youtube"] {
+  background: color-mix(in srgb, var(--youtube) 22%, transparent);
+  color: color-mix(in srgb, var(--youtube) 65%, var(--text));
+}
+
+.cluster-stream-platform[data-platform="twitch"] {
+  background: color-mix(in srgb, var(--twitch) 22%, transparent);
+  color: color-mix(in srgb, var(--twitch) 65%, var(--text));
+}
+
+.cluster-stream-channel {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cluster-stream-title {
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .cluster-node-actions {
