@@ -3,14 +3,14 @@
 
 // No-op when built as Tauri app — Tauri manages its own tray
 #[cfg(feature = "tauri-build")]
-pub fn run_tray(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_tray(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
 // Linux/macOS implementation using ksni
 #[cfg(all(not(target_os = "windows"), not(feature = "tauri-build")))]
-pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    use ksni;
+pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    use ksni::{self, TrayMethods};
 
     struct BiliTray {
         port: u16,
@@ -64,8 +64,7 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let tray = BiliTray { port };
-    let service = ksni::TrayService::new(tray);
-    service.spawn();
+    tray.spawn().await?;
 
     tracing::info!("✅ 系统托盘已启动");
 
@@ -81,15 +80,14 @@ pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("💡 点击托盘图标可重新打开控制面板");
 
-    // Keep main thread alive indefinitely
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
-    }
+    // Keep the task alive; the tray service runs in the background until quit.
+    std::future::pending::<()>().await;
+    Ok(())
 }
 
 // Windows implementation - system tray with native Windows API
 #[cfg(all(target_os = "windows", not(feature = "tauri-build")))]
-pub fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::mpsc;
     use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
 

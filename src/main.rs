@@ -2762,7 +2762,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             // Run system tray (this will block until quit)
-            bilistream::tray::run_tray(port)?;
+            bilistream::tray::run_tray(port).await?;
         }
         Some(("completion", sub_m)) => {
             let shell = sub_m.get_one::<String>("shell").unwrap();
@@ -2975,7 +2975,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::info!("✅ 后台服务已启动");
 
                     // Run system tray (this will block until quit)
-                    bilistream::tray::run_tray(port)?;
+                    bilistream::tray::run_tray(port).await?;
                 } else {
                     // Default: Start Web UI (Linux or non-tray build)
                     use bilistream::webui::start_webui;

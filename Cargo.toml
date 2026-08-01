@@ -73,7 +73,7 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 open = "5.0"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-ksni = "0.2"
+ksni = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 trayicon = "0.1"
