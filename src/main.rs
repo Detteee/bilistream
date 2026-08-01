@@ -13,11 +13,11 @@ use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
-    clear_warning_stop, enable_danmaku_commands, ffmpeg, get_aliases, get_area_name,
-    get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
-    wait_config_update_or_timeout, wait_ffmpeg, was_manual_restart, was_manual_stop,
+    clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
+    get_area_name, get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid,
+    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
+    run_danmaku, send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku,
+    stop_ffmpeg, wait_config_update_or_timeout, wait_ffmpeg, was_manual_restart, was_manual_stop,
     FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
 };
 use qrcode::QrCode;
@@ -25,8 +25,6 @@ use qrcode::QrCode;
 use chrono::{DateTime, Local, NaiveDateTime};
 use clap::{Arg, Command};
 use regex::Regex;
-use riven::consts::PlatformRoute;
-use riven::RiotApi;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -1441,7 +1439,6 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
         tracing::warn!("LOL 监控已启用，但 Riot API Key 未配置，跳过本次检测");
         return Ok(());
     };
-    let riot_api = RiotApi::new(riot_api_key);
     thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(runtime) => runtime,
@@ -1452,16 +1449,7 @@ async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
         };
         loop {
             rt.block_on(async {
-                if let Ok(Some(game_data)) = riot_api
-                    .spectator_v5()
-                    .get_current_game_info_by_puuid(PlatformRoute::JP1, &puuid)
-                    .await
-                {
-                    let riot_ids: Vec<String> = game_data
-                        .participants
-                        .iter()
-                        .filter_map(|p| p.riot_id.clone())
-                        .collect();
+                if let Ok(Some(riot_ids)) = current_game_riot_ids(&riot_api_key, &puuid).await {
                     let ids = format!("{:?}", riot_ids);
                     // tracing::info!("In game players: {}", ids);
                     let invalid_words_path = std::env::current_exe()
