@@ -281,7 +281,14 @@ pub async fn get_youtube_status(
     };
 
     // Use the multi-channel function for single channel
-    match get_holodex_streams(vec![channel_id.to_string()], false).await {
+    //
+    // The error is reduced to a String right away: Box<dyn Error> is not Send,
+    // and as the match scrutinee it would stay live across the awaits in the
+    // fallback arm, making this whole future unspawnable.
+    match get_holodex_streams(vec![channel_id.to_string()], false)
+        .await
+        .map_err(|e| e.to_string())
+    {
         Ok(streams) => {
             let status = select_holodex_channel_status(channel_id, &streams);
 
@@ -489,6 +496,16 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 mod tests {
     use super::*;
     use crate::plugins::holodex::HolodexChannel;
+
+    #[test]
+    fn youtube_status_futures_stay_send() {
+        // The WebUI spawns these, so a stray Box<dyn Error> held across an
+        // await would break the callers rather than this module.
+        fn assert_send<T: Send>(_: T) {}
+
+        assert_send(get_youtube_status("channel-id"));
+        assert_send(get_youtube_channel_status("channel-id"));
+    }
 
     fn holodex_stream(id: &str, status: &str, scheduled: Option<&str>) -> HolodexStream {
         HolodexStream {
