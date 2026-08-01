@@ -493,6 +493,42 @@ mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
+    /// The ffmpeg and self-update archives are both plain deflate zips, and the
+    /// zip dependency only pulls a deflate backend. A missing backend surfaces
+    /// as an "unsupported compression method" at extraction time on Windows,
+    /// so pin the codepath here instead.
+    #[test]
+    fn zip_archives_round_trip_deflate() {
+        use std::io::{Cursor, Read, Write};
+        use zip::write::SimpleFileOptions;
+
+        let body = "ffmpeg".repeat(512);
+        let mut buffer = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut buffer);
+        writer
+            .start_file(
+                "ffmpeg-master/bin/ffmpeg.exe",
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+            )
+            .unwrap();
+        writer.write_all(body.as_bytes()).unwrap();
+        writer.finish().unwrap();
+
+        let compressed = buffer.into_inner();
+        assert!(
+            compressed.len() < body.len(),
+            "entry was stored, not deflated, so this would not exercise the backend"
+        );
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(compressed)).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut entry = archive.by_index(0).unwrap();
+        assert_eq!(entry.name(), "ffmpeg-master/bin/ffmpeg.exe");
+        let mut extracted = String::new();
+        entry.read_to_string(&mut extracted).unwrap();
+        assert_eq!(extracted, body);
+    }
+
     #[test]
     fn executable_parent_dir_rejects_paths_without_parent() {
         assert_eq!(

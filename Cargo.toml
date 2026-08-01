@@ -68,7 +68,7 @@ tower-http = { version = "0.7", features = [
 ] }
 base64 = "0.23"
 # Windows dependencies
-zip = "0.6"
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 # System tray dependencies (platform-specific)
 open = "5.0"
 
