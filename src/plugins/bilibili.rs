@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::config::{save_config, Config};
+use crate::config::{save_config, Config, Credentials};
 use chrono::TimeZone;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
@@ -54,6 +54,42 @@ fn bili_status_clients(
 /// Reuse the shared plain HTTP client (no cookie store, default timeouts).
 pub(crate) fn bili_plain_http_client() -> reqwest::Client {
     BILI_PLAIN_CLIENT.clone()
+}
+
+/// Shared (raw, retrying) client pair for credentialed live-room calls.
+///
+/// The account cookies ride in an explicit `Cookie` header per request rather
+/// than a per-call cookie jar, so one client serves every caller and keeps its
+/// connection pool warm across stream lifecycles.
+static BILI_ROOM_CLIENTS: OnceLock<(reqwest::Client, reqwest_middleware::ClientWithMiddleware)> =
+    OnceLock::new();
+
+fn bili_room_clients(
+) -> Result<(reqwest::Client, reqwest_middleware::ClientWithMiddleware), reqwest::Error> {
+    if let Some((raw, retrying)) = BILI_ROOM_CLIENTS.get() {
+        return Ok((raw.clone(), retrying.clone()));
+    }
+
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+    let raw = reqwest::Client::builder()
+        .timeout(Duration::new(30, 0))
+        .build()?;
+    let retrying = ClientBuilder::new(raw.clone())
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build();
+    let (raw, retrying) = BILI_ROOM_CLIENTS.get_or_init(|| (raw, retrying));
+    Ok((raw.clone(), retrying.clone()))
+}
+
+/// `Cookie` header value carrying the configured Bilibili account credentials.
+fn bili_credential_cookie(credentials: &Credentials) -> String {
+    format!(
+        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
+        credentials.sessdata,
+        credentials.bili_jct,
+        credentials.dede_user_id,
+        credentials.dede_user_id_ckmd5
+    )
 }
 
 /// The live-client (version, build) pair changes rarely; cache successful
@@ -503,23 +539,8 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         .join("&");
 
     // Prepare cookies
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
-    let url = Url::parse("https://api.live.bilibili.com/")?;
-    let jar = Jar::default();
-    jar.add_cookie_str(&cookie, &url);
-
-    // Build the HTTP client
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .cookie_provider(jar.into())
-        .timeout(Duration::new(30, 0))
-        .build()?;
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (client, _) = bili_room_clients()?;
 
     // POST to the endpoint with query parameters in URL
     let response: Value = client
@@ -528,6 +549,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
             query_string
         ))
         .header("Accept", "application/json, text/plain, */*")
+        .header("Cookie", &cookie)
         .send()
         .await?
         .json()
@@ -630,34 +652,14 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box<dyn Error>> {
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
-    let url = Url::parse("https://api.live.bilibili.com/room/v1/Room/update")?;
-    let jar = Jar::default();
-    jar.add_cookie_str(&cookie, &url);
-
-    // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-
-    // Build the HTTP client with retry middleware
-    let raw_client = reqwest::Client::builder()
-        .cookie_store(true)
-        .cookie_provider(jar.into())
-        .timeout(Duration::new(30, 0))
-        .build()?;
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (_, client) = bili_room_clients()?;
 
     // Make the POST request to update the live title
     let _res: Value = client
         .post("https://api.live.bilibili.com/room/v1/Room/update")
         .header("Accept", "application/json, text/plain, */*")
+        .header("Cookie", &cookie)
         .header(
             "content-type",
             "application/x-www-form-urlencoded; charset=UTF-8",
@@ -712,34 +714,14 @@ pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
-    let url = Url::parse("https://api.live.bilibili.com/")?;
-    let jar = Jar::default();
-    jar.add_cookie_str(&cookie, &url);
-
-    // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-
-    // Build the HTTP client with retry middleware
-    let raw_client = reqwest::Client::builder()
-        .cookie_store(true)
-        .cookie_provider(jar.into())
-        .timeout(Duration::new(30, 0))
-        .build()?;
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (_, client) = bili_room_clients()?;
 
     // Make the POST request to stop the live stream
     let _res: Value = client
         .post("https://api.live.bilibili.com/room/v1/Room/stopLive")
         .header("Accept", "application/json, text/plain, */*")
+        .header("Cookie", &cookie)
         .header(
             "content-type",
             "application/x-www-form-urlencoded; charset=UTF-8",
@@ -770,13 +752,7 @@ pub async fn send_danmaku(
     message: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let client = bili_plain_http_client();
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let resp: Value = client
         .post("https://api.live.bilibili.com/msg/send")
         .header("Cookie", &cookie)
@@ -812,22 +788,8 @@ pub async fn send_danmaku(
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_change_cover(cfg: &Config, image_path: &str) -> Result<(), Box<dyn Error>> {
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
-    let url = Url::parse("https://api.bilibili.com/x/upload/web/image")?;
-    let jar = Jar::default();
-    jar.add_cookie_str(&cookie, &url);
-
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .cookie_provider(jar.into())
-        .timeout(Duration::new(30, 0))
-        .build()?;
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (client, _) = bili_room_clients()?;
 
     // Step 1: Upload image
     let file_content = tokio::fs::read(image_path).await?;
@@ -912,29 +874,8 @@ pub async fn bili_change_cover(cfg: &Config, image_path: &str) -> Result<(), Box
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error
 pub async fn bili_update_area(cfg: &Config, area_id: u64) -> Result<(), Box<dyn Error>> {
-    let cookie = format!(
-        "SESSDATA={};bili_jct={};DedeUserID={};DedeUserID__ckMd5={}",
-        cfg.bililive.credentials.sessdata,
-        cfg.bililive.credentials.bili_jct,
-        cfg.bililive.credentials.dede_user_id,
-        cfg.bililive.credentials.dede_user_id_ckmd5
-    );
-    let url = Url::parse("https://api.live.bilibili.com/")?;
-    let jar = Jar::default();
-    jar.add_cookie_str(&cookie, &url);
-
-    // Define the retry policy
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
-
-    // Build the HTTP client with retry middleware
-    let raw_client = reqwest::Client::builder()
-        .cookie_store(true)
-        .cookie_provider(jar.into())
-        .timeout(Duration::new(30, 0))
-        .build()?;
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (_, client) = bili_room_clients()?;
 
     let form_data = [
         ("room_id", cfg.bililive.room.to_string()),
@@ -1531,5 +1472,33 @@ mod tests {
     #[test]
     fn credential_constructor_returns_result() {
         assert!(Credential::new().is_ok());
+    }
+
+    #[test]
+    fn credential_cookie_carries_every_configured_field() {
+        let credentials = Credentials {
+            sessdata: "sess".to_string(),
+            bili_jct: "jct".to_string(),
+            dede_user_id: "uid".to_string(),
+            dede_user_id_ckmd5: "md5".to_string(),
+            ..Credentials::default()
+        };
+
+        assert_eq!(
+            bili_credential_cookie(&credentials),
+            "SESSDATA=sess;bili_jct=jct;DedeUserID=uid;DedeUserID__ckMd5=md5"
+        );
+    }
+
+    #[test]
+    fn room_clients_are_reused_across_calls() {
+        bili_room_clients().expect("client pair should build");
+        let first = BILI_ROOM_CLIENTS.get().map(|(raw, _)| raw as *const _);
+        bili_room_clients().expect("client pair should build");
+        let second = BILI_ROOM_CLIENTS.get().map(|(raw, _)| raw as *const _);
+
+        // The pair is built once and handed out as clones of the same pool.
+        assert!(first.is_some());
+        assert_eq!(first, second);
     }
 }
