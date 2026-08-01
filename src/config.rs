@@ -13,7 +13,6 @@ use std::time::SystemTime;
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
     static ref CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.json");
-    static ref LEGACY_CONFIG_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "config.yaml");
     static ref COOKIES_PATH: PathBuf = sibling_file_path(&BILISTREAM_PATH, "cookies.json");
     static ref CONFIG_CACHE: RwLock<Option<ConfigCacheEntry>> = RwLock::new(None);
 }
@@ -300,145 +299,10 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     }
 
     // Try to load config.json first
-    let mut config = if CONFIG_PATH.exists() {
+    let mut config: Config = if CONFIG_PATH.exists() {
         let config_content = tokio::fs::read_to_string(&*CONFIG_PATH).await?;
         serde_json::from_str(&config_content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-    } else if LEGACY_CONFIG_PATH.exists() {
-        // Migrate from config.yaml to config.json
-        tracing::info!("Migrating config.yaml to config.json...");
-        let config_content = fs::read_to_string(&*LEGACY_CONFIG_PATH)?;
-
-        // Parse YAML with old field names
-        #[derive(Deserialize)]
-        struct LegacyConfig {
-            #[serde(rename = "AutoCover")]
-            auto_cover: bool,
-            #[serde(rename = "AntiCollision")]
-            enable_anti_collision: bool,
-            #[serde(rename = "Interval")]
-            interval: u64,
-            #[serde(rename = "BiliLive")]
-            bililive: LegacyBiliLive,
-            #[serde(rename = "Twitch")]
-            twitch: LegacyTwitch,
-            #[serde(rename = "Youtube")]
-            youtube: LegacyYoutube,
-            #[serde(rename = "Proxy")]
-            proxy: Option<String>,
-            #[serde(rename = "HolodexApiKey")]
-            holodex_api_key: Option<String>,
-            #[serde(rename = "RiotApiKey")]
-            riot_api_key: Option<String>,
-            #[serde(rename = "EnableLolMonitor")]
-            enable_lol_monitor: bool,
-            #[serde(rename = "LolMonitorInterval")]
-            lol_monitor_interval: Option<u64>,
-            #[serde(rename = "AntiCollisionList")]
-            anti_collision_list: HashMap<String, i32>,
-        }
-
-        #[derive(Deserialize)]
-        struct LegacyBiliLive {
-            #[serde(rename = "EnableDanmakuCommand")]
-            enable_danmaku_command: bool,
-            #[serde(rename = "Room")]
-            room: i32,
-            #[serde(rename = "BiliRtmpUrl")]
-            bili_rtmp_url: String,
-            #[serde(rename = "BiliRtmpKey")]
-            bili_rtmp_key: String,
-        }
-
-        #[derive(Deserialize)]
-        struct LegacyTwitch {
-            #[serde(rename = "ChannelName", default)]
-            channel_name: String,
-            #[serde(rename = "Area_v2", default)]
-            area_v2: u64,
-            #[serde(rename = "ChannelId", default)]
-            channel_id: String,
-            #[serde(rename = "ProxyRegion", default)]
-            proxy_region: String,
-            #[serde(rename = "Quality", default = "default_quality")]
-            quality: String,
-        }
-
-        #[derive(Deserialize)]
-        struct LegacyYoutube {
-            #[serde(rename = "ChannelName", default)]
-            channel_name: String,
-            #[serde(rename = "ChannelId", default)]
-            channel_id: String,
-            #[serde(rename = "Area_v2", default)]
-            area_v2: u64,
-            #[serde(rename = "Quality", default = "default_quality")]
-            quality: String,
-            #[serde(default)]
-            cookies_file: Option<String>,
-            #[serde(default)]
-            cookies_from_browser: Option<String>,
-        }
-
-        let legacy: LegacyConfig = serde_yaml::from_str(&config_content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        // Convert to new format
-        let new_config = Config {
-            auto_cover: legacy.auto_cover,
-            enable_anti_collision: legacy.enable_anti_collision,
-            interval: legacy.interval,
-            bililive: BiliLive {
-                enable_danmaku_command: legacy.bililive.enable_danmaku_command,
-                room: legacy.bililive.room,
-                bili_rtmp_url: legacy.bililive.bili_rtmp_url,
-                bili_rtmp_key: legacy.bililive.bili_rtmp_key,
-                credentials: Credentials::default(),
-            },
-            twitch: Twitch {
-                enable_monitor: true, // Default to enabled for migration
-                channel_name: legacy.twitch.channel_name,
-                area_v2: legacy.twitch.area_v2,
-                channel_id: legacy.twitch.channel_id,
-                proxy_region: legacy.twitch.proxy_region,
-                quality: legacy.twitch.quality,
-                proxy: None,
-                crop: None,
-                ffmpeg_cache: FfmpegCache::default(),
-            },
-            youtube: Youtube {
-                enable_monitor: true, // Default to enabled for migration
-                channel_name: legacy.youtube.channel_name,
-                channel_id: legacy.youtube.channel_id,
-                area_v2: legacy.youtube.area_v2,
-                quality: legacy.youtube.quality,
-                cookies_file: legacy.youtube.cookies_file,
-                cookies_from_browser: legacy.youtube.cookies_from_browser,
-                proxy: legacy.proxy,
-                deno_path: None,
-                crop: None,
-                ffmpeg_cache: FfmpegCache::default(),
-            },
-            holodex_api_key: legacy.holodex_api_key,
-            holodex_jwt: None,
-            holodex_jwt_refreshed_at: None,
-            holodex_username: None,
-            holodex_skip_jwt_verify: false,
-            riot_api_key: legacy.riot_api_key,
-            enable_lol_monitor: legacy.enable_lol_monitor,
-            lol_monitor_interval: legacy.lol_monitor_interval,
-            anti_collision_list: legacy.anti_collision_list,
-        };
-
-        // Save as JSON
-        save_config(&new_config).await?;
-
-        // Backup old config
-        let backup_path = LEGACY_CONFIG_PATH.with_extension("yaml.backup");
-        fs::rename(&*LEGACY_CONFIG_PATH, backup_path)?;
-        tracing::info!("Migration complete! config.yaml backed up as config.yaml.backup");
-
-        new_config
     } else {
         return Err("No config file found. Please run setup first.".into());
     };
