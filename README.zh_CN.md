@@ -11,7 +11,7 @@
 
 ## 下载
 
-**最新版本：v0.5.4**
+**最新版本：v0.6.0**
 
 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
 
@@ -37,6 +37,11 @@
   - 保留所有配置和用户数据
   - 更新后自动重启
 - **Web UI** - 现代化控制面板，用于监控和管理直播
+  - 明亮与暗色主题
+  - 推流时显示码率、帧率与流量实时曲线
+- **Holodex 集成** - 浏览 VTuber 直播并一键切换转播目标
+  - 可选登录 Holodex 以使用自己的收藏夹
+  - 为每个直播推荐匹配的哔哩哔哩分区
 - **网页版设置向导** - 通过浏览器完成首次配置（无需命令行！）
   - 浏览器中显示二维码登录
   - 分步引导式设置
@@ -44,6 +49,7 @@
 - **自动转播** - Twitch 和 YouTube 直播到哔哩哔哩
 - **预定直播** - 支持 YouTube 预定直播
 - **自动设置** - 自动更新哔哩哔哩直播标题、分区和封面
+- **推流调整** - 按平台配置画面裁剪与 HLS 缓存延迟推流
 - **弹幕命令** - 离线时通过聊天更改监控目标
 - **英雄联盟监控** - 玩家名称发现黑名单词汇时停止直播
 - **防撞车** - 避免转播已被转播的内容
@@ -83,6 +89,12 @@
    sudo apt update
    sudo apt install ffmpeg python3-pip
    pip install yt-dlp streamlink
+   ```
+
+   若要从源码编译，还需要 C 工具链以及 `cmake` 和 `nasm`（内置 TLS 后端编译时需要）：
+
+   ```bash
+   sudo apt install build-essential cmake nasm
    ```
 3. 安装 streamlink-ttvlol 插件：
    按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
@@ -231,10 +243,14 @@
   - 无需手动编辑 JSON 文件
   - 管理频道、分区和平台设置
 - 📊 实时状态仪表板（Bilibili、YouTube、Twitch）
+- 📈 实时流量曲线（码率、帧率、累计推送量）
+- 🎬 **Holodex 面板** - VTuber 直播列表，一键切换转播目标
+- ✂️ **推流调整** - 按平台裁剪画面并设置 HLS 缓存延迟
 - 🎮 一键直播控制
 - 💬 发送弹幕消息
 - 📺 频道管理
 - 🎯 分区下拉选择
+- 🌗 明亮与暗色主题
 - 📱 移动端友好界面
 
 ### 命令

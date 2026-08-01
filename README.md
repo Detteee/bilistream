@@ -11,7 +11,7 @@
 
 ## Download
 
-**Latest Release: v0.5.4**
+**Latest Release: v0.6.0**
 
 Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 
@@ -37,6 +37,11 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
   - Preserves all configuration and user data
   - Auto-restart after update
 - **Web UI** - Modern control panel for monitoring and managing streams
+  - Light and dark themes
+  - Live throughput graph with bitrate, FPS and frame counters while streaming
+- **Holodex Integration** - Browse live VTuber streams and switch the rebroadcast target in one click
+  - Optional Holodex login to use your own favourites
+  - Suggests a matching Bilibili area for each stream
 - **Web-Based Setup Wizard** - Complete first-run configuration through browser (no CLI needed!)
   - QR code login displayed in browser
   - Step-by-step guided setup
@@ -44,6 +49,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 - **Auto Rebroadcast** - Twitch and YouTube streams to Bilibili Live
 - **Scheduled Streams** - Support for YouTube scheduled streams
 - **Auto Settings** - Update Bilibili live title, area, and thumbnail automatically
+- **Stream Tuning** - Per-platform video crop and an HLS cache for delayed push
 - **Danmaku Commands** - Change monitoring target via chat when offline
 - **LoL Monitor** - Stop streaming if blacklisted words found in player names
 - **Anti-Collision** - Avoid rebroadcasting already-streamed content
@@ -83,6 +89,13 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    sudo apt update
    sudo apt install ffmpeg python3-pip
    pip install yt-dlp streamlink
+   ```
+
+   To build from source you also need a C toolchain plus `cmake` and `nasm`,
+   which the bundled TLS backend compiles against:
+
+   ```bash
+   sudo apt install build-essential cmake nasm
    ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
@@ -231,10 +244,14 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
   - No need to manually edit JSON files
   - Manage channels, areas, and platform settings
 - 📊 Real-time status dashboard (Bilibili, YouTube, Twitch)
+- 📈 Live throughput graph (bitrate, FPS, total pushed)
+- 🎬 **Holodex Panel** - Live VTuber streams with one-click target switching
+- ✂️ **Stream Tuning** - Crop the source video and set an HLS cache delay per platform
 - 🎮 One-click stream controls
 - 💬 Send danmaku messages
 - 📺 Channel management
 - 🎯 Area selection dropdown
+- 🌗 Light and dark themes
 - 📱 Mobile-friendly interface
 
 ### Commands
