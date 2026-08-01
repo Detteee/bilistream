@@ -14,10 +14,11 @@ use bilistream::plugins::{
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
     get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
-    set_manual_restart, should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
-    wait_config_update_or_timeout, was_manual_restart, was_manual_stop, FfmpegCacheOptions,
-    BILI_START_TEMP_BAN_PREFIX,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
+    resolve_priority_channel_liveness, run_danmaku, send_danmaku, set_manual_restart,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
+    FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
@@ -1371,67 +1372,10 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
         }
 
         // Check priority channel status on both platforms
-        let mut priority_is_live = false;
-        let mut priority_platform = None;
-        let mut priority_title = None;
-
-        // Check YouTube if configured
-        if !cfg.priority_channel.youtube_channel_id.is_empty() {
-            let yt_client = YoutubeClient::new(
-                &cfg.priority_channel.channel_name,
-                &cfg.priority_channel.youtube_channel_id,
-                cfg.youtube.proxy.clone(),
-            );
-
-            match yt_client.get_status().await {
-                Ok((is_live, _, title, _, _, _)) => {
-                    if is_live {
-                        priority_is_live = true;
-                        priority_platform = Some("YouTube");
-                        priority_title = title;
-                    }
-                }
-                Err(e) => {
-                    {
-                        let error_msg = format!("YouTube 状态检查失败: {}", e);
-                        tracing::warn!("优先频道监控: {}", error_msg);
-                    } // Error is dropped here
-                }
-            }
-        }
-
-        // Check Twitch if configured and YouTube is not live
-        if !priority_is_live && !cfg.priority_channel.twitch_channel_id.is_empty() {
-            let tw_client = match TwitchClient::new(
-                &cfg.priority_channel.twitch_channel_id,
-                cfg.twitch.proxy_region.clone(),
-                cfg.twitch.proxy.clone(),
-            ) {
-                Ok(client) => client,
-                Err(e) => {
-                    let error_msg = format!("Twitch 客户端初始化失败: {}", e);
-                    tracing::warn!("优先频道监控: {}", error_msg);
-                    tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
-                    continue;
-                }
-            };
-
-            match tw_client.get_status().await {
-                Ok((is_live, _, title, _, _, _)) => {
-                    if is_live {
-                        priority_is_live = true;
-                        priority_platform = Some("Twitch");
-                        priority_title = title;
-                    }
-                }
-                Err(e) => {
-                    {
-                        let error_msg = format!("Twitch 状态检查失败: {}", e);
-                        tracing::warn!("优先频道监控: {}", error_msg);
-                    } // Error is dropped here
-                }
-            }
-        }
+        let liveness = resolve_priority_channel_liveness(&cfg).await;
+        let priority_is_live = liveness.is_live();
+        let priority_platform = liveness.platform.map(|platform| platform.label());
+        let priority_title = liveness.title;
 
         // If priority channel is live, check for collision and potentially switch
         if priority_is_live {

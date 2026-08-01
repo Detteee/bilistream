@@ -188,61 +188,18 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
         return Err("Priority channel not configured".to_string());
     }
 
-    let (priority_yt_is_live, priority_yt_title): (bool, Option<String>) =
-        if !cfg.priority_channel.youtube_channel_id.is_empty() {
-            match crate::plugins::youtube::get_holodex_streams(
-                vec![cfg.priority_channel.youtube_channel_id.clone()],
-                false,
-            )
-            .await
-            {
-                Ok(streams) => {
-                    let own_channel_streams: Vec<_> = streams
-                        .iter()
-                        .filter(|s| s.channel.id == cfg.priority_channel.youtube_channel_id)
-                        .collect();
-
-                    if let Some(stream) = own_channel_streams.first() {
-                        (stream.status == "live", Some(stream.title.clone()))
-                    } else {
-                        (false, None)
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("Priority YouTube status refresh failed: {}", e);
-                    (false, None)
-                }
-            }
-        } else {
-            (false, None)
-        };
-
-    let (priority_tw_is_live, priority_tw_title): (bool, Option<String>) =
-        if !cfg.priority_channel.twitch_channel_id.is_empty() {
-            match crate::plugins::get_twitch_status(&cfg.priority_channel.twitch_channel_id).await {
-                Ok((is_live, _, title, _)) => (is_live, title),
-                Err(e) => {
-                    tracing::debug!("Priority Twitch status refresh failed: {}", e);
-                    (false, None)
-                }
-            }
-        } else {
-            (false, None)
-        };
-
-    let (is_live, platform, title) = if priority_yt_is_live {
-        (true, Some("youtube".to_string()), priority_yt_title)
-    } else if priority_tw_is_live {
-        (true, Some("twitch".to_string()), priority_tw_title)
-    } else {
-        (false, None, None)
-    };
+    // Same resolution the background monitor switches on.
+    let liveness = crate::plugins::resolve_priority_channel_liveness(cfg).await;
+    let platform = liveness
+        .platform
+        .map(|platform| platform.api_name().to_string());
+    let title = liveness.title;
 
     update_status_cache_with(|status| {
         status.priority_channel = Some(PriorityChannelStatus {
             enabled: cfg.priority_channel.enabled,
             channel_name: cfg.priority_channel.channel_name.clone(),
-            is_live,
+            is_live: platform.is_some(),
             platform,
             title,
             default_area: cfg.priority_channel.default_area,
