@@ -348,9 +348,14 @@ pub(crate) fn apply_effective_local_monitor_state(status: &mut StatusData, is_ac
     if let Some(twitch) = status.twitch.as_mut() {
         twitch.enable_monitor = false;
     }
-    // Priority-channel switches are shared desired configuration (synced via
-    // monitored config). Keep them visible on standby nodes; local ownership
-    // still fences runtime monitoring and stream execution.
+    // A standby runs no monitor at all, priority channel included: the main loop
+    // exits on local_monitoring_allowed() before it ever looks at these. The
+    // desired state still lives in config and travels with the next handoff, so
+    // reporting it here only made a demoted node look like it kept monitoring.
+    if let Some(priority) = status.priority_channel.as_mut() {
+        priority.enabled = false;
+        priority.auto_restart = false;
+    }
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
