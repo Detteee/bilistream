@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
-use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -290,9 +289,7 @@ impl BilibiliDanmakuClient {
         let param_string = encoded_params.join("&");
         let string_to_hash = format!("{}{}", param_string, mixin_key);
 
-        let mut hasher = Md5::new();
-        hasher.update(string_to_hash.as_bytes());
-        format!("{:x}", hasher.finalize())
+        crate::plugins::utils::md5_hex(&string_to_hash)
     }
 
     async fn get_wbi_keys(&self) -> Result<(String, String)> {

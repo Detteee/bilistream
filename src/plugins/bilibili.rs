@@ -3,7 +3,6 @@
 use crate::config::{save_config, Config, Credentials};
 use chrono::TimeZone;
 use lazy_static::lazy_static;
-use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use qrcode::QrCode;
 use reqwest::cookie::{CookieStore, Jar};
@@ -280,9 +279,7 @@ fn calculate_w_rid(params: &BTreeMap<&str, String>, mixin_key: &str) -> String {
     let string_to_hash = format!("{}{}", param_string, mixin_key);
 
     // Calculate MD5
-    let mut hasher = Md5::new();
-    hasher.update(string_to_hash.as_bytes());
-    format!("{:x}", hasher.finalize())
+    super::utils::md5_hex(&string_to_hash)
 }
 
 fn wbi_key_from_url(url: &str, field: &str) -> Result<String, io::Error> {
@@ -524,9 +521,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         .join("&");
 
     // Sign the query string with appsec
-    let mut hasher = Md5::new();
-    hasher.update(format!("{}{}", query_string, secret));
-    let sign = format!("{:x}", hasher.finalize());
+    let sign = super::utils::md5_hex(&format!("{}{}", query_string, secret));
 
     // Add sign to params
     params.insert("sign", sign.clone());
@@ -1002,9 +997,7 @@ impl Credential {
     }
 
     pub fn sign(&self, param: &str, app_sec: &str) -> String {
-        let mut hasher = Md5::new();
-        hasher.update(format!("{}{}", param, app_sec));
-        format!("{:x}", hasher.finalize())
+        super::utils::md5_hex(&format!("{}{}", param, app_sec))
     }
 
     async fn login_by_qrcode(&self, value: Value) -> Result<LoginInfo, Box<dyn Error>> {

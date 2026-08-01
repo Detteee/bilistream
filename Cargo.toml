@@ -37,11 +37,11 @@ tokio = { version = "1.36.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "chrono"] }
 cookie_store = "0.16"
-md-5 = "0.10"
+md-5 = "0.11"
 serde_urlencoded = "0.7"
-qrcode = "0.12.0"
+qrcode = "0.14"
 textwrap = "0.16"
-unicode-width = "0.1.11"
+unicode-width = "0.2"
 lazy_static = "1.4.0"
 percent-encoding = "2.3.1"
 # WebSocket and streaming dependencies for native danmaku client
@@ -53,16 +53,15 @@ brotli = "8.0.2"
 anyhow = "1.0"
 # Web UI dependencies
 axum = "0.8"
-tower = "0.4"
-tower-http = { version = "0.5", features = [
+tower = "0.5"
+tower-http = { version = "0.7", features = [
   "compression-br",
   "compression-gzip",
   "cors",
   "fs",
   "set-header",
 ] }
-mime_guess = "2.0"
-base64 = "0.22"
+base64 = "0.23"
 # Windows dependencies
 zip = "0.6"
 # System tray dependencies (platform-specific)

@@ -1,7 +1,20 @@
+use md5::{Digest, Md5};
 use std::error::Error;
+use std::fmt::Write as _;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Lowercase hex MD5, the digest form Bilibili's signed endpoints expect.
+pub fn md5_hex(input: &str) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(input.as_bytes());
+    let mut digest = String::with_capacity(32);
+    for byte in hasher.finalize() {
+        let _ = write!(digest, "{:02x}", byte);
+    }
+    digest
+}
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -176,5 +189,19 @@ pub fn set_high_priority(pid: u32) {
                 tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod md5_hex_tests {
+    use super::md5_hex;
+
+    #[test]
+    fn matches_known_digests() {
+        assert_eq!(md5_hex(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex("abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(md5_hex("k"), "8ce4b16b22b58894aa86c421e8759df3");
+        // Leading 0x0e byte: guards against a non-padded hex formatter.
+        assert_eq!(md5_hex("240610708"), "0e462097431906509019562988736854");
     }
 }
