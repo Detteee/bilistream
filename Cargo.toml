@@ -25,6 +25,9 @@ openssl = { version = "0.10.64", features = ["vendored"] }
 regex = "1.10.3"
 # charset/form/http2/multipart/system-proxy were unconditional in reqwest 0.11;
 # 0.13 moved them behind features that `default-features = false` would drop.
+# rustls-no-provider rather than rustls: the latter selects aws-lc-rs, which
+# needs cmake and nasm to build and whose symbol count broke the mingw link.
+# install_crypto_provider() picks the backend at startup instead.
 reqwest = { version = "0.13", default-features = false, features = [
   "charset",
   "cookies",
@@ -32,8 +35,13 @@ reqwest = { version = "0.13", default-features = false, features = [
   "http2",
   "json",
   "multipart",
-  "rustls",
+  "rustls-no-provider",
   "system-proxy",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
 ] }
 reqwest-middleware = { version = "0.5", features = ["form"] }
 reqwest-retry = "0.9"

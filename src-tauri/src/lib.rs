@@ -33,6 +33,8 @@ fn open_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    bilistream::install_crypto_provider();
+
     #[cfg(target_os = "linux")]
     init_display_backend();
 

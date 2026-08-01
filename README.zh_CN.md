@@ -90,12 +90,6 @@
    sudo apt install ffmpeg python3-pip
    pip install yt-dlp streamlink
    ```
-
-   若要从源码编译，还需要 C 工具链以及 `cmake` 和 `nasm`（内置 TLS 后端编译时需要）：
-
-   ```bash
-   sudo apt install build-essential cmake nasm
-   ```
 3. 安装 streamlink-ttvlol 插件：
    按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
 4. 构建项目：

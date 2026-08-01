@@ -2316,6 +2316,8 @@ async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    bilistream::install_crypto_provider();
+
     // On Windows, allocate a console for CLI and WebUI modes
     #[cfg(target_os = "windows")]
     {

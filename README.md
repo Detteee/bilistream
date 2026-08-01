@@ -90,13 +90,6 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    sudo apt install ffmpeg python3-pip
    pip install yt-dlp streamlink
    ```
-
-   To build from source you also need a C toolchain plus `cmake` and `nasm`,
-   which the bundled TLS backend compiles against:
-
-   ```bash
-   sudo apt install build-essential cmake nasm
-   ```
 3. Install the streamlink-ttvlol plugin:
    Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
 4. Build the project:

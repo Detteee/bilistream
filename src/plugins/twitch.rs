@@ -257,6 +257,7 @@ mod tests {
 
     #[test]
     fn twitch_constructor_returns_result() {
+        crate::install_crypto_provider();
         let client = Twitch::new("example", "asl".to_string(), None)
             .expect("Twitch client should be constructible");
 

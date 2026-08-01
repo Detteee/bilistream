@@ -1464,6 +1464,7 @@ mod tests {
 
     #[test]
     fn credential_constructor_returns_result() {
+        crate::install_crypto_provider();
         assert!(Credential::new().is_ok());
     }
 
@@ -1485,6 +1486,7 @@ mod tests {
 
     #[test]
     fn room_clients_are_reused_across_calls() {
+        crate::install_crypto_provider();
         bili_room_clients().expect("client pair should build");
         let first = BILI_ROOM_CLIENTS.get().map(|(raw, _)| raw as *const _);
         bili_room_clients().expect("client pair should build");
