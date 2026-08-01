@@ -139,6 +139,108 @@ impl Youtube {
     }
 }
 
+/// A scheduled stream stops counting as "next up" once it is this far ahead.
+const UPCOMING_HORIZON_HOURS: i64 = 30;
+
+/// The stream a channel is currently on: the live one if there is any,
+/// otherwise the soonest stream scheduled within the next 30 hours.
+///
+/// The monitor loop and the WebUI status refresh both resolve a channel through
+/// this, so they cannot disagree about which stream a channel is on.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct YoutubeChannelStatus {
+    pub is_live: bool,
+    pub topic: Option<String>,
+    pub title: Option<String>,
+    pub scheduled_start: Option<DateTime<Local>>,
+    pub video_id: Option<String>,
+}
+
+fn select_holodex_channel_status_at(
+    channel_id: &str,
+    streams: &[HolodexStream],
+    now: DateTime<chrono::Utc>,
+) -> YoutubeChannelStatus {
+    let channel_streams: Vec<&HolodexStream> = streams
+        .iter()
+        .filter(|s| s.channel.id == channel_id)
+        .collect();
+
+    if let Some(live) = channel_streams.iter().find(|s| s.status == "live") {
+        return YoutubeChannelStatus {
+            is_live: true,
+            topic: live.topic_id.clone(),
+            title: Some(live.title.clone()),
+            scheduled_start: None,
+            video_id: Some(live.id.clone()),
+        };
+    }
+
+    let horizon = now + chrono::Duration::hours(UPCOMING_HORIZON_HOURS);
+    let mut upcoming: Vec<&HolodexStream> = channel_streams
+        .iter()
+        .copied()
+        .filter(|s| {
+            if s.status != "upcoming" {
+                return false;
+            }
+            match s
+                .start_scheduled
+                .as_deref()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            {
+                Some(scheduled) => scheduled.with_timezone(&chrono::Utc) <= horizon,
+                // Keep streams whose schedule is missing or unparseable.
+                None => true,
+            }
+        })
+        .collect();
+
+    // RFC3339 timestamps from Holodex are UTC-normalised, so ordering the
+    // strings orders the schedule.
+    upcoming.sort_by(|a, b| match (&a.start_scheduled, &b.start_scheduled) {
+        (Some(time_a), Some(time_b)) => time_a.cmp(time_b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    let Some(next) = upcoming.first() else {
+        return YoutubeChannelStatus::default();
+    };
+
+    YoutubeChannelStatus {
+        is_live: false,
+        topic: next.topic_id.clone(),
+        title: Some(next.title.clone()),
+        scheduled_start: next.start_scheduled.as_deref().and_then(|t| {
+            DateTime::parse_from_rfc3339(t)
+                .ok()
+                .map(|dt| dt.with_timezone(&Local))
+        }),
+        video_id: Some(next.id.clone()),
+    }
+}
+
+pub fn select_holodex_channel_status(
+    channel_id: &str,
+    streams: &[HolodexStream],
+) -> YoutubeChannelStatus {
+    select_holodex_channel_status_at(channel_id, streams, chrono::Utc::now())
+}
+
+/// Channel status straight from Holodex, without resolving a playback URL.
+///
+/// Callers that only need to display what a channel is on (the WebUI status
+/// refresh) use this; the monitor loop goes through `get_youtube_status`, which
+/// adds yt-dlp m3u8 resolution on top of the same selection.
+pub async fn get_youtube_channel_status(
+    channel_id: &str,
+) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
+    let streams = get_holodex_streams(vec![channel_id.to_string()], false).await?;
+    Ok(select_holodex_channel_status(channel_id, &streams))
+}
+
 pub async fn get_youtube_status(
     channel_id: &str,
 ) -> Result<
@@ -181,97 +283,39 @@ pub async fn get_youtube_status(
     // Use the multi-channel function for single channel
     match get_holodex_streams(vec![channel_id.to_string()], false).await {
         Ok(streams) => {
-            // If streams is empty, it means the API worked but there are no live/scheduled streams
-            if streams.is_empty() {
-                // tracing::info!(
-                //     "No live or scheduled streams found for channel {} in Holodex",
-                //     channel_id
-                // );
-                return Ok((false, None, None, None, None, None));
-            }
+            let status = select_holodex_channel_status(channel_id, &streams);
 
-            // Find streams for this specific channel, prioritizing live over upcoming
-            let channel_streams: Vec<_> = streams
-                .iter()
-                .filter(|s| s.channel.id == channel_id)
-                .collect();
-
-            if channel_streams.is_empty() {
-                return Ok((false, None, None, None, None, None));
-            }
-
-            // First try to find a live stream
-            if let Some(live_stream) = channel_streams.iter().find(|s| s.status == "live") {
-                let topic = live_stream.topic_id.clone();
-                let title = Some(live_stream.title.clone());
-                let video_id = Some(live_stream.id.clone());
-
+            if status.is_live {
+                // Holodex knows the stream; yt-dlp resolves the playable URL and
+                // has the final say on whether it is actually live.
                 let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
                     channel_id,
                     proxy.clone(),
-                    title.clone(),
+                    status.title.clone(),
                     Some(&quality),
                     cookies_file,
                     cookies_from_browser,
                     deno_path,
                 )
                 .await?;
-                return Ok((is_live, topic, title, m3u8_url, None, video_id));
+                return Ok((
+                    is_live,
+                    status.topic,
+                    status.title,
+                    m3u8_url,
+                    None,
+                    status.video_id,
+                ));
             }
 
-            // No live stream found, check for upcoming streams
-            // Filter and sort upcoming streams by scheduled time (earliest first)
-            // Also filter out scheduled streams more than 30 hours in the future
-            let now = chrono::Utc::now();
-            let thirty_hours_later = now + chrono::Duration::hours(30);
-
-            let mut upcoming_streams: Vec<_> = channel_streams
-                .iter()
-                .filter(|s| {
-                    if s.status != "upcoming" {
-                        return false;
-                    }
-
-                    // Filter by time (within 30 hours)
-                    if let Some(ref scheduled_time) = s.start_scheduled {
-                        if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time)
-                        {
-                            let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
-                            // Only keep if scheduled within next 30 hours
-                            return scheduled_utc <= thirty_hours_later;
-                        }
-                    }
-                    // If we can't parse the time, keep it to be safe
-                    true
-                })
-                .collect();
-
-            if !upcoming_streams.is_empty() {
-                // Sort by scheduled time (earliest first)
-                upcoming_streams.sort_by(|a, b| match (&a.start_scheduled, &b.start_scheduled) {
-                    (Some(time_a), Some(time_b)) => time_a.cmp(time_b),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                });
-
-                // Pick the earliest scheduled stream
-                let upcoming_stream = upcoming_streams[0];
-                let topic = upcoming_stream.topic_id.clone();
-                let title = Some(upcoming_stream.title.clone());
-                let video_id = Some(upcoming_stream.id.clone());
-
-                let start_time = upcoming_stream.start_scheduled.as_ref().and_then(|t| {
-                    DateTime::parse_from_rfc3339(t)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Local))
-                });
-
-                return Ok((false, topic, title, None, start_time, video_id));
-            }
-
-            // No live or upcoming streams found
-            Ok((false, None, None, None, None, None))
+            Ok((
+                false,
+                status.topic,
+                status.title,
+                None,
+                status.scheduled_start,
+                status.video_id,
+            ))
         }
         Err(e) => {
             tracing::error!("Holodex API failed: {}, using yt-dlp", e);
@@ -444,6 +488,103 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::holodex::HolodexChannel;
+
+    fn holodex_stream(id: &str, status: &str, scheduled: Option<&str>) -> HolodexStream {
+        HolodexStream {
+            id: id.to_string(),
+            title: format!("{} title", id),
+            stream_type: "stream".to_string(),
+            topic_id: Some(format!("{} topic", id)),
+            published_at: None,
+            available_at: None,
+            status: status.to_string(),
+            start_scheduled: scheduled.map(str::to_string),
+            start_actual: None,
+            live_viewers: None,
+            channel: HolodexChannel {
+                id: "channel-id".to_string(),
+                ..Default::default()
+            },
+            link: None,
+            thumbnail: None,
+            placeholder_type: None,
+        }
+    }
+
+    fn at(rfc3339: &str) -> DateTime<chrono::Utc> {
+        DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn channel_status_prefers_the_live_stream_over_anything_scheduled() {
+        let streams = vec![
+            holodex_stream("upcoming-1", "upcoming", Some("2026-08-01T10:00:00Z")),
+            holodex_stream("live-1", "live", None),
+        ];
+
+        let status =
+            select_holodex_channel_status_at("channel-id", &streams, at("2026-08-01T09:00:00Z"));
+
+        assert!(status.is_live);
+        assert_eq!(status.video_id.as_deref(), Some("live-1"));
+        assert_eq!(status.scheduled_start, None);
+    }
+
+    #[test]
+    fn channel_status_picks_the_earliest_upcoming_stream() {
+        let streams = vec![
+            holodex_stream("later", "upcoming", Some("2026-08-01T20:00:00Z")),
+            holodex_stream("sooner", "upcoming", Some("2026-08-01T12:00:00Z")),
+        ];
+
+        let status =
+            select_holodex_channel_status_at("channel-id", &streams, at("2026-08-01T09:00:00Z"));
+
+        assert!(!status.is_live);
+        assert_eq!(status.video_id.as_deref(), Some("sooner"));
+        assert_eq!(status.title.as_deref(), Some("sooner title"));
+        assert!(status.scheduled_start.is_some());
+    }
+
+    #[test]
+    fn channel_status_ignores_streams_beyond_the_upcoming_horizon() {
+        let streams = vec![holodex_stream(
+            "far-off",
+            "upcoming",
+            Some("2026-08-03T09:00:00Z"),
+        )];
+
+        let status =
+            select_holodex_channel_status_at("channel-id", &streams, at("2026-08-01T09:00:00Z"));
+
+        assert_eq!(status, YoutubeChannelStatus::default());
+    }
+
+    #[test]
+    fn channel_status_keeps_upcoming_streams_without_a_parseable_schedule() {
+        let streams = vec![holodex_stream("no-schedule", "upcoming", None)];
+
+        let status =
+            select_holodex_channel_status_at("channel-id", &streams, at("2026-08-01T09:00:00Z"));
+
+        assert!(!status.is_live);
+        assert_eq!(status.video_id.as_deref(), Some("no-schedule"));
+        assert_eq!(status.scheduled_start, None);
+    }
+
+    #[test]
+    fn channel_status_ignores_other_channels() {
+        let mut other = holodex_stream("other-live", "live", None);
+        other.channel.id = "someone-else".to_string();
+
+        let status =
+            select_holodex_channel_status_at("channel-id", &[other], at("2026-08-01T09:00:00Z"));
+
+        assert_eq!(status, YoutubeChannelStatus::default());
+    }
 
     #[test]
     fn strip_scheduled_title_suffix_removes_yt_dlp_date_suffix() {

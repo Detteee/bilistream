@@ -95,42 +95,19 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
         return Err("YouTube channel not configured".to_string());
     }
 
-    let streams =
-        crate::plugins::holodex::get_holodex_streams(vec![cfg.youtube.channel_id.clone()], false)
-            .await
-            .map_err(|e| e.to_string())?;
-
-    let channel_streams: Vec<_> = streams
-        .iter()
-        .filter(|s| s.channel.id == cfg.youtube.channel_id)
-        .collect();
-
-    let (is_live, topic, title) = if let Some(live_stream) =
-        channel_streams.iter().find(|s| s.status == "live")
-    {
-        (
-            true,
-            live_stream.topic_id.clone(),
-            Some(live_stream.title.clone()),
-        )
-    } else if let Some(upcoming_stream) = channel_streams.iter().find(|s| s.status == "upcoming") {
-        (
-            false,
-            upcoming_stream.topic_id.clone(),
-            Some(upcoming_stream.title.clone()),
-        )
-    } else {
-        (false, None, None)
-    };
+    // Same selection the monitor loop runs on, minus the yt-dlp URL lookup.
+    let source = crate::plugins::get_youtube_channel_status(&cfg.youtube.channel_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
 
     update_status_cache_with(|status| {
         status.youtube = Some(YtStatus {
-            is_live,
-            title,
-            topic,
+            is_live: source.is_live,
+            title: source.title,
+            topic: source.topic,
             channel_name: cfg.youtube.channel_name.clone(),
             channel_id: cfg.youtube.channel_id.clone(),
             quality: cfg.youtube.quality.clone(),
