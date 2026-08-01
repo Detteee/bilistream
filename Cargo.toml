@@ -23,19 +23,25 @@ clap = { version = "4.5.1", features = ["derive", "cargo"] }
 clap_complete = "4.5.1"
 openssl = { version = "0.10.64", features = ["vendored"] }
 regex = "1.10.3"
-reqwest = { version = "0.11.24", default-features = false, features = [
+# charset/form/http2/multipart/system-proxy were unconditional in reqwest 0.11;
+# 0.13 moved them behind features that `default-features = false` would drop.
+reqwest = { version = "0.13", default-features = false, features = [
+  "charset",
   "cookies",
+  "form",
+  "http2",
   "json",
-  "rustls-tls",
+  "multipart",
+  "rustls",
+  "system-proxy",
 ] }
-reqwest-middleware = "0.2.4"
-reqwest-retry = "0.3.0"
+reqwest-middleware = { version = "0.5", features = ["form"] }
+reqwest-retry = "0.9"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = "1.0.113"
 tokio = { version = "1.36.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "chrono"] }
-cookie_store = "0.16"
 md-5 = "0.11"
 serde_urlencoded = "0.7"
 qrcode = "0.14"
