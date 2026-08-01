@@ -21,7 +21,6 @@ async-trait = "0.1.77"
 chrono = "0.4.34"
 clap = { version = "4.5.1", features = ["derive", "cargo"] }
 clap_complete = "4.5.1"
-openssl = { version = "0.10.64", features = ["vendored"] }
 regex = "1.10.3"
 # charset/form/http2/multipart/system-proxy were unconditional in reqwest 0.11;
 # 0.13 moved them behind features that `default-features = false` would drop.
@@ -58,7 +57,9 @@ unicode-width = "0.2"
 lazy_static = "1.4.0"
 percent-encoding = "2.3.1"
 # WebSocket and streaming dependencies for native danmaku client
-tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+# rustls-tls-native-roots keeps the OS trust store that native-tls used, and
+# reuses the process-wide ring provider from install_crypto_provider().
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 byteorder = "1.5"
 flate2 = "1.0"
