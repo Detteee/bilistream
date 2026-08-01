@@ -1303,12 +1303,14 @@ pub fn start_cluster_worker() {
             send_heartbeats(&client, &cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
             schedule_auto_owner_transition(&cfg, previous_owner, &status);
-            let local_may_run = local_monitoring_allowed(&cfg);
-            if !local_may_run && is_ffmpeg_running().await {
-                tracing::warn!("集群租约或心跳多数派已丢失，停止本节点 ffmpeg 推流");
-                set_manual_restart();
-                clear_local_stream();
-                stop_ffmpeg().await;
+            let block_reason = local_monitoring_block_reason(&cfg);
+            if let Some(reason) = block_reason {
+                if is_ffmpeg_running().await {
+                    tracing::warn!("{}，停止本节点 ffmpeg 推流", reason);
+                    set_manual_restart();
+                    clear_local_stream();
+                    stop_ffmpeg().await;
+                }
             }
 
             tokio::time::sleep(heartbeat_cycle_delay(
@@ -1469,14 +1471,44 @@ pub(crate) fn last_known_active_channel_targets() -> Option<ChannelTargetState> 
 }
 
 pub fn local_monitoring_allowed(cfg: &Config) -> bool {
+    local_monitoring_block_reason(cfg).is_none()
+}
+
+/// `None` means this node may keep monitoring/pushing; `Some(reason)` is a
+/// human-readable Chinese reason suitable for logging.
+fn local_monitoring_block_reason(cfg: &Config) -> Option<String> {
     if !cfg.cluster.enabled {
-        return true;
+        return None;
     }
-    let state = cluster_state_read();
-    state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
-        && !state.local_draining
-        && !local_effective_ddos_state(&state)
-        && state_has_fresh_quorum(&state, cfg, now_secs())
+    state_monitoring_block_reason(&cluster_state_read(), cfg, now_secs())
+}
+
+fn state_monitoring_block_reason(state: &ClusterState, cfg: &Config, now: u64) -> Option<String> {
+    if state.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
+        return Some(format!(
+            "本节点已不是集群活跃节点 (当前活跃节点: {})",
+            state.active_owner.as_deref().unwrap_or("无")
+        ));
+    }
+    if state.local_draining {
+        return Some("本节点处于排空(drain)状态".to_string());
+    }
+    if state.local_ddos {
+        return Some("本节点被标记为 DDoS/网络不稳定".to_string());
+    }
+    if state.local_fault_ddos || state.local_fault_latched {
+        return Some(format!(
+            "本节点已被判定故障 ({})",
+            state
+                .local_fault_reason
+                .as_deref()
+                .unwrap_or("node_fault_latched")
+        ));
+    }
+    if !state_has_fresh_quorum(state, cfg, now) {
+        return Some("集群心跳多数派已丢失".to_string());
+    }
+    None
 }
 
 fn local_has_fresh_quorum(cfg: &Config) -> bool {
@@ -1552,6 +1584,13 @@ pub fn record_external_api_result(success: bool) {
 
     record_recent_time(&mut state.local_external_api_failure_times, now);
     state.local_external_api_failures = state.local_external_api_failure_times.len() as u32;
+}
+
+/// Self-fencing (latching a local fault and stopping ffmpeg) is only useful when
+/// another node can take over. With 自动转移 off the operator owns failover, so a
+/// degraded node keeps pushing instead of fencing itself into a dead stream.
+fn fault_fencing_enabled(cfg: &Config) -> bool {
+    cfg.cluster.auto_failover
 }
 
 fn latch_local_fault(reason: impl Into<String>) {
@@ -1889,6 +1928,16 @@ async fn collect_local_snapshot(cfg: &Config, config_version: String) -> Cluster
 
     let stream_degraded = ffmpeg_restart_degraded(&cfg.cluster, failed_restarts);
     let external_api_degraded = external_api_degraded(&cfg.cluster, external_api_failures);
+    if !fault_fencing_enabled(cfg) && fault_latched {
+        // Fencing only exists to hand the stream to another node. With
+        // 自动转移 off there is nowhere to hand it to, so a latched fault would
+        // just kill this node's push forever.
+        let mut state = cluster_state_write();
+        clear_local_fault_latch(&mut state);
+        fault_latched = false;
+        fault_ddos = false;
+        fault_reason = None;
+    }
     if fault_latched
         && fault_reason.as_deref() == Some(NETWORK_ISOLATED_REASON)
         && !network_isolated
@@ -1900,7 +1949,10 @@ async fn collect_local_snapshot(cfg: &Config, config_version: String) -> Cluster
             fault_reason = None;
         }
     }
-    if (stream_degraded || external_api_degraded || network_isolated) && !fault_latched {
+    if fault_fencing_enabled(cfg)
+        && (stream_degraded || external_api_degraded || network_isolated)
+        && !fault_latched
+    {
         let reason = if network_isolated {
             NETWORK_ISOLATED_REASON
         } else if external_api_degraded {
@@ -4390,6 +4442,46 @@ mod tests {
         assert_eq!(state.local_fault_reason, None);
         assert!(state.local_ddos);
         assert!(local_effective_ddos_state(&state));
+    }
+
+    #[test]
+    fn fault_fencing_follows_auto_failover_setting() {
+        let mut cfg = test_config("a", 1);
+        assert!(fault_fencing_enabled(&cfg));
+
+        cfg.cluster.auto_failover = false;
+        assert!(!fault_fencing_enabled(&cfg));
+    }
+
+    #[test]
+    fn monitoring_block_reason_names_the_latched_fault() {
+        let cfg = test_config("a", 1);
+        let state = ClusterState {
+            active_owner: Some("a".to_string()),
+            local_fault_ddos: true,
+            local_fault_latched: true,
+            local_fault_reason: Some("ffmpeg_repeated_failures".to_string()),
+            ..ClusterState::default()
+        };
+
+        let reason = state_monitoring_block_reason(&state, &cfg, now_secs())
+            .expect("latched fault blocks monitoring");
+        assert!(reason.contains("ffmpeg_repeated_failures"), "{}", reason);
+        assert!(!reason.contains("多数派"), "{}", reason);
+    }
+
+    #[test]
+    fn monitoring_block_reason_is_none_for_healthy_single_node_owner() {
+        let cfg = test_config("a", 1);
+        let state = ClusterState {
+            active_owner: Some("a".to_string()),
+            ..ClusterState::default()
+        };
+
+        assert_eq!(
+            state_monitoring_block_reason(&state, &cfg, now_secs()),
+            None
+        );
     }
 
     #[test]
