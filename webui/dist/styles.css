@@ -1887,6 +1887,11 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 .cluster-node-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* Nodes carry very different amounts of detail - only the active one has a
+     stream and meters. Without this every card in a row is stretched to the
+     tallest, and each card's own grid then spreads its handful of rows across
+     that height. */
+  align-items: start;
   gap: var(--sp-3);
   padding: 0 var(--sp-4) var(--sp-4);
 }
@@ -1944,6 +1949,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
 .cluster-node-card {
   display: grid;
+  align-content: start;
   gap: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid var(--line);
@@ -2012,7 +2018,7 @@ a.cluster-node-name-link {
 /* Only pair the meters up once both fit without wrapping their detail rows;
    below that a single full-width column reads better than two cramped ones. */
 .cluster-node-network .bili-network-meters {
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: var(--sp-2) var(--sp-3);
   margin-top: 0;
 }
