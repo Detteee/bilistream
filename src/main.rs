@@ -2656,10 +2656,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // CLI mode: Check if setup is needed
             let config_path = std::env::current_exe()?.with_file_name("config.json");
-            let legacy_config_path = std::env::current_exe()?.with_file_name("config.yaml");
             let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
             let needs_setup =
-                (!config_path.exists() && !legacy_config_path.exists()) || !cookies_path.exists();
+                !config_path.exists() || !cookies_path.exists();
 
             if needs_setup {
                 println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
@@ -2698,21 +2697,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let config_path = std::env::current_exe()
                         .unwrap()
                         .with_file_name("config.json");
-                    let legacy_config_path = std::env::current_exe()
-                        .unwrap()
-                        .with_file_name("config.yaml");
                     let cookies_path = std::env::current_exe()
                         .unwrap()
                         .with_file_name("cookies.json");
 
-                    if !config_path.exists() && !legacy_config_path.exists() {
+                    if !config_path.exists() {
                         tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
                         tracing::info!("💡 请访问 Web UI 进行配置");
 
                         // Wait for config to be created
                         loop {
                             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            if config_path.exists() || legacy_config_path.exists() {
+                            if config_path.exists() {
                                 tracing::info!("✅ 检测到配置文件，开始监控");
                                 break;
                             }
@@ -2861,10 +2857,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 // Check if this is first run
                 let config_path = std::env::current_exe()?.with_file_name("config.json");
-                let legacy_config_path = std::env::current_exe()?.with_file_name("config.yaml");
                 let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-                let is_first_run = (!config_path.exists() && !legacy_config_path.exists())
-                    || !cookies_path.exists();
+                let is_first_run = !config_path.exists() || !cookies_path.exists();
 
                 // Initialize logger with capture for webui mode
                 init_logger_with_capture();
@@ -2917,21 +2911,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let config_path = std::env::current_exe()
                                 .unwrap()
                                 .with_file_name("config.json");
-                            let legacy_config_path = std::env::current_exe()
-                                .unwrap()
-                                .with_file_name("config.yaml");
                             let cookies_path = std::env::current_exe()
                                 .unwrap()
                                 .with_file_name("cookies.json");
 
-                            if !config_path.exists() && !legacy_config_path.exists() {
+                            if !config_path.exists() {
                                 tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
                                 tracing::info!("💡 请访问 Web UI 进行配置");
 
                                 // Wait for config to be created
                                 loop {
                                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                                    if config_path.exists() || legacy_config_path.exists() {
+                                    if config_path.exists() {
                                         tracing::info!("✅ 检测到配置文件，开始监控");
                                         break;
                                     }

@@ -10,13 +10,11 @@ pub struct SetupStatus {
 pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
     let exe_path = std::env::current_exe().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let config_path = exe_path.with_file_name("config.json");
-    let legacy_config_path = exe_path.with_file_name("config.yaml");
     let cookies_path = exe_path.with_file_name("cookies.json");
 
     let mut missing_files = Vec::new();
 
-    // Check for config.json or config.yaml
-    if !config_path.exists() && !legacy_config_path.exists() {
+    if !config_path.exists() {
         missing_files.push("config.json".to_string());
     }
 
