@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{interval, timeout, Duration, Instant};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async, tungstenite::Bytes, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::config::Config;
@@ -169,11 +169,12 @@ impl BilibiliDanmakuClient {
 
         // Send authentication
         let auth_packet = self.create_auth_packet()?;
-        ws_sender.send(Message::Binary(auth_packet)).await?;
+        ws_sender.send(Message::Binary(auth_packet.into())).await?;
 
         // Start heartbeat task
         let mut heartbeat_interval = interval(Duration::from_secs(30));
-        let heartbeat_packet = Self::create_heartbeat_packet()?;
+        // Held as Bytes so the per-tick clone below is a refcount bump, not a copy.
+        let heartbeat_packet: Bytes = Self::create_heartbeat_packet()?.into();
 
         // Track last activity for connection health monitoring
         let mut last_activity = Instant::now();
