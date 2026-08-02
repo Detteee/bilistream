@@ -1572,6 +1572,10 @@ input[type="checkbox"] {
   background: var(--line);
 }
 
+.bili-network-graph.single-sided::before {
+  display: none;
+}
+
 .bili-network-column {
   position: relative;
   flex: 1 1 0;
@@ -1599,6 +1603,13 @@ input[type="checkbox"] {
   border-radius: 0 0 2px 2px;
 }
 
+/* HLS cache off: grow push bars from the floor across the full plot. */
+.bili-network-graph.single-sided .bili-network-bar.push {
+  top: auto;
+  bottom: 0;
+  border-radius: 2px 2px 0 0;
+}
+
 .bili-network-bar.active {
   opacity: 0.92;
 }
@@ -1608,6 +1619,10 @@ input[type="checkbox"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-3);
   margin-top: var(--sp-3);
+}
+
+.bili-network-graph.single-sided ~ .bili-network-meters {
+  grid-template-columns: 1fr;
 }
 
 .bili-network-meter {

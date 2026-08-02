@@ -3562,6 +3562,9 @@
           return;
         }
 
+        // Cache on: mirrored halves. Cache off: full-height single-sided push bars.
+        graph.classList.toggle('single-sided', !showCache);
+
         const activeSeries = showCache
           ? biliNetworkHistory.cache.concat(biliNetworkHistory.push)
           : biliNetworkHistory.push;
@@ -3575,13 +3578,14 @@
         const pushSeries = biliNetworkHistory.push.slice(pushStart);
         const cacheStart = Math.max(0, biliNetworkHistory.cache.length - graphWidth);
         const cacheSeries = biliNetworkHistory.cache.slice(cacheStart);
+        const heightScale = showCache ? 50 : 100;
         const fragment = document.createDocumentFragment();
 
         for (let i = 0; i < graphWidth; i += 1) {
           const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
           const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
-          const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * 50)) : 0;
-          const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * 50));
+          const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * heightScale)) : 0;
+          const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * heightScale));
 
           const column = document.createElement('span');
           column.className = 'bili-network-column';
