@@ -1034,9 +1034,15 @@
           return `即将开播 (${clock})`;
         }
 
+        const diffMinutes = diffMs / (1000 * 60);
+        if (diffMinutes < 60) {
+          const minutes = Math.max(1, Math.ceil(diffMinutes));
+          return `将在 ${minutes} 分钟内开播 (${clock})`;
+        }
+
         const diffHours = diffMs / (1000 * 60 * 60);
         if (diffHours < 24) {
-          const hours = Math.max(1, Math.ceil(diffHours));
+          const hours = Math.ceil(diffHours);
           return `将在 ${hours} 小时内开播 (${clock})`;
         }
 

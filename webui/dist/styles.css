@@ -1833,7 +1833,7 @@ input[type="checkbox"] {
   padding-inline: var(--sp-3);
   transform: translateX(-50%);
   background: var(--surface-2);
-  color: var(--text-mute);
+  color: var(--text-dim);
   font-size: var(--fs-sm);
   font-weight: 600;
 }
