@@ -645,7 +645,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             .iter()
             .find(|keyword| live_topic_title.contains(keyword.as_str()))
         {
-            tracing::error!("直播标题/分区包含不支持的关键词:\n{}", live_topic_title);
+            tracing::error!(
+                "直播标题/分区包含不支持的关键词: {} | {}",
+                keyword,
+                live_topic_title
+            );
             let _ = bilibili::send_danmaku(
                 &cfg,
                 &format!("错误：{} 的标题/分区含:{}", platform, keyword),
