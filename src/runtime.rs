@@ -15,7 +15,7 @@ use bilistream::plugins::{
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
     get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
-    resolve_priority_channel_liveness, run_danmaku, send_danmaku, set_manual_restart,
+    resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
     FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
@@ -1371,8 +1371,11 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
             break;
         }
 
-        // Check priority channel status on both platforms
-        let liveness = resolve_priority_channel_liveness(&cfg).await;
+        // Check priority channel status on both platforms. Metadata alone is not
+        // enough to switch on: it says "live" both before a scheduled stream
+        // really starts and after one ends, so the switch waits for a playable
+        // stream URL.
+        let liveness = resolve_playable_priority_channel(&cfg).await;
         let priority_is_live = liveness.is_live();
         let priority_platform = liveness.platform.map(|platform| platform.label());
         let priority_title = liveness.title;

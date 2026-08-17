@@ -188,7 +188,9 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
         return Err("Priority channel not configured".to_string());
     }
 
-    // Same resolution the background monitor switches on.
+    // Metadata only: the panel shows what the platforms report, while the
+    // background monitor additionally confirms a playable stream URL before it
+    // switches, so the panel can read live slightly before a switch happens.
     let liveness = crate::plugins::resolve_priority_channel_liveness(cfg).await;
     let platform = liveness
         .platform

@@ -1,7 +1,7 @@
 use crate::config::Config;
 
-use super::twitch::get_twitch_status;
-use super::youtube::get_youtube_channel_metadata;
+use super::twitch::{get_twitch_status, Twitch};
+use super::youtube::{get_youtube_channel_metadata, get_youtube_status};
 
 /// The platform the priority channel turned out to be live on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +43,11 @@ impl PriorityChannelLiveness {
 
 /// Resolve whether the configured priority channel is live, preferring YouTube.
 ///
-/// The background monitor and the WebUI status refresh both go through this, so
-/// the panel and the switching decision always agree. Only metadata is fetched:
-/// neither yt-dlp nor streamlink is asked for a playable URL, which the callers
-/// discarded anyway.
+/// Only metadata is fetched: neither yt-dlp nor streamlink is asked for a
+/// playable URL. That keeps the WebUI's frequent status polling cheap, but it
+/// also means the answer is only as fresh as the upstream APIs — see
+/// [`resolve_playable_priority_channel`], which the auto-switch decision uses
+/// instead.
 ///
 /// A platform that errors is reported as offline, matching what both callers
 /// did before.
@@ -74,6 +75,86 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("优先频道监控: Twitch 状态检查失败: {}", e),
+        }
+    }
+
+    PriorityChannelLiveness::default()
+}
+
+/// A platform is worth switching to only when it reports live *and* hands over a
+/// playable URL.
+fn playable_liveness(
+    platform: PriorityChannelPlatform,
+    is_live: bool,
+    title: Option<String>,
+    m3u8_url: Option<String>,
+) -> Option<PriorityChannelLiveness> {
+    if !is_live {
+        return None;
+    }
+
+    if m3u8_url.is_none_or(|url| url.is_empty()) {
+        tracing::info!(
+            "优先频道监控: {} 显示开播但拿不到可播放的流地址，暂不切换",
+            platform.label()
+        );
+        return None;
+    }
+
+    Some(PriorityChannelLiveness {
+        platform: Some(platform),
+        title: title.filter(|title| !title.is_empty()),
+    })
+}
+
+/// Resolve the priority channel to a stream ffmpeg can actually play right now.
+///
+/// [`resolve_priority_channel_liveness`] answers from metadata alone, and that
+/// lags reality in both directions: Holodex flips a scheduled stream to live at
+/// its scheduled time even while the streamer is still holding off, and keeps a
+/// finished stream marked live for a while after it ends. Switching on metadata
+/// alone therefore tears down a working restream for a channel with nothing to
+/// play, and bounces back to a priority channel that just went off air.
+///
+/// yt-dlp/streamlink do not lag, so the auto-switch decision goes through this
+/// instead. Metadata is still the first gate — the extra yt-dlp/streamlink call
+/// only happens once a switch is actually on the table. The resolved URL is
+/// discarded: the main loop resolves its own after the restart, and this one
+/// would be stale by then anyway.
+///
+/// A platform that errors, or that reports live without a URL, is treated as not
+/// switchable, and the next platform still gets its turn.
+pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelLiveness {
+    if !cfg.priority_channel.youtube_channel_id.is_empty() {
+        match get_youtube_status(&cfg.priority_channel.youtube_channel_id).await {
+            Ok((is_live, _, title, m3u8_url, _, _)) => {
+                if let Some(liveness) =
+                    playable_liveness(PriorityChannelPlatform::Youtube, is_live, title, m3u8_url)
+                {
+                    return liveness;
+                }
+            }
+            Err(e) => tracing::warn!("优先频道监控: YouTube 流地址获取失败: {}", e),
+        }
+    }
+
+    if !cfg.priority_channel.twitch_channel_id.is_empty() {
+        match Twitch::new(
+            &cfg.priority_channel.twitch_channel_id,
+            cfg.twitch.proxy_region.clone(),
+            cfg.twitch.proxy.clone(),
+        ) {
+            Ok(client) => match client.get_status().await {
+                Ok((is_live, _, title, m3u8_url, _, _)) => {
+                    if let Some(liveness) =
+                        playable_liveness(PriorityChannelPlatform::Twitch, is_live, title, m3u8_url)
+                    {
+                        return liveness;
+                    }
+                }
+                Err(e) => tracing::warn!("优先频道监控: Twitch 流地址获取失败: {}", e),
+            },
+            Err(e) => tracing::warn!("优先频道监控: Twitch 客户端初始化失败: {}", e),
         }
     }
 
@@ -109,5 +190,72 @@ mod tests {
         };
 
         assert!(liveness.is_live());
+    }
+
+    #[test]
+    fn a_platform_reporting_offline_is_not_switchable() {
+        assert_eq!(
+            playable_liveness(
+                PriorityChannelPlatform::Youtube,
+                false,
+                Some("stream".to_string()),
+                Some("https://example.com/live.m3u8".to_string()),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn live_metadata_without_a_stream_url_is_not_switchable() {
+        // Holodex marks a scheduled stream live at its scheduled time, and keeps
+        // an ended one live for a while: without a URL there is nothing to play.
+        assert_eq!(
+            playable_liveness(
+                PriorityChannelPlatform::Youtube,
+                true,
+                Some("stream".to_string()),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            playable_liveness(
+                PriorityChannelPlatform::Twitch,
+                true,
+                Some("stream".to_string()),
+                Some(String::new()),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn live_metadata_with_a_stream_url_switches() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Twitch,
+            true,
+            Some("stream".to_string()),
+            Some("https://example.com/live.m3u8".to_string()),
+        )
+        .expect("a live platform with a stream URL is switchable");
+
+        assert!(liveness.is_live());
+        assert_eq!(liveness.platform, Some(PriorityChannelPlatform::Twitch));
+        assert_eq!(liveness.title.as_deref(), Some("stream"));
+    }
+
+    #[test]
+    fn an_empty_title_is_reported_as_missing() {
+        // Twitch fills a missing title in with an empty string; callers log it
+        // as "无标题" only when it is None.
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Twitch,
+            true,
+            Some(String::new()),
+            Some("https://example.com/live.m3u8".to_string()),
+        )
+        .expect("a live platform with a stream URL is switchable");
+
+        assert_eq!(liveness.title, None);
     }
 }
