@@ -235,45 +235,64 @@ code {
 html.light-theme {
   color-scheme: light;
 
-  --bg: #f1f3fa;
-  --bg-glow-1: color-mix(in srgb, #4c6ef5 10%, transparent);
-  --bg-glow-2: color-mix(in srgb, #9775fa 9%, transparent);
-  --surface-1: #ffffff;
-  --surface-2: #ffffff;
-  --surface-3: #f4f6fc;
-  --surface-4: #e8ecf7;
-  --line: #e0e5f0;
-  --line-strong: #c8cfe0;
+  /* Warm paper: cream/stone instead of ice-white so the page does not glare. */
+  --bg: #d8d1c3;
+  --bg-glow-1: color-mix(in srgb, #8a7b5e 10%, transparent);
+  --bg-glow-2: color-mix(in srgb, #7d6e82 7%, transparent);
+  --surface-1: #e6dfd2;
+  --surface-2: #eee7da;
+  --surface-3: #e0d8cb;
+  --surface-4: #d2cabd;
+  --line: #c6bdad;
+  --line-strong: #b0a694;
 
-  --text: #1b2138;
-  --text-dim: #4a5372;
-  --text-mute: #79829e;
-  --text-on-accent: #ffffff;
+  --text: #3d3830;
+  --text-dim: #5c564b;
+  --text-mute: #6e675b;
+  --text-on-accent: #f3ede3;
 
-  --brand: #3b5bdb;
-  --brand-hi: #2f49b8;
-  --brand-2: #7048e8;
-  --ok: #1f9254;
-  --warn: #b06f00;
-  --danger: #d33b57;
-  --info: #0b7ea8;
-  --teal: #0d8b7c;
-  --live: #e03252;
+  --brand: #4a5d82;
+  --brand-hi: #3e5072;
+  --brand-2: #6a5780;
+  --ok: #4a7a56;
+  --warn: #9a6a28;
+  --danger: #a84e52;
+  --info: #3f6f80;
+  --teal: #3d746c;
+  --live: #b84a56;
 
-  --bilibili: #e0558a;
-  --youtube: #e0313f;
-  --twitch: #7d4ce0;
+  --bilibili: #b85d74;
+  --youtube: #b54c48;
+  --twitch: #6a5894;
 
-  /* Mid-tone stops, not the darker text accents, so the sweep stays legible
-     on the pale panel without going muddy. */
-  --net-cache-start: #f0a92a;
-  --net-cache-end: #2aa36b;
-  --net-push-start: #12a594;
-  --net-push-end: #4763d6;
+  /* Mid-tone stops on cream, not neon, so the sweep stays readable. */
+  --net-cache-start: #c4923a;
+  --net-cache-end: #4a8f62;
+  --net-push-start: #3d8278;
+  --net-push-end: #4a6494;
 
-  --sh-1: 0 1px 2px rgba(27, 33, 56, 0.08);
-  --sh-2: 0 4px 16px rgba(27, 33, 56, 0.09);
-  --sh-3: 0 18px 48px rgba(27, 33, 56, 0.16);
+  --sh-1: 0 1px 2px rgba(61, 56, 48, 0.08);
+  --sh-2: 0 4px 16px rgba(61, 56, 48, 0.10);
+  --sh-3: 0 18px 48px rgba(61, 56, 48, 0.16);
+}
+
+/* Do not pump saturation or overlay with cold black on the cream page. */
+html.light-theme .appbar,
+html.light-theme .tabbar {
+  backdrop-filter: blur(14px) saturate(108%);
+  -webkit-backdrop-filter: blur(14px) saturate(108%);
+}
+
+html.light-theme .modal,
+html.light-theme .area-modal,
+html.light-theme .holodex-login-modal,
+html.light-theme .face-auth-modal,
+html.light-theme .crop-modal {
+  background: rgba(52, 46, 38, 0.42);
+}
+
+html.light-theme .btn-fill:hover:not(:disabled) {
+  filter: brightness(1.04);
 }
 
 /* Ambient background wash — cheap, fixed, non-repainting. */
