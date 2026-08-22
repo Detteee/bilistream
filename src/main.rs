@@ -518,17 +518,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 title: bili_title.clone(),
                 area_id: bili_area_id,
                 area_name: bili_area_name,
-                stream_quality: None,
-                stream_speed: None,
-                stream_cache_speed: None,
-                stream_bitrate_kbps: None,
-                stream_cache_bitrate_kbps: None,
-                stream_fps: None,
-                stream_frame: None,
-                stream_total_bytes: 0,
-                stream_cache_total_bytes: 0,
-                hls_cache_active: false,
                 enable_danmaku_command: cfg.bililive.enable_danmaku_command,
+                ..Default::default()
             },
             youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
                 let yt_area_name = get_area_name(cfg.youtube.area_v2)

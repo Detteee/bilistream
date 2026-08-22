@@ -152,18 +152,44 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
     Ok(())
 }
 
-pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
+pub(crate) fn current_network_status() -> NetworkStatus {
     let hls_cache_active = is_ffmpeg_hls_cache_active();
-    let stream_speed = get_ffmpeg_speed();
-    let stream_cache_speed = if hls_cache_active {
-        get_ffmpeg_cache_speed()
-    } else {
-        None
-    };
     let network_stats = get_ffmpeg_network_stats();
+    NetworkStatus {
+        stream_speed: get_ffmpeg_speed(),
+        stream_cache_speed: if hls_cache_active {
+            get_ffmpeg_cache_speed()
+        } else {
+            None
+        },
+        stream_bitrate_kbps: network_stats.push_bitrate_kbps,
+        stream_cache_bitrate_kbps: if hls_cache_active {
+            network_stats.cache_bitrate_kbps
+        } else {
+            None
+        },
+        stream_fps: network_stats.push_fps,
+        stream_frame: network_stats.push_frame,
+        stream_total_bytes: network_stats.push_total_bytes,
+        stream_cache_total_bytes: if hls_cache_active {
+            network_stats.cache_total_bytes
+        } else {
+            0
+        },
+        hls_cache_active,
+        stream_bitrate_history: network_stats.push_bitrate_history,
+        stream_cache_bitrate_history: if hls_cache_active {
+            network_stats.cache_bitrate_history
+        } else {
+            Vec::new()
+        },
+    }
+}
 
+pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
+    let network = current_network_status();
     bili.stream_quality = if bili.is_live {
-        stream_speed.map(|speed| {
+        network.stream_speed.map(|speed| {
             if speed > 0.97 {
                 "流畅".to_string()
             } else if speed > 0.94 {
@@ -175,23 +201,7 @@ pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
     } else {
         None
     };
-    bili.stream_speed = stream_speed;
-    bili.stream_cache_speed = stream_cache_speed;
-    bili.stream_bitrate_kbps = network_stats.push_bitrate_kbps;
-    bili.stream_cache_bitrate_kbps = if hls_cache_active {
-        network_stats.cache_bitrate_kbps
-    } else {
-        None
-    };
-    bili.stream_fps = network_stats.push_fps;
-    bili.stream_frame = network_stats.push_frame;
-    bili.stream_total_bytes = network_stats.push_total_bytes;
-    bili.stream_cache_total_bytes = if hls_cache_active {
-        network_stats.cache_total_bytes
-    } else {
-        0
-    };
-    bili.hls_cache_active = hls_cache_active;
+    bili.apply_network(network);
 }
 
 pub async fn get_status() -> impl IntoResponse {
@@ -239,34 +249,9 @@ pub async fn get_status() -> impl IntoResponse {
 }
 
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
-    let hls_cache_active = is_ffmpeg_hls_cache_active();
-    let network_stats = get_ffmpeg_network_stats();
-
     Json(ApiResponse {
         success: true,
-        data: Some(NetworkStatus {
-            stream_speed: get_ffmpeg_speed(),
-            stream_cache_speed: if hls_cache_active {
-                get_ffmpeg_cache_speed()
-            } else {
-                None
-            },
-            stream_bitrate_kbps: network_stats.push_bitrate_kbps,
-            stream_cache_bitrate_kbps: if hls_cache_active {
-                network_stats.cache_bitrate_kbps
-            } else {
-                None
-            },
-            stream_fps: network_stats.push_fps,
-            stream_frame: network_stats.push_frame,
-            stream_total_bytes: network_stats.push_total_bytes,
-            stream_cache_total_bytes: if hls_cache_active {
-                network_stats.cache_total_bytes
-            } else {
-                0
-            },
-            hls_cache_active,
-        }),
+        data: Some(current_network_status()),
         message: None,
     })
 }

@@ -192,7 +192,7 @@ pub fn is_ffmpeg_hls_cache_active() -> bool {
     FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed)
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FfmpegNetworkStats {
     pub push_bitrate_kbps: Option<f32>,
     pub cache_bitrate_kbps: Option<f32>,
@@ -200,9 +200,12 @@ pub struct FfmpegNetworkStats {
     pub push_frame: Option<u64>,
     pub push_total_bytes: u64,
     pub cache_total_bytes: u64,
+    pub push_bitrate_history: Vec<f32>,
+    pub cache_bitrate_history: Vec<f32>,
 }
 
 pub fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
+    let (push_bitrate_history, cache_bitrate_history) = snapshot_bitrate_history();
     FfmpegNetworkStats {
         push_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS),
         cache_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS),
@@ -210,6 +213,8 @@ pub fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
         push_frame: optional_u64_from_atomic(&FFMPEG_PUSH_FRAME),
         push_total_bytes: FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
         cache_total_bytes: FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
+        push_bitrate_history,
+        cache_bitrate_history,
     }
 }
 
@@ -614,7 +619,7 @@ impl FfmpegStatsDisplay {
                 merge_stats_sample(merged, sample);
             }
         }
-        self.render();
+        self.record();
     }
 
     fn update_cache_bitrate(&mut self, bitrate_kbps: f32) {
@@ -626,6 +631,11 @@ impl FfmpegStatsDisplay {
             sample.bitrate = None;
             sample.bitrate_kbps = None;
         }
+        self.record();
+    }
+
+    fn record(&mut self) {
+        self.sample_history();
         self.render();
     }
 
@@ -633,7 +643,6 @@ impl FfmpegStatsDisplay {
         if !self.enabled {
             return;
         }
-        self.sample_history();
 
         let scale_kbps = self
             .cache_history
@@ -800,6 +809,17 @@ fn push_history_sample(history: &mut Vec<f32>, value: f32) {
     if history.len() > NETWORK_HISTORY_LIMIT {
         history.remove(0);
     }
+}
+
+fn snapshot_bitrate_history() -> (Vec<f32>, Vec<f32>) {
+    let display = match FFMPEG_STATS_DISPLAY.lock() {
+        Ok(display) => display,
+        Err(poisoned) => {
+            tracing::warn!("Recovering poisoned ffmpeg stats display");
+            poisoned.into_inner()
+        }
+    };
+    (display.push_history.clone(), display.cache_history.clone())
 }
 
 #[derive(Clone, Copy)]
@@ -1897,6 +1917,58 @@ mod tests {
         assert_eq!(push.frame, Some(120));
         assert_eq!(push.bitrate.as_deref(), Some("6.00 Mb/s"));
         assert_eq!(push.bitrate_kbps, Some(6_000.0));
+    }
+
+    #[test]
+    fn network_history_is_sampled_without_a_tty() {
+        let mut display = FfmpegStatsDisplay {
+            enabled: false,
+            ..FfmpegStatsDisplay::default()
+        };
+
+        display.update(
+            FfmpegStatsRole::Push,
+            FfmpegStatsSample {
+                bitrate: Some("1.50 Mb/s".to_string()),
+                bitrate_kbps: Some(1_500.0),
+                time: Some("00:00:01.00".to_string()),
+                stream_time_secs: Some(1),
+                speed: Some(1.0),
+                ..FfmpegStatsSample::default()
+            },
+        );
+
+        assert_eq!(display.push_history, vec![1_500.0]);
+        assert_eq!(display.cache_history, vec![0.0]);
+        assert_eq!(display.rendered_lines, 0);
+    }
+
+    #[test]
+    fn network_history_caps_at_limit() {
+        let mut display = FfmpegStatsDisplay {
+            enabled: false,
+            ..FfmpegStatsDisplay::default()
+        };
+
+        for index in 0..(NETWORK_HISTORY_LIMIT + 5) {
+            display.last_history_sample_ms = 0;
+            display.update(
+                FfmpegStatsRole::Push,
+                FfmpegStatsSample {
+                    bitrate_kbps: Some(index as f32),
+                    time: Some("00:00:01.00".to_string()),
+                    stream_time_secs: Some(1),
+                    ..FfmpegStatsSample::default()
+                },
+            );
+        }
+
+        assert_eq!(display.push_history.len(), NETWORK_HISTORY_LIMIT);
+        assert_eq!(display.push_history[0], 5.0);
+        assert_eq!(
+            display.push_history[NETWORK_HISTORY_LIMIT - 1],
+            (NETWORK_HISTORY_LIMIT + 4) as f32
+        );
     }
 
     #[test]

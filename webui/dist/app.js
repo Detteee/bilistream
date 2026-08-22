@@ -13,8 +13,7 @@
       let networkRefreshInFlight = false;
       let lastBiliNetworkLive = false;
       let lastBiliNetworkQuality = null;
-      const biliNetworkHistory = { cache: [], push: [] };
-      const biliNetworkHistoryLimit = 48;
+      const biliNetworkHistoryLimit = 60;
       let faceAuthUrl = null;
       let holodexCurrentSource = 'channels';
       let holodexStreamsRequested = false;
@@ -3711,11 +3710,16 @@
         });
       }
 
-      function pushBiliNetworkSample(series, value) {
-        series.push(Number.isFinite(value) && value > 0 ? value : 0);
-        if (series.length > biliNetworkHistoryLimit) {
-          series.splice(0, series.length - biliNetworkHistoryLimit);
+      function asBitrateHistory(values) {
+        if (!Array.isArray(values)) {
+          return [];
         }
+        return values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+      }
+
+      function sliceNetworkHistory(series, width) {
+        const start = Math.max(0, series.length - width);
+        return series.slice(start);
       }
 
       function formatNetworkRate(kbps) {
@@ -3764,7 +3768,7 @@
         return bar;
       }
 
-      function renderBiliNetworkGraph(showCache) {
+      function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
         const graph = document.getElementById('bili-network-graph');
         if (!graph) {
           return;
@@ -3774,18 +3778,16 @@
         graph.classList.toggle('single-sided', !showCache);
 
         const activeSeries = showCache
-          ? biliNetworkHistory.cache.concat(biliNetworkHistory.push)
-          : biliNetworkHistory.push;
+          ? cacheHistory.concat(pushHistory)
+          : pushHistory;
         const maxRate = Math.max(1, ...activeSeries);
         const scale = document.getElementById('bili-network-scale');
         if (scale) {
           scale.textContent = `Scale ${formatNetworkRate(maxRate)}`;
         }
         const graphWidth = window.matchMedia('(max-width: 520px)').matches ? 32 : biliNetworkHistoryLimit;
-        const pushStart = Math.max(0, biliNetworkHistory.push.length - graphWidth);
-        const pushSeries = biliNetworkHistory.push.slice(pushStart);
-        const cacheStart = Math.max(0, biliNetworkHistory.cache.length - graphWidth);
-        const cacheSeries = biliNetworkHistory.cache.slice(cacheStart);
+        const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
+        const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
         const heightScale = showCache ? 50 : 100;
         const fragment = document.createDocumentFragment();
 
@@ -3832,8 +3834,8 @@
         }
 
         panel.classList.remove('hidden');
-        pushBiliNetworkSample(biliNetworkHistory.push, bili.stream_bitrate_kbps);
-        pushBiliNetworkSample(biliNetworkHistory.cache, hasCache ? bili.stream_cache_bitrate_kbps : 0);
+        const pushHistory = asBitrateHistory(bili.stream_bitrate_history);
+        const cacheHistory = hasCache ? asBitrateHistory(bili.stream_cache_bitrate_history) : [];
 
         const quality = document.getElementById('bili-network-quality');
         quality.textContent = lastBiliNetworkQuality || 'Live';
@@ -3859,7 +3861,7 @@
           });
         }
 
-        renderBiliNetworkGraph(hasCache);
+        renderBiliNetworkGraph(hasCache, pushHistory, cacheHistory);
       }
 
       function updateBiliNetworkMeter(kind, metrics) {
