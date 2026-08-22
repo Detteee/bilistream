@@ -4,9 +4,7 @@ use super::election::configured_node_ids;
 use super::state::{cluster_state_read, cluster_state_write, now_secs, ClusterState};
 use super::types::*;
 use crate::config::{ClusterConfig, Config};
-use crate::plugins::{
-    get_ffmpeg_network_stats, get_ffmpeg_speed, is_ffmpeg_hls_cache_active, is_ffmpeg_running,
-};
+use crate::plugins::is_ffmpeg_running;
 use crate::webui::state::{get_status_cache, NetworkStatus};
 use std::collections::HashMap;
 
@@ -315,28 +313,7 @@ pub(crate) async fn collect_local_snapshot(
 }
 
 pub(crate) fn collect_network_status() -> NetworkStatus {
-    let hls_cache_active = is_ffmpeg_hls_cache_active();
-    let stats = get_ffmpeg_network_stats();
-
-    NetworkStatus {
-        stream_speed: get_ffmpeg_speed(),
-        stream_cache_speed: None,
-        stream_bitrate_kbps: stats.push_bitrate_kbps,
-        stream_cache_bitrate_kbps: if hls_cache_active {
-            stats.cache_bitrate_kbps
-        } else {
-            None
-        },
-        stream_fps: stats.push_fps,
-        stream_frame: stats.push_frame,
-        stream_total_bytes: stats.push_total_bytes,
-        stream_cache_total_bytes: if hls_cache_active {
-            stats.cache_total_bytes
-        } else {
-            0
-        },
-        hls_cache_active,
-    }
+    crate::webui::api::current_network_status()
 }
 
 pub(crate) fn ffmpeg_restart_degraded(cluster: &ClusterConfig, failed_restarts: u32) -> bool {
