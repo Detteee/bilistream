@@ -95,7 +95,7 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
             ),
         });
     };
-    let restart_command = match restart_command_line() {
+    let restart_command = match crate::webui::restart::restart_command_line() {
         Ok(command) => command,
         Err(e) => {
             tracing::error!("Failed to build server restart command: {}", e);
@@ -153,63 +153,6 @@ pub(crate) fn find_screen_session_by_name(screen_list: &str, name: &str) -> Opti
         let session_name = session.rsplit_once('.').map(|(_, name)| name)?;
         (session_name == name).then(|| session.to_string())
     })
-}
-
-pub(crate) fn restart_command_line() -> Result<String, String> {
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_word = resolve_restart_executable_word(&cwd, &exe);
-
-    let mut parts = vec![
-        "cd".to_string(),
-        shell_word(&cwd.to_string_lossy()),
-        "&&".to_string(),
-        shell_word(&exe_word),
-    ];
-    parts.extend(std::env::args_os().skip(1).map(|arg| {
-        let arg = arg.to_string_lossy();
-        shell_word(&arg)
-    }));
-
-    Ok(parts.join(" "))
-}
-
-pub(crate) fn resolve_restart_executable_word(
-    cwd: &std::path::Path,
-    current_exe: &std::path::Path,
-) -> String {
-    let local_bin = cwd.join("bilistream");
-    let local_bin_exists = local_bin.exists();
-    let current_exe_display = current_exe.to_string_lossy();
-    let running_deleted_binary = current_exe_display.ends_with(" (deleted)");
-
-    if local_bin_exists {
-        if running_deleted_binary {
-            return "./bilistream".to_string();
-        }
-        if std::fs::canonicalize(&local_bin).ok().as_ref()
-            == std::fs::canonicalize(current_exe).ok().as_ref()
-        {
-            return "./bilistream".to_string();
-        }
-    }
-
-    if running_deleted_binary {
-        return current_exe_display
-            .strip_suffix(" (deleted)")
-            .unwrap_or(&current_exe_display)
-            .to_string();
-    }
-
-    current_exe_display.to_string()
-}
-
-pub(crate) fn shell_word(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 pub(crate) fn schedule_screen_restart(
