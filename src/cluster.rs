@@ -24,7 +24,21 @@ lazy_static! {
     static ref CLUSTER_STATE: RwLock<ClusterState> = RwLock::new(ClusterState::default());
     static ref NODE_MODE_APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
     static ref CLUSTER_SWITCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
-    static ref CLUSTER_HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
+    static ref CLUSTER_HTTP_CLIENT: reqwest::Client = build_cluster_http_client();
+}
+
+fn build_cluster_http_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Some(session) = crate::webui::session_cookie() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(value) =
+            reqwest::header::HeaderValue::from_str(&format!("bilistream_session={session}"))
+        {
+            headers.insert(reqwest::header::COOKIE, value);
+            builder = builder.default_headers(headers);
+        }
+    }
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 pub(crate) fn cluster_http_client() -> reqwest::Client {
