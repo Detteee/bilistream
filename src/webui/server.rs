@@ -1,5 +1,6 @@
 use axum::{
     http::{header, HeaderValue, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{delete, get, post, put},
     Router,
@@ -11,6 +12,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use super::listen::{
+    auth_status, listen_bind, login, logout, password_required, require_webui_auth,
+};
 use super::{api, events, state};
 
 async fn health_check() -> impl IntoResponse {
@@ -26,6 +30,9 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     // API router
     let api_router = Router::new()
         .route("/health", get(health_check))
+        .route("/auth", get(auth_status))
+        .route("/login", post(login))
+        .route("/logout", post(logout))
         .route("/version", get(api::get_version))
         .route("/status", get(api::get_status))
         .route("/events", get(events::sse_events))
@@ -92,7 +99,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
             ),
-        );
+        )
+        .layer(middleware::from_fn(require_webui_auth));
 
     let static_files =
         ServeDir::new("webui/dist").not_found_service(ServeFile::new("webui/dist/index.html"));
@@ -111,29 +119,19 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .fallback_service(static_files)
         .layer(response_layers);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let bind = listen_bind();
+    let addr = SocketAddr::new(bind, port);
 
     println!("\n🌐 Web UI 服务已启动");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📍 本地访问:     http://localhost:{}", port);
+    println!("📍 监听地址:     {}", addr);
     println!("📍 本地访问:     http://127.0.0.1:{}", port);
-
-    // Try to get local network IP
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local_addr) = socket.local_addr() {
-                let ip = local_addr.ip();
-                if !ip.is_loopback() {
-                    println!("📍 局域网访问:   http://{}:{}", ip, port);
-                }
-            }
-        }
+    if password_required() {
+        println!("📍 网页需密码登录");
     }
 
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("💡 提示: 在浏览器中打开上述任一地址访问\n");
-
-    // tracing::info!("Web UI listening on 0.0.0.0:{}", port);
+    println!("💡 提示: 在浏览器中打开上述地址访问\n");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

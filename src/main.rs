@@ -273,7 +273,8 @@ async fn skip_stream_if_banned_keyword(
 
     if should_warn {
         tracing::error!("{}直播标题/分区包含不支持的关键词: {}", platform, keyword);
-        if let Err(e) = send_danmaku(cfg, &format!("错误：{}标题/分区含:{}", platform, keyword)).await
+        if let Err(e) =
+            send_danmaku(cfg, &format!("错误：{}标题/分区含:{}", platform, keyword)).await
         {
             tracing::error!("Failed to send danmaku: {}", e);
         }
@@ -2388,6 +2389,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .default_value("error")
                 .value_parser(["error", "info", "debug"]),
         )
+        .arg(
+            Arg::new("bind")
+                .long("bind")
+                .value_name("ADDR")
+                .help("Web UI listen address (default 127.0.0.1)")
+                .global(true),
+        )
+        .arg(
+            Arg::new("password")
+                .long("password")
+                .value_name("PASSWORD")
+                .help("Web UI login password. Also BILISTREAM_PASSWORD.")
+                .global(true),
+        )
         .subcommand(
             Command::new("cli")
                 .about("以命令行模式运行（无 Web UI）"),
@@ -2632,6 +2647,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("webui", sub_m)) => {
             // Initialize logger with capture for webui mode
             init_logger_with_capture();
+            apply_webui_listen(&matches)?;
 
             let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
             tracing::info!("🚀 启动 Web UI 和自动监控模式");
@@ -2659,8 +2675,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // CLI mode: Check if setup is needed
             let config_path = std::env::current_exe()?.with_file_name("config.json");
             let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-            let needs_setup =
-                !config_path.exists() || !cookies_path.exists();
+            let needs_setup = !config_path.exists() || !cookies_path.exists();
 
             if needs_setup {
                 println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
@@ -2674,6 +2689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(("tray", sub_m)) => {
             // Initialize logger with capture for tray mode
             init_logger_with_capture();
+            apply_webui_listen(&matches)?;
 
             let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
             let log_level = ffmpeg_log_level.to_string(); // Clone to owned String
@@ -2864,6 +2880,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Initialize logger with capture for webui mode
                 init_logger_with_capture();
+                apply_webui_listen(&matches)?;
 
                 // On Windows, default to tray mode
                 // On Linux, default to WebUI mode
@@ -3052,6 +3069,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn apply_webui_listen(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
+    let bind = matches
+        .get_one::<String>("bind")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("BILISTREAM_BIND")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let password = matches
+        .get_one::<String>("password")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("BILISTREAM_PASSWORD")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    bilistream::webui::install_listen(&bind, password)?;
+    Ok(())
+}
+
 fn init_logger() {
     tracing_subscriber::fmt()
         .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
@@ -3176,34 +3219,11 @@ fn init_logger_with_capture() {
 fn show_windows_notification() -> Result<(), Box<dyn std::error::Error>> {
     use std::process::Command as StdCommand;
 
-    // Get local IP address
-    let local_ip = if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local_addr) = socket.local_addr() {
-                let ip = local_addr.ip();
-                if !ip.is_loopback() {
-                    Some(ip.to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     // Build notification message
     let mut message = String::from("🌐 Web UI 服务已启动\n");
     message.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     message.push_str("📍 本地访问: http://localhost:3150\n");
     message.push_str("📍 本地访问: http://127.0.0.1:3150\n");
-    if let Some(ip) = local_ip {
-        message.push_str(&format!("📍 局域网访问: http://{}:3150", ip));
-    }
 
     // Escape the message for PowerShell
     let escaped_message = message.replace("`", "``").replace("\"", "`\"");

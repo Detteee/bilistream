@@ -273,9 +273,10 @@
 ./bilistream send-danmaku <消息>               # 发送弹幕消息
 ./bilistream completion <shell>                # 生成补全脚本（bash/zsh/fish）
 
-# 自定义端口
+# 自定义端口与密码
 ./bilistream webui --port <自定义端口>                 # Web UI 自定义端口
 ./bilistream tray --port <自定义端口>                  # 托盘模式自定义端口
+./bilistream --password <密码>                         # Web UI 登录密码
 ./bilistream                                    # 启动（Web UI 模式）
 ./bilistream --cli                              # 启动（CLI 模式）
 ./bilistream send-danmaku <弹幕内容>             # 发送弹幕

@@ -273,9 +273,10 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ./bilistream send-danmaku <message>             # Send chat message
 ./bilistream completion <shell>                 # Generate completions (bash/zsh/fish)
 
-# Custom ports
+# Custom ports and password
 ./bilistream webui --port <custom port>                  # Web UI with custom port
 ./bilistream tray --port <custom port>                   # Tray mode with custom port
+./bilistream --password <secret>                         # Web UI login password
 ```
 
 ### Danmaku Command Feature
