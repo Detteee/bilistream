@@ -418,9 +418,11 @@ pub(crate) fn executable_parent_dir(exe: &Path) -> Result<PathBuf, String> {
 #[cfg(target_os = "windows")]
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let restart_script = current_exe_dir()?.join("restart_after_update.bat");
-    if !restart_script.exists() {
-        return Err(format!("重启脚本不存在: {}", restart_script.display()));
-    }
+    std::fs::write(
+        &restart_script,
+        crate::webui::restart::windows_restart_bat()?,
+    )
+    .map_err(|e| format!("写入重启脚本失败: {}", e))?;
     let restart_script = restart_script
         .to_str()
         .ok_or_else(|| format!("重启脚本路径不是有效 UTF-8: {}", restart_script.display()))?;
@@ -435,8 +437,8 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let exe_dir = current_exe_dir()?;
     let restart_script = exe_dir.join("restart_after_update.sh");
-    let new_exe = exe_dir.join("bilistream");
     let old_exe = exe_dir.join("bilistream.old");
+    let restart_command = crate::webui::restart::restart_command_line()?;
 
     let script_content = format!(
         r#"#!/bin/bash
@@ -451,15 +453,15 @@ fi
 # Wait for port to be released
 sleep 1
 
-# Start new version
-"{}" &
+# Start new version with the same bind/password args
+{} &
 
 # Clean up this script
 rm "$0"
 "#,
         old_exe.display(),
         old_exe.display(),
-        new_exe.display()
+        restart_command
     );
 
     std::fs::write(&restart_script, script_content)

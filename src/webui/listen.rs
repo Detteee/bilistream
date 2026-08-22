@@ -63,7 +63,12 @@ pub fn listen_bind() -> IpAddr {
 
 /// True when the process was started with a Web UI password.
 pub fn password_required() -> bool {
-    LISTEN.get().is_some_and(|config| config.password.is_some())
+    listen_password().is_some()
+}
+
+/// Configured Web UI password, if the process was started with one.
+pub fn listen_password() -> Option<&'static str> {
+    LISTEN.get().and_then(|config| config.password.as_deref())
 }
 
 /// Session cookie value derived from the password, if one is configured.
@@ -102,7 +107,7 @@ pub struct LoginBody {
 }
 
 pub async fn login(Json(body): Json<LoginBody>) -> Response {
-    let Some(expected) = configured_password() else {
+    let Some(expected) = listen_password() else {
         return Json(serde_json::json!({ "success": true, "required": false })).into_response();
     };
 
@@ -155,10 +160,6 @@ pub(crate) fn is_public_api_path(path: &str) -> bool {
             | "/logout"
             | "/api/logout"
     )
-}
-
-fn configured_password() -> Option<&'static str> {
-    LISTEN.get().and_then(|config| config.password.as_deref())
 }
 
 fn session_id_for_password(password: &str) -> String {
