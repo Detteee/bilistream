@@ -1,17 +1,8 @@
-use lazy_static::lazy_static;
 use serde::Serialize;
-use std::collections::VecDeque;
-use std::sync::{LockResult, Mutex, RwLock};
-use tokio::sync::Notify;
+#[cfg(test)]
+use std::sync::LockResult;
 
-use super::events;
 use crate::config::Config;
-
-lazy_static! {
-    static ref LOG_BUFFER: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
-    static ref STATUS_CACHE: RwLock<Option<StatusData>> = RwLock::new(None);
-    static ref STATUS_REFRESH_NOTIFY: Notify = Notify::new();
-}
 
 #[derive(Serialize, Clone, Default, PartialEq)]
 pub struct StatusData {
@@ -83,67 +74,38 @@ pub struct TwStatus {
 }
 
 pub fn init_log_buffer() {
-    let mut buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
-    *buffer = Some(VecDeque::with_capacity(500));
+    crate::AppState::current().init_log_buffer();
 }
 
 pub fn add_log_line(line: String) {
-    let mut buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
-    if let Some(ref mut buf) = *buffer {
-        buf.push_back(line);
-        if buf.len() > 500 {
-            buf.pop_front();
-        }
-    }
+    crate::AppState::current().add_log_line(line);
 }
 
 pub fn get_logs() -> Vec<String> {
-    let buffer = recover_lock(LOG_BUFFER.lock(), "webui log buffer");
-    if let Some(ref buf) = *buffer {
-        buf.iter().cloned().collect()
-    } else {
-        Vec::new()
-    }
+    crate::AppState::current().get_logs()
 }
 
 pub fn update_status_cache(status: StatusData) {
-    let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
-    let changed = cache.as_ref() != Some(&status);
-    *cache = Some(status);
-    drop(cache);
-
-    if changed {
-        events::publish(events::STATUS);
-    }
+    crate::AppState::current().update_status_cache(status);
 }
 
 pub fn update_status_cache_with(update: impl FnOnce(&mut StatusData)) {
-    let mut cache = recover_lock(STATUS_CACHE.write(), "webui status cache");
-    let status = cache.get_or_insert_with(StatusData::default);
-    let before = status.clone();
-    update(status);
-    let changed = *status != before;
-    drop(cache);
-
-    if changed {
-        events::publish(events::STATUS);
-    }
+    crate::AppState::current().update_status_cache_with(update);
 }
 
 /// Wake the status refresh worker so external live status is re-fetched now
 /// instead of at the next poll interval (used right after state changes).
 pub fn request_status_refresh() {
-    STATUS_REFRESH_NOTIFY.notify_one();
+    crate::AppState::current().request_status_refresh();
 }
 
 /// Resolves when someone calls [`request_status_refresh`].
 pub async fn status_refresh_requested() {
-    STATUS_REFRESH_NOTIFY.notified().await;
+    crate::AppState::current().status_refresh_requested().await;
 }
 
 pub fn get_status_cache() -> Option<StatusData> {
-    let cache = recover_lock(STATUS_CACHE.read(), "webui status cache");
-    cache.clone()
+    crate::AppState::current().get_status_cache()
 }
 
 pub fn refresh_status_cache_config_from(cfg: &Config) {
@@ -216,6 +178,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
     });
 }
 
+#[cfg(test)]
 fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
     lock.unwrap_or_else(|poisoned| {
         tracing::warn!("Recovering poisoned {}", name);
@@ -227,6 +190,7 @@ fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
 mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::Mutex;
 
     #[test]
     fn recover_lock_returns_inner_after_poison() {

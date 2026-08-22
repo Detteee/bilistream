@@ -1,9 +1,11 @@
+pub mod app_state;
 pub mod config;
 pub mod deps;
 pub mod plugins;
 pub mod tray;
 pub mod updater;
 pub mod webui;
+pub use app_state::AppState;
 pub use webui::server::start_webui;
 
 // Re-export for convenience

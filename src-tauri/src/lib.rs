@@ -50,7 +50,8 @@ pub fn run() {
         .setup(|app| {
             // Start axum server in background
             tauri::async_runtime::spawn(async {
-                if let Err(e) = bilistream::webui::server::start_webui(PORT).await {
+                let state = bilistream::AppState::new().install();
+                if let Err(e) = bilistream::start_webui(PORT, state).await {
                     eprintln!("WebUI server error: {}", e);
                 }
             });

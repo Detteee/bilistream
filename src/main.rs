@@ -1900,9 +1900,9 @@ fn apply_webui_listen(
     Ok(())
 }
 
-fn spawn_webui(port: u16) {
+fn spawn_webui(port: u16, state: bilistream::AppState) {
     tokio::spawn(async move {
-        if let Err(e) = bilistream::webui::server::start_webui(port).await {
+        if let Err(e) = bilistream::start_webui(port, state).await {
             tracing::error!("Web UI 服务器错误: {}", e);
         }
     });
@@ -2037,6 +2037,7 @@ async fn run_tray_app(
     port: u16,
     ffmpeg_log_level: &str,
     is_first_run: bool,
+    state: bilistream::AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
         tracing::info!("🚀 欢迎使用 Bilistream！");
@@ -2046,7 +2047,7 @@ async fn run_tray_app(
     }
     tracing::info!("   Web UI 端口: {}", port);
 
-    spawn_webui(port);
+    spawn_webui(port, state);
     spawn_deps_download();
     spawn_monitor_loop(ffmpeg_log_level.to_string());
 
@@ -2060,6 +2061,7 @@ async fn run_webui_app(
     port: u16,
     ffmpeg_log_level: &str,
     is_first_run: bool,
+    state: bilistream::AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
         tracing::info!("🚀 欢迎使用 Bilistream！");
@@ -2084,7 +2086,7 @@ async fn run_webui_app(
         }
     }
 
-    spawn_webui(port);
+    spawn_webui(port, state);
     spawn_deps_download();
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     tracing::info!("✅ Web UI 已启动");
@@ -2141,6 +2143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let state = bilistream::AppState::new().install();
     init_logger_with_capture();
     apply_webui_listen(&launch.bind, launch.password.clone())?;
     install_shutdown_handler();
@@ -2149,9 +2152,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_first_run = !config_path.exists() || !cookies_path.exists();
 
     if launch.tray {
-        run_tray_app(launch.port, &launch.ffmpeg_log_level, is_first_run).await
+        run_tray_app(launch.port, &launch.ffmpeg_log_level, is_first_run, state).await
     } else {
-        run_webui_app(launch.port, &launch.ffmpeg_log_level, is_first_run).await
+        run_webui_app(launch.port, &launch.ffmpeg_log_level, is_first_run, state).await
     }
 }
 

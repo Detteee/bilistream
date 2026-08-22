@@ -15,15 +15,15 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use super::listen::{
     auth_status, listen_bind, login, logout, password_required, require_webui_auth,
 };
-use super::{api, events, state};
+use super::{api, events};
+use crate::AppState;
 
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
-pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize log buffer
-    state::init_log_buffer();
+pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::error::Error>> {
+    state.init_log_buffer();
     api::refresh_status_cache_config().await;
     api::start_status_refresh_worker();
 
@@ -117,7 +117,8 @@ pub async fn start_webui(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .nest("/api", api_router)
         .fallback_service(static_files)
-        .layer(response_layers);
+        .layer(response_layers)
+        .with_state(state);
 
     let bind = listen_bind();
     let addr = SocketAddr::new(bind, port);
