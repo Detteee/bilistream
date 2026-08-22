@@ -2,24 +2,18 @@ use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{Cursor, Read};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{interval, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Bytes, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::plugins::{bili_stop_live, send_danmaku};
-
-const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
 
 // Bilibili danmaku protocol constants
 const HEADER_LENGTH: u32 = 16;
@@ -41,28 +35,6 @@ const OP_AUTH_REPLY: u32 = 8;
 const PROTOVER_NORMAL: u8 = 1;
 #[allow(dead_code)]
 const PROTOVER_BROTLI: u8 = 3;
-
-fn executable_cache_dir() -> Option<PathBuf> {
-    let mut path = std::env::current_exe().ok()?;
-    if !path.pop() {
-        return None;
-    }
-    Some(path.join(".wbi_cache"))
-}
-
-fn wbi_cache_dir() -> PathBuf {
-    executable_cache_dir().unwrap_or_else(|| std::env::temp_dir().join("bilistream-wbi-cache"))
-}
-
-fn unix_time_secs(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
-fn current_unix_time_secs() -> u64 {
-    unix_time_secs(SystemTime::now())
-}
 
 fn danmaku_packet_body_length(packet_length: u32, header_length: u16) -> Result<u32> {
     if header_length as u32 != HEADER_LENGTH {
@@ -252,147 +224,16 @@ impl BilibiliDanmakuClient {
         Ok(())
     }
 
-    // WBI signature helper functions (same as in bilibili.rs)
-    fn gen_mixin_key(raw_wbi_key: &str) -> Result<String> {
-        const MIXIN_KEY_ENC_TAB: [u8; 64] = [
-            46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42,
-            19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60,
-            51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
-        ];
-
-        let raw_bytes = raw_wbi_key.as_bytes();
-        let mut mixin_key = String::with_capacity(32);
-        for &index in MIXIN_KEY_ENC_TAB.iter().take(32) {
-            let byte = raw_bytes.get(index as usize).ok_or_else(|| {
-                anyhow!(
-                    "invalid WBI key length: {} bytes, missing index {}",
-                    raw_bytes.len(),
-                    index
-                )
-            })?;
-            mixin_key.push(*byte as char);
-        }
-        Ok(mixin_key)
-    }
-
-    fn url_encode(s: &str) -> String {
-        utf8_percent_encode(s, NON_ALPHANUMERIC)
-            .to_string()
-            .replace('+', "%20")
-    }
-
-    fn calculate_w_rid(params: &BTreeMap<&str, String>, mixin_key: &str) -> String {
-        let encoded_params: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, Self::url_encode(v)))
-            .collect();
-
-        let param_string = encoded_params.join("&");
-        let string_to_hash = format!("{}{}", param_string, mixin_key);
-
-        crate::plugins::utils::md5_hex(&string_to_hash)
-    }
-
-    async fn get_wbi_keys(&self) -> Result<(String, String)> {
-        let cache_dir = wbi_cache_dir();
-        // Create cache directory if it doesn't exist
-        fs::create_dir_all(&cache_dir)?;
-
-        let img_key_path = cache_dir.join("img_key");
-        let sub_key_path = cache_dir.join("sub_key");
-        let timestamp_path = cache_dir.join("timestamp");
-
-        // Check if we have cached keys and if they're still valid
-        if img_key_path.exists() && sub_key_path.exists() && timestamp_path.exists() {
-            if let Ok(timestamp_str) = fs::read_to_string(&timestamp_path) {
-                if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                    let current_time = current_unix_time_secs();
-
-                    if current_time >= timestamp && current_time - timestamp < WBI_CACHE_DURATION {
-                        // Cache is still valid, read the keys
-                        if let (Ok(img_key), Ok(sub_key)) = (
-                            fs::read_to_string(&img_key_path),
-                            fs::read_to_string(&sub_key_path),
-                        ) {
-                            // Using cached WBI keys - suppress log
-                            return Ok((img_key.trim().to_string(), sub_key.trim().to_string()));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Cache miss or expired, fetch new keys
-        // info!("Fetching fresh WBI keys from Bilibili API...");
-        let client = crate::plugins::bilibili::bili_plain_http_client();
-        let response: Value = client
-            .get("https://api.bilibili.com/x/web-interface/nav")
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        let wbi_img = response["data"]["wbi_img"]
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("Missing wbi_img in nav response"))?;
-
-        let img_url = wbi_img["img_url"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing img_url"))?;
-        let sub_url = wbi_img["sub_url"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing sub_url"))?;
-
-        let img_key = img_url
-            .split('/')
-            .last()
-            .and_then(|s| s.split('.').next())
-            .ok_or_else(|| anyhow::anyhow!("Invalid img_url format"))?
-            .to_string();
-        let sub_key = sub_url
-            .split('/')
-            .last()
-            .and_then(|s| s.split('.').next())
-            .ok_or_else(|| anyhow::anyhow!("Invalid sub_url format"))?
-            .to_string();
-
-        // Cache the keys
-        let current_time = current_unix_time_secs();
-
-        fs::write(&img_key_path, &img_key)?;
-        fs::write(&sub_key_path, &sub_key)?;
-        fs::write(&timestamp_path, current_time.to_string())?;
-
-        // info!("WBI keys cached successfully");
-
-        Ok((img_key, sub_key))
-    }
-
     #[allow(dead_code)]
     async fn get_danmaku_info(&mut self) -> Result<()> {
-        // info!("Getting WBI keys for signed request...");
-        let (img_key, sub_key) = self.get_wbi_keys().await?;
-        let raw_wbi_key = format!("{}{}", img_key, sub_key);
-        let mixin_key = Self::gen_mixin_key(&raw_wbi_key)?;
-
-        // Get current timestamp
-        let wts = current_unix_time_secs().to_string();
-
-        // Build parameters for WBI signature
+        let client = crate::plugins::bilibili::bili_plain_http_client();
         let mut params = BTreeMap::new();
         params.insert("id", self.room_id.to_string());
         params.insert("type", "0".to_string());
-        params.insert("wts", wts.clone());
+        let query_string = crate::plugins::wbi::signed_query(&client, params)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
 
-        // Calculate w_rid
-        let w_rid = Self::calculate_w_rid(&params, &mixin_key);
-
-        // Build query string
-        let query_string = format!("id={}&type=0&wts={}&w_rid={}", self.room_id, wts, w_rid);
-
-        // info!("Requesting getDanmuInfo with WBI signature...");
-
-        let client = crate::plugins::bilibili::bili_plain_http_client();
         let cookie = if !self.config.buvid3.is_empty() {
             format!(
                 "SESSDATA={}; bili_jct={}; DedeUserID={}; DedeUserID__ckMd5={}; buvid3={}",
@@ -926,29 +767,6 @@ pub async fn run_native_danmaku_client(
 mod tests {
     use super::*;
     use std::io::Write;
-
-    #[test]
-    fn unix_time_secs_returns_zero_before_epoch() {
-        assert_eq!(
-            unix_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1)),
-            0
-        );
-    }
-
-    #[test]
-    fn mixin_key_rejects_short_wbi_key() {
-        assert!(BilibiliDanmakuClient::gen_mixin_key("short").is_err());
-    }
-
-    #[test]
-    fn mixin_key_accepts_full_wbi_key() {
-        let key = BilibiliDanmakuClient::gen_mixin_key(
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab",
-        )
-        .expect("64-byte WBI key should be accepted");
-
-        assert_eq!(key.len(), 32);
-    }
 
     #[test]
     fn heartbeat_packet_has_valid_header() {

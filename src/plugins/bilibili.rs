@@ -3,7 +3,6 @@
 use crate::config::{save_config, Config, Credentials};
 use chrono::TimeZone;
 use lazy_static::lazy_static;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use qrcode::QrCode;
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::Url;
@@ -23,8 +22,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 lazy_static! {
-    static ref BILISTREAM_PATH: PathBuf = executable_path();
-    static ref WBI_CACHE_DIR: PathBuf = wbi_cache_dir(&BILISTREAM_PATH);
     static ref BILI_PLAIN_CLIENT: reqwest::Client = reqwest::Client::new();
 }
 
@@ -108,7 +105,10 @@ async fn bili_live_version() -> Result<(String, i64), Box<dyn Error>> {
     let version_api =
         "https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion";
     let version_ts = chrono::Utc::now().timestamp().to_string();
-    let version_query = format!("system_version=2&ts={}&appKey=aae92bc66f3edfab&sign=", version_ts);
+    let version_query = format!(
+        "system_version=2&ts={}&appKey=aae92bc66f3edfab&sign=",
+        version_ts
+    );
     let version_url = format!("{}?{}", version_api, version_query);
 
     let version_resp: serde_json::Value = BILI_PLAIN_CLIENT
@@ -137,29 +137,10 @@ async fn bili_live_version() -> Result<(String, i64), Box<dyn Error>> {
 }
 static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
 pub const BILI_START_TEMP_BAN_PREFIX: &str = "BILI_START_TEMP_BAN:";
-
-const MIXIN_KEY_ENC_TAB: [u8; 64] = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
-    28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
-    54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
-];
 
 fn executable_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("bilistream"))
-}
-
-fn executable_parent_dir(path: &Path) -> Option<PathBuf> {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-}
-
-fn wbi_cache_dir(executable: &Path) -> PathBuf {
-    executable_parent_dir(executable)
-        .map(|parent| parent.join(".wbi_cache"))
-        .unwrap_or_else(|| std::env::temp_dir().join("bilistream-wbi-cache"))
 }
 
 fn bilistream_path_from_env_or_executable() -> PathBuf {
@@ -237,123 +218,6 @@ fn current_unix_time_secs() -> u64 {
     unix_time_secs(SystemTime::now())
 }
 
-fn invalid_data(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
-}
-
-fn gen_mixin_key(raw_wbi_key: impl AsRef<[u8]>) -> Result<String, io::Error> {
-    let raw_wbi_key = raw_wbi_key.as_ref();
-    let mut mixin_key = String::with_capacity(32);
-
-    for &index in MIXIN_KEY_ENC_TAB.iter().take(32) {
-        let byte = raw_wbi_key.get(index as usize).ok_or_else(|| {
-            invalid_data(format!(
-                "invalid WBI key length: {} bytes, missing index {}",
-                raw_wbi_key.len(),
-                index
-            ))
-        })?;
-        mixin_key.push(*byte as char);
-    }
-
-    Ok(mixin_key)
-}
-
-fn url_encode(s: &str) -> String {
-    utf8_percent_encode(s, NON_ALPHANUMERIC)
-        .to_string()
-        .replace('+', "%20")
-}
-
-fn calculate_w_rid(params: &BTreeMap<&str, String>, mixin_key: &str) -> String {
-    // Sort parameters by key and encode values
-    let encoded_params: Vec<String> = params
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, url_encode(v)))
-        .collect();
-
-    // Join parameters with &
-    let param_string = encoded_params.join("&");
-
-    // Append mixin_key
-    let string_to_hash = format!("{}{}", param_string, mixin_key);
-
-    // Calculate MD5
-    super::utils::md5_hex(&string_to_hash)
-}
-
-fn wbi_key_from_url(url: &str, field: &str) -> Result<String, io::Error> {
-    url.split('/')
-        .next_back()
-        .and_then(|segment| segment.split('.').next())
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| invalid_data(format!("invalid {field} WBI URL: {url}")))
-}
-
-async fn get_wbi_keys(agent: &reqwest::Client) -> Result<(String, String), Box<dyn Error>> {
-    // Create cache directory if it doesn't exist
-    fs::create_dir_all(&*WBI_CACHE_DIR)?;
-
-    let img_key_path = WBI_CACHE_DIR.join("img_key");
-    let sub_key_path = WBI_CACHE_DIR.join("sub_key");
-    let timestamp_path = WBI_CACHE_DIR.join("timestamp");
-
-    // Check if we have cached keys and if they're still valid
-    if img_key_path.exists() && sub_key_path.exists() && timestamp_path.exists() {
-        if let Ok(timestamp_str) = fs::read_to_string(&timestamp_path) {
-            if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                let current_time = current_unix_time_secs();
-
-                if current_time >= timestamp && current_time - timestamp < WBI_CACHE_DURATION {
-                    // Cache is still valid, read the keys
-                    if let (Ok(img_key), Ok(sub_key)) = (
-                        fs::read_to_string(&img_key_path),
-                        fs::read_to_string(&sub_key_path),
-                    ) {
-                        return Ok((img_key.trim().to_string(), sub_key.trim().to_string()));
-                    }
-                }
-            }
-        }
-    }
-
-    // Cache is invalid or doesn't exist, get new keys
-    let nav_data: Value = agent
-        .get("https://api.bilibili.com/x/web-interface/nav")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-        .header("Referer", "https://www.bilibili.com/")
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    let wbi_img = nav_data
-        .get("data")
-        .and_then(|d| d.get("wbi_img"))
-        .ok_or_else(|| "Missing wbi_img in nav response")?;
-
-    let img_url = wbi_img
-        .get("img_url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing img_url in wbi_img")?;
-
-    let sub_url = wbi_img
-        .get("sub_url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing sub_url in wbi_img")?;
-
-    let img_key = wbi_key_from_url(img_url, "img_url")?;
-    let sub_key = wbi_key_from_url(sub_url, "sub_url")?;
-
-    // Save the new keys and timestamp
-    fs::write(&img_key_path, &img_key)?;
-    fs::write(&sub_key_path, &sub_key)?;
-    fs::write(&timestamp_path, current_unix_time_secs().to_string())?;
-
-    Ok((img_key, sub_key))
-}
-
 enum AppKeyStore {
     BiliTV,
     Android,
@@ -390,24 +254,9 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
     // Reuse the shared clients; this runs every monitor cycle.
     let (raw_client, client) = bili_status_clients()?;
 
-    // Get WBI keys
-    let (img_key, sub_key) = get_wbi_keys(&raw_client).await?;
-    let raw_wbi_key = format!("{}{}", img_key, sub_key);
-    let mixin_key = gen_mixin_key(raw_wbi_key.as_bytes())?;
-
-    // Get wts
-    let wts = current_unix_time_secs().to_string();
-
-    // Create sorted parameters map
     let mut params = BTreeMap::new();
     params.insert("room_id", room.to_string());
-    params.insert("wts", wts.clone());
-
-    // Calculate w_rid
-    let w_rid = calculate_w_rid(&params, &mixin_key);
-
-    // Build final query string
-    let query_string = format!("room_id={}&wts={}&w_rid={}", room, wts, w_rid);
+    let query_string = super::wbi::signed_query(&raw_client, params).await?;
 
     // Make the GET request to check the live status
     let res: Value = client
@@ -445,14 +294,9 @@ pub async fn get_bili_live_time(
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
 
-    let (img_key, sub_key) = get_wbi_keys(&raw_client).await?;
-    let mixin_key = gen_mixin_key(format!("{}{}", img_key, sub_key).as_bytes())?;
-    let wts = current_unix_time_secs().to_string();
     let mut params = BTreeMap::new();
     params.insert("room_id", room.to_string());
-    params.insert("wts", wts.clone());
-    let w_rid = calculate_w_rid(&params, &mixin_key);
-    let query_string = format!("room_id={}&wts={}&w_rid={}", room, wts, w_rid);
+    let query_string = super::wbi::signed_query(&raw_client, params).await?;
 
     let res: Value = client
         .get(&format!(
@@ -1389,36 +1233,6 @@ mod tests {
         assert_eq!(
             unix_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1)),
             0
-        );
-    }
-
-    #[test]
-    fn mixin_key_rejects_short_wbi_key() {
-        assert!(gen_mixin_key("short").is_err());
-    }
-
-    #[test]
-    fn mixin_key_accepts_full_wbi_key() {
-        let key = gen_mixin_key("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab")
-            .expect("64-byte WBI key should be accepted");
-
-        assert_eq!(key.len(), 32);
-    }
-
-    #[test]
-    fn wbi_key_from_url_extracts_file_stem() {
-        assert_eq!(
-            wbi_key_from_url("https://i0.hdslb.com/bfs/wbi/example-key.png", "img_url").unwrap(),
-            "example-key"
-        );
-        assert!(wbi_key_from_url("https://i0.hdslb.com/bfs/wbi/", "img_url").is_err());
-    }
-
-    #[test]
-    fn wbi_cache_dir_falls_back_without_executable_parent() {
-        assert_eq!(
-            wbi_cache_dir(Path::new("bilistream")),
-            std::env::temp_dir().join("bilistream-wbi-cache")
         );
     }
 

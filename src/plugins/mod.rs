@@ -6,6 +6,7 @@ pub mod holodex;
 pub mod riot;
 pub mod twitch;
 pub mod utils;
+pub mod wbi;
 pub mod youtube;
 // Re-export commonly used items
 pub use bilibili::*;
