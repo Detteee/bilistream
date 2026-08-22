@@ -152,12 +152,7 @@ pub async fn cluster_drain(
         }
     }
 
-    let status = crate::cluster::set_drain_state(
-        &cfg,
-        target_node_id.clone(),
-        payload.draining,
-        payload.ddos,
-    );
+    let status = crate::cluster::set_drain_state(&cfg, target_node_id.clone(), payload.draining);
 
     if should_propagate && cfg.cluster.enabled {
         let propagation_target = target_node_id
@@ -166,7 +161,6 @@ pub async fn cluster_drain(
         let forwarded = ClusterDrainRequest {
             node_id: target_node_id.clone(),
             draining: payload.draining,
-            ddos: payload.ddos,
             propagate: Some(false),
         };
         post_cluster_control(&cfg, "/api/cluster/drain", &forwarded, propagation_target).await;

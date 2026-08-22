@@ -676,7 +676,7 @@ mod tests {
                 stream_degraded: false,
             },
             draining: false,
-            ddos: false,
+            network_unstable: false,
             ffmpeg_running: false,
             active_stream: None,
             status: None,
