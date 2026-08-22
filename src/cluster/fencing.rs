@@ -6,6 +6,8 @@ use super::types::*;
 use crate::config::{ClusterConfig, Config};
 use crate::plugins::is_ffmpeg_running;
 use crate::webui::state::{get_status_cache, NetworkStatus};
+
+#[cfg(test)]
 use std::collections::HashMap;
 
 pub(crate) const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
