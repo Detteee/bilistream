@@ -4,9 +4,7 @@
     windows_subsystem = "windows"
 )]
 
-use bilistream::config::{
-    load_config, save_config, BiliLive, Config, Credentials, Twitch, Youtube,
-};
+use bilistream::config::{load_config, save_config, Config};
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
@@ -14,16 +12,13 @@ use bilistream::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
-    get_area_name, get_bili_live_status, get_bili_live_time, get_channel_name, get_puuid,
-    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
-    run_danmaku, send_danmaku, should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku,
-    stop_ffmpeg, wait_config_update_or_timeout, wait_ffmpeg, was_manual_restart, was_manual_stop,
+    get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, run_danmaku, send_danmaku,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    wait_config_update_or_timeout, wait_ffmpeg, was_manual_restart, was_manual_stop,
     FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
 };
-use qrcode::QrCode;
-
 use chrono::{DateTime, Local, NaiveDateTime};
-use clap::{Arg, Command};
 use regex::Regex;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1200,238 +1195,6 @@ fn box_message(
     message
 }
 
-async fn get_live_status(
-    platform: &str,
-    channel_id: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match platform {
-        "bilibili" => {
-            let cfg = load_config().await?;
-            let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
-            if is_live {
-                println!(
-                    "B站直播中, 标题: {}, 分区: {} （ID: {}）",
-                    title,
-                    area_label(area_id),
-                    area_id,
-                );
-            } else {
-                println!("B站未直播");
-            }
-            Ok(())
-        }
-        "YT" => {
-            let cfg = load_config().await?;
-            let channel_id = if let Some(id) = channel_id {
-                id
-            } else {
-                &cfg.youtube.channel_id
-            };
-            let channel_name =
-                get_channel_name("YT", channel_id)?.unwrap_or_else(|| channel_id.to_string());
-            let yt_client =
-                YoutubeClient::new(&channel_name, channel_id, cfg.youtube.proxy.clone());
-            let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
-            if is_live {
-                println!(
-                    "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
-                    channel_name,
-                    topic.as_deref().unwrap_or("未知分区"),
-                    title.as_deref().unwrap_or("无标题")
-                );
-            } else if let Some(start_time) = start_time {
-                println!(
-                    "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
-                    channel_name,
-                    if let Some(t) = &topic {
-                        format!("分区: {}, ", t)
-                    } else {
-                        String::new()
-                    },
-                    start_time.format(MESSAGE_TIME_FORMAT),
-                    title.as_deref().unwrap_or("无标题")
-                );
-            } else {
-                println!("{} 未在 YouTube 直播", channel_name);
-            }
-            Ok(())
-        }
-        "TW" => {
-            let cfg = load_config().await?;
-            let channel_id = if let Some(id) = channel_id {
-                id
-            } else {
-                &cfg.twitch.channel_id
-            };
-            let channel_name =
-                get_channel_name("TW", channel_id)?.unwrap_or_else(|| channel_id.to_string());
-            let tw_client = TwitchClient::new(
-                channel_id,
-                cfg.twitch.proxy_region.clone(),
-                cfg.twitch.proxy.clone(),
-            )?;
-            let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
-            if is_live {
-                println!(
-                    "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
-                    channel_name,
-                    game_name.as_deref().unwrap_or("未知分区"),
-                    title.as_deref().unwrap_or("无标题")
-                );
-            } else {
-                println!("{} 未在 Twitch 直播", channel_name);
-            }
-            Ok(())
-        }
-        // all 平台 output all platform
-        "all" => {
-            let cfg = load_config().await?;
-            let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room).await?;
-            if is_live {
-                println!(
-                    "B站直播中, 标题: {}, 分区: {} （ID: {}）",
-                    title,
-                    area_label(area_id),
-                    area_id,
-                );
-            } else {
-                println!("B站未直播");
-            }
-            let channel_id = cfg.youtube.channel_id;
-            let channel_name = cfg.youtube.channel_name;
-
-            let yt_client =
-                YoutubeClient::new(&channel_name, &channel_id, cfg.youtube.proxy.clone());
-            let (is_live, topic, title, _, start_time, _) = yt_client.get_status().await?;
-            if is_live {
-                if let Some(topic) = topic.as_deref() {
-                    println!(
-                        "{} 在 YouTube 直播中, 分区: {}, 标题: {}",
-                        channel_name,
-                        topic,
-                        title.as_deref().unwrap_or("无标题")
-                    );
-                } else {
-                    println!(
-                        "{} 在 YouTube 直播中, 标题: {}",
-                        channel_name,
-                        title.as_deref().unwrap_or("无标题")
-                    );
-                }
-            } else if let Some(start_time) = start_time {
-                println!(
-                    "{} 未在 YouTube 直播, {}计划于 {} 开始, 标题: {}",
-                    channel_name,
-                    if let Some(t) = &topic {
-                        format!("分区: {}, ", t)
-                    } else {
-                        String::new()
-                    },
-                    start_time.format(MESSAGE_TIME_FORMAT),
-                    title.as_deref().unwrap_or("无标题")
-                );
-            } else {
-                println!("{} 未在 YouTube 直播", channel_name);
-            }
-            let channel_id = cfg.twitch.channel_id;
-            let channel_name = cfg.twitch.channel_name;
-            let tw_client = TwitchClient::new(
-                &channel_id,
-                cfg.twitch.proxy_region.clone(),
-                cfg.twitch.proxy.clone(),
-            )?;
-            let (is_live, game_name, title, _, _, _) = tw_client.get_status().await?;
-            if is_live {
-                println!(
-                    "{} 在 Twitch 直播中, 分区: {}, 标题: {}",
-                    channel_name,
-                    game_name.as_deref().unwrap_or("未知分区"),
-                    title.as_deref().unwrap_or("无标题")
-                );
-            } else {
-                println!("{} 未在 Twitch 直播", channel_name);
-            }
-            Ok(())
-        }
-        _ => {
-            println!("不支持的平台: {}", platform);
-            Err(format!("不支持的平台: {}", platform).into())
-        }
-    }
-}
-
-async fn start_live(optional_platform: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = load_config().await?;
-    let area_v2 = if optional_platform == Some("YT") {
-        cfg.youtube.area_v2
-    } else if optional_platform == Some("TW") {
-        cfg.twitch.area_v2
-    } else {
-        235 // default area_v2 (其他单机)
-    };
-
-    match bili_start_live(&mut cfg, area_v2).await {
-        Ok(_) => {
-            println!("直播开始成功");
-            println!("url：{}", cfg.bililive.bili_rtmp_url);
-            println!("key：{}", cfg.bililive.bili_rtmp_key);
-            Ok(())
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            if error_msg.starts_with("FACE_AUTH_REQUIRED:") {
-                let qr_url = error_msg.strip_prefix("FACE_AUTH_REQUIRED:").unwrap_or("");
-                eprintln!("❌ 需要人脸认证");
-
-                if let Ok(qr) = QrCode::new(qr_url) {
-                    let qr_string = qr
-                        .render::<char>()
-                        .quiet_zone(false)
-                        .module_dimensions(2, 1)
-                        .build();
-                    eprintln!("📱 请扫描二维码完成认证:\n{}", qr_string);
-                } else {
-                    eprintln!("📱 请访问以下链接完成认证: {}", qr_url);
-                }
-            } else {
-                eprintln!("❌ 开播失败: {}", error_msg);
-            }
-            Err(e)
-        }
-    }
-}
-
-async fn stop_live() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config().await?;
-    bili_stop_live(&cfg).await?;
-    println!("直播停止成功");
-    Ok(())
-}
-
-async fn change_live_title(new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config().await?;
-
-    match bili_change_live_title(&cfg, new_title).await {
-        Ok(_) => {
-            println!("✅ 直播标题改变成功");
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("❌ 直播标题改变失败: {}", e);
-
-            // Provide helpful suggestions for common issues
-            if e.to_string().contains("审核") {
-                eprintln!("💡 建议:");
-                eprintln!("   - 尝试使用更通用的标题，如 '【转播】游戏直播'");
-                eprintln!("   - 避免使用特定的VTuber名称");
-                eprintln!("   - 使用英文或数字代替敏感词汇");
-            }
-
-            Err(e)
-        }
-    }
-}
-
 async fn monitor_lol_game(puuid: String) -> Result<(), Box<dyn Error>> {
     let cfg = load_config().await?;
 
@@ -1896,624 +1659,328 @@ async fn handle_collisions(
     }
 }
 
-async fn setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::{self, Write};
+#[derive(Debug)]
+struct LaunchArgs {
+    bind: String,
+    password: Option<String>,
+    port: u16,
+    ffmpeg_log_level: String,
+    tray: bool,
+}
 
-    println!("=== Bilistream 初始化设置向导 ===\n");
+#[derive(Debug)]
+enum ParseOutcome {
+    Launch(LaunchArgs),
+    Help,
+    Version,
+}
 
-    // Step 1: Check if config.json already exists
-    let config_path = std::env::current_exe()?.with_file_name("config.json");
-    if config_path.exists() {
-        print!("检测到已存在的 config.json，是否覆盖? (y/N): ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("已取消设置");
-            return Ok(());
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn default_tray() -> bool {
+    cfg!(target_os = "windows")
+}
+
+fn print_help() {
+    println!(
+        "bilistream {}\n\n\
+Start the Web UI and stream monitor. Setup and controls are in the browser.\n\n\
+Usage: bilistream [OPTIONS]\n\n\
+Options:\n\
+  --bind ADDR                 Listen address (default 127.0.0.1, or BILISTREAM_BIND)\n\
+  -p, --port PORT             Web UI port (default 3150, or BILISTREAM_PORT)\n\
+  --password PASSWORD         Web UI login password (or BILISTREAM_PASSWORD)\n\
+  --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
+  --tray                      System tray (default on Windows)\n\
+  --webui                     Console Web UI (default on Linux/macOS)\n\
+  -h, --help                  Print help\n\
+  -V, --version               Print version",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn take_value(
+    argv: &[String],
+    i: &mut usize,
+    inline: Option<&str>,
+    name: &str,
+) -> Result<String, String> {
+    if let Some(value) = inline {
+        return Ok(value.to_string());
+    }
+    *i += 1;
+    argv.get(*i)
+        .cloned()
+        .ok_or_else(|| format!("missing value for {name}"))
+}
+
+fn parse_launch_args(argv: &[String]) -> Result<ParseOutcome, String> {
+    parse_launch_args_with(
+        argv,
+        env_nonempty("BILISTREAM_BIND"),
+        env_nonempty("BILISTREAM_PASSWORD"),
+        env_nonempty("BILISTREAM_PORT"),
+        env_nonempty("BILISTREAM_FFMPEG_LOG_LEVEL"),
+        default_tray(),
+    )
+}
+
+fn parse_launch_args_with(
+    argv: &[String],
+    env_bind: Option<String>,
+    env_password: Option<String>,
+    env_port: Option<String>,
+    env_ffmpeg: Option<String>,
+    mut tray: bool,
+) -> Result<ParseOutcome, String> {
+    let mut bind = env_bind.unwrap_or_else(|| "127.0.0.1".to_string());
+    let mut password = env_password;
+    let mut port: u16 = match env_port {
+        Some(value) => value
+            .parse()
+            .map_err(|_| format!("invalid BILISTREAM_PORT: {value}"))?,
+        None => 3150,
+    };
+    let mut ffmpeg_log_level = match env_ffmpeg {
+        Some(value) if matches!(value.as_str(), "error" | "info" | "debug") => value,
+        Some(value) => {
+            return Err(format!(
+                "invalid BILISTREAM_FFMPEG_LOG_LEVEL: {value} (error, info, debug)"
+            ));
         }
-    }
-
-    // Step 2: Login to Bilibili
-    println!("\n步骤 1/2: 登录 Bilibili");
-    println!("----------------------------------------");
-    let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-    if cookies_path.exists() {
-        print!("检测到已存在的 cookies.json，是否重新登录? (y/N): ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if input.trim().eq_ignore_ascii_case("y") {
-            bilibili::login().await?;
-        } else {
-            println!("使用现有登录凭证");
-        }
-    } else {
-        bilibili::login().await?;
-    }
-
-    // Step 3: Configure config.json
-    println!("\n步骤 2/2: 配置 config.json");
-    println!("----------------------------------------");
-
-    // Get room number
-    print!("请输入你的B站直播间号: ");
-    io::stdout().flush()?;
-    let mut room = String::new();
-    io::stdin().read_line(&mut room)?;
-    let room: i32 = room.trim().parse().unwrap_or(0);
-    if room == 0 {
-        return Err("无效的直播间号".into());
-    }
-
-    // Get YouTube channel info
-    print!("\n是否配置 YouTube 频道? (Y/n): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let configure_youtube = !input.trim().eq_ignore_ascii_case("n");
-
-    let (yt_channel_name, yt_channel_id, yt_area_v2, yt_quality, yt_proxy) = if configure_youtube {
-        print!("YouTube 频道名称: ");
-        io::stdout().flush()?;
-        let mut name = String::new();
-        io::stdin().read_line(&mut name)?;
-        let name = name.trim().to_string();
-
-        print!("YouTube 频道ID: ");
-        io::stdout().flush()?;
-        let mut id = String::new();
-        io::stdin().read_line(&mut id)?;
-        let id = id.trim().to_string();
-
-        print!("B站分区ID (默认 235-其他单机): ");
-        io::stdout().flush()?;
-        let mut area = String::new();
-        io::stdin().read_line(&mut area)?;
-        let area: u64 = area.trim().parse().unwrap_or(235);
-
-        println!("\n流质量设置 (用于网络受限用户):");
-        println!("  best - 最佳质量 (推荐)");
-        println!("  worst - 最低质量");
-        println!("  720p/480p - 指定分辨率");
-        print!("请选择质量 (默认 best): ");
-        io::stdout().flush()?;
-        let mut quality = String::new();
-        io::stdin().read_line(&mut quality)?;
-        let quality = if quality.trim().is_empty() {
-            "best".to_string()
-        } else {
-            quality.trim().to_string()
-        };
-
-        print!("\n是否需要为 YouTube 配置代理? (y/N): ");
-        io::stdout().flush()?;
-        let mut proxy_input = String::new();
-        io::stdin().read_line(&mut proxy_input)?;
-        let yt_proxy = if proxy_input.trim().eq_ignore_ascii_case("y") {
-            print!("YouTube 代理: ");
-            io::stdout().flush()?;
-            let mut proxy = String::new();
-            io::stdin().read_line(&mut proxy)?;
-            let proxy_str = proxy.trim().to_string();
-            if proxy_str.is_empty() {
-                None
-            } else {
-                Some(proxy_str)
-            }
-        } else {
-            None
-        };
-
-        (name, id, area, quality, yt_proxy)
-    } else {
-        (
-            "".to_string(),
-            "".to_string(),
-            235,
-            "best".to_string(),
-            None,
-        )
+        None => "error".to_string(),
     };
 
-    // Get Twitch channel info
-    print!("\n是否配置 Twitch 频道? (Y/n): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let configure_twitch = !input.trim().eq_ignore_ascii_case("n");
+    let mut i = 1;
+    while i < argv.len() {
+        let arg = argv[i].as_str();
+        let (key, inline) = match arg.split_once('=') {
+            Some((key, value)) => (key, Some(value)),
+            None => (arg, None),
+        };
 
-    let (tw_channel_name, tw_channel_id, tw_area_v2, tw_proxy_region, tw_quality, tw_proxy) =
-        if configure_twitch {
-            print!("Twitch 频道名称: ");
-            io::stdout().flush()?;
-            let mut name = String::new();
-            io::stdin().read_line(&mut name)?;
-            let name = name.trim().to_string();
-
-            print!("Twitch 频道ID (用户名): ");
-            io::stdout().flush()?;
-            let mut id = String::new();
-            io::stdin().read_line(&mut id)?;
-            let id = id.trim().to_string();
-
-            print!("B站分区ID (默认 235-其他单机): ");
-            io::stdout().flush()?;
-            let mut area = String::new();
-            io::stdin().read_line(&mut area)?;
-            let area: u64 = area.trim().parse().unwrap_or(235);
-
-            print!("Twitch 代理区域 (默认 as): ");
-            io::stdout().flush()?;
-            let mut region = String::new();
-            io::stdin().read_line(&mut region)?;
-            let region = if region.trim().is_empty() {
-                "as".to_string()
-            } else {
-                region.trim().to_string()
-            };
-
-            println!("\n流质量设置 (用于网络受限用户):");
-            println!("  best - 最佳质量 (推荐)");
-            println!("  worst - 最低质量");
-            println!("  720p/480p - 指定分辨率");
-            print!("请选择质量 (默认 best): ");
-            io::stdout().flush()?;
-            let mut quality = String::new();
-            io::stdin().read_line(&mut quality)?;
-            let quality = if quality.trim().is_empty() {
-                "best".to_string()
-            } else {
-                quality.trim().to_string()
-            };
-
-            print!("\n是否需要为 Twitch 配置代理? (y/N): ");
-            io::stdout().flush()?;
-            let mut proxy_input = String::new();
-            io::stdin().read_line(&mut proxy_input)?;
-            let tw_proxy = if proxy_input.trim().eq_ignore_ascii_case("y") {
-                print!("Twitch 代理: ");
-                io::stdout().flush()?;
-                let mut proxy = String::new();
-                io::stdin().read_line(&mut proxy)?;
-                let proxy_str = proxy.trim().to_string();
-                if proxy_str.is_empty() {
-                    None
-                } else {
-                    Some(proxy_str)
+        match key {
+            "-h" | "--help" => return Ok(ParseOutcome::Help),
+            "-V" | "--version" => return Ok(ParseOutcome::Version),
+            "--bind" => bind = take_value(argv, &mut i, inline, "--bind")?,
+            "--password" => {
+                password = Some(take_value(argv, &mut i, inline, "--password")?);
+            }
+            "-p" | "--port" => {
+                let value = take_value(argv, &mut i, inline, "--port")?;
+                port = value
+                    .parse()
+                    .map_err(|_| format!("invalid port: {value}"))?;
+            }
+            "--ffmpeg-log-level" => {
+                let value = take_value(argv, &mut i, inline, "--ffmpeg-log-level")?;
+                if !matches!(value.as_str(), "error" | "info" | "debug") {
+                    return Err(format!(
+                        "invalid --ffmpeg-log-level: {value} (error, info, debug)"
+                    ));
                 }
-            } else {
-                None
-            };
-
-            (name, id, area, region, quality, tw_proxy)
-        } else {
-            (
-                "".to_string(),
-                "".to_string(),
-                235,
-                "as".to_string(),
-                "best".to_string(),
-                None,
-            )
-        };
-
-    // Optional settings
-    print!("\n是否启用自动封面更换? (Y/n): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let auto_cover = !input.trim().eq_ignore_ascii_case("n");
-
-    print!("是否启用弹幕指令? (Y/n): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let enable_danmaku_command = !input.trim().eq_ignore_ascii_case("n");
-
-    print!("检测间隔 (秒，默认 60): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let interval: u64 = input.trim().parse().unwrap_or(60);
-
-    // Anti-collision settings
-    print!("\n是否启用撞车监控? (y/N): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let anti_collision = input.trim().eq_ignore_ascii_case("y");
-
-    let mut collision_rooms = Vec::new();
-    if anti_collision {
-        println!("\n配置撞车监控直播间");
-        println!("提示: 输入需要监控的B站直播间信息，用于检测是否有其他人在转播相同频道");
-        loop {
-            print!("\n输入监控直播间名称 (直接回车结束添加): ");
-            io::stdout().flush()?;
-            let mut name = String::new();
-            io::stdin().read_line(&mut name)?;
-            let name = name.trim();
-
-            if name.is_empty() {
-                break;
+                ffmpeg_log_level = value;
             }
-
-            print!("输入直播间号: ");
-            io::stdout().flush()?;
-            let mut room_id = String::new();
-            io::stdin().read_line(&mut room_id)?;
-            let room_id: i32 = match room_id.trim().parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    println!("⚠️  无效的直播间号，已跳过");
-                    continue;
+            "--tray" => {
+                if inline.is_some() {
+                    return Err("unexpected value for --tray".into());
                 }
-            };
-
-            collision_rooms.push((name.to_string(), room_id));
-            println!("✅ 已添加: {} ({})", name, room_id);
-        }
-
-        if collision_rooms.is_empty() {
-            println!("⚠️  未添加任何监控直播间，撞车监控将不会生效");
-        }
-    }
-
-    // Advanced optional settings
-    print!("\n是否配置高级选项 (API密钥等)? (y/N): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let configure_advanced = input.trim().eq_ignore_ascii_case("y");
-
-    let (holodex_api_key, holodex_jwt, riot_api_key, enable_lol_monitor) = if configure_advanced {
-        println!("\n高级选项配置");
-        println!("----------------------------------------");
-
-        println!("\nHolodex API Key (用于YouTube直播状态检测，可选)");
-        println!("获取方法: https://holodex.net/login");
-        print!("请输入 (直接回车跳过): ");
-        io::stdout().flush()?;
-        let mut holodex = String::new();
-        io::stdin().read_line(&mut holodex)?;
-        let holodex = holodex.trim().to_string();
-
-        println!("\nHolodex JWT (用于收藏夹直播监控，可选)");
-        println!("留空则 Holodex 监控使用 channels.json，可稍后在 Web UI 配置");
-        println!("如何获取 JWT:");
-        println!("  1. 打开 https://holodex.net/login 并完成登录");
-        println!("  2. 浏览器 F12 → Application（应用程序）→ Cookies → https://holodex.net");
-        println!("  3. 找到 HOLODEX_JWT，复制其 Value（值）");
-        println!("  (JWT 将在到期前 30 天内自动续期并写回 config.json)");
-        print!("请输入 (直接回车跳过): ");
-        io::stdout().flush()?;
-        let mut holodex_jwt = String::new();
-        io::stdin().read_line(&mut holodex_jwt)?;
-        let holodex_jwt = holodex_jwt
-            .trim()
-            .trim_start_matches("BEARER ")
-            .trim_start_matches("bearer ")
-            .to_string();
-
-        println!("\n英雄联盟玩家ID监控 (用于检测游戏内违禁词汇)");
-        print!("是否启用? (y/N): ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let enable_lol = input.trim().eq_ignore_ascii_case("y");
-
-        let riot = if enable_lol {
-            println!("\nRiot API Key (用于英雄联盟玩家ID监控)");
-            println!("获取方法: https://developer.riotgames.com/");
-            print!("请输入 (直接回车跳过): ");
-            io::stdout().flush()?;
-            let mut riot = String::new();
-            io::stdin().read_line(&mut riot)?;
-            riot.trim().to_string()
-        } else {
-            String::new()
-        };
-
-        (holodex, holodex_jwt, riot, enable_lol)
-    } else {
-        (String::new(), String::new(), String::new(), false)
-    };
-
-    // Create config structure
-    let mut collision_map = std::collections::HashMap::new();
-    for (name, room_id) in &collision_rooms {
-        collision_map.insert(name.clone(), *room_id);
-    }
-
-    let config = Config {
-        auto_cover,
-        enable_anti_collision: anti_collision,
-        interval,
-        bililive: BiliLive {
-            enable_danmaku_command,
-            room,
-            bili_rtmp_url: "rtmp://live-push.bilivideo.com/live-bvc/".to_string(),
-            bili_rtmp_key: String::new(),
-            credentials: Credentials::default(),
-        },
-        twitch: Twitch {
-            enable_monitor: true,
-            channel_name: tw_channel_name,
-            area_v2: tw_area_v2,
-            channel_id: tw_channel_id,
-            proxy_region: tw_proxy_region,
-            quality: tw_quality,
-            proxy: tw_proxy,
-            crop: None,
-            ffmpeg_cache: Default::default(),
-        },
-        youtube: Youtube {
-            enable_monitor: true,
-            channel_name: yt_channel_name,
-            channel_id: yt_channel_id,
-            area_v2: yt_area_v2,
-            quality: yt_quality,
-            cookies_file: None,
-            cookies_from_browser: None,
-            proxy: yt_proxy,
-            deno_path: None,
-            crop: None,
-            ffmpeg_cache: Default::default(),
-        },
-        holodex_api_key: if holodex_api_key.is_empty() {
-            None
-        } else {
-            Some(holodex_api_key)
-        },
-        holodex_jwt: if holodex_jwt.is_empty() {
-            None
-        } else {
-            Some(holodex_jwt)
-        },
-        holodex_jwt_refreshed_at: None,
-        holodex_username: None,
-        holodex_skip_jwt_verify: false,
-        riot_api_key: if riot_api_key.is_empty() {
-            None
-        } else {
-            Some(riot_api_key)
-        },
-        enable_lol_monitor,
-        lol_monitor_interval: Some(1),
-        anti_collision_list: collision_map,
-    };
-
-    // Write config file as JSON
-    let config_json = serde_json::to_string_pretty(&config)?;
-    std::fs::write(&config_path, config_json)?;
-    println!("\n✅ 配置文件已创建: {}", config_path.display());
-
-    // Try to start live to get RTMP info
-    println!("\n正在获取推流地址...");
-    match load_config().await {
-        Ok(mut cfg) => {
-            if let Err(e) = bili_start_live(&mut cfg, yt_area_v2).await {
-                println!("⚠️  获取推流地址失败: {}", e);
-                println!("你可以稍后手动开播获取推流地址");
-            } else {
-                println!("✅ 推流地址已更新到配置文件");
-                // Stop the live immediately
-                let _ = bili_stop_live(&cfg).await;
+                tray = true;
             }
+            "--webui" => {
+                if inline.is_some() {
+                    return Err("unexpected value for --webui".into());
+                }
+                tray = false;
+            }
+            other => return Err(format!("unknown argument: {other}")),
         }
-        Err(e) => {
-            println!("⚠️  加载配置失败: {}", e);
-        }
+        i += 1;
     }
 
-    println!("\n=== 设置完成 ===");
-    println!("你现在可以运行 'bilistream' 开始转播");
-    println!("配置文件位置: {}", config_path.display());
-    println!("登录凭证位置: {}", cookies_path.display());
+    if bind.trim().is_empty() {
+        bind = "127.0.0.1".to_string();
+    }
+    let password = password.filter(|value| !value.trim().is_empty());
 
+    Ok(ParseOutcome::Launch(LaunchArgs {
+        bind,
+        password,
+        port,
+        ffmpeg_log_level,
+        tray,
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_needs_console(argv: &[String]) -> bool {
+    let mut i = 1;
+    while i < argv.len() {
+        let raw = argv[i].as_str();
+        let key = raw.split_once('=').map(|(k, _)| k).unwrap_or(raw);
+        match key {
+            "-h" | "--help" | "-V" | "--version" | "--webui" => return true,
+            "--tray" => i += 1,
+            "--bind" | "--password" | "--port" | "-p" | "--ffmpeg-log-level" => {
+                if !raw.contains('=') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => return true,
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn allocate_windows_console() {
+    unsafe {
+        use std::ffi::CString;
+        use winapi::um::consoleapi::AllocConsole;
+        use winapi::um::fileapi::{CreateFileA, OPEN_EXISTING};
+        use winapi::um::processenv::SetStdHandle;
+        use winapi::um::winbase::{STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+        use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
+
+        AllocConsole();
+
+        let stdout_handle = CreateFileA(
+            CString::new("CONOUT$").unwrap().as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+
+        let stderr_handle = CreateFileA(
+            CString::new("CONOUT$").unwrap().as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+
+        let stdin_handle = CreateFileA(
+            CString::new("CONIN$").unwrap().as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+
+        SetStdHandle(STD_OUTPUT_HANDLE, stdout_handle);
+        SetStdHandle(STD_ERROR_HANDLE, stderr_handle);
+        SetStdHandle(STD_INPUT_HANDLE, stdin_handle);
+    }
+}
+
+fn apply_webui_listen(
+    bind: &str,
+    password: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bind = if bind.trim().is_empty() {
+        "127.0.0.1"
+    } else {
+        bind
+    };
+    let password = password.filter(|value| !value.trim().is_empty());
+    bilistream::webui::install_listen(bind, password)?;
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    bilistream::install_crypto_provider();
+fn spawn_webui(port: u16) {
+    tokio::spawn(async move {
+        if let Err(e) = bilistream::webui::server::start_webui(port).await {
+            tracing::error!("Web UI 服务器错误: {}", e);
+        }
+    });
+}
 
-    // On Windows, allocate a console for CLI and WebUI modes
-    #[cfg(target_os = "windows")]
-    {
-        // Check if we're running CLI or WebUI mode (or other console commands)
-        let args: Vec<String> = std::env::args().collect();
-        let needs_console = args.len() > 1 && !matches!(args[1].as_str(), "tray");
+fn spawn_deps_download() {
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
+            tracing::error!("⚠️ 下载依赖项失败: {}", e);
+            tracing::error!("请手动从 GitHub 下载必需文件");
+        }
+    });
+}
 
-        if needs_console {
-            unsafe {
-                use std::ffi::CString;
-                use winapi::um::consoleapi::AllocConsole;
-                use winapi::um::fileapi::{CreateFileA, OPEN_EXISTING};
-                use winapi::um::processenv::SetStdHandle;
-                use winapi::um::winbase::{STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
-                use winapi::um::winnt::{
-                    FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE,
-                };
+fn config_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
+    Ok((
+        exe.with_file_name("config.json"),
+        exe.with_file_name("cookies.json"),
+    ))
+}
 
-                // Allocate a console
-                AllocConsole();
+async fn wait_until_config_ready() {
+    let Ok((config_path, cookies_path)) = config_paths() else {
+        return;
+    };
 
-                // Redirect stdout, stdin, stderr to console
-                let stdout_handle = CreateFileA(
-                    CString::new("CONOUT$").unwrap().as_ptr(),
-                    GENERIC_WRITE,
-                    FILE_SHARE_WRITE,
-                    std::ptr::null_mut(),
-                    OPEN_EXISTING,
-                    0,
-                    std::ptr::null_mut(),
-                );
-
-                let stderr_handle = CreateFileA(
-                    CString::new("CONOUT$").unwrap().as_ptr(),
-                    GENERIC_WRITE,
-                    FILE_SHARE_WRITE,
-                    std::ptr::null_mut(),
-                    OPEN_EXISTING,
-                    0,
-                    std::ptr::null_mut(),
-                );
-
-                let stdin_handle = CreateFileA(
-                    CString::new("CONIN$").unwrap().as_ptr(),
-                    GENERIC_READ,
-                    FILE_SHARE_READ,
-                    std::ptr::null_mut(),
-                    OPEN_EXISTING,
-                    0,
-                    std::ptr::null_mut(),
-                );
-
-                // Set the handles
-                SetStdHandle(STD_OUTPUT_HANDLE, stdout_handle);
-                SetStdHandle(STD_ERROR_HANDLE, stderr_handle);
-                SetStdHandle(STD_INPUT_HANDLE, stdin_handle);
+    if !config_path.exists() {
+        tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
+        tracing::info!("💡 请访问 Web UI 进行配置");
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            if config_path.exists() {
+                tracing::info!("✅ 检测到配置文件，开始监控");
+                break;
             }
         }
     }
 
-    let matches = Command::new("bilistream")
-        .version(env!("CARGO_PKG_VERSION"))
-        .arg(
-            Arg::new("ffmpeg-log-level")
-                .long("ffmpeg-log-level")
-                .value_name("LEVEL")
-                .help("设置ffmpeg日志级别 (error, info, debug)")
-                .default_value("error")
-                .value_parser(["error", "info", "debug"]),
-        )
-        .arg(
-            Arg::new("bind")
-                .long("bind")
-                .value_name("ADDR")
-                .help("Web UI listen address (default 127.0.0.1)")
-                .global(true),
-        )
-        .arg(
-            Arg::new("password")
-                .long("password")
-                .value_name("PASSWORD")
-                .help("Web UI login password. Also BILISTREAM_PASSWORD.")
-                .global(true),
-        )
-        .subcommand(
-            Command::new("cli")
-                .about("以命令行模式运行（无 Web UI）"),
-        )
-        .subcommand(
-            Command::new("get-live-status")
-                .about("获取直播状态、标题和分区")
-                .arg(
-                    Arg::new("platform")
-                        .required(false)
-                        .value_parser(["YT", "TW", "bilibili", "all"])
-                        .default_value("all")
-                        .help("获取的平台 (YT, TW, bilibili, all)"),
-                )
-                .arg(Arg::new("channel_id").required(false).help("获取的频道ID")),
-        )
-        .subcommand(
-            Command::new("start-live").about("开始直播").arg(
-                Arg::new("platform")
-                    .required(false)
-                    .help("开始直播的分区来源 (YT, TW)，未指定则默认为其他单机分区开播"),
-            ),
-        )
-        .subcommand(Command::new("stop-live").about("停止直播"))
-        .subcommand(
-            Command::new("change-live-title")
-                .about("改变直播标题")
-                .arg(Arg::new("title").required(true).help("新直播标题")),
-        )
+    if !cookies_path.exists() {
+        tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
+        tracing::info!("💡 请访问 Web UI 进行登录");
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            if cookies_path.exists() {
+                tracing::info!("✅ 检测到登录凭证，开始监控");
+                break;
+            }
+        }
+    }
+}
 
-        .subcommand(
-            Command::new("login")
-                .about("通过二维码登录Bilibili")
-                .long_about("在终端显示一个二维码，你可以用Bilibili移动应用扫描登录。将登录凭证保存到cookies.json"),
-        )
-        .subcommand(
-            Command::new("send-danmaku")
-                .about("发送弹幕到直播间")
-                .arg(Arg::new("message").required(true).help("弹幕内容")),
-        )
-        .subcommand(
-            Command::new("replace-cover").about("更换直播间封面").arg(
-                Arg::new("image_path")
-                    .required(true)
-                    .help("封面图片路径 (支持jpg/png格式)"),
-            ),
-        )
-        .subcommand(
-            Command::new("update-area")
-                .about("更新Bilibili直播间分区")
-                .arg(
-                    Arg::new("area_id")
-                        .help("新分区ID")
-                        .required(true)
-                        .value_parser(clap::value_parser!(u64)),
-                ),
-        )
-        .subcommand(
-            Command::new("renew")
-                .about("更新Bilibili登录令牌")
+fn spawn_monitor_loop(log_level: String) {
+    tracing::info!("🔄 监控循环已启动");
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            tracing::info!("🔄 进入监控循环...");
+            wait_until_config_ready().await;
+            loop {
+                match run_bilistream(&log_level).await {
+                    Ok(_) => {
+                        tracing::info!("监控循环正常结束");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("监控循环错误: {}", e);
+                        tracing::info!("⏳ 5秒后重试...");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+    });
+}
 
-        )
-        .subcommand(
-            Command::new("completion")
-                .about("生成shell自动补全脚本")
-                .arg(
-                    Arg::new("shell")
-                        .required(true)
-                        .help("目标shell (bash, zsh, fish)")
-                        .value_parser(["bash", "zsh", "fish"]),
-                ),
-        )
-        .subcommand(
-            Command::new("setup")
-                .about("初始化配置：登录Bilibili并配置config.json")
-                .long_about("交互式设置向导，帮助你登录Bilibili并创建config.json配置文件"),
-        )
-        .subcommand(
-            Command::new("webui")
-                .about("启动 Web UI 控制面板")
-                .arg(
-                    Arg::new("port")
-                        .short('p')
-                        .long("port")
-                        .value_name("PORT")
-                        .help("Web UI 端口")
-                        .default_value("3150")
-                        .value_parser(clap::value_parser!(u16)),
-                ),
-        )
-        .subcommand(
-            Command::new("tray")
-                .about("启动系统托盘模式")
-                .arg(
-                    Arg::new("port")
-                        .short('p')
-                        .long("port")
-                        .value_name("PORT")
-                        .help("Web UI 端口")
-                        .default_value("3150")
-                        .value_parser(clap::value_parser!(u16)),
-                ),
-        )
-        .get_matches();
-
-    let ffmpeg_log_level = matches
-        .get_one::<String>("ffmpeg-log-level")
-        .map(String::as_str)
-        .unwrap_or("error");
-
-    // Set up graceful shutdown handler
+fn install_shutdown_handler() {
     #[cfg(unix)]
     {
         use tokio::signal;
@@ -2564,535 +2031,128 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+}
 
-    match matches.subcommand() {
-        Some(("get-live-status", sub_m)) => {
-            let platform = sub_m
-                .get_one::<String>("platform")
-                .map(String::as_str)
-                .unwrap_or("all");
-            let channel_id = sub_m.get_one::<String>("channel_id");
-            get_live_status(platform, channel_id.map(String::as_str)).await?;
+async fn run_tray_app(
+    port: u16,
+    ffmpeg_log_level: &str,
+    is_first_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if is_first_run {
+        tracing::info!("🚀 欢迎使用 Bilistream！");
+        tracing::info!("   检测到首次运行，启动设置向导...");
+    } else {
+        tracing::info!("🚀 启动 Bilistream 系统托盘模式");
+    }
+    tracing::info!("   Web UI 端口: {}", port);
+
+    spawn_webui(port);
+    spawn_deps_download();
+    spawn_monitor_loop(ffmpeg_log_level.to_string());
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    tracing::info!("✅ 后台服务已启动");
+    bilistream::tray::run_tray(port).await?;
+    Ok(())
+}
+
+async fn run_webui_app(
+    port: u16,
+    ffmpeg_log_level: &str,
+    is_first_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if is_first_run {
+        tracing::info!("🚀 欢迎使用 Bilistream！");
+        tracing::info!("   检测到首次运行，启动 Web 设置向导...");
+        tracing::info!("");
+        tracing::info!("📋 请在浏览器中完成设置：");
+        tracing::info!("   1. 打开浏览器访问 http://localhost:{}", port);
+        tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
+        tracing::info!("   3. 配置完成后即可开始使用");
+        tracing::info!("");
+    } else {
+        tracing::info!("🚀 启动 Web UI 和自动监控模式");
+        tracing::info!("   Web UI 将在后台运行");
+        tracing::info!("   访问 http://localhost:{} 查看控制面板", port);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
+        if let Err(e) = show_windows_notification(port) {
+            eprintln!("无法显示通知: {}", e);
         }
-        Some(("start-live", sub_m)) => {
-            let platform = sub_m.get_one::<String>("platform");
-            if platform.is_none() {
-                start_live(None).await?;
-            } else {
-                start_live(Some(platform.unwrap())).await?;
-            }
-        }
-        Some(("stop-live", _)) => {
-            stop_live().await?;
-        }
-        Some(("change-live-title", sub_m)) => {
-            let new_title = sub_m.get_one::<String>("title").unwrap();
-            change_live_title(new_title).await?;
-        }
+    }
 
-        Some(("login", _)) => {
-            tracing::info!("Starting Bilibili login process...");
-            bilibili::login().await?;
-        }
-        Some(("send-danmaku", sub_m)) => {
-            let message = sub_m.get_one::<String>("message").unwrap();
-            let cfg = load_config().await?;
-            match bilibili::send_danmaku(&cfg, message).await {
-                Ok(_) => println!("弹幕发送成功"),
-                Err(e) => {
-                    // Check if it's a rate limit error
-                    if e.to_string().contains("频率过快") {
-                        eprintln!("⚠️ 弹幕发送失败: 发送频率过快，请稍后再试");
-                    } else {
-                        eprintln!("❌ 弹幕发送失败: {}", e);
-                    }
-                }
-            }
-        }
-        Some(("replace-cover", sub_m)) => {
-            let image_path = sub_m.get_one::<String>("image_path").unwrap();
-            let cfg = load_config().await?;
-            bilibili::bili_change_cover(&cfg, image_path).await?;
-            println!("直播间封面更换成功");
-        }
-        Some(("update-area", sub_matches)) => {
-            let cfg = load_config().await?;
-            let area_id = sub_matches
-                .get_one::<u64>("area_id")
-                .expect("Required argument");
+    spawn_webui(port);
+    spawn_deps_download();
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    tracing::info!("✅ Web UI 已启动");
 
-            let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
-            if current_area != *area_id {
-                update_area(current_area, *area_id).await?;
-                let (_, _, current_area) = get_bili_live_status(cfg.bililive.room).await?;
-                if current_area != *area_id {
-                    println!("直播间分区更新失败");
-                } else {
-                    println!(
-                        "直播间分区更新成功, {} -> {}",
-                        area_label(current_area),
-                        area_label(*area_id)
-                    );
-                }
-            } else {
-                println!("分区相同，无须更新");
-            }
-        }
-        Some(("renew", _)) => {
-            bilibili::renew().await?;
-        }
-        Some(("setup", _)) => {
-            setup_wizard().await?;
-        }
-        Some(("webui", sub_m)) => {
-            // Initialize logger with capture for webui mode
-            init_logger_with_capture();
-            apply_webui_listen(&matches)?;
-
-            let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
-            tracing::info!("🚀 启动 Web UI 和自动监控模式");
-            tracing::info!("   Web UI 将在后台运行");
-            tracing::info!("   访问 http://localhost:{} 查看控制面板", port);
-
-            // Spawn WebUI server in background
-            tokio::spawn(async move {
-                if let Err(e) = bilistream::webui::server::start_webui(port).await {
-                    tracing::error!("Web UI 服务器错误: {}", e);
-                }
-            });
-
-            // Give WebUI time to start
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            tracing::info!("✅ Web UI 已启动");
-
-            // Run monitoring loop in foreground (this will block)
-            run_bilistream(ffmpeg_log_level).await?;
-        }
-        Some(("cli", _)) => {
-            // Initialize logger for CLI mode
-            init_logger();
-
-            // CLI mode: Check if setup is needed
-            let config_path = std::env::current_exe()?.with_file_name("config.json");
-            let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-            let needs_setup = !config_path.exists() || !cookies_path.exists();
-
-            if needs_setup {
-                println!("⚠️  检测到缺少配置文件，启动设置向导...\n");
-                setup_wizard().await?;
-                return Ok(());
-            }
-
-            // CLI mode: run normal monitoring
-            run_bilistream(ffmpeg_log_level).await?;
-        }
-        Some(("tray", sub_m)) => {
-            // Initialize logger with capture for tray mode
-            init_logger_with_capture();
-            apply_webui_listen(&matches)?;
-
-            let port = sub_m.get_one::<u16>("port").copied().unwrap_or(3150);
-            let log_level = ffmpeg_log_level.to_string(); // Clone to owned String
-
-            tracing::info!("🚀 启动系统托盘模式");
-            tracing::info!("   Web UI 端口: {}", port);
-
-            // Spawn WebUI server in background
-            tokio::spawn(async move {
-                if let Err(e) = bilistream::webui::server::start_webui(port).await {
-                    tracing::error!("Web UI 服务器错误: {}", e);
-                }
-            });
-
-            // Spawn monitoring loop in separate thread with its own runtime
-            tracing::info!("🔄 监控循环已启动");
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    tracing::info!("🔄 进入监控循环...");
-
-                    // Check if config exists before starting
-                    let config_path = std::env::current_exe()
-                        .unwrap()
-                        .with_file_name("config.json");
-                    let cookies_path = std::env::current_exe()
-                        .unwrap()
-                        .with_file_name("cookies.json");
-
-                    if !config_path.exists() {
-                        tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
-                        tracing::info!("💡 请访问 Web UI 进行配置");
-
-                        // Wait for config to be created
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            if config_path.exists() {
-                                tracing::info!("✅ 检测到配置文件，开始监控");
-                                break;
-                            }
-                        }
-                    }
-
-                    if !cookies_path.exists() {
-                        tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
-                        tracing::info!("💡 请访问 Web UI 进行登录");
-
-                        // Wait for cookies to be created
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            if cookies_path.exists() {
-                                tracing::info!("✅ 检测到登录凭证，开始监控");
-                                break;
-                            }
-                        }
-                    }
-
-                    // Now start the actual monitoring loop
-                    loop {
-                        match run_bilistream(&log_level).await {
-                            Ok(_) => {
-                                tracing::info!("监控循环正常结束");
-                                break;
-                            }
-                            Err(e) => {
-                                tracing::error!("监控循环错误: {}", e);
-                                tracing::info!("⏳ 5秒后重试...");
-                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            }
-                        }
-                    }
-                });
-            });
-
-            // Give WebUI time to start
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            tracing::info!("✅ 后台服务已启动");
-
-            // Download dependencies in background
-            tokio::spawn(async move {
-                if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
-                    tracing::warn!("⚠️ 下载依赖项失败: {}", e);
-                }
-            });
-
-            // Run system tray (this will block until quit)
-            bilistream::tray::run_tray(port).await?;
-        }
-        Some(("completion", sub_m)) => {
-            let shell = sub_m.get_one::<String>("shell").unwrap();
-            let mut cmd = Command::new("bilistream")
-                .version("0.2.1")
-                .arg(
-                    Arg::new("config")
-                        .short('c')
-                        .long("config")
-                        .value_name("FILE")
-                        .help("设置自定义配置文件")
-                        .global(true),
-                )
-                .arg(
-                    Arg::new("ffmpeg-log-level")
-                        .long("ffmpeg-log-level")
-                        .value_name("LEVEL")
-                        .help("设置ffmpeg日志级别 (error, info, debug)")
-                        .default_value("error")
-                        .value_parser(["error", "info", "debug"]),
-                )
-                .subcommand(
-                    Command::new("get-live-status")
-                        .about("检查频道直播状态")
-                        .visible_alias("get-status")
-                        .arg(
-                            Arg::new("platform")
-                                .required(true)
-                                .value_parser(["YT", "TW", "bilibili", "all"])
-                                .help("检查的平台 (YT, TW, bilibili, all)"),
-                        ),
-                )
-                .subcommand(Command::new("login").about("登录"))
-                .subcommand(
-                    Command::new("send-danmaku")
-                        .about("发送弹幕到直播间")
-                        .arg(Arg::new("message").required(true).help("弹幕内容")),
-                )
-                .subcommand(
-                    Command::new("replace-cover").about("更换直播间封面").arg(
-                        Arg::new("image_path")
-                            .required(true)
-                            .help("封面图片路径 (支持jpg/png格式)"),
-                    ),
-                )
-                .subcommand(
-                    Command::new("update-area")
-                        .about("更新Bilibili直播间分区")
-                        .arg(
-                            Arg::new("area_id")
-                                .help("新分区ID")
-                                .required(true)
-                                .value_parser(clap::value_parser!(u64)),
-                        ),
-                )
-                .subcommand(
-                    Command::new("completion")
-                        .about("Generate shell completion scripts")
-                        .arg(
-                            Arg::new("shell")
-                                .required(true)
-                                .help("Target shell (bash, zsh, fish)")
-                                .value_parser(["bash", "zsh", "fish"]),
-                        ),
-                );
-
-            match shell.as_str() {
-                "bash" => {
-                    clap_complete::generate(
-                        clap_complete::shells::Bash,
-                        &mut cmd,
-                        "bilistream",
-                        &mut std::io::stdout(),
-                    );
-                }
-                "zsh" => {
-                    clap_complete::generate(
-                        clap_complete::shells::Zsh,
-                        &mut cmd,
-                        "bilistream",
-                        &mut std::io::stdout(),
-                    );
-                }
-                "fish" => {
-                    clap_complete::generate(
-                        clap_complete::shells::Fish,
-                        &mut cmd,
-                        "bilistream",
-                        &mut std::io::stdout(),
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }
-        _ => {
-            {
-                // Check if this is first run
-                let config_path = std::env::current_exe()?.with_file_name("config.json");
-                let cookies_path = std::env::current_exe()?.with_file_name("cookies.json");
-                let is_first_run = !config_path.exists() || !cookies_path.exists();
-
-                // Initialize logger with capture for webui mode
-                init_logger_with_capture();
-                apply_webui_listen(&matches)?;
-
-                // On Windows, default to tray mode
-                // On Linux, default to WebUI mode
-                #[cfg(target_os = "windows")]
-                let use_tray_mode = true;
-                #[cfg(not(target_os = "windows"))]
-                let use_tray_mode = false;
-
-                if use_tray_mode {
-                    // Windows tray mode: system tray + auto-open browser
-                    let port = 3150u16;
-
-                    if is_first_run {
-                        tracing::info!("🚀 欢迎使用 Bilistream！");
-                        tracing::info!("   检测到首次运行，启动设置向导...");
-                    } else {
-                        tracing::info!("🚀 启动 Bilistream 系统托盘模式");
-                    }
-
-                    tracing::info!("   Web UI 端口: {}", port);
-
-                    // Spawn WebUI server in background
-                    tokio::spawn(async move {
-                        if let Err(e) = bilistream::webui::server::start_webui(port).await {
-                            tracing::error!("Web UI 服务器错误: {}", e);
-                        }
-                    });
-
-                    // Download dependencies in background after WebUI starts
-                    tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                        if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
-                            tracing::error!("⚠️ 下载依赖项失败: {}", e);
-                            tracing::error!("请手动从 GitHub 下载必需文件");
-                        }
-                    });
-
-                    // Spawn monitoring loop in separate thread with its own runtime
-                    tracing::info!("🔄 监控循环已启动");
-                    let log_level = ffmpeg_log_level.to_string();
-                    std::thread::spawn(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            tracing::info!("🔄 进入监控循环...");
-
-                            // Check if config exists before starting
-                            let config_path = std::env::current_exe()
-                                .unwrap()
-                                .with_file_name("config.json");
-                            let cookies_path = std::env::current_exe()
-                                .unwrap()
-                                .with_file_name("cookies.json");
-
-                            if !config_path.exists() {
-                                tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
-                                tracing::info!("💡 请访问 Web UI 进行配置");
-
-                                // Wait for config to be created
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                                    if config_path.exists() {
-                                        tracing::info!("✅ 检测到配置文件，开始监控");
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !cookies_path.exists() {
-                                tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
-                                tracing::info!("💡 请访问 Web UI 进行登录");
-
-                                // Wait for cookies to be created
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                                    if cookies_path.exists() {
-                                        tracing::info!("✅ 检测到登录凭证，开始监控");
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // Now start the actual monitoring loop
-                            loop {
-                                match run_bilistream(&log_level).await {
-                                    Ok(_) => {
-                                        tracing::info!("监控循环正常结束");
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("监控循环错误: {}", e);
-                                        tracing::info!("⏳ 5秒后重试...");
-                                        tokio::time::sleep(tokio::time::Duration::from_secs(5))
-                                            .await;
-                                    }
-                                }
-                            }
-                        });
-                    });
-
-                    // Give WebUI time to start
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    tracing::info!("✅ 后台服务已启动");
-
-                    // Run system tray (this will block until quit)
-                    bilistream::tray::run_tray(port).await?;
-                } else {
-                    // Default: Start Web UI (Linux or non-tray build)
-                    use bilistream::webui::start_webui;
-
-                    if is_first_run {
-                        tracing::info!("🚀 欢迎使用 Bilistream！");
-                        tracing::info!("   检测到首次运行，启动 Web 设置向导...");
-                        tracing::info!("");
-                        tracing::info!("📋 请在浏览器中完成设置：");
-                        tracing::info!("   1. 打开浏览器访问 http://localhost:3150");
-                        tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
-                        tracing::info!("   3. 配置完成后即可开始使用");
-                        tracing::info!("");
-                    } else {
-                        tracing::info!("🚀 启动 Web UI 和自动监控模式");
-                    }
-
-                    #[cfg(target_os = "windows")]
-                    {
-                        tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
-                        // Show notification about where the service is hosted
-                        if let Err(e) = show_windows_notification() {
-                            eprintln!("无法显示通知: {}", e);
-                        }
-                    }
-
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        tracing::info!("💡 提示: 使用 --cli 以命令行模式运行");
-                    }
-
-                    // Spawn WebUI server in background
-                    tokio::spawn(async move {
-                        if let Err(e) = start_webui(3150).await {
-                            tracing::error!("Web UI 服务器错误: {}", e);
-                        }
-                    });
-
-                    // Download dependencies in background after WebUI starts
-                    tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                        if let Err(e) = bilistream::deps::ensure_all_dependencies().await {
-                            tracing::error!("⚠️ 下载依赖项失败: {}", e);
-                            tracing::error!("请手动从 GitHub 下载必需文件");
-                        }
-                    });
-
-                    // Give WebUI time to start
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    tracing::info!("✅ Web UI 已启动");
-
-                    // Only run monitoring loop if config exists (not first run)
-                    if !is_first_run {
-                        // Run monitoring loop in foreground (this will block)
-                        run_bilistream(ffmpeg_log_level).await?;
-                    } else {
-                        // First run: wait for config to be created, then start monitoring
-                        tracing::info!("⏳ 等待配置完成...");
-                        tracing::info!("   配置完成后将自动开始监控");
-
-                        // Poll for config file creation
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                            // Check if config was created
-                            if config_path.exists() && cookies_path.exists() {
-                                tracing::info!("✅ 检测到配置文件已创建！");
-                                tracing::info!("🚀 正在启动监控...");
-                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-                                // Start monitoring loop
-                                run_bilistream(ffmpeg_log_level).await?;
-                                break;
-                            }
-                        }
-                    }
-                }
+    if !is_first_run {
+        run_bilistream(ffmpeg_log_level).await?;
+    } else {
+        tracing::info!("⏳ 等待配置完成...");
+        tracing::info!("   配置完成后将自动开始监控");
+        let (config_path, cookies_path) = config_paths()?;
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            if config_path.exists() && cookies_path.exists() {
+                tracing::info!("✅ 检测到配置文件已创建！");
+                tracing::info!("🚀 正在启动监控...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                run_bilistream(ffmpeg_log_level).await?;
+                break;
             }
         }
     }
     Ok(())
 }
 
-fn apply_webui_listen(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
-    let bind = matches
-        .get_one::<String>("bind")
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("BILISTREAM_BIND")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let password = matches
-        .get_one::<String>("password")
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("BILISTREAM_PASSWORD")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        });
-    bilistream::webui::install_listen(&bind, password)?;
-    Ok(())
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    bilistream::install_crypto_provider();
+
+    let args: Vec<String> = std::env::args().collect();
+
+    #[cfg(target_os = "windows")]
+    {
+        if windows_needs_console(&args) {
+            allocate_windows_console();
+        }
+    }
+
+    let launch = match parse_launch_args(&args) {
+        Ok(ParseOutcome::Help) => {
+            print_help();
+            return Ok(());
+        }
+        Ok(ParseOutcome::Version) => {
+            println!("bilistream {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Ok(ParseOutcome::Launch(launch)) => launch,
+        Err(err) => {
+            #[cfg(target_os = "windows")]
+            allocate_windows_console();
+            eprintln!("error: {err}");
+            eprintln!("Try 'bilistream --help' for more information.");
+            std::process::exit(2);
+        }
+    };
+
+    init_logger_with_capture();
+    apply_webui_listen(&launch.bind, launch.password.clone())?;
+    install_shutdown_handler();
+
+    let (config_path, cookies_path) = config_paths()?;
+    let is_first_run = !config_path.exists() || !cookies_path.exists();
+
+    if launch.tray {
+        run_tray_app(launch.port, &launch.ffmpeg_log_level, is_first_run).await
+    } else {
+        run_webui_app(launch.port, &launch.ffmpeg_log_level, is_first_run).await
+    }
 }
 
 fn init_logger() {
@@ -3216,14 +2276,14 @@ fn init_logger_with_capture() {
 }
 
 #[cfg(target_os = "windows")]
-fn show_windows_notification() -> Result<(), Box<dyn std::error::Error>> {
+fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     use std::process::Command as StdCommand;
 
     // Build notification message
     let mut message = String::from("🌐 Web UI 服务已启动\n");
     message.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    message.push_str("📍 本地访问: http://localhost:3150\n");
-    message.push_str("📍 本地访问: http://127.0.0.1:3150\n");
+    message.push_str(&format!("📍 本地访问: http://localhost:{}\n", port));
+    message.push_str(&format!("📍 本地访问: http://127.0.0.1:{}\n", port));
 
     // Escape the message for PowerShell
     let escaped_message = message.replace("`", "``").replace("\"", "`\"");
@@ -3367,5 +2427,62 @@ mod tests {
         let current = "YT: channel 未直播，计划于 2026-07-04 12:04:00 开始，new title";
 
         assert!(should_update_status_message(last, current));
+    }
+
+    fn parse_test_args(args: &[&str]) -> Result<ParseOutcome, String> {
+        let argv: Vec<String> = std::iter::once("bilistream".to_string())
+            .chain(args.iter().map(|s| (*s).to_string()))
+            .collect();
+        parse_launch_args_with(&argv, None, None, None, None, false)
+    }
+
+    #[test]
+    fn launch_defaults_without_flags() {
+        let ParseOutcome::Launch(launch) = parse_test_args(&[]).unwrap() else {
+            panic!("expected launch");
+        };
+        assert_eq!(launch.bind, "127.0.0.1");
+        assert_eq!(launch.port, 3150);
+        assert_eq!(launch.ffmpeg_log_level, "error");
+        assert!(!launch.tray);
+        assert!(launch.password.is_none());
+    }
+
+    #[test]
+    fn launch_parses_bind_port_and_webui() {
+        let ParseOutcome::Launch(launch) =
+            parse_test_args(&["--bind=0.0.0.0", "-p", "8080", "--webui"]).unwrap()
+        else {
+            panic!("expected launch");
+        };
+        assert_eq!(launch.bind, "0.0.0.0");
+        assert_eq!(launch.port, 8080);
+        assert!(!launch.tray);
+    }
+
+    #[test]
+    fn launch_tray_flag_overrides_default() {
+        let ParseOutcome::Launch(launch) = parse_test_args(&["--tray"]).unwrap() else {
+            panic!("expected launch");
+        };
+        assert!(launch.tray);
+    }
+
+    #[test]
+    fn launch_rejects_unknown_subcommand() {
+        let err = parse_test_args(&["setup"]).unwrap_err();
+        assert!(err.contains("unknown argument"));
+    }
+
+    #[test]
+    fn launch_help_and_version() {
+        assert!(matches!(
+            parse_test_args(&["--help"]).unwrap(),
+            ParseOutcome::Help
+        ));
+        assert!(matches!(
+            parse_test_args(&["-V"]).unwrap(),
+            ParseOutcome::Version
+        ));
     }
 }

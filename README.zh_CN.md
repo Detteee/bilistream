@@ -108,7 +108,7 @@
 
 5. **配置：**
 
-   **网页版设置（推荐）:**
+   **网页版设置:**
 
    - 直接运行 `./bilistream`（或双击 `bilistream.exe`）
    - 在浏览器中打开 `http://localhost:3150`
@@ -117,23 +117,6 @@
      - **步骤 1**: 哔哩哔哩登录（二维码显示在浏览器中）
      - **步骤 2**: 基础设置（直播间号、检测间隔、功能开关）
      - **步骤 3**: 平台配置（YouTube、Twitch、API 密钥）
-
-   **命令行设置（备选）:**
-
-   运行命令行设置向导：
-
-   ```bash
-   ./bilistream setup
-   ```
-
-   命令行向导将引导你完成：
-
-   - 哔哩哔哩登录（终端显示二维码）
-   - 代理设置（可选）
-   - 直播间配置
-   - YouTube/Twitch 频道（可选）
-   - API 密钥（Holodex、Riot Games - 可选）
-   - 防撞车监控（可选）
 6. **流质量配置：**
 
    对于网络带宽受限的用户，可以配置流质量设置：
@@ -189,7 +172,7 @@
 ├── areas.json           # 分区（游戏类别）和禁用关键词配置
 ├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
 ├── config.json          # 主配置文件
-├── cookies.json         # 哔哩哔哩登录 cookies（./bilistream login）
+├── cookies.json         # 哔哩哔哩登录 cookies（网页设置向导写入）
 ├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词 (可选)
 └── stream_manager.sh    # 管理脚本
 ```
@@ -212,9 +195,8 @@
 **高级选项：**
 
 ```bash
-./bilistream tray               # 强制后台模式（带系统托盘）
-./bilistream webui              # 强制 Web 模式（显示控制台日志）
-./bilistream cli                # 纯命令行模式（无 Web 界面）
+./bilistream --tray             # 强制系统托盘（Windows 默认）
+./bilistream --webui            # 强制控制台 Web UI（Linux/macOS 默认）
 ./bilistream-tauri              # 桌面应用模式（原生窗口 + 托盘）
 ```
 
@@ -247,44 +229,18 @@
 - 🌗 明亮与暗色主题
 - 📱 移动端友好界面
 
-### 命令
+### 启动选项
+
+登录、配置和直播控制都在 Web UI（`http://localhost:3150`）完成。
 
 ```bash
-# 运行模式
-./bilistream                                    # 默认（Windows 托盘，Linux WebUI）
-./bilistream tray                               # 系统托盘模式
-./bilistream webui                              # Web UI 模式
-./bilistream cli                                # 纯命令行模式
-
-# 设置和配置
-./bilistream setup                              # 设置向导
-./bilistream login                              # 登录哔哩哔哩
-./bilistream renew                              # 更新哔哩哔哩令牌
-
-# 直播控制
-./bilistream start-live                         # 开始直播
-./bilistream stop-live                          # 停止直播
-./bilistream change-live-title <标题>          # 更改直播标题
-./bilistream update-area <分区ID>              # 更新直播分区
-./bilistream replace-cover <图片路径>          # 更新直播封面
-
-# 状态和工具
-./bilistream get-live-status <平台>            # 获取状态（YT/TW/bilibili/all）
-./bilistream send-danmaku <消息>               # 发送弹幕消息
-./bilistream completion <shell>                # 生成补全脚本（bash/zsh/fish）
-
-# 自定义端口与密码
-./bilistream webui --port <自定义端口>                 # Web UI 自定义端口
-./bilistream tray --port <自定义端口>                  # 托盘模式自定义端口
-./bilistream --password <密码>                         # Web UI 登录密码
-./bilistream                                    # 启动（Web UI 模式）
-./bilistream --cli                              # 启动（CLI 模式）
-./bilistream send-danmaku <弹幕内容>             # 发送弹幕
-./bilistream replace-cover <图片路径>            # 更新直播封面
-./bilistream update-area <分区ID>               # 更新直播分区
-./bilistream renew                              # 更新哔哩哔哩令牌
-./bilistream get-live-status <平台>             # 获取状态（YT/TW/bilibili/all）
-./bilistream completion <shell>                 # 生成补全脚本（bash/zsh/fish）
+./bilistream                                    # 默认（Windows 托盘，Linux Web UI）
+./bilistream --tray                             # 系统托盘
+./bilistream --webui                            # 控制台 Web UI
+./bilistream --port 3150                        # Web UI 端口（或 BILISTREAM_PORT）
+./bilistream --bind 127.0.0.1                   # 监听地址（或 BILISTREAM_BIND）
+./bilistream --password <密码>                  # Web UI 登录密码（或 BILISTREAM_PASSWORD）
+./bilistream --ffmpeg-log-level error           # error、info 或 debug
 ```
 
 ### 弹幕命令功能

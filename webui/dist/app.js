@@ -4000,7 +4000,7 @@
           if (errorMsg.includes('权限错误') || errorMsg.includes('Permission denied')) {
             errorMsg = '配置文件权限错误！请在可执行文件所在目录运行程序。';
           } else if (errorMsg.includes('不存在') || errorMsg.includes('No such file')) {
-            errorMsg = '配置文件不存在！请先运行 "bilistream setup" 创建配置。';
+            errorMsg = '配置文件不存在！请在 Web UI 中完成设置。';
           } else if (errorMsg.includes('Failed to fetch')) {
             // Also suppress generic fetch failures
             return;

@@ -107,7 +107,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
    ```
 5. **Configuration:**
 
-   **Web-Based Setup (Recommended):**
+   **Web-Based Setup:**
 
    - Simply run `./bilistream` (or double-click on Windows)
    - Open your browser to `http://localhost:3150`
@@ -116,24 +116,6 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
      - **Step 1**: Bilibili login with QR code displayed in browser
      - **Step 2**: Basic settings (room number, intervals, features)
      - **Step 3**: Platform configuration (YouTube, Twitch, API keys)
-
-   **CLI Setup (Alternative):**
-
-   Run the command-line setup wizard:
-
-   ```bash
-   ./bilistream setup
-   ```
-
-   The CLI wizard guides you through:
-
-   - Bilibili login (QR code in terminal)
-   - Proxy settings (optional)
-   - Live room configuration
-   - YouTube/Twitch channels (optional)
-   - API keys (Holodex, Riot Games - optional)
-   - Anti-collision monitoring (optional)
-   - Stream quality settings (for network-limited users)
 6. **Stream Quality Configuration:**
 
    For users with limited network bandwidth, you can configure stream quality settings:
@@ -189,7 +171,7 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 ├── areas.json           # Area (game categories) and banned keywords configuration
 ├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
 ├── config.json          # Main configuration file
-├── cookies.json         # Bilibili login cookies (./bilistream login)
+├── cookies.json         # Bilibili login cookies (from the Web UI setup)
 ├── invalid_words.txt    # Filtered words for LOL players ID
 └── stream_manager.sh    # Management script
 ```
@@ -212,9 +194,8 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 **Advanced options:**
 
 ```bash
-./bilistream tray               # Force background mode (with system tray)
-./bilistream webui              # Force web mode (shows console logs)
-./bilistream cli                # Command-line only (no web interface)
+./bilistream --tray             # Force system tray (default on Windows)
+./bilistream --webui            # Force console Web UI (default on Linux/macOS)
 ./bilistream-tauri              # Desktop app mode (native window + tray)
 ```
 
@@ -247,36 +228,18 @@ Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
 - 🌗 Light and dark themes
 - 📱 Mobile-friendly interface
 
-### Commands
+### Launch options
+
+Setup, login, and stream control live in the Web UI (`http://localhost:3150`).
 
 ```bash
-# Running modes
-./bilistream                                    # Default (tray on Windows, webui on Linux)
-./bilistream tray                               # System tray mode
-./bilistream webui                              # Web UI mode
-./bilistream cli                                # CLI only mode
-
-# Setup and configuration
-./bilistream setup                              # Setup wizard
-./bilistream login                              # Login to Bilibili
-./bilistream renew                              # Renew Bilibili tokens
-
-# Stream control
-./bilistream start-live                         # Start streaming
-./bilistream stop-live                          # Stop streaming
-./bilistream change-live-title <title>          # Change stream title
-./bilistream update-area <area_id>              # Update stream area
-./bilistream replace-cover <image_path>         # Update stream cover
-
-# Status and utilities
-./bilistream get-live-status <platform>         # Get status (YT/TW/bilibili/all)
-./bilistream send-danmaku <message>             # Send chat message
-./bilistream completion <shell>                 # Generate completions (bash/zsh/fish)
-
-# Custom ports and password
-./bilistream webui --port <custom port>                  # Web UI with custom port
-./bilistream tray --port <custom port>                   # Tray mode with custom port
-./bilistream --password <secret>                         # Web UI login password
+./bilistream                                    # Default (tray on Windows, Web UI on Linux)
+./bilistream --tray                             # System tray
+./bilistream --webui                            # Console Web UI
+./bilistream --port 3150                        # Web UI port (or BILISTREAM_PORT)
+./bilistream --bind 127.0.0.1                   # Listen address (or BILISTREAM_BIND)
+./bilistream --password <secret>                # Web UI login password (or BILISTREAM_PASSWORD)
+./bilistream --ffmpeg-log-level error           # error, info, or debug
 ```
 
 ### Danmaku Command Feature

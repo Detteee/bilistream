@@ -24,11 +24,10 @@ pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
 
     let needs_setup = !missing_files.is_empty();
 
-    // Detect platform and set appropriate command
     let setup_command = if cfg!(target_os = "windows") {
-        "bilistream.exe setup".to_string()
+        "bilistream.exe".to_string()
     } else {
-        "./bilistream setup".to_string()
+        "./bilistream".to_string()
     };
 
     Ok(Json(SetupStatus {

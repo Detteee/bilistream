@@ -23,4 +23,4 @@ curl -L -o "$INSTALL_DIR/twitch.py" \
     'https://github.com/2bc4/streamlink-ttvlol/releases/latest/download/twitch.py'
 
 echo -e "\n\033[1;32m[5/5] Installation completed successfully!\033[0m"
-echo "You can now proceed with bilistream setup and configuration."
+echo "You can now run bilistream and finish setup in the browser."
