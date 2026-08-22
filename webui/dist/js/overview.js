@@ -1,7 +1,7 @@
 // overview.js — extracted from app.js
 
 import { isDashboardVisible, isElementHidden, setElementDisplay, reconcileChildren, createStreamThumbnail, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions, getAreaName } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
@@ -182,6 +182,33 @@ function initDashboardControls() {
   document
     .getElementById('tw-hls-cache-enabled')
     ?.addEventListener('change', event => setHlsCacheLatencyInputState('tw', event.currentTarget.checked));
+  document
+    .getElementById('priority-toggle')
+    ?.addEventListener('change', togglePriorityChannel);
+  document
+    .getElementById('refreshPriorityBtn')
+    ?.addEventListener('click', refreshPriorityStatus);
+  document
+    .getElementById('priority-channel-edit-btn')
+    ?.addEventListener('click', togglePriorityChannelEdit);
+  document
+    .getElementById('priority-channel-save-btn')
+    ?.addEventListener('click', savePriorityChannelEdit);
+  document
+    .getElementById('priority-channel-cancel-btn')
+    ?.addEventListener('click', cancelPriorityChannelEdit);
+  document
+    .getElementById('priority-area-edit-btn')
+    ?.addEventListener('click', togglePriorityAreaEdit);
+  document
+    .getElementById('priority-area-save-btn')
+    ?.addEventListener('click', savePriorityAreaEdit);
+  document
+    .getElementById('priority-area-cancel-btn')
+    ?.addEventListener('click', cancelPriorityAreaEdit);
+  document
+    .getElementById('priority-auto-restart-toggle')
+    ?.addEventListener('change', togglePriorityAutoRestart);
 }
 function initHolodexLoginModalControls() {
   bindDialog('holodex-login-modal', closeHolodexLoginModal);
@@ -268,6 +295,8 @@ async function initStatusRefresh() {
 
     applyHolodexMonitorGateToggle(config.holodex_monitor_gate !== false);
     applyHolodexConfig(config);
+
+    applyPriorityAutoRestartToggle(config);
 
     if (config.interval) {
       statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
@@ -1291,6 +1320,194 @@ async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, t
     showNotification('捕获失败: ' + error.message, 'error');
   }
 }
+
+async function togglePriorityChannel() {
+  const toggle = document.getElementById('priority-toggle');
+  const enabled = toggle.checked;
+
+  try {
+    const result = await postJsonApi('/api/priority-channel', { enabled });
+    if (result.success) {
+      showNotification(enabled ? '优先频道已启用' : '优先频道已禁用', 'success');
+      await refreshStatus();
+    } else {
+      toggle.checked = !enabled;
+      showNotification(result.message || '保存失败', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to toggle priority channel:', error);
+    toggle.checked = !enabled;
+    showNotification('保存失败: ' + error.message, 'error');
+  }
+}
+
+async function togglePriorityAutoRestart() {
+  const toggle = document.getElementById('priority-auto-restart-toggle');
+  if (!toggle) return;
+  const enabled = toggle.checked;
+
+  try {
+    const result = await postJsonApi('/api/priority-channel', { auto_restart: enabled });
+    if (result.success) {
+      showNotification(enabled ? '自动重启流已启用' : '自动重启流已禁用', 'success');
+    } else {
+      toggle.checked = !enabled;
+      showNotification(result.message || '保存失败', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to toggle auto restart:', error);
+    toggle.checked = !enabled;
+    showNotification('保存失败: ' + error.message, 'error');
+  }
+}
+
+async function togglePriorityChannelEdit() {
+  const channelSpan = document.getElementById('priority-channel-name');
+  const editContainer = document.getElementById('priority-channel-edit-container');
+  const editSelect = document.getElementById('priority-channel-edit-select');
+
+  showInfoRowEdit(channelSpan, editContainer);
+
+  await loadChannelsForPriorityInline();
+  editSelect.focus();
+}
+
+async function loadChannelsForPriorityInline() {
+  try {
+    const data = await getJson('/api/channels');
+    const select = document.getElementById('priority-channel-edit-select');
+
+    select.replaceChildren(createSelectOption('', '选择频道...'));
+
+    if (data.channels) {
+      data.channels.forEach(channel => {
+        select.appendChild(createSelectOption(channel.name, channel.name));
+      });
+
+      const currentChannel = document.getElementById('priority-channel-name').textContent;
+      if (currentChannel && currentChannel !== '未配置') {
+        select.value = currentChannel;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load channels:', error);
+  }
+}
+
+function cancelPriorityChannelEdit() {
+  const channelSpan = document.getElementById('priority-channel-name');
+  const editContainer = document.getElementById('priority-channel-edit-container');
+
+  hideInfoRowEdit(channelSpan, editContainer);
+}
+
+async function savePriorityChannelEdit() {
+  const editSelect = document.getElementById('priority-channel-edit-select');
+  const newChannel = editSelect.value;
+
+  if (!newChannel) {
+    showNotification('请选择一个频道', 'error');
+    return;
+  }
+
+  try {
+    const configData = await getJson('/api/config');
+
+    const priorityConfig = {
+      enabled: configData.priority_channel?.enabled || false,
+      channel_name: newChannel,
+      default_area: configData.priority_channel?.default_area || 235
+    };
+
+    const result = await postJsonApi('/api/priority-channel', priorityConfig);
+    if (result.success) {
+      showNotification('频道配置已保存', 'success');
+      cancelPriorityChannelEdit();
+      await refreshStatus();
+    } else {
+      showNotification(result.message || '保存失败', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to save priority channel:', error);
+    showNotification('保存失败: ' + error.message, 'error');
+  }
+}
+
+async function togglePriorityAreaEdit() {
+  const areaSpan = document.getElementById('priority-default-area');
+  const editContainer = document.getElementById('priority-area-edit-container');
+  const editSelect = document.getElementById('priority-area-edit-select');
+
+  showInfoRowEdit(areaSpan, editContainer);
+
+  await loadAreasForPriorityInline();
+  editSelect.focus();
+}
+
+async function loadAreasForPriorityInline() {
+  try {
+    const data = await getJson('/api/areas');
+    const select = document.getElementById('priority-area-edit-select');
+
+    select.replaceChildren(createAreaOption('', '选择分区...'));
+
+    if (data.areas) {
+      getSortedAreas(data.areas).forEach(area => {
+        select.appendChild(createAreaOption(area.id, area.name));
+      });
+
+      const currentAreaText = document.getElementById('priority-default-area').textContent;
+      if (currentAreaText && currentAreaText !== '-') {
+        const match = currentAreaText.match(/\((\d+)\)/);
+        if (match) {
+          select.value = match[1];
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load areas:', error);
+  }
+}
+
+function cancelPriorityAreaEdit() {
+  const areaSpan = document.getElementById('priority-default-area');
+  const editContainer = document.getElementById('priority-area-edit-container');
+
+  hideInfoRowEdit(areaSpan, editContainer);
+}
+
+async function savePriorityAreaEdit() {
+  const editSelect = document.getElementById('priority-area-edit-select');
+  const newAreaId = parseInteger(editSelect.value, 0);
+
+  if (!newAreaId) {
+    showNotification('请选择一个分区', 'error');
+    return;
+  }
+
+  try {
+    const configData = await getJson('/api/config');
+
+    const priorityConfig = {
+      enabled: configData.priority_channel?.enabled || false,
+      channel_name: configData.priority_channel?.channel_name || '',
+      default_area: newAreaId
+    };
+
+    const result = await postJsonApi('/api/priority-channel', priorityConfig);
+    if (result.success) {
+      showNotification('默认分区已保存', 'success');
+      cancelPriorityAreaEdit();
+      await refreshStatus();
+    } else {
+      showNotification(result.message || '保存失败', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to save priority area:', error);
+    showNotification('保存失败: ' + error.message, 'error');
+  }
+}
+
 // Holodex API Key Management Functions
 async function testHolodexApiKey() {
   const apiKeyInput = document.getElementById('holodex-api-input');
@@ -1873,6 +2090,77 @@ function refreshYouTubeStatus() {
 function refreshTwitchStatus() {
   return refreshPlatformStatus('Twitch', '/api/refresh/twitch', 'refreshTwitchBtn', 'refreshTwitchIcon');
 }
+
+function refreshPriorityStatus() {
+  return refreshDashboardStatusEndpoint({
+    endpoint: '/api/refresh/priority-channel',
+    buttonId: 'refreshPriorityBtn',
+    iconId: 'refreshPriorityIcon',
+    successMessage: '优先频道状态已刷新',
+    failureMessage: '刷新优先频道状态失败',
+    defaultError: 'Failed to refresh priority channel status',
+    logMessage: 'Error refreshing priority channel status:'
+  });
+}
+
+function setPriorityStatusFields(priority, liveStatus, title, defaultArea) {
+  const status = document.getElementById('priority-status');
+  if (status) {
+    status.className = `status-indicator ${priority?.is_live && priority.enabled ? 'status-live' : 'status-offline'}`;
+  }
+  setPlatformLiveInfoVisibility('priority', !!priority?.is_live && priority.enabled);
+  setElementText('priority-channel-name', priority?.channel_name || '未配置');
+  setElementText('priority-live-status', liveStatus);
+  setElementText('priority-title', title);
+  setElementText('priority-default-area', defaultArea);
+}
+
+function renderPriorityChannelStatus(priority) {
+  const priorityCard = document.getElementById('priority-channel-card');
+  const priorityToggle = document.getElementById('priority-toggle');
+  const priorityAutoRestartToggle = document.getElementById('priority-auto-restart-toggle');
+  if (!priorityCard || !priorityToggle) {
+    return;
+  }
+
+  priorityCard.style.display = '';
+
+  if (!priority) {
+    priorityToggle.checked = false;
+    if (priorityAutoRestartToggle) {
+      priorityAutoRestartToggle.checked = false;
+    }
+    setPriorityStatusFields(null, '未启用', '-', '-');
+    return;
+  }
+
+  priorityToggle.checked = priority.enabled;
+  if (priorityAutoRestartToggle) {
+    priorityAutoRestartToggle.checked = priority.auto_restart || false;
+  }
+  window.configData.priority_channel = {
+    ...(window.configData.priority_channel || {}),
+    enabled: priority.enabled,
+    auto_restart: priority.auto_restart || false,
+    channel_name: priority.channel_name || '',
+    default_area: priority.default_area || 235
+  };
+
+  const defaultArea = priority.default_area
+    ? `${getAreaName(priority.default_area)} (${priority.default_area})`
+    : '-';
+  if (priority.enabled) {
+    setPriorityStatusFields(
+      priority,
+      priority.is_live ? '直播中' : '未直播',
+      priority.title || '-',
+      defaultArea
+    );
+    return;
+  }
+
+  setPriorityStatusFields(priority, '未启用', '-', defaultArea);
+}
 function syncInfoRowLabelCenter(rowElement, valueElement) {
   if (!rowElement || !valueElement) {
     return;
@@ -1892,6 +2180,10 @@ function syncPlatformTitleRowCenters() {
   syncInfoRowLabelCenter(
     document.getElementById('tw-title-row'),
     document.getElementById('tw-title')
+  );
+  syncInfoRowLabelCenter(
+    document.getElementById('priority-title-row'),
+    document.getElementById('priority-title')
   );
 }
 // Mirrors the Bilibili room state into the top bar so the current state
@@ -1940,6 +2232,7 @@ async function refreshStatus() {
 
     if (data.success && data.data) {
       renderStatusCards(data.data);
+      renderPriorityChannelStatus(data.data.priority_channel);
     } else {
       console.error('Invalid API response:', data);
       showNotification('获取状态失败：响应格式错误', 'error');

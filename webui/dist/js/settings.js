@@ -1,7 +1,7 @@
 // settings.js — extracted from app.js
 
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
@@ -64,6 +64,7 @@ async function reloadServerConfig() {
     mergeConfigData(config);
     updateMonitorToggleStates(config);
     updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
+    applyPriorityAutoRestartToggle(config);
     return config;
   } catch (error) {
     console.debug('Failed to reload config:', error);

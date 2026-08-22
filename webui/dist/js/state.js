@@ -15,6 +15,7 @@ window.configData = {
   riot_api_key: '',
   holodex_api_key: '',
   youtube_api_key: '',
+  priority_channel: {},
   bilibili: {},
   youtube: {},
   twitch: {}
@@ -23,6 +24,7 @@ function mergeConfigData(config) {
   window.configData = {
     ...window.configData,
     ...config,
+    priority_channel: { ...window.configData.priority_channel, ...config.priority_channel },
     bilibili: { ...window.configData.bilibili, ...config.bilibili },
     youtube: { ...window.configData.youtube, ...config.youtube },
     twitch: { ...window.configData.twitch, ...config.twitch }
@@ -38,6 +40,13 @@ function updateMonitorToggleStates(config = window.configData) {
   }
   if (twitchToggle) {
     applyMonitorToggleConfigState(twitchToggle, 'twitch-monitor-toggle', config.twitch?.enable_monitor !== false);
+  }
+}
+
+function applyPriorityAutoRestartToggle(config = window.configData) {
+  const autoRestartToggle = document.getElementById('priority-auto-restart-toggle');
+  if (autoRestartToggle && config.priority_channel) {
+    autoRestartToggle.checked = config.priority_channel.auto_restart || false;
   }
 }
 function applyMonitorToggleConfigState(toggle, toggleId, enabled) {
@@ -146,6 +155,7 @@ function getAreaName(areaId) {
 export {
   mergeConfigData,
   updateMonitorToggleStates,
+  applyPriorityAutoRestartToggle,
   applyMonitorToggleConfigState,
   updateDanmakuCommandToggle,
   applyHolodexMonitorGateToggle,
