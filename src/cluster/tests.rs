@@ -619,9 +619,7 @@ fn remote_heartbeat_sender_local_flag_is_not_trusted() {
 
     update_node(node, &cfg.cluster.node_id);
 
-    let stored = CLUSTER_STATE
-        .read()
-        .unwrap()
+    let stored = cluster_state_read()
         .nodes
         .get("remote")
         .cloned()
@@ -1488,9 +1486,7 @@ fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
         mark_peer_unreachable(node_id, &cfg);
     }
 
-    let stored = CLUSTER_STATE
-        .read()
-        .unwrap()
+    let stored = cluster_state_read()
         .nodes
         .get(node_id)
         .cloned()
@@ -1513,9 +1509,7 @@ fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
     }
     mark_peer_unreachable(node_id, &cfg);
 
-    let stored = CLUSTER_STATE
-        .read()
-        .unwrap()
+    let stored = cluster_state_read()
         .nodes
         .get(node_id)
         .cloned()

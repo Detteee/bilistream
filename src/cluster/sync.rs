@@ -3,8 +3,8 @@
 use super::election::{configured_node_ids, node_is_eligible};
 use super::fencing::{clear_local_stream, local_monitoring_allowed};
 use super::state::{
-    cluster_control_timeout, cluster_state_read, cluster_state_write, now_secs, write_json_file,
-    ClusterState, CLUSTER_HTTP_CLIENT, CLUSTER_SWITCH_LOCK, NODE_MODE_APPLY_LOCK,
+    cluster_control_timeout, cluster_state_read, cluster_state_write, cluster_switch_lock,
+    node_mode_apply_lock, now_secs, write_json_file, ClusterState, CLUSTER_HTTP_CLIENT,
 };
 use super::status::{
     current_active_owner, force_failover, get_cluster_status,
@@ -353,7 +353,7 @@ pub async fn finalize_cluster_node_switch(
     target_node_id: &str,
     preserve_source_drain: bool,
 ) -> Result<(), String> {
-    let _switch_guard = CLUSTER_SWITCH_LOCK.lock().await;
+    let _switch_guard = cluster_switch_lock().lock().await;
     let current_owner = current_active_owner();
     if current_owner.as_deref() != Some(source_node_id)
         && current_owner.as_deref() != Some(target_node_id)
@@ -691,7 +691,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
 pub async fn apply_cluster_node_mode_locally(
     payload: ClusterApplyNodeModeRequest,
 ) -> Result<ClusterStatus, String> {
-    let _apply_guard = NODE_MODE_APPLY_LOCK.lock().await;
+    let _apply_guard = node_mode_apply_lock().lock().await;
     let active = payload.active;
     let restart = payload.restart;
     let preserve_drain = payload.preserve_drain;

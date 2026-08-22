@@ -12,11 +12,6 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
-    pub(crate) static ref CLUSTER_STATE: RwLock<ClusterState> =
-        RwLock::new(ClusterState::default());
-    pub(crate) static ref NODE_MODE_APPLY_LOCK: tokio::sync::Mutex<()> =
-        tokio::sync::Mutex::new(());
-    pub(crate) static ref CLUSTER_SWITCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
     pub(crate) static ref CLUSTER_HTTP_CLIENT: reqwest::Client = build_cluster_http_client();
 }
 
@@ -66,11 +61,19 @@ pub(crate) fn recover_write_lock<'a, T>(
 }
 
 pub(crate) fn cluster_state_read() -> RwLockReadGuard<'static, ClusterState> {
-    recover_read_lock(&CLUSTER_STATE, "cluster state")
+    recover_read_lock(crate::AppState::process_cluster(), "cluster state")
 }
 
 pub(crate) fn cluster_state_write() -> RwLockWriteGuard<'static, ClusterState> {
-    recover_write_lock(&CLUSTER_STATE, "cluster state")
+    recover_write_lock(crate::AppState::process_cluster(), "cluster state")
+}
+
+pub(crate) fn cluster_switch_lock() -> &'static tokio::sync::Mutex<()> {
+    crate::AppState::process_cluster_switch_lock()
+}
+
+pub(crate) fn node_mode_apply_lock() -> &'static tokio::sync::Mutex<()> {
+    crate::AppState::process_node_mode_apply_lock()
 }
 
 #[derive(Clone, Debug, Default)]

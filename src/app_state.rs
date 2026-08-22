@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, LockResult, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, LockResult, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::sync::{broadcast, Notify};
 
+use crate::cluster::ClusterState;
 use crate::webui::state::StatusData;
 
 const LOG_CAPACITY: usize = 500;
@@ -9,12 +10,13 @@ const EVENT_BUS_CAPACITY: usize = 64;
 
 static PROCESS: OnceLock<AppState> = OnceLock::new();
 
-/// Process runtime created in `main` and passed into the Web UI.
+/// Process runtime created in `main` and passed into the Web UI and cluster worker.
 ///
-/// Distinct [`AppState::new`] values do not share logs, status, or events.
-/// Free-function shims such as [`crate::webui::state::update_status_cache`]
-/// still go through [`AppState::current`], which is the instance [`install`]ed
-/// at startup (or a lazily created process default in tests).
+/// Distinct [`AppState::new`] values do not share logs, status, events, or
+/// cluster maps. Free-function shims such as
+/// [`crate::webui::state::update_status_cache`] still go through
+/// [`AppState::current`], which is the instance [`install`]ed at startup (or a
+/// lazily created process default in tests).
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Inner>,
@@ -25,6 +27,9 @@ struct Inner {
     status: RwLock<Option<StatusData>>,
     status_refresh: Notify,
     events: broadcast::Sender<&'static str>,
+    cluster: RwLock<ClusterState>,
+    cluster_node_mode_apply: tokio::sync::Mutex<()>,
+    cluster_switch: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -35,8 +40,37 @@ impl AppState {
                 status: RwLock::new(None),
                 status_refresh: Notify::new(),
                 events: broadcast::channel(EVENT_BUS_CAPACITY).0,
+                cluster: RwLock::new(ClusterState::default()),
+                cluster_node_mode_apply: tokio::sync::Mutex::new(()),
+                cluster_switch: tokio::sync::Mutex::new(()),
             }),
         }
+    }
+
+    fn process_inner() -> &'static Inner {
+        PROCESS.get_or_init(AppState::new).inner.as_ref()
+    }
+
+    pub(crate) fn process_cluster() -> &'static RwLock<ClusterState> {
+        &Self::process_inner().cluster
+    }
+
+    pub(crate) fn process_cluster_switch_lock() -> &'static tokio::sync::Mutex<()> {
+        &Self::process_inner().cluster_switch
+    }
+
+    pub(crate) fn process_node_mode_apply_lock() -> &'static tokio::sync::Mutex<()> {
+        &Self::process_inner().cluster_node_mode_apply
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn cluster_read(&self) -> RwLockReadGuard<'_, ClusterState> {
+        recover_lock(self.inner.cluster.read(), "cluster state")
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn cluster_write(&self) -> RwLockWriteGuard<'_, ClusterState> {
+        recover_lock(self.inner.cluster.write(), "cluster state")
     }
 
     /// Make this the process-wide default used by free-function shims.
@@ -183,5 +217,16 @@ mod tests {
 
         assert_eq!(a_rx.try_recv().expect("event on a"), "status");
         assert!(b_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn distinct_app_states_do_not_share_cluster_maps() {
+        let a = AppState::new();
+        let b = AppState::new();
+
+        a.cluster_write().local_draining = true;
+
+        assert!(a.cluster_read().local_draining);
+        assert!(!b.cluster_read().local_draining);
     }
 }
