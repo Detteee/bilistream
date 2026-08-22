@@ -1603,9 +1603,8 @@
     </div>
   </div>
 
-  <!-- app.js binds every control by id at parse time, so it must load after
-       the full document — including the modals above. -->
-  <script src="app.js"></script>
+  <!-- Native ES modules are deferred, so this still runs after the DOM. -->
+  <script type="module" src="js/main.js"></script>
 </body>
 
 </html>

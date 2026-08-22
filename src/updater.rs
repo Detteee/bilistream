@@ -132,7 +132,7 @@ fn should_update_file(relative_path: &str, install_dir: &std::path::Path) -> boo
         || name == "bilistream.exe"
         || name == "bilistream-tauri"
         || name == "bilistream-tauri.exe"
-        || name == "webui/dist/index.html"
+        || name.starts_with("webui/dist/")
     {
         return true;
     }
@@ -247,7 +247,7 @@ fn install_windows_update(
     //   ├── bilistream.exe
     //   ├── README.md
     //   ├── README.zh_CN.md
-    //   └── webui/dist/index.html
+    //   └── webui/dist/
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
@@ -345,7 +345,7 @@ fn install_unix_update(
     //   ├── bilistream
     //   ├── README.md
     //   ├── README.zh_CN.md
-    //   └── webui/dist/index.html
+    //   └── webui/dist/
 
     copy_dir_recursive(&extracted_dir, install_dir, "", install_dir)?;
 
@@ -414,4 +414,22 @@ fn compare_versions(v1: &str, v2: &str) -> i32 {
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn always_updates_webui_dist_tree() {
+        let dir = Path::new(".");
+        assert!(should_update_file("webui/dist/index.html", dir));
+        assert!(should_update_file("webui/dist/js/main.js", dir));
+        assert!(should_update_file("webui/dist/js/api.js", dir));
+        assert!(should_update_file("webui/dist/styles.css", dir));
+        assert!(should_update_file(r"webui\dist\js\cluster.js", dir));
+        assert!(!should_update_file("README.md", dir));
+        assert!(!should_update_file("config.json", dir));
+    }
 }
