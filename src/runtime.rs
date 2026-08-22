@@ -2140,6 +2140,7 @@ async fn handle_collisions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bilistream::config::{BiliLive, Credentials, Twitch, Youtube};
 
     #[test]
     fn invalid_player_words_ignore_blank_lines_and_match_ids_only() {
