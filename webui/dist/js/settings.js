@@ -3,6 +3,7 @@
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
 import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
+import { loadClusterSettings, getClusterConfigFromForm } from './cluster.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
@@ -128,6 +129,8 @@ async function loadSystemConfig() {
     // Load proxy settings
     setInputValue('config-yt-proxy', (config.youtube && config.youtube.proxy) || '');
     setInputValue('config-tw-proxy', (config.twitch && config.twitch.proxy) || '');
+
+    loadClusterSettings(config.cluster || {});
 
     // Load anti-collision list
     window.currentAntiCollisionList = config.anti_collision_list || {};
@@ -468,7 +471,8 @@ function getCurrentConfig() {
     anti_collision_list: window.currentAntiCollisionList || {},
     youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
     youtube_cookies_file: document.getElementById('config-yt-cookies-file').value.trim(),
-    youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim()
+    youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim(),
+    cluster: getClusterConfigFromForm()
   };
 }
 async function saveSystemConfig() {
@@ -478,6 +482,9 @@ async function saveSystemConfig() {
   if (button) button.disabled = true;
   try {
     const config = structuredClone(getCurrentConfig());
+    if (config.cluster.enabled && (!config.cluster.node_id || !config.cluster.public_api_url)) {
+      throw new Error('启用多服务器时必须填写本节点 ID 和 API 地址');
+    }
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
       const result = await postJsonApi('/api/config', patch);

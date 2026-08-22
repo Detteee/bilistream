@@ -6,6 +6,7 @@ export const state = {
   managedDataGeneration: 0,
   activeView: 'overview',
   monitorToggleSaveState: new Map(),
+  localNodeCanEnableMonitorToggles: true,
   hooks: {},
 };
 
@@ -16,6 +17,7 @@ window.configData = {
   holodex_api_key: '',
   youtube_api_key: '',
   priority_channel: {},
+  cluster: {},
   bilibili: {},
   youtube: {},
   twitch: {}
@@ -24,6 +26,7 @@ function mergeConfigData(config) {
   window.configData = {
     ...window.configData,
     ...config,
+    cluster: { ...window.configData.cluster, ...config.cluster },
     priority_channel: { ...window.configData.priority_channel, ...config.priority_channel },
     bilibili: { ...window.configData.bilibili, ...config.bilibili },
     youtube: { ...window.configData.youtube, ...config.youtube },

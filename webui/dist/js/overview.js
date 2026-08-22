@@ -2090,6 +2090,20 @@ function setPriorityStatusFields(priority, liveStatus, title, defaultArea) {
   setElementText('priority-live-status', liveStatus);
   setElementText('priority-title', title);
   setElementText('priority-default-area', defaultArea);
+  updatePriorityToggleAvailability();
+}
+
+function updatePriorityToggleAvailability() {
+  const toggle = document.getElementById('priority-toggle');
+  if (!toggle) return;
+
+  const blocked = !state.localNodeCanEnableMonitorToggles && !toggle.checked;
+  toggle.disabled = blocked;
+
+  const label = toggle.closest('.toggle-label');
+  if (label) {
+    label.title = blocked ? '只有活跃节点可启用优先频道' : '启用优先频道监控';
+  }
 }
 
 function renderPriorityChannelStatus(priority) {
@@ -3270,6 +3284,7 @@ export {
   schedulePlatformTitleRowCenters,
   refreshNetworkStatus,
   refreshStatus,
+  updatePriorityToggleAvailability,
   startStream,
   stopStream,
   restartStream,

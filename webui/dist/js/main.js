@@ -19,6 +19,7 @@ import {
 } from './settings.js';
 import { checkSetupStatus, initSetupControls } from './setup.js';
 import { initCropModalControls } from './crop.js';
+import { initClusterControls, startClusterRefresh, refreshClusterStatus } from './cluster.js';
 import {
   applyHolodexConfig,
   initDashboardControls,
@@ -33,6 +34,7 @@ import {
   loadChannelData,
   refreshStatus,
   switchToHolodexStream,
+  updatePriorityToggleAvailability,
 } from './overview.js';
 
 const VIEW_IDS = ['overview', 'manage', 'settings', 'logs'];
@@ -136,13 +138,13 @@ function bindEventStream() {
     },
     onHolodex: maybeLoadHolodexStreams,
     onCluster: () => {
-      state.hooks.refreshClusterStatus?.();
+      refreshClusterStatus();
     },
     onRefresh: () => {
       invalidateManagedData();
       reloadConfigAndHolodexPanel();
       refreshStatus();
-      state.hooks.refreshClusterStatus?.();
+      refreshClusterStatus();
     },
   });
 }
@@ -151,6 +153,8 @@ function boot() {
   state.hooks.switchToHolodexStream = switchToHolodexStream;
   state.hooks.refreshStatus = refreshStatus;
   state.hooks.reloadServerConfig = reloadServerConfig;
+  state.hooks.refreshClusterStatus = refreshClusterStatus;
+  state.hooks.updatePriorityToggleAvailability = updatePriorityToggleAvailability;
 
   bindEventStream();
   startLogRefresh();
@@ -168,6 +172,7 @@ function boot() {
   initManagementControls();
   initHolodexLoginModalControls();
   initFaceAuthModalControls();
+  initClusterControls();
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {
@@ -190,6 +195,7 @@ function boot() {
     if (!needsSetup) {
       loadVersion();
       initStatusRefresh();
+      startClusterRefresh();
       loadChannelData();
       setTimeout(autoCheckUpdates, 2000);
     }
