@@ -1,6 +1,6 @@
 {
   "productName": "bilistream",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "com.bilistream.desktop",
   "build": {
     "frontendDist": "../webui/dist"
