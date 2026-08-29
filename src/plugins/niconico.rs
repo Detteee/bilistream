@@ -1,3 +1,5 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::error::Error;
@@ -7,7 +9,14 @@ use std::time::Duration;
 
 use super::ffmpeg::PipedIngest;
 use super::utils::{command_output_with_timeout, configure_no_window, executable_command};
-use crate::config::{load_config, Niconico as NiconicoConfig};
+use crate::config::Niconico as NiconicoConfig;
+
+lazy_static! {
+    static ref LIVE_ID_FULL: Regex = Regex::new(r"live\.nicovideo\.jp/watch/(lv\d+)").unwrap();
+    static ref LIVE_ID_PATH: Regex = Regex::new(r"/watch/(lv\d+)").unwrap();
+    static ref TITLE_ALT: Regex = Regex::new(r#"alt="([^"]+)""#).unwrap();
+    static ref TITLE_CLASS: Regex = Regex::new(r#"class="title"[^>]*>\s*<a[^>]*>([^<]+)"#).unwrap();
+}
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
 const CHANNEL_STATUS_TIMEOUT: Duration = Duration::from_secs(20);
@@ -15,14 +24,12 @@ const CHANNEL_PAGE_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 pub struct Niconico {
-    pub channel_id: String,
+    cfg: NiconicoConfig,
 }
 
 impl Niconico {
-    pub fn new(channel_id: &str) -> Self {
-        Niconico {
-            channel_id: normalize_channel_id(channel_id),
-        }
+    pub fn new(cfg: &NiconicoConfig) -> Self {
+        Niconico { cfg: cfg.clone() }
     }
 
     pub async fn get_status(
@@ -38,8 +45,7 @@ impl Niconico {
         ),
         Box<dyn Error>,
     > {
-        let cfg = load_config().await?;
-        get_niconico_status(&cfg.niconico).await
+        get_niconico_status(&self.cfg).await
     }
 }
 
@@ -105,7 +111,21 @@ pub fn niconico_channel_id(cfg: &NiconicoConfig) -> String {
     normalize_channel_id(&cfg.channel_id)
 }
 
-pub fn niconico_restream_name_from_channel(channel: &crate::config::Channel) -> String {
+pub fn niconico_channel_identity(cfg: &NiconicoConfig) -> (String, String) {
+    let id = niconico_channel_id(cfg);
+    let name = if id.is_empty() {
+        cfg.channel_name.trim().to_string()
+    } else {
+        niconico_name_from_channels_file(&id).unwrap_or_else(|| cfg.channel_name.trim().to_string())
+    };
+    (id, name)
+}
+
+pub fn niconico_channel_name(cfg: &NiconicoConfig) -> String {
+    niconico_channel_identity(cfg).1
+}
+
+fn niconico_restream_name_from_channel(channel: &crate::config::Channel) -> String {
     channel
         .niconico_name
         .as_deref()
@@ -115,7 +135,7 @@ pub fn niconico_restream_name_from_channel(channel: &crate::config::Channel) -> 
         .to_string()
 }
 
-pub fn niconico_name_from_channels(
+fn niconico_name_from_channels(
     channels: &[crate::config::Channel],
     channel_id: &str,
 ) -> Option<String> {
@@ -125,22 +145,14 @@ pub fn niconico_name_from_channels(
     }
     channels.iter().find_map(|channel| {
         let nico_id = channel.platforms.niconico.as_deref()?;
-        if normalize_channel_id(nico_id) == id {
-            Some(niconico_restream_name_from_channel(channel))
-        } else {
-            None
-        }
+        (normalize_channel_id(nico_id) == id).then(|| niconico_restream_name_from_channel(channel))
     })
 }
 
-pub fn niconico_channel_name(cfg: &NiconicoConfig) -> String {
-    let id = niconico_channel_id(cfg);
-    if let Ok(channels) = crate::config::load_channels() {
-        if let Some(name) = niconico_name_from_channels(&channels.channels, &id) {
-            return name;
-        }
-    }
-    cfg.channel_name.trim().to_string()
+fn niconico_name_from_channels_file(channel_id: &str) -> Option<String> {
+    crate::config::load_channels()
+        .ok()
+        .and_then(|channels| niconico_name_from_channels(&channels.channels, channel_id))
 }
 
 pub fn niconico_configured(cfg: &NiconicoConfig) -> bool {
@@ -250,18 +262,17 @@ fn parse_channel_onair(html: &str) -> Option<OnairProgram> {
     .unwrap_or(rest.len().min(8000));
     let section = &rest[..end];
 
-    let live_id = regex_first(r"live\.nicovideo\.jp/watch/(lv\d+)", section)
-        .or_else(|| regex_first(r"/watch/(lv\d+)", section))?;
-    let title = regex_first(r#"alt="([^"]+)""#, section)
-        .or_else(|| regex_first(r#"class="title"[^>]*>\s*<a[^>]*>([^<]+)"#, section))
+    let live_id =
+        regex_first(&LIVE_ID_FULL, section).or_else(|| regex_first(&LIVE_ID_PATH, section))?;
+    let title = regex_first(&TITLE_ALT, section)
+        .or_else(|| regex_first(&TITLE_CLASS, section))
         .map(|title| html_unescape(&title));
 
     Some(OnairProgram { live_id, title })
 }
 
-fn regex_first(pattern: &str, haystack: &str) -> Option<String> {
-    regex::Regex::new(pattern)
-        .ok()?
+fn regex_first(pattern: &Regex, haystack: &str) -> Option<String> {
+    pattern
         .captures(haystack)
         .and_then(|caps| caps.get(1).map(|m| m.as_str().trim().to_string()))
         .filter(|value| !value.is_empty())
@@ -409,12 +420,7 @@ fn get_niconico_status_via_streamlink(
         return Err(error.to_string().into());
     }
 
-    let has_streams = parsed
-        .streams
-        .keys()
-        .any(|name| name != "best" || parsed.streams.len() > 1)
-        || parsed.streams.contains_key("best");
-    if !has_streams {
+    if parsed.streams.is_empty() {
         return Ok((false, None, None, None, None, Some(live_id.to_string())));
     }
 

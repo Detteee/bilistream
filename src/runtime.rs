@@ -16,7 +16,7 @@ use bilistream::plugins::{
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
     get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_configured, niconico_channel_id, niconico_channel_name,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_configured, niconico_channel_identity,
     resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     store_prefetched_playable_stream, take_prefetched_playable_stream, streamlink_ingest,
@@ -752,7 +752,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         };
 
         let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
-            Some(NiconicoClient::new(&niconico_channel_id(&cfg.niconico)))
+            Some(NiconicoClient::new(&cfg.niconico))
         } else {
             None
         };
@@ -769,6 +769,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             tracing::info!("🔄 Niconico状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
         }
+
+        let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
 
         // Get Bilibili status
         let (bili_is_live, bili_title, bili_area_id) =
@@ -840,8 +842,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     is_live: nico_is_live,
                     enable_monitor: cfg.niconico.enable_monitor,
                     title: nico_title.clone(),
-                    channel_name: niconico_channel_name(&cfg.niconico),
-                    channel_id: niconico_channel_id(&cfg.niconico),
+                    channel_name: nico_channel_name.clone(),
+                    channel_id: nico_channel_id.clone(),
                     live_id: nico_stream_id.clone(),
                     quality: cfg.niconico.quality.clone(),
                     area_id: cfg.niconico.area_v2,
@@ -976,14 +978,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 None
             },
             stream_id: nico_stream_id,
-            channel_name: niconico_channel_name(&cfg.niconico),
-            channel_id: {
-                let id = niconico_channel_id(&cfg.niconico);
-                if id.is_empty() {
-                    cfg.niconico.live_id.clone()
-                } else {
-                    id
-                }
+            channel_name: nico_channel_name,
+            channel_id: if nico_channel_id.is_empty() {
+                cfg.niconico.live_id.clone()
+            } else {
+                nico_channel_id
             },
             area_v2: cfg.niconico.area_v2,
             is_priority: false,

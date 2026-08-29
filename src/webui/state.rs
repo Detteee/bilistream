@@ -291,8 +291,8 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
         if nico_configured {
             let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
                 .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
-            let nico_channel_name = crate::plugins::niconico_channel_name(&cfg.niconico);
-            let nico_channel_id = crate::plugins::niconico_channel_id(&cfg.niconico);
+            let (nico_channel_id, nico_channel_name) =
+                crate::plugins::niconico_channel_identity(&cfg.niconico);
             if cached_status.niconico.as_ref().is_some_and(|status| status.channel_id != nico_channel_id) {
                 cached_status.niconico = None;
             }

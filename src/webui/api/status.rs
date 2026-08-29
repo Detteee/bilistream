@@ -208,14 +208,15 @@ pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> R
         .map_err(|e| e.to_string())?;
     let area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+    let (channel_id, channel_name) = crate::plugins::niconico_channel_identity(&cfg.niconico);
 
     update_status_cache_with(|status| {
         status.niconico = Some(NicoStatus {
             is_live,
             enable_monitor: cfg.niconico.enable_monitor,
             title,
-            channel_name: crate::plugins::niconico_channel_name(&cfg.niconico),
-            channel_id: crate::plugins::niconico_channel_id(&cfg.niconico),
+            channel_name,
+            channel_id,
             live_id,
             quality: cfg.niconico.quality.clone(),
             area_id: cfg.niconico.area_v2,

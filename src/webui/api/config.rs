@@ -4,6 +4,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (niconico_channel_id, niconico_channel_name) =
+        crate::plugins::niconico_channel_identity(&cfg.niconico);
 
     let config_json = json!({
         "interval": cfg.interval,
@@ -58,8 +60,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         },
         "niconico": {
             "enable_monitor": cfg.niconico.enable_monitor,
-            "channel_name": crate::plugins::niconico_channel_name(&cfg.niconico),
-            "channel_id": crate::plugins::niconico_channel_id(&cfg.niconico),
+            "channel_name": niconico_channel_name,
+            "channel_id": niconico_channel_id,
             "live_id": cfg.niconico.live_id,
             "area_v2": cfg.niconico.area_v2,
             "quality": cfg.niconico.quality,
