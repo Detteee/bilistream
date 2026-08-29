@@ -191,6 +191,7 @@ code {
   --bilibili: #fb7299;
   --youtube: #ff4757;
   --twitch: #b18cff;
+  --niconico: #8a93a3;
 
   /* Shape */
   --r-xs: 6px;
@@ -272,6 +273,7 @@ html.light-theme {
   --bilibili: #c45d78;
   --youtube: #c44c48;
   --twitch: #6350a0;
+  --niconico: #5c6570;
 
   --sh-1: 0 1px 2px rgba(45, 47, 52, 0.06);
   --sh-2: 0 4px 16px rgba(45, 47, 52, 0.08);
@@ -1229,7 +1231,7 @@ input[type="checkbox"] {
 /* Explicit column counts rather than auto-fit: the card count is known, so
    each step divides them evenly and never strands a half-empty row.
    1 column, then 2x2, then 3 across (the priority layer gives that step its
-   own full-width row) and finally all four side by side. */
+   own full-width row) and finally the four platform cards side by side. */
 .dashboard {
   display: grid;
   grid-template-columns: 1fr;
@@ -1317,22 +1319,25 @@ input[type="checkbox"] {
   --platform: var(--twitch);
 }
 
+.card[data-platform="niconico"] {
+  --platform: var(--niconico);
+}
+
 .card[data-platform="priority"] {
   --platform: var(--warn);
 }
 
-/* With the priority card there are four cards, so a wide viewport can put
-   them all on one row. */
+/* Four platform cards (Bilibili, YouTube, Twitch, Niconico) sit side by
+   side; the priority card stays on a full row below them. */
 @media (min-width: 1360px) {
   .dashboard {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-/* Between the 3-across and 4-across steps the priority card would be a lone
-   fourth cell, so it takes a full row of its own and lays its fields out
-   horizontally instead of leaving three quarters of the row empty. */
-@media (min-width: 1000px) and (max-width: 1359.98px) {
+/* From the 3-across step up, the priority card would otherwise sit as a
+   leftover cell, so it takes a full row and lays its fields out horizontally. */
+@media (min-width: 1000px) {
   #priority-channel-card {
     grid-column: 1 / -1;
     flex-direction: row;

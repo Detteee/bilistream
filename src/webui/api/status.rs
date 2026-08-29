@@ -18,6 +18,10 @@ pub async fn refresh_live_status_background() {
     tokio::spawn(async {
         let _ = refresh_twitch_status().await;
     });
+
+    tokio::spawn(async {
+        let _ = refresh_niconico_status().await;
+    });
 }
 
 pub struct StatusRefreshWorker(tokio::task::JoinHandle<()>);
@@ -80,6 +84,16 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
         crate::config::with_current_config(&cfg, || {
             update_status_cache_with(|status| status.twitch = None)
         });
+    }
+
+    if cfg.niconico.enable_monitor && crate::plugins::niconico_configured(&cfg.niconico) {
+        if let Err(e) = refresh_niconico_status_cache_with_config(&cfg).await {
+            tracing::warn!("WebUI Niconico status refresh failed: {}", e);
+        }
+    } else if !crate::plugins::niconico_configured(&cfg.niconico)
+        && cfg.niconico.channel_name.trim().is_empty()
+    {
+        update_status_cache_with(|status| status.niconico = None);
     }
 
     if cfg.priority_channel.enabled && !cfg.priority_channel.channel_name.is_empty() {
@@ -181,6 +195,37 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
                 ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
             });
         })
+    });
+
+    Ok(())
+}
+
+pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> Result<(), String> {
+    if !crate::plugins::niconico_configured(&cfg.niconico) {
+        return Err("Niconico channel not configured".to_string());
+    }
+
+    let (is_live, _, title, _, _, live_id) = crate::plugins::get_niconico_status(&cfg.niconico)
+        .await
+        .map_err(|e| e.to_string())?;
+    let area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
+        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+
+    update_status_cache_with(|status| {
+        status.niconico = Some(NicoStatus {
+            is_live,
+            enable_monitor: cfg.niconico.enable_monitor,
+            title,
+            channel_name: cfg.niconico.channel_name.clone(),
+            channel_id: cfg.niconico.channel_id.clone(),
+            live_id,
+            quality: cfg.niconico.quality.clone(),
+            area_id: cfg.niconico.area_v2,
+            area_name,
+            crop_enabled: cfg.niconico.crop.is_some(),
+            ffmpeg_cache_enabled: cfg.niconico.ffmpeg_cache.enabled,
+            ffmpeg_cache_latency_secs: cfg.niconico.ffmpeg_cache.latency_secs,
+        });
     });
 
     Ok(())
@@ -348,6 +393,9 @@ pub(crate) fn apply_effective_local_monitor_state(status: &mut StatusData, is_ac
     if let Some(twitch) = status.twitch.as_mut() {
         twitch.enable_monitor = false;
     }
+    if let Some(niconico) = status.niconico.as_mut() {
+        niconico.enable_monitor = false;
+    }
     // A standby runs no monitor at all, priority channel included: the main loop
     // exits on local_monitoring_allowed() before it ever looks at these. The
     // desired state still lives in config and travels with the next handoff, so
@@ -432,6 +480,40 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
             success: false,
             data: None,
             message: Some(format!("Failed to get Twitch status: {}", e)),
+        }),
+    }
+}
+
+pub async fn refresh_niconico_status() -> Json<ApiResponse<()>> {
+    let cfg = match load_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to load config: {}", e)),
+            });
+        }
+    };
+
+    if !crate::plugins::niconico_configured(&cfg.niconico) {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("Niconico channel not configured".to_string()),
+        });
+    }
+
+    match refresh_niconico_status_cache_with_config(&cfg).await {
+        Ok(()) => Json(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some("Niconico status refreshed".to_string()),
+        }),
+        Err(e) => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(format!("Failed to get Niconico status: {}", e)),
         }),
     }
 }

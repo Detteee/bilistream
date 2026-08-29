@@ -188,6 +188,15 @@ pub async fn capture_frame(
                 }
             }
         }
+        "niconico" => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(
+                    "Niconico 无法从 HLS 抓帧，请手动上传一张静帧图片进行裁剪".to_string(),
+                ),
+            });
+        }
         _ => {
             return Json(ApiResponse {
                 success: false,
@@ -322,6 +331,9 @@ pub async fn update_crop(
         "twitch" => {
             cfg.twitch.crop = crop_config;
         }
+        "niconico" => {
+            cfg.niconico.crop = crop_config;
+        }
         _ => {
             return Ok(ApiResponse {
                 success: false,
@@ -380,6 +392,7 @@ pub async fn get_crop(
     let crop = match platform.as_str() {
         "youtube" => cfg.youtube.crop,
         "twitch" => cfg.twitch.crop,
+        "niconico" => cfg.niconico.crop,
         _ => {
             return Ok(Json(ApiResponse {
                 success: false,
@@ -413,6 +426,7 @@ pub async fn update_ffmpeg_cache(
     let cache = match payload.platform.as_str() {
         "youtube" => &mut cfg.youtube.ffmpeg_cache,
         "twitch" => &mut cfg.twitch.ffmpeg_cache,
+        "niconico" => &mut cfg.niconico.ffmpeg_cache,
         _ => {
             return Ok(ApiResponse {
                 success: false,
@@ -451,6 +465,7 @@ pub async fn get_ffmpeg_cache(
     let cache = match platform.as_str() {
         "youtube" => cfg.youtube.ffmpeg_cache.clone(),
         "twitch" => cfg.twitch.ffmpeg_cache.clone(),
+        "niconico" => cfg.niconico.ffmpeg_cache.clone(),
         _ => {
             return Ok(Json(ApiResponse {
                 success: false,

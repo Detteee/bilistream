@@ -187,6 +187,11 @@
       <path
         d="M11.571 4.714h1.715v5.143H11.57Zm4.715 0H18v5.143h-1.714ZM6 0 1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0Zm14.571 11.143-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" />
     </symbol>
+
+    <symbol id="i-niconico" viewBox="0 0 24 24">
+      <path
+        d="M2.25 3.75h19.5v16.5H2.25Zm3.75 4.5h2.25v2.25H6Zm9.75 0H18v2.25h-2.25ZM7.5 14.25s1.7 2.25 4.5 2.25 4.5-2.25 4.5-2.25H7.5Z" />
+    </symbol>
   </svg>
 
   <!-- Toast stack — showNotification() appends here so simultaneous
@@ -962,6 +967,186 @@
             </div>
           </article>
 
+          <!-- Niconico ------------------------------------------------- -->
+          <article class="card" data-platform="niconico">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-niconico" /></svg>
+                Niconico
+                <span class="status-indicator" id="nc-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用 Niconico 监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="niconico-monitor-toggle" aria-label="启用 Niconico 监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshNiconicoBtn" class="action-btn action-btn--refresh icon-btn compact-btn" type="button"
+                  title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshNiconicoIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-channel-name">-</span>
+                  <button id="nc-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道名"
+                    aria-label="更改 Niconico 频道名">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <input type="text" id="nc-channel-edit-input" placeholder="转播标题用频道名" aria-label="Niconico 频道名">
+                    <button id="nc-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 频道名">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 频道名编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">频道ID</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-channel-id">-</span>
+                  <button id="nc-channel-id-edit-btn" class="info-row-edit-btn" type="button" title="更改频道 ID"
+                    aria-label="更改 Niconico 频道 ID">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-channel-id-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <input type="text" id="nc-channel-id-edit-input" placeholder="vspo 或 ch.nicovideo.jp/vspo"
+                      aria-label="Niconico 频道 ID">
+                    <button id="nc-channel-id-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存 Niconico 频道 ID">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-channel-id-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 频道 ID 编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row" id="nc-live-id-row">
+                <span class="info-label">节目ID</span>
+                <span class="info-value info-value-right" id="nc-live-id">-</span>
+              </div>
+
+              <div class="info-row" id="nc-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="nc-title">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">配置分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-area">-</span>
+                  <button id="nc-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区"
+                    aria-label="更改 Niconico 配置分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="nc-area-edit-select" aria-label="Niconico 配置分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="nc-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 配置分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 配置分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">画质</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-quality">-</span>
+                  <button id="nc-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质"
+                    aria-label="更改 Niconico 画质">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-quality-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="nc-quality-edit-select" aria-label="Niconico 画质"></select>
+                    <button id="nc-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 画质">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-quality-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 画质编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">裁剪</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-crop-status">关闭</span>
+                  <button id="nc-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪"
+                    aria-label="配置 Niconico 裁剪">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                  <button id="nc-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button"
+                    title="清除裁剪设置" aria-label="清除 Niconico 裁剪设置">
+                    <svg aria-hidden="true"><use href="#i-trash" /></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">HLS缓存</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-hls-cache-status">关闭</span>
+                  <button id="nc-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存"
+                    aria-label="配置 Niconico HLS 缓存">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-hls-cache-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                      <span class="toggle-switch hls-cache-toggle-switch">
+                        <input type="checkbox" id="nc-hls-cache-enabled" aria-label="启用 Niconico HLS 缓存">
+                        <span class="toggle-slider"></span>
+                      </span>
+                    </label>
+                    <span id="nc-hls-cache-latency-group" class="hls-cache-latency-group">
+                      <input type="number" id="nc-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60"
+                        placeholder="12" aria-label="Niconico HLS 缓存秒数">
+                      <span class="hls-cache-latency-unit">秒</span>
+                    </span>
+                    <button id="nc-hls-cache-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存 Niconico HLS 缓存">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico HLS 缓存编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
           <!-- Priority channel ----------------------------------------- -->
           <article class="card" data-platform="priority" id="priority-channel-card">
             <div class="dashboard-card-header">
@@ -1448,6 +1633,16 @@
                 <small class="settings-help-text">Twitch 专用代理，留空则不使用代理</small>
               </div>
               <div class="control-group">
+                <label for="config-nc-cookies-file">Niconico Cookies · 文件路径</label>
+                <input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt">
+                <small class="settings-help-text">Netscape 格式，需包含 user_session；不要提交该文件</small>
+              </div>
+              <div class="control-group">
+                <label for="config-nc-proxy">Niconico 代理地址 (可选)</label>
+                <input type="text" id="config-nc-proxy" placeholder="http://127.0.0.1:7890">
+                <small class="settings-help-text">streamlink 使用 HTTP 代理；本机 Clash 可用 mixed 端口</small>
+              </div>
+              <div class="control-group">
                 <label for="config-tw-region">Twitch 代理区域</label>
                 <select id="config-tw-region">
                   <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
@@ -1792,6 +1987,7 @@
             <select id="cropPlatform" class="crop-select">
               <option value="youtube">YouTube</option>
               <option value="twitch">Twitch</option>
+              <option value="niconico">Niconico</option>
             </select>
           </label>
 

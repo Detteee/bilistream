@@ -40,6 +40,22 @@
     }
   },
   
+  // ===== Niconico 配置 =====
+  "niconico": {
+    "enable_monitor": false,             // 启用 Niconico 监控转播
+    "channel_name": "",                  // 频道名称 (将出现于转播标题)
+    "channel_id": "vspo",                // 频道 slug 或 ch.nicovideo.jp/ 后面的路径
+    "live_id": "",                       // 仅当未填 channel_id 时固定某一场 lv
+    "area_v2": 235,                      // B站分区ID
+    "quality": "best",                   // streamlink 画质: best, 1080p60, 720p60, 450p, 288p
+    "cookies_file": "niconico_cookies.txt", // Netscape cookies，需包含 user_session
+    "proxy": "http://127.0.0.1:7890",    // streamlink HTTP 代理；留空则直连
+    "ffmpeg_cache": {
+      "enabled": true,                   // 启用本地 HLS 缓存延迟推流
+      "latency_secs": 12                 // Niconico 源约 3s 分片，建议 8–12 秒
+    }
+  },
+  
   // ===== 其他配置 =====
   "proxy": null,                         // 代理地址 (无需代理可留空)
   "holodex_api_key": null,               // Holodex API密钥 (https://holodex.net/login)

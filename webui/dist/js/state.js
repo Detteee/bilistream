@@ -20,12 +20,14 @@ window.configData = {
   cluster: {},
   bilibili: {},
   youtube: {},
-  twitch: {}
+  twitch: {},
+  niconico: {}
 };
 function mergeConfigData(config) {
   window.configData = {
     ...window.configData,
     ...config,
+    niconico: { ...window.configData.niconico, ...config.niconico },
     cluster: { ...window.configData.cluster, ...config.cluster },
     priority_channel: { ...window.configData.priority_channel, ...config.priority_channel },
     bilibili: { ...window.configData.bilibili, ...config.bilibili },
@@ -37,12 +39,16 @@ function mergeConfigData(config) {
 function updateMonitorToggleStates(config = window.configData) {
   const youtubeToggle = document.getElementById('youtube-monitor-toggle');
   const twitchToggle = document.getElementById('twitch-monitor-toggle');
+  const niconicoToggle = document.getElementById('niconico-monitor-toggle');
 
   if (youtubeToggle) {
     applyMonitorToggleConfigState(youtubeToggle, 'youtube-monitor-toggle', config.youtube?.enable_monitor !== false);
   }
   if (twitchToggle) {
     applyMonitorToggleConfigState(twitchToggle, 'twitch-monitor-toggle', config.twitch?.enable_monitor !== false);
+  }
+  if (niconicoToggle) {
+    applyMonitorToggleConfigState(niconicoToggle, 'niconico-monitor-toggle', config.niconico?.enable_monitor === true);
   }
 }
 

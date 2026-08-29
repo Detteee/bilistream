@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use super::state::{
     get_logs, get_status_cache, platform_channel_configured, refresh_status_cache_config_from,
-    update_status_cache, update_status_cache_with, BiliStatus, NetworkStatus,
+    update_status_cache, update_status_cache_with, BiliStatus, NetworkStatus, NicoStatus,
     PriorityChannelStatus, StatusData, TwStatus, YtStatus,
 };
 use crate::cluster::{
@@ -189,6 +189,10 @@ mod tests {
             expected.twitch.as_ref().unwrap().enable_monitor
         );
         assert_eq!(
+            status.niconico.as_ref().unwrap().enable_monitor,
+            expected.niconico.as_ref().unwrap().enable_monitor
+        );
+        assert_eq!(
             status.priority_channel.as_ref().unwrap().enabled,
             expected.priority_channel.as_ref().unwrap().enabled
         );
@@ -207,6 +211,7 @@ mod tests {
         assert!(!status.bilibili.enable_danmaku_command);
         assert!(!status.youtube.unwrap().enable_monitor);
         assert!(!status.twitch.unwrap().enable_monitor);
+        assert!(!status.niconico.unwrap().enable_monitor);
         let priority = status.priority_channel.unwrap();
         assert!(!priority.enabled);
         assert!(!priority.auto_restart);
@@ -239,6 +244,20 @@ mod tests {
                 game: None,
                 channel_name: "twitch".to_string(),
                 channel_id: "twitch-id".to_string(),
+                quality: "best".to_string(),
+                area_id: 1,
+                area_name: "area".to_string(),
+                crop_enabled: false,
+                ffmpeg_cache_enabled: false,
+                ffmpeg_cache_latency_secs: 0,
+            }),
+            niconico: Some(NicoStatus {
+                is_live: false,
+                enable_monitor: true,
+                title: None,
+                channel_name: "niconico".to_string(),
+                channel_id: "vspo".to_string(),
+                live_id: None,
                 quality: "best".to_string(),
                 area_id: 1,
                 area_name: "area".to_string(),
@@ -634,6 +653,7 @@ mod tests {
             priority_channel: PriorityChannel::default(),
             enable_youtube_monitor: false,
             enable_twitch_monitor: false,
+            niconico: crate::config::Niconico::default(),
             cluster: ClusterConfig::default(),
         }
     }

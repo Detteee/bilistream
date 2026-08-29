@@ -67,6 +67,12 @@ function initDashboardControls() {
     .getElementById('refreshTwitchBtn')
     ?.addEventListener('click', refreshTwitchStatus);
   document
+    .getElementById('niconico-monitor-toggle')
+    ?.addEventListener('change', toggleNiconicoMonitor);
+  document
+    .getElementById('refreshNiconicoBtn')
+    ?.addEventListener('click', refreshNiconicoStatus);
+  document
     .getElementById('refreshHolodexBtn')
     ?.addEventListener('click', () => refreshHolodexStreams({ force: true }));
   document
@@ -183,6 +189,60 @@ function initDashboardControls() {
   document
     .getElementById('tw-hls-cache-enabled')
     ?.addEventListener('change', event => setHlsCacheLatencyInputState('tw', event.currentTarget.checked));
+  document
+    .getElementById('nc-channel-edit-btn')
+    ?.addEventListener('click', toggleNcChannelEdit);
+  document
+    .getElementById('nc-channel-save-btn')
+    ?.addEventListener('click', saveNcChannelEdit);
+  document
+    .getElementById('nc-channel-cancel-btn')
+    ?.addEventListener('click', cancelNcChannelEdit);
+  document
+    .getElementById('nc-channel-id-edit-btn')
+    ?.addEventListener('click', toggleNcChannelIdEdit);
+  document
+    .getElementById('nc-channel-id-save-btn')
+    ?.addEventListener('click', saveNcChannelIdEdit);
+  document
+    .getElementById('nc-channel-id-cancel-btn')
+    ?.addEventListener('click', cancelNcChannelIdEdit);
+  document
+    .getElementById('nc-area-edit-btn')
+    ?.addEventListener('click', toggleNcAreaEdit);
+  document
+    .getElementById('nc-area-save-btn')
+    ?.addEventListener('click', saveNcAreaEdit);
+  document
+    .getElementById('nc-area-cancel-btn')
+    ?.addEventListener('click', cancelNcAreaEdit);
+  document
+    .getElementById('nc-quality-edit-btn')
+    ?.addEventListener('click', toggleNcQualityEdit);
+  document
+    .getElementById('nc-quality-save-btn')
+    ?.addEventListener('click', saveNcQualityEdit);
+  document
+    .getElementById('nc-quality-cancel-btn')
+    ?.addEventListener('click', cancelNcQualityEdit);
+  document
+    .getElementById('nc-crop-edit-btn')
+    ?.addEventListener('click', () => openCropConfig('niconico'));
+  document
+    .getElementById('nc-crop-clear-btn')
+    ?.addEventListener('click', () => clearCropConfig('niconico'));
+  document
+    .getElementById('nc-hls-cache-edit-btn')
+    ?.addEventListener('click', toggleNcHlsCacheEdit);
+  document
+    .getElementById('nc-hls-cache-save-btn')
+    ?.addEventListener('click', saveNcHlsCacheEdit);
+  document
+    .getElementById('nc-hls-cache-cancel-btn')
+    ?.addEventListener('click', cancelNcHlsCacheEdit);
+  document
+    .getElementById('nc-hls-cache-enabled')
+    ?.addEventListener('change', event => setHlsCacheLatencyInputState('nc', event.currentTarget.checked));
   document
     .getElementById('priority-toggle')
     ?.addEventListener('change', togglePriorityChannel);
@@ -1824,6 +1884,15 @@ function cancelTwHlsCacheEdit() {
 function saveTwHlsCacheEdit() {
   return saveHlsCacheEdit('tw', 'twitch', 'Twitch');
 }
+function toggleNcHlsCacheEdit() {
+  toggleHlsCacheEdit('nc', 'niconico');
+}
+function cancelNcHlsCacheEdit() {
+  cancelHlsCacheEdit('nc');
+}
+function saveNcHlsCacheEdit() {
+  return saveHlsCacheEdit('nc', 'niconico', 'Niconico');
+}
 function readHolodexAddChannelData(control) {
   return {
     name: control.dataset.channelName || '',
@@ -1972,10 +2041,17 @@ function togglePlatformMonitor(platform, toggleId, endpoint) {
     flushPlatformMonitorToggle(platform, toggleId, endpoint);
   }, monitorToggleSaveDebounceMs);
 }
+function platformMonitorEnabledFromConfig(platform) {
+  const enabled = window.configData[platform]?.enable_monitor;
+  if (platform === 'niconico') {
+    return enabled === true;
+  }
+  return enabled !== false;
+}
 function getMonitorToggleSaveState(platform, toggleId) {
   let toggleState = state.monitorToggleSaveState.get(toggleId);
   if (!toggleState) {
-    const confirmed = window.configData[platform]?.enable_monitor !== false;
+    const confirmed = platformMonitorEnabledFromConfig(platform);
     toggleState = {
       confirmed,
       desired: confirmed,
@@ -2040,6 +2116,9 @@ function toggleYouTubeMonitor() {
 function toggleTwitchMonitor() {
   return togglePlatformMonitor('twitch', 'twitch-monitor-toggle', '/api/toggle-twitch-monitor');
 }
+function toggleNiconicoMonitor() {
+  return togglePlatformMonitor('niconico', 'niconico-monitor-toggle', '/api/toggle-niconico-monitor');
+}
 async function refreshPlatformStatus(label, endpoint, buttonId, iconId) {
   const btn = document.getElementById(buttonId);
   const icon = document.getElementById(iconId);
@@ -2066,6 +2145,9 @@ function refreshYouTubeStatus() {
 }
 function refreshTwitchStatus() {
   return refreshPlatformStatus('Twitch', '/api/refresh/twitch', 'refreshTwitchBtn', 'refreshTwitchIcon');
+}
+function refreshNiconicoStatus() {
+  return refreshPlatformStatus('Niconico', '/api/refresh/niconico', 'refreshNiconicoBtn', 'refreshNiconicoIcon');
 }
 
 function refreshPriorityStatus() {
@@ -2749,6 +2831,190 @@ async function saveTwAreaEdit() {
     showNotification('更新失败: ' + error.message, 'error');
   }
 }
+function toggleNcTextEdit(spanId, containerId, inputId) {
+  const span = document.getElementById(spanId);
+  const container = document.getElementById(containerId);
+  const input = document.getElementById(inputId);
+
+  showInfoRowEdit(span, container);
+  const current = span?.textContent;
+  input.value = current && current !== '-' ? current : '';
+  input.focus();
+  input.select();
+}
+function cancelNcTextEdit(spanId, containerId) {
+  hideInfoRowEdit(document.getElementById(spanId), document.getElementById(containerId));
+}
+function toggleNcChannelEdit() {
+  toggleNcTextEdit('nc-channel-name', 'nc-channel-edit-container', 'nc-channel-edit-input');
+}
+function cancelNcChannelEdit() {
+  cancelNcTextEdit('nc-channel-name', 'nc-channel-edit-container');
+}
+async function saveNcChannelEdit() {
+  const channelName = document.getElementById('nc-channel-edit-input').value.trim();
+
+  if (!channelName) {
+    showNotification('请输入频道名', 'error');
+    return;
+  }
+
+  try {
+    const data = await postChannelUpdate({
+      platform: 'niconico',
+      channel_name: channelName
+    });
+
+    if (!data.success) {
+      showNotification(data.message || 'Niconico频道名更新失败', 'error');
+      return;
+    }
+
+    showNotification(data.message || 'Niconico频道名已更新', 'success');
+    cancelNcChannelEdit();
+    document.getElementById('nc-channel-name').textContent = channelName;
+    refreshStatus();
+  } catch (error) {
+    showNotification('更新失败: ' + error.message, 'error');
+  }
+}
+function toggleNcChannelIdEdit() {
+  toggleNcTextEdit('nc-channel-id', 'nc-channel-id-edit-container', 'nc-channel-id-edit-input');
+}
+function cancelNcChannelIdEdit() {
+  cancelNcTextEdit('nc-channel-id', 'nc-channel-id-edit-container');
+}
+async function saveNcChannelIdEdit() {
+  const channelId = document.getElementById('nc-channel-id-edit-input').value.trim();
+
+  if (!channelId) {
+    showNotification('请输入频道 ID', 'error');
+    return;
+  }
+
+  try {
+    const data = await postChannelUpdate({
+      platform: 'niconico',
+      channel_id: channelId
+    });
+
+    if (!data.success) {
+      showNotification(data.message || 'Niconico频道 ID 更新失败', 'error');
+      return;
+    }
+
+    showNotification(data.message || 'Niconico频道 ID 已更新', 'success');
+    cancelNcChannelIdEdit();
+    refreshStatus();
+  } catch (error) {
+    showNotification('更新失败: ' + error.message, 'error');
+  }
+}
+function toggleNcQualityEdit() {
+  const qualitySpan = document.getElementById('nc-quality');
+  const editContainer = document.getElementById('nc-quality-edit-container');
+  const editSelect = document.getElementById('nc-quality-edit-select');
+
+  showInfoRowEdit(qualitySpan, editContainer);
+  populateQualityOptions(editSelect, 'niconico');
+
+  const currentDisplayText = qualitySpan.textContent;
+  if (currentDisplayText && currentDisplayText !== '-') {
+    editSelect.value = getTechnicalQualityValue(currentDisplayText, 'niconico');
+  }
+
+  editSelect.focus();
+}
+function cancelNcQualityEdit() {
+  hideInfoRowEdit(
+    document.getElementById('nc-quality'),
+    document.getElementById('nc-quality-edit-container')
+  );
+}
+async function saveNcQualityEdit() {
+  const quality = document.getElementById('nc-quality-edit-select').value;
+
+  if (!quality) {
+    showNotification('请选择画质', 'error');
+    return;
+  }
+
+  try {
+    const data = await postChannelUpdate({
+      platform: 'niconico',
+      quality
+    });
+
+    if (!data.success) {
+      showNotification(data.message || 'Niconico画质更新失败', 'error');
+      return;
+    }
+
+    showNotification(data.message || 'Niconico画质已更新', 'success');
+    cancelNcQualityEdit();
+    document.getElementById('nc-quality').textContent = getQualityDisplayText(quality, 'niconico');
+    refreshStatus();
+  } catch (error) {
+    showNotification('更新失败: ' + error.message, 'error');
+  }
+}
+function toggleNcAreaEdit() {
+  const areaSpan = document.getElementById('nc-area');
+  const editContainer = document.getElementById('nc-area-edit-container');
+  const editSelect = document.getElementById('nc-area-edit-select');
+
+  showInfoRowEdit(areaSpan, editContainer);
+
+  if (!state.areasData) {
+    loadChannelData().then(() => {
+      populateNcAreaEditSelect();
+    });
+  } else {
+    populateNcAreaEditSelect();
+  }
+
+  editSelect.focus();
+}
+function populateNcAreaEditSelect() {
+  const editSelect = document.getElementById('nc-area-edit-select');
+  editSelect.replaceChildren(createAreaOption('', '选择分区...'));
+
+  if (state.areasData && state.areasData.areas) {
+    appendAreaOptions(editSelect, state.areasData.areas);
+  }
+}
+function cancelNcAreaEdit() {
+  hideInfoRowEdit(
+    document.getElementById('nc-area'),
+    document.getElementById('nc-area-edit-container')
+  );
+}
+async function saveNcAreaEdit() {
+  const areaId = parseInteger(document.getElementById('nc-area-edit-select').value, 0);
+
+  if (!areaId) {
+    showNotification('请选择分区', 'error');
+    return;
+  }
+
+  try {
+    const data = await postChannelUpdate({
+      platform: 'niconico',
+      area_id: areaId
+    });
+
+    if (!data.success) {
+      showNotification(data.message || 'Niconico配置分区更新失败', 'error');
+      return;
+    }
+
+    showNotification(data.message || 'Niconico配置分区已更新', 'success');
+    cancelNcAreaEdit();
+    refreshStatus();
+  } catch (error) {
+    showNotification('更新失败: ' + error.message, 'error');
+  }
+}
 // Area editing functions
 function toggleAreaEdit() {
   const areaSpan = document.getElementById('bili-area');
@@ -2949,10 +3215,17 @@ function getTechnicalQualityValue(displayText, platform = 'youtube') {
       '低质量 (360p)': 'low',
       '仅音频': 'audio_only',
       '最低质量': 'worst'
+    },
+    niconico: {
+      '最佳质量': 'best',
+      '1080p60': '1080p60',
+      '720p60': '720p60',
+      '450p': '450p',
+      '288p': '288p'
     }
   };
 
-  return reverseMappings[platform][displayText] || displayText;
+  return reverseMappings[platform]?.[displayText] || displayText;
 }
 // Unified function to populate quality options for any select element
 function populateQualityOptions(selectElement, platform, includeEmpty = true) {
@@ -2983,6 +3256,13 @@ function populateQualityOptions(selectElement, platform, includeEmpty = true) {
       'low': '低质量 (360p)',
       'audio_only': '仅音频',
       'worst': '最低质量'
+    },
+    niconico: {
+      'best': '最佳质量',
+      '1080p60': '1080p60',
+      '720p60': '720p60',
+      '450p': '450p',
+      '288p': '288p'
     }
   };
 

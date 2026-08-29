@@ -92,9 +92,26 @@ function showCropCanvasContainer() {
 function hideCropCanvasContainer() {
   document.getElementById('cropCanvasContainer')?.classList.add('hidden');
 }
+function cropPlatformLabel(platform) {
+  if (platform === 'youtube') {
+    return 'YouTube';
+  }
+  if (platform === 'niconico') {
+    return 'Niconico';
+  }
+  return 'Twitch';
+}
+function cropStatusElementId(platform) {
+  if (platform === 'youtube') {
+    return 'yt-crop-status';
+  }
+  if (platform === 'niconico') {
+    return 'nc-crop-status';
+  }
+  return 'tw-crop-status';
+}
 function setCropStatusLabel(platform, label) {
-  const statusId = platform === 'youtube' ? 'yt-crop-status' : 'tw-crop-status';
-  setElementText(statusId, label);
+  setElementText(cropStatusElementId(platform), label);
 }
 function createCropUpdatePayload(platform, enabled, rect = {}) {
   return {
@@ -118,7 +135,7 @@ function openCropConfig(platform, { autoCapture = true } = {}) {
   setCropRectInputs({ x: 0, y: 0, width: 0, height: 0 });
   loadCurrentCropSettings(session);
   // Auto-capture frame when opening from platform cards
-  if (platform && autoCapture) {
+  if (platform && autoCapture && platform !== 'niconico') {
     setTimeout(() => {
       if (isCropSessionCurrent(session)) autoCaptureFrame();
     }, 300);
@@ -134,7 +151,7 @@ function closeCropModal() {
   cropImage = null;
 }
 async function clearCropConfig(platform) {
-  if (!confirm(`确定要清除${platform === 'youtube' ? 'YouTube' : 'Twitch'}的裁剪设置吗？`)) {
+  if (!confirm(`确定要清除${cropPlatformLabel(platform)}的裁剪设置吗？`)) {
     return;
   }
 

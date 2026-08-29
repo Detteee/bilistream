@@ -93,6 +93,13 @@ export function getQualityDisplayText(technicalValue, platform = 'youtube') {
       'low': '低质量 (360p)',
       'audio_only': '仅音频',
       'worst': '最低质量'
+    },
+    niconico: {
+      'best': '最佳质量',
+      '1080p60': '1080p60',
+      '720p60': '720p60',
+      '450p': '450p',
+      '288p': '288p'
     }
   };
 

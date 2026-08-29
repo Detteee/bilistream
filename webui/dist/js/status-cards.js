@@ -1,4 +1,5 @@
-// status-cards.js — renderers for the Bilibili / YouTube / Twitch status cards.
+// status-cards.js — renderers for the Bilibili / YouTube / Twitch / Niconico
+// status cards.
 // status cards. Shared by the admin dashboard and the public status page, so
 // the two never drift. Pure painting: no fetching, no config writes.
 //
@@ -58,7 +59,9 @@ export function setPlatformLiveInfoVisibility(platform, isLive) {
     ? ['yt-title-row', 'yt-topic-row']
     : platform === 'twitch'
       ? ['tw-title-row', 'tw-game-row']
-      : platform === 'priority'
+      : platform === 'niconico'
+        ? ['nc-title-row', 'nc-live-id-row']
+        : platform === 'priority'
         ? ['priority-title-row']
         : [];
   for (const id of rowIds) {
@@ -318,10 +321,38 @@ export function renderTwitchCard(tw) {
 }
 
 /// Paints every platform card from one `/api/status` style payload.
+export function renderNiconicoCard(nc) {
+  if (!nc) {
+    setStatusIndicator('nc-status', 'status-offline');
+    setPlatformLiveInfoVisibility('niconico', false);
+    setElementText('nc-channel-name', '-');
+    setElementText('nc-channel-id', '-');
+    setElementText('nc-live-id', '-');
+    setElementText('nc-title', '-');
+    setElementText('nc-area', '-');
+    setElementText('nc-quality', '-');
+    setElementText('nc-crop-status', '关闭');
+    setElementText('nc-hls-cache-status', '关闭');
+    return;
+  }
+
+  setStatusIndicator('nc-status', nc.is_live ? 'status-live' : 'status-offline');
+  setPlatformLiveInfoVisibility('niconico', nc.is_live);
+  setElementText('nc-channel-name', nc.channel_name || '-');
+  setElementText('nc-channel-id', nc.channel_id || '-');
+  setElementText('nc-live-id', nc.live_id || '-');
+  setElementText('nc-title', nc.title || '-');
+  setElementText('nc-area', formatAreaText(nc.area_name, nc.area_id));
+  setElementText('nc-quality', nc.quality ? getQualityDisplayText(nc.quality, 'niconico') : '-');
+  setElementText('nc-crop-status', nc.crop_enabled ? '开启' : '关闭');
+  setElementText('nc-hls-cache-status', formatHlsCacheStatus(nc.ffmpeg_cache_enabled, nc.ffmpeg_cache_latency_secs));
+}
+
 export function renderStatusCards(status) {
   renderBilibiliCard(status.bilibili || {});
   renderYouTubeCard(status.youtube);
   renderTwitchCard(status.twitch);
+  renderNiconicoCard(status.niconico);
 }
 
 /// Replaces the channel/title fields with a short message when the status
@@ -336,4 +367,5 @@ export function setStatusCardsMessage(message) {
   setElementText('bili-title', message);
   setElementText('yt-channel-name', message);
   setElementText('tw-channel-name', message);
+  setElementText('nc-channel-name', message);
 }

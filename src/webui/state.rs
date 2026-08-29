@@ -7,6 +7,8 @@ pub struct StatusData {
     pub bilibili: BiliStatus,
     pub youtube: Option<YtStatus>,
     pub twitch: Option<TwStatus>,
+    #[serde(default)]
+    pub niconico: Option<NicoStatus>,
     pub priority_channel: Option<PriorityChannelStatus>,
 }
 
@@ -110,6 +112,24 @@ pub struct TwStatus {
     pub game: Option<String>,
     pub channel_name: String,
     pub channel_id: String,
+    pub quality: String,
+    pub area_id: u64,
+    pub area_name: String,
+    pub crop_enabled: bool,
+    pub ffmpeg_cache_enabled: bool,
+    pub ffmpeg_cache_latency_secs: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct NicoStatus {
+    pub is_live: bool,
+    #[serde(default)]
+    pub enable_monitor: bool,
+    pub title: Option<String>,
+    pub channel_name: String,
+    pub channel_id: String,
+    #[serde(default)]
+    pub live_id: Option<String>,
     pub quality: String,
     pub area_id: u64,
     pub area_name: String,
@@ -267,6 +287,44 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     default_area: cfg.priority_channel.default_area,
                 });
             }
+        let nico_configured = crate::plugins::niconico_configured(&cfg.niconico)
+            || !cfg.niconico.channel_name.trim().is_empty();
+        if nico_configured {
+            let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+            if cached_status.niconico.as_ref().is_some_and(|status| status.channel_id != cfg.niconico.channel_id) {
+                cached_status.niconico = None;
+            }
+            if let Some(ref mut nico_status) = cached_status.niconico {
+                nico_status.enable_monitor = cfg.niconico.enable_monitor;
+                nico_status.channel_name = cfg.niconico.channel_name.clone();
+                nico_status.channel_id = cfg.niconico.channel_id.clone();
+                nico_status.area_id = cfg.niconico.area_v2;
+                nico_status.area_name = nico_area_name;
+                nico_status.quality = cfg.niconico.quality.clone();
+                nico_status.crop_enabled = cfg.niconico.crop.is_some();
+                nico_status.ffmpeg_cache_enabled = cfg.niconico.ffmpeg_cache.enabled;
+                nico_status.ffmpeg_cache_latency_secs = cfg.niconico.ffmpeg_cache.latency_secs;
+            } else {
+                cached_status.niconico = Some(NicoStatus {
+                    is_live: false,
+                    enable_monitor: cfg.niconico.enable_monitor,
+                    title: Some("-".to_string()),
+                    channel_name: cfg.niconico.channel_name.clone(),
+                    channel_id: cfg.niconico.channel_id.clone(),
+                    live_id: None,
+                    area_id: cfg.niconico.area_v2,
+                    area_name: nico_area_name,
+                    quality: cfg.niconico.quality.clone(),
+                    crop_enabled: cfg.niconico.crop.is_some(),
+                    ffmpeg_cache_enabled: cfg.niconico.ffmpeg_cache.enabled,
+                    ffmpeg_cache_latency_secs: cfg.niconico.ffmpeg_cache.latency_secs,
+                });
+            }
+        } else {
+            cached_status.niconico = None;
+        }
+
         });
     });
 }
@@ -338,6 +396,7 @@ mod tests {
             },
             enable_youtube_monitor: false,
             enable_twitch_monitor: false,
+            niconico: crate::config::Niconico::default(),
             cluster: ClusterConfig::default(),
         }
     }

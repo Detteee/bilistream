@@ -56,6 +56,20 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
                 "latency_secs": cfg.twitch.ffmpeg_cache.latency_secs,
             },
         },
+        "niconico": {
+            "enable_monitor": cfg.niconico.enable_monitor,
+            "channel_name": cfg.niconico.channel_name,
+            "channel_id": cfg.niconico.channel_id,
+            "live_id": cfg.niconico.live_id,
+            "area_v2": cfg.niconico.area_v2,
+            "quality": cfg.niconico.quality,
+            "cookies_file": cfg.niconico.cookies_file,
+            "proxy": cfg.niconico.proxy,
+            "ffmpeg_cache": {
+                "enabled": cfg.niconico.ffmpeg_cache.enabled,
+                "latency_secs": cfg.niconico.ffmpeg_cache.latency_secs,
+            },
+        },
         "priority_channel": {
             "enabled": cfg.priority_channel.enabled,
             "channel_name": cfg.priority_channel.channel_name,
@@ -96,6 +110,8 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
+    niconico_cookies_file: Option<String>,
+    niconico_proxy: Option<String>,
     cluster: Option<ClusterConfig>,
 }
 
@@ -205,9 +221,18 @@ pub(crate) fn twitch_monitor_reload_needed(previous: &Config, current: &Config) 
     )
 }
 
+pub(crate) fn niconico_monitor_reload_needed(previous: &Config, current: &Config) -> bool {
+    previous.niconico.enable_monitor != current.niconico.enable_monitor
+        || (current.niconico.enable_monitor
+            && (previous.niconico.channel_name != current.niconico.channel_name
+                || previous.niconico.channel_id != current.niconico.channel_id
+                || previous.niconico.live_id != current.niconico.live_id))
+}
+
 pub(crate) fn monitor_reload_needed(previous: &Config, current: &Config) -> bool {
     youtube_monitor_reload_needed(previous, current)
         || twitch_monitor_reload_needed(previous, current)
+        || niconico_monitor_reload_needed(previous, current)
 }
 
 pub async fn update_config(
@@ -367,6 +392,20 @@ pub async fn update_config(
             None
         } else {
             Some(youtube_cookies_file)
+        };
+    }
+    if let Some(niconico_cookies_file) = payload.niconico_cookies_file {
+        cfg.niconico.cookies_file = if niconico_cookies_file.is_empty() {
+            None
+        } else {
+            Some(niconico_cookies_file)
+        };
+    }
+    if let Some(niconico_proxy) = payload.niconico_proxy {
+        cfg.niconico.proxy = if niconico_proxy.is_empty() {
+            None
+        } else {
+            Some(niconico_proxy)
         };
     }
     if let Some(youtube_deno_path) = payload.youtube_deno_path {

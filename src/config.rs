@@ -167,6 +167,8 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub enable_twitch_monitor: bool,
     #[serde(default)]
+    pub niconico: Niconico,
+    #[serde(default)]
     pub cluster: ClusterConfig,
 }
 
@@ -413,6 +415,59 @@ pub struct Youtube {
     pub crop: Option<CropConfig>,
     #[serde(default)]
     pub ffmpeg_cache: FfmpegCache,
+}
+
+/// Niconico Live restream source. Ingest is streamlink (pre-muxed A+V),
+/// not a standalone m3u8 URL.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Niconico {
+    #[serde(default)]
+    pub enable_monitor: bool,
+    #[serde(default)]
+    pub channel_name: String,
+    /// Channel slug (`vspo`) or `ch2648162`. Current `lv` is resolved from
+    /// `https://ch.nicovideo.jp/{channel_id}/live`.
+    #[serde(default)]
+    pub channel_id: String,
+    /// Optional pinned program. Used only when `channel_id` is empty.
+    #[serde(default)]
+    pub live_id: String,
+    #[serde(default)]
+    pub area_v2: u64,
+    #[serde(default = "default_quality")]
+    pub quality: String,
+    #[serde(default)]
+    pub cookies_file: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<String>,
+    #[serde(default)]
+    pub crop: Option<CropConfig>,
+    #[serde(default = "default_niconico_ffmpeg_cache")]
+    pub ffmpeg_cache: FfmpegCache,
+}
+
+impl Default for Niconico {
+    fn default() -> Self {
+        Self {
+            enable_monitor: false,
+            channel_name: String::new(),
+            channel_id: String::new(),
+            live_id: String::new(),
+            area_v2: 235,
+            quality: default_quality(),
+            cookies_file: None,
+            proxy: None,
+            crop: None,
+            ffmpeg_cache: default_niconico_ffmpeg_cache(),
+        }
+    }
+}
+
+fn default_niconico_ffmpeg_cache() -> FfmpegCache {
+    FfmpegCache {
+        enabled: true,
+        latency_secs: 12,
+    }
 }
 
 /// Struct representing crop configuration for video filtering

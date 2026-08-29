@@ -15,6 +15,7 @@ pub async fn start_stream(
     let area_v2 = match payload.platform.as_deref() {
         Some("YT") => cfg.youtube.area_v2,
         Some("TW") => cfg.twitch.area_v2,
+        Some("NC") => cfg.niconico.area_v2,
         _ => 235,
     };
 
@@ -294,9 +295,10 @@ pub async fn update_title(
 
 #[derive(Deserialize)]
 pub struct UpdateChannelRequest {
-    platform: String, // "youtube" or "twitch"
+    platform: String, // "youtube", "twitch", or "niconico"
     channel_id: Option<String>,
     channel_name: Option<String>,
+    live_id: Option<String>,
     area_id: Option<u64>,
     quality: Option<String>,
     riot_api_key: Option<String>,
@@ -372,6 +374,30 @@ pub async fn update_channel(
                 cfg.twitch.quality = quality;
             }
         }
+        "niconico" => {
+            if let Some(channel_id) = payload.channel_id {
+                cfg.niconico.channel_id = crate::plugins::normalize_channel_id(&channel_id);
+            }
+            if let Some(channel_name) = payload.channel_name {
+                cfg.niconico.channel_name = channel_name;
+            }
+            if let Some(live_id) = payload.live_id {
+                cfg.niconico.live_id = crate::plugins::normalize_live_id(&live_id);
+            }
+            if let Some(area_id) = payload.area_id {
+                cfg.niconico.area_v2 = area_id;
+                if area_id == 86 {
+                    if let Some(riot_api_key) = payload.riot_api_key {
+                        if !riot_api_key.is_empty() {
+                            cfg.riot_api_key = Some(riot_api_key);
+                        }
+                    }
+                }
+            }
+            if let Some(quality) = payload.quality {
+                cfg.niconico.quality = quality;
+            }
+        }
         _ => return Err(StatusCode::BAD_REQUEST),
     }
 
@@ -382,8 +408,9 @@ pub async fn update_channel(
 
     let refresh_youtube = youtube_monitor_reload_needed(&previous_cfg, &cfg);
     let refresh_twitch = twitch_monitor_reload_needed(&previous_cfg, &cfg);
+    let refresh_niconico = niconico_monitor_reload_needed(&previous_cfg, &cfg);
 
-    if refresh_youtube || refresh_twitch {
+    if refresh_youtube || refresh_twitch || refresh_niconico {
         set_config_updated();
     }
 
@@ -391,13 +418,16 @@ pub async fn update_channel(
     refresh_status_cache_config_from(&cfg);
 
     // Refresh live status in background only when the active monitor target changed.
-    if refresh_youtube || refresh_twitch {
+    if refresh_youtube || refresh_twitch || refresh_niconico {
         tokio::spawn(async move {
             if refresh_youtube {
                 let _ = refresh_youtube_status().await;
             }
             if refresh_twitch {
                 let _ = refresh_twitch_status().await;
+            }
+            if refresh_niconico {
+                let _ = refresh_niconico_status().await;
             }
         });
     }
@@ -636,6 +666,55 @@ pub async fn toggle_twitch_monitor(
         data: None,
         message: Some(format!(
             "Twitch监控已{}{}",
+            if payload.enabled { "启用" } else { "禁用" },
+            toggle_sync_message
+        )),
+    })
+}
+
+pub(crate) fn niconico_monitor_toggle_matches(cfg: &Config, enabled: bool) -> bool {
+    cfg.niconico.enable_monitor == enabled
+}
+
+pub async fn toggle_niconico_monitor(
+    Json(payload): Json<ToggleMonitorRequest>,
+) -> Result<ApiResponse<()>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if payload.enabled && !local_node_can_enable_monitor_toggles(&cfg) {
+        return Ok(monitor_toggle_enable_rejected_response());
+    }
+
+    if niconico_monitor_toggle_matches(&cfg, payload.enabled) {
+        refresh_status_cache_config_from(&cfg);
+        return Ok(ApiResponse {
+            success: true,
+            data: None,
+            message: Some(format!(
+                "Niconico监控已是{}",
+                if payload.enabled { "启用" } else { "禁用" }
+            )),
+        });
+    }
+
+    cfg.niconico.enable_monitor = payload.enabled;
+
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    set_config_updated();
+    refresh_status_cache_config_from(&cfg);
+    crate::webui::state::request_status_refresh();
+    let toggle_sync_message = schedule_active_monitor_state_sync_after_toggle_change(&cfg);
+
+    Ok(ApiResponse {
+        success: true,
+        data: None,
+        message: Some(format!(
+            "Niconico监控已{}{}",
             if payload.enabled { "启用" } else { "禁用" },
             toggle_sync_message
         )),

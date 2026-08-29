@@ -129,6 +129,8 @@ async function loadSystemConfig() {
     // Load proxy settings
     setInputValue('config-yt-proxy', (config.youtube && config.youtube.proxy) || '');
     setInputValue('config-tw-proxy', (config.twitch && config.twitch.proxy) || '');
+    setInputValue('config-nc-cookies-file', (config.niconico && config.niconico.cookies_file) || '');
+    setInputValue('config-nc-proxy', (config.niconico && config.niconico.proxy) || '');
 
     loadClusterSettings(config.cluster || {});
 
@@ -306,7 +308,7 @@ function renderDiscoveryTiles(tiles) {
 }
 async function loadMonitorToggleStates(config = window.configData) {
   try {
-    if (typeof config.youtube?.enable_monitor !== 'boolean' || typeof config.twitch?.enable_monitor !== 'boolean') {
+    if (typeof config.youtube?.enable_monitor !== 'boolean' || typeof config.twitch?.enable_monitor !== 'boolean' || typeof config.niconico?.enable_monitor !== 'boolean') {
       config = mergeConfigData(await getJson('/api/config'));
     }
 
@@ -472,6 +474,8 @@ function getCurrentConfig() {
     youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
     youtube_cookies_file: document.getElementById('config-yt-cookies-file').value.trim(),
     youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim(),
+    niconico_cookies_file: document.getElementById('config-nc-cookies-file').value.trim(),
+    niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
     cluster: getClusterConfigFromForm()
   };
 }

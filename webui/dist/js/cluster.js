@@ -804,7 +804,8 @@ function createClusterNodeStream(stream) {
 
 const CLUSTER_STREAM_PLATFORMS = {
   youtube: { symbol: '#i-youtube', label: 'YouTube' },
-  twitch: { symbol: '#i-twitch', label: 'Twitch' }
+  twitch: { symbol: '#i-twitch', label: 'Twitch' },
+  niconico: { symbol: '#i-niconico', label: 'Niconico' }
 }
 
 function createClusterStreamPlatform(platform) {
@@ -837,6 +838,7 @@ function clusterStreamPlatformKey(platform) {
   switch (platform.toUpperCase()) {
     case 'YT': return 'youtube';
     case 'TW': return 'twitch';
+    case 'NC': return 'niconico';
     default: return 'other';
   }
 }

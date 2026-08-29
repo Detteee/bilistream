@@ -102,6 +102,7 @@ pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
         priority_channel: PriorityChannel::default(),
         enable_youtube_monitor: true,
         enable_twitch_monitor: true,
+        niconico: crate::config::Niconico::default(),
         cluster: ClusterConfig {
             enabled: true,
             node_id: node_id.to_string(),

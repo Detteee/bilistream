@@ -12,8 +12,8 @@ pub use webui::server::start_webui;
 
 // Re-export for convenience
 pub use webui::state::{
-    add_log_line, update_status_cache, BiliStatus, PriorityChannelStatus, StatusData, TwStatus,
-    YtStatus,
+    add_log_line, update_status_cache, BiliStatus, NicoStatus, PriorityChannelStatus, StatusData,
+    TwStatus, YtStatus,
 };
 
 // Re-export anything that needs to be public

@@ -39,6 +39,19 @@ impl FfmpegCacheOptions {
     }
 }
 
+/// Pre-muxed MPEG-TS producer (streamlink nicolive) piped into ffmpeg.
+#[derive(Clone)]
+pub struct PipedIngest {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Clone)]
+pub enum FfmpegSource {
+    HlsUrl(String),
+    Piped(PipedIngest),
+}
+
 fn cache_startup_timeout_secs(latency_secs: u64) -> u64 {
     latency_secs + CACHE_PLAYLIST_WAIT_SECS
 }
@@ -122,6 +135,7 @@ pub struct FfmpegProcess {
     session: FfmpegSession,
     tasks: SessionTasks,
     children: Vec<Child>,
+    ingest: Option<Child>,
     pid: Option<u32>,
     cache_dir: Option<PathBuf>,
 }
@@ -144,6 +158,9 @@ impl FfmpegProcess {
 
     pub async fn kill(&mut self) -> std::io::Result<()> {
         let mut result = Ok(());
+        if let Some(ingest) = self.ingest.as_mut() {
+            kill_child_tree(ingest).await;
+        }
         for child in &mut self.children {
             if let Err(e) = child.kill().await {
                 result = Err(e);
@@ -178,6 +195,103 @@ pub async fn spawn_session_task(
     let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
     if let Some(process) = matching_process(&mut supervisor, session) {
         process.tasks.0.push(tokio::spawn(task));
+    }
+}
+
+async fn kill_child_tree(child: &mut Child) {
+    if let Some(pid) = child.id() {
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &format!("-{pid}")])
+                .output();
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output();
+        }
+    }
+    let _ = child.kill().await;
+}
+
+fn configure_ingest_process_group(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+}
+
+async fn spawn_piped_ingest(
+    ingest: &PipedIngest,
+    log_level: &str,
+) -> Option<(Child, tokio::process::ChildStdout)> {
+    let mut cmd = Command::new(&ingest.program);
+    configure_tokio_no_window(&mut cmd);
+    configure_ingest_process_group(&mut cmd);
+    cmd.args(&ingest.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    match cmd.spawn() {
+        Ok(mut child) => {
+            if let Some(pid) = child.id() {
+                tracing::info!("🚀 streamlink 摄取进程已启动 (PID: {:?})", pid);
+                set_high_priority(pid);
+            }
+            if let Some(stderr) = child.stderr.take() {
+                spawn_ffmpeg_stderr_monitor(stderr, log_level.to_string(), "streamlink", None);
+            }
+            let stdout = child.stdout.take()?;
+            Some((child, stdout))
+        }
+        Err(e) => {
+            tracing::error!("❌ 启动 streamlink 摄取失败: {}", e);
+            None
+        }
+    }
+}
+
+fn pipe_ingest_stdout(cmd: &mut Command, stdout: tokio::process::ChildStdout) -> bool {
+    match TryInto::<Stdio>::try_into(stdout) {
+        Ok(stdio) => {
+            cmd.stdin(stdio);
+            true
+        }
+        Err(e) => {
+            tracing::error!("❌ 无法把摄取 stdout 接到 ffmpeg: {}", e);
+            false
+        }
+    }
+}
+
+fn append_source_input(
+    cmd: &mut Command,
+    source: &FfmpegSource,
+    proxy: Option<&str>,
+    use_re: bool,
+) {
+    match source {
+        FfmpegSource::HlsUrl(url) => {
+            if let Some(proxy_url) = proxy {
+                cmd.arg("-http_proxy").arg(proxy_url);
+            }
+            append_remote_hls_input_options(cmd);
+            if use_re {
+                cmd.arg("-re");
+            }
+            cmd.arg("-fflags").arg("+genpts").arg("-i").arg(url);
+        }
+        FfmpegSource::Piped(_) => {
+            cmd.arg("-fflags")
+                .arg("+genpts")
+                .arg("-f")
+                .arg("mpegts")
+                .arg("-i")
+                .arg("pipe:0");
+        }
     }
 }
 
@@ -1541,7 +1655,7 @@ fn start_ffmpeg_timeout_monitor(session: FfmpegSession, timeout_secs: u64) -> Jo
 async fn spawn_direct_ffmpeg(
     supervisor: &mut Option<FfmpegProcess>,
     rtmp_url_key: String,
-    m3u8_url: String,
+    source: FfmpegSource,
     proxy: Option<String>,
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>,
@@ -1549,23 +1663,26 @@ async fn spawn_direct_ffmpeg(
     let ffmpeg_cmd = get_ffmpeg_command();
     tracing::info!("⏱️ HLS 缓存已关闭: 直接转播");
 
+    let ingest_spawned = match &source {
+        FfmpegSource::Piped(piped) => spawn_piped_ingest(piped, &log_level).await,
+        FfmpegSource::HlsUrl(_) => None,
+    };
+    if matches!(source, FfmpegSource::Piped(_)) && ingest_spawned.is_none() {
+        return;
+    }
+    let (ingest_child, ingest_stdout) = match ingest_spawned {
+        Some((child, stdout)) => (Some(child), Some(stdout)),
+        None => (None, None),
+    };
+
     let mut cmd = Command::new(&ffmpeg_cmd);
     configure_tokio_no_window(&mut cmd);
-
-    if let Some(proxy_url) = proxy {
-        cmd.arg("-http_proxy").arg(proxy_url);
-    }
 
     cmd.arg("-nostdin")
         .arg("-stats")
         .arg("-loglevel")
         .arg(&log_level);
-    append_remote_hls_input_options(&mut cmd);
-    cmd.arg("-re")
-        .arg("-fflags")
-        .arg("+genpts")
-        .arg("-i")
-        .arg(m3u8_url);
+    append_source_input(&mut cmd, &source, proxy.as_deref(), true);
 
     append_crop_or_copy(&mut cmd, crop);
 
@@ -1574,6 +1691,14 @@ async fn spawn_direct_ffmpeg(
         .kill_on_drop(true)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(stdout) = ingest_stdout {
+        if !pipe_ingest_stdout(&mut cmd, stdout) {
+            if let Some(mut ingest) = ingest_child {
+                kill_child_tree(&mut ingest).await;
+            }
+            return;
+        }
+    }
 
     match cmd.spawn() {
         Ok(mut child) => {
@@ -1604,6 +1729,7 @@ async fn spawn_direct_ffmpeg(
                 session,
                 tasks,
                 children: vec![child],
+                ingest: ingest_child,
                 pid,
                 cache_dir: None,
             };
@@ -1618,6 +1744,9 @@ async fn spawn_direct_ffmpeg(
         }
         Err(e) => {
             tracing::error!("❌ 启动 ffmpeg 失败: {}", e);
+            if let Some(mut ingest) = ingest_child {
+                kill_child_tree(&mut ingest).await;
+            }
         }
     }
 }
@@ -1625,7 +1754,7 @@ async fn spawn_direct_ffmpeg(
 async fn spawn_cached_ffmpeg(
     supervisor: &mut Option<FfmpegProcess>,
     rtmp_url_key: String,
-    m3u8_url: String,
+    source: FfmpegSource,
     proxy: Option<String>,
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>,
@@ -1648,26 +1777,30 @@ async fn spawn_cached_ffmpeg(
         playlist_path.display()
     );
 
+    let ingest_spawned = match &source {
+        FfmpegSource::Piped(piped) => spawn_piped_ingest(piped, &log_level).await,
+        FfmpegSource::HlsUrl(_) => None,
+    };
+    if matches!(source, FfmpegSource::Piped(_)) && ingest_spawned.is_none() {
+        return;
+    }
+    let (ingest_child, ingest_stdout) = match ingest_spawned {
+        Some((child, stdout)) => (Some(child), Some(stdout)),
+        None => (None, None),
+    };
+
     let mut cache_cmd = Command::new(&ffmpeg_cmd);
     configure_tokio_no_window(&mut cache_cmd);
-
-    if let Some(proxy_url) = proxy.clone() {
-        cache_cmd.arg("-http_proxy").arg(proxy_url);
-    }
 
     cache_cmd
         .arg("-nostdin")
         .arg("-stats")
         .arg("-loglevel")
-        .arg("warning");
-    append_remote_hls_input_options(&mut cache_cmd);
-    cache_cmd
+        .arg("warning")
         .arg("-rtbufsize")
-        .arg("100M")
-        .arg("-fflags")
-        .arg("+genpts")
-        .arg("-i")
-        .arg(m3u8_url)
+        .arg("100M");
+    append_source_input(&mut cache_cmd, &source, proxy.as_deref(), false);
+    cache_cmd
         .arg("-c")
         .arg("copy")
         .arg("-f")
@@ -1688,6 +1821,14 @@ async fn spawn_cached_ffmpeg(
         .kill_on_drop(true)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(stdout) = ingest_stdout {
+        if !pipe_ingest_stdout(&mut cache_cmd, stdout) {
+            if let Some(mut ingest) = ingest_child {
+                kill_child_tree(&mut ingest).await;
+            }
+            return;
+        }
+    }
 
     match cache_cmd.spawn() {
         Ok(mut cache_child) => {
@@ -1720,6 +1861,7 @@ async fn spawn_cached_ffmpeg(
                 session,
                 tasks,
                 children: vec![cache_child],
+                ingest: ingest_child,
                 pid: cache_pid,
                 cache_dir: Some(cache_dir.clone()),
             };
@@ -1819,6 +1961,9 @@ async fn spawn_cached_ffmpeg(
         }
         Err(e) => {
             tracing::error!("❌ 启动 ffmpeg 缓存写入进程失败: {}", e);
+            if let Some(mut ingest) = ingest_child {
+                kill_child_tree(&mut ingest).await;
+            }
         }
     }
 }
@@ -1827,7 +1972,7 @@ async fn spawn_cached_ffmpeg(
 pub async fn ffmpeg(
     rtmp_url: String,
     rtmp_key: String,
-    m3u8_url: String,
+    source: FfmpegSource,
     proxy: Option<String>,
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
@@ -1846,7 +1991,7 @@ pub async fn ffmpeg(
         spawn_cached_ffmpeg(
             &mut supervisor,
             rtmp_url_key,
-            m3u8_url,
+            source,
             proxy,
             log_level,
             crop,
@@ -1857,7 +2002,7 @@ pub async fn ffmpeg(
         spawn_direct_ffmpeg(
             &mut supervisor,
             rtmp_url_key,
-            m3u8_url,
+            source,
             proxy,
             log_level,
             crop,
