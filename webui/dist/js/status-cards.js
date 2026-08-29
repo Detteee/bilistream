@@ -322,6 +322,21 @@ export function renderTwitchCard(tw) {
 }
 
 /// Paints every platform card from one `/api/status` style payload.
+/// The channel id rides along on the name element's dataset so the card has
+/// one row instead of two.
+export function setNcChannelDisplay(name, channelId) {
+  const channelSpan = document.getElementById('nc-channel-name');
+  if (!channelSpan) {
+    return;
+  }
+  channelSpan.textContent = name || '-';
+  if (channelId) {
+    channelSpan.dataset.channelId = channelId;
+  } else {
+    delete channelSpan.dataset.channelId;
+  }
+}
+
 export function renderNiconicoCard(nc) {
   const scheduledRow = document.getElementById('nc-scheduled-row');
 
@@ -331,8 +346,7 @@ export function renderNiconicoCard(nc) {
     if (scheduledRow) {
       scheduledRow.style.display = 'none';
     }
-    setElementText('nc-channel-name', '-');
-    setElementText('nc-channel-id', '-');
+    setNcChannelDisplay('-', '');
     setElementText('nc-live-id', '-');
     setElementText('nc-title', '-');
     setElementText('nc-scheduled', '-');
@@ -353,8 +367,7 @@ export function renderNiconicoCard(nc) {
   if (scheduledRow) {
     scheduledRow.style.display = nc.scheduled_start && !nc.is_live ? '' : 'none';
   }
-  setElementText('nc-channel-name', nc.channel_name || '-');
-  setElementText('nc-channel-id', nc.channel_id || '-');
+  setNcChannelDisplay(nc.channel_name, nc.channel_id);
   setElementText('nc-live-id', nc.live_id || '-');
   setElementText('nc-title', nc.title || '-');
   setElementText('nc-scheduled', nc.scheduled_start ? formatScheduledStart(nc.scheduled_start) : '-');

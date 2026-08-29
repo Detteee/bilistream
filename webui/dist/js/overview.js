@@ -18,6 +18,7 @@ import {
   isBiliNetworkLive,
   renderBiliNetworkPanel,
   renderStatusCards,
+  setNcChannelDisplay,
   setPlatformLiveInfoVisibility,
   setStatusCardsMessage,
 } from './status-cards.js';
@@ -198,15 +199,6 @@ function initDashboardControls() {
   document
     .getElementById('nc-channel-cancel-btn')
     ?.addEventListener('click', cancelNcChannelEdit);
-  document
-    .getElementById('nc-channel-id-edit-btn')
-    ?.addEventListener('click', toggleNcChannelIdEdit);
-  document
-    .getElementById('nc-channel-id-save-btn')
-    ?.addEventListener('click', saveNcChannelIdEdit);
-  document
-    .getElementById('nc-channel-id-cancel-btn')
-    ?.addEventListener('click', cancelNcChannelIdEdit);
   document
     .getElementById('nc-area-edit-btn')
     ?.addEventListener('click', toggleNcAreaEdit);
@@ -2831,20 +2823,6 @@ async function saveTwAreaEdit() {
     showNotification('更新失败: ' + error.message, 'error');
   }
 }
-function toggleNcTextEdit(spanId, containerId, inputId) {
-  const span = document.getElementById(spanId);
-  const container = document.getElementById(containerId);
-  const input = document.getElementById(inputId);
-
-  showInfoRowEdit(span, container);
-  const current = span?.textContent;
-  input.value = current && current !== '-' ? current : '';
-  input.focus();
-  input.select();
-}
-function cancelNcTextEdit(spanId, containerId) {
-  hideInfoRowEdit(document.getElementById(spanId), document.getElementById(containerId));
-}
 async function toggleNcChannelEdit() {
   const channelSpan = document.getElementById('nc-channel-name');
   const editContainer = document.getElementById('nc-channel-edit-container');
@@ -2867,8 +2845,9 @@ function populateNcChannelEditSelect() {
   editSelect.replaceChildren(createSelectOption('', '选择频道...'));
   appendPlatformChannelOptions(editSelect, 'niconico');
 
-  const currentId = (document.getElementById('nc-channel-id')?.textContent || '').trim();
-  const currentName = (document.getElementById('nc-channel-name')?.textContent || '').trim();
+  const channelSpan = document.getElementById('nc-channel-name');
+  const currentId = (channelSpan?.dataset.channelId || '').trim();
+  const currentName = (channelSpan?.textContent || '').trim();
   for (const option of editSelect.options) {
     if (!option.value) continue;
     try {
@@ -2919,40 +2898,7 @@ async function saveNcChannelEdit() {
 
     showNotification(data.message || 'Niconico频道已更新', 'success');
     cancelNcChannelEdit();
-    document.getElementById('nc-channel-name').textContent = channelInfo.name;
-    document.getElementById('nc-channel-id').textContent = channelInfo.id;
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
-  }
-}
-function toggleNcChannelIdEdit() {
-  toggleNcTextEdit('nc-channel-id', 'nc-channel-id-edit-container', 'nc-channel-id-edit-input');
-}
-function cancelNcChannelIdEdit() {
-  cancelNcTextEdit('nc-channel-id', 'nc-channel-id-edit-container');
-}
-async function saveNcChannelIdEdit() {
-  const channelId = document.getElementById('nc-channel-id-edit-input').value.trim();
-
-  if (!channelId) {
-    showNotification('请输入频道 ID', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'niconico',
-      channel_id: channelId
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Niconico频道 ID 更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Niconico频道 ID 已更新', 'success');
-    cancelNcChannelIdEdit();
+    setNcChannelDisplay(channelInfo.name, channelInfo.id);
     refreshStatus();
   } catch (error) {
     showNotification('更新失败: ' + error.message, 'error');
