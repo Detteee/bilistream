@@ -2845,34 +2845,82 @@ function toggleNcTextEdit(spanId, containerId, inputId) {
 function cancelNcTextEdit(spanId, containerId) {
   hideInfoRowEdit(document.getElementById(spanId), document.getElementById(containerId));
 }
-function toggleNcChannelEdit() {
-  toggleNcTextEdit('nc-channel-name', 'nc-channel-edit-container', 'nc-channel-edit-input');
+async function toggleNcChannelEdit() {
+  const channelSpan = document.getElementById('nc-channel-name');
+  const editContainer = document.getElementById('nc-channel-edit-container');
+  const editSelect = document.getElementById('nc-channel-edit-select');
+
+  showInfoRowEdit(channelSpan, editContainer);
+
+  try {
+    state.channelsData = await getJson('/api/channels');
+  } catch (error) {
+    showNotification('加载频道列表失败: ' + error.message, 'error');
+    return;
+  }
+
+  populateNcChannelEditSelect();
+  editSelect.focus();
+}
+function populateNcChannelEditSelect() {
+  const editSelect = document.getElementById('nc-channel-edit-select');
+  editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+  appendPlatformChannelOptions(editSelect, 'niconico');
+
+  const currentId = (document.getElementById('nc-channel-id')?.textContent || '').trim();
+  const currentName = (document.getElementById('nc-channel-name')?.textContent || '').trim();
+  for (const option of editSelect.options) {
+    if (!option.value) continue;
+    try {
+      const info = JSON.parse(option.value);
+      if (
+        (currentId && currentId !== '-' && info.id === currentId)
+        || (currentName && currentName !== '-' && info.name === currentName)
+      ) {
+        editSelect.value = option.value;
+        break;
+      }
+    } catch (_error) {
+      // Skip malformed option values from older cached channel lists.
+    }
+  }
+
+  if (editSelect.options.length <= 1) {
+    showNotification('没有可选择的 Niconico 频道。请先在频道配置中填写 Niconico 频道ID 和转播标题。', 'error');
+  }
 }
 function cancelNcChannelEdit() {
-  cancelNcTextEdit('nc-channel-name', 'nc-channel-edit-container');
+  const channelSpan = document.getElementById('nc-channel-name');
+  const editContainer = document.getElementById('nc-channel-edit-container');
+
+  hideInfoRowEdit(channelSpan, editContainer);
 }
 async function saveNcChannelEdit() {
-  const channelName = document.getElementById('nc-channel-edit-input').value.trim();
+  const editSelect = document.getElementById('nc-channel-edit-select');
+  const selectedValue = editSelect.value;
 
-  if (!channelName) {
-    showNotification('请输入频道名', 'error');
+  if (!selectedValue) {
+    showNotification('请选择频道', 'error');
     return;
   }
 
   try {
+    const channelInfo = JSON.parse(selectedValue);
     const data = await postChannelUpdate({
       platform: 'niconico',
-      channel_name: channelName
+      channel_id: channelInfo.id,
+      channel_name: channelInfo.name
     });
 
     if (!data.success) {
-      showNotification(data.message || 'Niconico频道名更新失败', 'error');
+      showNotification(data.message || 'Niconico频道更新失败', 'error');
       return;
     }
 
-    showNotification(data.message || 'Niconico频道名已更新', 'success');
+    showNotification(data.message || 'Niconico频道已更新', 'success');
     cancelNcChannelEdit();
-    document.getElementById('nc-channel-name').textContent = channelName;
+    document.getElementById('nc-channel-name').textContent = channelInfo.name;
+    document.getElementById('nc-channel-id').textContent = channelInfo.id;
     refreshStatus();
   } catch (error) {
     showNotification('更新失败: ' + error.message, 'error');

@@ -101,8 +101,50 @@ pub fn channel_live_url(channel_id: &str) -> String {
     )
 }
 
+pub fn niconico_channel_id(cfg: &NiconicoConfig) -> String {
+    normalize_channel_id(&cfg.channel_id)
+}
+
+pub fn niconico_restream_name_from_channel(channel: &crate::config::Channel) -> String {
+    channel
+        .niconico_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(channel.name.trim())
+        .to_string()
+}
+
+pub fn niconico_name_from_channels(
+    channels: &[crate::config::Channel],
+    channel_id: &str,
+) -> Option<String> {
+    let id = normalize_channel_id(channel_id);
+    if id.is_empty() {
+        return None;
+    }
+    channels.iter().find_map(|channel| {
+        let nico_id = channel.platforms.niconico.as_deref()?;
+        if normalize_channel_id(nico_id) == id {
+            Some(niconico_restream_name_from_channel(channel))
+        } else {
+            None
+        }
+    })
+}
+
+pub fn niconico_channel_name(cfg: &NiconicoConfig) -> String {
+    let id = niconico_channel_id(cfg);
+    if let Ok(channels) = crate::config::load_channels() {
+        if let Some(name) = niconico_name_from_channels(&channels.channels, &id) {
+            return name;
+        }
+    }
+    cfg.channel_name.trim().to_string()
+}
+
 pub fn niconico_configured(cfg: &NiconicoConfig) -> bool {
-    !normalize_channel_id(&cfg.channel_id).is_empty() || !normalize_live_id(&cfg.live_id).is_empty()
+    !niconico_channel_id(cfg).is_empty() || !normalize_live_id(&cfg.live_id).is_empty()
 }
 
 pub fn streamlink_ingest(
@@ -288,7 +330,7 @@ pub async fn get_niconico_status(
     ),
     Box<dyn Error>,
 > {
-    let channel_id = normalize_channel_id(&cfg.channel_id);
+    let channel_id = niconico_channel_id(cfg);
     if !channel_id.is_empty() {
         return match fetch_channel_onair(&channel_id, cfg.proxy.as_deref()).await {
             Ok(Some(onair)) => Ok((
@@ -425,6 +467,69 @@ mod tests {
             ""
         );
         assert_eq!(normalize_channel_id(""), "");
+    }
+
+    #[test]
+    fn empty_niconico_config_is_not_configured() {
+        let cfg = crate::config::Niconico::default();
+        assert_eq!(niconico_channel_id(&cfg), "");
+        assert_eq!(niconico_channel_name(&cfg), "");
+        assert!(!niconico_configured(&cfg));
+    }
+
+    #[test]
+    fn pinned_live_id_is_configured_without_channel_id() {
+        let mut cfg = crate::config::Niconico::default();
+        cfg.live_id = "lv351182284".to_string();
+        assert_eq!(niconico_channel_id(&cfg), "");
+        assert!(niconico_configured(&cfg));
+    }
+
+    #[test]
+    fn niconico_restream_name_prefers_niconico_name_over_youtube_name() {
+        let channel = crate::config::Channel {
+            name: "ぶいすぽっ!【公式】".to_string(),
+            niconico_name: Some("ぶいすぽ激ロー".to_string()),
+            aliases: vec!["vspo".to_string()],
+            platforms: crate::config::ChannelPlatforms {
+                youtube: Some("UCuI5XaO-6VkOEhHao6ij7JA".to_string()),
+                twitch: None,
+                niconico: Some("vspo".to_string()),
+            },
+            riot_puuid: None,
+        };
+        assert_eq!(
+            niconico_restream_name_from_channel(&channel),
+            "ぶいすぽ激ロー"
+        );
+        assert_eq!(
+            niconico_name_from_channels(std::slice::from_ref(&channel), "vspo").as_deref(),
+            Some("ぶいすぽ激ロー")
+        );
+        assert_eq!(
+            niconico_name_from_channels(
+                std::slice::from_ref(&channel),
+                "https://ch.nicovideo.jp/vspo"
+            )
+            .as_deref(),
+            Some("ぶいすぽ激ロー")
+        );
+
+        let youtube_only = crate::config::Channel {
+            name: "ぶいすぽっ!【公式】".to_string(),
+            niconico_name: None,
+            aliases: vec![],
+            platforms: crate::config::ChannelPlatforms {
+                youtube: Some("UCuI5XaO-6VkOEhHao6ij7JA".to_string()),
+                twitch: None,
+                niconico: Some("vspo".to_string()),
+            },
+            riot_puuid: None,
+        };
+        assert_eq!(
+            niconico_restream_name_from_channel(&youtube_only),
+            "ぶいすぽっ!【公式】"
+        );
     }
 
     #[test]

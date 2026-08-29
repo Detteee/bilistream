@@ -325,11 +325,13 @@
     },
     {
       "name": "ぶいすぽっ!【公式】",
+      "niconico_name": "ぶいすぽ激ロー",
       "aliases": [
         "vspo"
       ],
       "platforms": {
-        "youtube": "UCuI5XaO-6VkOEhHao6ij7JA"
+        "youtube": "UCuI5XaO-6VkOEhHao6ij7JA",
+        "niconico": "vspo"
       }
     },
     {

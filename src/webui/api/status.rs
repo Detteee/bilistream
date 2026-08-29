@@ -90,9 +90,7 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
         if let Err(e) = refresh_niconico_status_cache_with_config(&cfg).await {
             tracing::warn!("WebUI Niconico status refresh failed: {}", e);
         }
-    } else if !crate::plugins::niconico_configured(&cfg.niconico)
-        && cfg.niconico.channel_name.trim().is_empty()
-    {
+    } else if !crate::plugins::niconico_configured(&cfg.niconico) {
         update_status_cache_with(|status| status.niconico = None);
     }
 
@@ -216,8 +214,8 @@ pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> R
             is_live,
             enable_monitor: cfg.niconico.enable_monitor,
             title,
-            channel_name: cfg.niconico.channel_name.clone(),
-            channel_id: cfg.niconico.channel_id.clone(),
+            channel_name: crate::plugins::niconico_channel_name(&cfg.niconico),
+            channel_id: crate::plugins::niconico_channel_id(&cfg.niconico),
             live_id,
             quality: cfg.niconico.quality.clone(),
             area_id: cfg.niconico.area_v2,

@@ -103,6 +103,10 @@ pub struct ChannelsData {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Channel {
     pub name: String,
+    /// Bilibili restream title for Niconico (`【转播】{niconico_name}`).
+    /// When omitted, Niconico uses `name` like YouTube/Twitch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub niconico_name: Option<String>,
     pub aliases: Vec<String>,
     pub platforms: ChannelPlatforms,
     pub riot_puuid: Option<String>,
@@ -112,6 +116,8 @@ pub struct Channel {
 pub struct ChannelPlatforms {
     pub youtube: Option<String>,
     pub twitch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub niconico: Option<String>,
 }
 
 /// Struct representing the overall configuration.
@@ -418,7 +424,8 @@ pub struct Youtube {
 }
 
 /// Niconico Live restream source. Ingest is streamlink (pre-muxed A+V),
-/// not a standalone m3u8 URL.
+/// not a standalone m3u8 URL. Channel id/name come from `channels.json` /
+/// the WebUI, same as YouTube and Twitch.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Niconico {
     #[serde(default)]
@@ -1080,6 +1087,29 @@ mod tests {
         .unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "2");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn channel_deserializes_niconico_platform_and_restream_name() {
+        let channel: Channel = serde_json::from_str(
+            r#"{
+                "name": "ぶいすぽっ!【公式】",
+                "niconico_name": "ぶいすぽ激ロー",
+                "aliases": ["vspo"],
+                "platforms": {
+                    "youtube": "UCuI5XaO-6VkOEhHao6ij7JA",
+                    "niconico": "vspo"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(channel.name, "ぶいすぽっ!【公式】");
+        assert_eq!(channel.niconico_name.as_deref(), Some("ぶいすぽ激ロー"));
+        assert_eq!(channel.platforms.niconico.as_deref(), Some("vspo"));
+        assert_eq!(
+            channel.platforms.youtube.as_deref(),
+            Some("UCuI5XaO-6VkOEhHao6ij7JA")
+        );
     }
 
     #[test]

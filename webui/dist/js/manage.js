@@ -236,8 +236,13 @@ async function loadChannels() {
             divider,
             createManagementMeta('别名', channel.aliases),
             createManagementMeta('YouTube', platforms.youtube),
-            createManagementMeta('Twitch', platforms.twitch)
+            createManagementMeta('Twitch', platforms.twitch),
+            createManagementMeta('Niconico', platforms.niconico)
           );
+
+          if (channel.niconico_name) {
+            card.appendChild(createManagementMeta('Niconico 转播标题', channel.niconico_name));
+          }
 
           if (channel.riot_puuid) {
             card.appendChild(createManagementMeta('Riot PUUID', channel.riot_puuid));
@@ -275,7 +280,7 @@ async function addChannel() {
   }
 
   if (Object.keys(payload.platforms).length === 0) {
-    showNotification('请至少填写一个平台的频道ID（YouTube或Twitch）', 'error');
+    showNotification('请至少填写一个平台的频道ID（YouTube、Twitch 或 Niconico）', 'error');
     return;
   }
 
@@ -307,7 +312,7 @@ async function updateChannel() {
   }
 
   if (Object.keys(payload.platforms).length === 0) {
-    showNotification('请至少填写一个平台的频道ID（YouTube或Twitch）', 'error');
+    showNotification('请至少填写一个平台的频道ID（YouTube、Twitch 或 Niconico）', 'error');
     return;
   }
 
@@ -327,12 +332,15 @@ async function updateChannel() {
 function readChannelForm() {
   const youtube = readInputValue('channel-youtube');
   const twitch = readInputValue('channel-twitch');
+  const niconico = readInputValue('channel-niconico');
   const platforms = {};
   if (youtube) platforms.youtube = youtube;
   if (twitch) platforms.twitch = twitch;
+  if (niconico) platforms.niconico = niconico;
 
   return {
     name: readInputValue('channel-name'),
+    niconico_name: readInputValue('channel-niconico-name') || null,
     aliases: parseCommaSeparatedInput('channel-aliases'),
     platforms,
     riot_puuid: readInputValue('channel-riot') || null
@@ -357,6 +365,8 @@ async function editChannel(channelName) {
     setInputValue('channel-aliases', (channel.aliases || []).join(', '));
     setInputValue('channel-youtube', platforms.youtube || '');
     setInputValue('channel-twitch', platforms.twitch || '');
+    setInputValue('channel-niconico', platforms.niconico || '');
+    setInputValue('channel-niconico-name', channel.niconico_name || '');
     setInputValue('channel-riot', channel.riot_puuid || '');
 
     editingChannelName = channel.name;
@@ -373,6 +383,8 @@ function clearChannelForm() {
   setInputValue('channel-aliases', '');
   setInputValue('channel-youtube', '');
   setInputValue('channel-twitch', '');
+  setInputValue('channel-niconico', '');
+  setInputValue('channel-niconico-name', '');
   setInputValue('channel-riot', '');
 
   editingChannelName = null;

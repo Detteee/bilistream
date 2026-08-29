@@ -43,8 +43,8 @@
   // ===== Niconico 配置 =====
   "niconico": {
     "enable_monitor": false,             // 启用 Niconico 监控转播
-    "channel_name": "",                  // 频道名称 (将出现于转播标题)
-    "channel_id": "vspo",                // 频道 slug 或 ch.nicovideo.jp/ 后面的路径
+    "channel_name": "",                  // B站标题【转播】{channel_name}；有 niconico_name 时以 channels.json 为准
+    "channel_id": "",                    // 频道 slug，WebUI 从 channels.json 选择
     "live_id": "",                       // 仅当未填 channel_id 时固定某一场 lv
     "area_v2": 235,                      // B站分区ID
     "quality": "best",                   // streamlink 画质: best, 1080p60, 720p60, 450p, 288p

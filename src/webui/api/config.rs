@@ -58,8 +58,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         },
         "niconico": {
             "enable_monitor": cfg.niconico.enable_monitor,
-            "channel_name": cfg.niconico.channel_name,
-            "channel_id": cfg.niconico.channel_id,
+            "channel_name": crate::plugins::niconico_channel_name(&cfg.niconico),
+            "channel_id": crate::plugins::niconico_channel_id(&cfg.niconico),
             "live_id": cfg.niconico.live_id,
             "area_v2": cfg.niconico.area_v2,
             "quality": cfg.niconico.quality,
@@ -83,7 +83,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(config_json))
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct UpdateConfigRequest {
     #[serde(skip_serializing)]
     expected: Option<HashMap<String, serde_json::Value>>,
@@ -185,6 +185,15 @@ pub(crate) fn validate_websub(url: Option<&str>, port: Option<u16>) -> Result<()
     Ok(())
 }
 
+pub(crate) fn config_payload_enables_a_monitor_toggle(
+    payload: &UpdateConfigRequest,
+    cfg: &Config,
+) -> bool {
+    (payload.enable_danmaku_command == Some(true) && !cfg.bililive.enable_danmaku_command)
+        || (payload.youtube_enable_monitor == Some(true) && !cfg.youtube.enable_monitor)
+        || (payload.twitch_enable_monitor == Some(true) && !cfg.twitch.enable_monitor)
+}
+
 pub(crate) fn monitor_target_reload_needed(
     previous_enabled: bool,
     current_enabled: bool,
@@ -247,11 +256,12 @@ pub async fn update_config(
     let old_monitored_config_version = monitored_config_version(&cfg);
     let cluster_changed = payload.cluster.is_some();
     let danmaku_command_changed = payload.enable_danmaku_command;
-    let requests_monitor_toggle_enable = payload.enable_danmaku_command == Some(true)
-        || payload.youtube_enable_monitor == Some(true)
-        || payload.twitch_enable_monitor == Some(true);
-
-    if requests_monitor_toggle_enable && !local_node_can_enable_monitor_toggles(&cfg) {
+    // The settings form always posts the current checkbox states. Only reject
+    // when this save would turn a monitor on, not when cookies/proxy change
+    // while danmaku is already enabled.
+    if config_payload_enables_a_monitor_toggle(&payload, &cfg)
+        && !local_node_can_enable_monitor_toggles(&cfg)
+    {
         return Ok(monitor_toggle_enable_rejected_response());
     }
 
@@ -573,4 +583,25 @@ pub async fn update_priority_channel(
             sync_message, toggle_sync_message
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_save_does_not_treat_already_enabled_danmaku_as_an_enable_request() {
+        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        cfg.bililive.enable_danmaku_command = true;
+        let payload = UpdateConfigRequest {
+            enable_danmaku_command: Some(true),
+            niconico_cookies_file: Some("niconico_cookies.txt".to_string()),
+            ..UpdateConfigRequest::default()
+        };
+
+        assert!(!config_payload_enables_a_monitor_toggle(&payload, &cfg));
+
+        cfg.bililive.enable_danmaku_command = false;
+        assert!(config_payload_enables_a_monitor_toggle(&payload, &cfg));
+    }
 }

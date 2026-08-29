@@ -427,10 +427,11 @@ fn show_file_usage_info() {
     println!("   • 弹幕指令: 发送 '%转播%YT%频道%lol' 使用别名 'lol' 选择英雄联盟");
 
     println!("\n📄 channels.json");
-    println!("   用途: 预设的 YouTube/Twitch 频道列表");
+    println!("   用途: 预设的 YouTube/Twitch/Niconico 频道列表");
     println!("   包含:");
-    println!("   • name: 频道名称");
-    println!("   • platforms: YouTube 频道 ID 和 Twitch 用户名");
+    println!("   • name: 频道名称（YouTube/Twitch 转播标题）");
+    println!("   • niconico_name: Niconico 转播标题（可选，缺省则用 name）");
+    println!("   • platforms: YouTube 频道 ID、Twitch 用户名、Niconico 频道 slug");
     println!("   • riot_puuid: 英雄联盟玩家 ID（用于 LOL 监控）");
     println!("   示例: 在 Web UI 中选择频道时会显示这些预设选项");
 

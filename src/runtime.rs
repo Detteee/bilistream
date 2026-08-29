@@ -16,7 +16,7 @@ use bilistream::plugins::{
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
     get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_configured,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_configured, niconico_channel_id, niconico_channel_name,
     resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     store_prefetched_playable_stream, take_prefetched_playable_stream, streamlink_ingest,
@@ -752,7 +752,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         };
 
         let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
-            Some(NiconicoClient::new(&cfg.niconico.channel_id))
+            Some(NiconicoClient::new(&niconico_channel_id(&cfg.niconico)))
         } else {
             None
         };
@@ -840,8 +840,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     is_live: nico_is_live,
                     enable_monitor: cfg.niconico.enable_monitor,
                     title: nico_title.clone(),
-                    channel_name: cfg.niconico.channel_name.clone(),
-                    channel_id: cfg.niconico.channel_id.clone(),
+                    channel_name: niconico_channel_name(&cfg.niconico),
+                    channel_id: niconico_channel_id(&cfg.niconico),
                     live_id: nico_stream_id.clone(),
                     quality: cfg.niconico.quality.clone(),
                     area_id: cfg.niconico.area_v2,
@@ -976,11 +976,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 None
             },
             stream_id: nico_stream_id,
-            channel_name: cfg.niconico.channel_name.clone(),
-            channel_id: if !cfg.niconico.channel_id.trim().is_empty() {
-                cfg.niconico.channel_id.clone()
-            } else {
-                cfg.niconico.live_id.clone()
+            channel_name: niconico_channel_name(&cfg.niconico),
+            channel_id: {
+                let id = niconico_channel_id(&cfg.niconico);
+                if id.is_empty() {
+                    cfg.niconico.live_id.clone()
+                } else {
+                    id
+                }
             },
             area_v2: cfg.niconico.area_v2,
             is_priority: false,

@@ -287,18 +287,19 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     default_area: cfg.priority_channel.default_area,
                 });
             }
-        let nico_configured = crate::plugins::niconico_configured(&cfg.niconico)
-            || !cfg.niconico.channel_name.trim().is_empty();
+        let nico_configured = crate::plugins::niconico_configured(&cfg.niconico);
         if nico_configured {
             let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
                 .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
-            if cached_status.niconico.as_ref().is_some_and(|status| status.channel_id != cfg.niconico.channel_id) {
+            let nico_channel_name = crate::plugins::niconico_channel_name(&cfg.niconico);
+            let nico_channel_id = crate::plugins::niconico_channel_id(&cfg.niconico);
+            if cached_status.niconico.as_ref().is_some_and(|status| status.channel_id != nico_channel_id) {
                 cached_status.niconico = None;
             }
             if let Some(ref mut nico_status) = cached_status.niconico {
                 nico_status.enable_monitor = cfg.niconico.enable_monitor;
-                nico_status.channel_name = cfg.niconico.channel_name.clone();
-                nico_status.channel_id = cfg.niconico.channel_id.clone();
+                nico_status.channel_name = nico_channel_name.clone();
+                nico_status.channel_id = nico_channel_id.clone();
                 nico_status.area_id = cfg.niconico.area_v2;
                 nico_status.area_name = nico_area_name;
                 nico_status.quality = cfg.niconico.quality.clone();
@@ -310,8 +311,8 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     is_live: false,
                     enable_monitor: cfg.niconico.enable_monitor,
                     title: Some("-".to_string()),
-                    channel_name: cfg.niconico.channel_name.clone(),
-                    channel_id: cfg.niconico.channel_id.clone(),
+                    channel_name: nico_channel_name,
+                    channel_id: nico_channel_id,
                     live_id: None,
                     area_id: cfg.niconico.area_v2,
                     area_name: nico_area_name,

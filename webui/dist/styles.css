@@ -1230,8 +1230,8 @@ input[type="checkbox"] {
 
 /* Explicit column counts rather than auto-fit: the card count is known, so
    each step divides them evenly and never strands a half-empty row.
-   1 column, then 2x2, then 3 across (the priority layer gives that step its
-   own full-width row) and finally the four platform cards side by side. */
+   Four platform cards (Bilibili, YouTube, Twitch, Niconico) fit 1, then 2x2,
+   then all four across. A 3-column step would leave Niconico alone. */
 .dashboard {
   display: grid;
   grid-template-columns: 1fr;
@@ -1242,11 +1242,11 @@ input[type="checkbox"] {
   .dashboard {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
 
-@media (min-width: 1000px) {
-  .dashboard {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Same leftover problem as the old 3-column step: five cards in two
+     columns would park priority in a half-empty row. */
+  #priority-channel-card {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1327,16 +1327,15 @@ input[type="checkbox"] {
   --platform: var(--warn);
 }
 
-/* Four platform cards (Bilibili, YouTube, Twitch, Niconico) sit side by
-   side; the priority card stays on a full row below them. */
+/* Shell is 1320px, so this step is for viewports wider than the content:
+   the four platform cards share one row and priority stays below. */
 @media (min-width: 1360px) {
   .dashboard {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-/* From the 3-across step up, the priority card would otherwise sit as a
-   leftover cell, so it takes a full row and lays its fields out horizontally. */
+/* Horizontal priority fields need more than the 2-column card width. */
 @media (min-width: 1000px) {
   #priority-channel-card {
     grid-column: 1 / -1;

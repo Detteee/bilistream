@@ -994,19 +994,21 @@
                 <span class="info-label">频道</span>
                 <div class="info-row-view">
                   <span class="info-value info-value-right" id="nc-channel-name">-</span>
-                  <button id="nc-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道名"
-                    aria-label="更改 Niconico 频道名">
+                  <button id="nc-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改 Niconico 频道">
                     <svg aria-hidden="true"><use href="#i-edit" /></svg>
                   </button>
                 </div>
                 <div id="nc-channel-edit-container" class="info-edit-container hidden">
                   <div>
-                    <input type="text" id="nc-channel-edit-input" placeholder="转播标题用频道名" aria-label="Niconico 频道名">
-                    <button id="nc-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 频道名">
+                    <select id="nc-channel-edit-select" aria-label="Niconico 频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="nc-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 频道">
                       <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
                     </button>
                     <button id="nc-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
-                      aria-label="取消 Niconico 频道名编辑">
+                      aria-label="取消 Niconico 频道编辑">
                       <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
                     </button>
                   </div>
@@ -1419,7 +1421,7 @@
                 <div>
                   <label class="management-field-label" for="channel-name">
                     频道名称
-                    <small class="management-field-note">将出现于转播标题</small>
+                    <small class="management-field-note">YouTube / Twitch 转播标题</small>
                   </label>
                   <input type="text" id="channel-name" class="management-field-input">
                 </div>
@@ -1443,8 +1445,22 @@
                 </div>
               </div>
 
+              <div class="management-form-grid management-channel-grid">
+                <div>
+                  <label class="management-field-label" for="channel-niconico">Niconico 频道ID (可选)</label>
+                  <input type="text" id="channel-niconico" class="management-field-input" placeholder="vspo 或 ch.nicovideo.jp/vspo">
+                </div>
+                <div>
+                  <label class="management-field-label" for="channel-niconico-name">
+                    Niconico 转播标题 (可选)
+                    <small class="management-field-note">不填则使用上方频道名称</small>
+                  </label>
+                  <input type="text" id="channel-niconico-name" class="management-field-input" placeholder="ぶいすぽ激ロー">
+                </div>
+              </div>
+
               <div class="management-field-group">
-                <div class="hint">至少填写一个平台的频道ID。</div>
+                <div class="hint">至少填写一个平台的频道ID（YouTube、Twitch 或 Niconico）。</div>
                 <label class="management-field-label" for="channel-riot">Riot PUUID (可选)</label>
                 <input type="text" id="channel-riot" class="management-field-input" placeholder="英雄联盟PUUID">
               </div>

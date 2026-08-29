@@ -134,22 +134,49 @@ function appendAreaOptions(select, areas, includeId = false) {
     select.appendChild(createAreaOption(area.id, label));
   });
 }
+function niconicoChannelIdFromCatalog(channel) {
+  const fromPlatform = String(channel?.platforms?.niconico || '').trim();
+  if (fromPlatform) return fromPlatform;
+  if (!(channel?.niconico_name || '').trim()) return '';
+  const aliases = Array.isArray(channel.aliases) ? channel.aliases : [];
+  return aliases
+    .map(alias => String(alias).trim())
+    .find(alias => alias && !/^UC[\w-]{20,}$/i.test(alias)) || '';
+}
+function restreamNameForPlatform(channel, platform) {
+  if (platform === 'niconico') {
+    const niconicoName = (channel.niconico_name || '').trim();
+    if (niconicoName) return niconicoName;
+  }
+  return channel.name;
+}
 function createPlatformChannelOption(channel, platform) {
   const platforms = channel.platforms || {};
-  return createSelectOption(
+  const id = platform === 'niconico'
+    ? niconicoChannelIdFromCatalog(channel)
+    : platforms[platform];
+  const restreamName = restreamNameForPlatform(channel, platform);
+  const option = createSelectOption(
     JSON.stringify({
-      id: platforms[platform],
-      name: channel.name
+      id,
+      name: restreamName
     }),
-    channel.name
+    restreamName
   );
+  if (platform === 'niconico' && channel.name && channel.name !== restreamName) {
+    option.title = channel.name;
+  }
+  return option;
 }
 function appendPlatformChannelOptions(select, platform) {
   if (!state.channelsData || !Array.isArray(state.channelsData.channels)) return;
 
   state.channelsData.channels.forEach(channel => {
     const platforms = channel.platforms || {};
-    if (platforms[platform]) {
+    const hasPlatform = platform === 'niconico'
+      ? Boolean(niconicoChannelIdFromCatalog(channel))
+      : Boolean(platforms[platform]);
+    if (hasPlatform) {
       select.appendChild(createPlatformChannelOption(channel, platform));
     }
   });
