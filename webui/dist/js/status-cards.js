@@ -14,6 +14,7 @@ import {
   formatFps,
   formatHlsCacheStatus,
   formatNetworkRate,
+  formatScheduledStart,
   formatSpeedRatio,
   formatStreamTime,
   getQualityDisplayText,
@@ -322,13 +323,19 @@ export function renderTwitchCard(tw) {
 
 /// Paints every platform card from one `/api/status` style payload.
 export function renderNiconicoCard(nc) {
+  const scheduledRow = document.getElementById('nc-scheduled-row');
+
   if (!nc) {
     setStatusIndicator('nc-status', 'status-offline');
     setPlatformLiveInfoVisibility('niconico', false);
+    if (scheduledRow) {
+      scheduledRow.style.display = 'none';
+    }
     setElementText('nc-channel-name', '-');
     setElementText('nc-channel-id', '-');
     setElementText('nc-live-id', '-');
     setElementText('nc-title', '-');
+    setElementText('nc-scheduled', '-');
     setElementText('nc-area', '-');
     setElementText('nc-quality', '-');
     setElementText('nc-crop-status', '关闭');
@@ -336,12 +343,21 @@ export function renderNiconicoCard(nc) {
     return;
   }
 
-  setStatusIndicator('nc-status', nc.is_live ? 'status-live' : 'status-offline');
-  setPlatformLiveInfoVisibility('niconico', nc.is_live);
+  // An upcoming 放送予定 is worth showing even though it is not on air yet.
+  const ncScheduled = !nc.is_live && !!(nc.scheduled_start || (nc.title && nc.live_id));
+  setStatusIndicator(
+    'nc-status',
+    nc.is_live ? 'status-live' : ncScheduled ? 'status-scheduled' : 'status-offline'
+  );
+  setPlatformLiveInfoVisibility('niconico', nc.is_live || ncScheduled);
+  if (scheduledRow) {
+    scheduledRow.style.display = nc.scheduled_start && !nc.is_live ? '' : 'none';
+  }
   setElementText('nc-channel-name', nc.channel_name || '-');
   setElementText('nc-channel-id', nc.channel_id || '-');
   setElementText('nc-live-id', nc.live_id || '-');
   setElementText('nc-title', nc.title || '-');
+  setElementText('nc-scheduled', nc.scheduled_start ? formatScheduledStart(nc.scheduled_start) : '-');
   setElementText('nc-area', formatAreaText(nc.area_name, nc.area_id));
   setElementText('nc-quality', nc.quality ? getQualityDisplayText(nc.quality, 'niconico') : '-');
   setElementText('nc-crop-status', nc.crop_enabled ? '开启' : '关闭');

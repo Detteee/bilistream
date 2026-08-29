@@ -1435,6 +1435,11 @@ input[type="checkbox"] {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
 }
 
+.status-scheduled {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
 .status-offline {
   background: var(--text-mute);
   box-shadow: none;

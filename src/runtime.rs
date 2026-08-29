@@ -754,13 +754,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             None
         };
-        let (nico_is_live, nico_title, nico_stream_id) = if let Some(ref client) = nico_live {
-            let (is_live, _, title, _, _, stream_id) =
-                client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS);
-            (is_live, title, stream_id)
-        } else {
-            (false, None, None)
-        };
+        let (nico_is_live, nico_title, nico_scheduled_start, nico_stream_id) =
+            if let Some(ref client) = nico_live {
+                let (is_live, _, title, _, scheduled_start, stream_id) =
+                    client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS);
+                (is_live, title, scheduled_start, stream_id)
+            } else {
+                (false, None, None, None)
+            };
 
         if is_config_updated() {
             clear_config_updated();
@@ -843,6 +844,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     channel_name: nico_channel_name.clone(),
                     channel_id: nico_channel_id.clone(),
                     live_id: nico_stream_id.clone(),
+                    scheduled_start: nico_scheduled_start
+                        .as_ref()
+                        .map(|start| start.to_rfc3339()),
                     quality: cfg.niconico.quality.clone(),
                     area_id: cfg.niconico.area_v2,
                     area_name: nico_area_name,

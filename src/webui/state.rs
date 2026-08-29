@@ -130,6 +130,9 @@ pub struct NicoStatus {
     pub channel_id: String,
     #[serde(default)]
     pub live_id: Option<String>,
+    /// RFC 3339 start time from 放送予定 when the channel is not live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_start: Option<String>,
     pub quality: String,
     pub area_id: u64,
     pub area_name: String,
@@ -314,6 +317,7 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
                     channel_name: nico_channel_name,
                     channel_id: nico_channel_id,
                     live_id: None,
+                    scheduled_start: None,
                     area_id: cfg.niconico.area_v2,
                     area_name: nico_area_name,
                     quality: cfg.niconico.quality.clone(),

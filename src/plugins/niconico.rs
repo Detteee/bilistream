@@ -1,3 +1,4 @@
+use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
@@ -16,6 +17,13 @@ lazy_static! {
     static ref LIVE_ID_PATH: Regex = Regex::new(r"/watch/(lv\d+)").unwrap();
     static ref TITLE_ALT: Regex = Regex::new(r#"alt="([^"]+)""#).unwrap();
     static ref TITLE_CLASS: Regex = Regex::new(r#"class="title"[^>]*>\s*<a[^>]*>([^<]+)"#).unwrap();
+    static ref HTML_TAGS: Regex = Regex::new(r"<[^>]+>").unwrap();
+    static ref START_FULL: Regex = Regex::new(
+        r"放送開始：\s*(\d{4})/(\d{1,2})/(\d{1,2})\s*\([^)]*\)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?"
+    )
+    .unwrap();
+    static ref START_KAIEN: Regex =
+        Regex::new(r"(\d{1,2})月(\d{1,2})日\s*\([^)]*\)\s*(\d{1,2})時(\d{1,2})分").unwrap();
     static ref EMBEDDED_DATA_PROPS: Regex =
         Regex::new(r#"<script[^>]*id="embedded-data"[^>]*data-props="([^"]+)""#).unwrap();
     static ref EMBEDDED_DATA_PROPS_ALT: Regex =
@@ -252,37 +260,155 @@ pub(crate) fn user_session_from_cookies_file(path: &Path) -> Result<String, Box<
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OnairProgram {
+struct ChannelProgram {
     live_id: String,
     title: Option<String>,
+    start_at: Option<DateTime<Local>>,
 }
 
-fn parse_channel_onair(html: &str) -> Option<OnairProgram> {
-    let start = html
-        .find(r#"id="live_now""#)
-        .or_else(|| html.find("id='live_now'"))?;
-    let rest = &html[start..];
-    let end = [
-        r#"id="live_future""#,
-        "id='live_future'",
-        r#"id="live_past""#,
-        "id='live_past'",
-        ">放送予定<",
-        ">過去<",
-    ]
-    .iter()
-    .filter_map(|marker| rest.find(marker))
-    .min()
-    .unwrap_or(rest.len().min(8000));
-    let section = &rest[..end];
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChannelLiveListing {
+    OnAir(ChannelProgram),
+    Scheduled(ChannelProgram),
+    Idle,
+}
 
+fn niconico_jst() -> FixedOffset {
+    FixedOffset::east_opt(9 * 3600).expect("JST offset")
+}
+
+fn html_class_section<'a>(html: &'a str, class: &str) -> Option<&'a str> {
+    let double = format!("class=\"sub {class}\"");
+    let single = format!("class='sub {class}'");
+    let start = html.find(&double).or_else(|| html.find(&single))?;
+    let after = html[start..].find('>')? + start + 1;
+    let end = html[after..].find("</section>")?;
+    Some(&html[after..after + end])
+}
+
+fn html_id_block<'a>(html: &'a str, id: &str, terminators: &[&str]) -> Option<&'a str> {
+    let double = format!("id=\"{id}\"");
+    let single = format!("id='{id}'");
+    let start = html.find(&double).or_else(|| html.find(&single))?;
+    let rest = &html[start..];
+    let end = terminators
+        .iter()
+        .filter_map(|marker| rest.find(marker))
+        .min()
+        .unwrap_or(rest.len().min(12000));
+    Some(&rest[..end])
+}
+
+fn now_section(html: &str) -> Option<&str> {
+    html_class_section(html, "now").or_else(|| {
+        html_id_block(
+            html,
+            "live_now",
+            &[
+                r#"id="live_future""#,
+                "id='live_future'",
+                r#"id="live_past""#,
+                "id='live_past'",
+                ">放送予定<",
+                ">過去<",
+            ],
+        )
+    })
+}
+
+fn future_section(html: &str) -> Option<&str> {
+    html_class_section(html, "future").or_else(|| {
+        html_id_block(
+            html,
+            "live_future",
+            &[
+                r#"id="live_past""#,
+                "id='live_past'",
+                ">過去の放送<",
+                ">過去<",
+            ],
+        )
+    })
+}
+
+fn parse_channel_program(section: &str) -> Option<ChannelProgram> {
+    if section.contains("次回予定はまだ登録されていません") {
+        return None;
+    }
     let live_id =
         regex_first(&LIVE_ID_FULL, section).or_else(|| regex_first(&LIVE_ID_PATH, section))?;
     let title = regex_first(&TITLE_ALT, section)
         .or_else(|| regex_first(&TITLE_CLASS, section))
         .map(|title| html_unescape(&title));
+    let start_at = parse_program_start(section);
+    Some(ChannelProgram {
+        live_id,
+        title,
+        start_at,
+    })
+}
 
-    Some(OnairProgram { live_id, title })
+fn parse_channel_live_listing(html: &str) -> ChannelLiveListing {
+    if let Some(program) = now_section(html).and_then(parse_channel_program) {
+        return ChannelLiveListing::OnAir(program);
+    }
+    if let Some(program) = future_section(html).and_then(parse_channel_program) {
+        return ChannelLiveListing::Scheduled(program);
+    }
+    ChannelLiveListing::Idle
+}
+
+fn parse_program_start(section: &str) -> Option<DateTime<Local>> {
+    parse_program_start_at(section, Utc::now().with_timezone(&niconico_jst()))
+}
+
+fn parse_program_start_at(
+    section: &str,
+    now_jst: DateTime<FixedOffset>,
+) -> Option<DateTime<Local>> {
+    let text = HTML_TAGS.replace_all(section, "");
+    let text = html_unescape(&text);
+    if let Some(caps) = START_FULL.captures(&text) {
+        let year: i32 = caps.get(1)?.as_str().parse().ok()?;
+        let month: u32 = caps.get(2)?.as_str().parse().ok()?;
+        let day: u32 = caps.get(3)?.as_str().parse().ok()?;
+        let hour: u32 = caps.get(4)?.as_str().parse().ok()?;
+        let minute: u32 = caps.get(5)?.as_str().parse().ok()?;
+        let second: u32 = caps
+            .get(6)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        return jst_local(year, month, day, hour, minute, second);
+    }
+    let caps = START_KAIEN.captures(&text)?;
+    let month: u32 = caps.get(1)?.as_str().parse().ok()?;
+    let day: u32 = caps.get(2)?.as_str().parse().ok()?;
+    let hour: u32 = caps.get(3)?.as_str().parse().ok()?;
+    let minute: u32 = caps.get(4)?.as_str().parse().ok()?;
+    let mut year = now_jst.year();
+    let mut dt = jst_local(year, month, day, hour, minute, 0)?;
+    let dt_jst = dt.with_timezone(&niconico_jst());
+    if dt_jst + chrono::Duration::hours(12) < now_jst {
+        year += 1;
+        dt = jst_local(year, month, day, hour, minute, 0)?;
+    }
+    Some(dt)
+}
+
+fn jst_local(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<DateTime<Local>> {
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = NaiveTime::from_hms_opt(hour, minute, second)?;
+    niconico_jst()
+        .from_local_datetime(&date.and_time(time))
+        .single()
+        .map(|dt| dt.with_timezone(&Local))
 }
 
 fn regex_first(pattern: &Regex, haystack: &str) -> Option<String> {
@@ -312,10 +438,10 @@ fn niconico_page_client(proxy: Option<&str>) -> Result<reqwest::Client, Box<dyn 
     Ok(builder.build()?)
 }
 
-async fn fetch_channel_onair(
+async fn fetch_channel_listing(
     channel_id: &str,
     proxy: Option<&str>,
-) -> Result<Option<OnairProgram>, Box<dyn Error>> {
+) -> Result<ChannelLiveListing, Box<dyn Error>> {
     let url = channel_live_url(channel_id);
     let client = niconico_page_client(proxy)?;
     let response = client.get(&url).send().await?;
@@ -323,7 +449,7 @@ async fn fetch_channel_onair(
         return Err(format!("Niconico channel page HTTP {}", response.status()).into());
     }
     let html = response.text().await?;
-    Ok(parse_channel_onair(&html))
+    Ok(parse_channel_live_listing(&html))
 }
 
 #[derive(Debug, Deserialize)]
@@ -455,16 +581,24 @@ pub async fn get_niconico_status(
 > {
     let channel_id = niconico_channel_id(cfg);
     if !channel_id.is_empty() {
-        return match fetch_channel_onair(&channel_id, cfg.proxy.as_deref()).await {
-            Ok(Some(onair)) => Ok((
+        return match fetch_channel_listing(&channel_id, cfg.proxy.as_deref()).await {
+            Ok(ChannelLiveListing::OnAir(program)) => Ok((
                 true,
                 None,
-                onair.title,
-                Some(watch_url(&onair.live_id)),
+                program.title,
+                Some(watch_url(&program.live_id)),
                 None,
-                Some(onair.live_id),
+                Some(program.live_id),
             )),
-            Ok(None) => Ok((false, None, None, None, None, None)),
+            Ok(ChannelLiveListing::Scheduled(program)) => Ok((
+                false,
+                None,
+                program.title,
+                Some(watch_url(&program.live_id)),
+                program.start_at,
+                Some(program.live_id),
+            )),
+            Ok(ChannelLiveListing::Idle) => Ok((false, None, None, None, None, None)),
             Err(e) => {
                 tracing::warn!("Niconico 频道直播页查询失败: {}", e);
                 Err(e)
@@ -559,6 +693,7 @@ fn get_niconico_status_via_streamlink(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     use std::io::Write;
 
     #[test]
@@ -668,23 +803,126 @@ mod tests {
 </div>
 <div id="live_future"><h1>放送予定</h1></div>
 "#;
-        let onair = parse_channel_onair(html).expect("onair program");
-        assert_eq!(onair.live_id, "lv351182284");
-        assert_eq!(
-            onair.title.as_deref(),
-            Some("【#ぶいすぽ激ロー】ノンデリ王2026")
-        );
+        match parse_channel_live_listing(html) {
+            ChannelLiveListing::OnAir(onair) => {
+                assert_eq!(onair.live_id, "lv351182284");
+                assert_eq!(
+                    onair.title.as_deref(),
+                    Some("【#ぶいすぽ激ロー】ノンデリ王2026")
+                );
+            }
+            other => panic!("expected on-air, got {other:?}"),
+        }
     }
 
     #[test]
-    fn parse_channel_onair_empty_live_now_is_offline() {
+    fn parse_channel_empty_live_now_is_not_live() {
         let html = r#"
 <div id="live_now"><h1>放送中</h1><div id="live_now_cnt"><ul class="items"></ul></div></div>
 <div id="live_future"><h1>放送予定</h1>
   <a href="https://live.nicovideo.jp/watch/lv111">upcoming</a>
 </div>
 "#;
-        assert!(parse_channel_onair(html).is_none());
+        match parse_channel_live_listing(html) {
+            ChannelLiveListing::Scheduled(program) => {
+                assert_eq!(program.live_id, "lv111");
+            }
+            other => panic!("expected scheduled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_channel_now_section_class_when_ids_are_absent() {
+        let html = r#"
+<section class="sub now">
+  <div class="item cfix">
+    <ul class="items">
+      <li class="item">
+        <a href="https://live.nicovideo.jp/watch/lv351182284" class="thumb_live">
+          <img alt="ライブ中">
+        </a>
+        <h2 class="title"><a href="https://live.nicovideo.jp/watch/lv351182284">ライブ中</a></h2>
+      </li>
+    </ul>
+  </div>
+</section>
+<section class="sub future"><h1>放送予定</h1><p class="not_found">次回予定はまだ登録されていません。</p></section>
+"#;
+        match parse_channel_live_listing(html) {
+            ChannelLiveListing::OnAir(program) => {
+                assert_eq!(program.live_id, "lv351182284");
+                assert_eq!(program.title.as_deref(), Some("ライブ中"));
+            }
+            other => panic!("expected on-air, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_channel_future_section_reads_kaien_schedule() {
+        let html = r#"
+<section class="sub now"></section>
+<section class="sub future">
+  <h1>放送予定</h1>
+  <div class="item cfix">
+    <ul class="items">
+      <li class="item">
+        <a href="https://live.nicovideo.jp/watch/lv351230205" class="thumb_live">
+          <img alt="にじさんじのTOYBOX！">
+        </a>
+        <h2 class="title"><a href="https://live.nicovideo.jp/watch/lv351230205">にじさんじのTOYBOX！</a></h2>
+        <p class="date">開演：<strong class="fs14">09月10日 (木) 20時00分</strong></p>
+      </li>
+    </ul>
+  </div>
+</section>
+"#;
+        match parse_channel_live_listing(html) {
+            ChannelLiveListing::Scheduled(program) => {
+                assert_eq!(program.live_id, "lv351230205");
+                assert_eq!(program.title.as_deref(), Some("にじさんじのTOYBOX！"));
+                let start = program.start_at.expect("kaien start");
+                let jst = start.with_timezone(&niconico_jst());
+                assert_eq!(jst.month(), 9);
+                assert_eq!(jst.day(), 10);
+                assert_eq!(jst.hour(), 20);
+                assert_eq!(jst.minute(), 0);
+            }
+            other => panic!("expected scheduled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_channel_future_not_found_is_idle() {
+        let html = r#"
+<section class="sub now"></section>
+<section class="sub future">
+  <h1>放送予定</h1>
+  <p class="not_found">次回予定はまだ登録されていません。</p>
+</section>
+<section class="sub past">
+  <a href="https://live.nicovideo.jp/watch/lv351182284">past</a>
+</section>
+"#;
+        assert_eq!(parse_channel_live_listing(html), ChannelLiveListing::Idle);
+    }
+
+    #[test]
+    fn kaien_without_year_rolls_forward_when_date_already_passed() {
+        let jst = niconico_jst();
+        let now = jst.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).single().unwrap();
+        let dt = parse_program_start_at("開演：09月10日 (木) 20時00分", now).unwrap();
+        assert_eq!(dt.with_timezone(&jst).year(), 2027);
+    }
+
+    #[test]
+    fn broadcast_start_parses_full_timestamp() {
+        let dt = parse_program_start("放送開始：2026/08/29 (土) 19:50:00").unwrap();
+        let jst = dt.with_timezone(&niconico_jst());
+        assert_eq!(jst.year(), 2026);
+        assert_eq!(jst.month(), 8);
+        assert_eq!(jst.day(), 29);
+        assert_eq!(jst.hour(), 19);
+        assert_eq!(jst.minute(), 50);
     }
 
     #[test]

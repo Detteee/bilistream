@@ -258,6 +258,7 @@ mod tests {
                 channel_name: "niconico".to_string(),
                 channel_id: "vspo".to_string(),
                 live_id: None,
+                scheduled_start: None,
                 quality: "best".to_string(),
                 area_id: 1,
                 area_name: "area".to_string(),
