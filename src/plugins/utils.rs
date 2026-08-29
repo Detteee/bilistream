@@ -129,6 +129,8 @@ pub async fn command_output_with_timeout(
 }
 
 /// Build a direct CDN thumbnail URL for YT/TW streams (same logic as holodex webui).
+/// Niconico listing thumbnails are not a static CDN path; see
+/// `niconico::niconico_cover_thumbnail_url`.
 pub fn stream_thumbnail_url(
     platform: &str,
     channel_id: &str,

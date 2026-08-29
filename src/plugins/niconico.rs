@@ -16,11 +16,25 @@ lazy_static! {
     static ref LIVE_ID_PATH: Regex = Regex::new(r"/watch/(lv\d+)").unwrap();
     static ref TITLE_ALT: Regex = Regex::new(r#"alt="([^"]+)""#).unwrap();
     static ref TITLE_CLASS: Regex = Regex::new(r#"class="title"[^>]*>\s*<a[^>]*>([^<]+)"#).unwrap();
+    static ref EMBEDDED_DATA_PROPS: Regex =
+        Regex::new(r#"<script[^>]*id="embedded-data"[^>]*data-props="([^"]+)""#).unwrap();
+    static ref EMBEDDED_DATA_PROPS_ALT: Regex =
+        Regex::new(r#"<script[^>]*data-props="([^"]+)"[^>]*id="embedded-data""#).unwrap();
+    static ref OG_IMAGE: Regex = Regex::new(r#"property="og:image"\s+content="([^"]+)""#).unwrap();
+    static ref OG_IMAGE_REV: Regex =
+        Regex::new(r#"content="([^"]+)"\s+property="og:image""#).unwrap();
+    static ref LISTING_W: Regex = Regex::new(r"([?&]w=)\d+").unwrap();
+    static ref LISTING_H: Regex = Regex::new(r"([?&]h=)\d+").unwrap();
 }
+
+/// Bilibili `new_room_cover` accepts Twitch 640×360 and YouTube sddefault
+/// 640×480. 320×180 is rejected (`42604`); 1280×720 is too large.
+const BILI_COVER_WIDTH: &str = "640";
+const BILI_COVER_HEIGHT: &str = "360";
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
 const CHANNEL_STATUS_TIMEOUT: Duration = Duration::from_secs(20);
-const CHANNEL_PAGE_USER_AGENT: &str =
+pub(crate) const CHANNEL_PAGE_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 pub struct Niconico {
@@ -287,11 +301,7 @@ fn html_unescape(input: &str) -> String {
         .replace("&#39;", "'")
 }
 
-async fn fetch_channel_onair(
-    channel_id: &str,
-    proxy: Option<&str>,
-) -> Result<Option<OnairProgram>, Box<dyn Error>> {
-    let url = channel_live_url(channel_id);
+fn niconico_page_client(proxy: Option<&str>) -> Result<reqwest::Client, Box<dyn Error>> {
     let mut builder = reqwest::Client::builder()
         .timeout(CHANNEL_STATUS_TIMEOUT)
         .user_agent(CHANNEL_PAGE_USER_AGENT)
@@ -299,13 +309,115 @@ async fn fetch_channel_onair(
     if let Some(proxy_url) = proxy.filter(|proxy| !proxy.is_empty()) {
         builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
     }
-    let client = builder.build()?;
+    Ok(builder.build()?)
+}
+
+async fn fetch_channel_onair(
+    channel_id: &str,
+    proxy: Option<&str>,
+) -> Result<Option<OnairProgram>, Box<dyn Error>> {
+    let url = channel_live_url(channel_id);
+    let client = niconico_page_client(proxy)?;
     let response = client.get(&url).send().await?;
     if !response.status().is_success() {
         return Err(format!("Niconico channel page HTTP {}", response.status()).into());
     }
     let html = response.text().await?;
     Ok(parse_channel_onair(&html))
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddedWatchData {
+    #[serde(default)]
+    program: Option<EmbeddedProgram>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddedProgram {
+    #[serde(default)]
+    thumbnail: Option<EmbeddedThumbnail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddedThumbnail {
+    #[serde(default)]
+    huge: Option<EmbeddedHugeThumbnail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddedHugeThumbnail {
+    #[serde(default, rename = "s1920x1080")]
+    s1920x1080: Option<String>,
+    #[serde(default, rename = "s1280x720")]
+    s1280x720: Option<String>,
+    #[serde(default, rename = "s640x360")]
+    s640x360: Option<String>,
+}
+
+fn bili_ready_listing_url(url: &str) -> Option<String> {
+    let unescaped = html_unescape(url);
+    if !(unescaped.starts_with("https://")
+        && unescaped.contains("listing-thumbnail.live.nicovideo.jp"))
+    {
+        return None;
+    }
+
+    let mut sized = if LISTING_W.is_match(&unescaped) {
+        LISTING_W
+            .replace(&unescaped, format!("${{1}}{BILI_COVER_WIDTH}").as_str())
+            .into_owned()
+    } else if unescaped.contains('?') {
+        format!("{unescaped}&w={BILI_COVER_WIDTH}")
+    } else {
+        format!("{unescaped}?w={BILI_COVER_WIDTH}")
+    };
+    if LISTING_H.is_match(&sized) {
+        sized = LISTING_H
+            .replace(&sized, format!("${{1}}{BILI_COVER_HEIGHT}").as_str())
+            .into_owned();
+    } else {
+        sized = format!("{sized}&h={BILI_COVER_HEIGHT}");
+    }
+    Some(sized)
+}
+
+/// Program listing thumbnail for Bilibili cover, forced to 640×360 (same as
+/// Twitch). Channel icons (64×64 / 128×128) are skipped.
+pub(crate) fn parse_niconico_cover_thumbnail_url(html: &str) -> Option<String> {
+    thumbnail_from_embedded_data(html).or_else(|| thumbnail_from_og_image(html))
+}
+
+fn thumbnail_from_embedded_data(html: &str) -> Option<String> {
+    let props = regex_first(&EMBEDDED_DATA_PROPS, html)
+        .or_else(|| regex_first(&EMBEDDED_DATA_PROPS_ALT, html))?;
+    let data: EmbeddedWatchData = serde_json::from_str(&html_unescape(&props)).ok()?;
+    let huge = data.program?.thumbnail?.huge?;
+    [huge.s640x360, huge.s1280x720, huge.s1920x1080]
+        .into_iter()
+        .find_map(|url| url.as_deref().and_then(bili_ready_listing_url))
+}
+
+fn thumbnail_from_og_image(html: &str) -> Option<String> {
+    regex_first(&OG_IMAGE, html)
+        .or_else(|| regex_first(&OG_IMAGE_REV, html))
+        .and_then(|url| bili_ready_listing_url(&url))
+}
+
+pub async fn niconico_cover_thumbnail_url(
+    live_id: &str,
+    proxy: Option<&str>,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let live_id = normalize_live_id(live_id);
+    if live_id.is_empty() {
+        return Ok(None);
+    }
+    let client = niconico_page_client(proxy)?;
+    let response = client.get(watch_url(&live_id)).send().await?;
+    if !response.status().is_success() {
+        return Err(format!("Niconico watch page HTTP {}", response.status()).into());
+    }
+    let html = response.text().await?;
+    Ok(parse_niconico_cover_thumbnail_url(&html))
 }
 
 #[derive(Debug, Deserialize)]
@@ -608,5 +720,56 @@ mod tests {
 
         assert!(user_session_from_cookies_file(&path).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn escaped_embedded_data(huge: &str) -> String {
+        format!(
+            r#"<script id="embedded-data" data-props="{{&quot;program&quot;:{{&quot;thumbnail&quot;:{{&quot;small&quot;:&quot;https://secure-dcdn.cdn.nimg.jp/comch/channel-icon/64x64/ch1.jpg&quot;,&quot;large&quot;:&quot;https://secure-dcdn.cdn.nimg.jp/comch/channel-icon/128x128/ch1.jpg&quot;,&quot;huge&quot;:{huge}}}}}}}"></script>"#
+        )
+    }
+
+    #[test]
+    fn cover_thumbnail_uses_640x360_even_when_1920_is_listed() {
+        let html = escaped_embedded_data(
+            r#"{&quot;s1920x1080&quot;:&quot;https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=1920&amp;h=1080&quot;,&quot;s1280x720&quot;:&quot;https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=1280&amp;h=720&quot;,&quot;s640x360&quot;:&quot;https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=640&amp;h=360&quot;}"#,
+        );
+        assert_eq!(
+            parse_niconico_cover_thumbnail_url(&html).as_deref(),
+            Some("https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360")
+        );
+    }
+
+    #[test]
+    fn cover_thumbnail_rewrites_1280_and_1920_listing_urls_to_640x360() {
+        let html = escaped_embedded_data(
+            r#"{&quot;s1280x720&quot;:&quot;https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=1280&amp;h=720&quot;}"#,
+        );
+        assert_eq!(
+            parse_niconico_cover_thumbnail_url(&html).as_deref(),
+            Some("https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360")
+        );
+
+        let html = escaped_embedded_data(
+            r#"{&quot;s1920x1080&quot;:&quot;https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=1920&amp;h=1080&quot;}"#,
+        );
+        assert_eq!(
+            parse_niconico_cover_thumbnail_url(&html).as_deref(),
+            Some("https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360")
+        );
+    }
+
+    #[test]
+    fn cover_thumbnail_skips_channel_icons() {
+        let html = escaped_embedded_data("{}");
+        assert_eq!(parse_niconico_cover_thumbnail_url(&html), None);
+    }
+
+    #[test]
+    fn cover_thumbnail_uses_og_image_when_embedded_data_missing() {
+        let html = r#"<meta property="og:image" content="https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&amp;w=1280&amp;h=720"/>"#;
+        assert_eq!(
+            parse_niconico_cover_thumbnail_url(html).as_deref(),
+            Some("https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360")
+        );
     }
 }

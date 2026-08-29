@@ -423,17 +423,15 @@ async fn skip_stream_if_banned_keyword(
 /// Updates the Bilibili live cover from the source stream's thumbnail in the
 /// background.
 fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id: Option<String>) {
-    if platform == "NC" {
-        return;
-    }
     let cfg = cfg.clone();
     let platform = platform.to_string();
     let channel_id = channel_id.to_string();
     tokio::spawn(async move {
-        let proxy = if platform == "YT" {
-            cfg.youtube.proxy.clone()
-        } else {
-            cfg.twitch.proxy.clone()
+        let proxy = match platform.as_str() {
+            "YT" => cfg.youtube.proxy.clone(),
+            "TW" => cfg.twitch.proxy.clone(),
+            "NC" => cfg.niconico.proxy.clone(),
+            _ => None,
         };
         match get_thumbnail(&platform, &channel_id, stream_id.as_deref(), proxy).await {
             Ok(cover_path) if !cover_path.is_empty() => {

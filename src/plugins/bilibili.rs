@@ -1175,19 +1175,48 @@ pub async fn get_thumbnail(
     stream_id: Option<&str>,
     proxy: Option<String>,
 ) -> Result<String, anyhow::Error> {
-    let Some(thumbnail_url) =
-        super::utils::stream_thumbnail_url(platform, channel_id, stream_id, None)
-    else {
-        warn!(
-            "无法构建缩略图 URL: platform={}, channel_id={}, stream_id={:?}",
-            platform, channel_id, stream_id
-        );
-        return Ok(String::new());
+    let proxy_url = proxy.filter(|p| !p.is_empty());
+    let thumbnail_url = if platform == "NC" {
+        let Some(live_id) = stream_id.filter(|id| !id.is_empty()) else {
+            warn!(
+                "无法构建缩略图 URL: platform={}, channel_id={}, stream_id={:?}",
+                platform, channel_id, stream_id
+            );
+            return Ok(String::new());
+        };
+        match super::niconico::niconico_cover_thumbnail_url(live_id, proxy_url.as_deref()).await {
+            Ok(Some(url)) => url,
+            Ok(None) => {
+                warn!("Niconico 节目没有可用的封面缩略图 (live_id={})", live_id);
+                return Ok(String::new());
+            }
+            Err(e) => {
+                warn!("获取 Niconico 封面缩略图失败: {}", e);
+                return Ok(String::new());
+            }
+        }
+    } else {
+        let Some(url) = super::utils::stream_thumbnail_url(platform, channel_id, stream_id, None)
+        else {
+            warn!(
+                "无法构建缩略图 URL: platform={}, channel_id={}, stream_id={:?}",
+                platform, channel_id, stream_id
+            );
+            return Ok(String::new());
+        };
+        url
     };
 
-    let client = super::http::pooled_client(proxy.as_deref())?;
+    let client = super::http::pooled_client(proxy_url.as_deref())?;
 
-    let response = match client.get(&thumbnail_url).send().await {
+    let mut request = client.get(&thumbnail_url);
+    if platform == "NC" {
+        request = request
+            .header("User-Agent", super::niconico::CHANNEL_PAGE_USER_AGENT)
+            .header("Referer", "https://live.nicovideo.jp/")
+            .header("Accept", "image/jpeg,image/*,*/*");
+    }
+    let response = match request.send().await {
         Ok(response) => response,
         Err(e) => {
             warn!("下载封面失败: {}", e);
