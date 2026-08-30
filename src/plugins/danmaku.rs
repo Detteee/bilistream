@@ -2,6 +2,9 @@ use super::twitch::get_twitch_status;
 use super::youtube::get_youtube_status;
 use crate::config::load_config;
 use crate::config::Config;
+use crate::plugins::banned_keywords::{
+    banned_keyword_hit, danmaku_banned_keywords, danmaku_haystack,
+};
 use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -61,41 +64,6 @@ pub async fn wait_danmaku_stop_signal() {
         return;
     }
     notified.await;
-}
-fn load_banned_keywords() -> Vec<String> {
-    let areas_path = match std::env::current_exe() {
-        Ok(path) => path.with_file_name("areas.json"),
-        Err(e) => {
-            tracing::error!("无法获取可执行文件路径: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let content = match std::fs::read_to_string(&areas_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("无法读取 areas.json: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let data: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("无法解析 areas.json: {}", e);
-            return Vec::new();
-        }
-    };
-
-    if let Some(keywords) = data["banned_keywords"].as_array() {
-        keywords
-            .iter()
-            .filter_map(|k| k.as_str().map(|s| s.to_string()))
-            .collect()
-    } else {
-        tracing::warn!("areas.json 中未找到 banned_keywords");
-        Vec::new()
-    }
 }
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {
@@ -638,13 +606,9 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 }
             }
         };
-        let live_topic_title = format!("{} {}", live_topic, live_title).to_lowercase();
+        let live_topic_title = danmaku_haystack(&live_topic, &live_title);
 
-        let banned_keywords = load_banned_keywords();
-        if let Some(keyword) = banned_keywords
-            .iter()
-            .find(|keyword| live_topic_title.contains(keyword.as_str()))
-        {
+        if let Some(keyword) = banned_keyword_hit(&live_topic_title, &danmaku_banned_keywords()) {
             tracing::error!(
                 "直播标题/分区包含不支持的关键词: {} | {}",
                 keyword,

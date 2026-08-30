@@ -1,3 +1,4 @@
+pub mod banned_keywords;
 pub mod bilibili;
 pub mod danmaku;
 pub mod danmaku_client;

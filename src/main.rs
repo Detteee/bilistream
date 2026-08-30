@@ -317,51 +317,6 @@ fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id:
     });
 }
 
-fn load_streaming_banned_keywords() -> Vec<String> {
-    let areas_path = match std::env::current_exe() {
-        Ok(path) => path.with_file_name("areas.json"),
-        Err(e) => {
-            tracing::error!("Failed to get executable path: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let content = match std::fs::read_to_string(&areas_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to read areas.json: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let data: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("Failed to parse areas.json: {}", e);
-            return Vec::new();
-        }
-    };
-
-    if let Some(keywords) = data["streaming_banned_keywords"].as_array() {
-        keywords
-            .iter()
-            .filter_map(|k| k.as_str().map(|s| s.to_string()))
-            .collect()
-    } else {
-        tracing::warn!("areas.json 中未找到 streaming_banned_keywords，使用默认值");
-        vec![
-            "どうぶつの森".to_string(),
-            "animal crossing".to_string(),
-            "asmr".to_string(),
-            "dbd".to_string(),
-            "dead by daylight".to_string(),
-            "l4d2".to_string(),
-            "left 4 dead 2".to_string(),
-            "gta".to_string(),
-        ]
-    }
-}
-
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -616,7 +571,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             }
 
-            let streaming_banned_keywords = load_streaming_banned_keywords();
+            let streaming_banned_keywords =
+                bilistream::plugins::banned_keywords::streaming_banned_keywords();
             skip_stream_if_banned_keyword(&mut yt_stream, &streaming_banned_keywords, &cfg).await;
             skip_stream_if_banned_keyword(&mut tw_stream, &streaming_banned_keywords, &cfg).await;
 
