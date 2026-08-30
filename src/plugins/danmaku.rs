@@ -338,6 +338,29 @@ pub fn suggest_area_from_stream(topic: Option<&str>, title: &str) -> (Option<u64
 }
 
 /// Resolve area alias to area name using areas.json
+/// What the `%查询` reply should do about the public status page.
+#[derive(Debug, PartialEq, Eq)]
+enum QueryAdvert {
+    Send(String),
+    /// Configured, but longer than a danmaku carries. Saving through the Web UI
+    /// rejects this, so it only happens with a hand-edited config.
+    TooLong(String),
+    None,
+}
+
+fn query_advert(cfg: &Config) -> QueryAdvert {
+    if let Some(advert) = cfg.cluster.public_status.danmaku_advert() {
+        return QueryAdvert::Send(advert);
+    }
+
+    let url = cfg.cluster.public_status.public_url.trim();
+    if url.is_empty() {
+        QueryAdvert::None
+    } else {
+        QueryAdvert::TooLong(url.to_string())
+    }
+}
+
 fn resolve_area_alias(alias: &str) -> String {
     let alias_trimmed = alias.trim();
     let alias_lower = alias_trimmed.to_lowercase();
@@ -421,6 +444,27 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         let _ =
             bilibili::send_danmaku(&cfg, &format!("TW: {} - {}", channel_name, area_name)).await;
+
+        // Advertising the status page rides on %查询 only: error replies and
+        // switch confirmations already spend the cooldown, and repeating a link
+        // on every failed command would just be spam.
+        //
+        // The advert is sent by whichever node runs the danmaku client, not by
+        // the node serving the page — the two are usually different, and this
+        // is the one in the live chat.
+        match query_advert(&cfg) {
+            QueryAdvert::Send(advert) => {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                let _ = bilibili::send_danmaku(&cfg, &advert).await;
+            }
+            QueryAdvert::TooLong(url) => {
+                // send_danmaku does not check length: Bilibili rejects an
+                // over-length message with a non-zero code that every caller
+                // discards, so without this the line would vanish silently.
+                tracing::warn!("公开状态页地址过长，%查询 未播报：{}", url);
+            }
+            QueryAdvert::None => {}
+        }
         return;
     }
 
@@ -955,6 +999,49 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_with_public_url(url: &str) -> Config {
+        let mut cfg = crate::cluster::tests::test_config("jp", 0);
+        cfg.cluster.public_status.public_url = url.to_string();
+        cfg
+    }
+
+    #[test]
+    fn no_public_url_means_no_advert() {
+        assert_eq!(query_advert(&config_with_public_url("")), QueryAdvert::None);
+        assert_eq!(
+            query_advert(&config_with_public_url("   ")),
+            QueryAdvert::None
+        );
+    }
+
+    #[test]
+    fn a_configured_url_is_advertised_with_the_prefix() {
+        assert_eq!(
+            query_advert(&config_with_public_url("s.example.com")),
+            QueryAdvert::Send("详情：s.example.com".to_string())
+        );
+    }
+
+    /// A quick-tunnel hostname is far past what a danmaku carries, and
+    /// send_danmaku does not check, so this must be caught here.
+    #[test]
+    fn an_over_length_url_is_reported_rather_than_sent() {
+        let url = "https://mango-tree-quiet-fox.trycloudflare.com";
+        assert_eq!(
+            query_advert(&config_with_public_url(url)),
+            QueryAdvert::TooLong(url.to_string())
+        );
+    }
+
+    #[test]
+    fn the_advert_fits_the_danmaku_limit() {
+        let longest = "a".repeat(crate::config::PublicStatusConfig::max_public_url_chars());
+        let QueryAdvert::Send(advert) = query_advert(&config_with_public_url(&longest)) else {
+            panic!("longest fitting url should be advertised");
+        };
+        assert_eq!(advert.chars().count(), crate::config::DANMAKU_MAX_CHARS);
+    }
 
     #[test]
     fn gta_topic_corrects_a_repeated_other_online_games_request_to_235() {
