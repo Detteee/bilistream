@@ -35,13 +35,6 @@ html.light-theme {
   fill: none;
 }
 
-/* Freshness note next to the theme toggle. */
-.public-updated {
-  color: var(--text-mute);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
 /* Shown when the serving node cannot see the streaming node, so the cards
    are not silently presenting stale numbers as current. */
 .public-banner {

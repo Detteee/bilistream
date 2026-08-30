@@ -5,7 +5,7 @@
 // the tab is hidden.
 
 import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=7';
-import { renderNodes } from './nodes.js?v=7';
+import { renderNodes } from './nodes.js?v=8';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -34,14 +34,6 @@ async function getJson(path) {
   return response.json();
 }
 
-function setUpdated(date) {
-  const element = document.getElementById('public-updated');
-  if (element) {
-    const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-    element.textContent = `更新于 ${clock}`;
-  }
-}
-
 function setSyncBanner(inSync) {
   document.getElementById('public-sync-banner')?.classList.toggle('hidden', inSync);
 }
@@ -55,7 +47,6 @@ async function refreshStatus() {
     renderNodes(status.nodes);
     setDanmakuEnabled(status.bilibili?.enable_danmaku_command);
     setSyncBanner(status.in_sync !== false);
-    setUpdated(new Date());
   } catch (error) {
     console.debug('status refresh failed', error);
     setStatusCardsMessage('连接中断');

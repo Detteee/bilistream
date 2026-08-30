@@ -4,7 +4,7 @@
 // actually pushing, compact tiles for the rest. No heartbeat ages, no action
 // buttons, and no links into a node's WebUI.
 
-import { formatBytes, formatFps, formatFrameCount, formatNetworkRate, formatSpeedRatio } from '/shared/js/format.js?v=7';
+import { formatBytes, formatFps, formatNetworkRate, formatSpeedRatio } from '/shared/js/format.js?v=7';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -239,8 +239,7 @@ function createNetwork(node) {
       speedTone(network.stream_speed),
       formatNetworkRate(network.stream_bitrate_kbps),
       [
-        [`${formatFps(network.stream_fps)} fps`, `${formatFrameCount(network.stream_frame)} 帧`],
-        [`累计 ${formatBytes(network.stream_total_bytes)}`],
+        [`累计 ${formatBytes(network.stream_total_bytes)}`, `${formatFps(network.stream_fps)} fps`],
       ],
     ));
   }

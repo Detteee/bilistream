@@ -4,7 +4,7 @@ import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setC
 import { createSelectOption, state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
-import { formatBytes, formatFps, formatFrameCount, formatNetworkRate, formatSpeedRatio } from './format.js';
+import { formatBytes, formatFps, formatNetworkRate, formatSpeedRatio } from './format.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -871,8 +871,7 @@ function createClusterNodeNetwork(node) {
     node.ffmpeg_running ? clusterSpeedTone(network.stream_speed) : 'stopped',
     formatNetworkRate(network.stream_bitrate_kbps),
     [
-      [`${formatFps(network.stream_fps)} fps`, `${formatFrameCount(network.stream_frame)} 帧`],
-      [`累计 ${formatBytes(network.stream_total_bytes)}`]
+      [`累计 ${formatBytes(network.stream_total_bytes)}`, `${formatFps(network.stream_fps)} fps`]
     ]
   ));
 
