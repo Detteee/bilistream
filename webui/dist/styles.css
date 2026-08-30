@@ -235,48 +235,48 @@ code {
 html.light-theme {
   color-scheme: light;
 
-  /* Warm paper: cream/stone instead of ice-white so the page does not glare. */
-  --bg: #d8d1c3;
-  --bg-glow-1: color-mix(in srgb, #8a7b5e 10%, transparent);
-  --bg-glow-2: color-mix(in srgb, #7d6e82 7%, transparent);
-  --surface-1: #e6dfd2;
-  --surface-2: #eee7da;
-  --surface-3: #e0d8cb;
-  --surface-4: #d2cabd;
-  --line: #c6bdad;
-  --line-strong: #b0a694;
+  /* Pale linen, not yellow paper: the page is parchment, cards lift to white. */
+  --bg: #fdf9f4;
+  --bg-glow-1: color-mix(in srgb, #176ae5 8%, transparent);
+  --bg-glow-2: color-mix(in srgb, #a478c4 6%, transparent);
+  --surface-1: #ffffff;
+  --surface-2: #fffcfa;
+  --surface-3: #f9efe4;
+  --surface-4: #f3e8dc;
+  --line: #e8e2d8;
+  --line-strong: #d5cdc3;
 
-  --text: #3d3830;
-  --text-dim: #5c564b;
-  --text-mute: #6e675b;
-  --text-on-accent: #f3ede3;
+  --text: #2d2f34;
+  --text-dim: #3f434a;
+  --text-mute: #6a707c;
+  --text-on-accent: #ffffff;
 
-  --brand: #4a5d82;
-  --brand-hi: #3e5072;
-  --brand-2: #6a5780;
-  --ok: #4a7a56;
-  --warn: #9a6a28;
-  --danger: #a84e52;
-  --info: #3f6f80;
-  --teal: #3d746c;
-  --live: #b84a56;
+  --brand: #176ae5;
+  --brand-hi: #0f57db;
+  --brand-2: #4b51c3;
+  --ok: #479a53;
+  --warn: #b7791f;
+  --danger: #c4454a;
+  --info: #176ae5;
+  --teal: #2d7a72;
+  --live: #d6455a;
 
-  --bilibili: #b85d74;
-  --youtube: #b54c48;
-  --twitch: #6a5894;
+  --bilibili: #c45d78;
+  --youtube: #c44c48;
+  --twitch: #6350a0;
 
-  /* Mid-tone stops on cream, not neon, so the sweep stays readable. */
+  /* Mid-tone stops on parchment, not neon, so the sweep stays readable. */
   --net-cache-start: #c4923a;
-  --net-cache-end: #4a8f62;
-  --net-push-start: #3d8278;
-  --net-push-end: #4a6494;
+  --net-cache-end: #479a53;
+  --net-push-start: #2d8a80;
+  --net-push-end: #176ae5;
 
-  --sh-1: 0 1px 2px rgba(61, 56, 48, 0.08);
-  --sh-2: 0 4px 16px rgba(61, 56, 48, 0.10);
-  --sh-3: 0 18px 48px rgba(61, 56, 48, 0.16);
+  --sh-1: 0 1px 2px rgba(45, 47, 52, 0.06);
+  --sh-2: 0 4px 16px rgba(45, 47, 52, 0.08);
+  --sh-3: 0 18px 48px rgba(45, 47, 52, 0.12);
 }
 
-/* Do not pump saturation or overlay with cold black on the cream page. */
+/* Do not pump saturation or overlay with cold black on the linen page. */
 html.light-theme .appbar,
 html.light-theme .tabbar {
   backdrop-filter: blur(14px) saturate(108%);
@@ -288,7 +288,7 @@ html.light-theme .area-modal,
 html.light-theme .holodex-login-modal,
 html.light-theme .face-auth-modal,
 html.light-theme .crop-modal {
-  background: rgba(52, 46, 38, 0.42);
+  background: rgba(45, 47, 52, 0.40);
 }
 
 html.light-theme .btn-fill:hover:not(:disabled) {
