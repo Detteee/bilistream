@@ -1208,7 +1208,6 @@ function publicStatusFromForm() {
     bind: document.getElementById('config-public-status-bind')?.value.trim() || '127.0.0.1',
     port: readIntegerInput('config-public-status-port', 23234),
     holodex_refresh_secs: readIntegerInput('config-public-status-refresh', 30),
-    rate_limit_per_min: readIntegerInput('config-public-status-rate-limit', 60),
     public_url: document.getElementById('config-public-status-url')?.value.trim() || '',
   };
 }
@@ -1264,7 +1263,6 @@ function loadPublicStatusSettings(cluster = {}) {
   setInputValue('config-public-status-bind', publicStatus.bind || '127.0.0.1');
   setInputValue('config-public-status-port', publicStatus.port || 23234);
   setInputValue('config-public-status-refresh', publicStatus.holodex_refresh_secs || 30);
-  setInputValue('config-public-status-rate-limit', publicStatus.rate_limit_per_min || 60);
   setInputValue('config-public-status-url', publicStatus.public_url || '');
   updatePublicStatusUrlHint();
 }

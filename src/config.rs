@@ -274,8 +274,6 @@ pub struct PublicStatusConfig {
     pub port: u16,
     #[serde(default = "default_public_status_holodex_refresh_secs")]
     pub holodex_refresh_secs: u64,
-    #[serde(default = "default_public_status_rate_limit_per_min")]
-    pub rate_limit_per_min: u32,
     /// Advertised in reply to the `%查询` danmaku command. Empty means silent.
     #[serde(default)]
     pub public_url: String,
@@ -288,7 +286,6 @@ impl Default for PublicStatusConfig {
             bind: default_public_status_bind(),
             port: default_public_status_port(),
             holodex_refresh_secs: default_public_status_holodex_refresh_secs(),
-            rate_limit_per_min: default_public_status_rate_limit_per_min(),
             public_url: String::new(),
         }
     }
@@ -348,9 +345,6 @@ impl PublicStatusConfig {
                 MIN_PUBLIC_STATUS_REFRESH_SECS
             ));
         }
-        if self.rate_limit_per_min == 0 {
-            return Err("每分钟请求上限不能为 0".to_string());
-        }
         let url = self.public_url.trim();
         if !url.is_empty() && url.chars().count() > Self::max_public_url_chars() {
             return Err(format!(
@@ -373,10 +367,6 @@ fn default_public_status_port() -> u16 {
 
 fn default_public_status_holodex_refresh_secs() -> u64 {
     30
-}
-
-fn default_public_status_rate_limit_per_min() -> u32 {
-    60
 }
 
 fn default_cluster_node_id() -> String {
@@ -1298,10 +1288,6 @@ mod tests {
 
         let mut cfg = public_status("ny");
         cfg.holodex_refresh_secs = 1;
-        assert!(cfg.validate().is_err());
-
-        let mut cfg = public_status("ny");
-        cfg.rate_limit_per_min = 0;
         assert!(cfg.validate().is_err());
 
         let mut cfg = public_status("ny");

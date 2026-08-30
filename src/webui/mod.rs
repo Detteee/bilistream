@@ -3,6 +3,7 @@ pub(crate) mod assets;
 pub mod events;
 pub(crate) mod holodex_list;
 pub mod listen;
+pub mod public;
 pub mod restart;
 pub mod server;
 pub mod state;

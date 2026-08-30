@@ -45,6 +45,7 @@ pub async fn start_webui_on_listener(
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
     crate::cluster::start_cluster_worker();
+    crate::webui::public::start_public_status_supervisor();
 
     // API router
     let api_router = Router::new()
@@ -65,7 +66,10 @@ pub async fn start_webui_on_listener(
         )
         .route("/cluster/failover", post(api::cluster_failover))
         .route("/cluster/restart-node", post(api::cluster_restart_node))
-        .route("/cluster/public-status", post(api::cluster_set_public_status))
+        .route(
+            "/cluster/public-status",
+            post(api::cluster_set_public_status),
+        )
         .route(
             "/cluster/apply-public-status",
             post(api::cluster_apply_public_status),

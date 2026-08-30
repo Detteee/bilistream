@@ -71,6 +71,7 @@ tower-http = { version = "0.7", features = [
   "compression-gzip",
   "cors",
   "fs",
+  "limit",
   "set-header",
 ] }
 base64 = "0.23"

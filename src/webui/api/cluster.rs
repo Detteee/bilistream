@@ -270,7 +270,8 @@ pub async fn cluster_set_public_status(
     }))
 }
 
-pub async fn cluster_export_config() -> Result<Json<ApiResponse<ClusterSyncConfigRequest>>, StatusCode> {
+pub async fn cluster_export_config(
+) -> Result<Json<ApiResponse<ClusterSyncConfigRequest>>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
