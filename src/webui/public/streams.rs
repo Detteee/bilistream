@@ -243,8 +243,6 @@ fn suggested_area(stream: &HolodexStream) -> (Option<u64>, Option<String>) {
 struct StreamsSnapshot {
     body: String,
     etag: String,
-    /// Thumbnail urls in this snapshot, for the cache to reconcile against.
-    thumbnails: Vec<String>,
 }
 
 static SNAPSHOT: RwLock<Option<StreamsSnapshot>> = RwLock::new(None);
@@ -257,23 +255,10 @@ pub fn current_public_streams() -> Option<(String, String)> {
     Some((snapshot.body.clone(), snapshot.etag.clone()))
 }
 
-/// Thumbnail urls the current snapshot refers to.
-pub fn current_thumbnail_urls() -> Vec<String> {
-    SNAPSHOT
-        .read()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|snap| snap.thumbnails.clone()))
-        .unwrap_or_default()
-}
-
 fn store_snapshot(streams: &[PublicStream]) {
     let Ok(body) = serde_json::to_string(streams) else {
         return;
     };
-    let thumbnails = streams
-        .iter()
-        .filter_map(|stream| stream.thumbnail.clone())
-        .collect();
 
     if let Ok(mut guard) = SNAPSHOT.write() {
         if let Some(previous) = guard.as_ref() {
@@ -281,7 +266,6 @@ fn store_snapshot(streams: &[PublicStream]) {
                 *guard = Some(StreamsSnapshot {
                     body: previous.body.clone(),
                     etag: previous.etag.clone(),
-                    thumbnails,
                 });
                 return;
             }
@@ -289,7 +273,6 @@ fn store_snapshot(streams: &[PublicStream]) {
         *guard = Some(StreamsSnapshot {
             body,
             etag: format!("\"{:x}\"", ETAG_COUNTER.fetch_add(1, Ordering::Relaxed)),
-            thumbnails,
         });
     }
 }
@@ -328,7 +311,10 @@ pub async fn refresh_public_streams() -> bool {
         return false;
     }
 
-    let streams = match crate::plugins::holodex::get_holodex_streams(ids, true).await {
+    // A dashboard fetch on this node counts as this interval's call, so the
+    // two together stay at one upstream request per interval.
+    let max_age = Duration::from_secs(cfg.cluster.public_status.holodex_refresh_secs);
+    let streams = match super::holodex_cache::get_or_fetch(ids, max_age).await {
         Ok(streams) => streams,
         Err(e) => {
             tracing::debug!("公开状态页 Holodex 刷新失败: {}", e);
@@ -337,14 +323,40 @@ pub async fn refresh_public_streams() -> bool {
     };
 
     let banned = danmaku_banned_keywords();
-    let public = build_public_streams(
+    let mut public = build_public_streams(
         streams,
         &channels,
         cfg.bililive.enable_danmaku_command,
         &banned,
     );
+
+    // Only a successful fetch reaches here, so the list is safe to reconcile
+    // against; a failed poll returns early above and leaves the cache alone.
+    let upstream: Vec<String> = public
+        .iter()
+        .filter_map(|stream| stream.thumbnail.clone())
+        .collect();
+    super::thumbnails::reconcile(&upstream).await;
+    rewrite_thumbnails(&mut public);
+
     store_snapshot(&public);
     true
+}
+
+/// Points each thumbnail at this node's copy. An url the node will not fetch
+/// is left as-is, so the page still shows something where it can.
+fn rewrite_thumbnails(streams: &mut [PublicStream]) {
+    for stream in streams {
+        let Some(url) = stream.thumbnail.as_deref() else {
+            continue;
+        };
+        if !super::thumbnails::host_is_allowed(url) {
+            continue;
+        }
+        stream.thumbnail = Some(super::thumbnails::public_path(
+            &super::thumbnails::thumbnail_key(url),
+        ));
+    }
 }
 
 /// Refreshes on the configured interval for as long as this node serves the

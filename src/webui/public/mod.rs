@@ -5,10 +5,12 @@
 //! is usually a standby, so the streaming node's state is read out of the
 //! cluster snapshots that heartbeats already carry.
 
+pub mod holodex_cache;
 pub mod payload;
 pub mod server;
 pub mod snapshot;
 pub mod streams;
+pub mod thumbnails;
 
 pub use payload::PublicStatus;
 pub use server::start_public_status_supervisor;

@@ -21,6 +21,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
 use super::streams::{current_public_streams, start_streams_refresh};
+use super::thumbnails::read_thumbnail;
 
 /// Nothing here accepts a body; anything larger is refused before it is read.
 const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -127,6 +128,27 @@ async fn public_areas() -> Response {
         .into_response()
 }
 
+/// A cached thumbnail. Keys are derived from the upstream url, so the bytes
+/// behind one never change and may be held indefinitely.
+async fn public_thumbnail(axum::extract::Path(key): axum::extract::Path<String>) -> Response {
+    let Some((bytes, content_type)) = read_thumbnail(&key).await else {
+        return (StatusCode::NOT_FOUND, "unknown thumbnail").into_response();
+    };
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=86400, immutable".to_string(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
@@ -194,6 +216,7 @@ pub fn public_router() -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/t/{key}", get(public_thumbnail))
         .nest("/api/public", api)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
@@ -393,6 +416,7 @@ mod tests {
             "/api/public/status",
             "/api/public/streams",
             "/api/public/areas",
+            "/t/deadbeef",
         ] {
             let response = client
                 .post(format!("http://{addr}{path}"))
@@ -420,6 +444,28 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert_ne!(response.text().await.unwrap().trim(), "[]");
+
+        let _ = stop.send(());
+    }
+
+    /// A key the node never minted must not reach the filesystem.
+    #[tokio::test]
+    async fn unknown_thumbnails_are_not_found() {
+        let (addr, stop) = serve_for_test().await;
+        let client = reqwest::Client::new();
+
+        for key in ["deadbeef", "..", "%2e%2e%2fetc%2fpasswd"] {
+            let response = client
+                .get(format!("http://{addr}/t/{key}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::NOT_FOUND,
+                "/t/{key} should not resolve"
+            );
+        }
 
         let _ = stop.send(());
     }
