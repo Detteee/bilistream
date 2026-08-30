@@ -1,5 +1,5 @@
-// format.js — pure formatters shared by the dashboard and the status cards.
-// Nothing here touches the DOM.
+// format.js — pure formatters shared by the dashboard, the cluster panel and
+// the status cards. Nothing here touches the DOM.
 
 export function formatNetworkRate(kbps) {
   if (!Number.isFinite(kbps) || kbps <= 0) {

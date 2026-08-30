@@ -4,45 +4,7 @@ import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setC
 import { state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
-
-function formatNetworkRate(kbps) {
-  if (!Number.isFinite(kbps) || kbps <= 0) {
-    return '-';
-  }
-  if (kbps >= 1000) {
-    return `${(kbps / 1000).toFixed(2)} Mb/s`;
-  }
-  return `${Math.round(kbps)} Kb/s`;
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return '-';
-  }
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return unit === 0 ? `${bytes} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
-}
-
-function formatSpeedRatio(value) {
-  return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
-}
-
-function formatFps(value) {
-  if (!Number.isFinite(value) || value < 0) {
-    return '-';
-  }
-  return value >= 100 ? `${Math.round(value)}` : value.toFixed(1);
-}
-
-function formatFrameCount(value) {
-  return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : '-';
-}
+import { formatBytes, formatFps, formatFrameCount, formatNetworkRate, formatSpeedRatio } from './format.js';
 
 const clusterRefreshInterval = 3000;
 

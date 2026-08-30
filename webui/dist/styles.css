@@ -1086,6 +1086,16 @@ input[type="checkbox"] {
   color: var(--text-mute);
 }
 
+/* Read-only pages (public status view) still show every switch, but greyed:
+   the on-state must read as "on, and not yours to change" rather than as the
+   usual accent-coloured live control. */
+.toggle-switch.is-locked .toggle-slider,
+.toggle-switch.is-locked input:checked + .toggle-slider {
+  filter: grayscale(1);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .toggle-label {
   display: inline-flex;
   align-items: center;

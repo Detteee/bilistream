@@ -1,5 +1,4 @@
 // status-cards.js — renderers for the Bilibili / YouTube / Twitch / Niconico
-// status cards.
 // status cards. Shared by the admin dashboard and the public status page, so
 // the two never drift. Pure painting: no fetching, no config writes.
 //
@@ -73,7 +72,6 @@ export function setPlatformLiveInfoVisibility(platform, isLive) {
   }
 }
 
-
 function applyBiliStreamQualityColor(element, quality) {
   element.classList.toggle('bili-network-quality-smooth', quality === '流畅');
   element.classList.toggle('bili-network-quality-unstable', quality === '波动');
@@ -85,10 +83,20 @@ function sliceNetworkHistory(series, width) {
   return series.slice(start);
 }
 
-function setToggleChecked(id, checked) {
+// The public page renders every switch as a locked, greyed control rather than
+// hiding it, so viewers can still see what is turned on.
+function applyToggle(id, checked, readonly) {
   const toggle = document.getElementById(id);
-  if (toggle && toggle.dataset.saving !== 'true' && typeof checked === 'boolean') {
+  if (!toggle) {
+    return;
+  }
+  if (typeof checked === 'boolean' && (readonly || toggle.dataset.saving !== 'true')) {
     toggle.checked = checked;
+  }
+  if (readonly) {
+    toggle.disabled = true;
+    toggle.setAttribute('aria-disabled', 'true');
+    toggle.closest('.toggle-switch')?.classList.add('is-locked');
   }
 }
 
@@ -208,8 +216,11 @@ function updateBiliNetworkMeter(kind, metrics) {
   setElementText(`bili-network-${kind}-time`, metrics.detail);
 }
 
-/// Paints the network meters and the bar graph.
-export function renderBiliNetworkPanel(bili) {
+/// Paints the network meters, and the bar graph when `options.showGraph` is
+/// set. The public page omits the graph and polls far less often, so it passes
+/// `showGraph: false` and leaves the graph element out of its markup.
+export function renderBiliNetworkPanel(bili, options = {}) {
+  const { showGraph = true } = options;
   const panel = document.getElementById('bili-network-panel');
   if (!panel) {
     return;
@@ -253,25 +264,33 @@ export function renderBiliNetworkPanel(bili) {
     });
   }
 
-  renderBiliNetworkGraph(
-    hasCache,
-    asBitrateHistory(bili.stream_bitrate_history),
-    hasCache ? asBitrateHistory(bili.stream_cache_bitrate_history) : []
-  );
+  if (showGraph) {
+    renderBiliNetworkGraph(
+      hasCache,
+      asBitrateHistory(bili.stream_bitrate_history),
+      hasCache ? asBitrateHistory(bili.stream_cache_bitrate_history) : []
+    );
+  }
 }
 
-export function renderBilibiliCard(bili) {
+export function renderBilibiliCard(bili, options = {}) {
+  const { readonly = false, showNetwork = true } = options;
+
   setStatusIndicator('bili-status', bili.is_live ? 'status-live' : 'status-offline');
   updateAppLiveBadge(bili.is_live);
   setElementText('bili-title', bili.title || '-');
   setElementText('bili-area', formatAreaText(bili.area_name, bili.area_id));
 
-  renderBiliNetworkPanel(bili);
+  if (showNetwork) {
+    renderBiliNetworkPanel(bili, options);
+  } else {
+    lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
+  }
 
-  setToggleChecked('bili-danmaku-command-toggle', bili.enable_danmaku_command);
+  applyToggle('bili-danmaku-command-toggle', bili.enable_danmaku_command, readonly);
 }
 
-export function renderYouTubeCard(yt) {
+export function renderYouTubeCard(yt, options = {}) {
   if (!yt) {
     setStatusIndicator('yt-status', 'status-offline');
     setPlatformLiveInfoVisibility('youtube', false);
@@ -294,9 +313,10 @@ export function renderYouTubeCard(yt) {
   setElementText('yt-quality', yt.quality ? getQualityDisplayText(yt.quality, 'youtube') : '-');
   setElementText('yt-crop-status', yt.crop_enabled ? '开启' : '关闭');
   setElementText('yt-hls-cache-status', formatHlsCacheStatus(yt.ffmpeg_cache_enabled, yt.ffmpeg_cache_latency_secs));
+  applyToggle('youtube-monitor-toggle', undefined, options.readonly);
 }
 
-export function renderTwitchCard(tw) {
+export function renderTwitchCard(tw, options = {}) {
   if (!tw) {
     setStatusIndicator('tw-status', 'status-offline');
     setPlatformLiveInfoVisibility('twitch', false);
@@ -319,9 +339,9 @@ export function renderTwitchCard(tw) {
   setElementText('tw-quality', tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-');
   setElementText('tw-crop-status', tw.crop_enabled ? '开启' : '关闭');
   setElementText('tw-hls-cache-status', formatHlsCacheStatus(tw.ffmpeg_cache_enabled, tw.ffmpeg_cache_latency_secs));
+  applyToggle('twitch-monitor-toggle', undefined, options.readonly);
 }
 
-/// Paints every platform card from one `/api/status` style payload.
 /// The channel id rides along on the name element's dataset so the card has
 /// one row instead of two.
 export function setNcChannelDisplay(name, channelId) {
@@ -337,7 +357,7 @@ export function setNcChannelDisplay(name, channelId) {
   }
 }
 
-export function renderNiconicoCard(nc) {
+export function renderNiconicoCard(nc, options = {}) {
   const scheduledRow = document.getElementById('nc-scheduled-row');
 
   if (!nc) {
@@ -375,13 +395,15 @@ export function renderNiconicoCard(nc) {
   setElementText('nc-quality', nc.quality ? getQualityDisplayText(nc.quality, 'niconico') : '-');
   setElementText('nc-crop-status', nc.crop_enabled ? '开启' : '关闭');
   setElementText('nc-hls-cache-status', formatHlsCacheStatus(nc.ffmpeg_cache_enabled, nc.ffmpeg_cache_latency_secs));
+  applyToggle('niconico-monitor-toggle', undefined, options.readonly);
 }
 
-export function renderStatusCards(status) {
-  renderBilibiliCard(status.bilibili || {});
-  renderYouTubeCard(status.youtube);
-  renderTwitchCard(status.twitch);
-  renderNiconicoCard(status.niconico);
+/// Paints every platform card from one `/api/status` style payload.
+export function renderStatusCards(status, options = {}) {
+  renderBilibiliCard(status.bilibili || {}, options);
+  renderYouTubeCard(status.youtube, options);
+  renderTwitchCard(status.twitch, options);
+  renderNiconicoCard(status.niconico, options);
 }
 
 /// Replaces the channel/title fields with a short message when the status
