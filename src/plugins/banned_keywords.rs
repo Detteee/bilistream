@@ -117,10 +117,19 @@ pub fn danmaku_haystack(topic: &str, title: &str) -> String {
 
 /// First keyword in `keywords` contained in `haystack`, if any.
 pub fn banned_keyword_hit(haystack: &str, keywords: &[String]) -> Option<String> {
+    banned_keyword_hits(haystack, keywords).into_iter().next()
+}
+
+/// Every keyword contained in `haystack`, in list order.
+///
+/// The status page tells viewers which words blocked a stream, so it needs all
+/// of them: a title and its topic often trip different entries.
+pub fn banned_keyword_hits(haystack: &str, keywords: &[String]) -> Vec<String> {
     keywords
         .iter()
-        .find(|keyword| haystack.contains(keyword.as_str()))
+        .filter(|keyword| haystack.contains(keyword.as_str()))
         .cloned()
+        .collect()
 }
 
 /// Whether a danmaku request for this topic/title would be rejected, and on
@@ -193,6 +202,23 @@ mod tests {
             banned_keyword_hit(&haystack, &list).as_deref(),
             Some("dead by daylight")
         );
+    }
+
+    #[test]
+    fn hits_collect_every_match_in_list_order() {
+        let list = keywords(&["talk", "asmr", "雑談"]);
+        let haystack = danmaku_haystack("talk", "【雑談】カルピス");
+
+        assert_eq!(
+            banned_keyword_hits(&haystack, &list),
+            keywords(&["talk", "雑談"])
+        );
+    }
+
+    #[test]
+    fn hits_are_empty_when_nothing_matches() {
+        let list = keywords(&["asmr"]);
+        assert!(banned_keyword_hits(&danmaku_haystack("Gaming", "ランク"), &list).is_empty());
     }
 
     #[test]

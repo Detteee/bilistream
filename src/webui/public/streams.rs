@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Channel, Config};
-use crate::plugins::banned_keywords::{banned_keyword_hit, danmaku_banned_keywords};
+use crate::plugins::banned_keywords::{banned_keyword_hits, danmaku_banned_keywords};
 use crate::plugins::holodex::HolodexStream;
 
 /// Why a stream cannot be requested. The matched keyword itself is never sent:
@@ -61,6 +61,10 @@ pub struct PublicStream {
     pub command_channel_short: Option<String>,
     pub switchable: bool,
     pub reason: Option<NotSwitchable>,
+    /// The keywords that blocked it, so the page can say which words matched
+    /// rather than leaving the block looking arbitrary. They are already
+    /// visible in the title or topic being shown.
+    pub reason_keywords: Vec<String>,
 }
 
 /// What the page needs to know about a configured channel to build a command.
@@ -171,27 +175,28 @@ fn switchability(
     target: Option<&CommandTarget>,
     danmaku_enabled: bool,
     banned: &[String],
-) -> Option<NotSwitchable> {
+) -> (Option<NotSwitchable>, Vec<String>) {
     if !danmaku_enabled {
-        return Some(NotSwitchable::DanmakuDisabled);
+        return (Some(NotSwitchable::DanmakuDisabled), Vec::new());
     }
 
     let Some(target) = target else {
-        return Some(NotSwitchable::UnknownChannel);
+        return (Some(NotSwitchable::UnknownChannel), Vec::new());
     };
     if target.name.is_none() {
-        return Some(NotSwitchable::NoCommandName);
+        return (Some(NotSwitchable::NoCommandName), Vec::new());
     }
 
     let haystack = crate::plugins::banned_keywords::danmaku_haystack(
         stream.topic_id.as_deref().unwrap_or_default(),
         &stream.title,
     );
-    if banned_keyword_hit(&haystack, banned).is_some() {
-        return Some(NotSwitchable::BannedKeyword);
+    let hits = banned_keyword_hits(&haystack, banned);
+    if !hits.is_empty() {
+        return (Some(NotSwitchable::BannedKeyword), hits);
     }
 
-    None
+    (None, Vec::new())
 }
 
 /// Niconico and anything else Holodex surfaces cannot be requested, because
@@ -210,11 +215,12 @@ pub(super) fn build_public_streams(
         .into_iter()
         .map(|stream| {
             let target = command_target(channels, &stream.channel.id, stream.link.as_deref());
-            let reason = if !platform_is_supported(target.as_ref()) && target.is_some() {
-                Some(NotSwitchable::UnsupportedPlatform)
-            } else {
-                switchability(&stream, target.as_ref(), danmaku_enabled, banned)
-            };
+            let (reason, reason_keywords) =
+                if !platform_is_supported(target.as_ref()) && target.is_some() {
+                    (Some(NotSwitchable::UnsupportedPlatform), Vec::new())
+                } else {
+                    switchability(&stream, target.as_ref(), danmaku_enabled, banned)
+                };
 
             let (suggested_area_id, suggested_area_name) = suggested_area(&stream);
             let thumbnail = thumbnail_for(&stream);
@@ -239,6 +245,7 @@ pub(super) fn build_public_streams(
                 command_channel: target.and_then(|target| target.name),
                 switchable: reason.is_none(),
                 reason,
+                reason_keywords,
             }
         })
         .collect()
@@ -522,20 +529,37 @@ mod tests {
         assert!(built[1].switchable);
     }
 
+    /// Without the words, a block reads as arbitrary. They are already on
+    /// screen in the title or topic the card shows.
     #[test]
-    fn the_banned_keyword_itself_is_never_sent() {
+    fn a_block_reports_which_keywords_matched() {
         let built = build(
-            vec![stream("Late night ASMR", None, "UCkamito")],
+            vec![stream("【雑談】カルピス", Some("talk"), "UCkamito")],
             true,
-            &["asmr"],
+            &["talk", "asmr", "雑談"],
         );
-        let json = serde_json::to_string(&built).unwrap();
 
-        assert!(json.contains("banned_keyword"));
-        // The title legitimately contains it; the blocklist entry must not
-        // appear as its own field.
-        assert!(!json.contains("\"keyword\""));
-        assert!(!json.contains("\"banned\""));
+        assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
+        assert_eq!(
+            built[0].reason_keywords,
+            vec!["talk".to_string(), "雑談".to_string()]
+        );
+    }
+
+    #[test]
+    fn other_block_reasons_carry_no_keywords() {
+        let built = build(vec![stream("ランク", None, "UCkamito")], false, &["asmr"]);
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::DanmakuDisabled));
+        assert!(built[0].reason_keywords.is_empty());
+    }
+
+    #[test]
+    fn a_switchable_stream_carries_no_keywords() {
+        let built = build(vec![stream("ランク", None, "UCkamito")], true, &["asmr"]);
+
+        assert!(built[0].switchable);
+        assert!(built[0].reason_keywords.is_empty());
     }
 
     #[test]
@@ -732,6 +756,7 @@ mod tests {
             "command_channel_short",
             "switchable",
             "reason",
+            "reason_keywords",
         ];
         expected.sort();
 

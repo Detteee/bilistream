@@ -16,6 +16,17 @@ const REASON_LABELS = {
   no_command_name: '该频道没有可用的点播名称',
 };
 
+/// A keyword block names the words that matched, so it does not read as
+/// arbitrary — they are already visible in the title and topic on the card.
+function reasonText(stream) {
+  const label = REASON_LABELS[stream.reason] || '该直播不可点播';
+  const keywords = Array.isArray(stream.reason_keywords) ? stream.reason_keywords : [];
+  if (stream.reason !== 'banned_keyword' || keywords.length === 0) {
+    return label;
+  }
+  return `${label}：标题/分区包含 ${keywords.join('/')}`;
+}
+
 /// A regular account cannot send a danmaku longer than this, so a command over
 /// it needs a shorter form even though the formal one is what we lead with.
 const DANMAKU_REGULAR_LIMIT = 20;
@@ -125,7 +136,7 @@ function createSwitchButton(stream) {
   if (!stream.switchable) {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
-    button.title = REASON_LABELS[stream.reason] || '该直播不可点播';
+    button.title = reasonText(stream);
     return button;
   }
 
@@ -176,7 +187,7 @@ function createStreamCard(stream) {
   if (!stream.switchable) {
     const note = document.createElement('div');
     note.className = 'holodex-stream-note';
-    note.textContent = REASON_LABELS[stream.reason] || '该直播不可点播';
+    note.textContent = reasonText(stream);
     body.appendChild(note);
   }
 
