@@ -4,8 +4,8 @@
 // paced for a page that may be open in many tabs for hours, and pauses while
 // the tab is hidden.
 
-import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js';
-import { renderNodes } from './nodes.js';
+import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=7';
+import { renderNodes } from './nodes.js?v=7';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -13,8 +13,10 @@ import {
   copyCommand,
   renderStreams,
   setAreas,
+  setDanmakuEnabled,
   setStatus,
-} from './streams.js';
+  stopDurationTicker,
+} from './streams.js?v=7';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
 /// 304s. Streams turn over on the server's own 30s timer.
@@ -51,6 +53,7 @@ async function refreshStatus() {
     // is on without being offered a control that is not theirs.
     renderStatusCards(status, { readonly: true, showNetwork: false });
     renderNodes(status.nodes);
+    setDanmakuEnabled(status.bilibili?.enable_danmaku_command);
     setSyncBanner(status.in_sync !== false);
     setUpdated(new Date());
   } catch (error) {
@@ -148,6 +151,7 @@ function init() {
       startPolling();
     } else {
       stopPolling();
+      stopDurationTicker();
     }
   });
 }

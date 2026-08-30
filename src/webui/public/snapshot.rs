@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::payload::PublicStatus;
 use crate::cluster::{ClusterNodeSnapshot, ClusterStatus};
+use crate::plugins::is_danmaku_commands_enabled;
 use crate::webui::state::{get_status_cache, StatusData};
 
 /// Longer than this and the page lags the dashboard noticeably; shorter and a
@@ -35,16 +36,32 @@ static ETAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn public_status_source(cluster: &ClusterStatus) -> Option<StatusData> {
     if !cluster.enabled {
         // Single node: it is the one streaming, so its own cache is the truth.
-        return get_status_cache();
+        return get_status_cache().map(with_live_danmaku_gate);
     }
 
     let owner = cluster.active_owner.as_deref()?;
     let node = cluster.nodes.iter().find(|node| node.node_id == owner)?;
 
     if node.is_local {
-        return get_status_cache();
+        return get_status_cache().map(with_live_danmaku_gate);
     }
     node_status_if_fresh(node)
+}
+
+/// Cache still holds the config switch. Restreaming clears the processor that
+/// accepts `%转播%`, and that is what the page must advertise.
+fn with_live_danmaku_gate(mut status: StatusData) -> StatusData {
+    status.bilibili.enable_danmaku_command = is_danmaku_commands_enabled();
+    status
+}
+
+/// Whether viewers can send a 切换 command right now: the owner's processor
+/// gate, not the config switch. A restreaming node keeps the config on and
+/// disables commands until ffmpeg exits.
+pub(super) fn public_danmaku_enabled(cluster: &ClusterStatus) -> bool {
+    public_status_source(cluster)
+        .map(|status| status.bilibili.enable_danmaku_command)
+        .unwrap_or(false)
 }
 
 fn node_status_if_fresh(node: &ClusterNodeSnapshot) -> Option<StatusData> {
@@ -212,5 +229,26 @@ mod tests {
         assert!(!payload.in_sync);
         assert_eq!(payload.nodes.len(), 1);
         assert!(payload.bilibili.title.is_empty());
+    }
+
+    #[test]
+    fn public_danmaku_follows_the_owners_processor_gate() {
+        let mut live = node("jp", false, false, "live in jp");
+        live.status
+            .as_mut()
+            .expect("status")
+            .bilibili
+            .enable_danmaku_command = true;
+        assert!(public_danmaku_enabled(&cluster(
+            Some("jp"),
+            vec![live.clone()]
+        )));
+
+        live.status
+            .as_mut()
+            .expect("status")
+            .bilibili
+            .enable_danmaku_command = false;
+        assert!(!public_danmaku_enabled(&cluster(Some("jp"), vec![live])));
     }
 }

@@ -44,6 +44,34 @@ export function formatHlsCacheStatus(enabled, latencySecs) {
   return enabled ? `${latencySecs || 8}秒` : '关闭';
 }
 
+export function timestampMs(value) {
+  if (!value) {
+    return null;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+export function formatClock(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+// Elapsed live time, same H:MM:SS / M:SS the dashboard paints on thumbnails.
+export function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 export function formatScheduledStart(startScheduled) {
   const start = new Date(startScheduled);
   if (Number.isNaN(start.getTime())) {
@@ -52,7 +80,7 @@ export function formatScheduledStart(startScheduled) {
 
   const now = Date.now();
   const diffMs = start.getTime() - now;
-  const clock = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+  const clock = formatClock(start);
 
   if (diffMs <= 0) {
     return `即将开播 (${clock})`;

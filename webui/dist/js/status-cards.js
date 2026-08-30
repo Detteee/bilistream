@@ -341,7 +341,7 @@ export function renderTwitchCard(tw, options = {}) {
   setPlatformLiveInfoVisibility('twitch', tw.is_live);
   setElementText('tw-channel-name', tw.channel_name || '-');
   setElementText('tw-title', tw.title || '-');
-  setElementText('tw-game', tw.game || '-');
+  setElementText('tw-game', tw.game || tw.topic || '-');
   setElementText('tw-area', formatAreaText(tw.area_name, tw.area_id));
   setElementText('tw-quality', tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-');
   setElementText('tw-crop-status', tw.crop_enabled ? '开启' : '关闭');

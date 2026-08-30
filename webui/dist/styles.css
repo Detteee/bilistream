@@ -2202,7 +2202,8 @@ a.cluster-node-name-link {
 }
 
 .cluster-stream-platform[data-platform="youtube"],
-.cluster-stream-platform[data-platform="twitch"] {
+.cluster-stream-platform[data-platform="twitch"],
+.cluster-stream-platform[data-platform="niconico"] {
   background: color-mix(in srgb, var(--platform) 22%, transparent);
   color: var(--platform);
 }
@@ -2213,6 +2214,10 @@ a.cluster-node-name-link {
 
 .cluster-stream-platform[data-platform="twitch"] {
   --platform: var(--twitch);
+}
+
+.cluster-stream-platform[data-platform="niconico"] {
+  --platform: var(--niconico);
 }
 
 .cluster-stream-channel {
@@ -2691,7 +2696,8 @@ a.cluster-node-name-link {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   align-items: stretch;
-  gap: var(--sp-4);
+  column-gap: var(--sp-6);
+  row-gap: var(--sp-7);
   margin-bottom: var(--sp-4);
 }
 
@@ -2699,7 +2705,7 @@ a.cluster-node-name-link {
   position: relative;
   grid-column: 1 / -1;
   height: 1px;
-  margin-block: var(--sp-3);
+  margin-block: var(--sp-5);
   background: linear-gradient(90deg, transparent, var(--line-strong), transparent);
 }
 
@@ -3048,10 +3054,18 @@ a.cluster-node-name-link {
   cursor: pointer;
 }
 
+.holodex-stream-watch svg,
+.holodex-stream-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
 .holodex-stream-watch {
   border-color: var(--line);
   background: var(--surface-4);
   color: var(--text);
+  text-decoration: none;
 }
 
 .holodex-stream-watch:hover {

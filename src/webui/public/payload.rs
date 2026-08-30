@@ -10,7 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::{ClusterNodeRole, ClusterNodeSnapshot, ClusterStatus};
+use crate::cluster::{
+    ClusterNodeRole, ClusterNodeSnapshot, ClusterStatus, ClusterStreamIdentity,
+};
 use crate::webui::state::{BiliStatus, NetworkStatus, NicoStatus, StatusData, TwStatus, YtStatus};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -69,7 +71,20 @@ pub struct PublicNode {
     pub role: ClusterNodeRole,
     pub healthy: bool,
     pub ffmpeg_running: bool,
+    /// Who is on air, without channel or stream ids.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<PublicNodeStream>,
     pub network: Option<PublicNetwork>,
+}
+
+/// The inset on the featured node card. Platform is the same `YT` / `TW` /
+/// `NC` code the cluster already uses.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublicNodeStream {
+    pub platform: String,
+    pub channel_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Meters only. The bar graph needs per-sample history and a fast poll, which
@@ -158,6 +173,21 @@ impl From<&NetworkStatus> for PublicNetwork {
     }
 }
 
+impl From<&ClusterStreamIdentity> for PublicNodeStream {
+    fn from(stream: &ClusterStreamIdentity) -> Self {
+        Self {
+            platform: stream.platform.clone(),
+            channel_name: stream.channel_name.clone(),
+            title: stream
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
 impl From<&ClusterNodeSnapshot> for PublicNode {
     fn from(node: &ClusterNodeSnapshot) -> Self {
         Self {
@@ -170,6 +200,7 @@ impl From<&ClusterNodeSnapshot> for PublicNode {
             role: node.role,
             healthy: node.health.healthy,
             ffmpeg_running: node.ffmpeg_running,
+            stream: node.active_stream.as_ref().map(PublicNodeStream::from),
             network: node.network.as_ref().map(PublicNetwork::from),
         }
     }
@@ -209,7 +240,7 @@ impl PublicStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::ClusterHealth;
+    use crate::cluster::{ClusterHealth, ClusterStreamIdentity};
     use serde_json::Value;
 
     /// serde_json orders object keys itself, so compare the set.
@@ -368,6 +399,8 @@ mod tests {
             "active_owner",
             "monitor_toggles",
             "is_local",
+            "stream_id",
+            "active_stream",
         ] {
             assert!(!json.contains(leaked), "public payload leaked {leaked}");
         }
@@ -409,6 +442,31 @@ mod tests {
         let twitch = payload.twitch.expect("twitch card");
         assert_eq!(twitch.topic.as_deref(), Some("VALORANT"));
         assert_eq!(twitch.channel_name, "kamito_jp");
+    }
+
+    #[test]
+    fn node_stream_drops_channel_and_stream_ids() {
+        let mut cluster = sample_cluster();
+        cluster.nodes[0].active_stream = Some(ClusterStreamIdentity {
+            platform: "YT".to_string(),
+            channel_name: "空澄セナ".to_string(),
+            channel_id: "UCleakChannelId".to_string(),
+            stream_id: Some("abc123video".to_string()),
+            title: Some("  morning live  ".to_string()),
+        });
+
+        let payload = PublicStatus::build(Some(&sample_status()), &cluster);
+        let stream = payload.nodes[0].stream.as_ref().expect("stream inset");
+        assert_eq!(stream.platform, "YT");
+        assert_eq!(stream.channel_name, "空澄セナ");
+        assert_eq!(stream.title.as_deref(), Some("morning live"));
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(!json.contains("UCleakChannelId"));
+        assert!(!json.contains("abc123video"));
+        assert!(!json.contains("channel_id"));
+        assert!(!json.contains("stream_id"));
+        assert!(!json.contains("active_stream"));
     }
 
     #[test]

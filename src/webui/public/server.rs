@@ -227,6 +227,10 @@ pub fn public_router() -> Router {
                 "default-src 'self'; img-src 'self' data:; style-src 'self'; \
                  script-src 'self'; frame-ancestors 'none'; base-uri 'none'",
             ),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
         ));
 
     // No not_found_service: the page is a single document with no client-side
@@ -552,6 +556,30 @@ mod tests {
         assert!(!body.contains("data-view=\"settings\""));
         assert!(!body.contains("id=\"tab-logs\""));
         assert!(!body.contains("crop"));
+
+        let _ = stop.send(());
+    }
+
+    /// HTML/CSS/JS are iterated often; without this, a tunnel in front keeps
+    /// serving the previous streams.js after index.html already changed.
+    #[tokio::test]
+    async fn static_page_assets_are_not_cached() {
+        let (addr, stop) = serve_for_test().await;
+        let client = reqwest::Client::new();
+
+        for path in ["/", "/public.css", "/js/main.js", "/shared/styles.css"] {
+            let response = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers().get("cache-control").unwrap(),
+                "no-store",
+                "{path} must revalidate"
+            );
+        }
 
         let _ = stop.send(());
     }

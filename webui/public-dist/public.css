@@ -10,13 +10,29 @@ html.light-theme {
   background: #d8d1c3;
 }
 
-/* The dashboard spaces its blocks through .view.is-active, which this page
-   does not use, so it needs its own vertical rhythm or the stream panel sits
-   flush against the status cards. */
+/* Flex rather than grid: a stretched one-column grid grows the last status
+   cards until they meet the monitor panel, which reads as the two blocks
+   sharing a border. Column layout plus a shared gap does not. */
 .public-shell {
-  display: grid;
-  gap: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
   padding-block: var(--sp-6) var(--sp-8);
+}
+
+.public-shell .dashboard {
+  flex: 0 0 auto;
+  gap: var(--sp-6);
+}
+
+.public-shell > .panel {
+  flex: 0 0 auto;
+}
+
+/* Path fills on the Holodex mark are gradients. Inherited currentColor from
+   .panel__title svg would paint over them and the icon would vanish. */
+.panel__title-mark {
+  fill: none;
 }
 
 /* Freshness note next to the theme toggle. */
@@ -29,7 +45,6 @@ html.light-theme {
 /* Shown when the serving node cannot see the streaming node, so the cards
    are not silently presenting stale numbers as current. */
 .public-banner {
-  margin-bottom: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid color-mix(in srgb, var(--warn) 44%, transparent);
   border-radius: var(--r-md);
@@ -71,8 +86,31 @@ html.light-theme {
   cursor: not-allowed;
 }
 
-.holodex-stream-note {
-  margin-top: var(--sp-1);
-  color: var(--text-mute);
-  font-size: var(--fs-xs);
+.holodex-stream-watch svg {
+  fill: currentColor;
+}
+
+.holodex-stream-btn svg {
+  fill: none;
+  stroke: currentColor;
+}
+
+/* Featured node card on this page has no heartbeat column and no action
+   buttons, so the stream inset sits beside the meters instead of leaving an
+   empty third track. */
+@media (min-width: 900px) {
+  .public-shell .cluster-node-card-featured {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "title"
+      "meta";
+  }
+
+  .public-shell .cluster-node-card-featured > .cluster-node-meta {
+    grid-template-columns: minmax(180px, 0.9fr) minmax(280px, 1.6fr);
+  }
+
+  .public-shell .cluster-node-card-featured > .cluster-node-meta:has(> :only-child) {
+    grid-template-columns: 1fr;
+  }
 }

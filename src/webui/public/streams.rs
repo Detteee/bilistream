@@ -42,8 +42,11 @@ pub struct PublicStream {
     pub topic: Option<String>,
     pub status: String,
     pub is_placeholder: bool,
+    pub placeholder_type: Option<String>,
     pub start_scheduled: Option<String>,
     pub start_actual: Option<String>,
+    pub available_at: Option<String>,
+    pub published_at: Option<String>,
     pub live_viewers: Option<i32>,
     pub channel_name: String,
     pub channel_photo: Option<String>,
@@ -231,8 +234,11 @@ pub(super) fn build_public_streams(
                 topic: stream.topic_id,
                 status: stream.status,
                 is_placeholder: stream.stream_type == "placeholder",
+                placeholder_type: stream.placeholder_type,
                 start_scheduled: stream.start_scheduled,
                 start_actual: stream.start_actual,
+                available_at: stream.available_at,
+                published_at: stream.published_at,
                 live_viewers: stream.live_viewers,
                 channel_name: stream.channel.name,
                 channel_photo: stream.channel.photo.filter(|photo| !photo.is_empty()),
@@ -373,40 +379,55 @@ async fn refresh_public_streams() -> bool {
     // or if it is more than a day out.
     let streams = crate::webui::api::filter_holodex_streams(streams, ids.into_iter().collect());
 
+    // Config stays on during a restream; the processor gate does not. Use the
+    // same owner-facing flag the status cards do, or 切换 stays green while
+    // `%转播%` is rejected.
+    let cluster = crate::cluster::get_cluster_status_for_config(&cfg).await;
+    let danmaku_enabled = super::snapshot::public_danmaku_enabled(&cluster);
+
     let banned = danmaku_banned_keywords();
-    let mut public = build_public_streams(
-        streams,
-        &channels,
-        cfg.bililive.enable_danmaku_command,
-        &banned,
-    );
+    let mut public = build_public_streams(streams, &channels, danmaku_enabled, &banned);
 
     // Only a successful fetch reaches here, so the list is safe to reconcile
     // against; a failed poll returns early above and leaves the cache alone.
-    let upstream: Vec<String> = public
-        .iter()
-        .filter_map(|stream| stream.thumbnail.clone())
-        .collect();
-    super::thumbnails::reconcile(&upstream).await;
+    // Channel photos use the same cache: the page's CSP only allows same-origin
+    // images, and those CDNs are often unreachable from the viewer's network.
+    super::thumbnails::reconcile(&image_urls(&public)).await;
     rewrite_thumbnails(&mut public);
 
     store_snapshot(&public);
     true
 }
 
-/// Points each thumbnail at this node's copy. An url the node will not fetch
-/// is left as-is, so the page still shows something where it can.
+/// Thumbnails and avatars the node will fetch for this list.
+fn image_urls(streams: &[PublicStream]) -> Vec<String> {
+    streams
+        .iter()
+        .flat_map(|stream| [stream.thumbnail.clone(), stream.channel_photo.clone()])
+        .flatten()
+        .collect()
+}
+
+/// Points each image at this node's copy. An url the node will not fetch is
+/// dropped: the page's CSP only allows same-origin images, so leaving the
+/// upstream address would never paint.
 fn rewrite_thumbnails(streams: &mut [PublicStream]) {
     for stream in streams {
-        let Some(url) = stream.thumbnail.as_deref() else {
-            continue;
-        };
-        if !super::thumbnails::host_is_allowed(url) {
-            continue;
-        }
-        stream.thumbnail = Some(super::thumbnails::public_path(
-            &super::thumbnails::thumbnail_key(url),
+        rewrite_image(&mut stream.thumbnail);
+        rewrite_image(&mut stream.channel_photo);
+    }
+}
+
+fn rewrite_image(url: &mut Option<String>) {
+    let Some(src) = url.as_deref() else {
+        return;
+    };
+    if super::thumbnails::host_is_allowed(src) {
+        *url = Some(super::thumbnails::public_path(
+            &super::thumbnails::thumbnail_key(src),
         ));
+    } else {
+        *url = None;
     }
 }
 
@@ -726,6 +747,36 @@ mod tests {
     }
 
     #[test]
+    fn channel_photos_are_fetched_alongside_thumbnails() {
+        let mut yt = stream("ランク", None, "UCkamito");
+        yt.channel.photo = Some("https://yt3.ggpht.com/a.jpg".to_string());
+        let built = build(vec![yt], true, &[]);
+        let urls = image_urls(&built);
+
+        assert!(urls.iter().any(|url| url == "https://yt3.ggpht.com/a.jpg"));
+        assert!(urls
+            .iter()
+            .any(|url| url == "https://i.ytimg.com/vi/vid1/maxres.jpg"));
+    }
+
+    #[test]
+    fn an_image_from_a_host_we_will_not_fetch_is_dropped() {
+        let mut url = Some("https://evil.example/x.jpg".to_string());
+        rewrite_image(&mut url);
+        assert_eq!(url, None);
+    }
+
+    #[test]
+    fn an_allowed_image_is_rewritten_to_the_local_path() {
+        let src = "https://i.ytimg.com/vi/vid1/maxres.jpg";
+        let mut url = Some(src.to_string());
+        rewrite_image(&mut url);
+        let rewritten = url.expect("rewritten");
+        assert!(rewritten.starts_with("/t/"));
+        assert_ne!(rewritten, src);
+    }
+
+    #[test]
     fn serialized_keys_are_the_allowlist() {
         let built = build(
             vec![stream("ランク", Some("Gaming"), "UCkamito")],
@@ -742,8 +793,11 @@ mod tests {
             "topic",
             "status",
             "is_placeholder",
+            "placeholder_type",
             "start_scheduled",
             "start_actual",
+            "available_at",
+            "published_at",
             "live_viewers",
             "channel_name",
             "channel_photo",

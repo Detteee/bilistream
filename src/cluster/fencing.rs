@@ -4,7 +4,7 @@ use super::election::configured_node_ids;
 use super::state::{cluster_state_read, cluster_state_write, now_secs, ClusterState};
 use super::types::*;
 use crate::config::{ClusterConfig, Config};
-use crate::plugins::is_ffmpeg_running;
+use crate::plugins::{is_danmaku_commands_enabled, is_ffmpeg_running};
 use crate::webui::state::{get_status_cache, NetworkStatus};
 
 #[cfg(test)]
@@ -201,7 +201,11 @@ pub(crate) async fn collect_local_snapshot(
     config_version: String,
 ) -> ClusterNodeSnapshot {
     let network = collect_network_status();
-    let status = get_status_cache();
+    let mut status = get_status_cache();
+    if let Some(ref mut status) = status {
+        // Config stays on during a restream; the processor that accepts `%转播%` does not.
+        status.bilibili.enable_danmaku_command = is_danmaku_commands_enabled();
+    }
     let (
         draining,
         mut fault_latched,
