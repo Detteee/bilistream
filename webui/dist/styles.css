@@ -235,14 +235,14 @@ code {
 html.light-theme {
   color-scheme: light;
 
-  /* Pale linen, not yellow paper: the page is parchment, cards lift to white. */
+  /* Dust cards on parchment; inner wells lift to linen white. */
   --bg: #fdf9f4;
   --bg-glow-1: color-mix(in srgb, #176ae5 8%, transparent);
   --bg-glow-2: color-mix(in srgb, #a478c4 6%, transparent);
   --surface-1: #ffffff;
-  --surface-2: #fffcfa;
-  --surface-3: #f9efe4;
-  --surface-4: #f3e8dc;
+  --surface-2: #f9efe4;
+  --surface-3: #fffcfa;
+  --surface-4: #ffffff;
   --line: #e8e2d8;
   --line-strong: #d5cdc3;
 
