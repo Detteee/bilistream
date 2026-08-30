@@ -181,7 +181,7 @@ impl PublicStatus {
     ///
     /// `status` is `None` when the serving node has no usable view of whoever
     /// owns the stream; the cards then render empty rather than stale.
-    pub fn build(status: Option<&StatusData>, cluster: &ClusterStatus) -> Self {
+    pub(super) fn build(status: Option<&StatusData>, cluster: &ClusterStatus) -> Self {
         let nodes = cluster.nodes.iter().map(PublicNode::from).collect();
 
         let Some(status) = status else {

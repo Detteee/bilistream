@@ -83,6 +83,13 @@ function sliceNetworkHistory(series, width) {
   return series.slice(start);
 }
 
+/// The dashboard sets the monitor switches from config, with its own debounced
+/// save, so the renderer must not fight it there. A read-only page has no
+/// config to read, so it takes the value out of the status payload instead.
+function monitorToggleValue(enabled, options) {
+  return options.readonly ? enabled : undefined;
+}
+
 // The public page renders every switch as a locked, greyed control rather than
 // hiding it, so viewers can still see what is turned on.
 function applyToggle(id, checked, readonly) {
@@ -313,7 +320,7 @@ export function renderYouTubeCard(yt, options = {}) {
   setElementText('yt-quality', yt.quality ? getQualityDisplayText(yt.quality, 'youtube') : '-');
   setElementText('yt-crop-status', yt.crop_enabled ? '开启' : '关闭');
   setElementText('yt-hls-cache-status', formatHlsCacheStatus(yt.ffmpeg_cache_enabled, yt.ffmpeg_cache_latency_secs));
-  applyToggle('youtube-monitor-toggle', undefined, options.readonly);
+  applyToggle('youtube-monitor-toggle', monitorToggleValue(yt.enable_monitor, options), options.readonly);
 }
 
 export function renderTwitchCard(tw, options = {}) {
@@ -339,7 +346,7 @@ export function renderTwitchCard(tw, options = {}) {
   setElementText('tw-quality', tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-');
   setElementText('tw-crop-status', tw.crop_enabled ? '开启' : '关闭');
   setElementText('tw-hls-cache-status', formatHlsCacheStatus(tw.ffmpeg_cache_enabled, tw.ffmpeg_cache_latency_secs));
-  applyToggle('twitch-monitor-toggle', undefined, options.readonly);
+  applyToggle('twitch-monitor-toggle', monitorToggleValue(tw.enable_monitor, options), options.readonly);
 }
 
 /// The channel id rides along on the name element's dataset so the card has
@@ -395,7 +402,7 @@ export function renderNiconicoCard(nc, options = {}) {
   setElementText('nc-quality', nc.quality ? getQualityDisplayText(nc.quality, 'niconico') : '-');
   setElementText('nc-crop-status', nc.crop_enabled ? '开启' : '关闭');
   setElementText('nc-hls-cache-status', formatHlsCacheStatus(nc.ffmpeg_cache_enabled, nc.ffmpeg_cache_latency_secs));
-  applyToggle('niconico-monitor-toggle', undefined, options.readonly);
+  applyToggle('niconico-monitor-toggle', monitorToggleValue(nc.enable_monitor, options), options.readonly);
 }
 
 /// Paints every platform card from one `/api/status` style payload.

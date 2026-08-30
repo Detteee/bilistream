@@ -94,6 +94,23 @@ fn short_command_name(channel: &Channel) -> Option<String> {
         .cloned()
 }
 
+/// Holodex omits the thumbnail for plain YouTube streams and for Twitch
+/// placeholders, so derive what the dashboard derives. Done here rather than
+/// in the page so the cache fetches these too.
+fn thumbnail_for(stream: &HolodexStream) -> Option<String> {
+    if let Some(thumbnail) = stream.thumbnail.as_deref().filter(|t| !t.is_empty()) {
+        return Some(thumbnail.to_string());
+    }
+
+    if stream.stream_type == "placeholder" {
+        return twitch_login_from_link(stream.link.as_deref()).map(|login| {
+            format!("https://static-cdn.jtvnw.net/previews-ttv/live_user_{login}-640x360.jpg")
+        });
+    }
+
+    (!stream.id.is_empty()).then(|| format!("https://i.ytimg.com/vi/{}/sddefault.jpg", stream.id))
+}
+
 fn twitch_login_from_link(link: Option<&str>) -> Option<String> {
     let link = link?;
     let rest = link
@@ -183,7 +200,7 @@ fn platform_is_supported(target: Option<&CommandTarget>) -> bool {
     matches!(target, Some(t) if t.platform == "YT" || t.platform == "TW")
 }
 
-pub fn build_public_streams(
+pub(super) fn build_public_streams(
     streams: Vec<HolodexStream>,
     channels: &[Channel],
     danmaku_enabled: bool,
@@ -200,6 +217,7 @@ pub fn build_public_streams(
             };
 
             let (suggested_area_id, suggested_area_name) = suggested_area(&stream);
+            let thumbnail = thumbnail_for(&stream);
 
             PublicStream {
                 id: stream.id,
@@ -212,7 +230,7 @@ pub fn build_public_streams(
                 live_viewers: stream.live_viewers,
                 channel_name: stream.channel.name,
                 channel_photo: stream.channel.photo.filter(|photo| !photo.is_empty()),
-                thumbnail: stream.thumbnail,
+                thumbnail,
                 link: stream.link,
                 suggested_area_id,
                 suggested_area_name,
@@ -270,7 +288,7 @@ static SNAPSHOT: RwLock<Option<StreamsSnapshot>> = RwLock::new(None);
 static ETAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The cached list and its ETag, or `None` before the first successful fetch.
-pub fn current_public_streams() -> Option<(String, String)> {
+pub(super) fn current_public_streams() -> Option<(String, String)> {
     let guard = SNAPSHOT.read().ok()?;
     let snapshot = guard.as_ref()?;
     Some((snapshot.body.clone(), snapshot.etag.clone()))
@@ -318,7 +336,7 @@ fn holodex_channel_ids(cfg: &Config, channels: &[Channel]) -> Vec<String> {
 
 /// One refresh cycle. Returns false when the list could not be refreshed, so
 /// the caller knows the snapshot it still holds is the last good one.
-pub async fn refresh_public_streams() -> bool {
+async fn refresh_public_streams() -> bool {
     let Ok(cfg) = crate::config::load_config().await else {
         return false;
     };
@@ -335,13 +353,18 @@ pub async fn refresh_public_streams() -> bool {
     // A dashboard fetch on this node counts as this interval's call, so the
     // two together stay at one upstream request per interval.
     let max_age = Duration::from_secs(cfg.cluster.public_status.holodex_refresh_secs);
-    let streams = match super::holodex_cache::get_or_fetch(ids, max_age).await {
+    let streams = match super::holodex_cache::get_or_fetch(ids.clone(), max_age).await {
         Ok(streams) => streams,
         Err(e) => {
             tracing::debug!("公开状态页 Holodex 刷新失败: {}", e);
             return false;
         }
     };
+
+    // Same filter the dashboard applies: a collab shows up under a channel we
+    // do not monitor, and an upcoming entry is noise once the channel is live
+    // or if it is more than a day out.
+    let streams = crate::webui::api::filter_holodex_streams(streams, ids.into_iter().collect());
 
     let banned = danmaku_banned_keywords();
     let mut public = build_public_streams(
@@ -382,7 +405,7 @@ fn rewrite_thumbnails(streams: &mut [PublicStream]) {
 
 /// Refreshes on the configured interval for as long as this node serves the
 /// page. Stops when the page moves elsewhere.
-pub fn start_streams_refresh(interval: Duration) -> tokio::sync::oneshot::Sender<()> {
+pub(super) fn start_streams_refresh(interval: Duration) -> tokio::sync::oneshot::Sender<()> {
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
@@ -631,6 +654,51 @@ mod tests {
 
         let ids = holodex_channel_ids(&cfg, &kamito());
         assert_eq!(ids, vec!["UCkamito".to_string(), "UCnotinfile".to_string()]);
+    }
+
+    /// Holodex leaves these null, and a card with no image is what the page
+    /// showed before the fallback existed.
+    #[test]
+    fn a_youtube_stream_without_a_thumbnail_falls_back_to_the_video_still() {
+        let mut yt = stream("ランク", None, "UCkamito");
+        yt.thumbnail = None;
+
+        assert_eq!(
+            thumbnail_for(&yt).as_deref(),
+            Some("https://i.ytimg.com/vi/vid1/sddefault.jpg")
+        );
+    }
+
+    #[test]
+    fn a_twitch_placeholder_falls_back_to_the_channel_preview() {
+        let mut placeholder = stream("VALORANT", None, "UCkamito");
+        placeholder.stream_type = "placeholder".to_string();
+        placeholder.link = Some("https://www.twitch.tv/kamito_jp".to_string());
+        placeholder.thumbnail = None;
+
+        assert_eq!(
+            thumbnail_for(&placeholder).as_deref(),
+            Some("https://static-cdn.jtvnw.net/previews-ttv/live_user_kamito_jp-640x360.jpg")
+        );
+    }
+
+    #[test]
+    fn a_thumbnail_holodex_does_supply_is_kept() {
+        let yt = stream("ランク", None, "UCkamito");
+        assert_eq!(
+            thumbnail_for(&yt).as_deref(),
+            Some("https://i.ytimg.com/vi/vid1/maxres.jpg")
+        );
+    }
+
+    #[test]
+    fn an_empty_thumbnail_is_treated_as_missing() {
+        let mut yt = stream("ランク", None, "UCkamito");
+        yt.thumbnail = Some(String::new());
+        assert_eq!(
+            thumbnail_for(&yt).as_deref(),
+            Some("https://i.ytimg.com/vi/vid1/sddefault.jpg")
+        );
     }
 
     #[test]

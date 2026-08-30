@@ -4,6 +4,7 @@
 // command; sending it is the viewer's own action in the live chat, which is
 // where their identity and your moderation already are.
 
+import { createSvgIcon } from '/shared/js/dom.js';
 import { formatScheduledStart } from '/shared/js/format.js';
 
 /// Mirrors the reasons the server sends, so a greyed button can say why.
@@ -53,12 +54,6 @@ export function areaTokens(area) {
   });
 }
 
-/// The formal 分区名称 when it is usable, since that is what a viewer
-/// recognises; otherwise the first alias that can actually resolve.
-export function areaAlias(area) {
-  return areaTokens(area)[0] || null;
-}
-
 function shortestToken(tokens) {
   return tokens.reduce((shortest, token) => (length(token) < length(shortest) ? token : shortest));
 }
@@ -101,11 +96,31 @@ function createThumb(stream) {
   return thumb;
 }
 
+/// Same shape as the dashboard's action icons, so the two pages read alike.
+function createStreamIcon(pathData) {
+  const svg = createSvgIcon('0 0 24 24', pathData);
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  return svg;
+}
+
 function createSwitchButton(stream) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'holodex-stream-btn holodex-stream-btn-switch';
-  button.textContent = '切换';
+
+  const icon = createStreamIcon([
+    { d: 'M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8' },
+    { d: 'm7 17l-4-1l-1 4M17 7l4 1l1-4' },
+  ]);
+  const label = document.createElement('span');
+  label.textContent = '切换';
+  button.append(icon, label);
 
   if (!stream.switchable) {
     button.disabled = true;
@@ -116,6 +131,18 @@ function createSwitchButton(stream) {
 
   button.addEventListener('click', () => startSwitch(stream));
   return button;
+}
+
+function createScheduleDivider() {
+  const divider = document.createElement('div');
+  divider.className = 'holodex-schedule-divider';
+
+  const label = document.createElement('span');
+  label.className = 'holodex-schedule-divider-label';
+  label.textContent = '预告';
+
+  divider.appendChild(label);
+  return divider;
 }
 
 function createStreamCard(stream) {
@@ -186,15 +213,22 @@ export function renderStreams(streams) {
 
   setStatus(status, null);
   const fragment = document.createDocumentFragment();
-  // Live first, upcoming after, which is the order viewers care about.
-  const ordered = [...streams].sort((a, b) => {
-    const liveA = a.status === 'live' ? 0 : 1;
-    const liveB = b.status === 'live' ? 0 : 1;
-    return liveA - liveB;
-  });
-  for (const stream of ordered) {
+
+  // Live first, upcoming after, with a divider between the two groups the way
+  // the dashboard separates them.
+  const live = streams.filter((stream) => stream.status === 'live');
+  const upcoming = streams.filter((stream) => stream.status !== 'live');
+
+  for (const stream of live) {
     fragment.appendChild(createStreamCard(stream));
   }
+  if (upcoming.length && live.length) {
+    fragment.appendChild(createScheduleDivider());
+  }
+  for (const stream of upcoming) {
+    fragment.appendChild(createStreamCard(stream));
+  }
+
   container.replaceChildren(fragment);
 }
 

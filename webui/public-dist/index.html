@@ -64,25 +64,28 @@
   </svg>
 
   <header class="appbar">
-    <div class="appbar__inner">
-      <div class="appbar__brand">
-        <span class="appbar__title">直播状态</span>
-        <span class="app-live-badge" id="app-live-badge">
-          <span class="app-live-dot" aria-hidden="true"></span>
-          <span id="app-live-badge-text">未开播</span>
-        </span>
+    <div class="container appbar__inner">
+      <div class="brand">
+        <span class="brand__name">直播状态</span>
       </div>
+
+      <span class="live-badge" id="app-live-badge" title="Bilibili 直播间状态">
+        <span class="live-badge__dot"></span>
+        <span id="app-live-badge-text">未开播</span>
+      </span>
+
+      <div class="appbar__spacer"></div>
+
       <div class="appbar__actions">
         <span class="public-updated" id="public-updated"></span>
-        <button id="themeToggle" class="btn-ghost icon-btn compact-btn" type="button" title="切换主题"
-          aria-label="切换主题">
-          <svg class="btn-icon" aria-hidden="true"><use href="#i-sun" /></svg>
+        <button id="themeToggle" class="btn-ghost icon-btn" type="button" title="切换主题" aria-label="切换主题">
+          <svg class="btn-icon" aria-hidden="true"><use href="#i-moon" /></svg>
         </button>
       </div>
     </div>
   </header>
 
-  <main class="shell">
+  <main class="container public-shell">
     <div class="public-banner hidden" id="public-sync-banner">正在与直播节点同步，以下信息可能不是最新的。</div>
 
     <div class="dashboard">

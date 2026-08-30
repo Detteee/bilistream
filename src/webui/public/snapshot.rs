@@ -26,33 +26,25 @@ struct Snapshot {
 static SNAPSHOT: RwLock<Option<Snapshot>> = RwLock::new(None);
 static ETAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// The status the page should show, and whether it is a live view.
+/// The status the page should show, or `None` when this node has no usable
+/// view of whoever owns the stream — which is what `in_sync` reports.
 ///
 /// On a standby the streaming node's state arrives through cluster heartbeats,
 /// so the owner's snapshot is the source. A snapshot that has gone stale is
-/// reported as out of sync rather than served as current.
-pub fn public_status_source(cluster: &ClusterStatus) -> (Option<StatusData>, bool) {
+/// withheld rather than served as current.
+fn public_status_source(cluster: &ClusterStatus) -> Option<StatusData> {
     if !cluster.enabled {
         // Single node: it is the one streaming, so its own cache is the truth.
-        return (get_status_cache(), true);
+        return get_status_cache();
     }
 
-    let Some(owner) = cluster.active_owner.as_deref() else {
-        return (None, false);
-    };
-
-    let Some(node) = cluster.nodes.iter().find(|node| node.node_id == owner) else {
-        return (None, false);
-    };
+    let owner = cluster.active_owner.as_deref()?;
+    let node = cluster.nodes.iter().find(|node| node.node_id == owner)?;
 
     if node.is_local {
-        return (get_status_cache(), true);
+        return get_status_cache();
     }
-
-    match node_status_if_fresh(node) {
-        Some(status) => (Some(status), true),
-        None => (None, false),
-    }
+    node_status_if_fresh(node)
 }
 
 fn node_status_if_fresh(node: &ClusterNodeSnapshot) -> Option<StatusData> {
@@ -62,15 +54,12 @@ fn node_status_if_fresh(node: &ClusterNodeSnapshot) -> Option<StatusData> {
     node.status.clone()
 }
 
-pub fn build_public_status(cluster: &ClusterStatus) -> PublicStatus {
-    let (status, in_sync) = public_status_source(cluster);
-    let mut payload = PublicStatus::build(status.as_ref(), cluster);
-    payload.in_sync = in_sync && payload.in_sync;
-    payload
+fn build_public_status(cluster: &ClusterStatus) -> PublicStatus {
+    PublicStatus::build(public_status_source(cluster).as_ref(), cluster)
 }
 
 /// Rebuilds the cached payload unconditionally.
-pub async fn refresh_public_status() {
+async fn refresh_public_status() {
     let Ok(cfg) = crate::config::load_config().await else {
         return;
     };
@@ -88,13 +77,9 @@ fn store_snapshot(payload: PublicStatus) {
     if let Ok(mut guard) = SNAPSHOT.write() {
         // Keep the previous ETag when nothing changed, so a polling client
         // stays on 304s instead of re-downloading identical bytes.
-        if let Some(previous) = guard.as_ref() {
+        if let Some(previous) = guard.as_mut() {
             if previous.body == body {
-                *guard = Some(Snapshot {
-                    body: previous.body.clone(),
-                    etag: previous.etag.clone(),
-                    built_at: Instant::now(),
-                });
+                previous.built_at = Instant::now();
                 return;
             }
         }
@@ -107,7 +92,7 @@ fn store_snapshot(payload: PublicStatus) {
 }
 
 /// The cached body and its ETag, rebuilding first when the cache has expired.
-pub async fn current_public_status() -> Option<(String, String)> {
+pub(super) async fn current_public_status() -> Option<(String, String)> {
     if snapshot_is_fresh() {
         return read_snapshot();
     }
@@ -192,37 +177,31 @@ mod tests {
     #[test]
     fn standby_serves_the_owners_snapshot() {
         let cluster = cluster(Some("jp"), vec![node("jp", false, false, "live in jp")]);
-        let (status, in_sync) = public_status_source(&cluster);
+        let payload = build_public_status(&cluster);
 
-        assert!(in_sync);
-        assert_eq!(status.unwrap().bilibili.title, "live in jp");
+        assert!(payload.in_sync);
+        assert_eq!(payload.bilibili.title, "live in jp");
     }
 
     #[test]
     fn a_stale_owner_is_reported_out_of_sync_not_served_stale() {
         let cluster = cluster(Some("jp"), vec![node("jp", false, true, "hours old")]);
-        let (status, in_sync) = public_status_source(&cluster);
+        let payload = build_public_status(&cluster);
 
-        assert!(!in_sync);
-        assert!(status.is_none());
+        assert!(!payload.in_sync);
+        assert!(payload.bilibili.title.is_empty());
     }
 
     #[test]
     fn no_active_owner_is_out_of_sync() {
         let cluster = cluster(None, vec![node("jp", false, false, "live in jp")]);
-        let (status, in_sync) = public_status_source(&cluster);
-
-        assert!(!in_sync);
-        assert!(status.is_none());
+        assert!(!build_public_status(&cluster).in_sync);
     }
 
     #[test]
     fn an_owner_missing_from_the_node_list_is_out_of_sync() {
         let cluster = cluster(Some("ca"), vec![node("jp", false, false, "live in jp")]);
-        let (status, in_sync) = public_status_source(&cluster);
-
-        assert!(!in_sync);
-        assert!(status.is_none());
+        assert!(!build_public_status(&cluster).in_sync);
     }
 
     #[test]

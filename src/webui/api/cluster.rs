@@ -204,6 +204,71 @@ pub async fn cluster_set_auto_failover(
     }))
 }
 
+/// Registered under the `/api` nest in webui::server, and used to build the
+/// peer url below. Kept as one constant so the two cannot drift: an earlier
+/// hand-written path silently produced a malformed url and the sync never ran.
+pub const APPLY_PUBLIC_STATUS_ROUTE: &str = "/cluster/apply-public-status";
+
+fn apply_public_status_url(api_url: &str) -> String {
+    format!(
+        "{}/api{}",
+        api_url.trim_end_matches('/'),
+        APPLY_PUBLIC_STATUS_ROUTE
+    )
+}
+
+/// Pushes the settings to every peer, reporting how many took them.
+///
+/// Deliberately not post_cluster_control: that one is fire and forget, so a
+/// failed push looked identical to a successful one in the panel, and it
+/// expects a ClusterStatus body this endpoint does not return.
+async fn push_public_status_to_peers(
+    cfg: &Config,
+    public_status: &crate::config::PublicStatusConfig,
+) -> Result<usize, String> {
+    let client = crate::cluster::cluster_http_client();
+    let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
+
+    let tasks = cfg
+        .cluster
+        .peers
+        .iter()
+        .filter(|peer| peer.node_id != cfg.cluster.node_id)
+        .map(|peer| {
+            let client = client.clone();
+            let url = apply_public_status_url(&peer.api_url);
+            async move {
+                let response = client
+                    .post(url)
+                    .json(public_status)
+                    .timeout(timeout)
+                    .send()
+                    .await
+                    .map_err(|e| format!("{}: {}", peer.node_id, e))?;
+
+                if !response.status().is_success() {
+                    return Err(format!("{}: HTTP {}", peer.node_id, response.status()));
+                }
+                Ok(())
+            }
+        });
+
+    let mut synced = 0usize;
+    let mut errors = Vec::new();
+    for result in join_all(tasks).await {
+        match result {
+            Ok(()) => synced += 1,
+            Err(error) => errors.push(error),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(synced)
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 /// Applies the public status page settings pushed by another node.
 pub async fn cluster_apply_public_status(
     Json(payload): Json<crate::config::PublicStatusConfig>,
@@ -253,14 +318,28 @@ pub async fn cluster_set_public_status(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let mut sync_note = String::new();
     if payload.propagate.unwrap_or(true) && cfg.cluster.enabled && !unchanged {
-        post_cluster_control(&cfg, "cluster/apply-public-status", &payload.config, None).await;
+        match push_public_status_to_peers(&cfg, &payload.config).await {
+            Ok(0) => {}
+            Ok(synced) => sync_note = format!("，已同步到 {} 个节点", synced),
+            // Saved locally but the peers disagree now, which the operator
+            // needs to know rather than read a plain success.
+            Err(e) => {
+                let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
+                return Ok(Json(ApiResponse {
+                    success: false,
+                    data: Some(status),
+                    message: Some(format!("本节点已保存，但同步失败: {}", e)),
+                }));
+            }
+        }
     }
 
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
     let message = match cfg.cluster.public_status.node_id.trim() {
-        "" => "已关闭公开状态页".to_string(),
-        node => format!("公开状态页由 {} 提供", node),
+        "" => format!("已关闭公开状态页{}", sync_note),
+        node => format!("公开状态页由 {} 提供{}", node, sync_note),
     };
 
     Ok(Json(ApiResponse {
@@ -989,5 +1068,31 @@ pub(crate) fn cluster_membership_target_request<'a>(
         lease_ttl_secs: request.lease_ttl_secs,
         thresholds: &request.thresholds,
         nodes: &request.nodes,
+    }
+}
+
+#[cfg(test)]
+mod public_status_tests {
+    use super::*;
+
+    /// The url the panel posts to must match the route the peer registers.
+    /// A hand-written path without the /api prefix produced
+    /// "http://ny:3150cluster/apply-public-status", which failed silently and
+    /// left every peer on stale settings.
+    #[test]
+    fn the_peer_url_matches_the_registered_route() {
+        assert_eq!(
+            apply_public_status_url("http://ny.example.com:3150"),
+            format!("http://ny.example.com:3150/api{APPLY_PUBLIC_STATUS_ROUTE}")
+        );
+        assert!(APPLY_PUBLIC_STATUS_ROUTE.starts_with('/'));
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_peer_url_does_not_double_up() {
+        assert_eq!(
+            apply_public_status_url("http://ny.example.com:3150/"),
+            "http://ny.example.com:3150/api/cluster/apply-public-status"
+        );
     }
 }

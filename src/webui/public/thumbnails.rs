@@ -44,7 +44,6 @@ const MISSING_ROUNDS_BEFORE_DELETE: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CacheEntry {
-    url: String,
     content_type: String,
     /// Consecutive good responses that did not mention this url.
     #[serde(default)]
@@ -60,7 +59,7 @@ static INDEX: RwLock<Option<CacheIndex>> = RwLock::new(None);
 
 /// Content-addressed by url, so a changed thumbnail is a new key and the
 /// stored bytes can be served as immutable.
-pub fn thumbnail_key(url: &str) -> String {
+pub(super) fn thumbnail_key(url: &str) -> String {
     let digest = Sha256::digest(url.as_bytes());
     hex_prefix(&digest, 16)
 }
@@ -74,7 +73,7 @@ fn hex_prefix(bytes: &[u8], chars: usize) -> String {
         .collect()
 }
 
-pub fn cache_dir() -> Option<PathBuf> {
+fn cache_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
         .map(|exe| exe.with_file_name("cache").join("thumbnails"))
@@ -89,7 +88,7 @@ fn file_path(dir: &Path, key: &str) -> PathBuf {
 }
 
 /// True when the url is one this node will fetch.
-pub fn host_is_allowed(url: &str) -> bool {
+pub(super) fn host_is_allowed(url: &str) -> bool {
     let Some(host) = host_of(url) else {
         return false;
     };
@@ -113,7 +112,7 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// The path a stream's thumbnail should point at, once cached.
-pub fn public_path(key: &str) -> String {
+pub(super) fn public_path(key: &str) -> String {
     format!("/t/{key}")
 }
 
@@ -140,7 +139,7 @@ fn cached_entry(key: &str) -> Option<CacheEntry> {
 }
 
 /// The stored bytes and content type for a key.
-pub async fn read_thumbnail(key: &str) -> Option<(Vec<u8>, String)> {
+pub(super) async fn read_thumbnail(key: &str) -> Option<(Vec<u8>, String)> {
     // Reject anything that is not a plain hex key before touching the path,
     // so a crafted key cannot escape the cache directory.
     if !key.chars().all(|c| c.is_ascii_hexdigit()) || key.is_empty() {
@@ -160,7 +159,7 @@ pub async fn read_thumbnail(key: &str) -> Option<(Vec<u8>, String)> {
 /// `urls` must come from a *successful* Holodex fetch. An empty list from a
 /// failed poll would delete the whole cache and leave the page on placeholders
 /// until the next success, so callers skip this entirely on failure.
-pub async fn reconcile(urls: &[String]) {
+pub(super) async fn reconcile(urls: &[String]) {
     let Some(dir) = cache_dir() else {
         return;
     };
@@ -302,7 +301,6 @@ async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry>
     tokio::fs::write(file_path(dir, key), &bytes).await.ok()?;
 
     Some(CacheEntry {
-        url: url.to_string(),
         content_type,
         missing_rounds: 0,
     })
@@ -381,18 +379,12 @@ mod tests {
         assert!(read_thumbnail("abc/def").await.is_none());
     }
 
-    #[test]
-    fn public_paths_are_built_from_the_key() {
-        assert_eq!(public_path("deadbeef"), "/t/deadbeef");
-    }
-
     fn index_with(keys: &[&str]) -> CacheIndex {
         let mut index = CacheIndex::default();
         for key in keys {
             index.entries.insert(
                 key.to_string(),
                 CacheEntry {
-                    url: format!("https://i.ytimg.com/{key}.jpg"),
                     content_type: "image/jpeg".to_string(),
                     missing_rounds: 0,
                 },

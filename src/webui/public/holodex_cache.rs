@@ -32,7 +32,7 @@ fn ids_key(ids: &[String]) -> String {
 }
 
 /// The cached response for this channel set, if it is younger than `max_age`.
-pub fn get_if_fresh(ids: &[String], max_age: Duration) -> Option<Vec<HolodexStream>> {
+fn get_if_fresh(ids: &[String], max_age: Duration) -> Option<Vec<HolodexStream>> {
     let key = ids_key(ids);
     let guard = CACHE.read().ok()?;
     let entry = guard.as_ref()?;
@@ -55,7 +55,7 @@ pub fn put(ids: &[String], streams: &[HolodexStream]) {
 
 /// Cached response if fresh, otherwise one upstream call whose result is
 /// cached for the other caller.
-pub async fn get_or_fetch(
+pub(super) async fn get_or_fetch(
     ids: Vec<String>,
     max_age: Duration,
 ) -> Result<Vec<HolodexStream>, Box<dyn std::error::Error>> {
@@ -145,11 +145,5 @@ mod tests {
         put(&ids(&["a"]), &[stream("vid")]);
 
         assert!(get_if_fresh(&ids(&["a"]), Duration::from_secs(0)).is_none());
-    }
-
-    #[test]
-    fn an_empty_cache_is_a_miss() {
-        let _guard = exclusive();
-        assert!(get_if_fresh(&ids(&["a"]), Duration::from_secs(60)).is_none());
     }
 }

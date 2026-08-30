@@ -10,6 +10,15 @@ html.light-theme {
   background: #d8d1c3;
 }
 
+/* The dashboard spaces its blocks through .view.is-active, which this page
+   does not use, so it needs its own vertical rhythm or the stream panel sits
+   flush against the status cards. */
+.public-shell {
+  display: grid;
+  gap: var(--sp-5);
+  padding-block: var(--sp-6) var(--sp-8);
+}
+
 /* Freshness note next to the theme toggle. */
 .public-updated {
   color: var(--text-mute);
