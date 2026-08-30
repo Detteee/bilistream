@@ -166,6 +166,7 @@ pub(crate) fn disabled_cluster_status(cfg: &Config, config_version: String) -> C
         lease_until: None,
         config_version,
         auto_failover: cfg.cluster.auto_failover,
+        public_status: cfg.cluster.public_status.clone(),
         nodes: Vec::new(),
     }
 }
@@ -214,6 +215,7 @@ pub(crate) fn build_status_from_state(
         lease_until,
         config_version,
         auto_failover: cfg.cluster.auto_failover,
+        public_status: cfg.cluster.public_status.clone(),
         nodes,
     }
 }

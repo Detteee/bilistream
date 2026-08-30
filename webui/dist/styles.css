@@ -2299,6 +2299,14 @@ a.cluster-node-name-link {
   color: var(--warn);
 }
 
+/* The public status page is pinned to a node rather than following the active
+   one, so its marker uses its own hue instead of the role colours. */
+.cluster-badge-public-status {
+  border-color: color-mix(in srgb, var(--brand-2) 44%, transparent);
+  background: color-mix(in srgb, var(--brand-2) 14%, transparent);
+  color: var(--brand-2);
+}
+
 .cluster-label-with-icon {
   display: inline-flex;
   align-items: center;
@@ -3550,6 +3558,12 @@ a.cluster-node-name-link {
 
 .settings-help-link {
   color: var(--brand);
+}
+
+/* A hint that has turned into a warning: the value is saved-blocking, so it
+   should not still read as neutral guidance. */
+.settings-field-help.is-invalid {
+  color: var(--danger);
 }
 
 .settings-mono-textarea {

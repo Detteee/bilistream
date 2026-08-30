@@ -116,6 +116,7 @@ pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
             sync_monitored_channels: true,
             auto_failover: true,
             thresholds: ClusterHealthThresholds::default(),
+            public_status: crate::config::PublicStatusConfig::default(),
         },
     }
 }
@@ -646,6 +647,7 @@ fn heartbeat_response_requires_peer_identity_and_snapshot() {
         lease_until: Some(now + 10),
         config_version: String::new(),
         auto_failover: true,
+        public_status: crate::config::PublicStatusConfig::default(),
         nodes: vec![peer],
     };
 
@@ -832,6 +834,7 @@ fn stale_active_snapshot_does_not_overwrite_cached_active_state() {
             lease_until: Some(900),
             config_version: String::new(),
             auto_failover: true,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: vec![stale_owner],
         },
         None,
@@ -958,6 +961,7 @@ fn direct_peer_status_merge_refreshes_peer_liveness() {
         lease_until: Some(now + 10),
         config_version: String::new(),
         auto_failover: true,
+        public_status: crate::config::PublicStatusConfig::default(),
         nodes: vec![peer_snapshot],
     };
 

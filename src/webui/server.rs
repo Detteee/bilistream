@@ -65,6 +65,11 @@ pub async fn start_webui_on_listener(
         )
         .route("/cluster/failover", post(api::cluster_failover))
         .route("/cluster/restart-node", post(api::cluster_restart_node))
+        .route("/cluster/public-status", post(api::cluster_set_public_status))
+        .route(
+            "/cluster/apply-public-status",
+            post(api::cluster_apply_public_status),
+        )
         .route("/cluster/export-config", get(api::cluster_export_config))
         .route(
             "/cluster/apply-node-mode",

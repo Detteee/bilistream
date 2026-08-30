@@ -1,7 +1,7 @@
 // cluster.js — multi-server panel, using the shared authenticated API client.
 
-import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setCheckboxChecked, showNotification, SVG_NS } from './dom.js';
-import { state } from './state.js';
+import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setCheckboxChecked, setButtonLoading, showNotification, SVG_NS } from './dom.js';
+import { createSelectOption, state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { formatBytes, formatFps, formatFrameCount, formatNetworkRate, formatSpeedRatio } from './format.js';
@@ -15,6 +15,9 @@ let clusterRefreshInFlight = false;
 let lastClusterFetchMs = 0;
 
 let lastClusterRenderSignature = null;
+
+// Which node serves the public status page, so the node list can mark it.
+let publicStatusNodeId = '';
 
 let clusterSeenTickerId = null;
 
@@ -200,6 +203,7 @@ function loadClusterSettings(cluster = {}) {
     }))
     : [];
   renderClusterPeerList();
+  loadPublicStatusSettings(cluster);
 }
 
 function renderClusterPeerList() {
@@ -521,6 +525,7 @@ function renderClusterStatus(cluster, errorMessage) {
 
   indicator.className = `status-indicator ${cluster.active_owner ? 'status-live' : 'status-offline'}`;
   updateClusterAutoFailoverToggle(cluster.auto_failover !== false);
+  publicStatusNodeId = (cluster.public_status?.node_id || '').trim();
 
   const nodes = Array.isArray(cluster.nodes) ? cluster.nodes : [];
   if (nodes.length === 0) {
@@ -659,6 +664,10 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   const head = document.createElement('div');
   head.className = 'cluster-node-tile-head';
   head.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
+  const tileChip = createPublicStatusChip(node);
+  if (tileChip) {
+    head.appendChild(tileChip);
+  }
 
   const seen = createClusterSeenValue(node);
   seen.classList.add('cluster-node-tile-seen');
@@ -676,6 +685,10 @@ function createClusterNodeCard(node, clusterConfigVersion) {
   const title = document.createElement('div');
   title.className = 'cluster-node-title';
   title.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
+  const titleChip = createPublicStatusChip(node);
+  if (titleChip) {
+    title.appendChild(titleChip);
+  }
 
   const meta = document.createElement('div');
   meta.className = 'cluster-node-meta';
@@ -698,6 +711,19 @@ function createClusterNodeCard(node, clusterConfigVersion) {
 
   card.append(title, meta, createClusterNodeActions(node));
   return card;
+}
+
+// The page does not follow the active node, so which node serves it is worth
+// showing next to the name rather than leaving it buried in settings.
+function createPublicStatusChip(node) {
+  if (!publicStatusNodeId || (node?.node_id || '').trim() !== publicStatusNodeId) {
+    return null;
+  }
+  const chip = document.createElement('span');
+  chip.className = 'cluster-badge cluster-badge-public-status';
+  chip.textContent = '状态页';
+  chip.title = '此节点提供公开状态页';
+  return chip;
 }
 
 function createClusterNodeName(node) {
@@ -1166,6 +1192,100 @@ async function pushClusterConfig() {
   }
 }
 
+// Public status page --------------------------------------------------------
+// One node serves it, picked for bandwidth rather than for holding the stream,
+// so the choice is cluster-wide config rather than a local flag.
+
+// %查询 answers the page as 「详情：<url>」, and Bilibili caps a live danmaku at
+// 30 characters, so the prefix comes out of the same budget.
+const DANMAKU_ADVERT_PREFIX = '详情：';
+const PUBLIC_URL_MAX_CHARS = 30 - [...DANMAKU_ADVERT_PREFIX].length;
+const PUBLIC_URL_HINT = `收到 %查询 弹幕时播报「${DANMAKU_ADVERT_PREFIX}地址」，留空则不播报。`;
+
+function publicStatusFromForm() {
+  return {
+    node_id: document.getElementById('config-public-status-node')?.value.trim() || '',
+    bind: document.getElementById('config-public-status-bind')?.value.trim() || '127.0.0.1',
+    port: readIntegerInput('config-public-status-port', 23234),
+    holodex_refresh_secs: readIntegerInput('config-public-status-refresh', 30),
+    rate_limit_per_min: readIntegerInput('config-public-status-rate-limit', 60),
+    public_url: document.getElementById('config-public-status-url')?.value.trim() || '',
+  };
+}
+
+function renderPublicStatusNodeOptions(cluster = {}, selected = '') {
+  const select = document.getElementById('config-public-status-node');
+  if (!select) return;
+
+  const nodes = [];
+  const localId = (cluster.node_id || '').trim();
+  if (localId) {
+    nodes.push({ id: localId, name: (cluster.node_name || localId).trim() });
+  }
+  for (const peer of Array.isArray(cluster.peers) ? cluster.peers : []) {
+    const id = (peer.node_id || '').trim();
+    if (id && !nodes.some(node => node.id === id)) {
+      nodes.push({ id, name: (peer.name || id).trim() });
+    }
+  }
+  // Keep a node that is configured but no longer listed, so opening the panel
+  // does not silently reassign the page.
+  if (selected && !nodes.some(node => node.id === selected)) {
+    nodes.push({ id: selected, name: selected, unknown: true });
+  }
+
+  const options = [createSelectOption('', '不启用')];
+  for (const node of nodes) {
+    const label = node.unknown
+      ? `${node.id} (未知节点)`
+      : node.name === node.id ? node.id : `${node.name} (${node.id})`;
+    options.push(createSelectOption(node.id, label));
+  }
+  select.replaceChildren(...options);
+  select.value = selected;
+}
+
+function updatePublicStatusUrlHint() {
+  const input = document.getElementById('config-public-status-url');
+  const hint = document.getElementById('public-status-url-hint');
+  if (!input || !hint) return;
+
+  const length = [...input.value.trim()].length;
+  const tooLong = length > PUBLIC_URL_MAX_CHARS;
+  hint.classList.toggle('is-invalid', tooLong);
+  hint.textContent = tooLong
+    ? `公开地址 ${length} 字，超过 ${PUBLIC_URL_MAX_CHARS} 字，%查询 不会播报；请用更短的域名。`
+    : PUBLIC_URL_HINT;
+}
+
+function loadPublicStatusSettings(cluster = {}) {
+  const publicStatus = cluster.public_status || {};
+  renderPublicStatusNodeOptions(cluster, (publicStatus.node_id || '').trim());
+  setInputValue('config-public-status-bind', publicStatus.bind || '127.0.0.1');
+  setInputValue('config-public-status-port', publicStatus.port || 23234);
+  setInputValue('config-public-status-refresh', publicStatus.holodex_refresh_secs || 30);
+  setInputValue('config-public-status-rate-limit', publicStatus.rate_limit_per_min || 60);
+  setInputValue('config-public-status-url', publicStatus.public_url || '');
+  updatePublicStatusUrlHint();
+}
+
+async function savePublicStatusSettings() {
+  const button = document.getElementById('public-status-save-btn');
+  setButtonLoading(button, null, true);
+  try {
+    const data = await postJsonApi('/api/cluster/public-status', { config: publicStatusFromForm() });
+    showNotification(data.message || (data.success ? '公开状态页配置已保存' : '保存失败'),
+      data.success ? 'success' : 'error');
+    if (data.success && data.data) {
+      renderClusterStatusAndSyncDashboard(data.data, null);
+    }
+  } catch (error) {
+    showNotification('保存失败: ' + error.message, 'error');
+  } finally {
+    setButtonLoading(button, null, false);
+  }
+}
+
 function initClusterControls() {
   document
     .getElementById('clusterAutoFailoverToggle')
@@ -1182,6 +1302,12 @@ function initClusterControls() {
   document
     .getElementById('cluster-peer-add-btn')
     ?.addEventListener('click', addClusterPeer);
+  document
+    .getElementById('public-status-save-btn')
+    ?.addEventListener('click', savePublicStatusSettings);
+  document
+    .getElementById('config-public-status-url')
+    ?.addEventListener('input', updatePublicStatusUrlHint);
   initClusterCardFold();
 }
 
@@ -1204,6 +1330,9 @@ function startClusterRefresh() {
 
 export {
   loadClusterSettings,
+  loadPublicStatusSettings,
+  savePublicStatusSettings,
+  updatePublicStatusUrlHint,
   getClusterConfigFromForm,
   refreshClusterStatus,
   initClusterControls,

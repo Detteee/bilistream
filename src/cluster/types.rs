@@ -17,6 +17,8 @@ pub struct ClusterStatus {
     pub config_version: String,
     #[serde(default = "default_true")]
     pub auto_failover: bool,
+    #[serde(default)]
+    pub public_status: crate::config::PublicStatusConfig,
     pub nodes: Vec<ClusterNodeSnapshot>,
 }
 
@@ -120,6 +122,13 @@ pub struct ClusterFailoverRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterAutoFailoverRequest {
     pub enabled: bool,
+    #[serde(default)]
+    pub propagate: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterPublicStatusRequest {
+    pub config: crate::config::PublicStatusConfig,
     #[serde(default)]
     pub propagate: Option<bool>,
 }

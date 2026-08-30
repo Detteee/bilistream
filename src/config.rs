@@ -204,6 +204,8 @@ pub struct ClusterConfig {
     pub auto_failover: bool,
     #[serde(default)]
     pub thresholds: ClusterHealthThresholds,
+    #[serde(default)]
+    pub public_status: PublicStatusConfig,
 }
 
 impl Default for ClusterConfig {
@@ -221,6 +223,7 @@ impl Default for ClusterConfig {
             sync_monitored_channels: false,
             auto_failover: default_cluster_auto_failover(),
             thresholds: ClusterHealthThresholds::default(),
+            public_status: PublicStatusConfig::default(),
         }
     }
 }
@@ -253,6 +256,127 @@ impl Default for ClusterHealthThresholds {
             external_api_failure_window_secs: default_cluster_external_api_failure_window_secs(),
         }
     }
+}
+
+/// Public read-only status page, served by one node chosen for its bandwidth
+/// rather than by who currently holds the stream. Empty `node_id` disables it
+/// everywhere.
+///
+/// The listener is meant to sit behind a tunnel, so `bind` stays on loopback
+/// unless it is set explicitly.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PublicStatusConfig {
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default = "default_public_status_bind")]
+    pub bind: String,
+    #[serde(default = "default_public_status_port")]
+    pub port: u16,
+    #[serde(default = "default_public_status_holodex_refresh_secs")]
+    pub holodex_refresh_secs: u64,
+    #[serde(default = "default_public_status_rate_limit_per_min")]
+    pub rate_limit_per_min: u32,
+    /// Advertised in reply to the `%查询` danmaku command. Empty means silent.
+    #[serde(default)]
+    pub public_url: String,
+}
+
+impl Default for PublicStatusConfig {
+    fn default() -> Self {
+        Self {
+            node_id: String::new(),
+            bind: default_public_status_bind(),
+            port: default_public_status_port(),
+            holodex_refresh_secs: default_public_status_holodex_refresh_secs(),
+            rate_limit_per_min: default_public_status_rate_limit_per_min(),
+            public_url: String::new(),
+        }
+    }
+}
+
+/// Bilibili drops a live danmaku longer than this, so an advertised URL that
+/// does not fit is never worth sending.
+pub const DANMAKU_MAX_CHARS: usize = 30;
+
+/// `%查询` answers carry the page as `详情：<url>`; the prefix eats into the
+/// same 30-character budget.
+pub const DANMAKU_ADVERT_PREFIX: &str = "详情：";
+
+/// Slower than this and the page shows visibly stale streams; faster and every
+/// node behind the tunnel hammers Holodex for no gain.
+const MIN_PUBLIC_STATUS_REFRESH_SECS: u64 = 10;
+
+impl PublicStatusConfig {
+    /// Whether this node is the one that should serve the page.
+    pub fn runs_on(&self, node_id: &str) -> bool {
+        !self.node_id.trim().is_empty() && self.node_id.trim() == node_id.trim()
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        !self.node_id.trim().is_empty()
+    }
+
+    /// The `详情：<url>` line sent in reply to `%查询`, or `None` when unset or
+    /// too long to survive as a danmaku.
+    pub fn danmaku_advert(&self) -> Option<String> {
+        let url = self.public_url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        let advert = format!("{DANMAKU_ADVERT_PREFIX}{url}");
+        (advert.chars().count() <= DANMAKU_MAX_CHARS).then_some(advert)
+    }
+
+    /// How many characters the URL itself may use once the prefix is counted.
+    pub fn max_public_url_chars() -> usize {
+        DANMAKU_MAX_CHARS - DANMAKU_ADVERT_PREFIX.chars().count()
+    }
+
+    /// Rejects settings that would make the listener unusable or expose more
+    /// than intended. Callers persist only what passes.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.port == 0 {
+            return Err("公开状态页端口不能为 0".to_string());
+        }
+        if self.bind.trim().is_empty() {
+            return Err("公开状态页监听地址不能为空".to_string());
+        }
+        crate::webui::parse_bind(&self.bind)?;
+        if self.holodex_refresh_secs < MIN_PUBLIC_STATUS_REFRESH_SECS {
+            return Err(format!(
+                "Holodex 刷新间隔不能小于 {} 秒",
+                MIN_PUBLIC_STATUS_REFRESH_SECS
+            ));
+        }
+        if self.rate_limit_per_min == 0 {
+            return Err("每分钟请求上限不能为 0".to_string());
+        }
+        let url = self.public_url.trim();
+        if !url.is_empty() && url.chars().count() > Self::max_public_url_chars() {
+            return Err(format!(
+                "公开地址超过 {} 字，加上「{}」会超出弹幕上限；请用更短的域名",
+                Self::max_public_url_chars(),
+                DANMAKU_ADVERT_PREFIX
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_public_status_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_public_status_port() -> u16 {
+    23234
+}
+
+fn default_public_status_holodex_refresh_secs() -> u64 {
+    30
+}
+
+fn default_public_status_rate_limit_per_min() -> u32 {
+    60
 }
 
 fn default_cluster_node_id() -> String {
@@ -1087,6 +1211,116 @@ mod tests {
         .unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "2");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn public_status(node_id: &str) -> PublicStatusConfig {
+        PublicStatusConfig {
+            node_id: node_id.to_string(),
+            ..PublicStatusConfig::default()
+        }
+    }
+
+    #[test]
+    fn public_status_defaults_to_disabled_on_loopback() {
+        let cfg = PublicStatusConfig::default();
+        assert!(!cfg.is_enabled());
+        assert!(!cfg.runs_on("ny"));
+        assert_eq!(cfg.bind, "127.0.0.1");
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn public_status_runs_only_on_the_chosen_node() {
+        let cfg = public_status("ny");
+        assert!(cfg.runs_on("ny"));
+        assert!(!cfg.runs_on("jp"));
+        assert!(!cfg.runs_on(""));
+    }
+
+    #[test]
+    fn public_status_node_id_ignores_surrounding_space() {
+        let cfg = public_status("  ny  ");
+        assert!(cfg.runs_on("ny"));
+        assert!(cfg.is_enabled());
+    }
+
+    #[test]
+    fn blank_node_id_never_runs_anywhere() {
+        let cfg = public_status("   ");
+        assert!(!cfg.is_enabled());
+        assert!(!cfg.runs_on("   "));
+    }
+
+    #[test]
+    fn danmaku_advert_needs_a_url_that_fits() {
+        let mut cfg = public_status("ny");
+        assert_eq!(cfg.danmaku_advert(), None);
+
+        cfg.public_url = "s.example.com".to_string();
+        assert_eq!(cfg.danmaku_advert().as_deref(), Some("详情：s.example.com"));
+
+        // A quick-tunnel hostname is far past what a danmaku carries.
+        cfg.public_url = "https://mango-tree-quiet-fox.trycloudflare.com".to_string();
+        assert_eq!(cfg.danmaku_advert(), None);
+    }
+
+    #[test]
+    fn danmaku_advert_budget_counts_the_prefix() {
+        let mut cfg = public_status("ny");
+        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_chars());
+        let advert = cfg.danmaku_advert().expect("longest fitting url");
+        assert_eq!(advert.chars().count(), DANMAKU_MAX_CHARS);
+        assert!(cfg.validate().is_ok());
+
+        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_chars() + 1);
+        assert_eq!(cfg.danmaku_advert(), None);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn danmaku_advert_counts_characters_not_bytes() {
+        let mut cfg = public_status("ny");
+        cfg.public_url = "转".repeat(PublicStatusConfig::max_public_url_chars());
+        assert!(cfg.danmaku_advert().is_some());
+        cfg.public_url = "转".repeat(PublicStatusConfig::max_public_url_chars() + 1);
+        assert_eq!(cfg.danmaku_advert(), None);
+    }
+
+    #[test]
+    fn validate_rejects_unusable_settings() {
+        let mut cfg = public_status("ny");
+        cfg.port = 0;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = public_status("ny");
+        cfg.bind = "not-an-address".to_string();
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = public_status("ny");
+        cfg.holodex_refresh_secs = 1;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = public_status("ny");
+        cfg.rate_limit_per_min = 0;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = public_status("ny");
+        cfg.public_url = "https://mango-tree-quiet-fox.trycloudflare.com".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_an_explicit_public_bind() {
+        let mut cfg = public_status("ny");
+        cfg.bind = "0.0.0.0".to_string();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn cluster_config_without_public_status_still_loads() {
+        let cluster: ClusterConfig = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert_eq!(cluster.public_status, PublicStatusConfig::default());
+        assert!(!cluster.public_status.is_enabled());
     }
 
     #[test]

@@ -204,8 +204,73 @@ pub async fn cluster_set_auto_failover(
     }))
 }
 
-pub async fn cluster_export_config(
-) -> Result<Json<ApiResponse<ClusterSyncConfigRequest>>, StatusCode> {
+/// Applies the public status page settings pushed by another node.
+pub async fn cluster_apply_public_status(
+    Json(payload): Json<crate::config::PublicStatusConfig>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    if let Err(message) = payload.validate() {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(message),
+        }));
+    }
+
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    cfg.cluster.public_status = payload;
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("公开状态页配置已同步".to_string()),
+    }))
+}
+
+/// Picks which node serves the public status page, and on what port. Every
+/// node keeps the same copy so the panel shows one answer wherever it is open.
+pub async fn cluster_set_public_status(
+    Json(payload): Json<crate::cluster::ClusterPublicStatusRequest>,
+) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
+    if let Err(message) = payload.config.validate() {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(message),
+        }));
+    }
+
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let unchanged = cfg.cluster.public_status == payload.config;
+    cfg.cluster.public_status = payload.config.clone();
+    crate::config::save_config(&cfg)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if payload.propagate.unwrap_or(true) && cfg.cluster.enabled && !unchanged {
+        post_cluster_control(&cfg, "cluster/apply-public-status", &payload.config, None).await;
+    }
+
+    let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
+    let message = match cfg.cluster.public_status.node_id.trim() {
+        "" => "已关闭公开状态页".to_string(),
+        node => format!("公开状态页由 {} 提供", node),
+    };
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(status),
+        message: Some(message),
+    }))
+}
+
+pub async fn cluster_export_config() -> Result<Json<ApiResponse<ClusterSyncConfigRequest>>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

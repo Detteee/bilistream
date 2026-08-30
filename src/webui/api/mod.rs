@@ -717,6 +717,7 @@ mod tests {
             lease_until: Some(30),
             config_version: String::new(),
             auto_failover: true,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: vec![node],
         }
     }
@@ -815,6 +816,7 @@ mod tests {
             lease_until: Some(30),
             config_version: String::new(),
             auto_failover: true,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: Vec::new(),
         };
         let exported = monitored_config_from_config(&status_cache_test_config());
@@ -834,6 +836,7 @@ mod tests {
             lease_until: Some(30),
             config_version: String::new(),
             auto_failover: true,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: Vec::new(),
         };
         let exported = monitored_config_from_config(&status_cache_test_config());
@@ -855,6 +858,7 @@ mod tests {
             lease_until: Some(30),
             config_version: String::new(),
             auto_failover: true,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: Vec::new(),
         };
         let exported = monitored_config_from_config(&status_cache_test_config());
@@ -895,6 +899,7 @@ mod tests {
             lease_until: None,
             config_version: String::new(),
             auto_failover: false,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: Vec::new(),
         };
 
@@ -910,6 +915,7 @@ mod tests {
             lease_until: Some(30),
             config_version: String::new(),
             auto_failover: false,
+            public_status: crate::config::PublicStatusConfig::default(),
             nodes: Vec::new(),
         };
 
