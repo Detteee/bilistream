@@ -1,0 +1,69 @@
+/* public.css — additions for the public status page. The shared look comes
+   from the dashboard's styles.css, served alongside this file, so the two
+   cannot drift apart. Only what the public page adds lives here. */
+
+html {
+  background: #0e0e16;
+}
+
+html.light-theme {
+  background: #d8d1c3;
+}
+
+/* Freshness note next to the theme toggle. */
+.public-updated {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+/* Shown when the serving node cannot see the streaming node, so the cards
+   are not silently presenting stale numbers as current. */
+.public-banner {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--warn) 44%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+
+.public-modal-hint {
+  margin-top: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.public-command-row {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.public-command-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+
+/* The 切换 button is present but inert when a stream cannot be requested, so
+   viewers can see the difference between "not offered" and "not there". */
+.holodex-stream-btn:disabled,
+.holodex-stream-btn[aria-disabled="true"] {
+  filter: grayscale(1);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.holodex-stream-note {
+  margin-top: var(--sp-1);
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+}

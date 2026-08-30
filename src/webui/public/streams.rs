@@ -53,8 +53,12 @@ pub struct PublicStream {
     pub suggested_area_name: Option<String>,
     /// `YT` or `TW`, matching what the danmaku command expects.
     pub command_platform: Option<String>,
-    /// The whitespace-free name or alias to put in the command.
+    /// The formal channel name to put in the command, or the first usable
+    /// alias when the name itself is unusable.
     pub command_channel: Option<String>,
+    /// The shortest usable name or alias, for when the formal command does not
+    /// fit a regular user's danmaku.
+    pub command_channel_short: Option<String>,
     pub switchable: bool,
     pub reason: Option<NotSwitchable>,
 }
@@ -63,16 +67,30 @@ pub struct PublicStream {
 struct CommandTarget {
     platform: &'static str,
     name: Option<String>,
+    short_name: Option<String>,
 }
 
 /// The command parser strips whitespace before matching against channels.json,
 /// so a name containing any is unusable no matter what the viewer types.
-fn command_name(channel: &Channel) -> Option<String> {
+fn usable_names(channel: &Channel) -> Vec<&String> {
     std::iter::once(&channel.name)
         .chain(channel.aliases.iter())
-        .find(|candidate| {
+        .filter(|candidate| {
             !candidate.trim().is_empty() && !candidate.chars().any(char::is_whitespace)
         })
+        .collect()
+}
+
+/// The formal name when it is usable, otherwise the first usable alias.
+fn command_name(channel: &Channel) -> Option<String> {
+    usable_names(channel).first().map(|name| (*name).clone())
+}
+
+/// The shortest usable name or alias, for the short form of the command.
+fn short_command_name(channel: &Channel) -> Option<String> {
+    usable_names(channel)
+        .into_iter()
+        .min_by_key(|name| name.chars().count())
         .cloned()
 }
 
@@ -108,6 +126,7 @@ fn command_target(
         return matched.map(|channel| CommandTarget {
             platform: "TW",
             name: command_name(channel),
+            short_name: short_command_name(channel),
         });
     }
 
@@ -122,6 +141,7 @@ fn command_target(
     Some(CommandTarget {
         platform: "YT",
         name: command_name(matched),
+        short_name: short_command_name(matched),
     })
 }
 
@@ -197,6 +217,7 @@ pub fn build_public_streams(
                 suggested_area_id,
                 suggested_area_name,
                 command_platform: target.as_ref().map(|target| target.platform.to_string()),
+                command_channel_short: target.as_ref().and_then(|target| target.short_name.clone()),
                 command_channel: target.and_then(|target| target.name),
                 switchable: reason.is_none(),
                 reason,
@@ -640,6 +661,7 @@ mod tests {
             "suggested_area_name",
             "command_platform",
             "command_channel",
+            "command_channel_short",
             "switchable",
             "reason",
         ];

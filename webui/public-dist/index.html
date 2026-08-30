@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>直播状态</title>
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z' fill='%2355ACEE'/></svg>">
+  <!-- External, not inline: the public listener sends a CSP with
+       script-src 'self', so an inline bootstrap would be blocked. -->
+  <script src="js/theme.js"></script>
+  <link rel="stylesheet" href="/shared/styles.css">
+  <link rel="stylesheet" href="public.css">
+</head>
+
+<body>
+  <svg class="sr-only" aria-hidden="true" focusable="false">
+    <defs>
+    <symbol id="i-servers" viewBox="0 0 24 24">
+      <path
+        d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-5 7h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" />
+    </symbol>
+    <symbol id="i-bilibili" viewBox="0 0 24 24">
+      <path
+        d="M18.223 3.086a1.25 1.25 0 0 1 0 1.768L17.08 5.996h1.17A3.75 3.75 0 0 1 22 9.747v7.5A3.75 3.75 0 0 1 18.25 21H5.75A3.75 3.75 0 0 1 2 17.247v-7.5a3.75 3.75 0 0 1 3.75-3.751h1.166L5.775 4.855a1.25 1.25 0 1 1 1.767-1.768l2.652 2.652c.079.079.144.166.196.257h3.222c.052-.09.117-.178.196-.257l2.651-2.652a1.25 1.25 0 0 1 1.768 0Zm.027 5.42H5.75a1.25 1.25 0 0 0-1.247 1.184l-.003.066v7.5c0 .659.51 1.199 1.157 1.246l.093.004h12.5a1.25 1.25 0 0 0 1.247-1.157l.003-.093v-7.5c0-.69-.56-1.25-1.25-1.25Zm-10 2.5c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Zm7.5 0c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Z" />
+    </symbol>
+    <symbol id="i-youtube" viewBox="0 0 24 24">
+      <path
+        d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814ZM9.545 15.568V8.432L15.818 12l-6.273 3.568Z" />
+    </symbol>
+    <symbol id="i-twitch" viewBox="0 0 24 24">
+      <path
+        d="M11.571 4.714h1.715v5.143H11.57Zm4.715 0H18v5.143h-1.714ZM6 0 1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0Zm14.571 11.143-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" />
+    </symbol>
+    <symbol id="i-niconico" viewBox="0 0 24 24">
+      <path
+        d="M.4787 7.534v12.1279A2.0213 2.0213 0 0 0 2.5 21.6832h2.3888l1.323 2.0948a.4778.4778 0 0 0 .4043.2205.4778.4778 0 0 0 .441-.2205l1.323-2.0948h6.9828l1.323 2.0948a.4778.4778 0 0 0 .441.2205c.1838 0 .3308-.0735.4043-.2205l1.323-2.0948h2.6462a2.0213 2.0213 0 0 0 2.0213-2.0213V7.5339a2.0213 2.0213 0 0 0-2.0213-1.9845h-7.681l4.4468-4.4469L17.1637 0l-5.1452 5.1452L6.8 0 5.6973 1.1025l4.4102 4.4102H2.5367a2.0213 2.0213 0 0 0-2.058 2.058z" />
+    </symbol>
+    <symbol id="i-holodex" viewBox="0 0 24 24">
+      <path d="M4.5 2a2 2 0 0 1 3-1.7L23 9.6a2 2 0 0 1 0 3.5L7.6 22.4a2 2 0 0 1-3-1.7V2Z" fill="url(#g-holo-a)" />
+      <path d="M0 2A2 2 0 0 1 3 .3l15.5 9.3a2 2 0 0 1 0 3.5L3.1 22.4A2 2 0 0 1 0 20.7V2Z" fill="url(#g-holo-b)" />
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M7 4.5a1 1 0 0 1 1.53-.85l11 7.5a1 1 0 0 1 0 1.7l-11 7.5A1 1 0 0 1 7 19.5v-15Z" />
+    </symbol>
+    </defs>
+  </svg>
+
+  <header class="appbar">
+    <div class="appbar__inner">
+      <div class="appbar__brand">
+        <span class="appbar__title">直播状态</span>
+        <span class="app-live-badge" id="app-live-badge">
+          <span class="app-live-dot" aria-hidden="true"></span>
+          <span id="app-live-badge-text">未开播</span>
+        </span>
+      </div>
+      <div class="appbar__actions">
+        <span class="public-updated" id="public-updated"></span>
+        <button id="themeToggle" class="btn-ghost icon-btn compact-btn" type="button" title="切换主题"
+          aria-label="切换主题">
+          <svg class="btn-icon" aria-hidden="true"><use href="#i-sun" /></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <div class="public-banner hidden" id="public-sync-banner">正在与直播节点同步，以下信息可能不是最新的。</div>
+
+    <div class="dashboard">
+      <article class="card cluster-card" data-platform="cluster">
+        <div class="dashboard-card-header cluster-header">
+          <h2 class="dashboard-card-title">
+            <svg aria-hidden="true"><use href="#i-servers" /></svg>
+            服务器
+            <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
+          </h2>
+        </div>
+        <div id="cluster-node-list" class="cluster-node-list">
+          <div class="cluster-empty">正在读取节点状态...</div>
+        </div>
+      </article>
+
+      <article class="card" data-platform="bilibili">
+        <div class="dashboard-card-header">
+          <h2 class="dashboard-card-title">
+            <svg aria-hidden="true"><use href="#i-bilibili" /></svg>
+            Bilibili
+            <span class="status-indicator" id="bili-status"></span>
+          </h2>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="info-label">标题</span>
+            <span class="info-value info-value-right" id="bili-title">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">分区</span>
+            <span class="info-value info-value-right" id="bili-area">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">弹幕点播</span>
+            <div class="info-row-view info-row-view-end">
+              <label class="toggle-label info-row-toggle-label">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="bili-danmaku-command-toggle" aria-label="弹幕点播" disabled>
+                  <span class="toggle-slider"></span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" data-platform="youtube">
+        <div class="dashboard-card-header">
+          <h2 class="dashboard-card-title">
+            <svg aria-hidden="true"><use href="#i-youtube" /></svg>
+            YouTube
+            <span class="status-indicator" id="yt-status"></span>
+          </h2>
+          <div class="card-header-actions">
+            <label class="toggle-label" title="YouTube 监控">
+              <span class="toggle-switch">
+                <input type="checkbox" id="youtube-monitor-toggle" aria-label="YouTube 监控" disabled>
+                <span class="toggle-slider"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="info-label">频道</span>
+            <span class="info-value info-value-right" id="yt-channel-name">-</span>
+          </div>
+          <div class="info-row" id="yt-title-row">
+            <span class="info-label">标题</span>
+            <span class="info-value info-value-right" id="yt-title">-</span>
+          </div>
+          <div class="info-row" id="yt-topic-row">
+            <span class="info-label">分区</span>
+            <span class="info-value info-value-right" id="yt-topic">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">配置分区</span>
+            <span class="info-value info-value-right" id="yt-area">-</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" data-platform="twitch">
+        <div class="dashboard-card-header">
+          <h2 class="dashboard-card-title">
+            <svg aria-hidden="true"><use href="#i-twitch" /></svg>
+            Twitch
+            <span class="status-indicator" id="tw-status"></span>
+          </h2>
+          <div class="card-header-actions">
+            <label class="toggle-label" title="Twitch 监控">
+              <span class="toggle-switch">
+                <input type="checkbox" id="twitch-monitor-toggle" aria-label="Twitch 监控" disabled>
+                <span class="toggle-slider"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="info-label">频道</span>
+            <span class="info-value info-value-right" id="tw-channel-name">-</span>
+          </div>
+          <div class="info-row" id="tw-title-row">
+            <span class="info-label">标题</span>
+            <span class="info-value info-value-right" id="tw-title">-</span>
+          </div>
+          <div class="info-row" id="tw-game-row">
+            <span class="info-label">分类</span>
+            <span class="info-value info-value-right" id="tw-game">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">配置分区</span>
+            <span class="info-value info-value-right" id="tw-area">-</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" data-platform="niconico">
+        <div class="dashboard-card-header">
+          <h2 class="dashboard-card-title">
+            <svg aria-hidden="true"><use href="#i-niconico" /></svg>
+            Niconico
+            <span class="status-indicator" id="nc-status"></span>
+          </h2>
+          <div class="card-header-actions">
+            <label class="toggle-label" title="Niconico 监控">
+              <span class="toggle-switch">
+                <input type="checkbox" id="niconico-monitor-toggle" aria-label="Niconico 监控" disabled>
+                <span class="toggle-slider"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="info-label">频道</span>
+            <span class="info-value info-value-right" id="nc-channel-name">-</span>
+          </div>
+          <div class="info-row" id="nc-title-row">
+            <span class="info-label">标题</span>
+            <span class="info-value info-value-right" id="nc-title">-</span>
+          </div>
+          <div class="info-row" id="nc-live-id-row">
+            <span class="info-label">直播 ID</span>
+            <span class="info-value info-value-right" id="nc-live-id">-</span>
+          </div>
+          <div class="info-row" id="nc-scheduled-row">
+            <span class="info-label">放送予定</span>
+            <span class="info-value info-value-right" id="nc-scheduled">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">配置分区</span>
+            <span class="info-value info-value-right" id="nc-area">-</span>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <section class="panel">
+      <div class="panel__head">
+        <h2 class="panel__title">
+          <svg aria-hidden="true"><use href="#i-holodex" /></svg>
+          直播监控
+        </h2>
+      </div>
+      <div class="panel__body">
+        <div id="holodex-status" class="empty-state">正在读取直播列表...</div>
+        <div id="holodex-streams" class="holodex-streams-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="area-modal hidden" id="area-modal" role="dialog" aria-modal="true" aria-labelledby="area-modal-title">
+    <div class="area-modal-content">
+      <h3 class="area-modal-title" id="area-modal-title">选择分区</h3>
+      <p class="public-modal-hint" id="area-modal-stream"></p>
+      <select id="area-modal-select" aria-label="分区">
+        <option value="">选择分区...</option>
+      </select>
+      <div class="area-modal-actions">
+        <button id="area-modal-cancel" class="btn-secondary" type="button">取消</button>
+        <button id="area-modal-confirm" class="btn-primary" type="button">生成指令</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="area-modal hidden" id="command-modal" role="dialog" aria-modal="true"
+    aria-labelledby="command-modal-title">
+    <div class="area-modal-content">
+      <h3 class="area-modal-title" id="command-modal-title">复制点播指令</h3>
+      <p class="public-modal-hint">在直播间发送这条弹幕即可点播。</p>
+      <div class="public-command-row">
+        <input type="text" id="command-text" class="public-command-input" readonly aria-label="弹幕点播指令">
+        <button id="command-copy" class="btn-primary" type="button">复制</button>
+      </div>
+      <p class="public-modal-hint hidden" id="command-alternatives"></p>
+      <div class="hidden" id="command-short-row">
+        <p class="public-modal-hint">上面这条超过 20 字，普通用户发不出去，可以改用短指令：</p>
+        <div class="public-command-row">
+          <input type="text" id="command-short-text" class="public-command-input" readonly
+            aria-label="短版弹幕点播指令">
+          <button id="command-short-copy" class="btn-secondary" type="button">复制</button>
+        </div>
+      </div>
+      <p class="public-modal-hint" id="command-feedback"></p>
+      <div class="area-modal-actions">
+        <button id="command-close" class="btn-secondary" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

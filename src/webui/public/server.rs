@@ -17,6 +17,7 @@ use serde::Serialize;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
@@ -191,6 +192,20 @@ fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
         .unwrap_or_default()
 }
 
+/// Assets shared with the dashboard, mounted file by file rather than as a
+/// directory: the public port must not be able to serve the dashboard's own
+/// markup or its admin-only modules.
+fn shared_assets() -> Router {
+    Router::new()
+        .route_service("/styles.css", ServeFile::new("webui/dist/styles.css"))
+        .route_service("/js/dom.js", ServeFile::new("webui/dist/js/dom.js"))
+        .route_service("/js/format.js", ServeFile::new("webui/dist/js/format.js"))
+        .route_service(
+            "/js/status-cards.js",
+            ServeFile::new("webui/dist/js/status-cards.js"),
+        )
+}
+
 pub fn public_router() -> Router {
     let api = Router::new()
         .route("/status", get(public_status))
@@ -214,10 +229,17 @@ pub fn public_router() -> Router {
             ),
         ));
 
+    // No not_found_service: the page is a single document with no client-side
+    // routing, and falling back to it would answer an admin path with 200
+    // instead of the 404 that says the route does not exist here.
+    let page = ServeDir::new("webui/public-dist");
+
     Router::new()
         .route("/health", get(health))
         .route("/t/{key}", get(public_thumbnail))
         .nest("/api/public", api)
+        .nest("/shared", shared_assets())
+        .fallback_service(page)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
         .layer(security_headers)
@@ -454,7 +476,14 @@ mod tests {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
-        for key in ["deadbeef", "..", "%2e%2e%2fetc%2fpasswd"] {
+        // "..", unencoded, is normalized away by the client before it is
+        // sent, so it would test nothing here; the encoded form does reach us.
+        for key in [
+            "deadbeef",
+            "zzzz",
+            "%2e%2e%2fetc%2fpasswd",
+            "..%2f..%2fconfig.json",
+        ] {
             let response = client
                 .get(format!("http://{addr}/t/{key}"))
                 .send()
@@ -466,6 +495,63 @@ mod tests {
                 "/t/{key} should not resolve"
             );
         }
+
+        let _ = stop.send(());
+    }
+
+    /// Shared assets are mounted one by one, so the dashboard's own markup and
+    /// its admin-only modules must not be reachable through /shared.
+    #[tokio::test]
+    async fn the_public_port_serves_only_the_named_shared_assets() {
+        let (addr, stop) = serve_for_test().await;
+        let client = reqwest::Client::new();
+
+        for path in ["/shared/styles.css", "/shared/js/status-cards.js"] {
+            let response = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK, "{path} missing");
+        }
+
+        for path in [
+            "/shared/index.html",
+            "/shared/js/overview.js",
+            "/shared/js/cluster.js",
+            "/shared/js/settings.js",
+            "/shared/js/api.js",
+            "/js/overview.js",
+        ] {
+            let response = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::NOT_FOUND,
+                "{path} should not be served publicly"
+            );
+        }
+
+        let _ = stop.send(());
+    }
+
+    #[tokio::test]
+    async fn the_page_itself_is_served() {
+        let (addr, stop) = serve_for_test().await;
+
+        let response = reqwest::get(format!("http://{addr}/")).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body = response.text().await.unwrap();
+
+        assert!(body.contains("id=\"holodex-streams\""));
+        assert!(body.contains("id=\"cluster-node-list\""));
+        // No dashboard chrome: no tab bar and no editing controls.
+        assert!(!body.contains("data-view=\"settings\""));
+        assert!(!body.contains("id=\"tab-logs\""));
+        assert!(!body.contains("crop"));
 
         let _ = stop.send(());
     }
