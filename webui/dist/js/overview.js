@@ -7,6 +7,19 @@ import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
 import { toggleDanmakuCommand } from './settings.js';
 import { openCropConfig, clearCropConfig, loadCapturedCropFrame } from './crop.js';
+import {
+  formatHlsCacheStatus,
+  formatScheduledStart as formatHolodexScheduledStart,
+  getQualityDisplayText,
+} from './format.js';
+import {
+  getBiliNetworkQuality,
+  isBiliNetworkLive,
+  renderBiliNetworkPanel,
+  renderStatusCards,
+  setPlatformLiveInfoVisibility,
+  setStatusCardsMessage,
+} from './status-cards.js';
 
 let statusRefreshInterval = 60000; // Default 60 seconds
 const networkRefreshInterval = 1000;
@@ -15,9 +28,6 @@ let networkRefreshIntervalId = null;
 let statusRefreshInFlight = false;
 let statusRefreshQueued = false;
 let networkRefreshInFlight = false;
-let lastBiliNetworkLive = false;
-let lastBiliNetworkQuality = null;
-const biliNetworkHistoryLimit = 60;
 let faceAuthUrl = null;
 let holodexCurrentSource = 'channels';
 let holodexStreamsRequested = false;
@@ -578,37 +588,6 @@ function escapeHolodexHtml(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-function formatHolodexScheduledStart(startScheduled) {
-  const start = new Date(startScheduled);
-  if (Number.isNaN(start.getTime())) {
-    return '预告';
-  }
-
-  const now = Date.now();
-  const diffMs = start.getTime() - now;
-  const clock = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-
-  if (diffMs <= 0) {
-    return `即将开播 (${clock})`;
-  }
-
-  const diffMinutes = diffMs / (1000 * 60);
-  if (diffMinutes < 60) {
-    const minutes = Math.max(1, Math.ceil(diffMinutes));
-    return `将在 ${minutes} 分钟内开播 (${clock})`;
-  }
-
-  const diffHours = diffMs / (1000 * 60 * 60);
-  if (diffHours < 24) {
-    const hours = Math.ceil(diffHours);
-    return `将在 ${hours} 小时内开播 (${clock})`;
-  }
-
-  const y = start.getFullYear();
-  const m = start.getMonth() + 1;
-  const d = start.getDate();
-  return `将在 ${y}/${m}/${d}开播 (${clock})`;
 }
 function formatHolodexDuration(ms) {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -1398,9 +1377,6 @@ async function saveHolodexApiKey() {
     console.error('Save API key error:', error);
   }
 }
-function formatHlsCacheStatus(enabled, latencySecs) {
-  return enabled ? `${latencySecs || 8}秒` : '关闭';
-}
 function setHlsCacheLatencyInputState(platform, enabled) {
   const latencyGroup = document.getElementById(`${platform}-hls-cache-latency-group`);
   const latencyInput = document.getElementById(`${platform}-hls-cache-latency`);
@@ -1765,184 +1741,13 @@ function syncPlatformTitleRowCenters() {
 }
 // Mirrors the Bilibili room state into the top bar so the current state
 // is readable from every view.
-function updateAppLiveBadge(isLive) {
-  const badge = document.getElementById('app-live-badge');
-  const text = document.getElementById('app-live-badge-text');
-  if (!badge) return;
-
-  badge.classList.toggle('is-live', !!isLive);
-  if (text) {
-    text.textContent = isLive ? '直播中' : '未开播';
-  }
-}
-function setPlatformLiveInfoVisibility(platform, isLive) {
-  const rowIds = platform === 'youtube'
-    ? ['yt-title-row', 'yt-topic-row']
-    : platform === 'twitch'
-      ? ['tw-title-row', 'tw-game-row']
-        : [];
-  for (const id of rowIds) {
-    const row = document.getElementById(id);
-    if (row) {
-      row.style.display = isLive ? '' : 'none';
-    }
-  }
-}
 function schedulePlatformTitleRowCenters() {
   requestAnimationFrame(() => {
     requestAnimationFrame(syncPlatformTitleRowCenters);
   });
 }
-function asBitrateHistory(values) {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-  return values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
-}
-function sliceNetworkHistory(series, width) {
-  const start = Math.max(0, series.length - width);
-  return series.slice(start);
-}
-function formatNetworkRate(kbps) {
-  if (!Number.isFinite(kbps) || kbps <= 0) {
-    return '-';
-  }
-  if (kbps >= 1000) {
-    return `${(kbps / 1000).toFixed(2)} Mb/s`;
-  }
-  return `${Math.round(kbps)} Kb/s`;
-}
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return '-';
-  }
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return unit === 0 ? `${bytes} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
-}
-function formatSpeedRatio(value) {
-  return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
-}
-function formatFps(value) {
-  if (!Number.isFinite(value) || value < 0) {
-    return '-';
-  }
-  return value >= 100 ? `${Math.round(value)}` : value.toFixed(1);
-}
-function formatFrameCount(value) {
-  return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : '-';
-}
-function createBiliNetworkBar(type, heightPercent) {
-  const bar = document.createElement('span');
-  bar.className = `bili-network-bar ${type} active`;
-  bar.style.height = `${heightPercent}%`;
-  return bar;
-}
-function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
-  const graph = document.getElementById('bili-network-graph');
-  if (!graph) {
-    return;
-  }
-
-  // Cache on: mirrored halves. Cache off: full-height single-sided push bars.
-  graph.classList.toggle('single-sided', !showCache);
-
-  const activeSeries = showCache
-    ? cacheHistory.concat(pushHistory)
-    : pushHistory;
-  const maxRate = Math.max(1, ...activeSeries);
-  const scale = document.getElementById('bili-network-scale');
-  if (scale) {
-    scale.textContent = `Scale ${formatNetworkRate(maxRate)}`;
-  }
-  const graphWidth = window.matchMedia('(max-width: 520px)').matches ? 32 : biliNetworkHistoryLimit;
-  const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
-  const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
-  const heightScale = showCache ? 50 : 100;
-  const fragment = document.createDocumentFragment();
-
-  for (let i = 0; i < graphWidth; i += 1) {
-    const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
-    const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
-    const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * heightScale)) : 0;
-    const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * heightScale));
-
-    const column = document.createElement('span');
-    column.className = 'bili-network-column';
-    if (showCache) {
-      column.appendChild(createBiliNetworkBar('cache', cacheHeight));
-    }
-    column.appendChild(createBiliNetworkBar('push', pushHeight));
-    fragment.appendChild(column);
-  }
-
-  graph.replaceChildren(fragment);
-}
-function applyBiliStreamQualityColor(element, quality) {
-  element.classList.toggle('bili-network-quality-smooth', quality === '流畅');
-  element.classList.toggle('bili-network-quality-unstable', quality === '波动');
-  element.classList.toggle('bili-network-quality-stalled', quality === '卡顿');
-}
-function updateBiliNetworkPanel(bili) {
-  const panel = document.getElementById('bili-network-panel');
-  if (!panel) {
-    return;
-  }
-
-  lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
-  lastBiliNetworkQuality = bili.stream_quality || lastBiliNetworkQuality;
-  const hasPush = Number.isFinite(bili.stream_bitrate_kbps)
-    || Number.isFinite(bili.stream_speed)
-    || Number.isFinite(bili.stream_fps)
-    || Number.isFinite(bili.stream_frame);
-  const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
-  if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
-    panel.classList.add('hidden');
-    return;
-  }
-
-  panel.classList.remove('hidden');
-  const pushHistory = asBitrateHistory(bili.stream_bitrate_history);
-  const cacheHistory = hasCache ? asBitrateHistory(bili.stream_cache_bitrate_history) : [];
-
-  const quality = document.getElementById('bili-network-quality');
-  quality.textContent = lastBiliNetworkQuality || 'Live';
-  applyBiliStreamQualityColor(quality, lastBiliNetworkQuality);
-
-  updateBiliNetworkMeter('push', {
-    bitrateKbps: bili.stream_bitrate_kbps,
-    speed: bili.stream_speed,
-    totalBytes: bili.stream_total_bytes
-  });
-  const pushFrame = document.getElementById('bili-network-push-frame');
-  if (pushFrame) {
-    pushFrame.textContent = `FPS ${formatFps(bili.stream_fps)} / Frame ${formatFrameCount(bili.stream_frame)}`;
-  }
-
-  const cacheMeter = document.getElementById('bili-network-cache-meter');
-  setElementDisplay(cacheMeter, hasCache, '');
-  if (hasCache) {
-    updateBiliNetworkMeter('cache', {
-      bitrateKbps: bili.stream_cache_bitrate_kbps,
-      speed: bili.stream_cache_speed,
-      totalBytes: bili.stream_cache_total_bytes
-    });
-  }
-
-  renderBiliNetworkGraph(hasCache, pushHistory, cacheHistory);
-}
-function updateBiliNetworkMeter(kind, metrics) {
-  setElementText(`bili-network-${kind}-rate`, formatNetworkRate(metrics.bitrateKbps));
-  setElementText(`bili-network-${kind}-speed-ratio`, formatSpeedRatio(metrics.speed));
-  setElementText(`bili-network-${kind}-total`, `Total ${formatBytes(metrics.totalBytes)}`);
-}
 async function refreshNetworkStatus() {
-  if (networkRefreshInFlight || !lastBiliNetworkLive) {
+  if (networkRefreshInFlight || !isBiliNetworkLive()) {
     return;
   }
 
@@ -1950,10 +1755,10 @@ async function refreshNetworkStatus() {
   try {
     const result = await getJson('/api/network-status');
     if (result.success && result.data) {
-      updateBiliNetworkPanel({
+      renderBiliNetworkPanel({
         ...result.data,
-        is_live: lastBiliNetworkLive,
-        stream_quality: lastBiliNetworkQuality,
+        is_live: isBiliNetworkLive(),
+        stream_quality: getBiliNetworkQuality(),
       });
     }
   } catch (error) {
@@ -1981,83 +1786,11 @@ async function refreshStatus() {
     }
 
     if (data.success && data.data) {
-      // Update Bilibili status
-      const bili = data.data.bilibili;
-      document.getElementById('bili-status').className =
-        `status-indicator ${bili.is_live ? 'status-live' : 'status-offline'}`;
-      updateAppLiveBadge(bili.is_live);
-      document.getElementById('bili-title').textContent = bili.title || '-';
-      document.getElementById('bili-area').textContent =
-        bili.area_name ? `${bili.area_name} (${bili.area_id})` : (bili.area_id || '-');
-
-      updateBiliNetworkPanel(bili);
-
-      updateDanmakuCommandToggle(bili.enable_danmaku_command);
-
-      // Update YouTube status
-      if (data.data.youtube) {
-        const yt = data.data.youtube;
-        document.getElementById('yt-status').className =
-          `status-indicator ${yt.is_live ? 'status-live' : 'status-offline'}`;
-        setPlatformLiveInfoVisibility('youtube', yt.is_live);
-        document.getElementById('yt-channel-name').textContent = yt.channel_name || '-';
-        document.getElementById('yt-title').textContent = yt.title || '-';
-        document.getElementById('yt-topic').textContent = yt.topic || '-';
-        document.getElementById('yt-area').textContent =
-          yt.area_name ? `${yt.area_name} (${yt.area_id})` : (yt.area_id || '-');
-        document.getElementById('yt-quality').textContent = yt.quality ? getQualityDisplayText(yt.quality, 'youtube') : '-';
-        // Update crop status
-        document.getElementById('yt-crop-status').textContent = yt.crop_enabled ? '开启' : '关闭';
-        document.getElementById('yt-hls-cache-status').textContent =
-          formatHlsCacheStatus(yt.ffmpeg_cache_enabled, yt.ffmpeg_cache_latency_secs);
-      } else {
-        document.getElementById('yt-status').className = 'status-indicator status-offline';
-        setPlatformLiveInfoVisibility('youtube', false);
-        document.getElementById('yt-channel-name').textContent = '-';
-        document.getElementById('yt-title').textContent = '-';
-        document.getElementById('yt-topic').textContent = '-';
-        document.getElementById('yt-area').textContent = '-';
-        document.getElementById('yt-quality').textContent = '-';
-        document.getElementById('yt-crop-status').textContent = '关闭';
-        document.getElementById('yt-hls-cache-status').textContent = '关闭';
-      }
-
-      // Update Twitch status
-      if (data.data.twitch) {
-        const tw = data.data.twitch;
-        document.getElementById('tw-status').className =
-          `status-indicator ${tw.is_live ? 'status-live' : 'status-offline'}`;
-        setPlatformLiveInfoVisibility('twitch', tw.is_live);
-        document.getElementById('tw-channel-name').textContent = tw.channel_name || '-';
-        document.getElementById('tw-title').textContent = tw.title || '-';
-        document.getElementById('tw-game').textContent = tw.game || '-';
-        document.getElementById('tw-area').textContent =
-          tw.area_name ? `${tw.area_name} (${tw.area_id})` : (tw.area_id || '-');
-        document.getElementById('tw-quality').textContent = tw.quality ? getQualityDisplayText(tw.quality, 'twitch') : '-';
-        // Update crop status
-        document.getElementById('tw-crop-status').textContent = tw.crop_enabled ? '开启' : '关闭';
-        document.getElementById('tw-hls-cache-status').textContent =
-          formatHlsCacheStatus(tw.ffmpeg_cache_enabled, tw.ffmpeg_cache_latency_secs);
-      } else {
-        document.getElementById('tw-status').className = 'status-indicator status-offline';
-        setPlatformLiveInfoVisibility('twitch', false);
-        document.getElementById('tw-channel-name').textContent = '-';
-        document.getElementById('tw-title').textContent = '-';
-        document.getElementById('tw-game').textContent = '-';
-        document.getElementById('tw-area').textContent = '-';
-        document.getElementById('tw-quality').textContent = '-';
-        document.getElementById('tw-crop-status').textContent = '关闭';
-        document.getElementById('tw-hls-cache-status').textContent = '关闭';
-      }
-
-      // Update Priority Channel status
+      renderStatusCards(data.data);
     } else {
       console.error('Invalid API response:', data);
       showNotification('获取状态失败：响应格式错误', 'error');
-      // Show error state
-      document.getElementById('bili-title').textContent = '数据错误';
-      document.getElementById('yt-channel-name').textContent = '数据错误';
-      document.getElementById('tw-channel-name').textContent = '数据错误';
+      setStatusCardsMessage('数据错误');
     }
   } catch (error) {
     console.error('Failed to refresh status:', error);
@@ -2081,9 +1814,7 @@ async function refreshStatus() {
     showNotification(errorMsg, 'error');
 
     // Show connection error state
-    document.getElementById('bili-title').textContent = '配置错误';
-    document.getElementById('yt-channel-name').textContent = '配置错误';
-    document.getElementById('tw-channel-name').textContent = '配置错误';
+    setStatusCardsMessage('配置错误');
   } finally {
     statusRefreshInFlight = false;
     schedulePlatformTitleRowCenters();
@@ -2758,28 +2489,6 @@ function updateChannelInfo() {
   }
 }
 // Quality mapping functions for display vs technical values
-function getQualityDisplayText(technicalValue, platform = 'youtube') {
-  const qualityMappings = {
-    youtube: {
-      'best': '最佳质量',
-      'best[height<=1080]': '超清 (1080p)',
-      'best[height<=720]': '高清 (720p)',
-      'best[height<=480]': '标清 (480p)',
-      'best[height<=360]': '流畅 (360p)',
-      'worst': '最低质量'
-    },
-    twitch: {
-      'best': '原画质量',
-      'high': '高质量 (720p)',
-      'medium': '中等质量 (540p)',
-      'low': '低质量 (360p)',
-      'audio_only': '仅音频',
-      'worst': '最低质量'
-    }
-  };
-
-  return qualityMappings[platform][technicalValue] || technicalValue;
-}
 function getTechnicalQualityValue(displayText, platform = 'youtube') {
   const reverseMappings = {
     youtube: {
@@ -3049,7 +2758,6 @@ export {
   createHolodexPlaceholderDurationOverlay,
   createHolodexDurationOverlay,
   escapeHolodexHtml,
-  formatHolodexScheduledStart,
   formatHolodexDuration,
   getHolodexStreamStartMs,
   stopHolodexDurationTicker,
@@ -3093,7 +2801,6 @@ export {
   saveHolodexJwt,
   logoutHolodexJwt,
   saveHolodexApiKey,
-  formatHlsCacheStatus,
   setHlsCacheLatencyInputState,
   hlsCacheDom,
   setHlsCacheEditorValues,
@@ -3127,21 +2834,7 @@ export {
   refreshTwitchStatus,
   syncInfoRowLabelCenter,
   syncPlatformTitleRowCenters,
-  updateAppLiveBadge,
-  setPlatformLiveInfoVisibility,
   schedulePlatformTitleRowCenters,
-  asBitrateHistory,
-  sliceNetworkHistory,
-  formatNetworkRate,
-  formatBytes,
-  formatSpeedRatio,
-  formatFps,
-  formatFrameCount,
-  createBiliNetworkBar,
-  renderBiliNetworkGraph,
-  applyBiliStreamQualityColor,
-  updateBiliNetworkPanel,
-  updateBiliNetworkMeter,
   refreshNetworkStatus,
   refreshStatus,
   startStream,
@@ -3186,7 +2879,6 @@ export {
   updateChannelList,
   updateQualityOptions,
   updateChannelInfo,
-  getQualityDisplayText,
   getTechnicalQualityValue,
   populateQualityOptions,
   applyChannelChange,
@@ -3201,9 +2893,6 @@ export {
   statusRefreshInFlight,
   statusRefreshQueued,
   networkRefreshInFlight,
-  lastBiliNetworkLive,
-  lastBiliNetworkQuality,
-  biliNetworkHistoryLimit,
   faceAuthUrl,
   holodexCurrentSource,
   holodexStreamsRequested,
