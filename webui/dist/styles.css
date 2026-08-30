@@ -2200,6 +2200,13 @@ input[type="checkbox"] {
   text-decoration: none;
 }
 
+.holodex-stream-watch svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+
 .holodex-stream-btn-crop {
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
   background: color-mix(in srgb, var(--warn) 16%, transparent);

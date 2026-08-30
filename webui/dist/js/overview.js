@@ -510,6 +510,16 @@ function createHolodexStreamSvg(pathData) {
   svg.setAttribute('stroke-linejoin', 'round');
   return svg;
 }
+function createHolodexWatchIcon() {
+  const svg = createSvgIcon(
+    '0 0 24 24',
+    'M7 4.5a1 1 0 0 1 1.53-.85l11 7.5a1 1 0 0 1 0 1.7l-11 7.5A1 1 0 0 1 7 19.5v-15Z',
+  );
+  svg.setAttribute('width', '15');
+  svg.setAttribute('height', '15');
+  svg.setAttribute('fill', 'currentColor');
+  return svg;
+}
 function createHolodexPlaceholderIcon(kind) {
   const iconClass = kind === 'twitch'
     ? 'holodex-duration-twitch-icon'
@@ -925,7 +935,9 @@ function createStreamCard(stream, isLive) {
   watchLink.href = watchUrl;
   watchLink.target = '_blank';
   watchLink.rel = 'noopener noreferrer';
-  watchLink.textContent = '📺 观看';
+  const watchLabel = document.createElement('span');
+  watchLabel.textContent = '观看';
+  watchLink.append(createHolodexWatchIcon(), watchLabel);
   actions.appendChild(watchLink);
 
   if (isLive) {
@@ -2754,6 +2766,7 @@ export {
   refreshHolodexStreams,
   getHolodexPlaceholderKind,
   createHolodexStreamSvg,
+  createHolodexWatchIcon,
   createHolodexPlaceholderIcon,
   createHolodexPlaceholderDurationOverlay,
   createHolodexDurationOverlay,
