@@ -20,6 +20,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
+use super::streams::{current_public_streams, start_streams_refresh};
 
 /// Nothing here accepts a body; anything larger is refused before it is read.
 const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -27,6 +28,10 @@ const MAX_BODY_BYTES: usize = 4 * 1024;
 /// Areas change when the operator edits areas.json, which is rare, so the edge
 /// may hold them far longer than the status payload.
 const AREAS_MAX_AGE_SECS: u64 = 300;
+
+/// Matches the refresh timer's floor, so the edge never holds a list longer
+/// than the origin would have kept it.
+const STREAMS_MAX_AGE_SECS: u64 = 30;
 
 #[derive(Serialize)]
 struct PublicArea {
@@ -73,6 +78,34 @@ async fn public_status(headers: HeaderMap) -> Response {
         .into_response()
 }
 
+/// The cached Holodex list. Refreshed on a timer, never on request, so viewer
+/// traffic cannot reach Holodex at all.
+async fn public_streams(headers: HeaderMap) -> Response {
+    let Some((body, etag)) = current_public_streams() else {
+        // Before the first successful fetch there is nothing to show; say so
+        // rather than serving an empty list that reads as "nobody is live".
+        return (StatusCode::SERVICE_UNAVAILABLE, "streams unavailable").into_response();
+    };
+
+    if not_modified(&headers, &etag) {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
+
+    (
+        StatusCode::OK,
+        [
+            (header::ETAG, etag),
+            (
+                header::CONTENT_TYPE,
+                "application/json; charset=utf-8".to_string(),
+            ),
+            (header::CACHE_CONTROL, cache_control(STREAMS_MAX_AGE_SECS)),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 /// Area ids, names and aliases: the page needs the aliases to build the
 /// danmaku command. The banned keyword lists in the same file stay private.
 async fn public_areas() -> Response {
@@ -92,6 +125,13 @@ async fn public_areas() -> Response {
         Json(public_areas_from_json(&parsed)),
     )
         .into_response()
+}
+
+fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|requested| requested == etag)
 }
 
 fn cache_control(max_age: u64) -> String {
@@ -132,6 +172,7 @@ fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
 pub fn public_router() -> Router {
     let api = Router::new()
         .route("/status", get(public_status))
+        .route("/streams", get(public_streams))
         .route("/areas", get(public_areas));
 
     let security_headers = ServiceBuilder::new()
@@ -163,32 +204,30 @@ pub fn public_router() -> Router {
 /// node from the panel takes effect without a restart on either node.
 pub fn start_public_status_supervisor() {
     tokio::spawn(async {
-        let mut running: Option<(SocketAddr, tokio::sync::oneshot::Sender<()>)> = None;
+        let mut running: Option<RunningListener> = None;
 
         loop {
             let desired = desired_listener().await;
 
             match (&running, desired) {
-                (Some((addr, _)), Some(wanted)) if *addr == wanted => {}
+                // Already serving exactly this; leave the timer running.
+                (Some(current), Some(wanted)) if current.matches(&wanted) => {}
                 (_, Some(wanted)) => {
-                    if let Some((addr, stop)) = running.take() {
-                        tracing::info!("公开状态页停止监听 {}", addr);
-                        let _ = stop.send(());
-                    }
-                    match spawn_listener(wanted).await {
+                    stop_listener(running.take());
+                    match spawn_listener(wanted.addr).await {
                         Ok(stop) => {
-                            tracing::info!("🌐 公开状态页已启动: http://{}", wanted);
-                            running = Some((wanted, stop));
+                            tracing::info!("🌐 公开状态页已启动: http://{}", wanted.addr);
+                            running = Some(RunningListener {
+                                addr: wanted.addr,
+                                refresh: wanted.refresh,
+                                stop_server: stop,
+                                stop_refresh: start_streams_refresh(wanted.refresh),
+                            });
                         }
-                        Err(e) => tracing::error!("公开状态页启动失败 ({}): {}", wanted, e),
+                        Err(e) => tracing::error!("公开状态页启动失败 ({}): {}", wanted.addr, e),
                     }
                 }
-                (Some(_), None) => {
-                    if let Some((addr, stop)) = running.take() {
-                        tracing::info!("公开状态页停止监听 {}", addr);
-                        let _ = stop.send(());
-                    }
-                }
+                (Some(_), None) => stop_listener(running.take()),
                 (None, None) => {}
             }
 
@@ -197,8 +236,34 @@ pub fn start_public_status_supervisor() {
     });
 }
 
-/// The address this node should be listening on, if any.
-async fn desired_listener() -> Option<SocketAddr> {
+struct RunningListener {
+    addr: SocketAddr,
+    refresh: Duration,
+    stop_server: tokio::sync::oneshot::Sender<()>,
+    stop_refresh: tokio::sync::oneshot::Sender<()>,
+}
+
+impl RunningListener {
+    fn matches(&self, wanted: &DesiredListener) -> bool {
+        self.addr == wanted.addr && self.refresh == wanted.refresh
+    }
+}
+
+struct DesiredListener {
+    addr: SocketAddr,
+    refresh: Duration,
+}
+
+fn stop_listener(running: Option<RunningListener>) {
+    if let Some(running) = running {
+        tracing::info!("公开状态页停止监听 {}", running.addr);
+        let _ = running.stop_server.send(());
+        let _ = running.stop_refresh.send(());
+    }
+}
+
+/// What this node should be running, if anything.
+async fn desired_listener() -> Option<DesiredListener> {
     let cfg = crate::config::load_config().await.ok()?;
     let public = &cfg.cluster.public_status;
 
@@ -211,7 +276,10 @@ async fn desired_listener() -> Option<SocketAddr> {
     }
 
     let bind = crate::webui::parse_bind(&public.bind).ok()?;
-    Some(SocketAddr::new(bind, public.port))
+    Some(DesiredListener {
+        addr: SocketAddr::new(bind, public.port),
+        refresh: Duration::from_secs(public.holodex_refresh_secs),
+    })
 }
 
 async fn spawn_listener(
@@ -320,7 +388,12 @@ mod tests {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
-        for path in ["/health", "/api/public/status", "/api/public/areas"] {
+        for path in [
+            "/health",
+            "/api/public/status",
+            "/api/public/streams",
+            "/api/public/areas",
+        ] {
             let response = client
                 .post(format!("http://{addr}{path}"))
                 .send()
@@ -332,6 +405,21 @@ mod tests {
                 "{path} accepted a POST"
             );
         }
+
+        let _ = stop.send(());
+    }
+
+    /// Before the first successful fetch, an empty list would read as "nobody
+    /// is live" rather than "not loaded yet".
+    #[tokio::test]
+    async fn streams_report_unavailable_rather_than_empty_before_the_first_fetch() {
+        let (addr, stop) = serve_for_test().await;
+
+        let response = reqwest::get(format!("http://{addr}/api/public/streams"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(response.text().await.unwrap().trim(), "[]");
 
         let _ = stop.send(());
     }

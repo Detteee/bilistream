@@ -8,7 +8,9 @@
 pub mod payload;
 pub mod server;
 pub mod snapshot;
+pub mod streams;
 
 pub use payload::PublicStatus;
 pub use server::start_public_status_supervisor;
 pub use snapshot::{current_public_status, refresh_public_status};
+pub use streams::{current_public_streams, refresh_public_streams};
