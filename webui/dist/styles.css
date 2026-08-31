@@ -283,8 +283,8 @@ html.light-theme {
   --net-push-end: #f34a62;
   --net-bar-axis-mix: 100%;
   --net-bar-tip-mix: 100%;
-  /* Cyan on linen is a wash; the violet 0-line is the readable RX stop. */
-  --net-legend-rx: var(--net-axis);
+  /* Cyan on linen is a wash; Cache RX uses a readable blue instead. */
+  --net-legend-rx: #1665da;
   --net-legend-tx: var(--net-push-end);
 }
 
@@ -1659,8 +1659,8 @@ input[type="checkbox"] {
   opacity: 1;
 }
 
-/* Light mode: the three stops as given, not mixed into the card. Dual-sided
-   splits them at the 0 line; cache-off is the full cyan→violet→rose ramp. */
+/* Light mode: solid stops, not mixed into the card. Dual-sided splits them
+   at the 0 line. Cache-off TX grows from that violet like HLS, with a red tip. */
 html.light-theme .bili-network-bar {
   background: linear-gradient(180deg, var(--net-push-start), var(--net-push-end));
 }
@@ -1670,12 +1670,7 @@ html.light-theme .bili-network-bar.cache {
 }
 
 html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
-  background: linear-gradient(
-    180deg,
-    var(--net-cache-start),
-    var(--net-axis),
-    var(--net-push-end)
-  );
+  background: linear-gradient(180deg, var(--net-push-end), var(--net-axis));
 }
 
 .bili-network-graph-axis {
