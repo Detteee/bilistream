@@ -2188,10 +2188,9 @@ a.cluster-node-name-link {
   margin-top: 0;
 }
 
-/* Below this the panel is phone-narrow or a half-width featured column:
-   one mirrored RX/TX plot like the dashboard Network card, not two stacked
-   sparklines. Sparks sit beside the meters only when both 60s rows fit. */
-@container cluster-net (min-width: 760px) {
+/* Phone-narrow: keep the mirrored RX/TX plot. From 520px, stack a spark
+   beside each meter until both chart+text rows fit on one line. */
+@container cluster-net (min-width: 520px) {
   .cluster-network-mirror {
     display: none;
   }
@@ -2223,6 +2222,13 @@ a.cluster-node-name-link {
     min-width: 1px;
   }
 
+  .cluster-node-network .bili-network-meters {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+  }
+}
+
+@container cluster-net (min-width: 760px) {
   .cluster-node-network .bili-network-meters {
     grid-template-columns: 1fr 1fr;
     gap: var(--sp-3);
