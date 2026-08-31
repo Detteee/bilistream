@@ -79,6 +79,8 @@ const DANMAKU_REGULAR_LIMIT = 20;
 
 let areas = [];
 let pendingStream = null;
+let selectedAreaId = null;
+let copyResetTimer = null;
 
 export function setAreas(list) {
   areas = Array.isArray(list) ? list : [];
@@ -538,9 +540,10 @@ function startSwitch(stream) {
 
 function openAreaModal(stream) {
   const modal = document.getElementById('area-modal');
-  const select = document.getElementById('area-modal-select');
+  const list = document.getElementById('area-modal-list');
   const label = document.getElementById('area-modal-stream');
-  if (!modal || !select) {
+  const confirm = document.getElementById('area-modal-confirm');
+  if (!modal || !list) {
     return;
   }
 
@@ -548,31 +551,63 @@ function openAreaModal(stream) {
     label.textContent = `${stream.channel_name || ''} · ${stream.title || ''}`.trim();
   }
 
-  const options = [option('', '选择分区...')];
-  for (const area of areas.filter(areaIsUsable)) {
-    options.push(option(String(area.id), area.name));
+  selectedAreaId = null;
+  if (confirm) {
+    confirm.disabled = true;
   }
-  select.replaceChildren(...options);
-  select.value = '';
+
+  const usable = areas.filter(areaIsUsable);
+  if (usable.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'area-option-empty';
+    empty.textContent = '没有可用分区';
+    list.replaceChildren(empty);
+  } else {
+    list.replaceChildren(...usable.map((area) => createAreaOption(area)));
+  }
 
   modal.classList.remove('hidden');
-  select.focus();
+  list.querySelector('.area-option')?.focus();
 }
 
-function option(value, label) {
-  const element = document.createElement('option');
-  element.value = value;
-  element.textContent = label;
-  return element;
+function createAreaOption(area) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'area-option';
+  button.setAttribute('role', 'option');
+  button.setAttribute('aria-selected', 'false');
+  button.dataset.id = String(area.id);
+  button.textContent = area.name;
+  button.addEventListener('click', () => {
+    if (selectedAreaId === area.id) {
+      confirmArea();
+      return;
+    }
+    selectArea(area.id);
+  });
+  return button;
+}
+
+function selectArea(id) {
+  selectedAreaId = id;
+  const confirm = document.getElementById('area-modal-confirm');
+  if (confirm) {
+    confirm.disabled = false;
+  }
+  document.querySelectorAll('#area-modal-list .area-option').forEach((button) => {
+    const on = Number(button.dataset.id) === id;
+    button.classList.toggle('is-selected', on);
+    button.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
 }
 
 export function closeAreaModal() {
   document.getElementById('area-modal')?.classList.add('hidden');
+  selectedAreaId = null;
 }
 
 export function confirmArea() {
-  const select = document.getElementById('area-modal-select');
-  const chosen = areaById(Number(select?.value));
+  const chosen = areaById(selectedAreaId);
   if (!chosen || !areaIsUsable(chosen) || !pendingStream) {
     return;
   }
@@ -618,6 +653,7 @@ function showCommand(stream, area) {
   renderShortForm(forms.short);
   renderAlternatives(forms.alternatives);
   setFeedback('');
+  resetCopyButtons();
   modal.classList.remove('hidden');
   input.focus();
   input.select();
@@ -647,13 +683,40 @@ function renderAlternatives(aliases) {
 export function closeCommandModal() {
   document.getElementById('command-modal')?.classList.add('hidden');
   pendingStream = null;
+  resetCopyButtons();
 }
 
 function setFeedback(message) {
   const feedback = document.getElementById('command-feedback');
   if (feedback) {
-    feedback.textContent = message;
+    feedback.textContent = message || '';
+    feedback.classList.toggle('hidden', !message);
   }
+}
+
+function copyButtonFor(inputId) {
+  return document.getElementById(inputId === 'command-short-text' ? 'command-short-copy' : 'command-copy');
+}
+
+function setCopyState(button, copied) {
+  const icon = button?.querySelector('use');
+  if (!button || !icon) {
+    return;
+  }
+  icon.setAttribute('href', copied ? '#i-check' : '#i-copy');
+  button.classList.toggle('is-copied', copied);
+  const label = copied ? '已复制' : '复制';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+}
+
+function resetCopyButtons() {
+  if (copyResetTimer) {
+    clearTimeout(copyResetTimer);
+    copyResetTimer = null;
+  }
+  setCopyState(document.getElementById('command-copy'), false);
+  setCopyState(document.getElementById('command-short-copy'), false);
 }
 
 export async function copyCommand(inputId = 'command-text') {
@@ -662,13 +725,20 @@ export async function copyCommand(inputId = 'command-text') {
     return;
   }
 
+  const button = copyButtonFor(inputId);
   try {
     // Clipboard access needs a secure context; select-and-copy is the
     // fallback when the page is opened over plain http.
     await navigator.clipboard.writeText(input.value);
     setFeedback('已复制，去直播间发送即可。');
+    setCopyState(button, true);
+    if (copyResetTimer) {
+      clearTimeout(copyResetTimer);
+    }
+    copyResetTimer = setTimeout(() => setCopyState(button, false), 1600);
   } catch {
     input.select();
+    setCopyState(button, false);
     setFeedback('复制失败，请手动选中并复制。');
   }
 }

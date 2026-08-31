@@ -53,14 +53,23 @@ html.light-theme {
   line-height: 1.6;
 }
 
-.public-command-row {
-  display: flex;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
+.area-modal-content .public-modal-hint {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
+.public-command-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* width: 0 beats the global input { width: 100% }, which otherwise keeps
+   the field as wide as the dialog and draws it over the copy button. */
 .public-command-input {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  width: 0;
   min-width: 0;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--line);
@@ -68,6 +77,33 @@ html.light-theme {
   background: var(--surface-3);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
+}
+
+.public-copy-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+}
+
+.public-copy-btn .btn-icon,
+.public-copy-btn use {
+  fill: none;
+  stroke: currentColor;
+}
+
+.public-copy-btn.is-copied {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+
+#command-short-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
 }
 
 /* Why 切换 is greyed: a keyword block names the words, other reasons just

@@ -11,8 +11,8 @@
   <!-- External, not inline: the public listener sends a CSP with
        script-src 'self', so an inline bootstrap would be blocked. -->
   <script src="js/theme.js?v=7"></script>
-  <link rel="stylesheet" href="/shared/styles.css?v=13">
-  <link rel="stylesheet" href="public.css?v=10">
+  <link rel="stylesheet" href="/shared/styles.css?v=15">
+  <link rel="stylesheet" href="public.css?v=12">
 </head>
 
 <body>
@@ -81,6 +81,11 @@
     </symbol>
     <symbol id="i-play" viewBox="0 0 24 24">
       <path d="M7 4.5a1 1 0 0 1 1.53-.85l11 7.5a1 1 0 0 1 0 1.7l-11 7.5A1 1 0 0 1 7 19.5v-15Z" />
+    </symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </symbol>
   </svg>
 
@@ -283,14 +288,13 @@
 
   <div class="area-modal hidden" id="area-modal" role="dialog" aria-modal="true" aria-labelledby="area-modal-title">
     <div class="area-modal-content">
+      <div class="area-dialog-handle" aria-hidden="true"></div>
       <h3 class="area-modal-title" id="area-modal-title">选择分区</h3>
       <p class="public-modal-hint" id="area-modal-stream"></p>
-      <select id="area-modal-select" aria-label="分区">
-        <option value="">选择分区...</option>
-      </select>
+      <div class="area-option-list" id="area-modal-list" role="listbox" aria-label="分区"></div>
       <div class="area-modal-actions">
         <button id="area-modal-cancel" class="btn-secondary" type="button">取消</button>
-        <button id="area-modal-confirm" class="btn-primary" type="button">生成指令</button>
+        <button id="area-modal-confirm" class="btn-primary" type="button" disabled>生成指令</button>
       </div>
     </div>
   </div>
@@ -298,11 +302,15 @@
   <div class="area-modal hidden" id="command-modal" role="dialog" aria-modal="true"
     aria-labelledby="command-modal-title">
     <div class="area-modal-content">
+      <div class="area-dialog-handle" aria-hidden="true"></div>
       <h3 class="area-modal-title" id="command-modal-title">复制点播指令</h3>
       <p class="public-modal-hint">在直播间发送这条弹幕即可点播。</p>
       <div class="public-command-row">
         <input type="text" id="command-text" class="public-command-input" readonly aria-label="弹幕点播指令">
-        <button id="command-copy" class="btn-primary" type="button">复制</button>
+        <button id="command-copy" class="btn-primary icon-btn public-copy-btn" type="button" title="复制"
+          aria-label="复制">
+          <svg class="btn-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+        </button>
       </div>
       <p class="public-modal-hint hidden" id="command-alternatives"></p>
       <div class="hidden" id="command-short-row">
@@ -310,17 +318,20 @@
         <div class="public-command-row">
           <input type="text" id="command-short-text" class="public-command-input" readonly
             aria-label="短版弹幕点播指令">
-          <button id="command-short-copy" class="btn-secondary" type="button">复制</button>
+          <button id="command-short-copy" class="btn-secondary icon-btn public-copy-btn" type="button"
+            title="复制" aria-label="复制">
+            <svg class="btn-icon" aria-hidden="true"><use href="#i-copy" /></svg>
+          </button>
         </div>
       </div>
-      <p class="public-modal-hint" id="command-feedback"></p>
+      <p class="public-modal-hint hidden" id="command-feedback"></p>
       <div class="area-modal-actions">
         <button id="command-close" class="btn-secondary" type="button">关闭</button>
       </div>
     </div>
   </div>
 
-  <script type="module" src="js/main.js?v=16"></script>
+  <script type="module" src="js/main.js?v=17"></script>
 </body>
 
 </html>
