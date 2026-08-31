@@ -143,7 +143,9 @@ function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
     : pushHistory;
   const maxRate = Math.max(1, ...activeSeries);
   setElementText('bili-network-scale', formatNetworkRate(maxRate));
-  const graphWidth = window.matchMedia('(max-width: 520px)').matches ? 32 : biliNetworkHistoryLimit;
+  // One column per second for the whole 60s window. Halving that on a
+  // 520px viewport made a full-width plot draw a handful of fat bars.
+  const graphWidth = biliNetworkHistoryLimit;
   setElementText('bili-network-window', `−${graphWidth}s`);
   const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
   const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
