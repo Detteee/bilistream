@@ -560,6 +560,8 @@ pub async fn update_banned_keywords(
     }
     set_config_updated();
 
+    crate::webui::public::remap_after_areas_change();
+
     Ok(ApiResponse {
         success: true,
         data: None,

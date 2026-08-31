@@ -70,7 +70,11 @@ where
     T: DeserializeOwned + Serialize + Send + 'static,
     F: FnOnce(&mut T) -> Result<(), String> + Send + 'static,
 {
-    crate::config::mutate_json_file(managed_json_path(file_name)?, edit).await
+    crate::config::mutate_json_file(managed_json_path(file_name)?, edit).await?;
+    if file_name == "areas.json" {
+        crate::webui::public::remap_after_areas_change();
+    }
+    Ok(())
 }
 
 pub(crate) fn managed_json_error(message: String) -> Json<ApiResponse<()>> {

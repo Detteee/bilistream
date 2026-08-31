@@ -13,3 +13,4 @@ pub mod streams;
 pub mod thumbnails;
 
 pub use server::start_public_status_supervisor;
+pub use streams::remap_after_areas_change;

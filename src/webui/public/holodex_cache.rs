@@ -43,6 +43,13 @@ fn get_if_fresh(ids: &[String], max_age: Duration) -> Option<Vec<HolodexStream>>
     Some(entry.streams.clone())
 }
 
+/// Cached Holodex payload for this channel set, even if the refresh interval
+/// has elapsed. Used to remap 建议分区 / 切换 after areas.json changes
+/// without another upstream call.
+pub(crate) fn get_cached(ids: &[String]) -> Option<Vec<HolodexStream>> {
+    get_if_fresh(ids, Duration::MAX)
+}
+
 pub(crate) fn put(ids: &[String], streams: &[HolodexStream]) {
     if let Ok(mut guard) = CACHE.write() {
         *guard = Some(Entry {
@@ -145,5 +152,15 @@ mod tests {
         put(&ids(&["a"]), &[stream("vid")]);
 
         assert!(get_if_fresh(&ids(&["a"]), Duration::from_secs(0)).is_none());
+    }
+
+    #[test]
+    fn get_cached_still_returns_a_stale_entry() {
+        let _guard = exclusive();
+        put(&ids(&["a"]), &[stream("vid")]);
+
+        assert!(get_if_fresh(&ids(&["a"]), Duration::from_secs(0)).is_none());
+        let hit = get_cached(&ids(&["a"])).expect("stale cache hit");
+        assert_eq!(hit[0].id, "vid");
     }
 }

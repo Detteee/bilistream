@@ -236,7 +236,8 @@ pub(super) fn build_public_streams(
                     switchability(&stream, target.as_ref(), danmaku_enabled, banned)
                 };
 
-            let (suggested_area_id, suggested_area_name) = suggested_area(&stream);
+            let (suggested_area_id, suggested_area_name) =
+                crate::plugins::suggest_area_from_stream(stream.topic_id.as_deref(), &stream.title);
             let thumbnail = thumbnail_for(&stream);
 
             PublicStream {
@@ -266,39 +267,6 @@ pub(super) fn build_public_streams(
             }
         })
         .collect()
-}
-
-/// Mirrors the dashboard's topic-and-title area guess so the page offers the
-/// same default the operator would see.
-fn suggested_area(stream: &HolodexStream) -> (Option<u64>, Option<String>) {
-    let title_for_detection = match stream.topic_id.as_deref() {
-        Some(topic) => format!("{} {}", topic, stream.title),
-        None => stream.title.clone(),
-    };
-
-    let mut area_id = 235;
-    if let Some(topic) = stream.topic_id.as_deref() {
-        let topic = topic.to_lowercase();
-        if topic.contains("freechat") || topic.contains("talk") || topic.contains("singing") {
-            area_id = 530;
-        }
-        if topic.contains("talk")
-            || topic.contains("zatsudan")
-            || topic.contains("雑談")
-            || topic.contains("just chatting")
-        {
-            area_id = 646;
-        }
-    }
-    if area_id == 235 {
-        area_id = crate::plugins::check_area_id_with_title(&title_for_detection, 235);
-    }
-
-    if area_id == 235 {
-        (None, None)
-    } else {
-        (Some(area_id), crate::plugins::get_area_name(area_id))
-    }
 }
 
 // Snapshot -------------------------------------------------------------------
@@ -357,6 +325,18 @@ fn holodex_channel_ids(cfg: &Config, channels: &[Channel]) -> Vec<String> {
 /// One refresh cycle. Returns false when the list could not be refreshed, so
 /// the caller knows the snapshot it still holds is the last good one.
 async fn refresh_public_streams() -> bool {
+    rebuild_public_streams(false).await
+}
+
+/// Re-applies current areas.json keywords and danmaku bans to the last Holodex
+/// payload so a management edit shows up without waiting for the poll timer.
+pub fn remap_after_areas_change() {
+    tokio::spawn(async {
+        let _ = rebuild_public_streams(true).await;
+    });
+}
+
+async fn rebuild_public_streams(cached_only: bool) -> bool {
     let Ok(cfg) = crate::config::load_config().await else {
         return false;
     };
@@ -370,14 +350,21 @@ async fn refresh_public_streams() -> bool {
         return false;
     }
 
-    // A dashboard fetch on this node counts as this interval's call, so the
-    // two together stay at one upstream request per interval.
-    let max_age = Duration::from_secs(cfg.cluster.public_status.holodex_refresh_secs);
-    let streams = match super::holodex_cache::get_or_fetch(ids.clone(), max_age).await {
-        Ok(streams) => streams,
-        Err(e) => {
-            tracing::debug!("公开状态页 Holodex 刷新失败: {}", e);
-            return false;
+    let streams = if cached_only {
+        match super::holodex_cache::get_cached(&ids) {
+            Some(streams) => streams,
+            None => return false,
+        }
+    } else {
+        // A dashboard fetch on this node counts as this interval's call, so the
+        // two together stay at one upstream request per interval.
+        let max_age = Duration::from_secs(cfg.cluster.public_status.holodex_refresh_secs);
+        match super::holodex_cache::get_or_fetch(ids.clone(), max_age).await {
+            Ok(streams) => streams,
+            Err(e) => {
+                tracing::debug!("公开状态页 Holodex 刷新失败: {}", e);
+                return false;
+            }
         }
     };
 
@@ -395,8 +382,8 @@ async fn refresh_public_streams() -> bool {
     let banned = danmaku_banned_keywords();
     let mut public = build_public_streams(streams, &channels, danmaku_enabled, &banned);
 
-    // Only a successful fetch reaches here, so the list is safe to reconcile
-    // against; a failed poll returns early above and leaves the cache alone.
+    // A failed poll returns early above and leaves the cache alone. Cached-only
+    // remaps reuse the last Holodex payload after areas.json changed.
     // Channel photos use the same cache: the page's CSP only allows same-origin
     // images, and those CDNs are often unreachable from the viewer's network.
     super::thumbnails::reconcile(&image_urls(&public)).await;
