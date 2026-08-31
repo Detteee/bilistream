@@ -182,6 +182,8 @@ code {
   --net-push-end: #aa96f9;
   --net-bar-axis-mix: 71%;
   --net-bar-tip-mix: 63%;
+  --net-legend-rx: var(--net-cache-start);
+  --net-legend-tx: var(--net-push-end);
 
   /* Platform hues */
   --bilibili: #fb7299;
@@ -281,6 +283,9 @@ html.light-theme {
   --net-push-end: #f34a62;
   --net-bar-axis-mix: 100%;
   --net-bar-tip-mix: 100%;
+  /* Cyan on linen is a wash; the violet 0-line is the readable RX stop. */
+  --net-legend-rx: var(--net-axis);
+  --net-legend-tx: var(--net-push-end);
 }
 
 /* Do not pump saturation or overlay with cold black on the linen page. */
@@ -1712,6 +1717,17 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   gap: var(--sp-2);
   color: var(--text-mute);
   font-size: var(--fs-sm);
+}
+
+/* Meter names double as the plot legend: TX tip and RX tip of the ramp. */
+.bili-network-meter[data-leg="tx"] .bili-network-meter-label {
+  color: var(--net-legend-tx);
+  font-weight: 700;
+}
+
+.bili-network-meter[data-leg="rx"] .bili-network-meter-label {
+  color: var(--net-legend-rx);
+  font-weight: 700;
 }
 
 .bili-network-meter-value {
