@@ -1442,14 +1442,13 @@
 
     <div id="area-modal" class="area-modal hidden" role="dialog" aria-modal="true" aria-labelledby="area-modal-title">
       <div class="area-modal-content">
+        <div class="area-dialog-handle" aria-hidden="true"></div>
         <h3 class="area-modal-title" id="area-modal-title">选择分区</h3>
         <p class="area-modal-message">未能自动检测分区，请手动选择：</p>
-        <select id="modal-area-select" class="area-modal-select" aria-label="分区">
-          <option value="">加载中...</option>
-        </select>
+        <div class="area-option-list" id="modal-area-list" role="listbox" aria-label="分区"></div>
         <div class="area-modal-actions">
-          <button id="confirm-area-selection-btn" class="area-modal-confirm-btn" type="button">确认</button>
           <button id="cancel-area-selection-btn" class="area-modal-cancel-btn" type="button">取消</button>
+          <button id="confirm-area-selection-btn" class="area-modal-confirm-btn" type="button" disabled>确认</button>
         </div>
       </div>
     </div>

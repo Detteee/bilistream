@@ -2788,6 +2788,16 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   animation: dialog-in var(--dur-slow) var(--ease);
 }
 
+/* Column layout so the area list scrolls and the actions stay below it.
+   A native <select> sat flush on the buttons; on a phone the OS picker
+   then covered 取消 / 确认. */
+.area-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  overflow: hidden;
+}
+
 @keyframes dialog-in {
   from {
     opacity: 0;
@@ -2831,15 +2841,77 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 /* Area picker ------------------------------------------------------------ */
 
 .area-modal-title {
-  margin-bottom: var(--sp-2);
+  margin-bottom: 0;
   color: var(--text);
   font-size: var(--fs-lg);
 }
 
 .area-modal-message {
-  margin-bottom: var(--sp-4);
+  margin-bottom: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
+}
+
+.area-dialog-handle {
+  display: none;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+}
+
+.area-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(50vh, 22rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.area-option-empty {
+  margin: auto;
+  padding: var(--sp-4);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.area-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+  text-align: left;
+}
+
+.area-option:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-4);
+}
+
+.area-option.is-selected {
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand-hi);
+}
+
+.area-option.is-selected::after {
+  content: '✓';
+  flex: 0 0 auto;
+  font-weight: 700;
 }
 
 .area-modal-select {
@@ -2848,12 +2920,17 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
 .area-modal-actions {
   display: flex;
+  flex-shrink: 0;
   gap: var(--sp-2);
+  width: 100%;
+  padding-top: var(--sp-1);
 }
 
+.area-modal-actions > button,
 .area-modal-confirm-btn,
 .area-modal-cancel-btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .area-modal-confirm-btn {
@@ -3012,6 +3089,27 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 
 @media (max-width: 560px) {
+  .area-modal {
+    align-items: flex-end;
+    padding: var(--sp-4) 0 0;
+  }
+
+  .area-modal-content {
+    width: 100%;
+    max-height: min(88vh, 100%);
+    max-height: min(88dvh, 100%);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    padding: var(--sp-3) var(--sp-4) max(var(--sp-5), env(safe-area-inset-bottom, 0px));
+  }
+
+  .area-dialog-handle {
+    display: block;
+  }
+
+  .area-option-list {
+    max-height: none;
+  }
+
   .face-auth-dialog {
     padding: var(--sp-5) var(--sp-4);
   }

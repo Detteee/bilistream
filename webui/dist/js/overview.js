@@ -966,6 +966,7 @@ function createStreamCard(stream, isLive) {
 }
 // Store pending switch data
 let pendingSwitchData = null;
+let selectedAreaId = null;
 async function switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform, twitchChannelId, externalLink) {
   if (!suggestedAreaId) {
     // Show modal for area selection
@@ -978,8 +979,9 @@ async function switchToHolodexStream(channelId, suggestedAreaId, title, topicId,
 }
 async function showAreaModal() {
   const modal = document.getElementById('area-modal');
-  const select = document.getElementById('modal-area-select');
-  if (!modal || !select) return;
+  const list = document.getElementById('modal-area-list');
+  const confirm = document.getElementById('confirm-area-selection-btn');
+  if (!modal || !list) return;
 
   // Load areas if not already loaded
   if (!state.areasData) {
@@ -991,15 +993,60 @@ async function showAreaModal() {
     }
   }
 
-  // Populate select
-  select.replaceChildren(createAreaOption('', '选择分区...'));
-  appendAreaOptions(select, getAreaList(), true);
+  selectedAreaId = null;
+  if (confirm) {
+    confirm.disabled = true;
+  }
+
+  const areas = getSortedAreas(getAreaList());
+  if (areas.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'area-option-empty';
+    empty.textContent = '没有可用分区';
+    list.replaceChildren(empty);
+  } else {
+    list.replaceChildren(...areas.map((area) => createAreaPickerOption(area)));
+  }
 
   modal.classList.remove('hidden');
+  list.querySelector('.area-option')?.focus();
 }
+
+function createAreaPickerOption(area) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'area-option';
+  button.setAttribute('role', 'option');
+  button.setAttribute('aria-selected', 'false');
+  button.dataset.id = String(area.id);
+  button.textContent = `${area.name} (${area.id})`;
+  button.addEventListener('click', () => {
+    if (selectedAreaId === area.id) {
+      confirmAreaSelection();
+      return;
+    }
+    selectAreaOption(area.id);
+  });
+  return button;
+}
+
+function selectAreaOption(id) {
+  selectedAreaId = id;
+  const confirm = document.getElementById('confirm-area-selection-btn');
+  if (confirm) {
+    confirm.disabled = false;
+  }
+  document.querySelectorAll('#modal-area-list .area-option').forEach((button) => {
+    const on = Number(button.dataset.id) === id;
+    button.classList.toggle('is-selected', on);
+    button.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
+
 function closeAreaModal() {
   document.getElementById('area-modal')?.classList.add('hidden');
   pendingSwitchData = null;
+  selectedAreaId = null;
 }
 
 function initAreaModalControls() {
@@ -1058,8 +1105,7 @@ function retryStartStream() {
   startStream();
 }
 async function confirmAreaSelection() {
-  const select = document.getElementById('modal-area-select');
-  const areaId = parseInteger(select.value, 0);
+  const areaId = parseInteger(selectedAreaId, 0);
 
   if (!areaId) {
     showNotification('请选择分区', 'error');
