@@ -10,12 +10,11 @@ import { setElementDisplay, setElementText } from './dom.js';
 import {
   asBitrateHistory,
   formatAreaText,
-  formatBytes,
   formatFps,
-  formatFrameCount,
   formatHlsCacheStatus,
   formatNetworkRate,
   formatSpeedRatio,
+  formatStreamTime,
   getQualityDisplayText,
 } from './format.js';
 
@@ -134,10 +133,33 @@ function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
   graph.replaceChildren(fragment);
 }
 
+function applySpeedTone(element, speed) {
+  if (!element) {
+    return;
+  }
+  if (!Number.isFinite(speed) || speed <= 0) {
+    delete element.dataset.tone;
+    return;
+  }
+  element.dataset.tone = speed > 0.97 ? 'ok' : speed > 0.94 ? 'warn' : 'danger';
+}
+
+function meterDetail(timeSecs, fps) {
+  const time = formatStreamTime(timeSecs);
+  if (!Number.isFinite(fps) || fps < 0) {
+    return time;
+  }
+  return `${time} · ${formatFps(fps)} fps`;
+}
+
 function updateBiliNetworkMeter(kind, metrics) {
   setElementText(`bili-network-${kind}-rate`, formatNetworkRate(metrics.bitrateKbps));
-  setElementText(`bili-network-${kind}-speed-ratio`, formatSpeedRatio(metrics.speed));
-  setElementText(`bili-network-${kind}-total`, `Total ${formatBytes(metrics.totalBytes)}`);
+  const speedEl = document.getElementById(`bili-network-${kind}-speed-ratio`);
+  if (speedEl) {
+    speedEl.textContent = formatSpeedRatio(metrics.speed);
+    applySpeedTone(speedEl, metrics.speed);
+  }
+  setElementText(`bili-network-${kind}-time`, metrics.detail);
 }
 
 /// Paints the network meters and the bar graph.
@@ -152,8 +174,13 @@ export function renderBiliNetworkPanel(bili) {
   const hasPush = Number.isFinite(bili.stream_bitrate_kbps)
     || Number.isFinite(bili.stream_speed)
     || Number.isFinite(bili.stream_fps)
+    || Number.isFinite(bili.stream_time_secs)
     || Number.isFinite(bili.stream_frame);
-  const hasCache = bili.hls_cache_active && (Number.isFinite(bili.stream_cache_bitrate_kbps) || Number.isFinite(bili.stream_cache_speed));
+  const hasCache = bili.hls_cache_active && (
+    Number.isFinite(bili.stream_cache_bitrate_kbps)
+    || Number.isFinite(bili.stream_cache_speed)
+    || Number.isFinite(bili.stream_cache_time_secs)
+  );
   if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
     panel.classList.add('hidden');
     return;
@@ -170,12 +197,8 @@ export function renderBiliNetworkPanel(bili) {
   updateBiliNetworkMeter('push', {
     bitrateKbps: bili.stream_bitrate_kbps,
     speed: bili.stream_speed,
-    totalBytes: bili.stream_total_bytes
+    detail: meterDetail(bili.stream_time_secs, bili.stream_fps)
   });
-  setElementText(
-    'bili-network-push-frame',
-    `FPS ${formatFps(bili.stream_fps)} / Frame ${formatFrameCount(bili.stream_frame)}`
-  );
 
   const cacheMeter = document.getElementById('bili-network-cache-meter');
   setElementDisplay(cacheMeter, hasCache, '');
@@ -183,7 +206,7 @@ export function renderBiliNetworkPanel(bili) {
     updateBiliNetworkMeter('cache', {
       bitrateKbps: bili.stream_cache_bitrate_kbps,
       speed: bili.stream_cache_speed,
-      totalBytes: bili.stream_cache_total_bytes
+      detail: formatStreamTime(bili.stream_cache_time_secs)
     });
   }
 

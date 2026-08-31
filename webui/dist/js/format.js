@@ -11,22 +11,22 @@ export function formatNetworkRate(kbps) {
   return `${Math.round(kbps)} Kb/s`;
 }
 
-export function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return '-';
-  }
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return unit === 0 ? `${bytes} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
-}
-
 export function formatSpeedRatio(value) {
   return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
+}
+
+export function formatStreamTime(secs) {
+  if (!Number.isFinite(secs) || secs < 0) {
+    return '-';
+  }
+  const totalSec = Math.floor(secs);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 export function formatFps(value) {

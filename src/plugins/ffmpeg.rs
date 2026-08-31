@@ -82,6 +82,7 @@ lazy_static::lazy_static! {
     static ref FFMPEG_PUSH_STARTED_AT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track last reported stream time from ffmpeg (stored as seconds, converted from HH:MM:SS.ms)
     static ref LAST_STREAM_TIME: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref FFMPEG_CACHE_TIME_SECS: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when stream time last changed (Unix timestamp in seconds)
     static ref LAST_STREAM_TIME_UPDATE: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     // Track when speed first dropped below LOW_SPEED_THRESHOLD (0 = speed is OK)
@@ -198,8 +199,8 @@ pub struct FfmpegNetworkStats {
     pub cache_bitrate_kbps: Option<f32>,
     pub push_fps: Option<f32>,
     pub push_frame: Option<u64>,
-    pub push_total_bytes: u64,
-    pub cache_total_bytes: u64,
+    pub push_time_secs: Option<u32>,
+    pub cache_time_secs: Option<u32>,
     pub push_bitrate_history: Vec<f32>,
     pub cache_bitrate_history: Vec<f32>,
 }
@@ -211,8 +212,8 @@ pub fn get_ffmpeg_network_stats() -> FfmpegNetworkStats {
         cache_bitrate_kbps: f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS),
         push_fps: optional_f32_from_atomic_bits(&FFMPEG_PUSH_FPS),
         push_frame: optional_u64_from_atomic(&FFMPEG_PUSH_FRAME),
-        push_total_bytes: FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
-        cache_total_bytes: FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
+        push_time_secs: optional_u32_from_atomic(&LAST_STREAM_TIME),
+        cache_time_secs: optional_u32_from_atomic(&FFMPEG_CACHE_TIME_SECS),
         push_bitrate_history,
         cache_bitrate_history,
     }
@@ -240,6 +241,11 @@ fn optional_f32_from_atomic_bits(value: &AtomicU32) -> Option<f32> {
 fn optional_u64_from_atomic(value: &AtomicU64) -> Option<u64> {
     let value = value.load(Ordering::Relaxed);
     (value != OPTIONAL_U64_NONE).then_some(value)
+}
+
+fn optional_u32_from_atomic(value: &AtomicU32) -> Option<u32> {
+    let value = value.load(Ordering::Relaxed);
+    (value > 0).then_some(value)
 }
 
 fn unix_time_secs_from(time: std::time::SystemTime) -> u32 {
@@ -530,6 +536,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LAST_PUSH_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_CACHE_PROGRESS_TIME.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_TIME_SECS.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
     NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
@@ -658,19 +665,11 @@ impl FfmpegStatsDisplay {
                 "Auto scale {:>12}",
                 format_network_rate(scale_kbps)
             )),
-            network_content_line(&Self::meter_row(
-                "Cache RX",
-                self.cache.as_ref(),
-                FFMPEG_CACHE_TOTAL_BYTES.load(Ordering::Relaxed),
-            )),
+            network_content_line(&Self::meter_row("Cache RX", self.cache.as_ref(), false)),
             network_content_line(&Self::rx_graph_row("RX", &self.cache_history, scale_kbps)),
             network_content_line(&Self::zero_axis_row()),
             network_content_line(&Self::tx_graph_row("TX", &self.push_history, scale_kbps)),
-            network_content_line(&Self::meter_row(
-                "RTMP TX",
-                self.push.as_ref(),
-                FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed),
-            )),
+            network_content_line(&Self::meter_row("RTMP TX", self.push.as_ref(), true)),
             network_bottom_border(),
         ];
 
@@ -718,7 +717,7 @@ impl FfmpegStatsDisplay {
         );
     }
 
-    fn meter_row(label: &str, sample: Option<&FfmpegStatsSample>, total_bytes: u64) -> String {
+    fn meter_row(label: &str, sample: Option<&FfmpegStatsSample>, show_fps: bool) -> String {
         let bitrate = sample
             .and_then(|s| s.bitrate_kbps)
             .map(format_network_rate)
@@ -726,16 +725,23 @@ impl FfmpegStatsDisplay {
         let speed = sample
             .and_then(|s| s.speed.map(|v| format!("{:.2}x", v)))
             .unwrap_or_else(|| "-".to_string());
-        truncate_cell(
-            &format!(
-                "{:<8} {:>12}  {:>6}  Total {:>10}",
-                label,
-                bitrate,
-                speed,
-                format_bytes(total_bytes)
-            ),
-            NETWORK_PANEL_CONTENT_WIDTH,
-        )
+        let time = sample
+            .and_then(|s| s.stream_time_secs)
+            .map(format_stream_time)
+            .unwrap_or_else(|| "-".to_string());
+        let line = if show_fps {
+            let fps = sample
+                .and_then(|s| s.fps.filter(|fps| fps.is_finite() && *fps >= 0.0))
+                .map(format_fps_label)
+                .unwrap_or_else(|| "- fps".to_string());
+            format!(
+                "{:<8} {:>12}  {:>6}  {:>8}  {:>8}",
+                label, bitrate, speed, time, fps
+            )
+        } else {
+            format!("{:<8} {:>12}  {:>6}  {:>8}", label, bitrate, speed, time)
+        };
+        truncate_cell(&line, NETWORK_PANEL_CONTENT_WIDTH)
     }
 
     fn rx_graph_row(label: &str, history: &[f32], scale_kbps: f32) -> String {
@@ -873,18 +879,20 @@ fn format_network_rate(kbps: f32) -> String {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} {}", bytes, UNITS[unit])
+fn format_stream_time(secs: u32) -> String {
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
+fn format_fps_label(fps: f32) -> String {
+    if fps >= 100.0 {
+        format!("{:.0} fps", fps)
     } else {
-        format!("{:.1} {}", value, UNITS[unit])
+        format!("{:.1} fps", fps)
     }
 }
 
@@ -1370,6 +1378,9 @@ fn handle_ffmpeg_stderr_line(
                     if let Some(speed) = sample.speed {
                         FFMPEG_CACHE_SPEED.store(speed.to_bits(), Ordering::Relaxed);
                     }
+                    if let Some(stream_time) = sample.stream_time_secs {
+                        FFMPEG_CACHE_TIME_SECS.store(stream_time, Ordering::Relaxed);
+                    }
                 }
                 FfmpegStatsRole::Push => {
                     if let Some(frame) = sample.frame {
@@ -1454,6 +1465,7 @@ fn reset_ffmpeg_tracking_state() {
     FFMPEG_PUSH_ACTIVE.store(false, Ordering::Relaxed);
     FFMPEG_PUSH_STARTED_AT.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME.store(0, Ordering::Relaxed);
+    FFMPEG_CACHE_TIME_SECS.store(0, Ordering::Relaxed);
     LAST_STREAM_TIME_UPDATE.store(0, Ordering::Relaxed);
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
     FFMPEG_CACHE_SPEED.store(0, Ordering::Relaxed);
@@ -2076,5 +2088,35 @@ mod tests {
 
         assert!(tracker.file_sizes.contains_key(&keep));
         assert!(!tracker.file_sizes.contains_key(&remove));
+    }
+
+    #[test]
+    fn stream_time_formats_as_hh_mm_ss() {
+        assert_eq!(format_stream_time(0), "00:00:00");
+        assert_eq!(format_stream_time(16 * 60 + 24), "00:16:24");
+        assert_eq!(format_stream_time(3600 + 2 * 60 + 3), "01:02:03");
+    }
+
+    #[test]
+    fn meter_row_shows_time_and_speed_instead_of_total_bytes() {
+        let sample = FfmpegStatsSample {
+            bitrate_kbps: Some(5_280.0),
+            speed: Some(1.0),
+            stream_time_secs: Some(16 * 60 + 24),
+            fps: Some(60.0),
+            ..FfmpegStatsSample::default()
+        };
+
+        let push = FfmpegStatsDisplay::meter_row("RTMP TX", Some(&sample), true);
+        assert!(push.contains("5.28 Mb/s"));
+        assert!(push.contains("1.00x"));
+        assert!(push.contains("00:16:24"));
+        assert!(push.contains("60.0 fps"));
+        assert!(!push.contains("Total"));
+        assert!(!push.to_ascii_lowercase().contains("gib"));
+
+        let cache = FfmpegStatsDisplay::meter_row("Cache RX", Some(&sample), false);
+        assert!(cache.contains("00:16:24"));
+        assert!(!cache.contains("fps"));
     }
 }

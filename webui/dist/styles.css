@@ -1664,11 +1664,33 @@ input[type="checkbox"] {
 }
 
 .bili-network-meter-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
   color: var(--text);
   font-size: var(--fs-md);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.bili-network-meter-speed {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bili-network-meter-speed[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.bili-network-meter-speed[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.bili-network-meter-speed[data-tone="danger"] {
+  color: var(--danger);
 }
 
 .bili-network-total {

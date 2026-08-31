@@ -24,8 +24,8 @@ pub struct BiliStatus {
     pub stream_cache_bitrate_kbps: Option<f32>,
     pub stream_fps: Option<f32>,
     pub stream_frame: Option<u64>,
-    pub stream_total_bytes: u64,
-    pub stream_cache_total_bytes: u64,
+    pub stream_time_secs: Option<u32>,
+    pub stream_cache_time_secs: Option<u32>,
     pub hls_cache_active: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stream_bitrate_history: Vec<f32>,
@@ -42,8 +42,8 @@ impl BiliStatus {
         self.stream_cache_bitrate_kbps = network.stream_cache_bitrate_kbps;
         self.stream_fps = network.stream_fps;
         self.stream_frame = network.stream_frame;
-        self.stream_total_bytes = network.stream_total_bytes;
-        self.stream_cache_total_bytes = network.stream_cache_total_bytes;
+        self.stream_time_secs = network.stream_time_secs;
+        self.stream_cache_time_secs = network.stream_cache_time_secs;
         self.hls_cache_active = network.hls_cache_active;
         self.stream_bitrate_history = network.stream_bitrate_history;
         self.stream_cache_bitrate_history = network.stream_cache_bitrate_history;
@@ -58,8 +58,8 @@ pub struct NetworkStatus {
     pub stream_cache_bitrate_kbps: Option<f32>,
     pub stream_fps: Option<f32>,
     pub stream_frame: Option<u64>,
-    pub stream_total_bytes: u64,
-    pub stream_cache_total_bytes: u64,
+    pub stream_time_secs: Option<u32>,
+    pub stream_cache_time_secs: Option<u32>,
     pub hls_cache_active: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stream_bitrate_history: Vec<f32>,

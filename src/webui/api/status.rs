@@ -170,11 +170,11 @@ pub(crate) fn current_network_status() -> NetworkStatus {
         },
         stream_fps: network_stats.push_fps,
         stream_frame: network_stats.push_frame,
-        stream_total_bytes: network_stats.push_total_bytes,
-        stream_cache_total_bytes: if hls_cache_active {
-            network_stats.cache_total_bytes
+        stream_time_secs: network_stats.push_time_secs,
+        stream_cache_time_secs: if hls_cache_active {
+            network_stats.cache_time_secs
         } else {
-            0
+            None
         },
         hls_cache_active,
         stream_bitrate_history: network_stats.push_bitrate_history,
