@@ -2172,7 +2172,7 @@ a.cluster-node-name-link {
 }
 
 .cluster-network-mirror .bili-network-graph {
-  height: 56px;
+  height: 72px;
   gap: 1px;
 }
 
@@ -2188,9 +2188,10 @@ a.cluster-node-name-link {
   margin-top: 0;
 }
 
-/* Query the network panel, not the viewport: at 900px the featured card
-   splits stream | network, so the plot's box is often ~320–500px. */
-@container cluster-net (min-width: 400px) {
+/* Below this the panel is phone-narrow or a half-width featured column:
+   one mirrored RX/TX plot like the dashboard Network card, not two stacked
+   sparklines. Sparks sit beside the meters only when both 60s rows fit. */
+@container cluster-net (min-width: 760px) {
   .cluster-network-mirror {
     display: none;
   }
@@ -2222,14 +2223,6 @@ a.cluster-node-name-link {
     min-width: 1px;
   }
 
-  .cluster-node-network .bili-network-meters {
-    grid-template-columns: 1fr;
-    gap: var(--sp-3);
-  }
-}
-
-/* Two meter+spark columns only when each half can hold 60s of bars. */
-@container cluster-net (min-width: 760px) {
   .cluster-node-network .bili-network-meters {
     grid-template-columns: 1fr 1fr;
     gap: var(--sp-3);
