@@ -361,7 +361,22 @@ pub(crate) fn update_node(mut node: ClusterNodeSnapshot, local_node_id: &str) {
         node.active_stream = state.local_stream.clone();
         node.failed_restarts = state.local_failed_restarts;
     }
+    let prev_gate = state
+        .nodes
+        .get(&node.node_id)
+        .and_then(|existing| existing.status.as_ref())
+        .map(|status| status.bilibili.enable_danmaku_command);
+    let next_gate = node
+        .status
+        .as_ref()
+        .map(|status| status.bilibili.enable_danmaku_command);
+    let owner_changed =
+        state.active_owner.as_deref() == Some(node.node_id.as_str()) && prev_gate != next_gate;
     state.nodes.insert(node.node_id.clone(), node);
+    drop(state);
+    if owner_changed {
+        crate::webui::public::snapshot::invalidate_public_status_snapshot();
+    }
 }
 
 pub(crate) fn merge_cluster_status_from_direct_peer(
@@ -405,6 +420,7 @@ pub(crate) fn merge_direct_peer_status(
             .peer_heartbeat_acks
             .insert(peer_node_id.to_string(), received_at);
     }
+    let prev_gate = owner_danmaku_gate(&state);
     merge_cluster_status_into(
         &mut state,
         status,
@@ -412,7 +428,23 @@ pub(crate) fn merge_direct_peer_status(
         Some(cfg),
         received_at,
     );
-    state.active_owner.as_deref() == Some(peer_node_id)
+    let next_gate = owner_danmaku_gate(&state);
+    let peer_is_owner = state.active_owner.as_deref() == Some(peer_node_id);
+    drop(state);
+    if prev_gate != next_gate {
+        crate::webui::public::snapshot::invalidate_public_status_snapshot();
+    }
+    peer_is_owner
+}
+
+fn owner_danmaku_gate(state: &ClusterState) -> Option<bool> {
+    let owner = state.active_owner.as_deref()?;
+    state
+        .nodes
+        .get(owner)?
+        .status
+        .as_ref()
+        .map(|status| status.bilibili.enable_danmaku_command)
 }
 
 pub(crate) fn merge_cluster_status_into(

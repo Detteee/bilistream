@@ -50,7 +50,7 @@ struct CacheEntry {
     missing_rounds: u32,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct CacheIndex {
     entries: HashMap<String, CacheEntry>,
 }
@@ -167,12 +167,8 @@ pub(super) async fn reconcile(urls: &[String]) {
         return;
     }
 
-    let mut index = match INDEX
-        .read()
-        .ok()
-        .and_then(|guard| guard.is_some().then_some(()))
-    {
-        Some(()) => take_index(),
+    let mut index = match INDEX.read().ok().and_then(|guard| guard.clone()) {
+        Some(index) => index,
         None => reconcile_index_with_disk(&dir).await,
     };
 
@@ -195,14 +191,6 @@ pub(super) async fn reconcile(urls: &[String]) {
     delete_unreferenced(&dir, &mut index, &wanted).await;
     save_index(&dir, &index).await;
     store_index(index);
-}
-
-fn take_index() -> CacheIndex {
-    INDEX
-        .write()
-        .ok()
-        .and_then(|mut guard| guard.take())
-        .unwrap_or_default()
 }
 
 fn store_index(index: CacheIndex) {

@@ -10,9 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::{
-    ClusterNodeRole, ClusterNodeSnapshot, ClusterStatus, ClusterStreamIdentity,
-};
+use crate::cluster::{ClusterNodeRole, ClusterNodeSnapshot, ClusterStatus, ClusterStreamIdentity};
 use crate::webui::state::{BiliStatus, NetworkStatus, NicoStatus, StatusData, TwStatus, YtStatus};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

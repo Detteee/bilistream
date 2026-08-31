@@ -17,8 +17,9 @@ use crate::config::{Channel, Config};
 use crate::plugins::banned_keywords::{banned_keyword_hits, danmaku_banned_keywords};
 use crate::plugins::holodex::HolodexStream;
 
-/// Why a stream cannot be requested. The matched keyword itself is never sent:
-/// a public page should not publish the blocklist.
+/// Why a stream cannot be requested. Banned-keyword hits go in
+/// `reason_keywords` rather than this enum, so the page can name the words
+/// without a new variant per match.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NotSwitchable {
@@ -171,18 +172,17 @@ fn command_target(
 
 /// Whether a stream can be requested, and why not when it cannot.
 ///
-/// Runs the same keyword predicate the danmaku path uses, so the page cannot
-/// offer a request that would be rejected on arrival.
+/// Per-stream reasons (unknown channel, banned title) are computed even when
+/// the owner's processor gate is down. The page greys every 切换 button from
+/// the live status payload; baking the gate in as the only reason would hide
+/// a keyword block and, after 转播 ends, leave every card stuck unswitchable
+/// until the 30s Holodex snapshot rebuilt.
 fn switchability(
     stream: &HolodexStream,
     target: Option<&CommandTarget>,
     danmaku_enabled: bool,
     banned: &[String],
 ) -> (Option<NotSwitchable>, Vec<String>) {
-    if !danmaku_enabled {
-        return (Some(NotSwitchable::DanmakuDisabled), Vec::new());
-    }
-
     let Some(target) = target else {
         return (Some(NotSwitchable::UnknownChannel), Vec::new());
     };
@@ -196,7 +196,18 @@ fn switchability(
     );
     let hits = banned_keyword_hits(&haystack, banned);
     if !hits.is_empty() {
-        return (Some(NotSwitchable::BannedKeyword), hits);
+        // Title matches first, then topic, matching the "标题/分区包含" wording.
+        let title = stream.title.to_lowercase();
+        let (in_title, in_topic): (Vec<_>, Vec<_>) = hits
+            .into_iter()
+            .partition(|keyword| title.contains(keyword.as_str()));
+        let mut ordered = in_title;
+        ordered.extend(in_topic);
+        return (Some(NotSwitchable::BannedKeyword), ordered);
+    }
+
+    if !danmaku_enabled {
+        return (Some(NotSwitchable::DanmakuDisabled), Vec::new());
     }
 
     (None, Vec::new())
@@ -315,10 +326,6 @@ fn store_snapshot(streams: &[PublicStream]) {
     if let Ok(mut guard) = SNAPSHOT.write() {
         if let Some(previous) = guard.as_ref() {
             if previous.body == body {
-                *guard = Some(StreamsSnapshot {
-                    body: previous.body.clone(),
-                    etag: previous.etag.clone(),
-                });
                 return;
             }
         }
@@ -534,6 +541,21 @@ mod tests {
         assert_eq!(built[0].reason, Some(NotSwitchable::DanmakuDisabled));
     }
 
+    /// A keyword block is still a keyword block while 转播 has the processor
+    /// down, so the page can keep showing 标题/分区包含 after the gate reopens
+    /// without waiting for a Holodex rebuild.
+    #[test]
+    fn a_banned_keyword_outweighs_the_global_gate() {
+        let built = build(
+            vec![stream("Late night ASMR", None, "UCkamito")],
+            false,
+            &["asmr"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
+        assert_eq!(built[0].reason_keywords, vec!["asmr".to_string()]);
+    }
+
     #[test]
     fn a_banned_keyword_blocks_only_that_stream() {
         let built = build(
@@ -563,7 +585,7 @@ mod tests {
         assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
         assert_eq!(
             built[0].reason_keywords,
-            vec!["talk".to_string(), "雑談".to_string()]
+            vec!["雑談".to_string(), "talk".to_string()]
         );
     }
 

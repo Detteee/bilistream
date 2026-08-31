@@ -70,6 +70,13 @@ html.light-theme {
   font-size: var(--fs-md);
 }
 
+/* Why 切换 is greyed: a keyword block names the words, other reasons just
+   say so. Muted so it sits with the meta line rather than shouting. */
+.holodex-stream-note {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
 /* The 切换 button is present but inert when a stream cannot be requested, so
    viewers can see the difference between "not offered" and "not there". */
 .holodex-stream-btn:disabled,

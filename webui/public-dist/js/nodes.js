@@ -43,11 +43,21 @@ function isRestreaming(node) {
   return !!node.ffmpeg_running && hasRtmpTx(node.network);
 }
 
+/// Same condition as the 转播中 badge: an active node with ffmpeg on the wire.
+export function clusterIsRestreaming(nodes) {
+  return Array.isArray(nodes) && nodes.some((node) => node.role === 'active' && isRestreaming(node));
+}
+
 function hasDetail(node) {
   return !!node.stream || isRestreaming(node) || hasHlsCache(node.network);
 }
 
 function roleLabel(node) {
+  // role is set before healthy is cleared for drain/fault, so check it first
+  // or a 维护中 node would read as 异常.
+  if (node.role === 'draining') {
+    return ROLE_LABELS.draining;
+  }
   if (!node.healthy) {
     return ROLE_LABELS.unhealthy;
   }
@@ -58,6 +68,9 @@ function roleLabel(node) {
 }
 
 function roleClass(node) {
+  if (node.role === 'draining') {
+    return 'draining';
+  }
   if (!node.healthy) {
     return 'unhealthy';
   }

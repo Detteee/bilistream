@@ -43,7 +43,7 @@ fn get_if_fresh(ids: &[String], max_age: Duration) -> Option<Vec<HolodexStream>>
     Some(entry.streams.clone())
 }
 
-pub fn put(ids: &[String], streams: &[HolodexStream]) {
+pub(crate) fn put(ids: &[String], streams: &[HolodexStream]) {
     if let Ok(mut guard) = CACHE.write() {
         *guard = Some(Entry {
             ids_key: ids_key(ids),

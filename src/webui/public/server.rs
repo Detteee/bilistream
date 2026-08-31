@@ -52,13 +52,8 @@ async fn public_status(headers: HeaderMap) -> Response {
         return (StatusCode::SERVICE_UNAVAILABLE, "status unavailable").into_response();
     };
 
-    if let Some(requested) = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-    {
-        if requested == etag {
-            return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
-        }
+    if not_modified(&headers, &etag) {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
     }
 
     (

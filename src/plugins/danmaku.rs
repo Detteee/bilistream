@@ -815,12 +815,20 @@ pub fn run_danmaku() {
 /// Enable or disable danmaku command processing.
 /// The client continues to monitor for WARNING/CUT_OFF regardless of this setting.
 pub fn enable_danmaku_commands(enabled: bool) {
+    if is_danmaku_commands_enabled() == enabled {
+        return;
+    }
     set_danmaku_commands_enabled(enabled);
     if enabled {
         tracing::info!("✅ 弹幕命令已启用");
     } else {
         tracing::info!("⏸️ 弹幕命令已禁用");
     }
+    // The public page keys 切换 on this gate. Bust the 5s snapshot so a
+    // poll that lands after 转播 ends (and the "可使用弹幕指令进行换台"
+    // danmaku) does not keep serving the closed state.
+    crate::webui::public::snapshot::invalidate_public_status_snapshot();
+    crate::webui::state::request_status_refresh();
 }
 
 /// Stop the danmaku client

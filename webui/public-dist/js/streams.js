@@ -15,6 +15,7 @@ import {
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
   danmaku_disabled: '弹幕点播当前已关闭',
+  restreaming: '转播中，弹幕点播已关闭',
   banned_keyword: '该直播不可点播',
   unsupported_platform: '该平台不支持弹幕点播',
   unknown_channel: '该频道不在点播列表中',
@@ -25,28 +26,40 @@ let lastStreams = null;
 /// `null` until the status payload arrives, so a Holodex poll that lands first
 /// can still use `stream.switchable`. `false` is the restreaming gate.
 let danmakuEnabled = null;
+/// True while an active node is pushing. Distinct from the config switch: a
+/// restream keeps that on and only gates the processor.
+let restreaming = false;
 
-export function setDanmakuEnabled(enabled) {
+export function setDanmakuEnabled(enabled, isRestreamingNow) {
   const next = !!enabled;
-  if (danmakuEnabled === next) {
+  const nextRestreaming = !!isRestreamingNow;
+  if (danmakuEnabled === next && restreaming === nextRestreaming) {
     return;
   }
   danmakuEnabled = next;
+  restreaming = nextRestreaming;
   if (lastStreams) {
     renderStreams(lastStreams);
   }
 }
 
 function streamIsSwitchable(stream) {
+  // The live processor gate is the switch key: 转播 sets it off, and the
+  // "空澄セナ 直播结束，可使用弹幕指令进行换台" path sets it back on.
+  // A Holodex snapshot taken while it was off still says danmaku_disabled;
+  // once the gate is on, that stale reason must not keep 切换 grey.
   if (danmakuEnabled === false) {
     return false;
+  }
+  if (danmakuEnabled === true && stream.reason === 'danmaku_disabled') {
+    return true;
   }
   return !!stream.switchable;
 }
 
 function switchDisabledReason(stream) {
   if (danmakuEnabled === false) {
-    return REASON_LABELS.danmaku_disabled;
+    return restreaming ? REASON_LABELS.restreaming : REASON_LABELS.danmaku_disabled;
   }
   return reasonText(stream);
 }
@@ -72,7 +85,7 @@ export function setAreas(list) {
 }
 
 /// `%转播%<平台>%<频道>%<分区>` — the format danmaku.rs parses.
-export function buildCommand(platform, channel, area) {
+function buildCommand(platform, channel, area) {
   return `%转播%${platform}%${channel}%${area}`;
 }
 
@@ -83,7 +96,7 @@ function length(text) {
 /// Every token that could stand in for an area in a command. The parser strips
 /// whitespace before matching, so a name or alias containing any can never
 /// resolve and is left out entirely.
-export function areaTokens(area) {
+function areaTokens(area) {
   if (!area) {
     return [];
   }
@@ -425,6 +438,15 @@ function createStreamCard(stream, isLive) {
 
   lines.appendChild(createStatusMeta(stream, isLive));
 
+  // The 切换 tooltip already has this, but a greyed button is easy to miss,
+  // and a keyword block without the words reads as arbitrary.
+  if (!streamIsSwitchable(stream)) {
+    const note = document.createElement('p');
+    note.className = 'holodex-stream-note';
+    note.textContent = switchDisabledReason(stream);
+    lines.appendChild(note);
+  }
+
   if (stream.suggested_area_name) {
     const area = document.createElement('p');
     area.className = 'holodex-stream-area-hint';
@@ -560,7 +582,7 @@ export function confirmArea() {
 
 /// The command to show, plus a shorter one when the formal names do not fit a
 /// regular account's danmaku.
-export function commandForms(stream, area) {
+function commandForms(stream, area) {
   const tokens = areaTokens(area);
   if (tokens.length === 0 || !stream.command_channel) {
     return null;
@@ -645,7 +667,7 @@ export async function copyCommand(inputId = 'command-text') {
     // fallback when the page is opened over plain http.
     await navigator.clipboard.writeText(input.value);
     setFeedback('已复制，去直播间发送即可。');
-  } catch (error) {
+  } catch {
     input.select();
     setFeedback('复制失败，请手动选中并复制。');
   }

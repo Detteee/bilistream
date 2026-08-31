@@ -117,6 +117,19 @@ pub(super) async fn current_public_status() -> Option<(String, String)> {
     read_snapshot()
 }
 
+/// Drop the TTL so the next poll rebuilds. Used when the owner's processor
+/// gate flips: 转播 ending enables `%转播%` and the page should not wait 5s
+/// to notice. The last good body is kept, so a failed rebuild still answers.
+pub(crate) fn invalidate_public_status_snapshot() {
+    if let Ok(mut guard) = SNAPSHOT.write() {
+        if let Some(snap) = guard.as_mut() {
+            snap.built_at = Instant::now()
+                .checked_sub(SNAPSHOT_TTL)
+                .unwrap_or(snap.built_at);
+        }
+    }
+}
+
 fn snapshot_is_fresh() -> bool {
     SNAPSHOT
         .read()

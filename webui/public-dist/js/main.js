@@ -5,7 +5,7 @@
 // the tab is hidden.
 
 import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=7';
-import { renderNodes } from './nodes.js?v=8';
+import { clusterIsRestreaming, renderNodes } from './nodes.js?v=10';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -16,7 +16,7 @@ import {
   setDanmakuEnabled,
   setStatus,
   stopDurationTicker,
-} from './streams.js?v=7';
+} from './streams.js?v=11';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
 /// 304s. Streams turn over on the server's own 30s timer.
@@ -25,11 +25,26 @@ const STREAMS_POLL_MS = 30_000;
 
 let statusTimer = null;
 let streamsTimer = null;
+const etags = new Map();
 
 async function getJson(path) {
-  const response = await fetch(path, { headers: { Accept: 'application/json' } });
+  const headers = { Accept: 'application/json' };
+  const etag = etags.get(path);
+  if (etag) {
+    headers['If-None-Match'] = etag;
+  }
+  // no-cache revalidates every poll so a 转播-end gate flip is not held in
+  // the browser's max-age window. Unchanged payloads still 304.
+  const response = await fetch(path, { headers, cache: 'no-cache' });
+  if (response.status === 304) {
+    return null;
+  }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
+  }
+  const next = response.headers.get('etag');
+  if (next) {
+    etags.set(path, next);
   }
   return response.json();
 }
@@ -41,11 +56,17 @@ function setSyncBanner(inSync) {
 async function refreshStatus() {
   try {
     const status = await getJson('/api/public/status');
+    if (!status) {
+      return;
+    }
     // readonly keeps every switch visible but locked, so viewers can see what
     // is on without being offered a control that is not theirs.
     renderStatusCards(status, { readonly: true, showNetwork: false });
     renderNodes(status.nodes);
-    setDanmakuEnabled(status.bilibili?.enable_danmaku_command);
+    setDanmakuEnabled(
+      status.bilibili?.enable_danmaku_command,
+      clusterIsRestreaming(status.nodes),
+    );
     setSyncBanner(status.in_sync !== false);
   } catch (error) {
     console.debug('status refresh failed', error);
@@ -56,6 +77,9 @@ async function refreshStatus() {
 async function refreshStreams() {
   try {
     const streams = await getJson('/api/public/streams');
+    if (!streams) {
+      return;
+    }
     renderStreams(streams);
   } catch (error) {
     console.debug('streams refresh failed', error);
