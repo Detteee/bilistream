@@ -266,6 +266,21 @@ fn load_areas_config() -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+/// Bilibili's catch-all 其他单机. A Holodex card treats a match here the same
+/// as no match, so the operator still picks the area by hand.
+pub const DEFAULT_AREA_ID: u64 = 235;
+
+/// Topic plus title, which is what Holodex cards and the restream loop both
+/// feed into [`check_area_id_with_title`]. Underscores become spaces so a
+/// Holodex `just_chatting` topic can hit a `just chatting` keyword.
+pub fn stream_area_haystack(topic: Option<&str>, title: &str) -> String {
+    let title = title.trim();
+    match topic.map(str::trim).filter(|topic| !topic.is_empty()) {
+        Some(topic) => format!("{topic} {title}"),
+        None => title.to_string(),
+    }
+}
+
 /// Determines the area id based on the live title by checking keywords from areas.json
 pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
     let title = live_title.to_lowercase().replace("_", " ");
@@ -284,7 +299,8 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
             {
                 for keyword in keywords {
                     if let Some(kw) = keyword.as_str() {
-                        if title.contains(&kw.to_lowercase()) {
+                        let kw = kw.trim().to_lowercase();
+                        if !kw.is_empty() && title.contains(&kw) {
                             return id;
                         }
                     }
@@ -294,6 +310,23 @@ pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
     }
 
     current_area_id
+}
+
+/// Suggested Holodex 切换 area from the current `areas.json` keywords.
+///
+/// Reads the file on every call so a keyword or ban-adjacent edit shows up on
+/// the next Holodex refresh instead of waiting for a process restart. Area
+/// 235 is the default and is left unset so the picker still opens.
+pub fn suggest_area_from_stream(
+    topic: Option<&str>,
+    title: &str,
+) -> (Option<u64>, Option<String>) {
+    let id = check_area_id_with_title(&stream_area_haystack(topic, title), DEFAULT_AREA_ID);
+    if id == DEFAULT_AREA_ID {
+        (None, None)
+    } else {
+        (Some(id), get_area_name(id))
+    }
 }
 
 /// Resolve area alias to area name using areas.json
@@ -930,6 +963,13 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_area_haystack_joins_topic_and_title() {
+        assert_eq!(stream_area_haystack(Some("chat"), "雑談"), "chat 雑談");
+        assert_eq!(stream_area_haystack(Some("  "), "solo"), "solo");
+        assert_eq!(stream_area_haystack(None, " solo "), "solo");
+    }
 
     #[test]
     fn unknown_area_name_uses_stable_fallback() {

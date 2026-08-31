@@ -207,7 +207,10 @@
       "aliases": [],
       "id": 530,
       "name": "萌宅领域",
-      "title_keywords": []
+      "title_keywords": [
+        "freechat",
+        "singing"
+      ]
     },
     {
       "aliases": [
@@ -241,7 +244,11 @@
       "id": 646,
       "name": "生活杂谈",
       "title_keywords": [
-        "UP主日常"
+        "UP主日常",
+        "talk",
+        "zatsudan",
+        "雑談",
+        "just chatting"
       ]
     },
     {

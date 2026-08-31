@@ -161,6 +161,7 @@ async function addArea() {
       showManagementSuccess(result, '分区添加成功');
       clearAreaForm();
       loadAreas();
+      notifyAreasJsonChanged();
     } else {
       showNotification(`添加失败: ${result.message}`, 'error');
     }
@@ -171,6 +172,9 @@ async function addArea() {
 }
 function showManagementSuccess(result, fallbackMessage) {
   showNotification(result.message || fallbackMessage, 'success');
+}
+function notifyAreasJsonChanged() {
+  document.dispatchEvent(new Event('areas-json-changed'));
 }
 function readAreaForm() {
   return {
@@ -425,6 +429,7 @@ async function updateArea(originalId) {
         showManagementSuccess(result, '分区更新成功');
         clearAreaForm();
         loadAreas();
+        notifyAreasJsonChanged();
       } else {
         showNotification(`更新失败: ${result.message}`, 'error');
       }
@@ -437,6 +442,7 @@ async function updateArea(originalId) {
       showManagementSuccess(result, '分区更新成功');
       clearAreaForm();
       loadAreas();
+      notifyAreasJsonChanged();
     } else {
       showNotification(`更新失败: ${result.message}`, 'error');
     }
@@ -456,6 +462,7 @@ async function deleteArea(areaId) {
     if (result.success) {
       showManagementSuccess(result, '分区删除成功');
       loadAreas();
+      notifyAreasJsonChanged();
     } else {
       showNotification(`删除失败: ${result.message}`, 'error');
     }

@@ -100,40 +100,8 @@ pub(crate) fn map_holodex_streams_with_area(
         .into_iter()
         .map(|stream| {
             let is_placeholder = stream.stream_type == "placeholder";
-            let title_for_detection = if let Some(ref topic) = stream.topic_id {
-                format!("{} {}", topic, stream.title)
-            } else {
-                stream.title.clone()
-            };
-
-            let mut suggested_area_id = 235;
-            if let Some(ref topic) = stream.topic_id {
-                let topic_lower = topic.to_lowercase();
-                if topic_lower.contains("freechat")
-                    || topic_lower.contains("talk")
-                    || topic_lower.contains("singing")
-                {
-                    suggested_area_id = 530;
-                }
-                if topic_lower.contains("talk")
-                    || topic_lower.contains("zatsudan")
-                    || topic_lower.contains("雑談")
-                    || topic_lower.contains("just chatting")
-                {
-                    suggested_area_id = 646;
-                }
-            }
-
-            if suggested_area_id == 235 {
-                suggested_area_id =
-                    crate::plugins::check_area_id_with_title(&title_for_detection, 235);
-            }
-
-            let suggested_area_name = if suggested_area_id != 235 {
-                crate::plugins::get_area_name(suggested_area_id)
-            } else {
-                None
-            };
+            let (suggested_area_id, suggested_area_name) =
+                crate::plugins::suggest_area_from_stream(stream.topic_id.as_deref(), &stream.title);
 
             HolodexStreamWithArea {
                 id: stream.id,
@@ -149,11 +117,7 @@ pub(crate) fn map_holodex_streams_with_area(
                 channel_id: stream.channel.id,
                 channel_name: stream.channel.name,
                 channel_photo: stream.channel.photo.filter(|p| !p.is_empty()),
-                suggested_area_id: if suggested_area_id != 235 {
-                    Some(suggested_area_id)
-                } else {
-                    None
-                },
+                suggested_area_id,
                 suggested_area_name,
                 is_placeholder,
                 placeholder_type: stream.placeholder_type,

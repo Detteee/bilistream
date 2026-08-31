@@ -60,6 +60,11 @@ function initDashboardControls() {
   document
     .getElementById('refreshHolodexBtn')
     ?.addEventListener('click', refreshHolodexStreams);
+  document.addEventListener('areas-json-changed', () => {
+    if (holodexStreamsRequested) {
+      refreshHolodexStreams();
+    }
+  });
   document
     .getElementById('bili-title-edit-btn')
     ?.addEventListener('click', toggleTitleEdit);

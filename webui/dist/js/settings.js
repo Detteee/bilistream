@@ -344,6 +344,7 @@ async function saveBannedKeywords() {
   if (!result.success) {
     throw new Error(result.message || '未知错误');
   }
+  document.dispatchEvent(new Event('areas-json-changed'));
 }
 function readBannedKeywordLines(elementId) {
   const value = document.getElementById(elementId)?.value || '';
