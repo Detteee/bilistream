@@ -139,60 +139,72 @@ function createBiliNetworkBar(type, heightPercent) {
   return bar;
 }
 
-function createNetworkColumn(showCache) {
+function createNetworkColumn(mode) {
   const column = document.createElement('span');
   column.className = 'bili-network-column';
-  if (showCache) {
+  if (mode === 'both' || mode === 'cache') {
     column.appendChild(createBiliNetworkBar('cache', 0));
   }
-  column.appendChild(createBiliNetworkBar('push', 0));
+  if (mode === 'both' || mode === 'push') {
+    column.appendChild(createBiliNetworkBar('push', 0));
+  }
   return column;
 }
 
-function paintNetworkColumn(column, showCache, cacheValue, pushValue, maxRate, heightScale) {
+function paintNetworkColumn(column, mode, cacheValue, pushValue, maxRate, heightScale) {
   const bars = column.children;
-  if (showCache) {
+  if (mode === 'both') {
     setNetworkBarHeight(bars[0], networkBarHeight(cacheValue, maxRate, heightScale));
     setNetworkBarHeight(bars[1], networkBarHeight(pushValue, maxRate, heightScale));
     return;
   }
-  setNetworkBarHeight(bars[0], networkBarHeight(pushValue, maxRate, heightScale));
+  const value = mode === 'cache' ? cacheValue : pushValue;
+  setNetworkBarHeight(bars[0], networkBarHeight(value, maxRate, heightScale));
 }
 
-/// Paints a 60s × 1 Hz RX/TX plot. History is sampled on the streaming node;
-/// cluster and public pages redraw it at their own poll, not at 1 Hz.
+function networkGraphMode(options) {
+  if (options.series === 'cache' || options.series === 'push') {
+    return options.series;
+  }
+  return options.showCache ? 'both' : 'push';
+}
+
+/// Paints a 60s × 1 Hz RX/TX plot. Always one column per second: dropping
+/// to 32 on a 520px viewport made full-width node cards draw fat bars.
+/// Cluster and public pages redraw this at their own poll, not at 1 Hz.
 export function paintNetworkGraph(graph, options = {}) {
   if (!graph) {
     return;
   }
 
-  const showCache = !!options.showCache;
+  const mode = networkGraphMode(options);
   const pushHistory = asBitrateHistory(options.pushHistory);
-  const cacheHistory = showCache ? asBitrateHistory(options.cacheHistory) : [];
+  const cacheHistory = mode === 'push' ? [] : asBitrateHistory(options.cacheHistory);
 
-  // Cache on: mirrored halves. Cache off: full-height single-sided push bars.
-  graph.classList.toggle('single-sided', !showCache);
+  graph.classList.toggle('single-sided', mode === 'push');
+  graph.classList.toggle('spark-tx', mode === 'push' && !!options.series);
+  graph.classList.toggle('spark-rx', mode === 'cache');
 
-  const activeSeries = showCache
-    ? cacheHistory.concat(pushHistory)
-    : pushHistory;
-  const maxRate = Math.max(1, ...activeSeries);
+  const activeSeries = mode === 'cache'
+    ? cacheHistory
+    : mode === 'both'
+      ? cacheHistory.concat(pushHistory)
+      : pushHistory;
+  const maxRate = options.maxRate > 0 ? options.maxRate : Math.max(1, ...activeSeries);
   setNodeText(options.scaleEl, formatNetworkRate(maxRate));
-  // One column per second for the whole 60s window. Halving that on a
-  // 520px viewport made a full-width plot draw a handful of fat bars.
-  const graphWidth = biliNetworkHistoryLimit;
+  const graphWidth = options.columnLimit || biliNetworkHistoryLimit;
   setNodeText(options.windowEl, `−${graphWidth}s`);
   const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
   const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
-  const heightScale = showCache ? 50 : 100;
+  const heightScale = mode === 'both' ? 50 : 100;
 
   const needsRebuild = graph.childElementCount !== graphWidth
-    || graph.dataset.cache !== String(!!showCache);
+    || graph.dataset.mode !== mode;
   if (needsRebuild) {
-    graph.dataset.cache = String(!!showCache);
+    graph.dataset.mode = mode;
     const fragment = document.createDocumentFragment();
     for (let i = 0; i < graphWidth; i += 1) {
-      fragment.appendChild(createNetworkColumn(showCache));
+      fragment.appendChild(createNetworkColumn(mode));
     }
     graph.replaceChildren(fragment);
   }
@@ -202,7 +214,7 @@ export function paintNetworkGraph(graph, options = {}) {
     const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
     paintNetworkColumn(
       graph.children[i],
-      showCache,
+      mode,
       cacheValue,
       pushValue,
       maxRate,
@@ -225,15 +237,45 @@ function historyHasSignal(series) {
   return series.some((value) => value > 0);
 }
 
-/// Graph + axis for a node card. Skips the plot when this snapshot has no
+function wrapMeterSpark(meter, { series, history, maxRate }) {
+  if (!meter || !historyHasSignal(history)) {
+    return;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'cluster-network-row';
+  meter.replaceWith(row);
+
+  const spark = document.createElement('div');
+  spark.className = 'bili-network-graph cluster-network-spark';
+  spark.setAttribute('aria-hidden', 'true');
+  spark.title = '−60s → now';
+  row.append(meter, spark);
+
+  paintNetworkGraph(spark, {
+    series,
+    pushHistory: series === 'push' ? history : [],
+    cacheHistory: series === 'cache' ? history : [],
+    maxRate,
+  });
+}
+
+/// Mirrored plot for a narrow node card, plus a sparkline beside each meter
+/// when the network column is wide enough. Skips when this snapshot has no
 /// samples yet, so a brand-new restream is meters-only until the first window.
-export function appendNetworkHistoryPlot(parent, network, options = {}) {
+export function mountNetworkHistory(panel, network, options = {}) {
   const showCache = !!options.showCache;
   const pushHistory = asBitrateHistory(network?.stream_bitrate_history);
   const cacheHistory = showCache ? asBitrateHistory(network?.stream_cache_bitrate_history) : [];
   if (!historyHasSignal(pushHistory) && !historyHasSignal(cacheHistory)) {
     return false;
   }
+
+  const maxRate = Math.max(1, ...pushHistory, ...cacheHistory);
+  const meters = panel.querySelector('.bili-network-meters');
+
+  const mirror = document.createElement('div');
+  mirror.className = 'cluster-network-mirror';
 
   const graph = document.createElement('div');
   graph.className = 'bili-network-graph';
@@ -248,14 +290,27 @@ export function appendNetworkHistoryPlot(parent, network, options = {}) {
   const nowEl = document.createElement('span');
   nowEl.textContent = 'now';
   axis.append(windowEl, scaleEl, nowEl);
+  mirror.append(graph, axis);
+  panel.insertBefore(mirror, meters);
 
-  parent.append(graph, axis);
   paintNetworkGraph(graph, {
     showCache,
     pushHistory,
     cacheHistory,
+    maxRate,
     scaleEl,
     windowEl,
+  });
+
+  wrapMeterSpark(options.pushMeter, {
+    series: 'push',
+    history: pushHistory,
+    maxRate,
+  });
+  wrapMeterSpark(options.cacheMeter, {
+    series: 'cache',
+    history: cacheHistory,
+    maxRate,
   });
   return true;
 }

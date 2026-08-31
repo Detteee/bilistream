@@ -1989,13 +1989,13 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
   .cluster-node-card-featured > .cluster-node-meta {
     grid-area: meta;
-    grid-template-columns: minmax(140px, auto) minmax(200px, 0.8fr) minmax(320px, 2fr);
+    grid-template-columns: minmax(200px, 0.85fr) minmax(320px, 2.2fr);
     align-items: stretch;
     gap: var(--sp-4);
   }
 
-  .cluster-node-card-featured .cluster-node-meta-row {
-    align-self: start;
+  .cluster-node-card-featured > .cluster-node-meta:has(> :only-child) {
+    grid-template-columns: 1fr;
   }
 
   .cluster-node-card-featured .cluster-node-network {
@@ -2081,6 +2081,29 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   min-width: 0;
 }
 
+.cluster-node-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-heartbeat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cluster-heartbeat .cluster-seen-value {
+  color: var(--text-dim);
+}
+
 .cluster-node-name {
   min-width: 0;
   color: var(--text);
@@ -2127,14 +2150,71 @@ a.cluster-node-name-link {
   border-top: 1px solid var(--line);
 }
 
-/* Same 60s plot as the Bilibili card, shortened so it fills the featured
-   network column instead of leaving a band beside the meters. */
-.cluster-node-network .bili-network-graph {
-  height: 56px;
+.cluster-network-row {
+  display: contents;
 }
 
-.cluster-node-network .bili-network-graph-axis {
+.cluster-network-spark {
+  display: none;
+}
+
+/* RX sparkline grows from the floor in cache colours, not from the 0 line. */
+.bili-network-graph.spark-rx::before {
+  display: none;
+}
+
+.bili-network-graph.spark-rx .bili-network-bar.cache {
+  bottom: 0;
+  top: auto;
+  border-radius: 2px 2px 0 0;
+}
+
+.cluster-network-mirror .bili-network-graph {
+  height: 56px;
+  gap: 1px;
+}
+
+.cluster-network-mirror .bili-network-graph-axis {
   margin-bottom: var(--sp-2);
+}
+
+/* Room for a meter and a sparkline: drop the mirrored plot and sit 60s of
+   history next to RTMP TX / HLS Cache. Below this, the mirror keeps one
+   column per second so a short window cannot fatten the bars. */
+@media (min-width: 520px) {
+  .cluster-network-mirror {
+    display: none;
+  }
+
+  .cluster-network-row {
+    display: grid;
+    grid-template-columns: minmax(108px, max-content) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--sp-3);
+    min-width: 0;
+  }
+
+  .cluster-network-spark {
+    display: flex;
+    height: 36px;
+    min-width: 0;
+    padding-block: 4px;
+    border-block: 0;
+    gap: 1px;
+    justify-content: flex-start;
+  }
+
+  .cluster-network-spark .bili-network-column {
+    flex: 0 1 3px;
+    width: 3px;
+    max-width: 4px;
+    min-width: 2px;
+  }
+
+  .cluster-node-network .bili-network-meters {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+  }
 }
 
 /* Only pair the meters up once both fit without wrapping their detail rows;

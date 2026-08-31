@@ -5,7 +5,7 @@ import { createSelectOption, state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
-import { appendNetworkHistoryPlot } from './status-cards.js';
+import { mountNetworkHistory } from './status-cards.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -646,6 +646,18 @@ function createClusterSeenValue(node) {
   return seen;
 }
 
+function createClusterHeartbeat(node) {
+  const wrap = document.createElement('span');
+  wrap.className = 'cluster-heartbeat';
+  const label = document.createElement('span');
+  label.className = 'cluster-heartbeat-label';
+  label.textContent = '心跳';
+  const seen = createClusterSeenValue(node);
+  seen.className = 'cluster-seen-value';
+  wrap.append(label, seen);
+  return wrap;
+}
+
 function createClusterNodeActions(node) {
   const usable = clusterNodeUsable(node);
   const isRecoverableFault = !!node.draining || !!node.network_unstable
@@ -704,22 +716,18 @@ function createClusterNodeCard(node, clusterConfigVersion) {
 
   const title = document.createElement('div');
   title.className = 'cluster-node-title';
-  title.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
+
+  const identity = document.createElement('div');
+  identity.className = 'cluster-node-identity';
+  identity.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
   const titleChip = createPublicStatusChip(node);
   if (titleChip) {
-    title.appendChild(titleChip);
+    identity.appendChild(titleChip);
   }
+  title.append(identity, createClusterHeartbeat(node));
 
   const meta = document.createElement('div');
   meta.className = 'cluster-node-meta';
-
-  const seenRow = document.createElement('div');
-  seenRow.className = 'cluster-node-meta-row';
-  const seenLabel = document.createElement('span');
-  seenLabel.className = 'cluster-node-meta-label';
-  seenLabel.textContent = '心跳';
-  seenRow.append(seenLabel, createClusterSeenValue(node));
-  meta.appendChild(seenRow);
 
   if (stream) {
     meta.appendChild(createClusterNodeStream(stream));
@@ -869,13 +877,12 @@ function createClusterNodeNetwork(node) {
 
   const panel = document.createElement('div');
   panel.className = 'cluster-node-network';
-  appendNetworkHistoryPlot(panel, network, { showCache: hasCache });
 
   const meters = document.createElement('div');
   meters.className = 'bili-network-meters';
 
   // Push first: it is the leg the cluster actually fails over on.
-  meters.appendChild(createClusterNetworkMeter(
+  const pushMeter = createClusterNetworkMeter(
     'RTMP TX',
     node.ffmpeg_running ? clusterSpeedLabel(network.stream_speed) || '-' : '停止',
     node.ffmpeg_running ? clusterSpeedTone(network.stream_speed) : 'stopped',
@@ -883,19 +890,25 @@ function createClusterNodeNetwork(node) {
     [
       [clusterMeterTime(network.stream_time_secs), clusterMeterFps(network.stream_fps)]
     ]
-  ));
+  );
+  meters.appendChild(pushMeter);
+  pushMeter.dataset.leg = 'tx';
 
+  let cacheMeter = null;
   if (hasCache) {
-    meters.appendChild(createClusterNetworkMeter(
+    cacheMeter = createClusterNetworkMeter(
       'HLS Cache',
       clusterSpeedLabel(network.stream_cache_speed),
       clusterSpeedTone(network.stream_cache_speed),
       formatNetworkRate(network.stream_cache_bitrate_kbps),
       [[clusterMeterTime(network.stream_cache_time_secs)]]
-    ));
+    );
+    meters.appendChild(cacheMeter);
+    cacheMeter.dataset.leg = 'rx';
   }
 
   panel.appendChild(meters);
+  mountNetworkHistory(panel, network, { showCache: hasCache, pushMeter, cacheMeter });
   return panel;
 }
 

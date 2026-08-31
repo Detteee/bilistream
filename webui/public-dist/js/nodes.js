@@ -5,7 +5,7 @@
 // buttons, and no links into a node's WebUI.
 
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from '/shared/js/format.js?v=8';
-import { appendNetworkHistoryPlot } from '/shared/js/status-cards.js?v=9';
+import { mountNetworkHistory } from '/shared/js/status-cards.js?v=10';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -242,9 +242,10 @@ function createNetworkMeter(label, speed, tone, value, detailGroups) {
   return meter;
 }
 
-/// Same column layout as the dashboard: 60s plot from the last snapshot,
-/// then the meters. The page still polls every 10s; the samples themselves
-/// are 1 Hz on the streaming node and arrive with each heartbeat.
+/// Same column layout as the dashboard: a mirrored 60s plot when the card
+/// is narrow, a sparkline beside each meter when there is room. The page
+/// still polls every 10s; the samples themselves are 1 Hz on the streaming
+/// node and arrive with each heartbeat.
 function createNetwork(node) {
   const network = node.network || {};
   const pushing = isRestreaming(node);
@@ -255,13 +256,13 @@ function createNetwork(node) {
 
   const panel = document.createElement('div');
   panel.className = 'cluster-node-network';
-  appendNetworkHistoryPlot(panel, network, { showCache: cache });
 
   const meters = document.createElement('div');
   meters.className = 'bili-network-meters';
 
+  let pushMeter = null;
   if (pushing) {
-    meters.appendChild(createNetworkMeter(
+    pushMeter = createNetworkMeter(
       'RTMP TX',
       speedLabel(network.stream_speed),
       speedTone(network.stream_speed),
@@ -269,20 +270,26 @@ function createNetwork(node) {
       [
         [meterTime(network.stream_time_secs), meterFps(network.stream_fps)],
       ],
-    ));
+    );
+    meters.appendChild(pushMeter);
+    pushMeter.dataset.leg = 'tx';
   }
 
+  let cacheMeter = null;
   if (cache) {
-    meters.appendChild(createNetworkMeter(
+    cacheMeter = createNetworkMeter(
       'HLS Cache',
       speedLabel(network.stream_cache_speed),
       speedTone(network.stream_cache_speed),
       formatNetworkRate(network.stream_cache_bitrate_kbps),
       [[meterTime(network.stream_cache_time_secs)]],
-    ));
+    );
+    meters.appendChild(cacheMeter);
+    cacheMeter.dataset.leg = 'rx';
   }
 
   panel.appendChild(meters);
+  mountNetworkHistory(panel, network, { showCache: cache, pushMeter, cacheMeter });
   return panel;
 }
 
