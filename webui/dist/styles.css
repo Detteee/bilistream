@@ -171,12 +171,13 @@ code {
   --teal: #94e2d5;
   --live: #ff5c7a;
 
-  /* Network graph, both themes: Cache RX is Sunset Vibes, RTMP TX is
-     Lavender Sky. Tips are the lighter stop; the centre axis is darker. */
-  --net-cache-start: #ffb347;
-  --net-cache-end: #ff416c;
-  --net-push-start: #8360c3;
-  --net-push-end: #ff8fbf;
+  /* Network graph, both themes: RX and TX meet on Lollipop Crush at the
+     0 line. RX tip is cream; TX tip is lilac. */
+  --net-axis: #f962a0;
+  --net-cache-start: #fcf3c4;
+  --net-cache-end: var(--net-axis);
+  --net-push-start: var(--net-axis);
+  --net-push-end: #aa96f9;
 
   /* Platform hues */
   --bilibili: #fb7299;
