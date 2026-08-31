@@ -2144,6 +2144,8 @@ a.cluster-node-name-link {
 }
 
 .cluster-node-network {
+  container-type: inline-size;
+  container-name: cluster-net;
   min-width: 0;
   margin-top: var(--sp-1);
   padding-top: var(--sp-2);
@@ -2178,37 +2180,46 @@ a.cluster-node-name-link {
   margin-bottom: var(--sp-2);
 }
 
-/* Room for a meter and a sparkline: drop the mirrored plot and sit 60s of
-   history next to RTMP TX / HLS Cache. Below this, the mirror keeps one
-   column per second so a short window cannot fatten the bars. */
-@media (min-width: 520px) {
+/* Pair compact meters under the mirrored plot. auto-fit at 120px is only
+   safe without sparklines — two spark rows need ~760px or they overflow. */
+.cluster-node-network .bili-network-meters {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: 0;
+}
+
+/* Query the network panel, not the viewport: at 900px the featured card
+   splits stream | network, so the plot's box is often ~320–500px. */
+@container cluster-net (min-width: 400px) {
   .cluster-network-mirror {
     display: none;
   }
 
   .cluster-network-row {
     display: grid;
-    grid-template-columns: minmax(108px, max-content) minmax(0, 1fr);
-    align-items: center;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: stretch;
     gap: var(--sp-3);
     min-width: 0;
   }
 
   .cluster-network-spark {
     display: flex;
-    height: 36px;
+    height: auto;
+    min-height: 0;
     min-width: 0;
-    padding-block: 4px;
+    overflow: hidden;
+    padding-block: 0;
     border-block: 0;
     gap: 1px;
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
   .cluster-network-spark .bili-network-column {
-    flex: 0 1 3px;
-    width: 3px;
+    flex: 1 1 0;
+    width: auto;
     max-width: 4px;
-    min-width: 2px;
+    min-width: 1px;
   }
 
   .cluster-node-network .bili-network-meters {
@@ -2217,12 +2228,12 @@ a.cluster-node-name-link {
   }
 }
 
-/* Only pair the meters up once both fit without wrapping their detail rows;
-   below that a single full-width column reads better than two cramped ones. */
-.cluster-node-network .bili-network-meters {
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: var(--sp-2) var(--sp-3);
-  margin-top: 0;
+/* Two meter+spark columns only when each half can hold 60s of bars. */
+@container cluster-net (min-width: 760px) {
+  .cluster-node-network .bili-network-meters {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-3);
+  }
 }
 
 .cluster-node-network .bili-network-meter-value {
