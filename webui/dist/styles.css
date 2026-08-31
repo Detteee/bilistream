@@ -172,12 +172,16 @@ code {
   --live: #ff5c7a;
 
   /* Network graph, both themes: RX and TX meet on Lollipop Crush at the
-     0 line. RX tip is cream; TX tip is lilac. */
+     0 line. RX tip is cream; TX tip is lilac. Dark mode punches a hole
+     through the fill so the plot sits on the card; light mode keeps the
+     stops solid so cream and lilac do not wash out on linen. */
   --net-axis: #f962a0;
   --net-cache-start: #fcf3c4;
   --net-cache-end: var(--net-axis);
   --net-push-start: var(--net-axis);
   --net-push-end: #aa96f9;
+  --net-bar-axis-mix: 71%;
+  --net-bar-tip-mix: 63%;
 
   /* Platform hues */
   --bilibili: #fb7299;
@@ -268,6 +272,9 @@ html.light-theme {
   --sh-1: 0 1px 2px rgba(45, 47, 52, 0.06);
   --sh-2: 0 4px 16px rgba(45, 47, 52, 0.08);
   --sh-3: 0 18px 48px rgba(45, 47, 52, 0.12);
+
+  --net-bar-axis-mix: 100%;
+  --net-bar-tip-mix: 100%;
 }
 
 /* Do not pump saturation or overlay with cold black on the linen page. */
@@ -1603,8 +1610,8 @@ input[type="checkbox"] {
   /* Mix % is the colour that remains, not the hole. */
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--net-push-start) 71%, transparent),
-    color-mix(in srgb, var(--net-push-end) 63%, transparent)
+    color-mix(in srgb, var(--net-push-start) var(--net-bar-axis-mix), transparent),
+    color-mix(in srgb, var(--net-push-end) var(--net-bar-tip-mix), transparent)
   );
   opacity: 0;
   transition: height var(--dur) var(--ease), opacity var(--dur) var(--ease);
@@ -1615,8 +1622,8 @@ input[type="checkbox"] {
   border-radius: 2px 2px 0 0;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--net-cache-start) 63%, transparent),
-    color-mix(in srgb, var(--net-cache-end) 71%, transparent)
+    color-mix(in srgb, var(--net-cache-start) var(--net-bar-tip-mix), transparent),
+    color-mix(in srgb, var(--net-cache-end) var(--net-bar-axis-mix), transparent)
   );
 }
 
@@ -1632,8 +1639,8 @@ input[type="checkbox"] {
   border-radius: 2px 2px 0 0;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--net-push-end) 63%, transparent),
-    color-mix(in srgb, var(--net-push-start) 71%, transparent)
+    color-mix(in srgb, var(--net-push-end) var(--net-bar-tip-mix), transparent),
+    color-mix(in srgb, var(--net-push-start) var(--net-bar-axis-mix), transparent)
   );
 }
 
