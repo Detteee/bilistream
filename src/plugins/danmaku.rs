@@ -266,8 +266,9 @@ fn load_areas_config() -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
-/// Bilibili's catch-all 其他单机. A Holodex card treats a match here the same
-/// as no match, so the operator still picks the area by hand.
+/// Bilibili's catch-all 其他单机. The restream loop starts here when nothing
+/// else has been chosen yet. A Holodex card still suggests it when a keyword
+/// actually matched.
 pub const DEFAULT_AREA_ID: u64 = 235;
 
 /// Topic plus title, which is what Holodex cards and the restream loop both
@@ -283,49 +284,43 @@ pub fn stream_area_haystack(topic: Option<&str>, title: &str) -> String {
 
 /// Determines the area id based on the live title by checking keywords from areas.json
 pub fn check_area_id_with_title(live_title: &str, current_area_id: u64) -> u64 {
+    matched_area_id_from_title(live_title).unwrap_or(current_area_id)
+}
+
+fn matched_area_id_from_title(live_title: &str) -> Option<u64> {
+    area_id_matching_keywords(live_title, &load_areas_config()?)
+}
+
+fn area_id_matching_keywords(live_title: &str, areas_config: &serde_json::Value) -> Option<u64> {
     let title = live_title.to_lowercase().replace("_", " ");
-
-    // Load areas configuration
-    let areas_config = match load_areas_config() {
-        Some(config) => config,
-        None => return current_area_id,
-    };
-
-    // Check each area's title keywords
-    if let Some(areas) = areas_config["areas"].as_array() {
-        for area in areas {
-            if let (Some(id), Some(keywords)) =
-                (area["id"].as_u64(), area["title_keywords"].as_array())
-            {
-                for keyword in keywords {
-                    if let Some(kw) = keyword.as_str() {
-                        let kw = kw.trim().to_lowercase();
-                        if !kw.is_empty() && title.contains(&kw) {
-                            return id;
-                        }
-                    }
-                }
+    let areas = areas_config["areas"].as_array()?;
+    for area in areas {
+        let (Some(id), Some(keywords)) = (area["id"].as_u64(), area["title_keywords"].as_array())
+        else {
+            continue;
+        };
+        for keyword in keywords {
+            let Some(kw) = keyword.as_str() else {
+                continue;
+            };
+            let kw = kw.trim().to_lowercase();
+            if !kw.is_empty() && title.contains(&kw) {
+                return Some(id);
             }
         }
     }
-
-    current_area_id
+    None
 }
 
 /// Suggested Holodex 切换 area from the current `areas.json` keywords.
 ///
-/// Reads the file on every call so a keyword or ban-adjacent edit shows up on
-/// the next Holodex refresh instead of waiting for a process restart. Area
-/// 235 is the default and is left unset so the picker still opens.
-pub fn suggest_area_from_stream(
-    topic: Option<&str>,
-    title: &str,
-) -> (Option<u64>, Option<String>) {
-    let id = check_area_id_with_title(&stream_area_haystack(topic, title), DEFAULT_AREA_ID);
-    if id == DEFAULT_AREA_ID {
-        (None, None)
-    } else {
-        (Some(id), get_area_name(id))
+/// Reads the file on every call so a keyword edit shows up on the next Holodex
+/// refresh instead of waiting for a process restart. A keyword hit on 235
+/// (其他单机) is still a suggestion; only a miss leaves the picker to open.
+pub fn suggest_area_from_stream(topic: Option<&str>, title: &str) -> (Option<u64>, Option<String>) {
+    match matched_area_id_from_title(&stream_area_haystack(topic, title)) {
+        Some(id) => (Some(id), get_area_name(id)),
+        None => (None, None),
     }
 }
 
@@ -969,6 +964,25 @@ mod tests {
         assert_eq!(stream_area_haystack(Some("chat"), "雑談"), "chat 雑談");
         assert_eq!(stream_area_haystack(Some("  "), "solo"), "solo");
         assert_eq!(stream_area_haystack(None, " solo "), "solo");
+    }
+
+    #[test]
+    fn a_keyword_hit_on_the_catchall_is_still_a_match() {
+        let areas = serde_json::json!({
+            "areas": [
+                { "id": 235, "title_keywords": ["rust"] },
+                { "id": 252, "title_keywords": ["tarkov", "タルコフ"] }
+            ]
+        });
+        assert_eq!(
+            area_id_matching_keywords("RUST】レオラス最終日", &areas),
+            Some(DEFAULT_AREA_ID)
+        );
+        assert_eq!(
+            area_id_matching_keywords("【Escape from Tarkov】タルコフ", &areas),
+            Some(252)
+        );
+        assert_eq!(area_id_matching_keywords("雑談します", &areas), None);
     }
 
     #[test]
