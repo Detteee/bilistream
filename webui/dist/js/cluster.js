@@ -4,7 +4,7 @@ import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setC
 import { createSelectOption, state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
-import { formatBytes, formatFps, formatNetworkRate, formatSpeedRatio } from './format.js';
+import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -847,12 +847,12 @@ function createClusterNodeNetwork(node) {
     || clusterHasPositiveNumber(network.stream_bitrate_kbps)
     || clusterHasPositiveNumber(network.stream_speed)
     || clusterHasPositiveNumber(network.stream_fps)
-    || clusterHasPositiveNumber(network.stream_frame)
-    || clusterHasPositiveNumber(network.stream_total_bytes);
+    || clusterHasPositiveNumber(network.stream_time_secs)
+    || clusterHasPositiveNumber(network.stream_frame);
   const hasCache = network.hls_cache_active
     && (clusterHasPositiveNumber(network.stream_cache_bitrate_kbps)
       || clusterHasPositiveNumber(network.stream_cache_speed)
-      || clusterHasPositiveNumber(network.stream_cache_total_bytes));
+      || clusterHasPositiveNumber(network.stream_cache_time_secs));
 
   if (!hasPush && !hasCache) {
     return null;
@@ -867,22 +867,21 @@ function createClusterNodeNetwork(node) {
   // Push first: it is the leg the cluster actually fails over on.
   meters.appendChild(createClusterNetworkMeter(
     'RTMP TX',
-    node.ffmpeg_running ? formatSpeedRatio(network.stream_speed) : '停止',
+    node.ffmpeg_running ? clusterSpeedLabel(network.stream_speed) || '-' : '停止',
     node.ffmpeg_running ? clusterSpeedTone(network.stream_speed) : 'stopped',
     formatNetworkRate(network.stream_bitrate_kbps),
     [
-      [`累计 ${formatBytes(network.stream_total_bytes)}`, `${formatFps(network.stream_fps)} fps`]
+      [clusterMeterTime(network.stream_time_secs), clusterMeterFps(network.stream_fps)]
     ]
   ));
 
   if (hasCache) {
     meters.appendChild(createClusterNetworkMeter(
       'HLS Cache',
-      // The cache leg has no push ratio; an empty slot beats a dangling '-'.
-      '',
-      '',
+      clusterSpeedLabel(network.stream_cache_speed),
+      clusterSpeedTone(network.stream_cache_speed),
       formatNetworkRate(network.stream_cache_bitrate_kbps),
-      [[`累计 ${formatBytes(network.stream_cache_total_bytes)}`]]
+      [[clusterMeterTime(network.stream_cache_time_secs)]]
     ));
   }
 
@@ -895,6 +894,18 @@ function clusterSpeedTone(speed) {
   if (speed > 0.97) return 'ok';
   if (speed > 0.94) return 'warn';
   return 'danger';
+}
+
+function clusterSpeedLabel(speed) {
+  return Number.isFinite(speed) && speed > 0 ? formatSpeedRatio(speed) : '';
+}
+
+function clusterMeterTime(secs) {
+  return Number.isFinite(secs) && secs >= 0 ? formatStreamTime(secs) : '';
+}
+
+function clusterMeterFps(fps) {
+  return Number.isFinite(fps) && fps >= 0 ? `${formatFps(fps)} fps` : '';
 }
 
 function createClusterNetworkMeter(label, speed, speedTone, value, detailGroups) {

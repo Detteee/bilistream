@@ -4,7 +4,7 @@
 // actually pushing, compact tiles for the rest. No heartbeat ages, no action
 // buttons, and no links into a node's WebUI.
 
-import { formatBytes, formatFps, formatNetworkRate, formatSpeedRatio } from '/shared/js/format.js?v=7';
+import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from '/shared/js/format.js?v=8';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -34,7 +34,7 @@ function hasHlsCache(network) {
   return !!network && network.hls_cache_active && (
     hasPositive(network.stream_cache_bitrate_kbps)
     || hasPositive(network.stream_cache_speed)
-    || hasPositive(network.stream_cache_total_bytes)
+    || hasPositive(network.stream_cache_time_secs)
   );
 }
 
@@ -177,6 +177,18 @@ function speedTone(speed) {
   return 'danger';
 }
 
+function speedLabel(speed) {
+  return Number.isFinite(speed) && speed > 0 ? formatSpeedRatio(speed) : '';
+}
+
+function meterTime(secs) {
+  return Number.isFinite(secs) && secs >= 0 ? formatStreamTime(secs) : '';
+}
+
+function meterFps(fps) {
+  return Number.isFinite(fps) && fps >= 0 ? `${formatFps(fps)} fps` : '';
+}
+
 function createNetworkMeter(label, speed, tone, value, detailGroups) {
   const meter = document.createElement('div');
   meter.className = 'bili-network-meter';
@@ -248,11 +260,11 @@ function createNetwork(node) {
   if (pushing) {
     meters.appendChild(createNetworkMeter(
       'RTMP TX',
-      formatSpeedRatio(network.stream_speed),
+      speedLabel(network.stream_speed),
       speedTone(network.stream_speed),
       formatNetworkRate(network.stream_bitrate_kbps),
       [
-        [`累计 ${formatBytes(network.stream_total_bytes)}`, `${formatFps(network.stream_fps)} fps`],
+        [meterTime(network.stream_time_secs), meterFps(network.stream_fps)],
       ],
     ));
   }
@@ -260,10 +272,10 @@ function createNetwork(node) {
   if (cache) {
     meters.appendChild(createNetworkMeter(
       'HLS Cache',
-      '',
-      '',
+      speedLabel(network.stream_cache_speed),
+      speedTone(network.stream_cache_speed),
       formatNetworkRate(network.stream_cache_bitrate_kbps),
-      [[`累计 ${formatBytes(network.stream_cache_total_bytes)}`]],
+      [[meterTime(network.stream_cache_time_secs)]],
     ));
   }
 

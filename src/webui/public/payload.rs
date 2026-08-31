@@ -95,8 +95,8 @@ pub struct PublicNetwork {
     pub stream_cache_speed: Option<f32>,
     pub stream_fps: Option<f32>,
     pub stream_frame: Option<u64>,
-    pub stream_total_bytes: u64,
-    pub stream_cache_total_bytes: u64,
+    pub stream_time_secs: Option<u32>,
+    pub stream_cache_time_secs: Option<u32>,
     pub hls_cache_active: bool,
 }
 
@@ -164,8 +164,8 @@ impl From<&NetworkStatus> for PublicNetwork {
             stream_cache_speed: network.stream_cache_speed,
             stream_fps: network.stream_fps,
             stream_frame: network.stream_frame,
-            stream_total_bytes: network.stream_total_bytes,
-            stream_cache_total_bytes: network.stream_cache_total_bytes,
+            stream_time_secs: network.stream_time_secs,
+            stream_cache_time_secs: network.stream_cache_time_secs,
             hls_cache_active: network.hls_cache_active,
         }
     }
@@ -370,8 +370,8 @@ mod tests {
                 "stream_cache_speed",
                 "stream_fps",
                 "stream_frame",
-                "stream_total_bytes",
-                "stream_cache_total_bytes",
+                "stream_time_secs",
+                "stream_cache_time_secs",
                 "hls_cache_active"
             ])
         );

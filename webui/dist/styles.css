@@ -1880,6 +1880,10 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   color: var(--danger);
 }
 
+.bili-network-meter-speed[data-tone="stopped"] {
+  color: var(--text-mute);
+}
+
 .bili-network-total {
   margin-top: 1px;
   color: var(--text-mute);
@@ -2132,28 +2136,6 @@ a.cluster-node-name-link {
   flex-wrap: wrap;
   gap: 0 var(--sp-2);
   font-size: var(--fs-base);
-}
-
-.bili-network-meter-speed {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.bili-network-meter-speed[data-tone="ok"] {
-  color: var(--ok);
-}
-
-.bili-network-meter-speed[data-tone="warn"] {
-  color: var(--warn);
-}
-
-.bili-network-meter-speed[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.bili-network-meter-speed[data-tone="stopped"] {
-  color: var(--text-mute);
 }
 
 .bili-network-total-sep {
