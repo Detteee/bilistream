@@ -5,6 +5,7 @@
 // buttons, and no links into a node's WebUI.
 
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from '/shared/js/format.js?v=8';
+import { appendNetworkHistoryPlot } from '/shared/js/status-cards.js?v=9';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -241,8 +242,9 @@ function createNetworkMeter(label, speed, tone, value, detailGroups) {
   return meter;
 }
 
-/// Same column layout as the dashboard. Never the bar graph: that needs
-/// per-sample history and a fast poll, which a public page should not do.
+/// Same column layout as the dashboard: 60s plot from the last snapshot,
+/// then the meters. The page still polls every 10s; the samples themselves
+/// are 1 Hz on the streaming node and arrive with each heartbeat.
 function createNetwork(node) {
   const network = node.network || {};
   const pushing = isRestreaming(node);
@@ -253,6 +255,7 @@ function createNetwork(node) {
 
   const panel = document.createElement('div');
   panel.className = 'cluster-node-network';
+  appendNetworkHistoryPlot(panel, network, { showCache: cache });
 
   const meters = document.createElement('div');
   meters.className = 'bili-network-meters';

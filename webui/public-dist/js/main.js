@@ -4,8 +4,8 @@
 // paced for a page that may be open in many tabs for hours, and pauses while
 // the tab is hidden.
 
-import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=8';
-import { clusterIsRestreaming, renderNodes } from './nodes.js?v=11';
+import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=9';
+import { clusterIsRestreaming, renderNodes } from './nodes.js?v=12';
 import {
   closeAreaModal,
   closeCommandModal,

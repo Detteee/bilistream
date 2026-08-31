@@ -1804,7 +1804,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   font-variant-numeric: tabular-nums;
 }
 
-.bili-network-graph-axis #bili-network-scale {
+.bili-network-graph-axis .bili-network-scale {
   color: var(--text-dim);
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1989,9 +1989,13 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
   .cluster-node-card-featured > .cluster-node-meta {
     grid-area: meta;
-    grid-template-columns: minmax(140px, auto) minmax(220px, 1fr) minmax(300px, 1.7fr);
-    align-items: start;
+    grid-template-columns: minmax(140px, auto) minmax(200px, 0.8fr) minmax(320px, 2fr);
+    align-items: stretch;
     gap: var(--sp-4);
+  }
+
+  .cluster-node-card-featured .cluster-node-meta-row {
+    align-self: start;
   }
 
   .cluster-node-card-featured .cluster-node-network {
@@ -2117,9 +2121,20 @@ a.cluster-node-name-link {
 }
 
 .cluster-node-network {
+  min-width: 0;
   margin-top: var(--sp-1);
   padding-top: var(--sp-2);
   border-top: 1px solid var(--line);
+}
+
+/* Same 60s plot as the Bilibili card, shortened so it fills the featured
+   network column instead of leaving a band beside the meters. */
+.cluster-node-network .bili-network-graph {
+  height: 56px;
+}
+
+.cluster-node-network .bili-network-graph-axis {
+  margin-bottom: var(--sp-2);
 }
 
 /* Only pair the meters up once both fit without wrapping their detail rows;

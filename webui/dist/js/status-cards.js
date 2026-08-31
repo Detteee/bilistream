@@ -3,8 +3,9 @@
 // the two never drift. Pure painting: no fetching, no config writes.
 //
 // Every lookup is null-safe on purpose — the public page ships a trimmed
-// markup (no quality / crop / HLS cache rows, no network graph) and simply
-// omits the elements it does not want.
+// markup (no quality / crop / HLS cache rows, no platform-card graph) and
+// simply omits the elements it does not want. Node cards still paint the
+// shared 60s history plot from the last heartbeat.
 
 import { setElementDisplay, setElementText } from './dom.js';
 import {
@@ -114,6 +115,17 @@ function networkBarHeight(value, maxRate, heightScale) {
   return Math.max(2, Math.round((value / maxRate) * heightScale));
 }
 
+function setNodeText(target, value) {
+  if (!target) {
+    return;
+  }
+  if (typeof target === 'string') {
+    setElementText(target, value);
+    return;
+  }
+  target.textContent = value;
+}
+
 function setNetworkBarHeight(bar, heightPercent) {
   const visible = heightPercent > 0;
   bar.style.height = visible ? `${heightPercent}%` : '0';
@@ -147,11 +159,16 @@ function paintNetworkColumn(column, showCache, cacheValue, pushValue, maxRate, h
   setNetworkBarHeight(bars[0], networkBarHeight(pushValue, maxRate, heightScale));
 }
 
-function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
-  const graph = document.getElementById('bili-network-graph');
+/// Paints a 60s × 1 Hz RX/TX plot. History is sampled on the streaming node;
+/// cluster and public pages redraw it at their own poll, not at 1 Hz.
+export function paintNetworkGraph(graph, options = {}) {
   if (!graph) {
     return;
   }
+
+  const showCache = !!options.showCache;
+  const pushHistory = asBitrateHistory(options.pushHistory);
+  const cacheHistory = showCache ? asBitrateHistory(options.cacheHistory) : [];
 
   // Cache on: mirrored halves. Cache off: full-height single-sided push bars.
   graph.classList.toggle('single-sided', !showCache);
@@ -160,11 +177,11 @@ function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
     ? cacheHistory.concat(pushHistory)
     : pushHistory;
   const maxRate = Math.max(1, ...activeSeries);
-  setElementText('bili-network-scale', formatNetworkRate(maxRate));
+  setNodeText(options.scaleEl, formatNetworkRate(maxRate));
   // One column per second for the whole 60s window. Halving that on a
   // 520px viewport made a full-width plot draw a handful of fat bars.
   const graphWidth = biliNetworkHistoryLimit;
-  setElementText('bili-network-window', `−${graphWidth}s`);
+  setNodeText(options.windowEl, `−${graphWidth}s`);
   const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
   const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
   const heightScale = showCache ? 50 : 100;
@@ -192,6 +209,55 @@ function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
       heightScale
     );
   }
+}
+
+function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
+  paintNetworkGraph(document.getElementById('bili-network-graph'), {
+    showCache,
+    pushHistory,
+    cacheHistory,
+    scaleEl: 'bili-network-scale',
+    windowEl: 'bili-network-window',
+  });
+}
+
+function historyHasSignal(series) {
+  return series.some((value) => value > 0);
+}
+
+/// Graph + axis for a node card. Skips the plot when this snapshot has no
+/// samples yet, so a brand-new restream is meters-only until the first window.
+export function appendNetworkHistoryPlot(parent, network, options = {}) {
+  const showCache = !!options.showCache;
+  const pushHistory = asBitrateHistory(network?.stream_bitrate_history);
+  const cacheHistory = showCache ? asBitrateHistory(network?.stream_cache_bitrate_history) : [];
+  if (!historyHasSignal(pushHistory) && !historyHasSignal(cacheHistory)) {
+    return false;
+  }
+
+  const graph = document.createElement('div');
+  graph.className = 'bili-network-graph';
+
+  const axis = document.createElement('div');
+  axis.className = 'bili-network-graph-axis';
+  axis.setAttribute('aria-hidden', 'true');
+
+  const windowEl = document.createElement('span');
+  const scaleEl = document.createElement('span');
+  scaleEl.className = 'bili-network-scale';
+  const nowEl = document.createElement('span');
+  nowEl.textContent = 'now';
+  axis.append(windowEl, scaleEl, nowEl);
+
+  parent.append(graph, axis);
+  paintNetworkGraph(graph, {
+    showCache,
+    pushHistory,
+    cacheHistory,
+    scaleEl,
+    windowEl,
+  });
+  return true;
 }
 
 function applySpeedTone(element, speed) {
@@ -223,9 +289,9 @@ function updateBiliNetworkMeter(kind, metrics) {
   setElementText(`bili-network-${kind}-time`, metrics.detail);
 }
 
-/// Paints the network meters, and the bar graph when `options.showGraph` is
-/// set. The public page omits the graph and polls far less often, so it passes
-/// `showGraph: false` and leaves the graph element out of its markup.
+/// Paints the platform-card meters, and the bar graph when `options.showGraph`
+/// is set. The public Bilibili card still omits that graph; node cards paint
+/// the same 60s window from the heartbeat snapshot instead.
 export function renderBiliNetworkPanel(bili, options = {}) {
   const { showGraph = true } = options;
   const panel = document.getElementById('bili-network-panel');

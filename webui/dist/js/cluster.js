@@ -5,6 +5,7 @@ import { createSelectOption, state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
+import { appendNetworkHistoryPlot } from './status-cards.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -598,7 +599,26 @@ function clusterNodeHasDetail(node) {
   if ((node.role || 'unknown') !== 'active' || node.is_local) {
     return false;
   }
-  return !!node.active_stream || !!createClusterNodeNetwork(node);
+  return !!node.active_stream || clusterNodeHasNetwork(node);
+}
+
+function clusterNodeHasNetwork(node) {
+  return clusterNetworkFlags(node).visible;
+}
+
+function clusterNetworkFlags(node) {
+  const network = node.network || {};
+  const hasPush = node.ffmpeg_running
+    || clusterHasPositiveNumber(network.stream_bitrate_kbps)
+    || clusterHasPositiveNumber(network.stream_speed)
+    || clusterHasPositiveNumber(network.stream_fps)
+    || clusterHasPositiveNumber(network.stream_time_secs)
+    || clusterHasPositiveNumber(network.stream_frame);
+  const hasCache = network.hls_cache_active
+    && (clusterHasPositiveNumber(network.stream_cache_bitrate_kbps)
+      || clusterHasPositiveNumber(network.stream_cache_speed)
+      || clusterHasPositiveNumber(network.stream_cache_time_secs));
+  return { network, hasPush, hasCache, visible: hasPush || hasCache };
 }
 
 function createClusterNodeBadge(node, clusterConfigVersion) {
@@ -842,24 +862,14 @@ function createClusterIconButton(label, extraClass, onClick) {
 }
 
 function createClusterNodeNetwork(node) {
-  const network = node.network || {};
-  const hasPush = node.ffmpeg_running
-    || clusterHasPositiveNumber(network.stream_bitrate_kbps)
-    || clusterHasPositiveNumber(network.stream_speed)
-    || clusterHasPositiveNumber(network.stream_fps)
-    || clusterHasPositiveNumber(network.stream_time_secs)
-    || clusterHasPositiveNumber(network.stream_frame);
-  const hasCache = network.hls_cache_active
-    && (clusterHasPositiveNumber(network.stream_cache_bitrate_kbps)
-      || clusterHasPositiveNumber(network.stream_cache_speed)
-      || clusterHasPositiveNumber(network.stream_cache_time_secs));
-
-  if (!hasPush && !hasCache) {
+  const { network, hasCache, visible } = clusterNetworkFlags(node);
+  if (!visible) {
     return null;
   }
 
   const panel = document.createElement('div');
   panel.className = 'cluster-node-network';
+  appendNetworkHistoryPlot(panel, network, { showCache: hasCache });
 
   const meters = document.createElement('div');
   meters.className = 'bili-network-meters';

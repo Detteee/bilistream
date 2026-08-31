@@ -96,8 +96,8 @@ html.light-theme {
 }
 
 /* Featured node card on this page has no heartbeat column and no action
-   buttons, so the stream inset sits beside the meters instead of leaving an
-   empty third track. */
+   buttons, so the stream inset sits beside the 60s plot instead of leaving
+   an empty third track. */
 @media (min-width: 900px) {
   .public-shell .cluster-node-card-featured {
     grid-template-columns: 1fr;
@@ -107,7 +107,7 @@ html.light-theme {
   }
 
   .public-shell .cluster-node-card-featured > .cluster-node-meta {
-    grid-template-columns: minmax(180px, 0.9fr) minmax(280px, 1.6fr);
+    grid-template-columns: minmax(180px, 0.7fr) minmax(320px, 2fr);
   }
 
   .public-shell .cluster-node-card-featured > .cluster-node-meta:has(> :only-child) {

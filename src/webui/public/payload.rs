@@ -85,8 +85,8 @@ pub struct PublicNodeStream {
     pub title: Option<String>,
 }
 
-/// Meters only. The bar graph needs per-sample history and a fast poll, which
-/// is exactly what a public page should not be doing.
+/// The 60s RX/TX window sampled on the streaming node. Public still polls
+/// every 10s; this is the last heartbeat's history, not a live 1 Hz feed.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PublicNetwork {
     pub stream_bitrate_kbps: Option<f32>,
@@ -98,6 +98,10 @@ pub struct PublicNetwork {
     pub stream_time_secs: Option<u32>,
     pub stream_cache_time_secs: Option<u32>,
     pub hls_cache_active: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_bitrate_history: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_cache_bitrate_history: Vec<f32>,
 }
 
 impl From<&BiliStatus> for PublicBiliStatus {
@@ -167,6 +171,8 @@ impl From<&NetworkStatus> for PublicNetwork {
             stream_time_secs: network.stream_time_secs,
             stream_cache_time_secs: network.stream_cache_time_secs,
             hls_cache_active: network.hls_cache_active,
+            stream_bitrate_history: network.stream_bitrate_history.clone(),
+            stream_cache_bitrate_history: network.stream_cache_bitrate_history.clone(),
         }
     }
 }
@@ -372,7 +378,8 @@ mod tests {
                 "stream_frame",
                 "stream_time_secs",
                 "stream_cache_time_secs",
-                "hls_cache_active"
+                "hls_cache_active",
+                "stream_bitrate_history"
             ])
         );
     }
@@ -410,11 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn node_network_drops_the_graph_history() {
+    fn node_network_keeps_the_sampled_history() {
         let payload = PublicStatus::build(Some(&sample_status()), &sample_cluster());
-        let json = serde_json::to_string(&payload).unwrap();
+        let network = payload.nodes[0].network.as_ref().expect("network");
+        assert_eq!(network.stream_bitrate_history, vec![1.0, 2.0, 3.0]);
+        assert!(network.stream_cache_bitrate_history.is_empty());
 
-        assert!(!json.contains("stream_bitrate_history"));
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("stream_bitrate_history"));
         assert!(!json.contains("stream_cache_bitrate_history"));
     }
 
