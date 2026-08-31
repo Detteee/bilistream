@@ -171,10 +171,10 @@ code {
   --teal: #94e2d5;
   --live: #ff5c7a;
 
-  /* Network graph, both themes: RX and TX meet on Lollipop Crush at the
-     0 line. RX tip is cream; TX tip is lilac. Dark mode punches a hole
-     through the fill so the plot sits on the card; light mode keeps the
-     stops solid so cream and lilac do not wash out on linen. */
+  /* Network graph: dark mode meets on Lollipop Crush at the 0 line
+     (cream RX tip, lilac TX tip) and punches a hole through the fill
+     so the plot sits on the card. Light mode uses a solid cyan–violet–
+     rose ramp instead; see html.light-theme. */
   --net-axis: #f962a0;
   --net-cache-start: #fcf3c4;
   --net-cache-end: var(--net-axis);
@@ -273,6 +273,12 @@ html.light-theme {
   --sh-2: 0 4px 16px rgba(45, 47, 52, 0.08);
   --sh-3: 0 18px 48px rgba(45, 47, 52, 0.12);
 
+  /* Cyan RX tip → violet 0 line → rose TX tip. Solid; no mix into linen. */
+  --net-axis: #bb77ed;
+  --net-cache-start: #1cdce8;
+  --net-cache-end: var(--net-axis);
+  --net-push-start: var(--net-axis);
+  --net-push-end: #f34a62;
   --net-bar-axis-mix: 100%;
   --net-bar-tip-mix: 100%;
 }
@@ -1646,6 +1652,25 @@ input[type="checkbox"] {
 
 .bili-network-bar.active {
   opacity: 1;
+}
+
+/* Light mode: the three stops as given, not mixed into the card. Dual-sided
+   splits them at the 0 line; cache-off is the full cyan→violet→rose ramp. */
+html.light-theme .bili-network-bar {
+  background: linear-gradient(180deg, var(--net-push-start), var(--net-push-end));
+}
+
+html.light-theme .bili-network-bar.cache {
+  background: linear-gradient(180deg, var(--net-cache-start), var(--net-cache-end));
+}
+
+html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
+  background: linear-gradient(
+    180deg,
+    var(--net-cache-start),
+    var(--net-axis),
+    var(--net-push-end)
+  );
 }
 
 .bili-network-graph-axis {
