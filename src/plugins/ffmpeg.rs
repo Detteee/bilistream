@@ -548,6 +548,8 @@ const NETWORK_HISTORY_LIMIT: usize = 60;
 const NETWORK_SAMPLE_GAP_LIMIT_MS: u64 = 10_000;
 const NETWORK_MIN_SAMPLE_INTERVAL_MS: u64 = 250;
 const NETWORK_HISTORY_SAMPLE_MS: u64 = 1000;
+const NETWORK_HISTORY_WINDOW_SECS: usize =
+    (NETWORK_HISTORY_LIMIT as u64 * NETWORK_HISTORY_SAMPLE_MS / 1000) as usize;
 const CACHE_BYTE_SAMPLE_INTERVAL_MS: u64 = 1000;
 const CACHE_RATE_WINDOW_MS: u64 = 5_000;
 const OPTIONAL_F32_NONE_BITS: u32 = u32::MAX;
@@ -662,8 +664,9 @@ impl FfmpegStatsDisplay {
         let lines = [
             network_top_border(),
             network_content_line(&format!(
-                "Auto scale {:>12}",
-                format_network_rate(scale_kbps)
+                "Auto scale {:>12}  {:>4}",
+                format_network_rate(scale_kbps),
+                format!("{}s", NETWORK_HISTORY_WINDOW_SECS)
             )),
             network_content_line(&Self::meter_row("Cache RX", self.cache.as_ref(), false)),
             network_content_line(&Self::rx_graph_row("RX", &self.cache_history, scale_kbps)),
@@ -2118,5 +2121,11 @@ mod tests {
         let cache = FfmpegStatsDisplay::meter_row("Cache RX", Some(&sample), false);
         assert!(cache.contains("00:16:24"));
         assert!(!cache.contains("fps"));
+    }
+
+    #[test]
+    fn network_history_window_is_one_column_per_second() {
+        assert_eq!(NETWORK_HISTORY_SAMPLE_MS, 1000);
+        assert_eq!(NETWORK_HISTORY_WINDOW_SECS, NETWORK_HISTORY_LIMIT);
     }
 }

@@ -19,6 +19,7 @@ import {
 } from './format.js';
 
 const biliNetworkHistoryLimit = 60;
+// One column per second, matching ffmpeg NETWORK_HISTORY_SAMPLE_MS.
 
 let lastBiliNetworkLive = false;
 let lastBiliNetworkQuality = null;
@@ -88,11 +89,44 @@ function setToggleChecked(id, checked) {
   }
 }
 
+function networkBarHeight(value, maxRate, heightScale) {
+  if (!(value > 0) || !(maxRate > 0)) {
+    return 0;
+  }
+  return Math.max(2, Math.round((value / maxRate) * heightScale));
+}
+
+function setNetworkBarHeight(bar, heightPercent) {
+  const visible = heightPercent > 0;
+  bar.style.height = visible ? `${heightPercent}%` : '0';
+  bar.classList.toggle('active', visible);
+}
+
 function createBiliNetworkBar(type, heightPercent) {
   const bar = document.createElement('span');
-  bar.className = `bili-network-bar ${type} active`;
-  bar.style.height = `${heightPercent}%`;
+  bar.className = `bili-network-bar ${type}`;
+  setNetworkBarHeight(bar, heightPercent);
   return bar;
+}
+
+function createNetworkColumn(showCache) {
+  const column = document.createElement('span');
+  column.className = 'bili-network-column';
+  if (showCache) {
+    column.appendChild(createBiliNetworkBar('cache', 0));
+  }
+  column.appendChild(createBiliNetworkBar('push', 0));
+  return column;
+}
+
+function paintNetworkColumn(column, showCache, cacheValue, pushValue, maxRate, heightScale) {
+  const bars = column.children;
+  if (showCache) {
+    setNetworkBarHeight(bars[0], networkBarHeight(cacheValue, maxRate, heightScale));
+    setNetworkBarHeight(bars[1], networkBarHeight(pushValue, maxRate, heightScale));
+    return;
+  }
+  setNetworkBarHeight(bars[0], networkBarHeight(pushValue, maxRate, heightScale));
 }
 
 function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
@@ -108,29 +142,36 @@ function renderBiliNetworkGraph(showCache, pushHistory, cacheHistory) {
     ? cacheHistory.concat(pushHistory)
     : pushHistory;
   const maxRate = Math.max(1, ...activeSeries);
-  setElementText('bili-network-scale', `Scale ${formatNetworkRate(maxRate)}`);
+  setElementText('bili-network-scale', formatNetworkRate(maxRate));
   const graphWidth = window.matchMedia('(max-width: 520px)').matches ? 32 : biliNetworkHistoryLimit;
+  setElementText('bili-network-window', `−${graphWidth}s`);
   const pushSeries = sliceNetworkHistory(pushHistory, graphWidth);
   const cacheSeries = sliceNetworkHistory(cacheHistory, graphWidth);
   const heightScale = showCache ? 50 : 100;
-  const fragment = document.createDocumentFragment();
+
+  const needsRebuild = graph.childElementCount !== graphWidth
+    || graph.dataset.cache !== String(!!showCache);
+  if (needsRebuild) {
+    graph.dataset.cache = String(!!showCache);
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < graphWidth; i += 1) {
+      fragment.appendChild(createNetworkColumn(showCache));
+    }
+    graph.replaceChildren(fragment);
+  }
 
   for (let i = 0; i < graphWidth; i += 1) {
     const pushValue = pushSeries[i - (graphWidth - pushSeries.length)] || 0;
     const cacheValue = cacheSeries[i - (graphWidth - cacheSeries.length)] || 0;
-    const cacheHeight = showCache ? Math.max(2, Math.round((cacheValue / maxRate) * heightScale)) : 0;
-    const pushHeight = Math.max(2, Math.round((pushValue / maxRate) * heightScale));
-
-    const column = document.createElement('span');
-    column.className = 'bili-network-column';
-    if (showCache) {
-      column.appendChild(createBiliNetworkBar('cache', cacheHeight));
-    }
-    column.appendChild(createBiliNetworkBar('push', pushHeight));
-    fragment.appendChild(column);
+    paintNetworkColumn(
+      graph.children[i],
+      showCache,
+      cacheValue,
+      pushValue,
+      maxRate,
+      heightScale
+    );
   }
-
-  graph.replaceChildren(fragment);
 }
 
 function applySpeedTone(element, speed) {
@@ -187,6 +228,7 @@ export function renderBiliNetworkPanel(bili) {
   }
 
   panel.classList.remove('hidden');
+  panel.classList.toggle('single-sided', !hasCache);
 
   const quality = document.getElementById('bili-network-quality');
   if (quality) {
