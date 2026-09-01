@@ -284,7 +284,7 @@ async function loadAreasForSetup() {
         if (!select) return;
         select.replaceChildren();
         appendAreaOptions(select, areasList, true);
-        if (areasList.some(area => area.id === 235)) {
+        if (areasList.some(area => Number(area.id) === 235)) {
           select.value = '235';
         }
       });

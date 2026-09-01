@@ -78,12 +78,21 @@ function normalizeAreaData(data) {
 function getAreaList(data = state.areasData) {
   return normalizeAreaData(data).areas || [];
 }
+/// Bilibili's catch-all 其他单机. Pinned first in every picker so it is not
+/// buried in id order.
+const DEFAULT_AREA_ID = 235;
+
+function isDefaultArea(area) {
+  return Number(area?.id) === DEFAULT_AREA_ID;
+}
+
 function getSortedAreas(areas) {
-  return [...areas].sort((a, b) => {
-    if (a.id === 235) return -1;
-    if (b.id === 235) return 1;
-    return 0;
-  });
+  const defaults = [];
+  const rest = [];
+  for (const area of areas || []) {
+    (isDefaultArea(area) ? defaults : rest).push(area);
+  }
+  return defaults.concat(rest);
 }
 function appendAreaOptions(select, areas, includeId = false) {
   getSortedAreas(areas).forEach(area => {

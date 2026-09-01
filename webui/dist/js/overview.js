@@ -1,7 +1,7 @@
 // overview.js — extracted from app.js
 
 import { isDashboardVisible, isElementHidden, setElementDisplay, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
