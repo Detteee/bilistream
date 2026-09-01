@@ -162,7 +162,7 @@ fn cache_control(max_age: u64) -> String {
 }
 
 fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
-    parsed["areas"]
+    let mut areas = parsed["areas"]
         .as_array()
         .map(|areas| {
             areas
@@ -182,9 +182,11 @@ fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
                             .unwrap_or_default(),
                     })
                 })
-                .collect()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    areas.sort_by_key(|area| u8::from(area.id != crate::plugins::DEFAULT_AREA_ID));
+    areas
 }
 
 /// Assets shared with the dashboard, mounted file by file rather than as a
@@ -623,6 +625,23 @@ mod tests {
         assert_eq!(areas.len(), 1);
         assert_eq!(areas[0].id, 86);
         assert!(areas[0].aliases.is_empty());
+    }
+
+    #[test]
+    fn the_catchall_area_is_listed_first() {
+        let parsed = serde_json::json!({
+            "areas": [
+                { "id": 86, "name": "英雄联盟" },
+                { "id": 235, "name": "其他单机" },
+                { "id": 252, "name": "逃离塔科夫" }
+            ]
+        });
+
+        let areas = public_areas_from_json(&parsed);
+        assert_eq!(
+            areas.iter().map(|area| area.id).collect::<Vec<_>>(),
+            vec![235, 86, 252]
+        );
     }
 
     #[test]

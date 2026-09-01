@@ -82,8 +82,20 @@ let pendingStream = null;
 let selectedAreaId = null;
 let copyResetTimer = null;
 
+/// Bilibili's catch-all 其他单机. Pinned first, same as the dashboard picker.
+const DEFAULT_AREA_ID = 235;
+
+function pinDefaultAreaFirst(list) {
+  const defaults = [];
+  const rest = [];
+  for (const area of list) {
+    (Number(area?.id) === DEFAULT_AREA_ID ? defaults : rest).push(area);
+  }
+  return defaults.concat(rest);
+}
+
 export function setAreas(list) {
-  areas = Array.isArray(list) ? list : [];
+  areas = pinDefaultAreaFirst(Array.isArray(list) ? list : []);
 }
 
 /// `%转播%<平台>%<频道>%<分区>` — the format danmaku.rs parses.
