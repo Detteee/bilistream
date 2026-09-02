@@ -49,24 +49,63 @@ impl OrderedChannelIds {
     }
 }
 
+/// Holodex Favorites/Home drop streams that never got `start_actual` once the
+/// schedule is more than two hours old (`!start_actual && now > scheduled + 2h`).
+fn holodex_has_start_actual(stream: &crate::plugins::holodex::HolodexStream) -> bool {
+    stream
+        .start_actual
+        .as_deref()
+        .is_some_and(|start| !start.is_empty())
+}
+
+fn holodex_scheduled_at(
+    stream: &crate::plugins::holodex::HolodexStream,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(stream.start_scheduled.as_deref()?)
+        .ok()
+        .map(|scheduled| scheduled.with_timezone(&chrono::Utc))
+}
+
+fn holodex_unconfirmed_and_stale(
+    stream: &crate::plugins::holodex::HolodexStream,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if holodex_has_start_actual(stream) {
+        return false;
+    }
+    holodex_scheduled_at(stream)
+        .is_some_and(|scheduled| now > scheduled + chrono::Duration::hours(2))
+}
+
 pub(crate) fn filter_holodex_streams(
     streams: Vec<crate::plugins::holodex::HolodexStream>,
     allowed_channel_ids: HashSet<String>,
 ) -> Vec<crate::plugins::holodex::HolodexStream> {
+    filter_holodex_streams_at(streams, allowed_channel_ids, chrono::Utc::now())
+}
+
+fn filter_holodex_streams_at(
+    streams: Vec<crate::plugins::holodex::HolodexStream>,
+    allowed_channel_ids: HashSet<String>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<crate::plugins::holodex::HolodexStream> {
     let mut live_channels: HashSet<String> = HashSet::new();
     for stream in &streams {
-        if stream.status == "live" {
+        if stream.status == "live" && !holodex_unconfirmed_and_stale(stream, now) {
             live_channels.insert(stream.channel.id.clone());
         }
     }
 
-    let now = chrono::Utc::now();
     let thirty_hours_later = now + chrono::Duration::hours(30);
 
     streams
         .into_iter()
         .filter(|stream| {
             if !allowed_channel_ids.contains(&stream.channel.id) {
+                return false;
+            }
+
+            if holodex_unconfirmed_and_stale(stream, now) {
                 return false;
             }
 
@@ -79,11 +118,8 @@ pub(crate) fn filter_holodex_streams(
             }
 
             if stream.status == "upcoming" {
-                if let Some(ref scheduled_time) = stream.start_scheduled {
-                    if let Ok(scheduled) = chrono::DateTime::parse_from_rfc3339(scheduled_time) {
-                        let scheduled_utc = scheduled.with_timezone(&chrono::Utc);
-                        return scheduled_utc <= thirty_hours_later;
-                    }
+                if let Some(scheduled_utc) = holodex_scheduled_at(stream) {
+                    return scheduled_utc <= thirty_hours_later;
                 }
                 return true;
             }
@@ -775,4 +811,129 @@ pub async fn switch_to_holodex_stream(
             if is_live { "直播中" } else { "预定直播" }
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::holodex::{HolodexChannel, HolodexStream};
+    use chrono::{DateTime, Utc};
+
+    fn at(rfc3339: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn stream(
+        id: &str,
+        status: &str,
+        scheduled: Option<&str>,
+        start_actual: Option<&str>,
+    ) -> HolodexStream {
+        HolodexStream {
+            id: id.to_string(),
+            title: format!("{id} title"),
+            stream_type: "stream".to_string(),
+            topic_id: None,
+            published_at: None,
+            available_at: scheduled.map(str::to_string),
+            status: status.to_string(),
+            start_scheduled: scheduled.map(str::to_string),
+            start_actual: start_actual.map(str::to_string),
+            live_viewers: None,
+            channel: HolodexChannel {
+                id: "channel-id".to_string(),
+                ..Default::default()
+            },
+            link: None,
+            thumbnail: None,
+            placeholder_type: None,
+        }
+    }
+
+    fn ids() -> HashSet<String> {
+        HashSet::from(["channel-id".to_string()])
+    }
+
+    fn kept(streams: Vec<HolodexStream>, now: DateTime<Utc>) -> Vec<String> {
+        filter_holodex_streams_at(streams, ids(), now)
+            .into_iter()
+            .map(|stream| stream.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_live_stream_with_start_actual_is_kept() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![stream(
+            "confirmed",
+            "live",
+            Some("2026-09-01T14:00:00Z"),
+            Some("2026-09-01T14:03:00Z"),
+        )];
+        assert_eq!(kept(streams, now), vec!["confirmed"]);
+    }
+
+    #[test]
+    fn a_live_stream_without_start_actual_is_dropped_two_hours_after_schedule() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![stream("hung", "live", Some("2026-09-01T14:00:00Z"), None)];
+        assert!(kept(streams, now).is_empty());
+    }
+
+    #[test]
+    fn a_live_stream_without_start_actual_is_kept_inside_the_two_hour_grace() {
+        let now = at("2026-09-01T15:30:00Z");
+        let streams = vec![stream("fresh", "live", Some("2026-09-01T14:00:00Z"), None)];
+        assert_eq!(kept(streams, now), vec!["fresh"]);
+    }
+
+    #[test]
+    fn a_live_stream_without_start_actual_is_kept_at_exactly_two_hours() {
+        let now = at("2026-09-01T16:00:00Z");
+        let streams = vec![stream("edge", "live", Some("2026-09-01T14:00:00Z"), None)];
+        assert_eq!(kept(streams, now), vec!["edge"]);
+    }
+
+    #[test]
+    fn an_empty_start_actual_counts_as_missing() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![stream(
+            "empty",
+            "live",
+            Some("2026-09-01T14:00:00Z"),
+            Some(""),
+        )];
+        assert!(kept(streams, now).is_empty());
+    }
+
+    #[test]
+    fn a_live_stream_without_a_schedule_is_kept() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![stream("no-sched", "live", None, None)];
+        assert_eq!(kept(streams, now), vec!["no-sched"]);
+    }
+
+    #[test]
+    fn a_stale_unconfirmed_upcoming_is_dropped() {
+        let now = at("2026-09-01T17:00:00Z");
+        let streams = vec![stream(
+            "waiting-room",
+            "upcoming",
+            Some("2026-09-01T14:00:00Z"),
+            None,
+        )];
+        assert!(kept(streams, now).is_empty());
+    }
+
+    #[test]
+    fn a_hung_live_does_not_hide_a_later_upcoming_on_the_same_channel() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![
+            stream("hung", "live", Some("2026-09-01T14:00:00Z"), None),
+            stream("later", "upcoming", Some("2026-09-02T20:00:00Z"), None),
+        ];
+        assert_eq!(kept(streams, now), vec!["later"]);
+    }
 }
