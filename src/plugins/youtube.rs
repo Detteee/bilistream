@@ -229,16 +229,80 @@ pub fn select_holodex_channel_status(
     select_holodex_channel_status_at(channel_id, streams, chrono::Utc::now())
 }
 
-/// Channel status straight from Holodex, without resolving a playback URL.
+/// Holodex is the monitor's first gate only when the toggle is on and a key
+/// is configured. Otherwise yt-dlp talks to YouTube directly.
+pub fn holodex_monitor_gate_enabled(cfg: &crate::config::Config) -> bool {
+    holodex_monitor_gate_is_on(cfg.holodex_monitor_gate, cfg.holodex_api_key.as_deref())
+}
+
+fn holodex_monitor_gate_is_on(gate: bool, api_key: Option<&str>) -> bool {
+    gate && api_key.is_some_and(|key| !key.is_empty())
+}
+
+fn youtube_channel_status_from_probe(
+    is_live: bool,
+    topic: Option<String>,
+    title: Option<String>,
+    scheduled_start: Option<DateTime<Local>>,
+    video_id: Option<String>,
+) -> YoutubeChannelStatus {
+    YoutubeChannelStatus {
+        is_live,
+        topic,
+        title,
+        scheduled_start,
+        video_id,
+    }
+}
+
+/// Channel status without a playable URL.
 ///
-/// Callers that only need to display what a channel is on (the WebUI status
-/// refresh) use this; the monitor loop goes through `get_youtube_status`, which
-/// adds yt-dlp m3u8 resolution on top of the same selection.
+/// When the Holodex monitor gate is on this is a Holodex read, cheap enough
+/// for the WebUI poller. When the gate is off it takes the same yt-dlp path
+/// as the monitor loop so the dashboard cannot disagree about live/upcoming.
 pub async fn get_youtube_channel_status(
     channel_id: &str,
 ) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
+    let cfg = load_config().await?;
+    if !holodex_monitor_gate_enabled(&cfg) {
+        let (is_live, topic, title, _, scheduled_start, video_id) =
+            get_youtube_status(channel_id).await?;
+        return Ok(youtube_channel_status_from_probe(
+            is_live,
+            topic,
+            title,
+            scheduled_start,
+            video_id,
+        ));
+    }
+
     let streams = get_holodex_streams(vec![channel_id.to_string()], false).await?;
     Ok(select_holodex_channel_status(channel_id, &streams))
+}
+
+/// Channel status without a playable URL, falling back to yt-dlp when Holodex
+/// is not the monitor gate.
+///
+/// With the gate on this stays a Holodex-only read. With it off (or with no
+/// API key) it uses `get_youtube_status`, which resolves a stream URL as a
+/// side effect of answering.
+pub async fn get_youtube_channel_metadata(
+    channel_id: &str,
+) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
+    let cfg = load_config().await?;
+    if holodex_monitor_gate_enabled(&cfg) {
+        return get_youtube_channel_status(channel_id).await;
+    }
+
+    let (is_live, topic, title, _, scheduled_start, video_id) =
+        get_youtube_status(channel_id).await?;
+    Ok(youtube_channel_status_from_probe(
+        is_live,
+        topic,
+        title,
+        scheduled_start,
+        video_id,
+    ))
 }
 
 pub async fn get_youtube_status(
@@ -261,24 +325,20 @@ pub async fn get_youtube_status(
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let deno_path = &cfg.youtube.deno_path;
 
-    // Check if Holodex API key is available
-    match cfg.holodex_api_key.clone() {
-        Some(_key) if !_key.is_empty() => {}
-        _ => {
-            tracing::info!("Holodex API key not configured, using yt-dlp");
-            let title = get_youtube_live_title(channel_id).await?;
-            return get_status_with_yt_dlp(
-                channel_id,
-                proxy,
-                title,
-                Some(&quality),
-                cookies_file,
-                cookies_from_browser,
-                deno_path,
-            )
-            .await;
-        }
-    };
+    if !holodex_monitor_gate_enabled(&cfg) {
+        tracing::debug!("Holodex monitor gate off, using yt-dlp for {}", channel_id);
+        let title = get_youtube_live_title(channel_id).await?;
+        return get_status_with_yt_dlp(
+            channel_id,
+            proxy,
+            title,
+            Some(&quality),
+            cookies_file,
+            cookies_from_browser,
+            deno_path,
+        )
+        .await;
+    }
 
     // Use the multi-channel function for single channel
     //
@@ -476,16 +536,16 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
         Ok(title)
     };
 
-    // Try Holodex API if key is configured
-    if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
-        match get_holodex_live_title(&key, channel_id, channel_name.as_deref()).await {
-            Ok(title) => return Ok(title),
-            _ => {
-                tracing::warn!("Holodex API failed, falling back to yt-dlp");
+    // Try Holodex API if it is the monitor's first gate.
+    if holodex_monitor_gate_enabled(&cfg) {
+        if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
+            match get_holodex_live_title(&key, channel_id, channel_name.as_deref()).await {
+                Ok(title) => return Ok(title),
+                _ => {
+                    tracing::warn!("Holodex API failed, falling back to yt-dlp");
+                }
             }
         }
-    } else {
-        // Holodex API key not configured, silently fall back to yt-dlp
     }
 
     // Fallback to yt-dlp
@@ -496,6 +556,14 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 mod tests {
     use super::*;
     use crate::plugins::holodex::HolodexChannel;
+
+    #[test]
+    fn holodex_monitor_gate_requires_both_flag_and_key() {
+        assert!(!holodex_monitor_gate_is_on(true, None));
+        assert!(!holodex_monitor_gate_is_on(true, Some("")));
+        assert!(!holodex_monitor_gate_is_on(false, Some("key")));
+        assert!(holodex_monitor_gate_is_on(true, Some("key")));
+    }
 
     #[test]
     fn youtube_status_futures_stay_send() {
@@ -564,6 +632,33 @@ mod tests {
         assert_eq!(status.video_id.as_deref(), Some("sooner"));
         assert_eq!(status.title.as_deref(), Some("sooner title"));
         assert!(status.scheduled_start.is_some());
+    }
+
+    /// `%转播%` checks this selected title. A later clean stream on the same
+    /// channel must not make the channel requestable while 雑談 is still next.
+    #[test]
+    fn channel_status_banned_hit_uses_the_earliest_upcoming_title() {
+        let mut later = holodex_stream("later", "upcoming", Some("2026-08-01T20:00:00Z"));
+        later.title = "【 Phasmophobia 】 ウンウンウンウンOK幽霊ね!!!!!".to_string();
+        let mut sooner = holodex_stream("sooner", "upcoming", Some("2026-08-01T12:00:00Z"));
+        sooner.title = "【朝活雑談】 もう9月!!!!!!!!!!".to_string();
+
+        let status = select_holodex_channel_status_at(
+            "channel-id",
+            &[later, sooner],
+            at("2026-08-01T09:00:00Z"),
+        );
+        let haystack = crate::plugins::banned_keywords::danmaku_haystack(
+            status.topic.as_deref().unwrap_or_default(),
+            status.title.as_deref().unwrap_or_default(),
+        );
+        let banned = vec!["雑談".to_string()];
+
+        assert_eq!(status.video_id.as_deref(), Some("sooner"));
+        assert_eq!(
+            crate::plugins::banned_keywords::banned_keyword_hit(&haystack, &banned).as_deref(),
+            Some("雑談")
+        );
     }
 
     #[test]

@@ -228,6 +228,9 @@ function initHolodexLoginModalControls() {
   document
     .getElementById('holodex-skip-jwt-verify')
     ?.addEventListener('change', toggleHolodexSkipJwtVerify);
+  document
+    .getElementById('holodex-monitor-gate-toggle')
+    ?.addEventListener('change', toggleHolodexMonitorGate);
 }
 function initFaceAuthModalControls() {
   const modal = document.getElementById('face-auth-modal');
@@ -262,6 +265,7 @@ async function initStatusRefresh() {
     updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
     const holodexApiKeyConfigured = !!config.holodex_api_key?.trim();
+    applyHolodexMonitorGateToggle(config.holodex_monitor_gate !== false);
     applyHolodexSectionVisibility(holodexApiKeyConfigured);
     if (holodexApiKeyConfigured) {
       loadHolodexAuthStatus();
@@ -316,6 +320,12 @@ function applyHolodexSectionVisibility(apiKeyConfigured) {
   setElementDisplay(document.getElementById('holodex-streams-section'), apiKeyConfigured);
   setElementDisplay(document.getElementById('holodex-login-btn'), apiKeyConfigured, 'inline-flex');
   maybeLoadHolodexStreams();
+}
+function applyHolodexMonitorGateToggle(enabled) {
+  const toggle = document.getElementById('holodex-monitor-gate-toggle');
+  if (toggle) {
+    toggle.checked = !!enabled;
+  }
 }
 // The stream list is only worth fetching once the API key is known to be
 // configured, the overview is the visible view, and the panel is open.
@@ -1327,6 +1337,27 @@ async function toggleHolodexSkipJwtVerify() {
       showNotification(toggle.checked ? '已跳过 JWT 校验' : '已启用 JWT 校验', 'success');
       await loadHolodexAuthStatus();
       await refreshHolodexStreams();
+    } else {
+      toggle.checked = !toggle.checked;
+      showNotification('更新失败: ' + (data.message || '未知错误'), 'error');
+    }
+  } catch (error) {
+    toggle.checked = !toggle.checked;
+    showNotification('更新失败: ' + error.message, 'error');
+  }
+}
+async function toggleHolodexMonitorGate() {
+  const toggle = document.getElementById('holodex-monitor-gate-toggle');
+  if (!toggle) return;
+
+  try {
+    const data = await postJsonApi('/api/config', { holodex_monitor_gate: toggle.checked });
+    if (data.success) {
+      showNotification(
+        toggle.checked ? '已启用 Holodex 状态查询' : '已改用 yt-dlp 查询 YouTube',
+        'success'
+      );
+      refreshYouTubeStatus();
     } else {
       toggle.checked = !toggle.checked;
       showNotification('更新失败: ' + (data.message || '未知错误'), 'error');

@@ -106,6 +106,10 @@ pub struct Config {
     /// When true, use stored JWT as-is without expiry checks or auto-refresh.
     #[serde(default)]
     pub holodex_skip_jwt_verify: bool,
+    /// When true (default), YouTube monitor/status asks Holodex first if an API
+    /// key is configured. When false, yt-dlp queries YouTube directly.
+    #[serde(default = "default_true")]
+    pub holodex_monitor_gate: bool,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,

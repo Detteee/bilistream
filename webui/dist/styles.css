@@ -1775,6 +1775,13 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   margin-bottom: var(--sp-4);
 }
 
+.holodex-monitor-gate {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .holodex-auth-bar {
   display: none;
   align-items: center;

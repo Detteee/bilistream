@@ -18,6 +18,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             .as_ref()
             .is_some_and(|j| !j.is_empty()),
         "holodex_skip_jwt_verify": cfg.holodex_skip_jwt_verify,
+        "holodex_monitor_gate": cfg.holodex_monitor_gate,
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
@@ -65,6 +66,7 @@ pub struct UpdateConfigRequest {
     holodex_api_key: Option<String>,
     holodex_jwt: Option<String>,
     holodex_skip_jwt_verify: Option<bool>,
+    holodex_monitor_gate: Option<bool>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
     youtube_proxy: Option<String>,
@@ -179,6 +181,12 @@ pub async fn update_config(
     if let Some(holodex_skip_jwt_verify) = payload.holodex_skip_jwt_verify {
         cfg.holodex_skip_jwt_verify = holodex_skip_jwt_verify;
     }
+    let holodex_monitor_gate_changed = payload
+        .holodex_monitor_gate
+        .is_some_and(|gate| gate != cfg.holodex_monitor_gate);
+    if let Some(holodex_monitor_gate) = payload.holodex_monitor_gate {
+        cfg.holodex_monitor_gate = holodex_monitor_gate;
+    }
 
     if let Some(anti_collision_list) = payload.anti_collision_list {
         cfg.anti_collision_list = anti_collision_list;
@@ -244,6 +252,10 @@ pub async fn update_config(
 
     if monitor_reload_needed(&previous_cfg, &cfg) {
         set_config_updated();
+    }
+
+    if holodex_monitor_gate_changed {
+        crate::webui::state::request_status_refresh();
     }
 
     // Apply the exact saved config to the cache without re-reading config.json.
