@@ -27,6 +27,10 @@ pub enum NotSwitchable {
     DanmakuDisabled,
     /// Title or topic hits the danmaku banned keyword list.
     BannedKeyword,
+    /// `%转播%` names a channel, not a video. An earlier live or upcoming
+    /// stream on this channel is banned, so switching would hit that title
+    /// first even if this later one is clean.
+    EarlierBannedKeyword,
     /// The danmaku command only understands YT and TW.
     UnsupportedPlatform,
     /// Not in channels.json, so no command name resolves to it.
@@ -129,6 +133,69 @@ fn twitch_login_from_link(link: Option<&str>) -> Option<String> {
     (!login.is_empty()).then(|| login.to_lowercase())
 }
 
+/// `%转播%` names a platform and a channel, not a video, so two Holodex rows
+/// for the same YouTube channel (or the same Twitch login) are one switch
+/// target. A unique fallback keeps unkeyed rows from grouping together.
+fn switch_group_key(stream: &HolodexStream) -> String {
+    if let Some(login) = twitch_login_from_link(stream.link.as_deref()) {
+        return format!("TW:{login}");
+    }
+    if !stream.channel.id.is_empty() {
+        return format!("YT:{}", stream.channel.id);
+    }
+    format!("ID:{}", stream.id)
+}
+
+/// Live before upcoming, then sooner `start_scheduled`. Same order
+/// `select_holodex_channel_status` uses to decide which stream a channel is on.
+fn cmp_public_stream_order(a: &PublicStream, b: &PublicStream) -> std::cmp::Ordering {
+    let live_rank = |stream: &PublicStream| u8::from(stream.status != "live");
+    live_rank(a)
+        .cmp(&live_rank(b))
+        .then_with(|| match (&a.start_scheduled, &b.start_scheduled) {
+            (Some(time_a), Some(time_b)) => time_a.cmp(time_b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        })
+}
+
+/// If the stream a channel would actually switch to is banned, later cards on
+/// that same target cannot offer 切换 either: the command cannot pick the
+/// later video.
+fn apply_earlier_banned_keyword(keys: &[String], built: &mut [PublicStream]) {
+    let mut groups: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (index, key) in keys.iter().enumerate() {
+        groups.entry(key.as_str()).or_default().push(index);
+    }
+
+    for indices in groups.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        let mut ordered = indices.clone();
+        ordered.sort_by(|&left, &right| cmp_public_stream_order(&built[left], &built[right]));
+        let earliest = ordered[0];
+        if built[earliest].reason != Some(NotSwitchable::BannedKeyword) {
+            continue;
+        }
+        let hits = built[earliest].reason_keywords.clone();
+        if hits.is_empty() {
+            continue;
+        }
+        for &index in &ordered[1..] {
+            match built[index].reason {
+                None | Some(NotSwitchable::DanmakuDisabled) => {
+                    built[index].reason = Some(NotSwitchable::EarlierBannedKeyword);
+                    built[index].reason_keywords = hits.clone();
+                    built[index].switchable = false;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Resolves a stream back to a configured channel, and to the platform token
 /// the danmaku command uses.
 fn command_target(
@@ -225,7 +292,8 @@ pub(super) fn build_public_streams(
     danmaku_enabled: bool,
     banned: &[String],
 ) -> Vec<PublicStream> {
-    streams
+    let group_keys: Vec<String> = streams.iter().map(switch_group_key).collect();
+    let mut public: Vec<PublicStream> = streams
         .into_iter()
         .map(|stream| {
             let target = command_target(channels, &stream.channel.id, stream.link.as_deref());
@@ -266,7 +334,10 @@ pub(super) fn build_public_streams(
                 reason_keywords,
             }
         })
-        .collect()
+        .collect();
+
+    apply_earlier_banned_keyword(&group_keys, &mut public);
+    public
 }
 
 // Snapshot -------------------------------------------------------------------
@@ -470,15 +541,26 @@ mod tests {
     }
 
     fn stream(title: &str, topic: Option<&str>, channel_id: &str) -> HolodexStream {
+        stream_on("vid1", title, topic, channel_id, "live", None)
+    }
+
+    fn stream_on(
+        id: &str,
+        title: &str,
+        topic: Option<&str>,
+        channel_id: &str,
+        status: &str,
+        scheduled: Option<&str>,
+    ) -> HolodexStream {
         HolodexStream {
-            id: "vid1".to_string(),
+            id: id.to_string(),
             title: title.to_string(),
             stream_type: "stream".to_string(),
             topic_id: topic.map(str::to_string),
             published_at: None,
             available_at: None,
-            status: "live".to_string(),
-            start_scheduled: None,
+            status: status.to_string(),
+            start_scheduled: scheduled.map(str::to_string),
             start_actual: None,
             live_viewers: Some(1200),
             channel: HolodexChannel {
@@ -487,7 +569,7 @@ mod tests {
                 photo: None,
             },
             link: None,
-            thumbnail: Some("https://i.ytimg.com/vi/vid1/maxres.jpg".to_string()),
+            thumbnail: Some(format!("https://i.ytimg.com/vi/{id}/maxres.jpg")),
             placeholder_type: None,
         }
     }
@@ -543,20 +625,194 @@ mod tests {
         assert_eq!(built[0].reason_keywords, vec!["asmr".to_string()]);
     }
 
+    /// A keyword on one channel must not grey out a different channel's card.
     #[test]
-    fn a_banned_keyword_blocks_only_that_stream() {
-        let built = build(
+    fn a_banned_keyword_blocks_only_that_channel() {
+        let channels = vec![
+            channel("Kamito", &["kmt"], Some("UCkamito"), Some("kamito_jp")),
+            channel("Nazuna", &["nzn"], Some("UCnazuna"), None),
+        ];
+        let banned = vec!["asmr".to_string()];
+        let built = build_public_streams(
             vec![
                 stream("Late night ASMR", None, "UCkamito"),
-                stream("ランク", None, "UCkamito"),
+                stream("ランク", None, "UCnazuna"),
             ],
+            &channels,
             true,
-            &["asmr"],
+            &banned,
         );
 
         assert!(!built[0].switchable);
         assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
         assert!(built[1].switchable);
+        assert_eq!(built[1].reason, None);
+    }
+
+    /// `%转播%` names the channel. If the sooner stream is banned, the later
+    /// clean title is not requestable either — switching would hit 雑談 first.
+    #[test]
+    fn an_earlier_banned_stream_blocks_later_ones_on_the_same_channel() {
+        let built = build(
+            vec![
+                stream_on(
+                    "morning",
+                    "【朝活雑談】 もう9月!!!!!!!!!!",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T06:00:00+09:00"),
+                ),
+                stream_on(
+                    "evening",
+                    "【 Phasmophobia 】 ウンウンウンウンOK幽霊ね!!!!!",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T20:00:00+09:00"),
+                ),
+            ],
+            true,
+            &["雑談"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
+        assert_eq!(built[0].reason_keywords, vec!["雑談".to_string()]);
+        assert!(!built[1].switchable);
+        assert_eq!(built[1].reason, Some(NotSwitchable::EarlierBannedKeyword));
+        assert_eq!(built[1].reason_keywords, vec!["雑談".to_string()]);
+    }
+
+    /// Same as a per-stream keyword block: keep showing 标题/分区包含 on the
+    /// later card while 转播 has the processor down, so a stale danmaku_disabled
+    /// reason cannot turn 切换 green when the gate reopens.
+    #[test]
+    fn an_earlier_ban_outweighs_the_global_gate_on_later_cards() {
+        let built = build(
+            vec![
+                stream_on(
+                    "morning",
+                    "【朝活雑談】",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T06:00:00+09:00"),
+                ),
+                stream_on(
+                    "evening",
+                    "【 Phasmophobia 】",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T20:00:00+09:00"),
+                ),
+            ],
+            false,
+            &["雑談"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
+        assert_eq!(built[1].reason, Some(NotSwitchable::EarlierBannedKeyword));
+        assert_eq!(built[1].reason_keywords, vec!["雑談".to_string()]);
+    }
+
+    /// List order is not schedule order: the 06:00 雑談 still blocks the
+    /// 20:00 card when Holodex returns the later row first.
+    #[test]
+    fn the_sooner_banned_stream_wins_even_when_listed_second() {
+        let built = build(
+            vec![
+                stream_on(
+                    "evening",
+                    "【 Phasmophobia 】",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T20:00:00+09:00"),
+                ),
+                stream_on(
+                    "morning",
+                    "【朝活雑談】",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T06:00:00+09:00"),
+                ),
+            ],
+            true,
+            &["雑談"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::EarlierBannedKeyword));
+        assert_eq!(built[1].reason, Some(NotSwitchable::BannedKeyword));
+    }
+
+    /// The later title is what `%转播%` would hit only after the sooner one
+    /// is gone, so a clean earlier stream stays requestable.
+    #[test]
+    fn a_later_banned_stream_does_not_block_an_earlier_clean_one() {
+        let built = build(
+            vec![
+                stream_on(
+                    "morning",
+                    "ランク",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T06:00:00+09:00"),
+                ),
+                stream_on(
+                    "evening",
+                    "Late night ASMR",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T20:00:00+09:00"),
+                ),
+            ],
+            true,
+            &["asmr"],
+        );
+
+        assert!(built[0].switchable);
+        assert_eq!(built[0].reason, None);
+        assert_eq!(built[1].reason, Some(NotSwitchable::BannedKeyword));
+    }
+
+    /// Twitch is a different `%转播%` target than YouTube, even when Holodex
+    /// keys the placeholder by the same YouTube channel.
+    #[test]
+    fn an_earlier_youtube_ban_does_not_block_a_later_twitch_placeholder() {
+        let mut twitch = stream_on(
+            "twitch-eve",
+            "VALORANT",
+            None,
+            "UCkamito",
+            "upcoming",
+            Some("2026-09-02T20:00:00+09:00"),
+        );
+        twitch.stream_type = "placeholder".to_string();
+        twitch.link = Some("https://www.twitch.tv/kamito_jp".to_string());
+
+        let built = build(
+            vec![
+                stream_on(
+                    "morning",
+                    "【朝活雑談】",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T06:00:00+09:00"),
+                ),
+                twitch,
+            ],
+            true,
+            &["雑談"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::BannedKeyword));
+        assert!(built[1].switchable);
+        assert_eq!(built[1].command_platform.as_deref(), Some("TW"));
     }
 
     /// Without the words, a block reads as arbitrary. They are already on

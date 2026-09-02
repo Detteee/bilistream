@@ -639,6 +639,9 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 }
             }
         };
+        // `%转播%` names a channel, not a video. For YT this title is the live
+        // stream or the soonest upcoming one (`select_holodex_channel_status`),
+        // so a later clean title on the same channel cannot bypass the list.
         let live_topic_title = danmaku_haystack(&live_topic, &live_title);
 
         if let Some(keyword) = banned_keyword_hit(&live_topic_title, &danmaku_banned_keywords()) {

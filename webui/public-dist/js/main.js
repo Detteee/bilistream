@@ -16,7 +16,7 @@ import {
   setDanmakuEnabled,
   setStatus,
   stopDurationTicker,
-} from './streams.js?v=13';
+} from './streams.js?v=15';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
 /// 304s. Streams turn over on the server's own 30s timer.

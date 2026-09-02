@@ -456,6 +456,9 @@ pub async fn update_config(
 
     // Apply the exact saved config to the cache without re-reading config.json.
     refresh_status_cache_config_from(&cfg);
+    if holodex_monitor_gate_changed {
+        crate::webui::state::request_status_refresh();
+    }
 
     let monitor_toggle_changed = danmaku_command_changed.is_some()
         || payload.youtube_enable_monitor.is_some()

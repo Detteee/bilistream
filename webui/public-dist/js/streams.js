@@ -16,7 +16,8 @@ import {
 const REASON_LABELS = {
   danmaku_disabled: '弹幕点播当前已关闭',
   restreaming: '转播中，弹幕点播已关闭',
-  banned_keyword: '该直播不可点播',
+  banned_keyword: '不可点播',
+  earlier_banned_keyword: '不可点播',
   unsupported_platform: '该平台不支持弹幕点播',
   unknown_channel: '该频道不在点播列表中',
   no_command_name: '该频道没有可用的点播名称',
@@ -65,9 +66,11 @@ function switchDisabledReason(stream) {
 }
 
 function reasonText(stream) {
-  const label = REASON_LABELS[stream.reason] || '该直播不可点播';
+  const label = REASON_LABELS[stream.reason] || '不可点播';
   const keywords = Array.isArray(stream.reason_keywords) ? stream.reason_keywords : [];
-  if (stream.reason !== 'banned_keyword' || keywords.length === 0) {
+  const showsKeywords =
+    stream.reason === 'banned_keyword' || stream.reason === 'earlier_banned_keyword';
+  if (!showsKeywords || keywords.length === 0) {
     return label;
   }
   return `${label}：标题/分区包含 ${keywords.join('/')}`;
