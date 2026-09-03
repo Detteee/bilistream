@@ -86,6 +86,29 @@ fn default_streaming_banned_keywords() -> Vec<String> {
     .collect()
 }
 
+/// Topic and title joined the way the monitor skip-check does it.
+///
+/// Unlike [`danmaku_haystack`], this keeps the original case: the streaming
+/// skip has always been a plain `contains` on the concatenated fields.
+pub fn streaming_haystack(topic: Option<&str>, title: Option<&str>) -> Option<String> {
+    match (topic, title) {
+        (Some(topic), Some(title)) => Some(format!("{topic} {title}")),
+        _ => title.map(str::to_string),
+    }
+}
+
+/// First keyword in `keywords` contained in the monitor haystack, if any.
+///
+/// The haystack is lowercased so `areas.json` can keep English keywords in
+/// lowercase and still hit titles like `ASMR` or topics like `Just Chatting`.
+pub fn streaming_banned_hit(
+    topic: Option<&str>,
+    title: Option<&str>,
+    keywords: &[String],
+) -> Option<String> {
+    banned_keyword_hit(&streaming_haystack(topic, title)?.to_lowercase(), keywords)
+}
+
 /// The haystack a danmaku request is matched against: topic and title joined
 /// and lowercased, so keywords only need their lowercase form.
 pub fn danmaku_haystack(topic: &str, title: &str) -> String {
@@ -113,6 +136,43 @@ mod tests {
 
     fn keywords(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn streaming_haystack_joins_topic_and_title() {
+        assert_eq!(
+            streaming_haystack(Some("Just Chatting"), Some("雑談")).as_deref(),
+            Some("Just Chatting 雑談")
+        );
+    }
+
+    #[test]
+    fn streaming_haystack_falls_back_to_title_when_topic_is_missing() {
+        assert_eq!(
+            streaming_haystack(None, Some("ランク")).as_deref(),
+            Some("ランク")
+        );
+        assert_eq!(streaming_haystack(Some("Just Chatting"), None), None);
+        assert_eq!(streaming_haystack(None, None), None);
+    }
+
+    #[test]
+    fn streaming_hit_matches_keyword_in_title_or_joined_topic() {
+        let list = keywords(&["asmr", "just chatting"]);
+        assert_eq!(
+            streaming_banned_hit(None, Some("late night asmr"), &list).as_deref(),
+            Some("asmr")
+        );
+        assert_eq!(
+            streaming_banned_hit(Some("Just Chatting"), Some("雑談"), &list).as_deref(),
+            Some("just chatting")
+        );
+        assert_eq!(
+            streaming_banned_hit(None, Some("【ASMR】睡眠導入"), &list).as_deref(),
+            Some("asmr")
+        );
+        assert!(streaming_banned_hit(None, Some("ランク"), &list).is_none());
+        assert!(streaming_banned_hit(None, None, &list).is_none());
     }
 
     #[test]

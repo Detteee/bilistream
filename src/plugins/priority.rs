@@ -1,5 +1,6 @@
 use crate::config::Config;
 
+use super::banned_keywords::streaming_banned_hit;
 use super::twitch::{get_twitch_status, Twitch};
 use super::youtube::{get_youtube_channel_metadata, get_youtube_status};
 
@@ -33,11 +34,19 @@ impl PriorityChannelPlatform {
 pub struct PriorityChannelLiveness {
     pub platform: Option<PriorityChannelPlatform>,
     pub title: Option<String>,
+    pub topic: Option<String>,
 }
 
 impl PriorityChannelLiveness {
     pub fn is_live(&self) -> bool {
         self.platform.is_some()
+    }
+
+    /// Keyword from `streaming_banned_keywords` that would make the monitor skip
+    /// this stream. Auto-switch must not force a restream onto a title the main
+    /// loop would discard.
+    pub fn banned_streaming_keyword(&self, keywords: &[String]) -> Option<String> {
+        streaming_banned_hit(self.topic.as_deref(), self.title.as_deref(), keywords)
     }
 }
 
@@ -58,6 +67,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
                 return PriorityChannelLiveness {
                     platform: Some(PriorityChannelPlatform::Youtube),
                     title: status.title,
+                    topic: status.topic.filter(|topic| !topic.is_empty()),
                 };
             }
             Ok(_) => {}
@@ -67,10 +77,11 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
 
     if !cfg.priority_channel.twitch_channel_id.is_empty() {
         match get_twitch_status(&cfg.priority_channel.twitch_channel_id).await {
-            Ok((true, _, title, _)) => {
+            Ok((true, topic, title, _)) => {
                 return PriorityChannelLiveness {
                     platform: Some(PriorityChannelPlatform::Twitch),
                     title,
+                    topic: topic.filter(|topic| !topic.is_empty()),
                 };
             }
             Ok(_) => {}
@@ -86,6 +97,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
 fn playable_liveness(
     platform: PriorityChannelPlatform,
     is_live: bool,
+    topic: Option<String>,
     title: Option<String>,
     m3u8_url: Option<String>,
 ) -> Option<PriorityChannelLiveness> {
@@ -104,6 +116,7 @@ fn playable_liveness(
     Some(PriorityChannelLiveness {
         platform: Some(platform),
         title: title.filter(|title| !title.is_empty()),
+        topic: topic.filter(|topic| !topic.is_empty()),
     })
 }
 
@@ -127,10 +140,14 @@ fn playable_liveness(
 pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelLiveness {
     if !cfg.priority_channel.youtube_channel_id.is_empty() {
         match get_youtube_status(&cfg.priority_channel.youtube_channel_id).await {
-            Ok((is_live, _, title, m3u8_url, _, _)) => {
-                if let Some(liveness) =
-                    playable_liveness(PriorityChannelPlatform::Youtube, is_live, title, m3u8_url)
-                {
+            Ok((is_live, topic, title, m3u8_url, _, _)) => {
+                if let Some(liveness) = playable_liveness(
+                    PriorityChannelPlatform::Youtube,
+                    is_live,
+                    topic,
+                    title,
+                    m3u8_url,
+                ) {
                     return liveness;
                 }
             }
@@ -145,10 +162,14 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
             cfg.twitch.proxy.clone(),
         ) {
             Ok(client) => match client.get_status().await {
-                Ok((is_live, _, title, m3u8_url, _, _)) => {
-                    if let Some(liveness) =
-                        playable_liveness(PriorityChannelPlatform::Twitch, is_live, title, m3u8_url)
-                    {
+                Ok((is_live, topic, title, m3u8_url, _, _)) => {
+                    if let Some(liveness) = playable_liveness(
+                        PriorityChannelPlatform::Twitch,
+                        is_live,
+                        topic,
+                        title,
+                        m3u8_url,
+                    ) {
                         return liveness;
                     }
                 }
@@ -172,6 +193,7 @@ mod tests {
         assert!(!liveness.is_live());
         assert_eq!(liveness.platform, None);
         assert_eq!(liveness.title, None);
+        assert_eq!(liveness.topic, None);
     }
 
     #[test]
@@ -187,6 +209,7 @@ mod tests {
         let liveness = PriorityChannelLiveness {
             platform: Some(PriorityChannelPlatform::Twitch),
             title: Some("stream".to_string()),
+            topic: None,
         };
 
         assert!(liveness.is_live());
@@ -198,6 +221,7 @@ mod tests {
             playable_liveness(
                 PriorityChannelPlatform::Youtube,
                 false,
+                None,
                 Some("stream".to_string()),
                 Some("https://example.com/live.m3u8".to_string()),
             ),
@@ -213,6 +237,7 @@ mod tests {
             playable_liveness(
                 PriorityChannelPlatform::Youtube,
                 true,
+                None,
                 Some("stream".to_string()),
                 None,
             ),
@@ -222,6 +247,7 @@ mod tests {
             playable_liveness(
                 PriorityChannelPlatform::Twitch,
                 true,
+                None,
                 Some("stream".to_string()),
                 Some(String::new()),
             ),
@@ -234,6 +260,7 @@ mod tests {
         let liveness = playable_liveness(
             PriorityChannelPlatform::Twitch,
             true,
+            Some("Just Chatting".to_string()),
             Some("stream".to_string()),
             Some("https://example.com/live.m3u8".to_string()),
         )
@@ -242,6 +269,7 @@ mod tests {
         assert!(liveness.is_live());
         assert_eq!(liveness.platform, Some(PriorityChannelPlatform::Twitch));
         assert_eq!(liveness.title.as_deref(), Some("stream"));
+        assert_eq!(liveness.topic.as_deref(), Some("Just Chatting"));
     }
 
     #[test]
@@ -252,10 +280,63 @@ mod tests {
             PriorityChannelPlatform::Twitch,
             true,
             Some(String::new()),
+            Some(String::new()),
             Some("https://example.com/live.m3u8".to_string()),
         )
         .expect("a live platform with a stream URL is switchable");
 
         assert_eq!(liveness.title, None);
+        assert_eq!(liveness.topic, None);
+    }
+
+    #[test]
+    fn a_banned_streaming_keyword_blocks_auto_switch() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Youtube,
+            true,
+            None,
+            Some("【ASMR】睡眠導入".to_string()),
+            Some("https://example.com/live.m3u8".to_string()),
+        )
+        .expect("a live platform with a stream URL is switchable");
+
+        let keywords = vec!["asmr".to_string(), "gta".to_string()];
+        assert_eq!(
+            liveness.banned_streaming_keyword(&keywords).as_deref(),
+            Some("asmr")
+        );
+    }
+
+    #[test]
+    fn a_banned_keyword_in_the_topic_blocks_auto_switch() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Twitch,
+            true,
+            Some("Just Chatting".to_string()),
+            Some("雑談".to_string()),
+            Some("https://example.com/live.m3u8".to_string()),
+        )
+        .expect("a live platform with a stream URL is switchable");
+
+        let keywords = vec!["just chatting".to_string()];
+        assert_eq!(
+            liveness.banned_streaming_keyword(&keywords).as_deref(),
+            Some("just chatting")
+        );
+    }
+
+    #[test]
+    fn a_clean_title_does_not_block_auto_switch() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Youtube,
+            true,
+            Some("League of Legends".to_string()),
+            Some("ランク".to_string()),
+            Some("https://example.com/live.m3u8".to_string()),
+        )
+        .expect("a live platform with a stream URL is switchable");
+
+        let keywords = vec!["asmr".to_string(), "just chatting".to_string()];
+        assert!(liveness.banned_streaming_keyword(&keywords).is_none());
     }
 }

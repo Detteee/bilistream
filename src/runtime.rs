@@ -129,10 +129,10 @@ impl StreamCandidate {
     }
 
     fn stream_title(&self) -> Option<String> {
-        match (&self.topic, &self.title) {
-            (Some(topic), Some(title)) => Some(format!("{} {}", topic, title)),
-            _ => self.title.clone(),
-        }
+        bilistream::plugins::banned_keywords::streaming_haystack(
+            self.topic.as_deref(),
+            self.title.as_deref(),
+        )
     }
 
     fn cfg_title(&self) -> String {
@@ -262,6 +262,34 @@ async fn skip_stream_if_previously_warned(stream: &mut StreamCandidate, cfg: &Co
     stream.is_live = false;
 }
 
+/// A live priority stream is still live; this only answers whether we may yank
+/// the current restream onto it. Titles that hit `streaming_banned_keywords`
+/// would be skipped by the main loop anyway, so auto-switch must not force them.
+fn priority_live_for_switch(
+    is_live: bool,
+    topic: Option<&str>,
+    title: Option<&str>,
+    keywords: &[String],
+    platform: &str,
+    channel_name: &str,
+) -> bool {
+    if !is_live {
+        return false;
+    }
+    match bilistream::plugins::banned_keywords::streaming_banned_hit(topic, title, keywords) {
+        Some(keyword) => {
+            tracing::warn!(
+                "优先频道 {} 的{}直播标题/分区包含不支持的关键词: {}，不强制切换",
+                channel_name,
+                platform,
+                keyword
+            );
+            false
+        }
+        None => true,
+    }
+}
+
 /// Marks a candidate offline when its title/topic contains a banned streaming
 /// keyword, warning once per (platform, keyword, title) combination.
 async fn skip_stream_if_banned_keyword(
@@ -273,16 +301,16 @@ async fn skip_stream_if_banned_keyword(
         return;
     }
 
-    let stream_title = stream.stream_title();
-    let default_title = "无标题".to_string();
-    let title_str = stream_title.as_ref().unwrap_or(&default_title);
-    let Some(keyword) = keywords.iter().find(|k| {
-        stream_title
-            .as_ref()
-            .is_some_and(|t| t.contains(k.as_str()))
-    }) else {
+    let Some(keyword) = bilistream::plugins::banned_keywords::streaming_banned_hit(
+        stream.topic.as_deref(),
+        stream.title.as_deref(),
+        keywords,
+    ) else {
         return;
     };
+    let default_title = "无标题".to_string();
+    let stream_title = stream.stream_title();
+    let title_str = stream_title.as_ref().unwrap_or(&default_title);
 
     let platform = stream.platform.code();
     let should_warn = {
@@ -665,6 +693,25 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             },
         });
 
+        let streaming_banned_keywords =
+            bilistream::plugins::banned_keywords::streaming_banned_keywords();
+        let priority_yt_is_live = priority_live_for_switch(
+            priority_yt_is_live,
+            priority_yt_area.as_deref(),
+            priority_yt_title.as_deref(),
+            &streaming_banned_keywords,
+            "YouTube",
+            &cfg.priority_channel.channel_name,
+        );
+        let priority_tw_is_live = priority_live_for_switch(
+            priority_tw_is_live,
+            priority_tw_area.as_deref(),
+            priority_tw_title.as_deref(),
+            &streaming_banned_keywords,
+            "Twitch",
+            &cfg.priority_channel.channel_name,
+        );
+
         let mut yt_stream = if priority_yt_is_live {
             StreamCandidate {
                 platform: StreamPlatform::Youtube,
@@ -777,8 +824,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             }
 
-            let streaming_banned_keywords =
-                bilistream::plugins::banned_keywords::streaming_banned_keywords();
             skip_stream_if_banned_keyword(&mut yt_stream, &streaming_banned_keywords, &cfg).await;
             skip_stream_if_banned_keyword(&mut tw_stream, &streaming_banned_keywords, &cfg).await;
 
@@ -1376,6 +1421,20 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
         // really starts and after one ends, so the switch waits for a playable
         // stream URL.
         let liveness = resolve_playable_priority_channel(&cfg).await;
+        if liveness.is_live() {
+            let streaming_banned_keywords =
+                bilistream::plugins::banned_keywords::streaming_banned_keywords();
+            if let Some(keyword) = liveness.banned_streaming_keyword(&streaming_banned_keywords) {
+                tracing::warn!(
+                    "⚠️ 优先频道 {} 标题/分区包含不支持的关键词: {}，跳过自动切换",
+                    cfg.priority_channel.channel_name,
+                    keyword
+                );
+                tokio::time::sleep(Duration::from_secs(cfg.interval * 2)).await;
+                continue;
+            }
+        }
+
         let priority_is_live = liveness.is_live();
         let priority_platform = liveness.platform.map(|platform| platform.label());
         let priority_title = liveness.title;
@@ -2204,6 +2263,51 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn priority_live_for_switch_rejects_banned_titles() {
+        let keywords = vec!["asmr".to_string(), "just chatting".to_string()];
+
+        assert!(!priority_live_for_switch(
+            true,
+            None,
+            Some("【ASMR】睡眠導入"),
+            &keywords,
+            "YouTube",
+            "priority",
+        ));
+        assert!(!priority_live_for_switch(
+            true,
+            Some("Just Chatting"),
+            Some("雑談"),
+            &keywords,
+            "Twitch",
+            "priority",
+        ));
+        assert!(priority_live_for_switch(
+            true,
+            Some("League of Legends"),
+            Some("ランク"),
+            &keywords,
+            "YouTube",
+            "priority",
+        ));
+        assert!(!priority_live_for_switch(
+            false,
+            None,
+            Some("ランク"),
+            &keywords,
+            "YouTube",
+            "priority",
+        ));
+    }
+
+    #[test]
+    fn stream_title_joins_topic_and_title() {
+        let mut stream = test_stream_candidate(StreamPlatform::Youtube, true);
+        stream.topic = Some("Just Chatting".to_string());
+        stream.title = Some("雑談".to_string());
+        assert_eq!(stream.stream_title().as_deref(), Some("Just Chatting 雑談"));
+    }
     #[test]
     fn status_message_update_ignores_small_time_only_changes() {
         let last = "YT: channel 未直播，计划于 2026-07-04 12:00:00 开始，";
