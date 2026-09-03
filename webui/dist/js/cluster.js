@@ -1,7 +1,7 @@
 // cluster.js — multi-server panel, using the shared authenticated API client.
 
 import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setCheckboxChecked, setButtonLoading, showNotification, SVG_NS } from './dom.js';
-import { createSelectOption, state } from './state.js';
+import { createSelectOption, state, syncMonitorTogglesWithClusterRole } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
@@ -482,6 +482,7 @@ function getClusterLocalStateSignature(cluster) {
     enable_twitch_monitor: !!toggles.enable_twitch_monitor,
     youtube_enable_monitor: !!toggles.youtube_enable_monitor,
     twitch_enable_monitor: !!toggles.twitch_enable_monitor,
+    niconico_enable_monitor: !!toggles.niconico_enable_monitor,
     priority_channel_enabled: !!toggles.priority_channel_enabled,
     priority_channel_auto_restart: !!toggles.priority_channel_auto_restart
   });
@@ -501,8 +502,13 @@ function renderClusterStatus(cluster, errorMessage) {
 
   // Recorded before the no-op early return below, so the gate still
   // tracks ownership changes on renders that draw nothing new.
-  state.localNodeCanEnableMonitorToggles = !cluster?.enabled
+  const canEnable = !cluster?.enabled
     || (!!cluster.active_owner && cluster.active_owner === cluster.local_node_id);
+  const roleChanged = state.localNodeCanEnableMonitorToggles !== canEnable;
+  state.localNodeCanEnableMonitorToggles = canEnable;
+  if (roleChanged) {
+    syncMonitorTogglesWithClusterRole();
+  }
   state.hooks.updatePriorityToggleAvailability?.();
 
   if (!indicator || !nodeList) {

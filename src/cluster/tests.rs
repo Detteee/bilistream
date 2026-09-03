@@ -373,6 +373,7 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     local.twitch.enable_monitor = true;
     local.priority_channel.enabled = true;
     local.priority_channel.auto_restart = false;
+    local.niconico.enable_monitor = true;
 
     let mut source = test_config("source", 10);
     source.bililive.enable_danmaku_command = true;
@@ -389,6 +390,7 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     source.priority_channel.youtube_channel_id = "remote-priority-yt".to_string();
     source.priority_channel.twitch_channel_id = "remote-priority-tw".to_string();
     source.priority_channel.auto_restart = true;
+    source.niconico.enable_monitor = false;
 
     apply_monitored_config_to_config(&mut local, monitored_config_from_config(&source));
 
@@ -401,6 +403,7 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     // monitor toggles: a pushed config must not flip them on this node.
     assert!(local.priority_channel.enabled);
     assert!(!local.priority_channel.auto_restart);
+    assert!(local.niconico.enable_monitor);
 
     assert_eq!(local.youtube.channel_name, "remote yt");
     assert_eq!(local.youtube.channel_id, "remote-yt-id");
@@ -436,6 +439,7 @@ fn monitor_toggle_state_applies_without_changing_channel_targets() {
         twitch_enable_monitor: false,
         priority_channel_enabled: true,
         priority_channel_auto_restart: true,
+        niconico_enable_monitor: true,
     };
 
     apply_monitor_toggle_state_to_config(&mut cfg, &toggles);
@@ -448,6 +452,7 @@ fn monitor_toggle_state_applies_without_changing_channel_targets() {
     assert_eq!(cfg.priority_channel.channel_name, "priority target");
     assert_eq!(cfg.priority_channel.youtube_channel_id, "priority-yt");
     assert_eq!(cfg.priority_channel.twitch_channel_id, "priority-tw");
+    assert!(cfg.niconico.enable_monitor);
 }
 
 #[test]
@@ -463,7 +468,7 @@ fn node_mode_without_explicit_state_preserves_desired_config() {
 }
 
 #[test]
-fn handoff_preserves_source_toggles_and_applies_them_to_target() {
+fn handoff_applies_source_toggles_to_target_and_clears_source() {
     let mut source = test_config("source", 10);
     let source_toggles = MonitorToggleState {
         enable_danmaku_command: true,
@@ -473,17 +478,47 @@ fn handoff_preserves_source_toggles_and_applies_them_to_target() {
         twitch_enable_monitor: false,
         priority_channel_enabled: true,
         priority_channel_auto_restart: true,
+        niconico_enable_monitor: true,
     };
     apply_monitor_toggle_state_to_config(&mut source, &source_toggles);
 
     let mut target = test_config("target", 5);
     apply_monitor_toggle_state_to_config(&mut target, &all_monitor_toggles_off());
 
-    apply_node_mode_config_state(&mut source, None, None);
-    apply_node_mode_config_state(&mut target, None, Some(&source_toggles));
+    let source_applied = resolved_node_mode_monitor_toggles(false, None);
+    let target_applied = resolved_node_mode_monitor_toggles(true, Some(source_toggles.clone()));
+    apply_node_mode_config_state(&mut source, None, source_applied.as_ref());
+    apply_node_mode_config_state(&mut target, None, target_applied.as_ref());
 
-    assert_eq!(monitor_toggle_state_from_config(&source), source_toggles);
+    assert_eq!(
+        monitor_toggle_state_from_config(&source),
+        all_monitor_toggles_off()
+    );
     assert_eq!(monitor_toggle_state_from_config(&target), source_toggles);
+}
+
+#[test]
+fn demoted_node_mode_clears_unspecified_monitor_toggles() {
+    assert_eq!(
+        resolved_node_mode_monitor_toggles(false, None),
+        Some(all_monitor_toggles_off())
+    );
+    assert_eq!(resolved_node_mode_monitor_toggles(true, None), None);
+
+    let requested = MonitorToggleState {
+        enable_danmaku_command: true,
+        enable_youtube_monitor: true,
+        enable_twitch_monitor: true,
+        youtube_enable_monitor: true,
+        twitch_enable_monitor: true,
+        priority_channel_enabled: true,
+        priority_channel_auto_restart: false,
+        niconico_enable_monitor: true,
+    };
+    assert_eq!(
+        resolved_node_mode_monitor_toggles(false, Some(requested.clone())),
+        Some(requested)
+    );
 }
 
 #[test]
@@ -1450,6 +1485,7 @@ fn last_known_active_toggles_preserves_all_off_cache() {
         twitch_enable_monitor: true,
         priority_channel_enabled: true,
         priority_channel_auto_restart: true,
+        niconico_enable_monitor: true,
     };
 
     {
@@ -1569,6 +1605,7 @@ fn cached_toggles_fallback_when_previous_owner_snapshot_missing() {
         twitch_enable_monitor: true,
         priority_channel_enabled: true,
         priority_channel_auto_restart: false,
+        niconico_enable_monitor: true,
     };
 
     {

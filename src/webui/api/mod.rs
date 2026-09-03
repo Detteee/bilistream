@@ -732,6 +732,7 @@ mod tests {
             twitch_enable_monitor: false,
             priority_channel_enabled: true,
             priority_channel_auto_restart: false,
+            niconico_enable_monitor: true,
         }
     }
 

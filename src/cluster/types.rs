@@ -177,6 +177,8 @@ pub struct MonitoredConfig {
     pub youtube: Youtube,
     pub twitch: Twitch,
     pub priority_channel: PriorityChannel,
+    #[serde(default)]
+    pub niconico_enable_monitor: bool,
     pub channels_json: Option<serde_json::Value>,
     pub areas_json: Option<serde_json::Value>,
 }
@@ -197,6 +199,8 @@ pub struct MonitorToggleState {
     pub priority_channel_enabled: bool,
     #[serde(default)]
     pub priority_channel_auto_restart: bool,
+    #[serde(default)]
+    pub niconico_enable_monitor: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -237,6 +241,7 @@ pub fn monitor_toggle_state_from_config(cfg: &Config) -> MonitorToggleState {
         twitch_enable_monitor: cfg.twitch.enable_monitor,
         priority_channel_enabled: cfg.priority_channel.enabled,
         priority_channel_auto_restart: cfg.priority_channel.auto_restart,
+        niconico_enable_monitor: cfg.niconico.enable_monitor,
     }
 }
 
@@ -249,11 +254,26 @@ pub fn monitor_toggle_state_from_monitored_config(payload: &MonitoredConfig) -> 
         twitch_enable_monitor: payload.twitch.enable_monitor,
         priority_channel_enabled: payload.priority_channel.enabled,
         priority_channel_auto_restart: payload.priority_channel.auto_restart,
+        niconico_enable_monitor: payload.niconico_enable_monitor,
     }
 }
 
 pub fn all_monitor_toggles_off() -> MonitorToggleState {
     MonitorToggleState::default()
+}
+
+/// Demotion persists all-off. The dashboard reads `/api/config`, so the
+/// previous owner's switches must actually be cleared, not only masked in
+/// `/api/status`.
+pub(crate) fn resolved_node_mode_monitor_toggles(
+    active: bool,
+    requested: Option<MonitorToggleState>,
+) -> Option<MonitorToggleState> {
+    match requested {
+        Some(toggles) => Some(toggles),
+        None if active => None,
+        None => Some(all_monitor_toggles_off()),
+    }
 }
 
 pub fn channel_target_state_from_config(cfg: &Config) -> ChannelTargetState {
@@ -298,6 +318,7 @@ pub fn apply_monitor_toggle_state_to_config(cfg: &mut Config, payload: &MonitorT
     cfg.twitch.enable_monitor = payload.twitch_enable_monitor;
     cfg.priority_channel.enabled = payload.priority_channel_enabled;
     cfg.priority_channel.auto_restart = payload.priority_channel_auto_restart;
+    cfg.niconico.enable_monitor = payload.niconico_enable_monitor;
 }
 
 pub(crate) fn monitor_toggles_all_off(toggles: &MonitorToggleState) -> bool {

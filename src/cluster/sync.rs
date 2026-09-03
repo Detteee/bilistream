@@ -437,7 +437,10 @@ pub async fn finalize_cluster_node_switch(
                 active: false,
                 restart: false,
                 preserve_drain: preserve_source_drain,
-                monitor_toggles: None,
+                // Channel targets stay. Apply-node-mode fills in all-off when
+                // monitor_toggles is omitted; send it explicitly so an older
+                // peer that lacks that fill-in still persists the demotion.
+                monitor_toggles: Some(all_monitor_toggles_off()),
                 channel_targets: None,
                 expected_active_owner: Some(expected_source_owner.to_string()),
             },
@@ -695,7 +698,7 @@ pub async fn apply_cluster_node_mode_locally(
     let active = payload.active;
     let restart = payload.restart;
     let preserve_drain = payload.preserve_drain;
-    let monitor_toggles = payload.monitor_toggles;
+    let monitor_toggles = resolved_node_mode_monitor_toggles(active, payload.monitor_toggles);
     let channel_targets = payload.channel_targets;
     let mut config_changed = monitor_toggles.is_some() || channel_targets.is_some();
     let mut cfg = load_config().await.map_err(|e| e.to_string())?;

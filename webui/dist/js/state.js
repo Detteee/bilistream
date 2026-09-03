@@ -40,16 +40,24 @@ function updateMonitorToggleStates(config = window.configData) {
   const youtubeToggle = document.getElementById('youtube-monitor-toggle');
   const twitchToggle = document.getElementById('twitch-monitor-toggle');
   const niconicoToggle = document.getElementById('niconico-monitor-toggle');
+  const canEnable = state.localNodeCanEnableMonitorToggles;
 
   if (youtubeToggle) {
-    applyMonitorToggleConfigState(youtubeToggle, 'youtube-monitor-toggle', config.youtube?.enable_monitor !== false);
+    applyMonitorToggleConfigState(youtubeToggle, 'youtube-monitor-toggle', canEnable && config.youtube?.enable_monitor !== false);
   }
   if (twitchToggle) {
-    applyMonitorToggleConfigState(twitchToggle, 'twitch-monitor-toggle', config.twitch?.enable_monitor !== false);
+    applyMonitorToggleConfigState(twitchToggle, 'twitch-monitor-toggle', canEnable && config.twitch?.enable_monitor !== false);
   }
   if (niconicoToggle) {
-    applyMonitorToggleConfigState(niconicoToggle, 'niconico-monitor-toggle', config.niconico?.enable_monitor === true);
+    applyMonitorToggleConfigState(niconicoToggle, 'niconico-monitor-toggle', canEnable && config.niconico?.enable_monitor === true);
   }
+}
+
+function syncMonitorTogglesWithClusterRole(config = window.configData) {
+  updateMonitorToggleStates(config);
+  const danmakuEnabled = state.localNodeCanEnableMonitorToggles
+    && config.bilibili?.enable_danmaku_command !== false;
+  updateDanmakuCommandToggle(danmakuEnabled);
 }
 
 function applyPriorityAutoRestartToggle(config = window.configData) {
@@ -176,6 +184,7 @@ function getAreaName(areaId) {
 export {
   mergeConfigData,
   updateMonitorToggleStates,
+  syncMonitorTogglesWithClusterRole,
   applyPriorityAutoRestartToggle,
   applyMonitorToggleConfigState,
   updateDanmakuCommandToggle,

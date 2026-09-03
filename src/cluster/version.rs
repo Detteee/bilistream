@@ -18,6 +18,7 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
         youtube: cfg.youtube.clone(),
         twitch: cfg.twitch.clone(),
         priority_channel: cfg.priority_channel.clone(),
+        niconico_enable_monitor: cfg.niconico.enable_monitor,
         channels_json: read_json_file("channels.json"),
         areas_json: read_json_file("areas.json"),
     }

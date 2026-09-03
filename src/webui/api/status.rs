@@ -397,10 +397,9 @@ pub(crate) fn apply_effective_local_monitor_state(status: &mut StatusData, is_ac
     if let Some(niconico) = status.niconico.as_mut() {
         niconico.enable_monitor = false;
     }
-    // A standby runs no monitor at all, priority channel included: the main loop
-    // exits on local_monitoring_allowed() before it ever looks at these. The
-    // desired state still lives in config and travels with the next handoff, so
-    // reporting it here only made a demoted node look like it kept monitoring.
+    // A standby runs no monitor at all, priority channel included. Demotion
+    // persists all-off into config; this mask covers the window before that
+    // save and any stale status cache.
     if let Some(priority) = status.priority_channel.as_mut() {
         priority.enabled = false;
         priority.auto_restart = false;
