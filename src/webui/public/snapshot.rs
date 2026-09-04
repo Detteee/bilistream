@@ -58,7 +58,14 @@ fn with_live_danmaku_gate(mut status: StatusData) -> StatusData {
 /// Whether viewers can send a 切换 command right now: the owner's processor
 /// gate, not the config switch. A restreaming node keeps the config on and
 /// disables commands until ffmpeg exits.
+///
+/// The 转播中 badge is ffmpeg+RTMP from this same cluster view. If that is
+/// already on and the processor flag is still the config bit, advertise off
+/// here rather than polling faster or shortening the 5s snapshot.
 pub(super) fn public_danmaku_enabled(cluster: &ClusterStatus) -> bool {
+    if cluster.owner_is_restreaming() {
+        return false;
+    }
     public_status_source(cluster)
         .map(|status| status.bilibili.enable_danmaku_command)
         .unwrap_or(false)
@@ -72,7 +79,11 @@ fn node_status_if_fresh(node: &ClusterNodeSnapshot) -> Option<StatusData> {
 }
 
 fn build_public_status(cluster: &ClusterStatus) -> PublicStatus {
-    PublicStatus::build(public_status_source(cluster).as_ref(), cluster)
+    let mut payload = PublicStatus::build(public_status_source(cluster).as_ref(), cluster);
+    if cluster.owner_is_restreaming() {
+        payload.bilibili.enable_danmaku_command = false;
+    }
+    payload
 }
 
 /// Rebuilds the cached payload unconditionally.

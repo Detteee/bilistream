@@ -51,6 +51,27 @@ impl ClusterNodeSnapshot {
     pub(crate) fn is_serviceable(&self) -> bool {
         self.health.healthy && !self.draining && !self.network_unstable
     }
+
+    /// Same condition as the public page's 转播中 badge: ffmpeg with RTMP TX.
+    pub(crate) fn is_restreaming(&self) -> bool {
+        if !self.ffmpeg_running {
+            return false;
+        }
+        let Some(network) = self.network.as_ref() else {
+            return false;
+        };
+        network.stream_bitrate_kbps.is_some_and(|kbps| kbps > 0.0)
+            || network.stream_speed.is_some_and(|speed| speed > 0.0)
+    }
+}
+
+impl ClusterStatus {
+    /// An active owner is on the wire. Idle active is 活跃, not 转播中.
+    pub(crate) fn owner_is_restreaming(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| node.role == ClusterNodeRole::Active && node.is_restreaming())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

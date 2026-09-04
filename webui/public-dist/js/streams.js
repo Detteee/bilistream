@@ -45,13 +45,14 @@ export function setDanmakuEnabled(enabled, isRestreamingNow) {
 }
 
 function streamIsSwitchable(stream) {
-  // The live processor gate is the switch key: 转播 sets it off, and the
-  // "空澄セナ 直播结束，可使用弹幕指令进行换台" path sets it back on.
-  // A Holodex snapshot taken while it was off still says danmaku_disabled;
-  // once the gate is on, that stale reason must not keep 切换 grey.
-  if (danmakuEnabled === false) {
+  // Same payload as the 转播中 badge (`clusterIsRestreaming`). Do not wait
+  // for a second poll: if JP is already pushing, 切换 is not requestable.
+  if (restreaming || danmakuEnabled === false) {
     return false;
   }
+  // A Holodex snapshot taken while the processor was down still says
+  // danmaku_disabled; once 转播 ends and the gate is on, that stale reason
+  // must not keep 切换 grey.
   if (danmakuEnabled === true && stream.reason === 'danmaku_disabled') {
     return true;
   }
@@ -59,8 +60,11 @@ function streamIsSwitchable(stream) {
 }
 
 function switchDisabledReason(stream) {
+  if (restreaming) {
+    return REASON_LABELS.restreaming;
+  }
   if (danmakuEnabled === false) {
-    return restreaming ? REASON_LABELS.restreaming : REASON_LABELS.danmaku_disabled;
+    return REASON_LABELS.danmaku_disabled;
   }
   return reasonText(stream);
 }
