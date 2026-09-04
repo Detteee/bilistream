@@ -19,6 +19,7 @@ use bilistream::plugins::{
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
     FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
+    store_prefetched_playable_stream, take_prefetched_playable_stream, PriorityChannelPlatform,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
@@ -182,6 +183,28 @@ type SourceStatus = (
 );
 
 const OFFLINE_SOURCE_STATUS: SourceStatus = (false, None, None, None, None, None);
+
+/// Use the URL the priority monitor already confirmed, if it matches this
+/// channel. Avoids a second yt-dlp/streamlink fetch right after a switch.
+fn take_prefetched_source_status(
+    platform: PriorityChannelPlatform,
+    channel_id: &str,
+) -> Option<SourceStatus> {
+    take_prefetched_playable_stream(platform, channel_id).map(|stream| {
+        tracing::info!(
+            "♻️ 复用优先频道已确认的 {} 流地址，跳过重新拉取",
+            platform.label()
+        );
+        (
+            true,
+            stream.topic,
+            stream.title,
+            Some(stream.m3u8_url),
+            None,
+            stream.stream_id,
+        )
+    })
+}
 
 /// The live-status client backing the currently selected stream candidate.
 enum SourceClient<'a> {
@@ -458,10 +481,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     cfg.youtube.proxy.clone(),
                 );
                 let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
-                    yt_live
-                        .get_status()
-                        .await
-                        .unwrap_or((false, None, None, None, None, None));
+                    if let Some(status) = take_prefetched_source_status(
+                        PriorityChannelPlatform::Youtube,
+                        &cfg.youtube.channel_id,
+                    ) {
+                        status
+                    } else {
+                        yt_live.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
+                    };
                 let max_scheduled_start = Local::now() + Duration::from_secs(2 * 24 * 60 * 60);
                 if scheduled_start
                     .as_ref()
@@ -509,21 +536,29 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             priority_yt_video_id,
         ) = if let Some(ref client) = priority_yt_live {
             if cfg.youtube.channel_name == cfg.priority_channel.channel_name {
-                // If YouTube is already configured for priority channel, reuse the existing status
-                (
-                    yt_is_live,
-                    yt_area.clone(),
-                    yt_title.clone(),
-                    yt_m3u8_url.clone(),
-                    scheduled_start,
-                    yt_video_id.clone(),
-                )
+                if let Some(status) = take_prefetched_source_status(
+                    PriorityChannelPlatform::Youtube,
+                    &cfg.priority_channel.youtube_channel_id,
+                ) {
+                    status
+                } else {
+                    (
+                        yt_is_live,
+                        yt_area.clone(),
+                        yt_title.clone(),
+                        yt_m3u8_url.clone(),
+                        scheduled_start,
+                        yt_video_id.clone(),
+                    )
+                }
+            } else if let Some(status) = take_prefetched_source_status(
+                PriorityChannelPlatform::Youtube,
+                &cfg.priority_channel.youtube_channel_id,
+            ) {
+                status
             } else {
                 // Only check priority channel separately if not already configured
-                client
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None, None))
+                client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
             }
         } else {
             (false, None, None, None, None, None)
@@ -538,10 +573,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     cfg.twitch.proxy.clone(),
                 ) {
                     Ok(tw_live) => {
-                        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) = tw_live
-                            .get_status()
-                            .await
-                            .unwrap_or((false, None, None, None, None, None));
+                        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) =
+                            if let Some(status) = take_prefetched_source_status(
+                                PriorityChannelPlatform::Twitch,
+                                &cfg.twitch.channel_id,
+                            ) {
+                                status
+                            } else {
+                                tw_live.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
+                            };
                         (
                             Some(tw_live),
                             tw_is_live,
@@ -591,21 +631,29 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             priority_tw_stream_id,
         ) = if let Some(ref client) = priority_tw_live {
             if cfg.twitch.channel_name == cfg.priority_channel.channel_name {
-                // If Twitch is already configured for priority channel, reuse the existing status
-                (
-                    tw_is_live,
-                    tw_area.clone(),
-                    tw_title.clone(),
-                    tw_m3u8_url.clone(),
-                    None,
-                    tw_stream_id.clone(),
-                )
+                if let Some(status) = take_prefetched_source_status(
+                    PriorityChannelPlatform::Twitch,
+                    &cfg.priority_channel.twitch_channel_id,
+                ) {
+                    status
+                } else {
+                    (
+                        tw_is_live,
+                        tw_area.clone(),
+                        tw_title.clone(),
+                        tw_m3u8_url.clone(),
+                        None,
+                        tw_stream_id.clone(),
+                    )
+                }
+            } else if let Some(status) = take_prefetched_source_status(
+                PriorityChannelPlatform::Twitch,
+                &cfg.priority_channel.twitch_channel_id,
+            ) {
+                status
             } else {
                 // Only check priority channel separately if not already configured
-                client
-                    .get_status()
-                    .await
-                    .unwrap_or((false, None, None, None, None, None))
+                client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
             }
         } else {
             (false, None, None, None, None, None)
@@ -1435,6 +1483,10 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
             }
         }
 
+        let prefetched = liveness.prefetched_stream(
+            &cfg.priority_channel.youtube_channel_id,
+            &cfg.priority_channel.twitch_channel_id,
+        );
         let priority_is_live = liveness.is_live();
         let priority_platform = liveness.platform.map(|platform| platform.label());
         let priority_title = liveness.title;
@@ -1505,6 +1557,10 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
                         tracing::error!("{}", error_msg);
                     } // Error is dropped here
                 } else {
+                    if let Some(stream) = prefetched {
+                        store_prefetched_playable_stream(stream);
+                    }
+
                     // Stop current ffmpeg and trigger immediate restart
                     set_manual_restart();
                     stop_ffmpeg().await;
