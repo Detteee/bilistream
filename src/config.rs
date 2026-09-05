@@ -493,17 +493,35 @@ where
         let result = edit(&mut data)?;
         let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
         write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
-        let _publication = CONFIG_PUBLICATION_LOCK
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        CONFIG_REVISION.fetch_add(1, Ordering::AcqRel);
-        invalidate_config_cache();
-        crate::plugins::set_config_updated();
-        crate::webui::state::request_status_refresh();
+        managed_json_committed();
         Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Replace an authoritative managed JSON snapshot using the same transaction
+/// lock as edits. Unlike mutation, replacement can initialize a missing file.
+pub async fn replace_json_file(path: PathBuf, data: serde_json::Value) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = PERSISTENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
+        managed_json_committed();
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn managed_json_committed() {
+    let _publication = CONFIG_PUBLICATION_LOCK
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    CONFIG_REVISION.fetch_add(1, Ordering::AcqRel);
+    invalidate_config_cache();
+    crate::plugins::set_config_updated();
+    crate::webui::state::request_status_refresh();
 }
 
 fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -664,6 +682,24 @@ mod tests {
             merge_config_changes(Some(&base), Some(&edited), Some(&current), "config").unwrap(),
             Some(serde_json::json!({"b": [2], "c": true}))
         );
+    }
+
+    #[tokio::test]
+    async fn managed_replacement_initializes_a_missing_file_and_supports_edits() {
+        let dir = test_dir();
+        let path = dir.join("managed.json");
+        replace_json_file(path.clone(), serde_json::json!({"count": 4}))
+            .await
+            .unwrap();
+        mutate_json_file(path.clone(), |data: &mut serde_json::Value| {
+            data["count"] = serde_json::json!(data["count"].as_u64().unwrap() + 1);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(data["count"], 5);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
