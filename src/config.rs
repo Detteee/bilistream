@@ -334,6 +334,20 @@ async fn read_config(config_path: &Path, cookies_path: &Path) -> Result<Config, 
 
 /// Saves the configuration to config.json
 pub async fn save_config(config: &mut Config) -> Result<(), Box<dyn Error>> {
+    save_config_inner(config, false).await
+}
+
+/// Commit an automated decision only if every input source is still current.
+/// Unlike user field edits, an automated plan must not be rebased over newer
+/// settings that may have disabled or redirected the operation.
+pub async fn save_config_if_current(config: &mut Config) -> Result<(), Box<dyn Error>> {
+    save_config_inner(config, true).await
+}
+
+async fn save_config_inner(
+    config: &mut Config,
+    require_current: bool,
+) -> Result<(), Box<dyn Error>> {
     let edited = serde_json::to_value(&config)?;
     let snapshot = config.snapshot.clone();
     let credentials = config.bililive.credentials.clone();
@@ -344,6 +358,16 @@ pub async fn save_config(config: &mut Config) -> Result<(), Box<dyn Error>> {
         let _guard = PERSISTENCE_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if require_current
+            && snapshot
+                .as_ref()
+                .is_none_or(|snapshot| !snapshot_is_current(snapshot))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "configuration changed while planning the operation",
+            ));
+        }
         let json =
             commit_config_snapshot(&CONFIG_PATH, snapshot.as_deref().map(|s| &s.json), &edited)?;
         let mut saved: Config = serde_json::from_value(json.clone())?;
@@ -371,10 +395,15 @@ pub async fn save_config(config: &mut Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub fn config_is_current(config: &Config) -> bool {
-    config.snapshot.as_ref().is_some_and(|snapshot| {
-        snapshot.revision == CONFIG_REVISION.load(Ordering::Acquire)
-            && snapshot.source_keys == config_source_keys()
-    })
+    config
+        .snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot_is_current(snapshot))
+}
+
+fn snapshot_is_current(snapshot: &ConfigSnapshot) -> bool {
+    snapshot.revision == CONFIG_REVISION.load(Ordering::Acquire)
+        && snapshot.source_keys == config_source_keys()
 }
 
 /// Apply a synchronous runtime update only while its source configuration is

@@ -514,20 +514,7 @@ async fn stop_ffmpeg_matching(
         if manual {
             MANUAL_STOP.store(true, Ordering::SeqCst);
         }
-        if let Some(mut process) = supervisor.take() {
-            // Abort readers/monitors before clearing shared state. Every child
-            // also has kill_on_drop enabled in case this runtime shuts down.
-            drop(std::mem::take(&mut process.tasks));
-            if let Err(error) = process.kill().await {
-                tracing::warn!("FFmpeg session cleanup failed: {error}");
-            }
-            if let Some(cache_dir) = process.cache_dir.take() {
-                if let Err(error) = tokio::fs::remove_dir_all(&cache_dir).await {
-                    tracing::warn!("Cannot remove cache {}: {error}", cache_dir.display());
-                }
-            }
-        }
-        reset_stopped_tracking_state();
+        stop_locked(&mut supervisor).await;
         cleanup.await;
         // Hold the lock until cleanup and metric reset are complete.
         drop(supervisor);
@@ -535,6 +522,41 @@ async fn stop_ffmpeg_matching(
     })
     .await
     .unwrap_or(false)
+}
+
+/// Keep a stream running when preparation fails, and fence the entire
+/// preparation/stop sequence against replacement by another session.
+pub async fn transition_ffmpeg_session(
+    session: FfmpegSession,
+    prepare: impl Future<Output = bool> + Send + 'static,
+) -> bool {
+    tokio::spawn(async move {
+        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+        if matching_process(&mut supervisor, session).is_none() || !prepare.await {
+            return false;
+        }
+        stop_locked(&mut supervisor).await;
+        true
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn stop_locked(supervisor: &mut Option<FfmpegProcess>) {
+    if let Some(mut process) = supervisor.take() {
+        // Abort readers/monitors before clearing shared state. Every child
+        // also has kill_on_drop enabled in case this runtime shuts down.
+        drop(std::mem::take(&mut process.tasks));
+        if let Err(error) = process.kill().await {
+            tracing::warn!("FFmpeg session cleanup failed: {error}");
+        }
+        if let Some(cache_dir) = process.cache_dir.take() {
+            if let Err(error) = tokio::fs::remove_dir_all(&cache_dir).await {
+                tracing::warn!("Cannot remove cache {}: {error}", cache_dir.display());
+            }
+        }
+    }
+    reset_stopped_tracking_state();
 }
 
 fn reset_stopped_tracking_state() {
@@ -1987,6 +2009,15 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let worker_called = called.clone();
         assert!(!stop_ffmpeg_session(FfmpegSession(1)).await);
+        let stale_called = called.clone();
+        assert!(
+            !transition_ffmpeg_session(FfmpegSession(1), async move {
+                stale_called.store(true, Ordering::SeqCst);
+                true
+            })
+            .await
+        );
+        assert!(!transition_ffmpeg_session(FfmpegSession(2), async { false }).await);
         spawn_session_task(FfmpegSession(1), async move {
             worker_called.store(true, Ordering::SeqCst);
         })
