@@ -453,7 +453,7 @@ async fn get_status_with_yt_dlp(
         "https://www.youtube.com/channel/{}/live",
         channel_id
     ));
-    let output = command_output_with_timeout(&mut command, YT_DLP_TIMEOUT, "yt-dlp")?;
+    let output = command_output_with_timeout(command, YT_DLP_TIMEOUT, "yt-dlp").await?;
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -506,7 +506,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
         optional_channel_name_for_holodex(get_channel_name("YT", channel_id), channel_id);
 
     // Helper function to get title using yt-dlp
-    let get_title_with_ytdlp = || -> Result<Option<String>, Box<dyn Error>> {
+    let get_title_with_ytdlp = || async {
         let mut command = Command::new(get_yt_dlp_command());
         configure_no_window(&mut command);
         if let Some(ref p) = proxy {
@@ -519,7 +519,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
             channel_id
         ));
 
-        let output = command_output_with_timeout(&mut command, YT_DLP_TIMEOUT, "yt-dlp")?;
+        let output = command_output_with_timeout(command, YT_DLP_TIMEOUT, "yt-dlp").await?;
         let title_str = String::from_utf8_lossy(&output.stdout);
 
         let title = title_str
@@ -529,11 +529,11 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                     && !line.starts_with("WARNING")
                     && !line.starts_with("ERROR")
             })
-            .last()
+            .next_back()
             .map(strip_scheduled_title_suffix)
             .filter(|s| !s.is_empty());
 
-        Ok(title)
+        Ok::<_, Box<dyn Error>>(title)
     };
 
     // Try Holodex API if it is the monitor's first gate.
@@ -549,7 +549,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
     }
 
     // Fallback to yt-dlp
-    get_title_with_ytdlp()
+    get_title_with_ytdlp().await
 }
 
 #[cfg(test)]

@@ -62,7 +62,7 @@ impl Twitch {
         if is_live {
             let cfg = crate::config::load_config().await?;
             let quality = cfg.twitch.quality.clone();
-            let m3u8_url = self.get_streamlink_url(Some(&quality))?;
+            let m3u8_url = self.get_streamlink_url(Some(&quality)).await?;
             Ok((
                 is_live,
                 Some(game_name.unwrap_or_default()),
@@ -75,9 +75,9 @@ impl Twitch {
             Ok((is_live, None, None, None, None, stream_id))
         }
     }
-    fn get_streamlink_url(&self, quality: Option<&str>) -> Result<String, Box<dyn Error>> {
+    async fn get_streamlink_url(&self, quality: Option<&str>) -> Result<String, Box<dyn Error>> {
         // First try with configured proxy region
-        match self.try_with_proxy(&self.proxy_region, quality) {
+        match self.try_with_proxy(&self.proxy_region, quality).await {
             Ok(url) => return Ok(url),
             Err(e) => tracing::warn!("Failed with configured proxy {}: {}", self.proxy_region, e),
         }
@@ -88,7 +88,7 @@ impl Twitch {
             if region == self.proxy_region {
                 continue; // Skip if it's the same as the already tried region
             }
-            match self.try_with_proxy(region, quality) {
+            match self.try_with_proxy(region, quality).await {
                 Ok(url) => {
                     tracing::info!(
                         "Successfully got stream URL with backup proxy region: {}",
@@ -105,7 +105,7 @@ impl Twitch {
         Err("Failed to get stream URL with all proxy regions".into())
     }
 
-    fn try_with_proxy(
+    async fn try_with_proxy(
         &self,
         proxy_region: &str,
         quality: Option<&str>,
@@ -132,15 +132,14 @@ impl Twitch {
         ))
         .arg(quality);
 
-        let output = match command_output_with_timeout(&mut cmd, STREAMLINK_TIMEOUT, "streamlink") {
+        let output = match command_output_with_timeout(cmd, STREAMLINK_TIMEOUT, "streamlink").await
+        {
             Ok(output) => output,
             Err(e) => {
-                if e.downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-                {
+                if e.kind() == std::io::ErrorKind::NotFound {
                     return Err("streamlink 未安装或不在 PATH 中。".into());
                 }
-                return Err(e);
+                return Err(e.into());
             }
         };
 
