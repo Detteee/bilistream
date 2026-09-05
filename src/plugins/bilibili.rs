@@ -1185,11 +1185,7 @@ pub async fn get_thumbnail(
         return Ok(String::new());
     };
 
-    let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
-    if let Some(proxy_url) = proxy.filter(|p| !p.is_empty()) {
-        client_builder = client_builder.proxy(reqwest::Proxy::all(proxy_url)?);
-    }
-    let client = client_builder.build()?;
+    let client = super::http::pooled_client(proxy.as_deref())?;
 
     let response = match client.get(&thumbnail_url).send().await {
         Ok(response) => response,
@@ -1208,7 +1204,7 @@ pub async fn get_thumbnail(
         return Ok(String::new());
     }
 
-    let bytes = match response.bytes().await {
+    let bytes = match super::http::response_bytes_limited(response, 8 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(e) => {
             warn!("读取封面失败: {}", e);
@@ -1216,7 +1212,7 @@ pub async fn get_thumbnail(
         }
     };
 
-    if let Err(e) = fs::write("cover.jpg", &bytes) {
+    if let Err(e) = tokio::fs::write("cover.jpg", &bytes).await {
         warn!("保存封面失败: {}", e);
         return Ok(String::new());
     }

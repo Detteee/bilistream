@@ -1,3 +1,4 @@
+use super::http::{pooled_client, response_json_limited};
 use crate::config::load_config;
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -70,16 +71,19 @@ pub async fn get_holodex_streams(
         format!("https://holodex.net/api/v2/users/live?channels={channels_param}")
     };
 
-    let client = reqwest::Client::builder()
+    let client = pooled_client(None)?;
+    let response = client
+        .get(&url)
         .timeout(Duration::from_secs(15))
-        .build()?;
-    let response = client.get(&url).header("X-APIKEY", api_key).send().await?;
+        .header("X-APIKEY", api_key)
+        .send()
+        .await?;
 
     if !response.status().is_success() {
         return Err(format!("Holodex API error: {}", response.status()).into());
     }
 
-    Ok(response.json().await?)
+    Ok(response_json_limited(response).await?)
 }
 
 fn holodex_get(
@@ -90,6 +94,7 @@ fn holodex_get(
 ) -> reqwest::RequestBuilder {
     client
         .get(url)
+        .timeout(Duration::from_secs(20))
         .header("X-APIKEY", api_key)
         .header("Authorization", format!("BEARER {jwt}"))
         .header("User-Agent", "bilistream/1.0")
@@ -100,9 +105,7 @@ pub async fn get_holodex_favorites_live(
     api_key: &str,
     jwt: &str,
 ) -> Result<(HashSet<String>, Vec<HolodexStream>), Box<dyn Error>> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()?;
+    let client = pooled_client(None)?;
 
     let fav_resp = holodex_get(
         &client,
@@ -117,7 +120,7 @@ pub async fn get_holodex_favorites_live(
         return Err(format!("Holodex favorites error: {}", fav_resp.status()).into());
     }
 
-    let favorites: Vec<HolodexFavoriteChannel> = fav_resp.json().await?;
+    let favorites: Vec<HolodexFavoriteChannel> = response_json_limited(fav_resp).await?;
     let fav_ids: HashSet<String> = favorites.into_iter().map(|c| c.id).collect();
 
     let live_resp = holodex_get(
@@ -133,7 +136,7 @@ pub async fn get_holodex_favorites_live(
         return Err(format!("Holodex favorites live error: {}", live_resp.status()).into());
     }
 
-    let streams: Vec<HolodexStream> = live_resp.json().await?;
+    let streams: Vec<HolodexStream> = response_json_limited(live_resp).await?;
     let filtered = streams
         .into_iter()
         .filter(|s| fav_ids.contains(&s.channel.id))
@@ -151,10 +154,7 @@ pub async fn refresh_holodex_jwt(
     api_key: &str,
     jwt: &str,
 ) -> Result<Option<HolodexJwtRefresh>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = pooled_client(None).map_err(|e| e.to_string())?;
 
     let response = holodex_get(
         &client,
@@ -162,6 +162,7 @@ pub async fn refresh_holodex_jwt(
         api_key,
         jwt,
     )
+    .timeout(Duration::from_secs(10))
     .send()
     .await
     .map_err(|e| e.to_string())?;
@@ -170,7 +171,9 @@ pub async fn refresh_holodex_jwt(
         return Ok(None);
     }
 
-    let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let body: serde_json::Value = response_json_limited(response)
+        .await
+        .map_err(|e| e.to_string())?;
     let username = body
         .get("user")
         .and_then(|u| u.get("username"))
@@ -272,17 +275,20 @@ pub async fn get_holodex_live_title(
     channel_id: &str,
     channel_name: Option<&str>,
 ) -> Result<Option<String>, Box<dyn Error>> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()?;
+    let client = pooled_client(None)?;
     let url = format!("https://holodex.net/api/v2/users/live?channels={channel_id}");
 
-    let response = client.get(&url).header("X-APIKEY", api_key).send().await?;
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(15))
+        .header("X-APIKEY", api_key)
+        .send()
+        .await?;
     if !response.status().is_success() {
         return Err(format!("Holodex API error: {}", response.status()).into());
     }
 
-    let videos: Vec<HolodexStream> = response.json().await?;
+    let videos: Vec<HolodexStream> = response_json_limited(response).await?;
     for video in videos.iter().rev() {
         if !video
             .channel

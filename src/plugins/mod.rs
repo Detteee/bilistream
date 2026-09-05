@@ -4,6 +4,7 @@ pub mod danmaku;
 pub mod danmaku_client;
 pub mod ffmpeg;
 pub mod holodex;
+pub mod http;
 pub mod riot;
 pub mod twitch;
 pub mod utils;

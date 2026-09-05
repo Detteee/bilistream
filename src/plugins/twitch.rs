@@ -1,5 +1,4 @@
 use chrono::{DateTime, Local};
-use reqwest::Client;
 use reqwest_middleware::ClientBuilder;
 use reqwest_middleware::ClientWithMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
@@ -188,7 +187,7 @@ pub async fn get_twitch_status(
     ),
     Box<dyn std::error::Error>,
 > {
-    let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let client = super::http::pooled_client(None)?;
 
     let query = r#"
     query GetStreamInfo($login: String!) {
@@ -218,6 +217,7 @@ pub async fn get_twitch_status(
 
     let response = client
         .post("https://gql.twitch.tv/gql")
+        .timeout(Duration::from_secs(15))
         .header("Client-ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
         .json(&json!({
             "query": query,
@@ -226,7 +226,14 @@ pub async fn get_twitch_status(
         .send()
         .await?;
 
-    let json_response = response.json::<serde_json::Value>().await?;
+    let json_response: serde_json::Value =
+        super::http::response_json_limited(response.error_for_status()?).await?;
+    if json_response
+        .get("errors")
+        .is_some_and(|errors| errors.as_array().is_some_and(|errors| !errors.is_empty()))
+    {
+        return Err("Twitch GraphQL returned errors".into());
+    }
     // status = {is_live, game_name, title, stream_id}
     let is_live = json_response["data"]["user"]["stream"]["type"] == "live";
     let game_name = json_response["data"]["user"]["stream"]["game"]["name"]
