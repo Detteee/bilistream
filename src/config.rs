@@ -7,7 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
 lazy_static! {
@@ -18,6 +18,16 @@ lazy_static! {
 }
 
 const COOKIE_REFRESH_AGE_SECS: u64 = 3600 * 24 * 3;
+static PERSISTENCE_LOCK: Mutex<()> = Mutex::new(());
+static CONFIG_PUBLICATION_LOCK: RwLock<()> = RwLock::new(());
+static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+pub(crate) struct ConfigSnapshot {
+    json: serde_json::Value,
+    revision: u64,
+    source_keys: Vec<FileCacheKey>,
+}
 
 type FileCacheKey = Option<(SystemTime, u64)>;
 
@@ -39,26 +49,20 @@ fn config_source_keys() -> Vec<FileCacheKey> {
     vec![file_cache_key(&CONFIG_PATH), file_cache_key(&COOKIES_PATH)]
 }
 
-fn cookies_need_refresh() -> bool {
-    match file_cache_key(&COOKIES_PATH) {
-        // Refresh is due when the file is older than the renewal window.
-        Some((modified, _)) => modified
-            .elapsed()
-            .map(|age| age.as_secs() > COOKIE_REFRESH_AGE_SECS)
-            .unwrap_or(false),
-        // Missing cookies file requires the login flow in the full load path.
-        None => true,
-    }
-}
-
 fn cached_config(source_keys: &[FileCacheKey]) -> Option<Config> {
-    if source_keys.first()?.is_none() || cookies_need_refresh() {
+    if source_keys.first()?.is_none() {
         return None;
     }
 
     let cache = CONFIG_CACHE.read().ok()?;
     let entry = cache.as_ref()?;
-    (entry.source_keys == source_keys).then(|| entry.config.clone())
+    (entry.source_keys == source_keys
+        && entry
+            .config
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.revision == CONFIG_REVISION.load(Ordering::Acquire)))
+    .then(|| entry.config.clone())
 }
 
 fn store_cached_config(source_keys: Vec<FileCacheKey>, config: &Config) {
@@ -89,6 +93,10 @@ fn sibling_file_path(base: &Path, file_name: &str) -> PathBuf {
 /// Struct representing the overall configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    /// The read snapshot travels with clones, so all save_config callers get
+    /// conflict detection without persisting runtime metadata in config.json.
+    #[serde(skip)]
+    pub(crate) snapshot: Option<Arc<ConfigSnapshot>>,
     pub auto_cover: bool,
     pub enable_anti_collision: bool,
     pub interval: u64,
@@ -145,7 +153,7 @@ pub struct BiliLive {
     pub room: i32,
     pub bili_rtmp_url: String,
     pub bili_rtmp_key: String,
-    #[serde(skip_deserializing)]
+    #[serde(skip)]
     pub credentials: Credentials,
 }
 
@@ -295,6 +303,7 @@ async fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dy
 
 /// Loads the configuration along with credentials from cookies.json.
 pub async fn load_config() -> Result<Config, Box<dyn Error>> {
+    let revision = CONFIG_REVISION.load(Ordering::Acquire);
     // The keys are captured before reading: a file swapped mid-load produces a
     // key mismatch on the next call, which forces a fresh parse.
     let source_keys = config_source_keys();
@@ -302,38 +311,170 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
         return Ok(config);
     }
 
-    // Try to load config.json first
-    let mut config: Config = if CONFIG_PATH.exists() {
-        let config_content = tokio::fs::read_to_string(&*CONFIG_PATH).await?;
-        serde_json::from_str(&config_content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-    } else {
-        return Err("No config file found. Please run setup first.".into());
-    };
-
-    // Check cookies
-    check_cookies().await?;
-
-    // Load credentials from cookies.json
-    let credentials = load_credentials(COOKIES_PATH.as_ref() as &Path).await;
-    config.bililive.credentials = credentials?;
+    let mut config = read_config(&CONFIG_PATH, &COOKIES_PATH).await?;
+    config.snapshot = Some(Arc::new(ConfigSnapshot {
+        json: serde_json::to_value(&config)?,
+        revision,
+        source_keys: source_keys.clone(),
+    }));
 
     store_cached_config(source_keys, &config);
 
     Ok(config)
 }
 
+async fn read_config(config_path: &Path, cookies_path: &Path) -> Result<Config, Box<dyn Error>> {
+    let content = tokio::fs::read(config_path).await?;
+    let mut config: Config = serde_json::from_slice(&content)?;
+    // Settings reads never trigger login or renewal. Missing/invalid cookies
+    // keep the setup interface available; authentication remains explicit.
+    config.bililive.credentials = load_credentials(cookies_path).await.unwrap_or_default();
+    Ok(config)
+}
+
 /// Saves the configuration to config.json
-pub async fn save_config(config: &Config) -> Result<(), Box<dyn Error>> {
-    let json = serde_json::to_string_pretty(config)?;
-    // write_file_atomic fsyncs; run it off the async runtime.
-    let path: &'static Path = &CONFIG_PATH;
-    tokio::task::spawn_blocking(move || write_file_atomic(path, json.as_bytes()))
+pub async fn save_config(config: &mut Config) -> Result<(), Box<dyn Error>> {
+    let edited = serde_json::to_value(&config)?;
+    let snapshot = config.snapshot.clone();
+    let credentials = config.bililive.credentials.clone();
+    // A blocking transaction owns its lock through read/merge/fsync/rename even
+    // if its HTTP caller disconnects. Unrelated edits merge; conflicting edits
+    // fail explicitly instead of silently overwriting newer settings.
+    let mut saved = tokio::task::spawn_blocking(move || -> std::io::Result<Config> {
+        let _guard = PERSISTENCE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let json =
+            commit_config_snapshot(&CONFIG_PATH, snapshot.as_deref().map(|s| &s.json), &edited)?;
+        let mut saved: Config = serde_json::from_value(json.clone())?;
+        let _publication = CONFIG_PUBLICATION_LOCK
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let revision = CONFIG_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+        saved.snapshot = Some(Arc::new(ConfigSnapshot {
+            json,
+            revision,
+            source_keys: config_source_keys(),
+        }));
+        invalidate_config_cache();
+        crate::webui::events::publish(crate::webui::events::CONFIG);
+        crate::webui::state::request_status_refresh();
+        Ok(saved)
+    })
+    .await
+    .map_err(|error| -> Box<dyn Error> { error.to_string().into() })??;
+    saved.bililive.credentials = load_credentials(&*COOKIES_PATH)
         .await
-        .map_err(|e| -> Box<dyn Error> { e.to_string().into() })??;
-    invalidate_config_cache();
-    crate::webui::events::publish(crate::webui::events::CONFIG);
+        .unwrap_or(credentials);
+    *config = saved;
     Ok(())
+}
+
+pub fn config_is_current(config: &Config) -> bool {
+    config.snapshot.as_ref().is_some_and(|snapshot| {
+        snapshot.revision == CONFIG_REVISION.load(Ordering::Acquire)
+            && snapshot.source_keys == config_source_keys()
+    })
+}
+
+/// Apply a synchronous runtime update only while its source configuration is
+/// current, excluding a concurrent commit between validation and publication.
+pub fn with_current_config<T>(config: &Config, update: impl FnOnce() -> T) -> Option<T> {
+    let _guard = CONFIG_PUBLICATION_LOCK
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    config_is_current(config).then(update)
+}
+
+fn commit_config_snapshot(
+    path: &Path,
+    base: Option<&serde_json::Value>,
+    edited: &serde_json::Value,
+) -> std::io::Result<serde_json::Value> {
+    let current = match fs::read(path) {
+        Ok(bytes) => {
+            let parsed: Config = serde_json::from_slice(&bytes)?;
+            Some(serde_json::to_value(parsed)?)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let merged = merge_config_changes(base, Some(edited), current.as_ref(), "config")?
+        .ok_or_else(|| std::io::Error::other("configuration was removed during edit"))?;
+    write_file_atomic(path, &serde_json::to_vec_pretty(&merged)?)?;
+    Ok(merged)
+}
+
+fn merge_config_changes(
+    base: Option<&serde_json::Value>,
+    edited: Option<&serde_json::Value>,
+    current: Option<&serde_json::Value>,
+    path: &str,
+) -> std::io::Result<Option<serde_json::Value>> {
+    if base == edited {
+        return Ok(current.cloned());
+    }
+    if current == base || current == edited {
+        return Ok(edited.cloned());
+    }
+    if let (
+        Some(serde_json::Value::Object(base)),
+        Some(serde_json::Value::Object(edited)),
+        Some(serde_json::Value::Object(current)),
+    ) = (base, edited, current)
+    {
+        let mut merged = current.clone();
+        let keys: std::collections::BTreeSet<_> = base.keys().chain(edited.keys()).collect();
+        for key in keys {
+            match merge_config_changes(
+                base.get(key),
+                edited.get(key),
+                current.get(key),
+                &format!("{path}.{key}"),
+            )? {
+                Some(value) => {
+                    merged.insert(key.clone(), value);
+                }
+                None => {
+                    merged.remove(key);
+                }
+            }
+        }
+        return Ok(Some(serde_json::Value::Object(merged)));
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        format!("{path} changed during edit; reload and retry"),
+    ))
+}
+
+/// One serialized read/edit/atomic-write operation for managed JSON files.
+pub async fn mutate_json_file<T, R, F>(path: PathBuf, edit: F) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + Serialize + Send + 'static,
+    R: Send + 'static,
+    F: FnOnce(&mut T) -> Result<R, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let _guard = PERSISTENCE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut data: T = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let result = edit(&mut data)?;
+        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
+        let _publication = CONFIG_PUBLICATION_LOCK
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        CONFIG_REVISION.fetch_add(1, Ordering::AcqRel);
+        invalidate_config_cache();
+        crate::plugins::set_config_updated();
+        crate::webui::state::request_status_refresh();
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -382,14 +523,20 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
     ))
 }
 
-async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn refresh_credentials() -> Result<(), Box<dyn std::error::Error>> {
     // Check for the existence of cookies.json
     if !COOKIES_PATH.exists() {
-        tracing::info!("cookies.json 不存在，请登录");
-        bilibili::login().await?;
+        return Err("cookies.json is missing; complete login in the setup UI".into());
     } else {
         // Check if cookies.json is older than 3 days
-        if COOKIES_PATH.metadata()?.modified()?.elapsed()?.as_secs() > 3600 * 24 * 3 {
+        if COOKIES_PATH
+            .metadata()?
+            .modified()?
+            .elapsed()
+            .unwrap_or_default()
+            .as_secs()
+            > COOKIE_REFRESH_AGE_SECS
+        {
             tracing::info!("cookies.json 已超过3天，正在刷新");
             bilibili::renew().await?;
         }
@@ -400,6 +547,128 @@ async fn check_cookies() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-config-review-{}-{}",
+            std::process::id(),
+            CONFIG_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn fixture_json() -> serde_json::Value {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "auto_cover": false, "enable_anti_collision": false, "interval": 15,
+            "bililive": { "enable_danmaku_command": false, "room": 1, "bili_rtmp_url": "", "bili_rtmp_key": "" },
+            "youtube": {}, "twitch": {}, "enable_lol_monitor": false, "anti_collision_list": {}
+        })).unwrap();
+        serde_json::to_value(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn settings_are_readable_without_credentials() {
+        let dir = test_dir();
+        let path = dir.join("config.json");
+        write_file_atomic(&path, &serde_json::to_vec(&fixture_json()).unwrap()).unwrap();
+        let config = read_config(&path, &dir.join("cookies.json")).await.unwrap();
+        assert_eq!(config.interval, 15);
+        assert!(config.bililive.credentials.sessdata.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_config_edits_preserve_unrelated_fields() {
+        let dir = test_dir();
+        let path = dir.join("config.json");
+        let base = fixture_json();
+        write_file_atomic(&path, &serde_json::to_vec(&base).unwrap()).unwrap();
+        let mut tasks = Vec::new();
+        for id in 0..10 {
+            let (path, base) = (path.clone(), base.clone());
+            tasks.push(tokio::task::spawn_blocking(move || {
+                let mut edited = base.clone();
+                edited["anti_collision_list"][format!("room-{id}")] = serde_json::json!(id);
+                let _guard = PERSISTENCE_LOCK.lock().unwrap();
+                commit_config_snapshot(&path, Some(&base), &edited).unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let current: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            current["anti_collision_list"].as_object().unwrap().len(),
+            10
+        );
+        let mut first = base.clone();
+        first["interval"] = serde_json::json!(20);
+        let mut stale = base.clone();
+        stale["interval"] = serde_json::json!(30);
+        commit_config_snapshot(&path, Some(&base), &first).unwrap();
+        assert_eq!(
+            commit_config_snapshot(&path, Some(&base), &stale)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let current: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(current["interval"], 20);
+        assert_eq!(
+            current["anti_collision_list"].as_object().unwrap().len(),
+            10
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn merge_rejects_conflicting_deletion_and_preserves_other_keys() {
+        let base = serde_json::json!({"a": 1, "b": [1]});
+        let edited = serde_json::json!({"b": [1]});
+        let current = serde_json::json!({"a": 2, "b": [1]});
+        assert!(
+            merge_config_changes(Some(&base), Some(&edited), Some(&current), "config").is_err()
+        );
+        let current = serde_json::json!({"a": 1, "b": [2], "c": true});
+        assert_eq!(
+            merge_config_changes(Some(&base), Some(&edited), Some(&current), "config").unwrap(),
+            Some(serde_json::json!({"b": [2], "c": true}))
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_does_not_abandon_a_managed_transaction() {
+        let dir = test_dir();
+        let path = dir.join("counter.json");
+        write_file_atomic(&path, b"0").unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first_path = path.clone();
+        let caller = tokio::spawn(async move {
+            mutate_json_file(first_path, move |count: &mut u64| {
+                started_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                *count += 1;
+                Ok(())
+            })
+            .await
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        mutate_json_file(path.clone(), |count: &mut u64| {
+            *count += 1;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "2");
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn sibling_file_path_keeps_executable_directory() {

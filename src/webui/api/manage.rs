@@ -61,11 +61,12 @@ pub(crate) fn read_managed_json<T: DeserializeOwned>(file_name: &str) -> Result<
     serde_json::from_str::<T>(&data).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
 }
 
-pub(crate) fn write_managed_json<T: Serialize>(file_name: &str, data: &T) -> Result<(), String> {
-    let json_str = serde_json::to_string_pretty(data)
-        .map_err(|e| format!("Failed to serialize {} data: {}", file_name, e))?;
-    let path = managed_json_path(file_name)?;
-    std::fs::write(path, json_str).map_err(|e| format!("Failed to write {}: {}", file_name, e))
+pub(crate) async fn mutate_managed_json<T, F>(file_name: &str, edit: F) -> Result<(), String>
+where
+    T: DeserializeOwned + Serialize + Send + 'static,
+    F: FnOnce(&mut T) -> Result<(), String> + Send + 'static,
+{
+    crate::config::mutate_json_file(managed_json_path(file_name)?, edit).await
 }
 
 pub(crate) fn managed_json_error(message: String) -> Json<ApiResponse<()>> {
@@ -101,41 +102,25 @@ pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
     }
 }
 
-// Add new area
+// Mutations execute validation, editing, and persistence in one transaction.
 pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
-    // Read current areas
-    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
-        Ok(areas) => areas,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Check if area ID already exists
-    if areas_data.areas.iter().any(|a| a.id == payload.id) {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Area with ID {} already exists", payload.id)),
+    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+        if data.areas.iter().any(|area| area.id == payload.id) {
+            return Err(format!("Area with ID {} already exists", payload.id));
+        }
+        data.areas.push(Area {
+            id: payload.id,
+            name: payload.name,
+            title_keywords: payload.title_keywords,
+            aliases: payload.aliases,
         });
-    }
-
-    // Add new area
-    areas_data.areas.push(Area {
-        id: payload.id,
-        name: payload.name,
-        title_keywords: payload.title_keywords,
-        aliases: payload.aliases,
-    });
-
-    // Sort areas by ID
-    areas_data.areas.sort_by_key(|a| a.id);
-
-    if let Err(e) = write_managed_json("areas.json", &areas_data) {
-        return managed_json_error(e);
-    }
-    managed_json_success("分区添加成功")
+        data.areas.sort_by_key(|area| area.id);
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "分区添加成功")
 }
 
-// Get all channels
 pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
     match read_managed_json::<ChannelsData>("channels.json") {
         Ok(channels) => Json(ApiResponse {
@@ -143,185 +128,108 @@ pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
             data: Some(channels),
             message: None,
         }),
-        Err(e) => Json(ApiResponse {
+        Err(error) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(e),
+            message: Some(error),
         }),
     }
 }
 
-// Add new channel
-pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
-    // Validate that at least one platform is provided
-    if payload.platforms.is_empty() {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(
-                "At least one platform (YouTube or Twitch) must be specified".to_string(),
-            ),
-        });
+fn managed_mutation_response(result: Result<(), String>, message: &str) -> Json<ApiResponse<()>> {
+    match result {
+        Ok(()) => managed_json_success(message),
+        Err(error) => managed_json_error(error),
     }
-
-    // Read current channels
-    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
-        Ok(channels) => channels,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Check if channel name already exists
-    if channels_data
-        .channels
-        .iter()
-        .any(|c| c.name == payload.name)
-    {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Channel '{}' already exists", payload.name)),
-        });
-    }
-
-    // Add new channel
-    channels_data.channels.push(Channel {
-        name: payload.name,
-        aliases: payload.aliases,
-        platforms: payload.platforms,
-        riot_puuid: payload.riot_puuid,
-    });
-
-    if let Err(e) = write_managed_json("channels.json", &channels_data) {
-        return managed_json_error(e);
-    }
-    managed_json_success("频道添加成功")
 }
 
-// Update existing channel
+pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
+    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+        if payload.platforms.is_empty() {
+            return Err("At least one platform (YouTube or Twitch) must be specified".to_string());
+        }
+        if data
+            .channels
+            .iter()
+            .any(|channel| channel.name == payload.name)
+        {
+            return Err(format!("Channel '{}' already exists", payload.name));
+        }
+        data.channels.push(Channel {
+            name: payload.name,
+            aliases: payload.aliases,
+            platforms: payload.platforms,
+            riot_puuid: payload.riot_puuid,
+        });
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "频道添加成功")
+}
+
 pub async fn update_channel_manage(
     Json(payload): Json<AddChannelRequest>,
 ) -> Json<ApiResponse<()>> {
-    // Validate that at least one platform is provided
-    if payload.platforms.is_empty() {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(
-                "At least one platform (YouTube or Twitch) must be specified".to_string(),
-            ),
-        });
-    }
-
-    // Read current channels
-    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
-        Ok(channels) => channels,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Find and update the channel
-    if let Some(channel) = channels_data
-        .channels
-        .iter_mut()
-        .find(|c| c.name == payload.name)
-    {
+    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+        if payload.platforms.is_empty() {
+            return Err("At least one platform (YouTube or Twitch) must be specified".to_string());
+        }
+        let channel = data
+            .channels
+            .iter_mut()
+            .find(|channel| channel.name == payload.name)
+            .ok_or_else(|| format!("Channel '{}' not found", payload.name))?;
         channel.aliases = payload.aliases;
         channel.platforms = payload.platforms;
         channel.riot_puuid = payload.riot_puuid;
-
-        if let Err(e) = write_managed_json("channels.json", &channels_data) {
-            return managed_json_error(e);
-        }
-        managed_json_success("频道更新成功")
-    } else {
-        Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Channel '{}' not found", payload.name)),
-        })
-    }
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "频道更新成功")
 }
 
-// Update existing area
 pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
-    // Read current areas
-    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
-        Ok(areas) => areas,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Find and update the area
-    if let Some(area) = areas_data.areas.iter_mut().find(|a| a.id == payload.id) {
+    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+        let area = data
+            .areas
+            .iter_mut()
+            .find(|area| area.id == payload.id)
+            .ok_or_else(|| format!("Area with ID {} not found", payload.id))?;
         area.name = payload.name;
         area.title_keywords = payload.title_keywords;
         area.aliases = payload.aliases;
-
-        if let Err(e) = write_managed_json("areas.json", &areas_data) {
-            return managed_json_error(e);
-        }
-        managed_json_success("分区更新成功")
-    } else {
-        Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Area with ID {} not found", payload.id)),
-        })
-    }
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "分区更新成功")
 }
 
-// Delete area by ID
 pub async fn delete_area(
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Json<ApiResponse<()>> {
-    // Read current areas
-    let mut areas_data = match read_managed_json::<AreasData>("areas.json") {
-        Ok(areas) => areas,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Find and remove the area
-    let initial_len = areas_data.areas.len();
-    areas_data.areas.retain(|area| area.id != id);
-
-    if areas_data.areas.len() == initial_len {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Area with ID {} not found", id)),
-        });
-    }
-
-    if let Err(e) = write_managed_json("areas.json", &areas_data) {
-        return managed_json_error(e);
-    }
-    managed_json_success("分区删除成功")
+    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+        let previous = data.areas.len();
+        data.areas.retain(|area| area.id != id);
+        if data.areas.len() == previous {
+            return Err(format!("Area with ID {} not found", id));
+        }
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "分区删除成功")
 }
 
-// Delete channel by name
 pub async fn delete_channel(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Json<ApiResponse<()>> {
-    // Read current channels
-    let mut channels_data = match read_managed_json::<ChannelsData>("channels.json") {
-        Ok(channels) => channels,
-        Err(e) => return managed_json_error(e),
-    };
-
-    // Find and remove the channel
-    let initial_len = channels_data.channels.len();
-    channels_data
-        .channels
-        .retain(|channel| channel.name != name);
-
-    if channels_data.channels.len() == initial_len {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("Channel '{}' not found", name)),
-        });
-    }
-
-    if let Err(e) = write_managed_json("channels.json", &channels_data) {
-        return managed_json_error(e);
-    }
-    managed_json_success("频道删除成功")
+    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+        let previous = data.channels.len();
+        data.channels.retain(|channel| channel.name != name);
+        if data.channels.len() == previous {
+            return Err(format!("Channel '{}' not found", name));
+        }
+        Ok(())
+    })
+    .await;
+    managed_mutation_response(result, "频道删除成功")
 }

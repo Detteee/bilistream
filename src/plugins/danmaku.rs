@@ -220,41 +220,36 @@ pub fn get_all_channels(
 }
 
 /// Updates the configuration JSON file with new values.
-fn update_config(
+async fn update_config(
     platform: &str,
     channel_name: &str,
     channel_id: &str,
     area_id: u64,
 ) -> io::Result<bool> {
-    // Use the same config.json path as the executable (matches config.rs behavior)
-    let exe_path = std::env::current_exe()?;
-    let config_path = exe_path.with_file_name("config.json");
-
-    // Read the existing config.json
-    let config_content = fs::read_to_string(&config_path)?;
-
-    // Deserialize JSON into Config struct
-    let mut config: Config = serde_json::from_str(&config_content)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    // Update the fields directly (no need to check again since we already checked earlier)
-    if platform == "YT" {
-        config.youtube.channel_id = channel_id.to_string();
-        config.youtube.channel_name = channel_name.to_string();
-        config.youtube.area_v2 = area_id;
-    } else if platform == "TW" {
-        config.twitch.channel_id = channel_id.to_string();
-        config.twitch.channel_name = channel_name.to_string();
-        config.twitch.area_v2 = area_id;
+    let mut config = load_config()
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    match platform {
+        "YT" => {
+            config.youtube.channel_id = channel_id.to_owned();
+            config.youtube.channel_name = channel_name.to_owned();
+            config.youtube.area_v2 = area_id;
+        }
+        "TW" => {
+            config.twitch.channel_id = channel_id.to_owned();
+            config.twitch.channel_name = channel_name.to_owned();
+            config.twitch.area_v2 = area_id;
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown platform",
+            ))
+        }
     }
-
-    // Serialize Config struct back to JSON
-    let updated_json = serde_json::to_string_pretty(&config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    // Write the updated JSON back to config.json (this also updates file mtime)
-    fs::write(&config_path, updated_json)?;
-
+    crate::config::save_config(&mut config)
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
     Ok(true)
 }
 
@@ -667,7 +662,9 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             &resolved_channel_name,
             channel_id_str,
             updated_area_id,
-        ) {
+        )
+        .await
+        {
             Ok(_) => {
                 // Clear warning flag when user manually changes channel
                 clear_warning_stop();

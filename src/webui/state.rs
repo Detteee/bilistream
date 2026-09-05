@@ -133,72 +133,88 @@ pub fn get_status_cache() -> Option<StatusData> {
 }
 
 pub fn refresh_status_cache_config_from(cfg: &Config) {
-    update_status_cache_with(|cached_status| {
-        cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
+    crate::config::with_current_config(cfg, || {
+        update_status_cache_with(|cached_status| {
+            cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
-        if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
-            let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+            if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
+                let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
+                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
 
-            if let Some(ref mut yt_status) = cached_status.youtube {
-                yt_status.channel_name = cfg.youtube.channel_name.clone();
-                yt_status.channel_id = cfg.youtube.channel_id.clone();
-                yt_status.area_id = cfg.youtube.area_v2;
-                yt_status.area_name = yt_area_name;
-                yt_status.quality = cfg.youtube.quality.clone();
-                yt_status.crop_enabled = cfg.youtube.crop.is_some();
-                yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
-                yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
+                if cached_status
+                    .youtube
+                    .as_ref()
+                    .is_some_and(|status| status.channel_id != cfg.youtube.channel_id)
+                {
+                    cached_status.youtube = None;
+                }
+                if let Some(ref mut yt_status) = cached_status.youtube {
+                    yt_status.channel_name = cfg.youtube.channel_name.clone();
+                    yt_status.channel_id = cfg.youtube.channel_id.clone();
+                    yt_status.area_id = cfg.youtube.area_v2;
+                    yt_status.area_name = yt_area_name;
+                    yt_status.quality = cfg.youtube.quality.clone();
+                    yt_status.crop_enabled = cfg.youtube.crop.is_some();
+                    yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
+                    yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
+                } else {
+                    cached_status.youtube = Some(YtStatus {
+                        is_live: false,
+                        title: Some("-".to_string()),
+                        channel_name: cfg.youtube.channel_name.clone(),
+                        channel_id: cfg.youtube.channel_id.clone(),
+                        area_id: cfg.youtube.area_v2,
+                        area_name: yt_area_name,
+                        topic: Some("-".to_string()),
+                        quality: cfg.youtube.quality.clone(),
+                        crop_enabled: cfg.youtube.crop.is_some(),
+                        ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+                        ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
+                    });
+                }
             } else {
-                cached_status.youtube = Some(YtStatus {
-                    is_live: false,
-                    title: Some("-".to_string()),
-                    channel_name: cfg.youtube.channel_name.clone(),
-                    channel_id: cfg.youtube.channel_id.clone(),
-                    area_id: cfg.youtube.area_v2,
-                    area_name: yt_area_name,
-                    topic: Some("-".to_string()),
-                    quality: cfg.youtube.quality.clone(),
-                    crop_enabled: cfg.youtube.crop.is_some(),
-                    ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
-                    ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
-                });
+                cached_status.youtube = None;
             }
-        } else {
-            cached_status.youtube = None;
-        }
 
-        if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-            let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+            if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
+                let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
+                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
 
-            if let Some(ref mut tw_status) = cached_status.twitch {
-                tw_status.channel_name = cfg.twitch.channel_name.clone();
-                tw_status.channel_id = cfg.twitch.channel_id.clone();
-                tw_status.area_id = cfg.twitch.area_v2;
-                tw_status.area_name = tw_area_name;
-                tw_status.quality = cfg.twitch.quality.clone();
-                tw_status.crop_enabled = cfg.twitch.crop.is_some();
-                tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
-                tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
+                if cached_status
+                    .twitch
+                    .as_ref()
+                    .is_some_and(|status| status.channel_id != cfg.twitch.channel_id)
+                {
+                    cached_status.twitch = None;
+                }
+                if let Some(ref mut tw_status) = cached_status.twitch {
+                    tw_status.channel_name = cfg.twitch.channel_name.clone();
+                    tw_status.channel_id = cfg.twitch.channel_id.clone();
+                    tw_status.area_id = cfg.twitch.area_v2;
+                    tw_status.area_name = tw_area_name;
+                    tw_status.quality = cfg.twitch.quality.clone();
+                    tw_status.crop_enabled = cfg.twitch.crop.is_some();
+                    tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
+                    tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
+                } else {
+                    cached_status.twitch = Some(TwStatus {
+                        is_live: false,
+                        title: Some("-".to_string()),
+                        channel_name: cfg.twitch.channel_name.clone(),
+                        channel_id: cfg.twitch.channel_id.clone(),
+                        area_id: cfg.twitch.area_v2,
+                        area_name: tw_area_name,
+                        game: Some("-".to_string()),
+                        quality: cfg.twitch.quality.clone(),
+                        crop_enabled: cfg.twitch.crop.is_some(),
+                        ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+                        ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
+                    });
+                }
             } else {
-                cached_status.twitch = Some(TwStatus {
-                    is_live: false,
-                    title: Some("-".to_string()),
-                    channel_name: cfg.twitch.channel_name.clone(),
-                    channel_id: cfg.twitch.channel_id.clone(),
-                    area_id: cfg.twitch.area_v2,
-                    area_name: tw_area_name,
-                    game: Some("-".to_string()),
-                    quality: cfg.twitch.quality.clone(),
-                    crop_enabled: cfg.twitch.crop.is_some(),
-                    ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
-                    ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
-                });
+                cached_status.twitch = None;
             }
-        } else {
-            cached_status.twitch = None;
-        }
+        });
     });
 }
 

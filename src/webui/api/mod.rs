@@ -39,6 +39,18 @@ pub use setup::*;
 pub use status::*;
 pub use stream::*;
 
+fn config_save_status(error: Box<dyn std::error::Error>) -> StatusCode {
+    if error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+    {
+        StatusCode::CONFLICT
+    } else {
+        tracing::error!("Configuration save failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
     success: bool,

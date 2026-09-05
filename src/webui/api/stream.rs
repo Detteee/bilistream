@@ -268,9 +268,9 @@ pub async fn update_channel(
     }
 
     // Save config
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     let refresh_youtube = youtube_monitor_reload_needed(&previous_cfg, &cfg);
     let refresh_twitch = twitch_monitor_reload_needed(&previous_cfg, &cfg);
@@ -386,27 +386,18 @@ pub async fn update_banned_keywords(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("areas.json");
 
-    let content = tokio::fs::read_to_string(&areas_path)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let mut data: serde_json::Value =
-        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if let Some(danmaku_keywords) = payload.danmaku_banned_keywords {
-        data["banned_keywords"] = serde_json::json!(danmaku_keywords);
-    }
-
-    if let Some(streaming_keywords) = payload.streaming_banned_keywords {
-        data["streaming_banned_keywords"] = serde_json::json!(streaming_keywords);
-    }
-
-    let updated_content =
-        serde_json::to_string_pretty(&data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    tokio::fs::write(&areas_path, updated_content)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::config::mutate_json_file(areas_path, move |data: &mut serde_json::Value| {
+        if let Some(keywords) = payload.danmaku_banned_keywords {
+            data["banned_keywords"] = serde_json::json!(keywords);
+        }
+        if let Some(keywords) = payload.streaming_banned_keywords {
+            data["streaming_banned_keywords"] = serde_json::json!(keywords);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    set_config_updated();
 
     Ok(ApiResponse {
         success: true,
@@ -441,9 +432,9 @@ pub async fn toggle_youtube_monitor(
 
     cfg.youtube.enable_monitor = payload.enabled;
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     set_config_updated();
     refresh_status_cache_config_from(&cfg);
@@ -480,9 +471,9 @@ pub async fn toggle_twitch_monitor(
 
     cfg.twitch.enable_monitor = payload.enabled;
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     set_config_updated();
     refresh_status_cache_config_from(&cfg);

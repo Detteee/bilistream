@@ -240,9 +240,9 @@ pub async fn update_config(
     }
 
     // Save config
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     if holodex_jwt_saved {
         if let Some(jwt) = cfg.holodex_jwt.clone() {

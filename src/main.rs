@@ -328,6 +328,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         stop_ffmpeg().await;
     }
 
+    // Credential renewal is explicit and runs after the interface is available.
+    bilistream::config::refresh_credentials().await?;
     // Load config to check danmaku command setting
     let initial_cfg = load_config().await?;
 
@@ -371,7 +373,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        if is_config_updated() {
+        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
             tracing::info!("🔄 检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
@@ -410,7 +412,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 (None, false, None, None, None, None, None)
             };
 
-        if is_config_updated() {
+        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
             tracing::info!("🔄 YouTube状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
@@ -447,7 +449,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 (None, false, None, None, None, None)
             };
 
-        if is_config_updated() {
+        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
             tracing::info!("🔄 Twitch状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
@@ -558,7 +560,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             skip_stream_if_previously_warned(&mut tw_stream, &cfg).await;
 
             // Check if config was updated by danmaku command after warning filtering
-            if is_config_updated() {
+            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                 clear_config_updated();
                 tracing::info!("🔄 检测到配置更新（弹幕指令），重新加载配置并检查频道状态");
                 continue 'outer;
@@ -713,7 +715,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 tracing::warn!(
                                     "检测到B站异常开播限制，已关闭 YouTube 和 Twitch 监控"
                                 );
-                                if let Err(save_err) = save_config(&cfg).await {
+                                if let Err(save_err) = save_config(&mut cfg).await {
                                     tracing::error!("保存配置失败: {}", save_err);
                                 }
                             }
@@ -771,6 +773,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             }
 
+            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+                continue 'outer;
+            }
             let source_client = selected_source_client(&selected_stream, &yt_live, &tw_live);
 
             // Execute ffmpeg with platform-specific locks
@@ -866,7 +871,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                 // Check if config was updated (channel switch)
                 // Only break if stream has ended, otherwise continue streaming current channel
-                if is_config_updated() {
+                if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                     tracing::info!("🔄 检测到配置更新请求，但当前流仍在进行，继续转播直到流结束");
                     // Don't break, let the stream continue until it naturally ends
                 }
@@ -919,7 +924,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 if config_changed {
-                    if let Err(e) = save_config(&cfg).await {
+                    if let Err(e) = save_config(&mut cfg).await {
                         tracing::error!("保存配置失败: {}", e);
                     }
                 }
@@ -1047,7 +1052,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Check if config was updated (skip waiting if so)
-            if is_config_updated() {
+            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                 clear_config_updated();
                 tracing::info!("🔄 检测到配置更新，重新加载配置并检查频道状态");
                 continue 'outer;
@@ -1068,7 +1073,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 elapsed += sleep_time;
 
                 // Check if config was updated during sleep
-                if is_config_updated() {
+                if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                     clear_config_updated();
                     tracing::info!("🔄 等待期间检测到配置更新，重新加载配置并检查频道状态");
                     continue 'outer;

@@ -326,9 +326,9 @@ pub async fn update_crop(
         }
     }
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     set_config_updated();
 
@@ -422,9 +422,9 @@ pub async fn update_ffmpeg_cache(
         cache.latency_secs = latency_secs.clamp(1, 60);
     }
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     set_config_updated();
     refresh_status_cache_config_from(&cfg);

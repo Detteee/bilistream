@@ -58,7 +58,9 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
             tracing::warn!("WebUI YouTube status refresh failed: {}", e);
         }
     } else {
-        update_status_cache_with(|status| status.youtube = None);
+        crate::config::with_current_config(&cfg, || {
+            update_status_cache_with(|status| status.youtube = None)
+        });
     }
 
     if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
@@ -66,7 +68,9 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
             tracing::warn!("WebUI Twitch status refresh failed: {}", e);
         }
     } else {
-        update_status_cache_with(|status| status.twitch = None);
+        crate::config::with_current_config(&cfg, || {
+            update_status_cache_with(|status| status.twitch = None)
+        });
     }
 
     Ok(cfg.interval)
@@ -79,12 +83,14 @@ pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> R
     let area_name = crate::plugins::get_area_name(area_id)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", area_id));
 
-    update_status_cache_with(|status| {
-        status.bilibili.is_live = is_live;
-        status.bilibili.title = title;
-        status.bilibili.area_id = area_id;
-        status.bilibili.area_name = area_name;
-        status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
+    crate::config::with_current_config(cfg, || {
+        update_status_cache_with(|status| {
+            status.bilibili.is_live = is_live;
+            status.bilibili.title = title;
+            status.bilibili.area_id = area_id;
+            status.bilibili.area_name = area_name;
+            status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
+        })
     });
 
     Ok(())
@@ -103,20 +109,22 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
     let area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
 
-    update_status_cache_with(|status| {
-        status.youtube = Some(YtStatus {
-            is_live: source.is_live,
-            title: source.title,
-            topic: source.topic,
-            channel_name: cfg.youtube.channel_name.clone(),
-            channel_id: cfg.youtube.channel_id.clone(),
-            quality: cfg.youtube.quality.clone(),
-            area_id: cfg.youtube.area_v2,
-            area_name,
-            crop_enabled: cfg.youtube.crop.is_some(),
-            ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
-            ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
-        });
+    crate::config::with_current_config(cfg, || {
+        update_status_cache_with(|status| {
+            status.youtube = Some(YtStatus {
+                is_live: source.is_live,
+                title: source.title,
+                topic: source.topic,
+                channel_name: cfg.youtube.channel_name.clone(),
+                channel_id: cfg.youtube.channel_id.clone(),
+                quality: cfg.youtube.quality.clone(),
+                area_id: cfg.youtube.area_v2,
+                area_name,
+                crop_enabled: cfg.youtube.crop.is_some(),
+                ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+                ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
+            });
+        })
     });
 
     Ok(())
@@ -133,20 +141,22 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
     let area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
 
-    update_status_cache_with(|status| {
-        status.twitch = Some(TwStatus {
-            is_live,
-            title,
-            game,
-            channel_name: cfg.twitch.channel_name.clone(),
-            channel_id: cfg.twitch.channel_id.clone(),
-            quality: cfg.twitch.quality.clone(),
-            area_id: cfg.twitch.area_v2,
-            area_name,
-            crop_enabled: cfg.twitch.crop.is_some(),
-            ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
-            ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
-        });
+    crate::config::with_current_config(cfg, || {
+        update_status_cache_with(|status| {
+            status.twitch = Some(TwStatus {
+                is_live,
+                title,
+                game,
+                channel_name: cfg.twitch.channel_name.clone(),
+                channel_id: cfg.twitch.channel_id.clone(),
+                quality: cfg.twitch.quality.clone(),
+                area_id: cfg.twitch.area_v2,
+                area_name,
+                crop_enabled: cfg.twitch.crop.is_some(),
+                ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+                ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
+            });
+        })
     });
 
     Ok(())

@@ -681,7 +681,7 @@ pub async fn switch_to_holodex_stream(
             cfg.twitch.area_v2 = area_id;
         }
 
-        if let Err(e) = crate::config::save_config(&cfg).await {
+        if let Err(e) = crate::config::save_config(&mut cfg).await {
             tracing::error!("Failed to save config: {}", e);
             return Ok(ApiResponse {
                 success: false,
@@ -750,7 +750,7 @@ pub async fn switch_to_holodex_stream(
     }
 
     // Save config as JSON
-    if let Err(e) = crate::config::save_config(&cfg).await {
+    if let Err(e) = crate::config::save_config(&mut cfg).await {
         tracing::error!("Failed to save config: {}", e);
         return Ok(ApiResponse {
             success: false,

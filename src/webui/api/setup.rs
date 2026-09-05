@@ -86,6 +86,7 @@ pub async fn save_setup_config(
     } else {
         // Create new config with defaults
         crate::config::Config {
+            snapshot: None,
             auto_cover: true,
             enable_anti_collision: false,
             interval: 60,
@@ -206,9 +207,9 @@ pub async fn save_setup_config(
     }
 
     // Save config
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     let youtube_updated = youtube_monitor_reload_needed(&previous_cfg, &cfg);
     let twitch_updated = twitch_monitor_reload_needed(&previous_cfg, &cfg);
