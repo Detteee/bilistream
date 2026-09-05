@@ -14,3 +14,10 @@ pub mod thumbnails;
 
 pub use server::start_public_status_supervisor;
 pub use streams::remap_after_areas_change;
+
+/// Content-derived validators survive process restarts. Weak validators also
+/// remain valid when the compression layer changes the wire representation.
+fn body_etag(body: &[u8]) -> String {
+    use sha2::Digest;
+    format!("W/\"{:x}\"", sha2::Sha256::digest(body))
+}

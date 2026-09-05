@@ -24,6 +24,9 @@ const REASON_LABELS = {
 };
 
 let lastStreams = null;
+let renderedGate = null;
+let renderedCards = new Map();
+let scheduleDivider = null;
 /// `null` until the status payload arrives, so a Holodex poll that lands first
 /// can still use `stream.switchable`. `false` is the restreaming gate.
 let danmakuEnabled = null;
@@ -280,8 +283,11 @@ function updateDurations() {
   });
 }
 
-function startDurationTicker() {
+export function startDurationTicker() {
   stopDurationTicker();
+  if (document.visibilityState !== 'visible') {
+    return;
+  }
   updateDurations();
   if (document.querySelector('.holodex-stream-duration[data-tick="live"]')) {
     durationTickerId = setInterval(updateDurations, 1000);
@@ -492,6 +498,7 @@ function createStreamCard(stream, isLive) {
 }
 
 export function renderStreams(streams) {
+  const unchanged = lastStreams === streams && renderedGate === `${danmakuEnabled}:${restreaming}`;
   lastStreams = Array.isArray(streams) ? streams : null;
   const container = document.getElementById('holodex-streams');
   const status = document.getElementById('holodex-status');
@@ -503,12 +510,31 @@ export function renderStreams(streams) {
 
   if (!Array.isArray(streams) || streams.length === 0) {
     container.replaceChildren();
+    renderedCards.clear();
     setStatus(status, '当前没有正在直播或即将开播的频道');
     return;
   }
 
   setStatus(status, null);
-  const fragment = document.createDocumentFragment();
+  if (unchanged) {
+    startDurationTicker();
+    return;
+  }
+  renderedGate = `${danmakuEnabled}:${restreaming}`;
+  const nextCards = new Map();
+  const occurrences = new Map();
+  const desired = [];
+  const appendCard = (stream, isLive) => {
+    const baseKey = `${stream.command_platform}:${stream.id}`;
+    const occurrence = occurrences.get(baseKey) || 0;
+    occurrences.set(baseKey, occurrence + 1);
+    const key = `${baseKey}:${occurrence}`;
+    const signature = `${renderedGate}:${JSON.stringify(stream)}`;
+    const previous = renderedCards.get(key);
+    const element = previous?.signature === signature ? previous.element : createStreamCard(stream, isLive);
+    nextCards.set(key, { signature, element });
+    desired.push(element);
+  };
 
   const live = streams.filter(isLiveStream);
   const upcoming = streams.filter((stream) => !isLiveStream(stream));
@@ -519,16 +545,29 @@ export function renderStreams(streams) {
   });
 
   for (const stream of live) {
-    fragment.appendChild(createStreamCard(stream, true));
+    appendCard(stream, true);
   }
   if (upcoming.length && live.length) {
-    fragment.appendChild(createScheduleDivider());
+    scheduleDivider ??= createScheduleDivider();
+    desired.push(scheduleDivider);
   }
   for (const stream of upcoming) {
-    fragment.appendChild(createStreamCard(stream, false));
+    appendCard(stream, false);
   }
 
-  container.replaceChildren(fragment);
+  // Keep unchanged elements attached, preserving focus and loaded images.
+  const retained = new Set(desired);
+  for (const element of Array.from(container.children)) {
+    if (!retained.has(element)) {
+      element.remove();
+    }
+  }
+  desired.forEach((element, index) => {
+    if (container.children[index] !== element) {
+      container.insertBefore(element, container.children[index] || null);
+    }
+  });
+  renderedCards = nextCards;
   startDurationTicker();
 }
 

@@ -254,11 +254,8 @@ async fn delete_unreferenced(dir: &Path, index: &mut CacheIndex, wanted: &[(Stri
 }
 
 async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry> {
-    let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
-        .build()
-        .ok()?;
-    let response = client.get(url).send().await.ok()?;
+    let client = crate::plugins::http::pooled_client(None).ok()?;
+    let response = client.get(url).timeout(FETCH_TIMEOUT).send().await.ok()?;
     if !response.status().is_success() {
         return None;
     }
@@ -273,16 +270,10 @@ async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry>
         return None;
     }
 
-    // Refuse before buffering when the server declares an oversized body.
-    if response
-        .content_length()
-        .is_some_and(|length| length as usize > MAX_BYTES)
-    {
-        return None;
-    }
-
-    let bytes = response.bytes().await.ok()?;
-    if bytes.len() > MAX_BYTES || bytes.is_empty() {
+    let bytes = crate::plugins::http::response_bytes_limited(response, MAX_BYTES)
+        .await
+        .ok()?;
+    if bytes.is_empty() {
         return None;
     }
 

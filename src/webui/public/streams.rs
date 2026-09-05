@@ -7,7 +7,8 @@
 //! Only channels listed in channels.json are fetched, and the JWT/favorites
 //! branch of the Holodex client is never reached.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use axum::body::Bytes;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -84,24 +85,20 @@ struct CommandTarget {
 
 /// The command parser strips whitespace before matching against channels.json,
 /// so a name containing any is unusable no matter what the viewer types.
-fn usable_names(channel: &Channel) -> Vec<&String> {
+fn usable_names(channel: &Channel) -> impl Iterator<Item = &String> {
     std::iter::once(&channel.name)
         .chain(channel.aliases.iter())
         .filter(|candidate| {
             !candidate.trim().is_empty() && !candidate.chars().any(char::is_whitespace)
         })
-        .collect()
 }
 
-/// The formal name when it is usable, otherwise the first usable alias.
 fn command_name(channel: &Channel) -> Option<String> {
-    usable_names(channel).first().map(|name| (*name).clone())
+    usable_names(channel).next().cloned()
 }
 
-/// The shortest usable name or alias, for the short form of the command.
 fn short_command_name(channel: &Channel) -> Option<String> {
     usable_names(channel)
-        .into_iter()
         .min_by_key(|name| name.chars().count())
         .cloned()
 }
@@ -164,77 +161,77 @@ fn cmp_public_stream_order(a: &PublicStream, b: &PublicStream) -> std::cmp::Orde
 /// that same target cannot offer 切换 either: the command cannot pick the
 /// later video.
 fn apply_earlier_banned_keyword(keys: &[String], built: &mut [PublicStream]) {
-    let mut groups: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    // Keep the first row on equal sort keys, just like the previous stable sort.
+    let mut earliest: HashMap<&str, usize> = HashMap::with_capacity(keys.len());
     for (index, key) in keys.iter().enumerate() {
-        groups.entry(key.as_str()).or_default().push(index);
-    }
-
-    for indices in groups.values() {
-        if indices.len() < 2 {
-            continue;
-        }
-        let mut ordered = indices.clone();
-        ordered.sort_by(|&left, &right| cmp_public_stream_order(&built[left], &built[right]));
-        let earliest = ordered[0];
-        if built[earliest].reason != Some(NotSwitchable::BannedKeyword) {
-            continue;
-        }
-        let hits = built[earliest].reason_keywords.clone();
-        if hits.is_empty() {
-            continue;
-        }
-        for &index in &ordered[1..] {
-            match built[index].reason {
-                None | Some(NotSwitchable::DanmakuDisabled) => {
-                    built[index].reason = Some(NotSwitchable::EarlierBannedKeyword);
-                    built[index].reason_keywords = hits.clone();
-                    built[index].switchable = false;
+        earliest
+            .entry(key)
+            .and_modify(|current| {
+                if cmp_public_stream_order(&built[index], &built[*current]).is_lt() {
+                    *current = index;
                 }
-                _ => {}
-            }
+            })
+            .or_insert(index);
+    }
+    for (index, key) in keys.iter().enumerate() {
+        let first = earliest[key.as_str()];
+        if first != index
+            && built[first].reason == Some(NotSwitchable::BannedKeyword)
+            && !built[first].reason_keywords.is_empty()
+            && matches!(
+                built[index].reason,
+                None | Some(NotSwitchable::DanmakuDisabled)
+            )
+        {
+            built[index].reason_keywords = built[first].reason_keywords.clone();
+            built[index].reason = Some(NotSwitchable::EarlierBannedKeyword);
+            built[index].switchable = false;
         }
     }
 }
 
-/// Resolves a stream back to a configured channel, and to the platform token
-/// the danmaku command uses.
-fn command_target(
-    channels: &[Channel],
-    youtube_channel_id: &str,
-    link: Option<&str>,
-) -> Option<CommandTarget> {
-    let twitch_login = twitch_login_from_link(link);
+/// Preserve the first configured channel on duplicate IDs, matching Vec::find.
+struct ChannelIndex<'a> {
+    youtube: HashMap<&'a str, &'a Channel>,
+    twitch: HashMap<String, &'a Channel>,
+}
 
-    // A Twitch placeholder is a Twitch stream even though Holodex keys it by
-    // the YouTube channel it belongs to.
-    if let Some(login) = twitch_login.as_deref() {
-        let matched = channels.iter().find(|channel| {
-            channel
-                .platforms
-                .twitch
-                .as_deref()
-                .is_some_and(|configured| configured.eq_ignore_ascii_case(login))
-        });
-        return matched.map(|channel| CommandTarget {
-            platform: "TW",
-            name: command_name(channel),
-            short_name: short_command_name(channel),
-        });
+impl<'a> ChannelIndex<'a> {
+    fn new(channels: &'a [Channel]) -> Self {
+        let mut index = Self {
+            youtube: HashMap::with_capacity(channels.len()),
+            twitch: HashMap::with_capacity(channels.len()),
+        };
+        for channel in channels {
+            if let Some(id) = channel.platforms.youtube.as_deref() {
+                index.youtube.entry(id).or_insert(channel);
+            }
+            if let Some(id) = channel.platforms.twitch.as_deref() {
+                index
+                    .twitch
+                    .entry(id.to_ascii_lowercase())
+                    .or_insert(channel);
+            }
+        }
+        index
     }
 
-    let matched = channels.iter().find(|channel| {
-        channel
-            .platforms
-            .youtube
-            .as_deref()
-            .is_some_and(|configured| configured == youtube_channel_id)
-    })?;
-
-    Some(CommandTarget {
-        platform: "YT",
-        name: command_name(matched),
-        short_name: short_command_name(matched),
-    })
+    fn command_target(
+        &self,
+        youtube_channel_id: &str,
+        link: Option<&str>,
+    ) -> Option<CommandTarget> {
+        let (platform, channel) = if let Some(login) = twitch_login_from_link(link) {
+            ("TW", *self.twitch.get(&login)?)
+        } else {
+            ("YT", *self.youtube.get(youtube_channel_id)?)
+        };
+        Some(CommandTarget {
+            platform,
+            name: command_name(channel),
+            short_name: short_command_name(channel),
+        })
+    }
 }
 
 /// Whether a stream can be requested, and why not when it cannot.
@@ -292,11 +289,12 @@ pub(super) fn build_public_streams(
     danmaku_enabled: bool,
     banned: &[String],
 ) -> Vec<PublicStream> {
+    let channels = ChannelIndex::new(channels);
     let group_keys: Vec<String> = streams.iter().map(switch_group_key).collect();
     let mut public: Vec<PublicStream> = streams
         .into_iter()
         .map(|stream| {
-            let target = command_target(channels, &stream.channel.id, stream.link.as_deref());
+            let target = channels.command_target(&stream.channel.id, stream.link.as_deref());
             let (reason, reason_keywords) =
                 if !platform_is_supported(target.as_ref()) && target.is_some() {
                     (Some(NotSwitchable::UnsupportedPlatform), Vec::new())
@@ -343,22 +341,21 @@ pub(super) fn build_public_streams(
 // Snapshot -------------------------------------------------------------------
 
 struct StreamsSnapshot {
-    body: String,
+    body: Bytes,
     etag: String,
 }
 
 static SNAPSHOT: RwLock<Option<StreamsSnapshot>> = RwLock::new(None);
-static ETAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The cached list and its ETag, or `None` before the first successful fetch.
-pub(super) fn current_public_streams() -> Option<(String, String)> {
+pub(super) fn current_public_streams() -> Option<(Bytes, String)> {
     let guard = SNAPSHOT.read().ok()?;
     let snapshot = guard.as_ref()?;
     Some((snapshot.body.clone(), snapshot.etag.clone()))
 }
 
 fn store_snapshot(streams: &[PublicStream]) {
-    let Ok(body) = serde_json::to_string(streams) else {
+    let Ok(body) = serde_json::to_vec(streams).map(Bytes::from) else {
         return;
     };
 
@@ -369,8 +366,8 @@ fn store_snapshot(streams: &[PublicStream]) {
             }
         }
         *guard = Some(StreamsSnapshot {
+            etag: super::body_etag(&body),
             body,
-            etag: format!("\"{:x}\"", ETAG_COUNTER.fetch_add(1, Ordering::Relaxed)),
         });
     }
 }
@@ -378,19 +375,14 @@ fn store_snapshot(streams: &[PublicStream]) {
 /// YouTube channel ids to ask Holodex about: exactly what channels.json lists,
 /// plus whatever channel is configured right now.
 fn holodex_channel_ids(cfg: &Config, channels: &[Channel]) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::new();
-    for channel in channels {
-        if let Some(id) = channel.platforms.youtube.as_deref() {
-            if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
-                ids.push(id.to_string());
-            }
-        }
-    }
-    let configured = cfg.youtube.channel_id.trim();
-    if !configured.is_empty() && !ids.iter().any(|existing| existing == configured) {
-        ids.push(configured.to_string());
-    }
-    ids
+    let mut seen = HashSet::with_capacity(channels.len() + 1);
+    channels
+        .iter()
+        .filter_map(|channel| channel.platforms.youtube.as_deref())
+        .chain(std::iter::once(cfg.youtube.channel_id.trim()))
+        .filter(|id| !id.is_empty() && seen.insert(*id))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// One refresh cycle. Returns false when the list could not be refreshed, so

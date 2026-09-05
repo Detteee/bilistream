@@ -146,10 +146,16 @@ async fn public_thumbnail(axum::extract::Path(key): axum::extract::Path<String>)
 }
 
 fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
+    let expected = etag.strip_prefix("W/").unwrap_or(etag);
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|requested| requested == etag)
+        .is_some_and(|requested| {
+            requested.split(',').any(|tag| {
+                let tag = tag.trim();
+                tag == "*" || tag.strip_prefix("W/").unwrap_or(tag) == expected
+            })
+        })
 }
 
 fn cache_control(max_age: u64) -> String {
@@ -248,8 +254,16 @@ pub fn public_router() -> Router {
 
 /// Watches config and keeps the listener matching it, so changing the serving
 /// node from the panel takes effect without a restart on either node.
-pub fn start_public_status_supervisor() {
-    tokio::spawn(async {
+pub struct PublicStatusSupervisor(tokio::task::JoinHandle<()>);
+
+impl Drop for PublicStatusSupervisor {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
+    PublicStatusSupervisor(tokio::spawn(async {
         let mut running: Option<RunningListener> = None;
 
         loop {
@@ -279,7 +293,7 @@ pub fn start_public_status_supervisor() {
 
             tokio::time::sleep(Duration::from_secs(15)).await;
         }
-    });
+    }))
 }
 
 struct RunningListener {
@@ -352,6 +366,20 @@ async fn spawn_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_get_accepts_weak_validators_and_lists() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"old\", W/\"current\""),
+        );
+        assert!(not_modified(&headers, "\"current\""));
+        assert!(not_modified(&headers, "W/\"current\""));
+        assert!(!not_modified(&headers, "W/\"changed\""));
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
+        assert!(not_modified(&headers, "W/\"current\""));
+    }
 
     async fn serve_for_test() -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
         // reqwest::Client::build panics without one; see install_crypto_provider.

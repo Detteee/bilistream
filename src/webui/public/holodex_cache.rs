@@ -22,12 +22,14 @@ struct Entry {
 }
 
 static CACHE: RwLock<Option<Entry>> = RwLock::new(None);
+static FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Order-independent key for a channel set, so the two callers building the
 /// same set in a different order still share a hit.
 fn ids_key(ids: &[String]) -> String {
     let mut sorted: Vec<&str> = ids.iter().map(String::as_str).collect();
     sorted.sort_unstable();
+    sorted.dedup();
     sorted.join(",")
 }
 
@@ -62,7 +64,7 @@ pub(crate) fn put(ids: &[String], streams: &[HolodexStream]) {
 
 /// Cached response if fresh, otherwise one upstream call whose result is
 /// cached for the other caller.
-pub(super) async fn get_or_fetch(
+pub(crate) async fn get_or_fetch(
     ids: Vec<String>,
     max_age: Duration,
 ) -> Result<Vec<HolodexStream>, Box<dyn std::error::Error>> {
@@ -70,6 +72,10 @@ pub(super) async fn get_or_fetch(
         return Ok(cached);
     }
 
+    let _fetch = FETCH_LOCK.lock().await;
+    if let Some(cached) = get_if_fresh(&ids, max_age) {
+        return Ok(cached);
+    }
     let streams = crate::plugins::holodex::get_holodex_streams(ids.clone(), true).await?;
     put(&ids, &streams);
     Ok(streams)

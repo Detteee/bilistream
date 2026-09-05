@@ -6,6 +6,7 @@
 
 import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=10';
 import { clusterIsRestreaming, renderNodes } from './nodes.js?v=13';
+import { createJsonPoller } from './request.js?v=1';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -15,8 +16,9 @@ import {
   setAreas,
   setDanmakuEnabled,
   setStatus,
+  startDurationTicker,
   stopDurationTicker,
-} from './streams.js?v=16';
+} from './streams.js?v=17';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
 /// 304s. Streams turn over on the server's own 30s timer.
@@ -25,29 +27,9 @@ const STREAMS_POLL_MS = 30_000;
 
 let statusTimer = null;
 let streamsTimer = null;
-const etags = new Map();
-
-async function getJson(path) {
-  const headers = { Accept: 'application/json' };
-  const etag = etags.get(path);
-  if (etag) {
-    headers['If-None-Match'] = etag;
-  }
-  // no-cache revalidates every poll so a 转播-end gate flip is not held in
-  // the browser's max-age window. Unchanged payloads still 304.
-  const response = await fetch(path, { headers, cache: 'no-cache' });
-  if (response.status === 304) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  const next = response.headers.get('etag');
-  if (next) {
-    etags.set(path, next);
-  }
-  return response.json();
-}
+const getJson = createJsonPoller();
+let statusCardsSignature = null;
+let nodesSignature = null;
 
 function setSyncBanner(inSync) {
   document.getElementById('public-sync-banner')?.classList.toggle('hidden', inSync);
@@ -61,8 +43,18 @@ async function refreshStatus() {
     }
     // readonly keeps every switch visible but locked, so viewers can see what
     // is on without being offered a control that is not theirs.
-    renderStatusCards(status, { readonly: true, showNetwork: false });
-    renderNodes(status.nodes);
+    const nextCards = JSON.stringify([
+      status.bilibili, status.youtube, status.twitch, status.niconico, status.priority_channel,
+    ]);
+    if (nextCards !== statusCardsSignature) {
+      renderStatusCards(status, { readonly: true, showNetwork: false });
+      statusCardsSignature = nextCards;
+    }
+    const nextNodes = JSON.stringify(status.nodes);
+    if (nextNodes !== nodesSignature) {
+      renderNodes(status.nodes);
+      nodesSignature = nextNodes;
+    }
     setDanmakuEnabled(
       status.bilibili?.enable_danmaku_command,
       clusterIsRestreaming(status.nodes),
@@ -70,6 +62,7 @@ async function refreshStatus() {
     setSyncBanner(status.in_sync !== false);
   } catch (error) {
     console.debug('status refresh failed', error);
+    statusCardsSignature = null;
     setStatusCardsMessage('连接中断');
   }
 }
@@ -97,6 +90,9 @@ async function loadAreas() {
 
 function startPolling() {
   stopPolling();
+  if (document.visibilityState !== 'visible') {
+    return;
+  }
   statusTimer = setInterval(refreshStatus, STATUS_POLL_MS);
   streamsTimer = setInterval(refreshStreams, STREAMS_POLL_MS);
 }
@@ -161,6 +157,7 @@ function init() {
   // A page left open in a background tab should not keep polling for hours.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      startDurationTicker();
       refreshStatus();
       refreshStreams();
       startPolling();

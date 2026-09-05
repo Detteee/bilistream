@@ -5,7 +5,7 @@
 //! is rebuilt at most once per [`SNAPSHOT_TTL`], and an ETag lets repeat polls
 //! settle for a 304.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use axum::body::Bytes;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -19,13 +19,13 @@ use crate::webui::state::{get_status_cache, StatusData};
 pub const SNAPSHOT_TTL: Duration = Duration::from_secs(5);
 
 struct Snapshot {
-    body: String,
+    body: Bytes,
     etag: String,
     built_at: Instant,
 }
 
 static SNAPSHOT: RwLock<Option<Snapshot>> = RwLock::new(None);
-static ETAG_COUNTER: AtomicU64 = AtomicU64::new(0);
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The status the page should show, or `None` when this node has no usable
 /// view of whoever owns the stream — which is what `in_sync` reports.
@@ -97,10 +97,10 @@ async fn refresh_public_status() {
 }
 
 fn store_snapshot(payload: PublicStatus) {
-    let Ok(body) = serde_json::to_string(&payload) else {
+    let Ok(body) = serde_json::to_vec(&payload).map(Bytes::from) else {
         return;
     };
-    let etag = format!("\"{:x}\"", ETAG_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let etag = super::body_etag(&body);
 
     if let Ok(mut guard) = SNAPSHOT.write() {
         // Keep the previous ETag when nothing changed, so a polling client
@@ -120,11 +120,14 @@ fn store_snapshot(payload: PublicStatus) {
 }
 
 /// The cached body and its ETag, rebuilding first when the cache has expired.
-pub(super) async fn current_public_status() -> Option<(String, String)> {
+pub(super) async fn current_public_status() -> Option<(Bytes, String)> {
     if snapshot_is_fresh() {
         return read_snapshot();
     }
-    refresh_public_status().await;
+    let _refresh = REFRESH_LOCK.lock().await;
+    if !snapshot_is_fresh() {
+        refresh_public_status().await;
+    }
     read_snapshot()
 }
 
@@ -153,7 +156,7 @@ fn snapshot_is_fresh() -> bool {
         .unwrap_or(false)
 }
 
-fn read_snapshot() -> Option<(String, String)> {
+fn read_snapshot() -> Option<(Bytes, String)> {
     let guard = SNAPSHOT.read().ok()?;
     let snapshot = guard.as_ref()?;
     Some((snapshot.body.clone(), snapshot.etag.clone()))
