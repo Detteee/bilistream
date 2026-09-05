@@ -157,9 +157,7 @@ fn take_matching_prefetch(
     now: Instant,
     ttl: Duration,
 ) -> Option<PrefetchedPlayableStream> {
-    let Some((stored_at, stream)) = slot.as_ref() else {
-        return None;
-    };
+    let (stored_at, stream) = slot.as_ref()?;
     if now.saturating_duration_since(*stored_at) > ttl {
         *slot = None;
         return None;
