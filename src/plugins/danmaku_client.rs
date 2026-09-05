@@ -4,6 +4,7 @@ use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +18,9 @@ use crate::plugins::{bili_stop_live, send_danmaku};
 
 // Bilibili danmaku protocol constants
 const HEADER_LENGTH: u32 = 16;
+const MAX_DECODED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_NESTING_DEPTH: usize = 8;
+const MAX_PACKETS: usize = 4096;
 
 // Protocol types (header protocol field)
 const PROTOCOL_COMMAND: u16 = 0;
@@ -25,10 +29,8 @@ const PROTOCOL_COMMAND_BROTLI: u16 = 3;
 
 // Operation codes (packet type)
 const OP_HEARTBEAT: u32 = 2;
-const OP_HEARTBEAT_REPLY: u32 = 3;
 const OP_MESSAGE: u32 = 5;
 const OP_AUTH: u32 = 7;
-const OP_AUTH_REPLY: u32 = 8;
 
 // Protocol versions (body protover field)
 #[allow(dead_code)]
@@ -53,22 +55,79 @@ fn danmaku_packet_body_length(packet_length: u32, header_length: u16) -> Result<
     Ok(packet_length - HEADER_LENGTH)
 }
 
-fn decode_danmaku_body(protocol_version: u16, body: &[u8]) -> Result<(Vec<u8>, bool)> {
-    match protocol_version {
-        PROTOCOL_COMMAND_ZLIB => {
-            let mut decoder = ZlibDecoder::new(body);
-            let mut decompressed = Vec::with_capacity(body.len() * 2);
-            decoder.read_to_end(&mut decompressed)?;
-            Ok((decompressed, true))
-        }
-        PROTOCOL_COMMAND_BROTLI => {
-            let mut decoder = brotli::Decompressor::new(body, 4096);
-            let mut decompressed = Vec::with_capacity(body.len() * 2);
-            decoder.read_to_end(&mut decompressed)?;
-            Ok((decompressed, true))
-        }
-        _ => Ok((body.to_vec(), false)),
+fn decode_danmaku_body<'a>(
+    protocol_version: u16,
+    body: &'a [u8],
+    bytes_left: &mut usize,
+) -> Result<(Cow<'a, [u8]>, bool)> {
+    fn limited(reader: impl Read, bytes_left: &mut usize) -> Result<Vec<u8>> {
+        let mut decoded = Vec::new();
+        reader
+            .take(*bytes_left as u64 + 1)
+            .read_to_end(&mut decoded)?;
+        *bytes_left = bytes_left
+            .checked_sub(decoded.len())
+            .ok_or_else(|| anyhow!("danmaku decoded byte budget exceeded"))?;
+        Ok(decoded)
     }
+    let decoded = match protocol_version {
+        PROTOCOL_COMMAND_ZLIB => limited(ZlibDecoder::new(body), bytes_left)?,
+        PROTOCOL_COMMAND_BROTLI => limited(brotli::Decompressor::new(body, 4096), bytes_left)?,
+        _ => return Ok((Cow::Borrowed(body), false)),
+    };
+    Ok((Cow::Owned(decoded), true))
+}
+
+/// Validate a complete frame before dispatching commands. Limits apply to the
+/// entire expansion tree, including sibling compressed packets.
+fn decode_danmaku_messages(data: &[u8]) -> Result<Vec<DanmakuMessage>> {
+    fn packets(
+        data: &[u8],
+        depth: usize,
+        bytes_left: &mut usize,
+        packets_left: &mut usize,
+        messages: &mut Vec<DanmakuMessage>,
+    ) -> Result<()> {
+        if depth > MAX_NESTING_DEPTH {
+            return Err(anyhow!("danmaku nesting limit exceeded"));
+        }
+        let mut cursor = Cursor::new(data);
+        while cursor.position() < data.len() as u64 {
+            *packets_left = packets_left
+                .checked_sub(1)
+                .ok_or_else(|| anyhow!("danmaku packet budget exceeded"))?;
+            let packet_length = cursor.read_u32::<BigEndian>()?;
+            let header_length = cursor.read_u16::<BigEndian>()?;
+            let protocol_version = cursor.read_u16::<BigEndian>()?;
+            let operation = cursor.read_u32::<BigEndian>()?;
+            let _sequence = cursor.read_u32::<BigEndian>()?;
+            let body_length = danmaku_packet_body_length(packet_length, header_length)? as usize;
+            let start = cursor.position() as usize;
+            let end = start
+                .checked_add(body_length)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| anyhow!("truncated danmaku packet body"))?;
+            cursor.set_position(end as u64);
+            if operation != OP_MESSAGE {
+                continue;
+            }
+            let (body, nested) =
+                decode_danmaku_body(protocol_version, &data[start..end], bytes_left)?;
+            if nested {
+                packets(&body, depth + 1, bytes_left, packets_left, messages)?;
+            } else if let Ok(message) = serde_json::from_slice(&body) {
+                messages.push(message);
+            }
+        }
+        Ok(())
+    }
+    let mut bytes_left = MAX_DECODED_BYTES
+        .checked_sub(data.len())
+        .ok_or_else(|| anyhow!("danmaku frame byte budget exceeded"))?;
+    let mut messages = Vec::new();
+    let mut packets_left = MAX_PACKETS;
+    packets(data, 0, &mut bytes_left, &mut packets_left, &mut messages)?;
+    Ok(messages)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,73 +414,9 @@ impl BilibiliDanmakuClient {
     }
 
     async fn handle_message(&self, data: &[u8]) -> Result<()> {
-        let mut cursor = Cursor::new(data);
-
-        while cursor.position() < data.len() as u64 {
-            // Read packet header
-            let packet_length = cursor.read_u32::<BigEndian>()?;
-            let header_length = cursor.read_u16::<BigEndian>()?;
-            let protocol_version = cursor.read_u16::<BigEndian>()?;
-            let operation = cursor.read_u32::<BigEndian>()?;
-            let _sequence = cursor.read_u32::<BigEndian>()?;
-
-            let body_length = danmaku_packet_body_length(packet_length, header_length)?;
-
-            // Limit body size to prevent excessive memory allocation
-            const MAX_BODY_SIZE: u32 = 10 * 1024 * 1024; // 10MB limit
-            let remaining = data.len() as u64 - cursor.position();
-            if body_length as u64 > remaining {
-                return Err(anyhow!(
-                    "truncated danmaku packet body: need {} bytes, have {}",
-                    body_length,
-                    remaining
-                ));
-            }
-            if body_length > MAX_BODY_SIZE {
-                warn!("Skipping oversized packet: {} bytes", body_length);
-                cursor.set_position(cursor.position() + body_length as u64);
-                continue;
-            }
-
-            let mut body = vec![0u8; body_length as usize];
-            cursor.read_exact(&mut body)?;
-
-            match operation {
-                OP_AUTH_REPLY => {
-                    // info!("Authentication successful");
-                }
-                OP_HEARTBEAT_REPLY => {
-                    // Heartbeat reply contains viewer count
-                    // if body.len() >= 4 {
-                    //     let viewer_count = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
-                    //     info!("Viewer count: {}", viewer_count);
-                    // }
-                }
-                OP_MESSAGE => {
-                    self.handle_danmaku_message(protocol_version, &body).await?;
-                }
-                _ => {
-                    // Unknown operation
-                }
-            }
+        for message in decode_danmaku_messages(data)? {
+            self.process_danmaku_command(&message).await;
         }
-
-        Ok(())
-    }
-
-    async fn handle_danmaku_message(&self, protocol_version: u16, body: &[u8]) -> Result<()> {
-        let (decompressed_data, is_nested_packet) = decode_danmaku_body(protocol_version, body)?;
-
-        // Parse nested messages
-        if is_nested_packet {
-            Box::pin(self.handle_message(&decompressed_data)).await?;
-        } else {
-            // Parse JSON message - use from_slice to avoid UTF-8 conversion overhead
-            if let Ok(message) = serde_json::from_slice::<DanmakuMessage>(&decompressed_data) {
-                self.process_danmaku_command(&message).await;
-            }
-        }
-
         Ok(())
     }
 
@@ -768,6 +763,56 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn packet(protocol: u16, body: &[u8]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        packet
+            .write_u32::<BigEndian>(HEADER_LENGTH + body.len() as u32)
+            .unwrap();
+        packet.write_u16::<BigEndian>(HEADER_LENGTH as u16).unwrap();
+        packet.write_u16::<BigEndian>(protocol).unwrap();
+        packet.write_u32::<BigEndian>(OP_MESSAGE).unwrap();
+        packet.write_u32::<BigEndian>(1).unwrap();
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    fn compressed_packet(body: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(body).unwrap();
+        packet(PROTOCOL_COMMAND_ZLIB, &encoder.finish().unwrap())
+    }
+
+    #[test]
+    fn decoded_budget_is_shared_by_sibling_packets() {
+        let compressed = compressed_packet(&vec![0; MAX_DECODED_BYTES / 2 + 1]);
+        let body = &compressed[HEADER_LENGTH as usize..];
+        let mut budget = MAX_DECODED_BYTES;
+        decode_danmaku_body(PROTOCOL_COMMAND_ZLIB, body, &mut budget).unwrap();
+        assert!(decode_danmaku_body(PROTOCOL_COMMAND_ZLIB, body, &mut budget).is_err());
+    }
+
+    #[test]
+    fn nested_packets_preserve_order_and_reject_excessive_depth() {
+        let mut nested = packet(PROTOCOL_COMMAND, br#"{"cmd":"first"}"#);
+        nested.extend(packet(PROTOCOL_COMMAND, br#"{"cmd":"second"}"#));
+        for _ in 0..MAX_NESTING_DEPTH {
+            nested = compressed_packet(&nested);
+        }
+        let messages = decode_danmaku_messages(&nested).unwrap();
+        assert_eq!(
+            messages.iter().map(|m| m.cmd.as_str()).collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        assert!(decode_danmaku_messages(&compressed_packet(&nested)).is_err());
+    }
+
+    #[test]
+    fn rejects_packet_floods_and_truncated_bodies() {
+        let one = packet(PROTOCOL_COMMAND, b"{}");
+        assert!(decode_danmaku_messages(&one.repeat(MAX_PACKETS + 1)).is_err());
+        assert!(decode_danmaku_messages(&one[..one.len() - 1]).is_err());
+    }
+
     #[test]
     fn heartbeat_packet_has_valid_header() {
         let packet = BilibiliDanmakuClient::create_heartbeat_packet()
@@ -802,9 +847,11 @@ mod tests {
             writer.write_all(payload).unwrap();
         }
 
-        let (decoded, nested) = decode_danmaku_body(PROTOCOL_COMMAND_BROTLI, &compressed).unwrap();
+        let mut budget = MAX_DECODED_BYTES;
+        let (decoded, nested) =
+            decode_danmaku_body(PROTOCOL_COMMAND_BROTLI, &compressed, &mut budget).unwrap();
 
         assert!(nested);
-        assert_eq!(decoded, payload);
+        assert_eq!(decoded.as_ref(), payload);
     }
 }
