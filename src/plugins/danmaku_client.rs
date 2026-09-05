@@ -32,12 +32,6 @@ const OP_HEARTBEAT: u32 = 2;
 const OP_MESSAGE: u32 = 5;
 const OP_AUTH: u32 = 7;
 
-// Protocol versions (body protover field)
-#[allow(dead_code)]
-const PROTOVER_NORMAL: u8 = 1;
-#[allow(dead_code)]
-const PROTOVER_BROTLI: u8 = 3;
-
 fn danmaku_packet_body_length(packet_length: u32, header_length: u16) -> Result<u32> {
     if header_length as u32 != HEADER_LENGTH {
         return Err(anyhow!(
@@ -150,8 +144,7 @@ pub struct DanmakuMessage {
 pub struct BilibiliDanmakuClient {
     config: DanmakuConfig,
     room_id: u64,
-    #[allow(dead_code)]
-    token: Option<String>, // Kept for potential future use with getDanmuInfo
+    token: Option<String>,
     host_list: Vec<String>,
     app_config: Arc<Config>,
     enable_commands: Arc<AtomicBool>,
@@ -283,7 +276,6 @@ impl BilibiliDanmakuClient {
         Ok(())
     }
 
-    #[allow(dead_code)]
     async fn get_danmaku_info(&mut self) -> Result<()> {
         let client = crate::plugins::bilibili::bili_plain_http_client();
         let mut params = BTreeMap::new();
