@@ -291,9 +291,9 @@ pub(crate) fn resolved_node_mode_monitor_toggles(
     requested: Option<MonitorToggleState>,
 ) -> Option<MonitorToggleState> {
     match requested {
+        _ if !active => Some(all_monitor_toggles_off()),
         Some(toggles) => Some(toggles),
-        None if active => None,
-        None => Some(all_monitor_toggles_off()),
+        None => None,
     }
 }
 

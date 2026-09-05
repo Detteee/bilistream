@@ -4,7 +4,7 @@ use super::election::{configured_node_ids, node_is_eligible};
 use super::fencing::{clear_local_stream, local_monitoring_allowed};
 use super::state::{
     cluster_control_timeout, cluster_state_read, cluster_state_write, cluster_switch_lock,
-    node_mode_apply_lock, now_secs, write_json_file, ClusterState, CLUSTER_HTTP_CLIENT,
+    node_mode_apply_lock, now_secs, ClusterState, CLUSTER_HTTP_CLIENT,
 };
 use super::status::{
     current_active_owner, force_failover, get_cluster_status,
@@ -34,7 +34,7 @@ pub async fn apply_monitor_toggle_state(payload: MonitorToggleState) -> Result<(
         .await
         .map_err(|e| e.to_string())?;
     apply_monitor_toggle_state_to_config(&mut cfg, &payload);
-    save_config(&cfg).await.map_err(|e| e.to_string())?;
+    save_config(&mut cfg).await.map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
     apply_danmaku_command_runtime_state(payload.enable_danmaku_command).await;
     if monitor_toggles_any_enabled(&payload)
@@ -224,7 +224,7 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
 
     apply_monitored_config_to_config(&mut cfg, payload);
 
-    save_config(&cfg).await.map_err(|e| e.to_string())?;
+    save_config(&mut cfg).await.map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
 
@@ -238,17 +238,17 @@ pub(crate) async fn write_monitored_json_files(
     channels_json: Option<serde_json::Value>,
     areas_json: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        if let Some(channels_json) = &channels_json {
-            write_json_file("channels.json", channels_json)?;
+    for (name, data) in [("channels.json", channels_json), ("areas.json", areas_json)] {
+        if let Some(data) = data {
+            let path = super::state::executable_sibling(name)
+                .ok_or_else(|| "failed to resolve executable path".to_string())?;
+            crate::config::replace_json_file(path, data).await?;
+            if name == "areas.json" {
+                crate::webui::public::remap_after_areas_change();
+            }
         }
-        if let Some(areas_json) = &areas_json {
-            write_json_file("areas.json", areas_json)?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("monitored JSON write task failed: {}", e))?
+    }
+    Ok(())
 }
 
 pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) {
@@ -353,7 +353,31 @@ pub async fn finalize_cluster_node_switch(
     target_node_id: &str,
     preserve_source_drain: bool,
 ) -> Result<(), String> {
+    // Complete the ordered handoff even if the requesting HTTP client disconnects.
+    let cfg = cfg.clone();
+    let before = before.clone();
+    let source = source_node_id.to_string();
+    let target = target_node_id.to_string();
+    tokio::spawn(async move {
+        finalize_cluster_node_switch_inner(&cfg, &before, &source, &target, preserve_source_drain)
+            .await
+    })
+    .await
+    .map_err(|e| format!("集群交接任务失败: {e}"))?
+}
+
+async fn finalize_cluster_node_switch_inner(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    target_node_id: &str,
+    preserve_source_drain: bool,
+) -> Result<(), String> {
     let _switch_guard = cluster_switch_lock().lock().await;
+    let pending_source = (target_node_id == cfg.cluster.node_id)
+        .then(|| cluster_state_read().pending_handoff_source.clone())
+        .flatten();
+    let source_node_id = pending_source.as_deref().unwrap_or(source_node_id);
     let current_owner = current_active_owner();
     if current_owner.as_deref() != Some(source_node_id)
         && current_owner.as_deref() != Some(target_node_id)
@@ -398,6 +422,36 @@ pub async fn finalize_cluster_node_switch(
         &source_config.payload.monitored_config,
     );
 
+    // Never enable the replacement until the source confirms persisted all-off
+    // toggles and a stopped process. An unreachable source leaves handoff pending.
+    if source_node_id != target_node_id {
+        apply_cluster_node_mode_to_node_with_retry(
+            &client,
+            cfg,
+            source_node_id,
+            ClusterApplyNodeModeRequest {
+                monitored_config: None,
+                active: false,
+                restart: false,
+                preserve_drain: preserve_source_drain,
+                monitor_toggles: Some(all_monitor_toggles_off()),
+                channel_targets: None,
+                expected_active_owner: Some(
+                    if source_node_id == cfg.cluster.node_id {
+                        current_owner.as_deref().unwrap_or(source_node_id)
+                    } else {
+                        source_node_id
+                    }
+                    .to_string(),
+                ),
+            },
+            "disable_previous_active",
+        )
+        .await
+        .map_err(|e| format!("源节点尚未确认停止，取消接管: {e}"))?;
+    }
+
+    ensure_handoff_target_is_eligible(cfg, target_node_id)?;
     apply_cluster_node_mode_to_node_with_retry(
         &client,
         cfg,
@@ -419,41 +473,6 @@ pub async fn finalize_cluster_node_switch(
         let status = force_failover(cfg, Some(target_node_id.to_string()));
         if status.active_owner.as_deref() != Some(target_node_id) {
             return Err(format!("目标节点 {} 当前不可接管", target_node_id));
-        }
-    }
-
-    if source_node_id != target_node_id {
-        let expected_source_owner = if source_node_id == cfg.cluster.node_id {
-            target_node_id
-        } else {
-            source_node_id
-        };
-        if let Err(e) = apply_cluster_node_mode_to_node_with_retry(
-            &client,
-            cfg,
-            source_node_id,
-            ClusterApplyNodeModeRequest {
-                monitored_config: None,
-                active: false,
-                restart: false,
-                preserve_drain: preserve_source_drain,
-                // Channel targets stay. Apply-node-mode fills in all-off when
-                // monitor_toggles is omitted; send it explicitly so an older
-                // peer that lacks that fill-in still persists the demotion.
-                monitor_toggles: Some(all_monitor_toggles_off()),
-                channel_targets: None,
-                expected_active_owner: Some(expected_source_owner.to_string()),
-            },
-            "disable_previous_active",
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to disable previous active {} after ownership moved to {}: {}",
-                source_node_id,
-                target_node_id,
-                e
-            );
         }
     }
 
@@ -644,8 +663,8 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
     payload: &ClusterApplyNodeModeRequest,
 ) -> Result<(), String> {
     if node_id == cfg.cluster.node_id {
-        apply_cluster_node_mode_locally(payload.clone()).await?;
-        return Ok(());
+        let status = apply_cluster_node_mode_locally(payload.clone()).await?;
+        return validate_node_mode_response(&status, node_id, payload.active);
     }
 
     let peer = cfg
@@ -680,9 +699,11 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
         .map_err(|e| format!("解析节点 {} 模式响应失败: {}", node_id, e))?;
 
     if envelope.success {
-        if let Some(status) = envelope.data {
-            merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
-        }
+        let status = envelope
+            .data
+            .ok_or_else(|| format!("节点 {node_id} 未返回模式确认状态"))?;
+        validate_node_mode_response(&status, node_id, payload.active)?;
+        merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
         Ok(())
     } else {
         Err(envelope
@@ -692,6 +713,34 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
 }
 
 pub async fn apply_cluster_node_mode_locally(
+    payload: ClusterApplyNodeModeRequest,
+) -> Result<ClusterStatus, String> {
+    // The hold, commit, runtime changes and acknowledgement form one owned task.
+    tokio::spawn(apply_cluster_node_mode_inner(payload))
+        .await
+        .map_err(|e| format!("节点模式更新任务失败: {e}"))?
+}
+
+pub(crate) fn validate_node_mode_response(
+    status: &ClusterStatus,
+    node_id: &str,
+    active: bool,
+) -> Result<(), String> {
+    if status.local_node_id != node_id {
+        return Err(format!("节点 {node_id} 模式确认身份不符"));
+    }
+    let node = status
+        .nodes
+        .iter()
+        .find(|node| node.node_id == node_id)
+        .ok_or_else(|| format!("节点 {node_id} 模式确认缺少本机状态"))?;
+    if !active && (node.ffmpeg_running || !monitor_toggles_all_off(&node.monitor_toggles)) {
+        return Err(format!("节点 {node_id} 未确认停止推流和监控"));
+    }
+    Ok(())
+}
+
+async fn apply_cluster_node_mode_inner(
     payload: ClusterApplyNodeModeRequest,
 ) -> Result<ClusterStatus, String> {
     let _apply_guard = node_mode_apply_lock().lock().await;
@@ -708,6 +757,24 @@ pub async fn apply_cluster_node_mode_locally(
         active,
         &cfg.cluster.node_id,
     )?;
+    if active {
+        let state = cluster_state_read();
+        if state
+            .pending_handoff_source
+            .as_deref()
+            .is_some_and(|source| payload.expected_active_owner.as_deref() != Some(source))
+        {
+            return Err("节点仍在等待原活跃节点交接确认".to_string());
+        }
+    }
+    if !active {
+        // Hold execution before the first write/await so a monitor cannot restart
+        // between demotion's config commit and process shutdown.
+        cluster_state_write().local_execution_held = true;
+        set_manual_restart();
+        clear_local_stream();
+        stop_ffmpeg().await;
+    }
     if let Some(monitored_config) = payload.monitored_config {
         write_monitored_json_files(
             monitored_config.channels_json.clone(),
@@ -721,7 +788,7 @@ pub async fn apply_cluster_node_mode_locally(
     apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
     if config_changed {
-        save_config(&cfg).await.map_err(|e| e.to_string())?;
+        save_config(&mut cfg).await.map_err(|e| e.to_string())?;
         refresh_status_cache_config_from(&cfg);
         set_config_updated();
         crate::webui::state::request_status_refresh();
@@ -751,6 +818,12 @@ pub async fn apply_cluster_node_mode_locally(
         stop_ffmpeg().await;
     }
 
+    if active {
+        force_failover(&cfg, Some(cfg.cluster.node_id.clone()));
+        let mut state = cluster_state_write();
+        state.pending_handoff_source = None;
+        state.local_execution_held = false;
+    }
     get_cluster_status().await
 }
 
@@ -805,7 +878,7 @@ pub(crate) async fn adopt_auto_failover_from_peer_view(
     }
 
     updated.cluster.auto_failover = peer_auto_failover;
-    if let Err(e) = save_config(&updated).await {
+    if let Err(e) = save_config(&mut updated).await {
         tracing::warn!(
             "Failed to adopt cluster auto_failover from peer {}: {}",
             peer_node_id,

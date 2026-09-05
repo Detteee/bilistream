@@ -26,8 +26,16 @@ use std::time::{Duration, Instant};
 
 pub(crate) static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-pub fn start_cluster_worker() {
-    tokio::spawn(async {
+pub struct ClusterWorker(tokio::task::JoinHandle<()>);
+
+impl Drop for ClusterWorker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+pub fn start_cluster_worker() -> ClusterWorker {
+    ClusterWorker(tokio::spawn(async {
         let client = CLUSTER_HTTP_CLIENT.clone();
 
         loop {
@@ -72,7 +80,7 @@ pub fn start_cluster_worker() {
             ))
             .await;
         }
-    });
+    }))
 }
 
 pub(crate) fn heartbeat_cycle_delay(period: Duration, elapsed: Duration) -> Duration {
@@ -106,6 +114,10 @@ pub(crate) fn schedule_auto_owner_transition(
     if !cfg.cluster.auto_failover {
         return;
     }
+    let previous_owner = cluster_state_read()
+        .pending_handoff_source
+        .clone()
+        .or(previous_owner);
     let Some(previous_owner) = previous_owner else {
         return;
     };

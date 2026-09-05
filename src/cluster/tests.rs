@@ -4,12 +4,197 @@ use crate::config::{
     PriorityChannel, Twitch, Youtube,
 };
 use std::collections::HashMap;
-use std::fs;
-use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
 static CLUSTER_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn peer_view(owner: &str, members: &[&str], now: u64) -> PeerOwnerView {
+    PeerOwnerView {
+        owner: Some(owner.to_string()),
+        received_at: now,
+        members: members.iter().map(|member| member.to_string()).collect(),
+        confirmed_by_heartbeat: true,
+    }
+}
+
+#[test]
+fn competing_healthy_owners_cannot_both_pass_the_execution_gate() {
+    let now = 100;
+    for (local, other) in [("a", "b"), ("b", "a")] {
+        let mut cfg = test_config(local, 0);
+        cfg.cluster.peers = [other, "c"]
+            .into_iter()
+            .map(|id| crate::config::ClusterPeer {
+                node_id: id.to_string(),
+                name: id.to_string(),
+                api_url: format!("http://{id}"),
+                priority: 0,
+            })
+            .collect();
+        let mut state = ClusterState {
+            active_owner: Some(local.to_string()),
+            ..Default::default()
+        };
+        for id in ["a", "b", "c"] {
+            let mut node = empty_node(id, id, "", if id == "a" { 10 } else { 0 }, id == local, now);
+            node.last_seen = Some(now);
+            node.health = ClusterHealth::healthy();
+            state.nodes.insert(id.to_string(), node);
+        }
+        for peer in [other, "c"] {
+            state.peer_heartbeat_acks.insert(peer.to_string(), now);
+        }
+        state
+            .peer_owner_views
+            .insert(other.to_string(), peer_view(other, &["a", "b", "c"], now));
+        state
+            .peer_owner_views
+            .insert("c".to_string(), peer_view(local, &["a", "b", "c"], now));
+        assert!(state_has_fresh_quorum(&state, &cfg, now));
+        assert!(!state_has_owner_agreement(&state, &cfg, now));
+        assert!(state_monitoring_block_reason(&state, &cfg, now).is_some());
+        assert_eq!(choose_owner(&state, &cfg, now).as_deref(), Some("a"));
+    }
+}
+
+#[test]
+fn owner_confirmation_expires_and_cannot_cross_membership_changes() {
+    let mut cfg = test_config("a", 0);
+    cfg.cluster.failover_timeout_secs = 10;
+    cfg.cluster.peers = vec![crate::config::ClusterPeer {
+        node_id: "b".into(),
+        name: "b".into(),
+        api_url: "http://b".into(),
+        priority: 0,
+    }];
+    let mut state = ClusterState {
+        active_owner: Some("a".into()),
+        ..Default::default()
+    };
+    state.peer_heartbeat_acks.insert("b".into(), 100);
+    assert!(!state_has_owner_agreement(&state, &cfg, 100));
+    state
+        .peer_owner_views
+        .insert("b".into(), peer_view("a", &["a", "b"], 100));
+    assert!(state_has_owner_agreement(&state, &cfg, 110));
+    assert!(!state_has_owner_agreement(&state, &cfg, 111));
+    assert!(!state_has_owner_agreement(&state, &cfg, 99));
+    state
+        .peer_owner_views
+        .get_mut("b")
+        .unwrap()
+        .confirmed_by_heartbeat = false;
+    assert!(!state_has_owner_agreement(&state, &cfg, 100));
+    state
+        .peer_owner_views
+        .insert("b".into(), peer_view("a", &["a", "b", "c"], 100));
+    assert!(!state_has_owner_agreement(&state, &cfg, 100));
+    state.peer_heartbeat_acks.clear();
+    state.peer_heartbeat_acks.insert("a".into(), 100);
+    assert!(!state_has_fresh_quorum(&state, &cfg, 100));
+}
+
+#[test]
+fn a_new_local_owner_waits_for_handoff_even_with_agreement() {
+    let cfg = test_config("a", 10);
+    let now = 100;
+    let mut state = ClusterState {
+        active_owner: Some("old".into()),
+        ..Default::default()
+    };
+    let mut local = empty_node("a", "a", "", 10, true, now);
+    local.last_seen = Some(now);
+    local.health = ClusterHealth::healthy();
+    state.nodes.insert("a".into(), local);
+    build_status_from_state(&mut state, &cfg, String::new(), now);
+    assert_eq!(state.active_owner.as_deref(), Some("a"));
+    assert_eq!(state.pending_handoff_source.as_deref(), Some("old"));
+    assert!(state_monitoring_block_reason(&state, &cfg, now).is_some());
+}
+
+#[tokio::test]
+async fn failed_source_demotion_never_sends_target_promotion() {
+    use axum::{routing::post, Json, Router};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let _state_guard = ClusterStateGuard::new();
+    crate::install_crypto_provider();
+    let promotions = Arc::new(AtomicUsize::new(0));
+    let seen = promotions.clone();
+    let app = Router::new()
+        .route(
+            "/source/api/cluster/apply-node-mode",
+            post(|| async {
+                Json(serde_json::json!({"success": false, "message": "source still running"}))
+            }),
+        )
+        .route(
+            "/target/api/cluster/apply-node-mode",
+            post(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+                async { Json(serde_json::json!({"success": false})) }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut cfg = test_config("coordinator", 0);
+    cfg.cluster.peers = ["source", "target"]
+        .into_iter()
+        .map(|id| crate::config::ClusterPeer {
+            node_id: id.to_string(),
+            name: id.to_string(),
+            api_url: format!("http://{addr}/{id}"),
+            priority: 10,
+        })
+        .collect();
+    let now = now_secs();
+    let nodes: Vec<_> = ["source", "target"]
+        .into_iter()
+        .map(|id| {
+            let mut node = empty_node(id, id, "", 10, false, now);
+            node.last_seen = Some(now);
+            node.health = ClusterHealth::healthy();
+            node
+        })
+        .collect();
+    {
+        let mut state = cluster_state_write();
+        *state = ClusterState::default();
+        state.active_owner = Some("source".into());
+        state.nodes = nodes
+            .iter()
+            .map(|node| (node.node_id.clone(), node.clone()))
+            .collect();
+    }
+    let mut before = ClusterStatus {
+        enabled: true,
+        local_node_id: "coordinator".into(),
+        active_owner: Some("source".into()),
+        lease_until: None,
+        config_version: String::new(),
+        auto_failover: true,
+        public_status: Default::default(),
+        nodes,
+    };
+    let result = finalize_cluster_node_switch(&cfg, &before, "source", "target", false).await;
+    server.abort();
+    assert!(result.is_err());
+    assert_eq!(promotions.load(Ordering::SeqCst), 0);
+    assert_eq!(current_active_owner().as_deref(), Some("source"));
+
+    // A success envelope with a still-running process also cannot confirm demotion.
+    before.local_node_id = "source".into();
+    before.nodes[0].ffmpeg_running = true;
+    assert!(validate_node_mode_response(&before, "source", false).is_err());
+    before.nodes[0].ffmpeg_running = false;
+    assert!(validate_node_mode_response(&before, "source", false).is_ok());
+}
 
 #[test]
 fn recover_locks_return_inner_after_poison() {
@@ -56,6 +241,7 @@ impl Drop for ClusterStateGuard {
 
 pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
     Config {
+        snapshot: None,
         auto_cover: false,
         enable_anti_collision: false,
         interval: 60,
@@ -180,46 +366,6 @@ fn canonical_json_sorts_keys_without_changing_shape() {
         canonical_json(&value),
         r#"{"a":[true,null,{"x":"quote\"","z":2}],"b":1}"#
     );
-}
-
-#[test]
-fn cluster_json_tmp_paths_are_unique_siblings() {
-    let path = std::env::temp_dir().join("bilistream-cluster-state.json");
-
-    let first = unique_json_tmp_path(&path);
-    let second = unique_json_tmp_path(&path);
-
-    assert_ne!(first, second);
-    assert_eq!(first.parent(), path.parent());
-    assert_eq!(second.parent(), path.parent());
-    assert!(first
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("bilistream-cluster-state.json.tmp-")));
-}
-
-#[test]
-fn cluster_json_atomic_write_replaces_target_without_leftover_tmp() {
-    let dir = std::env::temp_dir().join(format!(
-        "bilistream-cluster-json-test-{}-{}",
-        std::process::id(),
-        JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("state.json");
-
-    write_json_file_atomic(&path, br#"{"old":true}"#).unwrap();
-    write_json_file_atomic(&path, br#"{"new":true}"#).unwrap();
-
-    assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"new":true}"#);
-    let entries = fs::read_dir(&dir)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path(), path);
-
-    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -410,14 +556,10 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     assert_eq!(local.twitch.channel_name, "remote tw");
     assert_eq!(local.twitch.channel_id, "remote-tw-id");
     assert_eq!(local.priority_channel.channel_name, "remote priority");
-    assert_eq!(
-        local.priority_channel.youtube_channel_id,
-        "remote-priority-yt"
-    );
-    assert_eq!(
-        local.priority_channel.twitch_channel_id,
-        "remote-priority-tw"
-    );
+    // The synced channel is absent from the local registry, so IDs must not
+    // remain usable after a missing/removed channel lookup.
+    assert!(local.priority_channel.youtube_channel_id.is_empty());
+    assert!(local.priority_channel.twitch_channel_id.is_empty());
 }
 
 #[test]
@@ -516,8 +658,8 @@ fn demoted_node_mode_clears_unspecified_monitor_toggles() {
         niconico_enable_monitor: true,
     };
     assert_eq!(
-        resolved_node_mode_monitor_toggles(false, Some(requested.clone())),
-        Some(requested)
+        resolved_node_mode_monitor_toggles(false, Some(requested)),
+        Some(all_monitor_toggles_off())
     );
 }
 

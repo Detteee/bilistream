@@ -44,8 +44,8 @@ pub async fn start_webui_on_listener(
     let _twitch_live_worker = crate::plugins::twitch_live::start_twitch_live_worker();
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
-    crate::cluster::start_cluster_worker();
-    crate::webui::public::start_public_status_supervisor();
+    let _cluster_worker = crate::cluster::start_cluster_worker();
+    let _public_supervisor = crate::webui::public::start_public_status_supervisor();
 
     // API router
     let api_router = Router::new()

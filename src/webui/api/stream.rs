@@ -703,7 +703,7 @@ pub async fn toggle_niconico_monitor(
 
     cfg.niconico.enable_monitor = payload.enabled;
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

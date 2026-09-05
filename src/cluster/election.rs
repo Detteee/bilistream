@@ -76,7 +76,17 @@ pub(crate) fn choose_owner_with_configured(
             .or_else(|| last_resort_local_owner(state, cfg));
     }
 
-    if let Some(current_owner) = state.active_owner.as_ref() {
+    // Healthy owner stickiness must not preserve two competing self-claims
+    // forever. Resolve observed conflicts with the same stable priority order.
+    let conflicting_claim = state.peer_owner_views.iter().any(|(peer, view)| {
+        configured.contains(peer.as_str())
+            && view.owner.as_deref() == Some(peer.as_str())
+            && view.owner != state.active_owner
+            && now
+                .checked_sub(view.received_at)
+                .is_some_and(|age| age <= cfg.cluster.failover_timeout_secs.max(1))
+    });
+    if let Some(current_owner) = state.active_owner.as_ref().filter(|_| !conflicting_claim) {
         if state
             .nodes
             .get(current_owner)

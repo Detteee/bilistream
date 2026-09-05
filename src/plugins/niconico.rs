@@ -78,7 +78,7 @@ pub fn normalize_live_id(input: &str) -> String {
     }
 
     let last = trimmed
-        .rsplit(|c| c == '/' || c == '?')
+        .rsplit(['/', '?'])
         .find(|part| !part.is_empty())
         .unwrap_or(trimmed);
 
@@ -427,15 +427,15 @@ fn html_unescape(input: &str) -> String {
         .replace("&#39;", "'")
 }
 
-fn niconico_page_client(proxy: Option<&str>) -> Result<reqwest::Client, Box<dyn Error>> {
-    let mut builder = reqwest::Client::builder()
+fn niconico_page_request(
+    url: &str,
+    proxy: Option<&str>,
+) -> Result<reqwest::RequestBuilder, Box<dyn Error>> {
+    Ok(super::http::pooled_client(proxy)?
+        .get(url)
         .timeout(CHANNEL_STATUS_TIMEOUT)
-        .user_agent(CHANNEL_PAGE_USER_AGENT)
-        .http1_only();
-    if let Some(proxy_url) = proxy.filter(|proxy| !proxy.is_empty()) {
-        builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
-    }
-    Ok(builder.build()?)
+        .header(reqwest::header::USER_AGENT, CHANNEL_PAGE_USER_AGENT)
+        .version(reqwest::Version::HTTP_11))
 }
 
 async fn fetch_channel_listing(
@@ -443,12 +443,13 @@ async fn fetch_channel_listing(
     proxy: Option<&str>,
 ) -> Result<ChannelLiveListing, Box<dyn Error>> {
     let url = channel_live_url(channel_id);
-    let client = niconico_page_client(proxy)?;
-    let response = client.get(&url).send().await?;
+    let request = niconico_page_request(&url, proxy)?;
+    let response = request.send().await?;
     if !response.status().is_success() {
         return Err(format!("Niconico channel page HTTP {}", response.status()).into());
     }
-    let html = response.text().await?;
+    let bytes = super::http::response_bytes_limited(response, 8 * 1024 * 1024).await?;
+    let html = String::from_utf8_lossy(&bytes);
     Ok(parse_channel_live_listing(&html))
 }
 
@@ -537,12 +538,13 @@ pub async fn niconico_cover_thumbnail_url(
     if live_id.is_empty() {
         return Ok(None);
     }
-    let client = niconico_page_client(proxy)?;
-    let response = client.get(watch_url(&live_id)).send().await?;
+    let request = niconico_page_request(&watch_url(&live_id), proxy)?;
+    let response = request.send().await?;
     if !response.status().is_success() {
         return Err(format!("Niconico watch page HTTP {}", response.status()).into());
     }
-    let html = response.text().await?;
+    let bytes = super::http::response_bytes_limited(response, 8 * 1024 * 1024).await?;
+    let html = String::from_utf8_lossy(&bytes);
     Ok(parse_niconico_cover_thumbnail_url(&html))
 }
 
@@ -610,10 +612,10 @@ pub async fn get_niconico_status(
     if live_id.is_empty() {
         return Ok((false, None, None, None, None, None));
     }
-    get_niconico_status_via_streamlink(&live_id, cfg)
+    get_niconico_status_via_streamlink(&live_id, cfg).await
 }
 
-fn get_niconico_status_via_streamlink(
+async fn get_niconico_status_via_streamlink(
     live_id: &str,
     cfg: &NiconicoConfig,
 ) -> Result<
@@ -635,15 +637,14 @@ fn get_niconico_status_via_streamlink(
     configure_no_window(&mut command);
     command.args(&args);
 
-    let output = match command_output_with_timeout(&mut command, STREAMLINK_TIMEOUT, "streamlink") {
+    let output = match command_output_with_timeout(command, STREAMLINK_TIMEOUT, "streamlink").await
+    {
         Ok(output) => output,
         Err(e) => {
-            if e.downcast_ref::<std::io::Error>()
-                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-            {
+            if e.kind() == std::io::ErrorKind::NotFound {
                 return Err("streamlink 未安装或不在 PATH 中。".into());
             }
-            return Err(e);
+            return Err(e.into());
         }
     };
 
@@ -732,8 +733,10 @@ mod tests {
 
     #[test]
     fn pinned_live_id_is_configured_without_channel_id() {
-        let mut cfg = crate::config::Niconico::default();
-        cfg.live_id = "lv351182284".to_string();
+        let cfg = crate::config::Niconico {
+            live_id: "lv351182284".to_string(),
+            ..Default::default()
+        };
         assert_eq!(niconico_channel_id(&cfg), "");
         assert!(niconico_configured(&cfg));
     }

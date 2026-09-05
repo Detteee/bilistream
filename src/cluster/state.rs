@@ -5,9 +5,7 @@ use crate::config::Config;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,8 +30,6 @@ pub(crate) fn build_cluster_http_client() -> reqwest::Client {
 pub(crate) fn cluster_http_client() -> reqwest::Client {
     CLUSTER_HTTP_CLIENT.clone()
 }
-
-pub(crate) static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn cluster_control_timeout(cfg: &Config) -> Duration {
     Duration::from_secs(cfg.cluster.heartbeat_interval_secs.clamp(5, 15))
@@ -92,9 +88,22 @@ pub(crate) struct ClusterState {
     pub(crate) local_external_api_failure_times: Vec<u64>,
     pub(crate) heartbeat_failures: HashMap<String, u32>,
     pub(crate) peer_heartbeat_acks: HashMap<String, u64>,
+    pub(crate) peer_owner_views: HashMap<String, PeerOwnerView>,
+    /// A newly elected local owner cannot execute until handoff completes.
+    pub(crate) pending_handoff_source: Option<String>,
+    /// Demotion fences execution before any await, even if persistence fails.
+    pub(crate) local_execution_held: bool,
     pub(crate) peer_observations: HashMap<String, HashMap<String, u64>>,
     pub(crate) last_known_active_toggles: Option<MonitorToggleState>,
     pub(crate) last_known_active_channel_targets: Option<ChannelTargetState>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PeerOwnerView {
+    pub(crate) owner: Option<String>,
+    pub(crate) received_at: u64,
+    pub(crate) members: std::collections::HashSet<String>,
+    pub(crate) confirmed_by_heartbeat: bool,
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -114,58 +123,4 @@ pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
     let path = executable_sibling(name)?;
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
-}
-
-pub(crate) fn write_json_file(name: &str, value: &serde_json::Value) -> Result<(), String> {
-    let path =
-        executable_sibling(name).ok_or_else(|| "failed to resolve executable path".to_string())?;
-    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    write_json_file_atomic(&path, json.as_bytes()).map_err(|e| e.to_string())
-}
-
-pub(crate) fn write_json_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let (tmp_path, mut tmp_file) = create_unique_json_tmp_file(path)?;
-    let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
-    drop(tmp_file);
-
-    let result = write_result.and_then(|_| fs::rename(&tmp_path, path));
-
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp_path);
-    }
-    result
-}
-
-pub(crate) fn create_unique_json_tmp_file(path: &Path) -> std::io::Result<(PathBuf, fs::File)> {
-    const MAX_ATTEMPTS: usize = 16;
-    for _ in 0..MAX_ATTEMPTS {
-        let tmp_path = unique_json_tmp_path(path);
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-        {
-            Ok(file) => return Ok((tmp_path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "failed to reserve unique cluster json temporary file",
-    ))
-}
-
-pub(crate) fn unique_json_tmp_path(path: &Path) -> PathBuf {
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("json");
-    let suffix = JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.with_extension(format!(
-        "{}.tmp-{}-{}",
-        extension,
-        std::process::id(),
-        suffix
-    ))
 }

@@ -98,3 +98,6 @@ winapi = { version = "0.3", features = [
   "winnt",
   "winbase",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

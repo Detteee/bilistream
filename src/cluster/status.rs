@@ -5,7 +5,9 @@ use super::election::{
     configured_node_ids, is_stale,
 };
 use super::fencing::collect_local_snapshot;
-use super::state::{cluster_state_read, cluster_state_write, now_secs, ClusterState};
+use super::state::{
+    cluster_state_read, cluster_state_write, now_secs, ClusterState, PeerOwnerView,
+};
 use super::types::*;
 use super::version::monitored_config_version;
 use crate::config::Config;
@@ -184,6 +186,7 @@ pub(crate) fn build_status_from_state(
     clear_invalid_forced_owner(state, cfg, now, &configured);
 
     let chosen = choose_owner_with_configured(state, cfg, now, &configured);
+    hold_new_local_owner(state, &chosen, cfg);
     state.active_owner = chosen.clone();
     cache_current_owner_monitor_state(state);
     state.lease_until = if chosen.is_some() {
@@ -266,6 +269,9 @@ pub(crate) fn ensure_configured_nodes(
         .retain(|node_id, _| configured.contains(node_id.as_str()));
     state
         .peer_heartbeat_acks
+        .retain(|node_id, _| configured.contains(node_id.as_str()));
+    state
+        .peer_owner_views
         .retain(|node_id, _| configured.contains(node_id.as_str()));
 
     state
@@ -419,6 +425,27 @@ pub(crate) fn merge_direct_peer_status(
         state
             .peer_heartbeat_acks
             .insert(peer_node_id.to_string(), received_at);
+        state.peer_owner_views.insert(
+            peer_node_id.to_string(),
+            PeerOwnerView {
+                owner: status.active_owner.clone().filter(|_| status.enabled),
+                received_at,
+                members: status
+                    .nodes
+                    .iter()
+                    .map(|node| node.node_id.clone())
+                    .collect(),
+                confirmed_by_heartbeat: true,
+            },
+        );
+    } else if let Some(view) = state.peer_owner_views.get_mut(peer_node_id) {
+        // A control reply can revoke a previous confirmation, but cannot
+        // refresh it: only the heartbeat exchange supplies fresh evidence.
+        let owner = status.active_owner.clone().filter(|_| status.enabled);
+        if view.owner != owner {
+            view.confirmed_by_heartbeat = false;
+        }
+        view.owner = owner;
     }
     let prev_gate = owner_danmaku_gate(&state);
     merge_cluster_status_into(
@@ -480,6 +507,7 @@ pub(crate) fn merge_cluster_status_into(
         node.is_local = false;
         state.nodes.insert(node.node_id.clone(), node);
     }
+    let previous_owner = state.active_owner.clone();
     adopt_owner_view(
         state,
         status.active_owner,
@@ -487,7 +515,22 @@ pub(crate) fn merge_cluster_status_into(
         cfg.map(|cfg| cfg.cluster.auto_failover).unwrap_or(true),
         direct_peer_id,
     );
+    if let Some(cfg) = cfg {
+        let chosen = state.active_owner.clone();
+        state.active_owner = previous_owner;
+        hold_new_local_owner(state, &chosen, cfg);
+        state.active_owner = chosen;
+    }
     cache_current_owner_monitor_state(state);
+}
+
+fn hold_new_local_owner(state: &mut ClusterState, chosen: &Option<String>, cfg: &Config) {
+    if chosen.as_deref() == Some(cfg.cluster.node_id.as_str())
+        && state.active_owner != *chosen
+        && state.active_owner.is_some()
+    {
+        state.pending_handoff_source = state.active_owner.clone();
+    }
 }
 
 pub(crate) fn merged_status_last_seen(

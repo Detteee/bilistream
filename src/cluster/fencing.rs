@@ -52,8 +52,14 @@ pub(crate) fn state_monitoring_block_reason(
                 .unwrap_or("node_fault_latched")
         ));
     }
+    if state.local_execution_held || state.pending_handoff_source.is_some() {
+        return Some("集群节点交接尚未确认，暂停本节点执行".to_string());
+    }
     if !state_has_fresh_quorum(state, cfg, now) {
         return Some("集群心跳多数派已丢失".to_string());
+    }
+    if !state_has_owner_agreement(state, cfg, now) {
+        return Some("集群活跃节点存在分歧或尚未获得多数节点确认".to_string());
     }
     None
 }
@@ -73,11 +79,49 @@ pub(crate) fn state_has_fresh_quorum(state: &ClusterState, cfg: &Config, now: u6
         .peer_heartbeat_acks
         .iter()
         .filter(|(node_id, acknowledged_at)| {
-            configured.contains(node_id.as_str())
-                && now.saturating_sub(**acknowledged_at) <= timeout
+            node_id.as_str() != cfg.cluster.node_id
+                && configured.contains(node_id.as_str())
+                && now
+                    .checked_sub(**acknowledged_at)
+                    .is_some_and(|age| age <= timeout)
         })
         .count();
     1 + fresh_peers >= required
+}
+
+/// Fresh, direct owner observations are stronger than connectivity, but are
+/// still not quorum-granted leases. In particular, this cannot fence a paused
+/// process or an external publisher. Never use the display lease as authority.
+pub(crate) fn state_has_owner_agreement(state: &ClusterState, cfg: &Config, now: u64) -> bool {
+    let Some(owner) = state.active_owner.as_deref() else {
+        return false;
+    };
+    let members = configured_node_ids(cfg);
+    let timeout = cfg.cluster.failover_timeout_secs.max(1);
+    let mut confirmations = 1;
+    for (peer, view) in &state.peer_owner_views {
+        if peer == &cfg.cluster.node_id || !members.contains(peer.as_str()) {
+            continue;
+        }
+        if now
+            .checked_sub(view.received_at)
+            .is_none_or(|age| age > timeout)
+        {
+            continue;
+        }
+        // Membership changes invalidate old confirmations, and a known
+        // disagreement vetoes execution even if other peers form a majority.
+        if view.members.len() != members.len()
+            || !members.iter().all(|member| view.members.contains(*member))
+            || view.owner.as_deref().is_some_and(|claim| claim != owner)
+        {
+            return false;
+        }
+        if view.confirmed_by_heartbeat && view.owner.as_deref() == Some(owner) {
+            confirmations += 1;
+        }
+    }
+    confirmations > members.len() / 2
 }
 
 pub fn local_may_push(cfg: &Config, stream: Option<ClusterStreamIdentity>) -> bool {

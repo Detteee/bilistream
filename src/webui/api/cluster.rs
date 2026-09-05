@@ -182,7 +182,7 @@ pub async fn cluster_set_auto_failover(
     let should_propagate = payload.propagate.unwrap_or(true);
     let old_cluster = cfg.cluster.clone();
     cfg.cluster.auto_failover = payload.enabled;
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
@@ -285,7 +285,7 @@ pub async fn cluster_apply_public_status(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     cfg.cluster.public_status = payload;
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -314,7 +314,7 @@ pub async fn cluster_set_public_status(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let unchanged = cfg.cluster.public_status == payload.config;
     cfg.cluster.public_status = payload.config.clone();
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -863,7 +863,7 @@ pub(crate) async fn apply_cluster_membership_locally(
     let mut cfg = load_config().await.map_err(|e| e.to_string())?;
     apply_cluster_membership_to_config(&mut cfg.cluster, payload);
 
-    crate::config::save_config(&cfg)
+    crate::config::save_config(&mut cfg)
         .await
         .map_err(|e| e.to_string())?;
 

@@ -135,7 +135,7 @@ pub struct FfmpegProcess {
     session: FfmpegSession,
     tasks: SessionTasks,
     children: Vec<Child>,
-    ingest: Option<Child>,
+    ingest: Option<IngestProcess>,
     pid: Option<u32>,
     cache_dir: Option<PathBuf>,
 }
@@ -198,22 +198,46 @@ pub async fn spawn_session_task(
     }
 }
 
-async fn kill_child_tree(child: &mut Child) {
-    if let Some(pid) = child.id() {
+// Own the process group as well as the direct child: cancellation during startup
+// must also terminate streamlink's muxer.
+struct IngestProcess(Child);
+
+impl Drop for IngestProcess {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0.id() {
+            // SAFETY: spawn_piped_ingest creates a separate process group whose
+            // ID is the unreaped child's PID. No borrowed memory crosses FFI.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+    }
+}
+
+async fn kill_child_tree(child: &mut IngestProcess) {
+    if let Some(pid) = child.0.id() {
         #[cfg(unix)]
         {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &format!("-{pid}")])
-                .output();
+            // SAFETY: this child is the leader of its own process group.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
         }
         #[cfg(windows)]
         {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .output();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await;
         }
     }
-    let _ = child.kill().await;
+    let _ = child.0.kill().await;
+    let _ = child.0.wait().await;
 }
 
 fn configure_ingest_process_group(cmd: &mut Command) {
@@ -226,11 +250,14 @@ fn configure_ingest_process_group(cmd: &mut Command) {
 async fn spawn_piped_ingest(
     ingest: &PipedIngest,
     log_level: &str,
-) -> Option<(Child, tokio::process::ChildStdout)> {
+    session: FfmpegSession,
+    tasks: &mut SessionTasks,
+) -> Option<(IngestProcess, tokio::process::ChildStdout)> {
     let mut cmd = Command::new(&ingest.program);
     configure_tokio_no_window(&mut cmd);
     configure_ingest_process_group(&mut cmd);
     cmd.args(&ingest.args)
+        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -242,10 +269,16 @@ async fn spawn_piped_ingest(
                 set_high_priority(pid);
             }
             if let Some(stderr) = child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(stderr, log_level.to_string(), "streamlink", None);
+                tasks.0.push(spawn_ffmpeg_stderr_monitor(
+                    session,
+                    stderr,
+                    log_level.to_string(),
+                    "streamlink",
+                    None,
+                ));
             }
             let stdout = child.stdout.take()?;
-            Some((child, stdout))
+            Some((IngestProcess(child), stdout))
         }
         Err(e) => {
             tracing::error!("❌ 启动 streamlink 摄取失败: {}", e);
@@ -1663,8 +1696,12 @@ async fn spawn_direct_ffmpeg(
     let ffmpeg_cmd = get_ffmpeg_command();
     tracing::info!("⏱️ HLS 缓存已关闭: 直接转播");
 
+    let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+    let mut tasks = SessionTasks::default();
     let ingest_spawned = match &source {
-        FfmpegSource::Piped(piped) => spawn_piped_ingest(piped, &log_level).await,
+        FfmpegSource::Piped(piped) => {
+            spawn_piped_ingest(piped, &log_level, session, &mut tasks).await
+        }
         FfmpegSource::HlsUrl(_) => None,
     };
     if matches!(source, FfmpegSource::Piped(_)) && ingest_spawned.is_none() {
@@ -1702,8 +1739,6 @@ async fn spawn_direct_ffmpeg(
 
     match cmd.spawn() {
         Ok(mut child) => {
-            let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
-            let mut tasks = SessionTasks::default();
             let pid = child.id();
             tracing::info!("🚀 ffmpeg 进程已启动 (PID: {:?})", pid);
 
@@ -1777,8 +1812,12 @@ async fn spawn_cached_ffmpeg(
         playlist_path.display()
     );
 
+    let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+    let mut tasks = SessionTasks::default();
     let ingest_spawned = match &source {
-        FfmpegSource::Piped(piped) => spawn_piped_ingest(piped, &log_level).await,
+        FfmpegSource::Piped(piped) => {
+            spawn_piped_ingest(piped, &log_level, session, &mut tasks).await
+        }
         FfmpegSource::HlsUrl(_) => None,
     };
     if matches!(source, FfmpegSource::Piped(_)) && ingest_spawned.is_none() {
@@ -1832,8 +1871,6 @@ async fn spawn_cached_ffmpeg(
 
     match cache_cmd.spawn() {
         Ok(mut cache_child) => {
-            let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
-            let mut tasks = SessionTasks::default();
             let cache_pid = cache_child.id();
             tracing::info!("🚀 ffmpeg HLS 缓存写入进程已启动 (PID: {:?})", cache_pid);
 
@@ -1984,6 +2021,21 @@ pub async fn ffmpeg(
         return None;
     }
 
+    // Recheck cluster execution while holding the same lock as demotion's stop.
+    // A task queued on this lock before a handoff must not start afterwards.
+    let cfg = match crate::config::load_config()
+        .await
+        .map_err(|e| e.to_string())
+    {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            tracing::warn!("FFmpeg startup cancelled: {error}");
+            return None;
+        }
+    };
+    if !crate::cluster::local_monitoring_allowed(&cfg) {
+        return None;
+    }
     let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
     let latency_secs = cache.latency_secs();
 
@@ -2120,6 +2172,7 @@ mod tests {
             session,
             tasks: SessionTasks::default(),
             children: Vec::new(),
+            ingest: None,
             pid: None,
             cache_dir: None,
         }

@@ -145,16 +145,6 @@ fn normalize_managed_platforms(mut platforms: HashMap<String, String>) -> HashMa
     platforms
 }
 
-fn reject_empty_platforms() -> Json<ApiResponse<()>> {
-    Json(ApiResponse {
-        success: false,
-        data: None,
-        message: Some(
-            "At least one platform (YouTube, Twitch, or Niconico) must be specified".to_string(),
-        ),
-    })
-}
-
 pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
     match read_managed_json::<AreasData>("areas.json") {
         Ok(areas) => Json(ApiResponse {
@@ -204,19 +194,25 @@ pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
     }
 }
 
-fn managed_mutation_response(result: Result<(), String>, file_name: &str, message: &str) -> Json<ApiResponse<()>> {
+fn managed_mutation_response(
+    result: Result<(), String>,
+    file_name: &str,
+    message: &str,
+) -> Json<ApiResponse<()>> {
     match result {
         Ok(()) => managed_json_success(file_name, message),
         Err(error) => managed_json_error(error),
     }
-
 }
 
 pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
     let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
-            return Err("At least one platform (YouTube or Twitch) must be specified".to_string());
+            return Err(
+                "At least one platform (YouTube, Twitch, or Niconico) must be specified"
+                    .to_string(),
+            );
         }
         if data
             .channels
@@ -244,7 +240,10 @@ pub async fn update_channel_manage(
     let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
-            return Err("At least one platform (YouTube or Twitch) must be specified".to_string());
+            return Err(
+                "At least one platform (YouTube, Twitch, or Niconico) must be specified"
+                    .to_string(),
+            );
         }
         let channel = data
             .channels

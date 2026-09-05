@@ -608,6 +608,7 @@ mod tests {
 
     fn status_cache_test_config() -> Config {
         Config {
+            snapshot: None,
             auto_cover: false,
             enable_anti_collision: false,
             interval: 60,
@@ -956,11 +957,8 @@ mod tests {
 
     #[test]
     fn disabled_platform_monitors_keep_configured_channel_status() {
-        update_status_cache(StatusData::default());
-
-        refresh_status_cache_config_from(&status_cache_test_config());
-
-        let status = get_status_cache().expect("status cache should be initialized");
+        let mut status = StatusData::default();
+        crate::webui::state::apply_status_cache_config(&mut status, &status_cache_test_config());
         let youtube = status.youtube.expect("youtube status should be present");
         let twitch = status.twitch.expect("twitch status should be present");
 

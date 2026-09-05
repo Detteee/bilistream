@@ -16,12 +16,13 @@ use bilistream::plugins::{
     check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
     clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
     get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_configured, niconico_channel_identity,
-    resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
-    store_prefetched_playable_stream, take_prefetched_playable_stream, streamlink_ingest,
-    wait_config_update_or_timeout, was_manual_restart, was_manual_stop, FfmpegCacheOptions,
-    FfmpegSource, PipedIngest, PriorityChannelPlatform, BILI_START_TEMP_BAN_PREFIX,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_channel_identity,
+    niconico_configured, resolve_playable_priority_channel, run_danmaku, send_danmaku,
+    set_manual_restart, should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku,
+    stop_ffmpeg, store_prefetched_playable_stream, streamlink_ingest,
+    take_prefetched_playable_stream, wait_config_update_or_timeout, was_manual_restart,
+    was_manual_stop, FfmpegCacheOptions, FfmpegSource, PipedIngest, PriorityChannelPlatform,
+    BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
@@ -1195,14 +1196,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
                             .unwrap_or(&error);
                         tracing::error!("B站开播失败: {}", message);
-                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX) {
-                            if disable_monitors_after_bili_start_temp_ban(&mut cfg) {
-                                tracing::warn!(
-                                    "检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控"
-                                );
-                                if let Err(save_err) = save_config(&mut cfg).await {
-                                    tracing::error!("保存配置失败: {}", save_err);
-                                }
+                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
+                            && disable_monitors_after_bili_start_temp_ban(&mut cfg)
+                        {
+                            tracing::warn!(
+                                "检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控"
+                            );
+                            if let Err(save_err) = save_config(&mut cfg).await {
+                                tracing::error!("保存配置失败: {}", save_err);
                             }
                         }
                         tracing::warn!("⚠️ 将在下次循环重试");
@@ -1714,7 +1715,8 @@ async fn monitor_priority_channel_background(
                     // sync outlive it, without awaiting peer I/O under the supervisor lock.
                     tokio::spawn(async move {
                         if bilistream::config::config_is_current(&sync_cfg) {
-                            let message = cluster::sync_monitored_config_after_change(&sync_cfg).await;
+                            let message =
+                                cluster::sync_monitored_config_after_change(&sync_cfg).await;
                             if !message.is_empty() {
                                 tracing::info!("优先频道自动切换{}", message);
                             }
@@ -2303,6 +2305,7 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
+            snapshot: None,
             auto_cover: false,
             enable_anti_collision: false,
             interval: 60,
