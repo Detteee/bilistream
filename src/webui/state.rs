@@ -229,20 +229,20 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
             } else {
                 cached_status.twitch = None;
             }
-        if let Some(ref mut priority_status) = cached_status.priority_channel {
-            priority_status.enabled = cfg.priority_channel.enabled;
-            priority_status.channel_name = cfg.priority_channel.channel_name.clone();
-            priority_status.default_area = cfg.priority_channel.default_area;
-        } else {
-            cached_status.priority_channel = Some(PriorityChannelStatus {
-                enabled: cfg.priority_channel.enabled,
-                channel_name: cfg.priority_channel.channel_name.clone(),
-                is_live: false,
-                platform: None,
-                title: None,
-                default_area: cfg.priority_channel.default_area,
-            });
-        }
+            if let Some(ref mut priority_status) = cached_status.priority_channel {
+                priority_status.enabled = cfg.priority_channel.enabled;
+                priority_status.channel_name = cfg.priority_channel.channel_name.clone();
+                priority_status.default_area = cfg.priority_channel.default_area;
+            } else {
+                cached_status.priority_channel = Some(PriorityChannelStatus {
+                    enabled: cfg.priority_channel.enabled,
+                    channel_name: cfg.priority_channel.channel_name.clone(),
+                    is_live: false,
+                    platform: None,
+                    title: None,
+                    default_area: cfg.priority_channel.default_area,
+                });
+            }
         });
     });
 }

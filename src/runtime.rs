@@ -17,9 +17,9 @@ use bilistream::plugins::{
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
     resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
-    wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
-    FfmpegCacheOptions, BILI_START_TEMP_BAN_PREFIX,
-    store_prefetched_playable_stream, take_prefetched_playable_stream, PriorityChannelPlatform,
+    store_prefetched_playable_stream, take_prefetched_playable_stream,
+    wait_config_update_or_timeout, was_manual_restart, was_manual_stop, FfmpegCacheOptions,
+    PriorityChannelPlatform, BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
@@ -1551,7 +1551,7 @@ async fn monitor_priority_channel_background(current_channel_name: String) -> Re
                 updated_cfg.twitch.channel_id = cfg.priority_channel.twitch_channel_id.clone();
 
                 // Save updated config
-                if let Err(e) = save_config(&updated_cfg).await {
+                if let Err(e) = save_config(&mut updated_cfg).await {
                     {
                         let error_msg = format!("保存优先频道配置失败: {}", e);
                         tracing::error!("{}", error_msg);
