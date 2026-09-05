@@ -33,7 +33,7 @@ async fn graceful_shutdown() {
 static NO_LIVE: AtomicBool = AtomicBool::new(false);
 // Use compact representation to reduce memory footprint
 static LAST_MESSAGE: Mutex<Option<Box<str>>> = Mutex::new(None);
-static LAST_COLLISION: Mutex<Option<(Box<str>, i32, Box<str>)>> = Mutex::new(None);
+static LAST_COLLISION: Mutex<Option<Box<str>>> = Mutex::new(None);
 const DUAL_COLLISION_PLATFORM: &str = "双平台";
 const MESSAGE_TIME_PATTERN: &str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}";
 const MESSAGE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -243,7 +243,7 @@ async fn skip_stream_if_banned_keyword(
     let Some(keyword) = keywords.iter().find(|k| {
         stream_title
             .as_ref()
-            .map_or(false, |t| t.contains(k.as_str()))
+            .is_some_and(|t| t.contains(k.as_str()))
     }) else {
         return;
     };
@@ -981,11 +981,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     {
                         tracing::error!("Failed to send danmaku: {}", e);
                     }
-                } else {
-                    if let Err(e) = send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
-                    {
-                        tracing::error!("Failed to send danmaku: {}", e);
-                    }
+                } else if let Err(e) =
+                    send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
+                {
+                    tracing::error!("Failed to send danmaku: {}", e);
                 }
             } else if !bili_is_live {
                 // B站 stream was stopped
@@ -1027,21 +1026,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     cfg.twitch.enable_monitor,
                 );
                 update_last_status_message(current_message);
-            } else {
-                if !NO_LIVE.load(Ordering::SeqCst) {
-                    let current_message = box_message(
-                        &yt_stream.channel_name,
-                        cfg.youtube.enable_monitor,
-                        None,
-                        None, // No title when not streaming
-                        &tw_stream.channel_name,
-                        cfg.twitch.enable_monitor,
-                    );
-                    print!("{}", current_message);
-                    let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
-                    *last = Some(current_message.into_boxed_str());
-                    NO_LIVE.store(true, Ordering::SeqCst);
-                }
+            } else if !NO_LIVE.load(Ordering::SeqCst) {
+                let current_message = box_message(
+                    &yt_stream.channel_name,
+                    cfg.youtube.enable_monitor,
+                    None,
+                    None, // No title when not streaming
+                    &tw_stream.channel_name,
+                    cfg.twitch.enable_monitor,
+                );
+                print!("{}", current_message);
+                let mut last = recover_mutex_lock(&LAST_MESSAGE, "last message");
+                *last = Some(current_message.into_boxed_str());
+                NO_LIVE.store(true, Ordering::SeqCst);
             }
             if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                 enable_danmaku_commands(true);
@@ -1089,7 +1086,7 @@ fn box_message(
 ) -> String {
     // Calculate YouTube line
     let yt_line = if !yt_monitor_enabled {
-        format!("YT: 监听已关闭")
+        "YT: 监听已关闭".to_string()
     } else if let Some(scheduled_time) = scheduled_time {
         format!(
             "YT: {} 未直播，计划于 {} 开始，",
@@ -1105,7 +1102,7 @@ fn box_message(
 
     // Calculate Twitch line
     let tw_line = if !tw_monitor_enabled {
-        format!("TW: 监听已关闭")
+        "TW: 监听已关闭".to_string()
     } else {
         format!("TW: {} 未直播", tw_channel)
     };
@@ -1493,18 +1490,14 @@ async fn handle_collisions(
                 let last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
                 last_collision
                     .as_ref()
-                    .map(|(_, _, platform)| platform.as_ref() == DUAL_COLLISION_PLATFORM)
+                    .map(|platform| platform.as_ref() == DUAL_COLLISION_PLATFORM)
                     .unwrap_or(false)
             };
 
             if !already_in_dual_collision {
                 {
                     let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
-                    *last_collision = Some((
-                        yt_room_name.clone().into_boxed_str(),
-                        yt_room_id,
-                        DUAL_COLLISION_PLATFORM.into(),
-                    ));
+                    *last_collision = Some(DUAL_COLLISION_PLATFORM.into());
                 }
 
                 tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
@@ -1562,18 +1555,14 @@ async fn handle_collisions(
                 let last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
                 last_collision
                     .as_ref()
-                    .map(|(_, _, platform)| platform.as_ref() == target_name.as_str())
+                    .map(|platform| platform.as_ref() == target_name.as_str())
                     .unwrap_or(false)
             };
 
             if !other_live && !already_in_collision {
                 {
                     let mut last_collision = recover_mutex_lock(&LAST_COLLISION, "last collision");
-                    *last_collision = Some((
-                        room_name.clone().into_boxed_str(),
-                        room_id,
-                        target_name.clone().into_boxed_str(),
-                    ));
+                    *last_collision = Some(target_name.clone().into_boxed_str());
                 }
 
                 tracing::warn!(

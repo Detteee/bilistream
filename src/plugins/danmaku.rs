@@ -518,11 +518,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
                     // Check if update is needed
                     let needs_update = if platform == "YT" {
-                        &config.youtube.channel_id != channel_id_str
+                        config.youtube.channel_id != channel_id_str
                             || config.youtube.channel_name != resolved_channel_name
                             || config.youtube.area_v2 != area_id
                     } else if platform == "TW" {
-                        &config.twitch.channel_id != channel_id_str
+                        config.twitch.channel_id != channel_id_str
                             || config.twitch.channel_name != resolved_channel_name
                             || config.twitch.area_v2 != area_id
                     } else {
@@ -692,9 +692,8 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             Err(e) => {
                 tracing::error!("更新配置时出错: {}", e);
                 let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
-                return;
             }
-        };
+        }
     } else {
         tracing::error!("指令错误: {}", danmaku_command);
         let _ = bilibili::send_danmaku(&cfg, &format!("错误：不支持的平台 {}", platform)).await;

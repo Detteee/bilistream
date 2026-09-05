@@ -260,7 +260,7 @@ pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<
 
     // Make the GET request to check the live status
     let res: Value = client
-        .get(&format!(
+        .get(format!(
             "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
             query_string
         ))
@@ -299,7 +299,7 @@ pub async fn get_bili_live_time(
     let query_string = super::wbi::signed_query(&raw_client, params).await?;
 
     let res: Value = client
-        .get(&format!(
+        .get(format!(
             "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
             query_string
         ))

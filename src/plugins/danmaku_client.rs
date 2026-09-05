@@ -313,7 +313,7 @@ impl BilibiliDanmakuClient {
         };
 
         let response: Value = client
-            .get(&format!(
+            .get(format!(
                 "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?{}",
                 query_string
             ))
@@ -440,7 +440,7 @@ impl BilibiliDanmakuClient {
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("Unknown");
                             let uid = user_info
-                                .and_then(|u| u.get(0))
+                                .and_then(|u| u.first())
                                 .and_then(|n| n.as_u64())
                                 .unwrap_or(0);
 

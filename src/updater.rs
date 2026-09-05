@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_REPO: &str = "Detteee/bilistream";
@@ -53,26 +53,22 @@ pub async fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error + Send + Sy
     let has_update = compare_versions(latest_version, CURRENT_VERSION) > 0;
 
     // Determine the appropriate asset for the current platform
-    let (asset_name, download_url, asset_size) = if has_update {
-        get_platform_asset(&release.assets)?
-    } else {
-        (None, None, None)
-    };
+    let asset = has_update
+        .then(|| get_platform_asset(&release.assets))
+        .flatten();
     Ok(UpdateInfo {
         current_version: CURRENT_VERSION.to_string(),
         latest_version: latest_version.to_string(),
         has_update,
-        download_url,
+        download_url: asset.map(|asset| asset.browser_download_url.clone()),
         release_notes: Some(release.body),
-        asset_name,
-        asset_size,
+        asset_name: asset.map(|asset| asset.name.clone()),
+        asset_size: asset.map(|asset| asset.size),
     })
 }
 
 /// Get the appropriate download asset for the current platform
-fn get_platform_asset(
-    assets: &[ReleaseAsset],
-) -> Result<(Option<String>, Option<String>, Option<u64>), Box<dyn Error + Send + Sync>> {
+fn get_platform_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
     // Tauri build gets the tauri-specific archive; regular build gets the standard one
     let platform_suffix = if cfg!(feature = "tauri-build") {
         if cfg!(target_os = "windows") {
@@ -87,17 +83,13 @@ fn get_platform_asset(
     } else if cfg!(target_os = "macos") {
         "_for_macos.tar.gz"
     } else {
-        return Ok((None, None, None));
+        return None;
     };
 
     // Find the asset that matches the platform
     for asset in assets {
         if asset.name.ends_with(platform_suffix) || asset.name.contains(platform_suffix) {
-            return Ok((
-                Some(asset.name.clone()),
-                Some(asset.browser_download_url.clone()),
-                Some(asset.size),
-            ));
+            return Some(asset);
         }
     }
 
@@ -110,17 +102,9 @@ fn get_platform_asset(
         "macos"
     };
 
-    for asset in assets {
-        if asset.name.to_lowercase().contains(platform_keyword) {
-            return Ok((
-                Some(asset.name.clone()),
-                Some(asset.browser_download_url.clone()),
-                Some(asset.size),
-            ));
-        }
-    }
-
-    Ok((None, None, None))
+    assets
+        .iter()
+        .find(|asset| asset.name.to_lowercase().contains(platform_keyword))
 }
 
 // Only update the binary and webui — never overwrite user config/data files.
@@ -213,7 +197,7 @@ pub async fn download_and_install_update(
 /// Install the downloaded update
 fn install_update(
     archive_path: &PathBuf,
-    install_dir: &PathBuf,
+    install_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     #[cfg(target_os = "windows")]
     {
@@ -231,7 +215,7 @@ fn install_update(
 #[cfg(target_os = "windows")]
 fn install_windows_update(
     archive_path: &PathBuf,
-    install_dir: &PathBuf,
+    install_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Extract zip file
     let file = fs::File::open(archive_path)?;
@@ -307,7 +291,7 @@ del "%~f0"
 #[cfg(not(target_os = "windows"))]
 fn install_unix_update(
     archive_path: &PathBuf,
-    install_dir: &PathBuf,
+    install_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     use std::process::Command;
 

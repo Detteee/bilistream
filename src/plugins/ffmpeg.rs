@@ -430,8 +430,7 @@ fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
     );
     update_network_idle_tracking(transfer_idle);
 
-    let check_stream_time_frozen =
-        !hls_cache_active || (hls_cache_active && push_active && transfer_idle);
+    let check_stream_time_frozen = !hls_cache_active || (push_active && transfer_idle);
 
     if check_stream_time_frozen {
         let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);

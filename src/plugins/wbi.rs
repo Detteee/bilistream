@@ -131,17 +131,17 @@ async fn get_wbi_keys(agent: &reqwest::Client) -> Result<(String, String), Box<d
     let wbi_img = nav_data
         .get("data")
         .and_then(|d| d.get("wbi_img"))
-        .ok_or_else(|| "Missing wbi_img in nav response")?;
+        .ok_or("Missing wbi_img in nav response")?;
 
     let img_url = wbi_img
         .get("img_url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing img_url in wbi_img")?;
+        .ok_or("Missing img_url in wbi_img")?;
 
     let sub_url = wbi_img
         .get("sub_url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing sub_url in wbi_img")?;
+        .ok_or("Missing sub_url in wbi_img")?;
 
     let img_key = wbi_key_from_url(img_url, "img_url")?;
     let sub_key = wbi_key_from_url(sub_url, "sub_url")?;

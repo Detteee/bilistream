@@ -135,7 +135,7 @@ impl Youtube {
         ),
         Box<dyn Error>,
     > {
-        Ok(get_youtube_status(&self.channel_id).await?)
+        get_youtube_status(&self.channel_id).await
     }
 }
 
@@ -524,12 +524,11 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 
         let title = title_str
             .lines()
-            .filter(|line| {
+            .rfind(|line| {
                 !line.trim().is_empty()
                     && !line.starts_with("WARNING")
                     && !line.starts_with("ERROR")
             })
-            .next_back()
             .map(strip_scheduled_title_suffix)
             .filter(|s| !s.is_empty());
 
