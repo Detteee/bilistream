@@ -14,8 +14,12 @@ use super::youtube::{get_youtube_channel_metadata, get_youtube_status};
 /// again. After this window the main loop asks yt-dlp/streamlink itself.
 const PREFETCH_TTL: Duration = Duration::from_secs(120);
 
-static PREFETCHED_PLAYABLE_STREAM: Mutex<Option<(Instant, PrefetchedPlayableStream)>> =
-    Mutex::new(None);
+struct PrefetchedSlot {
+    config: Config,
+    value: Option<(Instant, PrefetchedPlayableStream)>,
+}
+
+static PREFETCHED_PLAYABLE_STREAM: Mutex<Option<PrefetchedSlot>> = Mutex::new(None);
 
 /// The platform the priority channel turned out to be live on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,15 +110,22 @@ impl PriorityChannelLiveness {
     }
 }
 
-fn prefetched_slot() -> MutexGuard<'static, Option<(Instant, PrefetchedPlayableStream)>> {
+fn prefetched_slot() -> MutexGuard<'static, Option<PrefetchedSlot>> {
     PREFETCHED_PLAYABLE_STREAM
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+pub fn clear_prefetched_playable_stream() {
+    *prefetched_slot() = None;
+}
+
 /// Park a confirmed URL for the restream that is about to restart.
-pub fn store_prefetched_playable_stream(stream: PrefetchedPlayableStream) {
-    *prefetched_slot() = Some((Instant::now(), stream));
+pub fn store_prefetched_playable_stream(stream: PrefetchedPlayableStream, config: &Config) {
+    *prefetched_slot() = Some(PrefetchedSlot {
+        config: config.clone(),
+        value: Some((Instant::now(), stream)),
+    });
 }
 
 /// Take the parked URL if it is for this platform and channel and still fresh.
@@ -122,8 +133,16 @@ pub fn take_prefetched_playable_stream(
     platform: PriorityChannelPlatform,
     channel_id: &str,
 ) -> Option<PrefetchedPlayableStream> {
+    let mut slot = prefetched_slot();
+    if slot
+        .as_ref()
+        .is_some_and(|slot| !crate::config::config_is_current(&slot.config))
+    {
+        *slot = None;
+    }
+    let slot = slot.as_mut()?;
     take_matching_prefetch(
-        &mut prefetched_slot(),
+        &mut slot.value,
         platform,
         channel_id,
         Instant::now(),

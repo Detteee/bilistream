@@ -425,7 +425,7 @@ pub async fn update_priority_channel(
     // Save config
     crate::config::save_config(&mut cfg)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(config_save_status)?;
 
     // Set config updated flag so main loop can detect the change
     set_config_updated();

@@ -13,6 +13,7 @@ pub struct StatusData {
 #[derive(Serialize, Clone, PartialEq)]
 pub struct PriorityChannelStatus {
     pub enabled: bool,
+    pub auto_restart: bool,
     pub channel_name: String,
     pub is_live: bool,
     pub platform: Option<String>,
@@ -229,13 +230,27 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
             } else {
                 cached_status.twitch = None;
             }
+            if cached_status
+                .priority_channel
+                .as_ref()
+                .is_some_and(|status| status.channel_name != cfg.priority_channel.channel_name)
+            {
+                cached_status.priority_channel = None;
+            }
             if let Some(ref mut priority_status) = cached_status.priority_channel {
                 priority_status.enabled = cfg.priority_channel.enabled;
+                priority_status.auto_restart = cfg.priority_channel.auto_restart;
+                if !priority_status.enabled {
+                    priority_status.is_live = false;
+                    priority_status.platform = None;
+                    priority_status.title = None;
+                }
                 priority_status.channel_name = cfg.priority_channel.channel_name.clone();
                 priority_status.default_area = cfg.priority_channel.default_area;
             } else {
                 cached_status.priority_channel = Some(PriorityChannelStatus {
                     enabled: cfg.priority_channel.enabled,
+                    auto_restart: cfg.priority_channel.auto_restart,
                     channel_name: cfg.priority_channel.channel_name.clone(),
                     is_live: false,
                     platform: None,

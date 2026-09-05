@@ -197,15 +197,18 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
         .map(|platform| platform.api_name().to_string());
     let title = liveness.title;
 
-    update_status_cache_with(|status| {
-        status.priority_channel = Some(PriorityChannelStatus {
-            enabled: cfg.priority_channel.enabled,
-            channel_name: cfg.priority_channel.channel_name.clone(),
-            is_live: platform.is_some(),
-            platform,
-            title,
-            default_area: cfg.priority_channel.default_area,
-        });
+    crate::config::with_current_config(cfg, || {
+        update_status_cache_with(|status| {
+            status.priority_channel = Some(PriorityChannelStatus {
+                enabled: cfg.priority_channel.enabled,
+                auto_restart: cfg.priority_channel.auto_restart,
+                channel_name: cfg.priority_channel.channel_name.clone(),
+                is_live: platform.is_some(),
+                platform,
+                title,
+                default_area: cfg.priority_channel.default_area,
+            });
+        })
     });
 
     Ok(())

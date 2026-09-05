@@ -488,6 +488,7 @@ async fn save_config_inner(
             source_keys: config_source_keys(),
         }));
         invalidate_config_cache();
+        crate::plugins::priority::clear_prefetched_playable_stream();
         crate::webui::events::publish(crate::webui::events::CONFIG);
         crate::webui::holodex_list::wake();
         crate::webui::state::request_status_refresh();
@@ -725,20 +726,34 @@ pub fn find_channel_by_name(name: &str) -> Option<Channel> {
 
 /// Updates priority channel config with channel info from channels.json
 pub fn update_priority_channel_from_channels(config: &mut Config) {
-    if config.priority_channel.enabled && !config.priority_channel.channel_name.is_empty() {
-        if let Some(channel) = find_channel_by_name(&config.priority_channel.channel_name) {
-            // Update YouTube ID or clear if not available
-            config.priority_channel.youtube_channel_id =
-                channel.platforms.youtube.unwrap_or_default();
-            // Update Twitch ID or clear if not available
-            config.priority_channel.twitch_channel_id =
-                channel.platforms.twitch.unwrap_or_default();
-        }
-    }
+    let channel = find_channel_by_name(&config.priority_channel.channel_name);
+    apply_priority_channel_lookup(&mut config.priority_channel, channel.as_ref());
+}
+
+fn apply_priority_channel_lookup(priority: &mut PriorityChannel, channel: Option<&Channel>) {
+    // A removed/renamed channel must not retain the preceding target's IDs.
+    priority.youtube_channel_id = channel
+        .and_then(|channel| channel.platforms.youtube.clone())
+        .unwrap_or_default();
+    priority.twitch_channel_id = channel
+        .and_then(|channel| channel.platforms.twitch.clone())
+        .unwrap_or_default();
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_priority_channel_clears_previous_ids() {
+        let mut priority = super::PriorityChannel {
+            youtube_channel_id: "old-yt".into(),
+            twitch_channel_id: "old-tw".into(),
+            ..Default::default()
+        };
+        super::apply_priority_channel_lookup(&mut priority, None);
+        assert!(priority.youtube_channel_id.is_empty());
+        assert!(priority.twitch_channel_id.is_empty());
+    }
+
     use super::*;
 
     fn test_dir() -> PathBuf {
