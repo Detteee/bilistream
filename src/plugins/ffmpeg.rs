@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -6,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
 
@@ -99,8 +101,26 @@ static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 // Track if a manual restart was requested (force immediate restart even if stream is live)
 static MANUAL_RESTART: AtomicBool = AtomicBool::new(false);
 
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FfmpegSession(u64);
+
+#[derive(Default)]
+struct SessionTasks(Vec<JoinHandle<()>>);
+
+impl Drop for SessionTasks {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
+}
+
 // Represents a managed ffmpeg process
 pub struct FfmpegProcess {
+    session: FfmpegSession,
+    tasks: SessionTasks,
     children: Vec<Child>,
     pid: Option<u32>,
     cache_dir: Option<PathBuf>,
@@ -130,6 +150,34 @@ impl FfmpegProcess {
             }
         }
         result
+    }
+}
+
+fn matching_process(
+    supervisor: &mut Option<FfmpegProcess>,
+    session: FfmpegSession,
+) -> Option<&mut FfmpegProcess> {
+    supervisor
+        .as_mut()
+        .filter(|process| process.session == session)
+}
+
+pub async fn current_ffmpeg_session() -> Option<FfmpegSession> {
+    FFMPEG_SUPERVISOR
+        .lock()
+        .await
+        .as_ref()
+        .map(|process| process.session)
+}
+
+/// Register work while checking ownership under the supervisor lock.
+pub async fn spawn_session_task(
+    session: FfmpegSession,
+    task: impl Future<Output = ()> + Send + 'static,
+) {
+    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+    if let Some(process) = matching_process(&mut supervisor, session) {
+        process.tasks.0.push(tokio::spawn(task));
     }
 }
 
@@ -437,86 +485,60 @@ pub async fn stop_ffmpeg() {
 
 /// Internal stop function with manual flag
 async fn stop_ffmpeg_internal(manual: bool) {
-    if manual {
-        MANUAL_STOP.store(true, Ordering::SeqCst);
-    }
+    stop_ffmpeg_matching(None, manual, async {}).await;
+}
 
-    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-    if let Some(mut process) = supervisor.take() {
-        let pid = process.pid();
-        if let Some(pid_value) = pid {
-            tracing::info!("🛑 正在停止 ffmpeg 进程组 (主 PID: {})", pid_value);
+async fn stop_ffmpeg_session(session: FfmpegSession) -> bool {
+    stop_ffmpeg_matching(Some(session), false, async {}).await
+}
+
+/// Keep replacement startup excluded until the session's external cleanup has
+/// finished (for example stopping its Bilibili room).
+pub async fn stop_ffmpeg_session_with(
+    session: FfmpegSession,
+    cleanup: impl Future<Output = ()> + Send + 'static,
+) -> bool {
+    stop_ffmpeg_matching(Some(session), false, cleanup).await
+}
+
+async fn stop_ffmpeg_matching(
+    expected: Option<FfmpegSession>,
+    manual: bool,
+    cleanup: impl Future<Output = ()> + Send + 'static,
+) -> bool {
+    // The cleanup must survive cancellation of the requesting session task.
+    tokio::spawn(async move {
+        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+        if expected.is_some_and(|session| matching_process(&mut supervisor, session).is_none()) {
+            return false;
         }
-        let cache_dir = process.cache_dir.clone();
-
-        // Try tokio kill first
-        match process.kill().await {
-            Ok(_) => {
-                // Successfully killed via tokio
+        if manual {
+            MANUAL_STOP.store(true, Ordering::SeqCst);
+        }
+        if let Some(mut process) = supervisor.take() {
+            // Abort readers/monitors before clearing shared state. Every child
+            // also has kill_on_drop enabled in case this runtime shuts down.
+            drop(std::mem::take(&mut process.tasks));
+            if let Err(error) = process.kill().await {
+                tracing::warn!("FFmpeg session cleanup failed: {error}");
             }
-            Err(e) => {
-                tracing::warn!("⚠️ Tokio 终止失败: {}，尝试系统 kill", e);
-
-                // Fallback to system kill command
-                if let Some(pid_value) = pid {
-                    #[cfg(unix)]
-                    {
-                        let kill_result = std::process::Command::new("kill")
-                            .arg("-9")
-                            .arg(pid_value.to_string())
-                            .output();
-
-                        match kill_result {
-                            Ok(output) if output.status.success() => {
-                                // Successfully killed via system kill
-                            }
-                            Ok(output) => {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                tracing::error!("❌ 系统 kill 失败: {}", stderr);
-                            }
-                            Err(e) => {
-                                tracing::error!("❌ 执行 kill 命令失败: {}", e);
-                            }
-                        }
-                    }
-
-                    #[cfg(windows)]
-                    {
-                        let kill_result = std::process::Command::new("taskkill")
-                            .arg("/F")
-                            .arg("/PID")
-                            .arg(pid_value.to_string())
-                            .output();
-
-                        match kill_result {
-                            Ok(output) if output.status.success() => {
-                                // Successfully killed via taskkill
-                            }
-                            Ok(output) => {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                tracing::error!("❌ taskkill 失败: {}", stderr);
-                            }
-                            Err(e) => {
-                                tracing::error!("❌ 执行 taskkill 失败: {}", e);
-                            }
-                        }
-                    }
+            if let Some(cache_dir) = process.cache_dir.take() {
+                if let Err(error) = tokio::fs::remove_dir_all(&cache_dir).await {
+                    tracing::warn!("Cannot remove cache {}: {error}", cache_dir.display());
                 }
             }
         }
+        reset_stopped_tracking_state();
+        cleanup.await;
+        // Hold the lock until cleanup and metric reset are complete.
+        drop(supervisor);
+        true
+    })
+    .await
+    .unwrap_or(false)
+}
 
-        // Wait a bit for process to actually terminate
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        if let Some(cache_dir) = cache_dir {
-            if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
-                tracing::warn!("⚠️ 删除 HLS 缓存目录失败 {}: {}", cache_dir.display(), e);
-            }
-        }
-        tracing::info!("✅ ffmpeg 进程已停止");
-    } else {
-        tracing::info!("没有需要停止的 ffmpeg 进程");
-    }
-
+fn reset_stopped_tracking_state() {
     // Clear speed, progress time, and rendered stats when ffmpeg stops.
     reset_stats_display();
     FFMPEG_SPEED.store(0, Ordering::Relaxed);
@@ -541,6 +563,7 @@ async fn stop_ffmpeg_internal(manual: bool) {
     LOW_SPEED_SINCE.store(0, Ordering::Relaxed);
     NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
 }
+
 const NETWORK_PANEL_WIDTH: usize = 72;
 const NETWORK_PANEL_CONTENT_WIDTH: usize = NETWORK_PANEL_WIDTH - 4;
 const NETWORK_GRAPH_WIDTH: usize = NETWORK_PANEL_CONTENT_WIDTH - 9;
@@ -1280,7 +1303,7 @@ impl CacheByteTracker {
     }
 }
 
-fn start_hls_cache_byte_monitor(cache_dir: PathBuf) {
+fn start_hls_cache_byte_monitor(session: FfmpegSession, cache_dir: PathBuf) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut tracker = CacheByteTracker::new(cache_dir.clone());
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
@@ -1290,11 +1313,20 @@ fn start_hls_cache_byte_monitor(cache_dir: PathBuf) {
 
         loop {
             interval.tick().await;
-            if !FFMPEG_HLS_CACHE_ACTIVE.load(Ordering::Relaxed) || !cache_dir.exists() {
+            let Ok((next_tracker, sample)) = tokio::task::spawn_blocking(move || {
+                let sample = tracker.sample();
+                (tracker, sample)
+            })
+            .await
+            else {
+                break;
+            };
+            tracker = next_tracker;
+            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+            if matching_process(&mut supervisor, session).is_none() {
                 break;
             }
-
-            let Some((bitrate_kbps, delta_bytes)) = tracker.sample() else {
+            let Some((bitrate_kbps, delta_bytes)) = sample else {
                 continue;
             };
             update_network_counters_from_bytes(FfmpegStatsRole::Cache, bitrate_kbps, delta_bytes);
@@ -1302,15 +1334,16 @@ fn start_hls_cache_byte_monitor(cache_dir: PathBuf) {
                 update_cache_bitrate_display(kbps);
             }
         }
-    });
+    })
 }
 
 fn spawn_ffmpeg_stderr_monitor(
+    session: FfmpegSession,
     stderr: tokio::process::ChildStderr,
     log_level: String,
     process_name: &'static str,
     stats_role: Option<FfmpegStatsRole>,
-) {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
 
@@ -1323,10 +1356,14 @@ fn spawn_ffmpeg_stderr_monitor(
                 break;
             }
 
+            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+            if matching_process(&mut supervisor, session).is_none() {
+                break;
+            }
             let chunk = String::from_utf8_lossy(&buffer[..n]);
 
             for ch in chunk.chars() {
-                if ch == '\r' {
+                if ch == '\r' || ch == '\n' {
                     handle_ffmpeg_stderr_line(
                         &line_buffer,
                         log_level.as_str(),
@@ -1334,20 +1371,12 @@ fn spawn_ffmpeg_stderr_monitor(
                         stats_role,
                     );
                     line_buffer.clear();
-                } else if ch == '\n' {
-                    handle_ffmpeg_stderr_line(
-                        &line_buffer,
-                        log_level.as_str(),
-                        process_name,
-                        stats_role,
-                    );
-                    line_buffer.clear();
-                } else {
+                } else if line_buffer.len() < 64 * 1024 {
                     line_buffer.push(ch);
                 }
             }
         }
-    });
+    })
 }
 
 fn handle_ffmpeg_stderr_line(
@@ -1484,13 +1513,12 @@ fn reset_ffmpeg_tracking_state() {
     NETWORK_IDLE_SINCE.store(0, Ordering::Relaxed);
 }
 
-fn start_ffmpeg_timeout_monitor(timeout_secs: u64) {
-    tokio::spawn(async move {
-        monitor_ffmpeg_timeout(timeout_secs).await;
-    });
+fn start_ffmpeg_timeout_monitor(session: FfmpegSession, timeout_secs: u64) -> JoinHandle<()> {
+    tokio::spawn(monitor_ffmpeg_timeout(session, timeout_secs))
 }
 
 async fn spawn_direct_ffmpeg(
+    supervisor: &mut Option<FfmpegProcess>,
     rtmp_url_key: String,
     m3u8_url: String,
     proxy: Option<String>,
@@ -1522,11 +1550,14 @@ async fn spawn_direct_ffmpeg(
 
     append_flv_output_options(&mut cmd);
     cmd.arg(rtmp_url_key)
-        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
     match cmd.spawn() {
         Ok(mut child) => {
+            let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+            let mut tasks = SessionTasks::default();
             let pid = child.id();
             tracing::info!("🚀 ffmpeg 进程已启动 (PID: {:?})", pid);
 
@@ -1539,23 +1570,30 @@ async fn spawn_direct_ffmpeg(
             mark_push_process_started();
 
             if let Some(stderr) = child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(
+                tasks.0.push(spawn_ffmpeg_stderr_monitor(
+                    session,
                     stderr,
                     log_level,
                     "ffmpeg",
                     Some(FfmpegStatsRole::Push),
-                );
+                ));
             }
 
             let process = FfmpegProcess {
+                session,
+                tasks,
                 children: vec![child],
                 pid,
                 cache_dir: None,
             };
-            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
 
-            start_ffmpeg_timeout_monitor(STARTUP_NO_STATS_TIMEOUT_SECS);
+            if let Some(process) = supervisor.as_mut() {
+                process.tasks.0.push(start_ffmpeg_timeout_monitor(
+                    session,
+                    STARTUP_NO_STATS_TIMEOUT_SECS,
+                ));
+            }
         }
         Err(e) => {
             tracing::error!("❌ 启动 ffmpeg 失败: {}", e);
@@ -1564,6 +1602,7 @@ async fn spawn_direct_ffmpeg(
 }
 
 async fn spawn_cached_ffmpeg(
+    supervisor: &mut Option<FfmpegProcess>,
     rtmp_url_key: String,
     m3u8_url: String,
     proxy: Option<String>,
@@ -1624,10 +1663,15 @@ async fn spawn_cached_ffmpeg(
         .arg(segment_pattern)
         .arg(&playlist_path);
 
-    cache_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cache_cmd
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
 
     match cache_cmd.spawn() {
         Ok(mut cache_child) => {
+            let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+            let mut tasks = SessionTasks::default();
             let cache_pid = cache_child.id();
             tracing::info!("🚀 ffmpeg HLS 缓存写入进程已启动 (PID: {:?})", cache_pid);
 
@@ -1637,32 +1681,35 @@ async fn spawn_cached_ffmpeg(
 
             reset_ffmpeg_tracking_state();
             FFMPEG_HLS_CACHE_ACTIVE.store(true, Ordering::Relaxed);
-            start_hls_cache_byte_monitor(cache_dir.clone());
+            tasks
+                .0
+                .push(start_hls_cache_byte_monitor(session, cache_dir.clone()));
 
             if let Some(stderr) = cache_child.stderr.take() {
-                spawn_ffmpeg_stderr_monitor(
+                tasks.0.push(spawn_ffmpeg_stderr_monitor(
+                    session,
                     stderr,
                     log_level.clone(),
                     "ffmpeg 缓存写入",
                     Some(FfmpegStatsRole::Cache),
-                );
+                ));
             }
 
             let process = FfmpegProcess {
+                session,
+                tasks,
                 children: vec![cache_child],
                 pid: cache_pid,
                 cache_dir: Some(cache_dir.clone()),
             };
-            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
             *supervisor = Some(process);
-            drop(supervisor);
 
             let reader_playlist_path = playlist_path.clone();
             let reader_ffmpeg_cmd = ffmpeg_cmd.clone();
             let reader_log_level = log_level.clone();
             let reader_crop = crop;
             let reader_rtmp_url_key = rtmp_url_key.clone();
-            tokio::spawn(async move {
+            let reader_task = tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(latency_secs)).await;
 
                 let mut waited_ms = 0;
@@ -1680,7 +1727,7 @@ async fn spawn_cached_ffmpeg(
                         latency_secs + CACHE_PLAYLIST_WAIT_SECS,
                         reader_playlist_path.display()
                     );
-                    stop_ffmpeg_internal(false).await;
+                    stop_ffmpeg_session(session).await;
                     return;
                 }
 
@@ -1705,9 +1752,14 @@ async fn spawn_cached_ffmpeg(
                 append_flv_output_options(&mut reader_cmd);
                 reader_cmd
                     .arg(reader_rtmp_url_key)
-                    .stdout(Stdio::piped())
+                    .kill_on_drop(true)
+                    .stdout(Stdio::null())
                     .stderr(Stdio::piped());
 
+                let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+                let Some(process) = matching_process(&mut supervisor, session) else {
+                    return;
+                };
                 match reader_cmd.spawn() {
                     Ok(mut reader_child) => {
                         let reader_pid = reader_child.id();
@@ -1717,27 +1769,32 @@ async fn spawn_cached_ffmpeg(
                         }
                         mark_push_process_started();
                         if let Some(stderr) = reader_child.stderr.take() {
-                            spawn_ffmpeg_stderr_monitor(
+                            process.tasks.0.push(spawn_ffmpeg_stderr_monitor(
+                                session,
                                 stderr,
                                 reader_log_level,
                                 "ffmpeg 延迟推流",
                                 Some(FfmpegStatsRole::Push),
-                            );
+                            ));
                         }
 
-                        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-                        if let Some(process) = supervisor.as_mut() {
-                            process.children.push(reader_child);
-                        }
+                        process.children.push(reader_child);
                     }
                     Err(e) => {
                         tracing::error!("❌ 启动延迟 RTMP ffmpeg 失败: {}", e);
-                        stop_ffmpeg_internal(false).await;
+                        drop(supervisor);
+                        stop_ffmpeg_session(session).await;
                     }
                 }
             });
 
-            start_ffmpeg_timeout_monitor(cache_startup_timeout_secs(latency_secs));
+            if let Some(process) = supervisor.as_mut() {
+                process.tasks.0.push(reader_task);
+                process.tasks.0.push(start_ffmpeg_timeout_monitor(
+                    session,
+                    cache_startup_timeout_secs(latency_secs),
+                ));
+            }
         }
         Err(e) => {
             tracing::error!("❌ 启动 ffmpeg 缓存写入进程失败: {}", e);
@@ -1754,30 +1811,54 @@ pub async fn ffmpeg(
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
     cache: FfmpegCacheOptions,
-) {
-    // Check if already running
-    if is_ffmpeg_running().await {
-        return;
+) -> Option<FfmpegSession> {
+    // Serialize the running check, process spawn, and registration with stops.
+    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+    if supervisor.is_some() {
+        return None;
     }
 
     let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
     let latency_secs = cache.latency_secs();
 
     if cache.enabled {
-        spawn_cached_ffmpeg(rtmp_url_key, m3u8_url, proxy, log_level, crop, latency_secs).await;
+        spawn_cached_ffmpeg(
+            &mut supervisor,
+            rtmp_url_key,
+            m3u8_url,
+            proxy,
+            log_level,
+            crop,
+            latency_secs,
+        )
+        .await;
     } else {
-        spawn_direct_ffmpeg(rtmp_url_key, m3u8_url, proxy, log_level, crop).await;
+        spawn_direct_ffmpeg(
+            &mut supervisor,
+            rtmp_url_key,
+            m3u8_url,
+            proxy,
+            log_level,
+            crop,
+        )
+        .await;
     }
+    supervisor.as_ref().map(|process| process.session)
 }
 
 /// Wait for the ffmpeg process to exit and return the exit status
 /// This function blocks until ffmpeg exits or is killed
 pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
+    let session = current_ffmpeg_session().await?;
+    wait_ffmpeg_session(session).await
+}
+
+pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process::ExitStatus> {
     // Poll to check if process is still running, allowing stop_ffmpeg to interrupt
     loop {
         let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
 
-        if let Some(process) = supervisor.as_mut() {
+        if let Some(process) = matching_process(&mut supervisor, session) {
             // Check if process has exited without blocking
             for child in &mut process.children {
                 match child.try_wait() {
@@ -1789,14 +1870,14 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
                         }
 
                         drop(supervisor);
-                        stop_ffmpeg_internal(false).await;
+                        stop_ffmpeg_session(session).await;
                         return Some(status);
                     }
                     Ok(None) => {}
                     Err(e) => {
                         tracing::error!("检查 ffmpeg 状态失败: {}", e);
                         drop(supervisor);
-                        stop_ffmpeg_internal(false).await;
+                        stop_ffmpeg_session(session).await;
                         return None;
                     }
                 }
@@ -1813,15 +1894,17 @@ pub async fn wait_ffmpeg() -> Option<std::process::ExitStatus> {
 }
 
 /// Background task to monitor ffmpeg timeout and kill if stuck
-async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
+async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
     loop {
-        // Check if ffmpeg is still running
-        if !is_ffmpeg_running().await {
+        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+        if matching_process(&mut supervisor, session).is_none() {
             // Process exited, stop monitoring
             break;
         }
 
-        if let Some(reason) = check_ffmpeg_stuck(timeout_secs) {
+        let stuck = check_ffmpeg_stuck(timeout_secs);
+        drop(supervisor);
+        if let Some(reason) = stuck {
             match reason {
                 StuckReason::NoStats {
                     elapsed_secs,
@@ -1853,7 +1936,7 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
                     );
                 }
             }
-            stop_ffmpeg_internal(false).await;
+            stop_ffmpeg_session(session).await;
             break;
         }
 
@@ -1865,6 +1948,56 @@ async fn monitor_ffmpeg_timeout(timeout_secs: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_process(session: FfmpegSession) -> FfmpegProcess {
+        FfmpegProcess {
+            session,
+            tasks: SessionTasks::default(),
+            children: Vec::new(),
+            pid: None,
+            cache_dir: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn replacing_session_cancels_its_sleeping_workers() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut old = empty_process(FfmpegSession(1));
+        old.tasks.0.push(tokio::spawn(async move {
+            let _on_drop = dropped_tx;
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        }));
+        started_rx.await.unwrap();
+        let mut supervisor = Some(old);
+        let _ = supervisor.replace(empty_process(FfmpegSession(2)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(matching_process(&mut supervisor, FfmpegSession(1)).is_none());
+        assert_eq!(supervisor.as_ref().unwrap().session, FfmpegSession(2));
+    }
+
+    #[tokio::test]
+    async fn stale_session_cannot_register_a_worker_for_replacement() {
+        *FFMPEG_SUPERVISOR.lock().await = Some(empty_process(FfmpegSession(2)));
+        let called = Arc::new(AtomicBool::new(false));
+        let worker_called = called.clone();
+        assert!(!stop_ffmpeg_session(FfmpegSession(1)).await);
+        spawn_session_task(FfmpegSession(1), async move {
+            worker_called.store(true, Ordering::SeqCst);
+        })
+        .await;
+        tokio::task::yield_now().await;
+        assert!(!called.load(Ordering::SeqCst));
+        let process = FFMPEG_SUPERVISOR.lock().await.take().unwrap();
+        assert_eq!(process.session, FfmpegSession(2));
+        assert!(process.tasks.0.is_empty());
+    }
 
     lazy_static::lazy_static! {
         static ref FFMPEG_COUNTER_TEST_LOCK: StdMutex<()> = StdMutex::new(());

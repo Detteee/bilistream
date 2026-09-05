@@ -34,6 +34,7 @@ pub async fn current_game_riot_ids(
     let response = spectator_client()
         .get(format!("{}/{}", SPECTATOR_V5_ACTIVE_GAME_URL, puuid))
         .header("X-Riot-Token", api_key)
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await?;
 
