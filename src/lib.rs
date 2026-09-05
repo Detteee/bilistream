@@ -2,6 +2,7 @@ pub mod app_state;
 pub mod config;
 pub mod deps;
 pub mod plugins;
+pub mod runtime;
 pub mod tray;
 pub mod updater;
 pub mod webui;

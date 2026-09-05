@@ -22,10 +22,22 @@ async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
+pub async fn bind_webui(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(SocketAddr::new(listen_bind(), port)).await
+}
+
 pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::error::Error>> {
+    start_webui_on_listener(bind_webui(port).await?, state).await
+}
+
+pub async fn start_webui_on_listener(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = listener.local_addr()?;
+    let port = addr.port();
     state.init_log_buffer();
-    api::refresh_status_cache_config().await;
-    api::start_status_refresh_worker();
+    let _status_worker = api::start_status_refresh_worker();
 
     // API router
     let api_router = Router::new()
@@ -102,8 +114,9 @@ pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::
         )
         .layer(middleware::from_fn(require_webui_auth));
 
+    let assets = static_asset_dir("webui/dist");
     let static_files =
-        ServeDir::new("webui/dist").not_found_service(ServeFile::new("webui/dist/index.html"));
+        ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html")));
 
     let response_layers = ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -120,9 +133,6 @@ pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::
         .layer(response_layers)
         .with_state(state);
 
-    let bind = listen_bind();
-    let addr = SocketAddr::new(bind, port);
-
     println!("\n🌐 Web UI 服务已启动");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📍 监听地址:     {}", addr);
@@ -134,8 +144,21 @@ pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("💡 提示: 在浏览器中打开上述地址访问\n");
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Installed assets live beside the executable. The manifest directory is a
+/// development fallback and does not depend on the shell's working directory.
+pub(crate) fn static_asset_dir(relative: &str) -> std::path::PathBuf {
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            let installed = parent.join(relative);
+            if installed.is_dir() {
+                return installed;
+            }
+        }
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }

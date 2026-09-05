@@ -20,12 +20,21 @@ pub async fn refresh_live_status_background() {
     });
 }
 
-pub fn start_status_refresh_worker() {
+pub struct StatusRefreshWorker(tokio::task::JoinHandle<()>);
+
+impl Drop for StatusRefreshWorker {
+    fn drop(&mut self) {
+        self.0.abort();
+        STATUS_REFRESH_WORKER_STARTED.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn start_status_refresh_worker() -> Option<StatusRefreshWorker> {
     if STATUS_REFRESH_WORKER_STARTED.swap(true, Ordering::SeqCst) {
-        return;
+        return None;
     }
 
-    tokio::spawn(async {
+    Some(StatusRefreshWorker(tokio::spawn(async {
         loop {
             let interval_secs = match refresh_status_snapshot().await {
                 Ok(interval_secs) => interval_secs.max(5),
@@ -42,7 +51,7 @@ pub fn start_status_refresh_worker() {
                 _ = crate::webui::state::status_refresh_requested() => {}
             }
         }
-    });
+    })))
 }
 
 pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {

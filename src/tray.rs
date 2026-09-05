@@ -47,7 +47,7 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
                 StandardItem {
                     label: "退出".to_string(),
                     activate: Box::new(|_| {
-                        std::process::exit(0);
+                        crate::runtime::request_shutdown();
                     }),
                     ..Default::default()
                 }
@@ -88,81 +88,90 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 // Windows implementation - system tray with native Windows API
 #[cfg(all(target_os = "windows", not(feature = "tauri-build")))]
 pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    use std::sync::mpsc;
-    use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        use std::sync::mpsc;
+        use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
 
-    #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-    enum Events {
-        ClickTrayIcon,
-        OpenPanel,
-        Exit,
-    }
-
-    let (tx, rx) = mpsc::channel::<Events>();
-    let tx_clone = tx.clone();
-
-    // Create tray icon with menu (icon is embedded at compile time)
-    let icon_data = include_bytes!("../icon.ico");
-    let icon = Icon::from_buffer(icon_data, None, None)?;
-
-    let _tray_icon = TrayIconBuilder::new()
-        .sender(move |e: &Events| {
-            let _ = tx_clone.send(*e);
-        })
-        .icon(icon)
-        .tooltip("Bilistream - 左键打开控制面板，右键显示菜单")
-        .on_click(Events::ClickTrayIcon)
-        .on_double_click(Events::OpenPanel)
-        .menu(
-            MenuBuilder::new()
-                .item("打开控制面板", Events::OpenPanel)
-                .separator()
-                .item("退出", Events::Exit),
-        )
-        .build()?;
-
-    tracing::info!("✅ 托盘图标创建成功");
-    tracing::info!("✅ 系统托盘已启动");
-
-    // Auto-open browser on startup
-    let url = format!("http://localhost:{}", port);
-    tracing::info!("🌐 正在打开浏览器: {}", url);
-    if let Err(e) = open::that(&url) {
-        tracing::warn!("⚠️ 无法自动打开浏览器: {}", e);
-        tracing::info!("💡 请手动访问: {}", url);
-    } else {
-        tracing::info!("✅ 浏览器已打开");
-    }
-
-    tracing::info!("💡 点击托盘图标打开控制面板，右键显示菜单");
-
-    // Spawn event handler in separate thread
-    std::thread::spawn(move || loop {
-        match rx.recv() {
-            Ok(Events::ClickTrayIcon) | Ok(Events::OpenPanel) => {
-                let url = format!("http://localhost:{}", port);
-                let _ = open::that(&url);
-            }
-            Ok(Events::Exit) => {
-                std::process::exit(0);
-            }
-            Err(_) => break,
+        #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+        enum Events {
+            ClickTrayIcon,
+            OpenPanel,
+            Exit,
         }
-    });
 
-    tracing::info!("🔄 进入Windows消息循环...");
+        let (tx, rx) = mpsc::channel::<Events>();
+        let tx_clone = tx.clone();
 
-    // Windows message loop - required for tray icon events
-    use std::ptr;
-    use winapi::um::winuser::{DispatchMessageW, GetMessageW, TranslateMessage, MSG};
+        // Create tray icon with menu (icon is embedded at compile time)
+        let icon_data = include_bytes!("../icon.ico");
+        let icon = Icon::from_buffer(icon_data, None, None).map_err(|error| error.to_string())?;
 
-    unsafe {
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        let _tray_icon = TrayIconBuilder::new()
+            .sender(move |e: &Events| {
+                if *e == Events::Exit {
+                    // Tray callbacks run on the thread owning the message queue.
+                    unsafe {
+                        winapi::um::winuser::PostQuitMessage(0);
+                    }
+                }
+                let _ = tx_clone.send(*e);
+            })
+            .icon(icon)
+            .tooltip("Bilistream - 左键打开控制面板，右键显示菜单")
+            .on_click(Events::ClickTrayIcon)
+            .on_double_click(Events::OpenPanel)
+            .menu(
+                MenuBuilder::new()
+                    .item("打开控制面板", Events::OpenPanel)
+                    .separator()
+                    .item("退出", Events::Exit),
+            )
+            .build()
+            .map_err(|error| error.to_string())?;
+
+        tracing::info!("✅ 托盘图标创建成功");
+        tracing::info!("✅ 系统托盘已启动");
+
+        // Auto-open browser on startup
+        let url = format!("http://localhost:{}", port);
+        tracing::info!("🌐 正在打开浏览器: {}", url);
+        if let Err(e) = open::that(&url) {
+            tracing::warn!("⚠️ 无法自动打开浏览器: {}", e);
+            tracing::info!("💡 请手动访问: {}", url);
+        } else {
+            tracing::info!("✅ 浏览器已打开");
         }
-    }
 
-    Ok(())
+        tracing::info!("💡 点击托盘图标打开控制面板，右键显示菜单");
+
+        // Spawn event handler in separate thread
+        std::thread::spawn(move || loop {
+            match rx.recv() {
+                Ok(Events::ClickTrayIcon) | Ok(Events::OpenPanel) => {
+                    let url = format!("http://localhost:{}", port);
+                    let _ = open::that(&url);
+                }
+                Ok(Events::Exit) => break,
+                Err(_) => break,
+            }
+        });
+
+        tracing::info!("🔄 进入Windows消息循环...");
+
+        // Windows message loop - required for tray icon events
+        use std::ptr;
+        use winapi::um::winuser::{DispatchMessageW, GetMessageW, TranslateMessage, MSG};
+
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        Ok(())
+    })
+    .await?
+    .map_err(Into::into)
 }
