@@ -685,6 +685,7 @@ mod tests {
         channel_targets: ChannelTargetState,
     ) -> ClusterNodeSnapshot {
         ClusterNodeSnapshot {
+            self_check: None,
             node_id: node_id.to_string(),
             name: node_id.to_string(),
             api_url: format!("http://{}", node_id),

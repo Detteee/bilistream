@@ -117,6 +117,17 @@ pub(crate) fn cluster_ui_signature(status: &ClusterStatus) -> u64 {
         node.health.hash(&mut hasher);
         node.draining.hash(&mut hasher);
         node.network_unstable.hash(&mut hasher);
+        node.self_check
+            .as_ref()
+            .map(|check| {
+                (
+                    &check.state,
+                    check.consecutive_failures,
+                    check.latency_ms,
+                    &check.failure,
+                )
+            })
+            .hash(&mut hasher);
         node.ffmpeg_running.hash(&mut hasher);
         node.last_seen.is_some().hash(&mut hasher);
         node.active_stream.hash(&mut hasher);
@@ -311,6 +322,7 @@ pub(crate) fn empty_node(
     now: u64,
 ) -> ClusterNodeSnapshot {
     ClusterNodeSnapshot {
+        self_check: None,
         node_id: node_id.to_string(),
         name: if name.is_empty() {
             node_id.to_string()

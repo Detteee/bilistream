@@ -24,6 +24,8 @@ pub struct ClusterStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterNodeSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_check: Option<super::self_check::SelfCheckStatus>,
     pub node_id: String,
     pub name: String,
     pub api_url: String,

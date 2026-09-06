@@ -259,6 +259,7 @@ pub(crate) async fn collect_local_snapshot(
         external_api_failures,
         network_isolated,
         observed_at,
+        self_check,
     ) = {
         let mut state = cluster_state_write();
         let now = now_secs();
@@ -287,6 +288,11 @@ pub(crate) async fn collect_local_snapshot(
                 now,
             ),
             now,
+            super::self_check::self_check_status(
+                state.local_self_check.as_ref(),
+                &cfg.cluster,
+                std::time::Instant::now(),
+            ),
         )
     };
 
@@ -341,6 +347,7 @@ pub(crate) async fn collect_local_snapshot(
     };
 
     ClusterNodeSnapshot {
+        self_check,
         node_id: cfg.cluster.node_id.clone(),
         name: cfg.cluster.node_name.clone(),
         api_url: cfg.cluster.public_api_url.clone(),
@@ -407,37 +414,60 @@ pub(crate) fn local_network_isolated_from_state(
     external_api_failures: u32,
     now: u64,
 ) -> bool {
-    local_network_isolated_with(cluster, external_api_failures, |peer| {
-        let inbound_is_fresh = state
-            .nodes
-            .get(&peer.node_id)
-            .and_then(|node| node.last_seen)
-            .is_some_and(|last_seen| {
-                now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
-            });
-        if inbound_is_fresh {
-            return false;
-        }
+    let self_check_failed = super::self_check::self_check_status(
+        state.local_self_check.as_ref(),
+        cluster,
+        std::time::Instant::now(),
+    )
+    .is_some_and(|status| status.state == super::self_check::SelfCheckState::Unreachable);
+    local_network_isolated_by(
+        cluster,
+        self_check_failed || external_api_degraded(cluster, external_api_failures),
+        |peer| {
+            let inbound_is_fresh = state
+                .nodes
+                .get(&peer.node_id)
+                .and_then(|node| node.last_seen)
+                .is_some_and(|last_seen| {
+                    now.saturating_sub(last_seen) <= cluster.failover_timeout_secs.max(1)
+                });
+            if inbound_is_fresh {
+                return false;
+            }
 
-        state
-            .heartbeat_failures
-            .get(&peer.node_id)
-            .copied()
-            .unwrap_or_default()
-            >= HEARTBEAT_FAILURE_THRESHOLD
-    })
+            state
+                .heartbeat_failures
+                .get(&peer.node_id)
+                .copied()
+                .unwrap_or_default()
+                >= HEARTBEAT_FAILURE_THRESHOLD
+        },
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn local_network_isolated_with(
     cluster: &ClusterConfig,
     external_api_failures: u32,
+    peer_failed: impl FnMut(&crate::config::ClusterPeer) -> bool,
+) -> bool {
+    local_network_isolated_by(
+        cluster,
+        external_api_degraded(cluster, external_api_failures),
+        peer_failed,
+    )
+}
+
+fn local_network_isolated_by(
+    cluster: &ClusterConfig,
+    local_path_failed: bool,
     mut peer_failed: impl FnMut(&crate::config::ClusterPeer) -> bool,
 ) -> bool {
     let peer_count = cluster.peers.len();
     if peer_count == 0 {
         return false;
     }
-    if !external_api_degraded(cluster, external_api_failures) {
+    if !local_path_failed {
         return false;
     }
 

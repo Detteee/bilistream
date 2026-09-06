@@ -6,6 +6,7 @@ import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
 import { mountNetworkHistory } from './status-cards.js';
+import { selfCheckDisplay } from './cluster-health.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -490,7 +491,8 @@ function getClusterLocalStateSignature(cluster) {
 
 function clusterRenderSignature(cluster, errorMessage) {
   return JSON.stringify({ cluster, errorMessage }, (key, value) => (
-    (key === 'last_seen' || key === 'lease_until' || key === 'status')
+    (key === 'last_seen' || key === 'lease_until' || key === 'status'
+      || key === 'checked_at' || key === 'last_success_at')
       ? undefined
       : value
   ));
@@ -664,6 +666,17 @@ function createClusterHeartbeat(node) {
   return wrap;
 }
 
+function createClusterSelfCheck(node) {
+  if (!node.self_check) return null;
+  const display = selfCheckDisplay(node.self_check, node.health?.stale === true);
+  const label = document.createElement('span');
+  label.className = 'cluster-self-check';
+  label.dataset.state = display.state;
+  label.textContent = `隧道 ${display.label}`;
+  label.title = display.title;
+  return label;
+}
+
 function createClusterNodeActions(node) {
   const usable = clusterNodeUsable(node);
   const isRecoverableFault = !!node.draining || !!node.network_unstable
@@ -710,7 +723,10 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   const seen = createClusterSeenValue(node);
   seen.classList.add('cluster-node-tile-seen');
 
-  tile.append(head, seen, createClusterNodeActions(node));
+  tile.append(head, seen);
+  const selfCheck = createClusterSelfCheck(node);
+  if (selfCheck) tile.appendChild(selfCheck);
+  tile.appendChild(createClusterNodeActions(node));
   return tile;
 }
 
@@ -734,6 +750,9 @@ function createClusterNodeCard(node, clusterConfigVersion) {
 
   const meta = document.createElement('div');
   meta.className = 'cluster-node-meta';
+
+  const selfCheck = createClusterSelfCheck(node);
+  if (selfCheck) meta.appendChild(selfCheck);
 
   if (stream) {
     meta.appendChild(createClusterNodeStream(stream));

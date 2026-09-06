@@ -2104,6 +2104,20 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   color: var(--text-dim);
 }
 
+.cluster-self-check {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-self-check[data-state="healthy"] {
+  color: var(--teal);
+}
+
+.cluster-self-check[data-state="unreachable"] {
+  color: var(--danger);
+}
+
 .cluster-node-name {
   min-width: 0;
   color: var(--text);

@@ -74,6 +74,7 @@ pub(crate) fn node_mode_apply_lock() -> &'static tokio::sync::Mutex<()> {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ClusterState {
+    pub(crate) local_self_check: Option<super::self_check::SelfCheckRecord>,
     pub(crate) nodes: HashMap<String, ClusterNodeSnapshot>,
     pub(crate) local_draining: bool,
     pub(crate) local_fault_latched: bool,

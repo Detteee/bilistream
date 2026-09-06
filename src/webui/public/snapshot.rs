@@ -170,6 +170,7 @@ mod tests {
 
     fn node(node_id: &str, is_local: bool, stale: bool, title: &str) -> ClusterNodeSnapshot {
         ClusterNodeSnapshot {
+            self_check: None,
             node_id: node_id.to_string(),
             name: node_id.to_string(),
             api_url: String::new(),

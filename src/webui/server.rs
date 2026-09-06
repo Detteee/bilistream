@@ -59,6 +59,10 @@ pub async fn start_webui_on_listener(
         .route("/network-status", get(api::get_network_status))
         .route("/cluster/status", get(api::get_cluster_status))
         .route("/cluster/heartbeat", post(api::cluster_heartbeat))
+        .route(
+            crate::cluster::SELF_CHECK_API_PATH,
+            post(api::cluster_self_check).layer(axum::extract::DefaultBodyLimit::max(1024)),
+        )
         .route("/cluster/drain", post(api::cluster_drain))
         .route(
             "/cluster/auto-failover",

@@ -262,6 +262,7 @@ mod tests {
 
     fn sample_node() -> ClusterNodeSnapshot {
         ClusterNodeSnapshot {
+            self_check: None,
             node_id: "ny".to_string(),
             name: "New York".to_string(),
             api_url: "http://ny.internal:3150".to_string(),

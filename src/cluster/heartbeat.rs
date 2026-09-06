@@ -18,6 +18,7 @@ use super::types::*;
 use super::version::monitored_config_version;
 use crate::config::Config;
 use crate::plugins::{is_ffmpeg_running, set_manual_restart, stop_ffmpeg};
+use axum::body::Bytes;
 use futures_util::future::join_all;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -26,16 +27,20 @@ use std::time::{Duration, Instant};
 
 pub(crate) static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-pub struct ClusterWorker(tokio::task::JoinHandle<()>);
+pub struct ClusterWorker {
+    heartbeat: tokio::task::JoinHandle<()>,
+    self_check: tokio::task::JoinHandle<()>,
+}
 
 impl Drop for ClusterWorker {
     fn drop(&mut self) {
-        self.0.abort();
+        self.heartbeat.abort();
+        self.self_check.abort();
     }
 }
 
 pub fn start_cluster_worker() -> ClusterWorker {
-    ClusterWorker(tokio::spawn(async {
+    let heartbeat = tokio::spawn(async {
         let client = CLUSTER_HTTP_CLIENT.clone();
 
         loop {
@@ -80,7 +85,12 @@ pub fn start_cluster_worker() -> ClusterWorker {
             ))
             .await;
         }
-    }))
+    });
+    // Self-check latency cannot delay heartbeats to healthy peers.
+    ClusterWorker {
+        heartbeat,
+        self_check: tokio::spawn(super::self_check::run_self_checks()),
+    }
 }
 
 pub(crate) fn heartbeat_cycle_delay(period: Duration, elapsed: Duration) -> Duration {
@@ -207,6 +217,13 @@ pub(crate) async fn send_heartbeats(
     local: ClusterNodeSnapshot,
 ) {
     let request = ClusterHeartbeatRequest { node: local };
+    let body = match encode_heartbeat(&request) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!("Could not encode local cluster heartbeat: {error}");
+            return;
+        }
+    };
     // Fan out concurrently: one slow/dead peer must not delay heartbeats to the
     // others, otherwise healthy peers may see this node as stale.
     let tasks = cfg
@@ -214,15 +231,21 @@ pub(crate) async fn send_heartbeats(
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| send_heartbeat_to_peer(client, cfg, peer, &request));
+        .map(|peer| send_heartbeat_to_peer(client, cfg, peer, body.clone()));
     join_all(tasks).await;
+}
+
+fn encode_heartbeat(request: &ClusterHeartbeatRequest) -> Result<Bytes, serde_json::Error> {
+    // Every peer receives identical bytes. Encoding once also avoids one
+    // payload-sized allocation per peer; Bytes clones only share ownership.
+    serde_json::to_vec(request).map(Bytes::from)
 }
 
 pub(crate) async fn send_heartbeat_to_peer(
     client: &reqwest::Client,
     cfg: &Config,
     peer: &crate::config::ClusterPeer,
-    request: &ClusterHeartbeatRequest,
+    body: Bytes,
 ) {
     let url = format!(
         "{}/api/cluster/heartbeat",
@@ -230,7 +253,8 @@ pub(crate) async fn send_heartbeat_to_peer(
     );
     let result = client
         .post(url)
-        .json(&request)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
         .timeout(cluster_heartbeat_timeout(cfg))
         .send()
         .await;
@@ -244,7 +268,11 @@ pub(crate) async fn send_heartbeat_to_peer(
             );
             mark_peer_unreachable(&peer.node_id, cfg);
         }
-        Ok(response) => match response.json::<PeerApiResponse<ClusterStatus>>().await {
+        Ok(response) => match crate::plugins::http::response_json_limited::<
+            PeerApiResponse<ClusterStatus>,
+        >(response)
+        .await
+        {
             Ok(envelope) if envelope.success => {
                 if let Some(status) = envelope.data {
                     if heartbeat_response_is_valid(&status, &peer.node_id) {
@@ -352,4 +380,54 @@ pub(crate) fn mark_peer_unreachable(node_id: &str, cfg: &Config) {
         return;
     }
     node.health = ClusterHealth::unhealthy("api_unreachable", true, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hint::black_box;
+
+    #[test]
+    #[ignore = "manual encoding benchmark: run with --release --ignored --nocapture"]
+    fn benchmark_heartbeat_encoding() {
+        let mut node = empty_node("local", "Local", "https://local.example", 10, true, 100);
+        node.network = Some(crate::webui::state::NetworkStatus {
+            stream_speed: Some(1.0),
+            stream_bitrate_history: vec![3000.0; 60],
+            stream_cache_bitrate_history: vec![3200.0; 60],
+            ..Default::default()
+        });
+        let request = ClusterHeartbeatRequest { node };
+        let bytes = encode_heartbeat(&request).unwrap();
+        let decoded: ClusterHeartbeatRequest = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.node.node_id, request.node.node_id);
+        // Median of five batches; this measures encoding/ownership only,
+        // excluding network I/O, peer responses, and end-to-end failover.
+        fn median(mut operation: impl FnMut()) -> u128 {
+            let mut samples = Vec::with_capacity(5);
+            for _ in 0..5 {
+                let started = Instant::now();
+                for _ in 0..1000 {
+                    operation();
+                }
+                samples.push(started.elapsed().as_nanos() / 1000);
+            }
+            samples.sort_unstable();
+            samples[2]
+        }
+        for peers in [1, 4, 16, 64] {
+            let old_ns = median(|| {
+                for _ in 0..peers {
+                    black_box(serde_json::to_vec(black_box(&request)).unwrap());
+                }
+            });
+            let shared_ns = median(|| {
+                let body = encode_heartbeat(black_box(&request)).unwrap();
+                for _ in 0..peers {
+                    black_box(body.clone());
+                }
+            });
+            println!("heartbeat_encoding peers={peers} bytes={} per_peer_ns={old_ns} shared_ns={shared_ns}", bytes.len());
+        }
+    }
 }

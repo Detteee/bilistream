@@ -115,6 +115,24 @@ pub async fn cluster_heartbeat(
     }))
 }
 
+pub async fn cluster_self_check(
+    Json(payload): Json<crate::cluster::SelfCheckRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let reply =
+        crate::cluster::self_check_reply(&cfg.cluster, payload).ok_or(StatusCode::BAD_REQUEST)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(ApiResponse {
+            success: true,
+            data: Some(reply),
+            message: None,
+        }),
+    ))
+}
+
 pub async fn cluster_drain(
     Json(payload): Json<ClusterDrainRequest>,
 ) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
