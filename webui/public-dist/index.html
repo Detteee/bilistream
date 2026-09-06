@@ -122,6 +122,7 @@
             服务器
             <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
           </h2>
+          <a class="public-streams-link" href="#public-streams">直播列表 <span aria-hidden="true">↓</span></a>
         </div>
         <div id="cluster-node-list" class="cluster-node-list">
           <div class="cluster-empty">正在读取节点状态...</div>
@@ -148,12 +149,8 @@
           <div class="info-row">
             <span class="info-label">弹幕点播</span>
             <div class="info-row-view info-row-view-end">
-              <label class="toggle-label info-row-toggle-label">
-                <span class="toggle-switch">
-                  <input type="checkbox" id="bili-danmaku-command-toggle" aria-label="弹幕点播" disabled>
-                  <span class="toggle-slider"></span>
-                </span>
-              </label>
+              <span class="public-readonly-state" id="bili-danmaku-command-toggle" data-readonly-state
+                data-state="unknown" data-on-text="开启" data-off-text="关闭">状态未知</span>
             </div>
           </div>
         </div>
@@ -167,12 +164,8 @@
             <span class="status-indicator" id="yt-status"></span>
           </h2>
           <div class="card-header-actions">
-            <label class="toggle-label" title="YouTube 监控">
-              <span class="toggle-switch">
-                <input type="checkbox" id="youtube-monitor-toggle" aria-label="YouTube 监控" disabled>
-                <span class="toggle-slider"></span>
-              </span>
-            </label>
+            <span class="public-readonly-state" id="youtube-monitor-toggle" data-readonly-state
+              data-state="unknown" data-on-text="监控开启" data-off-text="监控关闭">状态未知</span>
           </div>
         </div>
         <div class="card-body">
@@ -203,12 +196,8 @@
             <span class="status-indicator" id="tw-status"></span>
           </h2>
           <div class="card-header-actions">
-            <label class="toggle-label" title="Twitch 监控">
-              <span class="toggle-switch">
-                <input type="checkbox" id="twitch-monitor-toggle" aria-label="Twitch 监控" disabled>
-                <span class="toggle-slider"></span>
-              </span>
-            </label>
+            <span class="public-readonly-state" id="twitch-monitor-toggle" data-readonly-state
+              data-state="unknown" data-on-text="监控开启" data-off-text="监控关闭">状态未知</span>
           </div>
         </div>
         <div class="card-body">
@@ -239,12 +228,8 @@
             <span class="status-indicator" id="nc-status"></span>
           </h2>
           <div class="card-header-actions">
-            <label class="toggle-label" title="Niconico 监控">
-              <span class="toggle-switch">
-                <input type="checkbox" id="niconico-monitor-toggle" aria-label="Niconico 监控" disabled>
-                <span class="toggle-slider"></span>
-              </span>
-            </label>
+            <span class="public-readonly-state" id="niconico-monitor-toggle" data-readonly-state
+              data-state="unknown" data-on-text="监控开启" data-off-text="监控关闭">状态未知</span>
           </div>
         </div>
         <div class="card-body">
@@ -272,11 +257,11 @@
       </article>
     </div>
 
-    <section class="panel">
+    <section class="panel" id="public-streams" tabindex="-1" aria-labelledby="public-streams-title">
       <div class="panel__head">
-        <h2 class="panel__title">
+        <h2 class="panel__title" id="public-streams-title">
           <svg class="panel__title-mark" aria-hidden="true"><use href="#i-holodex" /></svg>
-          Holodex 直播监控
+          直播与预告
         </h2>
       </div>
       <div class="panel__body">

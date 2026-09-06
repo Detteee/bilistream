@@ -4,7 +4,7 @@
 // command; sending it is the viewer's own action in the live chat, which is
 // where their identity and your moderation already are.
 
-import { createSvgIcon } from '/shared/js/dom.js';
+import { createSvgIcon, createStreamThumbnail, reconcileChildren } from '/shared/js/dom.js';
 import {
   formatClock,
   formatDuration,
@@ -15,7 +15,7 @@ import {
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
   danmaku_disabled: '弹幕点播当前已关闭',
-  restreaming: '转播中，弹幕点播已关闭',
+  restreaming: '转播期间暂停点播',
   banned_keyword: '不可点播',
   earlier_banned_keyword: '不可点播',
   unsupported_platform: '该平台不支持弹幕点播',
@@ -310,9 +310,8 @@ function updateDurations() {
       return;
     }
     const textEl = el.querySelector('.holodex-duration-text');
-    if (textEl) {
-      textEl.textContent = formatDuration(now - startMs);
-    }
+    const text = formatDuration(now - startMs);
+    if (textEl && textEl.textContent !== text) textEl.textContent = text;
   });
   document.querySelectorAll('.holodex-stream-scheduled[data-start]').forEach(el => {
     const text = formatScheduledStart(el.dataset.start);
@@ -342,14 +341,11 @@ function createThumb(stream, isLive) {
     media.href = href;
     media.target = '_blank';
     media.rel = 'noopener noreferrer';
+    media.setAttribute('aria-label', `观看 ${stream.channel_name || stream.title || '直播'}`);
   }
 
   if (stream.thumbnail) {
-    const image = document.createElement('img');
-    image.loading = 'lazy';
-    image.alt = '';
-    image.src = stream.thumbnail;
-    media.appendChild(image);
+    media.appendChild(createStreamThumbnail(stream.thumbnail));
   } else {
     const placeholder = document.createElement('div');
     placeholder.className = 'holodex-stream-thumb-placeholder';
@@ -437,6 +433,7 @@ function createAvatar(stream) {
   image.src = stream.channel_photo;
   image.alt = '';
   image.loading = 'lazy';
+  image.decoding = 'async';
   avatar.appendChild(image);
   return avatar;
 }
@@ -461,12 +458,18 @@ function createStatusMeta(stream, isLive) {
   liveLabel.textContent = '直播中';
   statusMeta.appendChild(liveLabel);
 
-  if (stream.live_viewers) {
-    const viewers = document.createElement('span');
-    viewers.textContent = `• ${Number(stream.live_viewers).toLocaleString()} 观看`;
-    statusMeta.appendChild(viewers);
-  }
+  const viewers = document.createElement('span');
+  viewers.className = 'holodex-stream-viewers';
+  statusMeta.appendChild(viewers);
   return statusMeta;
+}
+
+function updateViewerCount(card, viewers) {
+  const element = card.querySelector('.holodex-stream-viewers');
+  if (!element) return;
+  const text = Number.isFinite(viewers) && viewers >= 0 ? `• ${viewers.toLocaleString()} 观看` : '';
+  if (element.textContent !== text) element.textContent = text;
+  element.classList.toggle('hidden', !text);
 }
 
 function createStreamCard(stream, isLive) {
@@ -532,6 +535,7 @@ function createStreamCard(stream, isLive) {
   body.appendChild(actions);
 
   card.appendChild(body);
+  updateViewerCount(card, stream.live_viewers);
   return card;
 }
 
@@ -570,9 +574,11 @@ export function renderStreams(streams, { fresh = true } = {}) {
     const occurrence = occurrences.get(baseKey) || 0;
     occurrences.set(baseKey, occurrence + 1);
     const key = `${baseKey}:${occurrence}`;
-    const signature = `${renderedGate}:${JSON.stringify(stream)}`;
+    const { live_viewers, ...content } = stream;
+    const signature = `${renderedGate}:${JSON.stringify(content)}`;
     const previous = renderedCards.get(key);
     const element = previous?.signature === signature ? previous.element : createStreamCard(stream, isLive);
+    updateViewerCount(element, live_viewers);
     nextCards.set(key, { signature, element });
     desired.push(element);
   };
@@ -596,18 +602,7 @@ export function renderStreams(streams, { fresh = true } = {}) {
     appendCard(stream, false);
   }
 
-  // Keep unchanged elements attached, preserving focus and loaded images.
-  const retained = new Set(desired);
-  for (const element of Array.from(container.children)) {
-    if (!retained.has(element)) {
-      element.remove();
-    }
-  }
-  desired.forEach((element, index) => {
-    if (container.children[index] !== element) {
-      container.insertBefore(element, container.children[index] || null);
-    }
-  });
+  reconcileChildren(container, desired);
   renderedCards = nextCards;
   startDurationTicker();
 }

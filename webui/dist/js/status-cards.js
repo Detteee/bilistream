@@ -91,11 +91,20 @@ function monitorToggleValue(enabled, options) {
   return options.readonly ? enabled : undefined;
 }
 
-// The public page renders every switch as a locked, greyed control rather than
-// hiding it, so viewers can still see what is turned on.
+// Public status values are text, while the dashboard keeps editable switches.
 function applyToggle(id, checked, readonly) {
   const toggle = document.getElementById(id);
   if (!toggle) {
+    return;
+  }
+  if (readonly && toggle.hasAttribute('data-readonly-state')) {
+    const known = typeof checked === 'boolean';
+    const state = known ? (checked ? 'on' : 'off') : 'unknown';
+    const text = known
+      ? (checked ? toggle.dataset.onText || '开启' : toggle.dataset.offText || '关闭')
+      : '状态未知';
+    if (toggle.dataset.state !== state) toggle.dataset.state = state;
+    if (toggle.textContent !== text) toggle.textContent = text;
     return;
   }
   if (typeof checked === 'boolean' && (readonly || toggle.dataset.saving !== 'true')) {
@@ -432,6 +441,7 @@ export function renderYouTubeCard(yt, options = {}) {
     setElementText('yt-quality', '-');
     setElementText('yt-crop-status', '关闭');
     setElementText('yt-hls-cache-status', '关闭');
+    applyToggle('youtube-monitor-toggle', undefined, options.readonly);
     return;
   }
 
@@ -458,6 +468,7 @@ export function renderTwitchCard(tw, options = {}) {
     setElementText('tw-quality', '-');
     setElementText('tw-crop-status', '关闭');
     setElementText('tw-hls-cache-status', '关闭');
+    applyToggle('twitch-monitor-toggle', undefined, options.readonly);
     return;
   }
 
@@ -505,6 +516,7 @@ export function renderNiconicoCard(nc, options = {}) {
     setElementText('nc-quality', '-');
     setElementText('nc-crop-status', '关闭');
     setElementText('nc-hls-cache-status', '关闭');
+    applyToggle('niconico-monitor-toggle', undefined, options.readonly);
     return;
   }
 
@@ -540,6 +552,9 @@ export function renderStatusCards(status, options = {}) {
 /// Replaces the channel/title fields with a short message when the status
 /// payload could not be read at all.
 export function setStatusCardsMessage(message) {
+  document.querySelectorAll('[data-readonly-state]').forEach(element => {
+    applyToggle(element.id, undefined, true);
+  });
   for (const id of ['bili-status', 'yt-status', 'tw-status', 'nc-status']) {
     setStatusIndicator(id, 'status-offline');
   }

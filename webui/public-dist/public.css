@@ -29,6 +29,49 @@ html.light-theme {
   flex: 0 0 auto;
 }
 
+#public-streams {
+  scroll-margin-top: calc(var(--appbar-h) + var(--sp-4));
+}
+
+.public-streams-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 32px;
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.public-streams-link:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.public-readonly-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.public-readonly-state[data-state="on"] {
+  border-color: color-mix(in srgb, var(--ok) 32%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface-2));
+  color: var(--ok);
+}
+
 /* Path fills on the Holodex mark are gradients. Inherited currentColor from
    .panel__title svg would paint over them and the icon would vanish. */
 .panel__title-mark {

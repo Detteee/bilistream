@@ -49,8 +49,7 @@ async function refreshStatus() {
     if (!status) {
       throw new Error('缺少状态数据');
     }
-    // readonly keeps every switch visible but locked, so viewers can see what
-    // is on without being offered a control that is not theirs.
+    // Public cards show confirmed settings as text instead of editable switches.
     const nextCards = JSON.stringify([
       status.bilibili, status.youtube, status.twitch, status.niconico, status.priority_channel,
     ]);
