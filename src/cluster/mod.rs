@@ -28,4 +28,6 @@ pub use version::*;
 #[cfg(test)]
 mod election_tests;
 #[cfg(test)]
+mod frontend_tests;
+#[cfg(test)]
 pub(crate) mod tests;

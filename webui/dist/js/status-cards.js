@@ -412,7 +412,10 @@ export function renderBilibiliCard(bili, options = {}) {
   if (showNetwork) {
     renderBiliNetworkPanel(bili, options);
   } else {
-    lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
+    lastBiliNetworkLive = bili.ffmpeg_running === true;
+    lastBiliNetworkQuality = null;
+    document.getElementById('bili-network-panel')?.classList.add('hidden');
+    document.getElementById('bili-network-graph')?.replaceChildren();
   }
 
   applyToggle('bili-danmaku-command-toggle', bili.enable_danmaku_command, readonly);
@@ -537,7 +540,7 @@ export function renderStatusCards(status, options = {}) {
 /// Replaces the channel/title fields with a short message when the status
 /// payload could not be read at all.
 export function setStatusCardsMessage(message) {
-  for (const id of ['bili-status', 'yt-status', 'tw-status']) {
+  for (const id of ['bili-status', 'yt-status', 'tw-status', 'nc-status']) {
     setStatusIndicator(id, 'status-offline');
   }
   updateAppLiveBadge(false);

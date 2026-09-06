@@ -2083,6 +2083,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
 .cluster-node-identity {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
@@ -2391,18 +2392,23 @@ a.cluster-node-name-link {
 }
 
 .cluster-badge.unhealthy,
-.cluster-badge.draining,
+.cluster-badge.fault,
 .cluster-badge.disabled {
   border-color: color-mix(in srgb, var(--danger) 44%, transparent);
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 
-.cluster-badge.fault,
 .cluster-badge.sync-warning {
   border-color: color-mix(in srgb, var(--warn) 44%, transparent);
   background: color-mix(in srgb, var(--warn) 14%, transparent);
   color: var(--warn);
+}
+
+.cluster-badge.draining {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+  color: var(--text-dim);
 }
 
 /* The public status page is pinned to a node rather than following the active

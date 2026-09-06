@@ -4,13 +4,13 @@
 // command; sending it is the viewer's own action in the live chat, which is
 // where their identity and your moderation already are.
 
-import { createSvgIcon } from '/shared/js/dom.js?v=7';
+import { createSvgIcon } from '/shared/js/dom.js';
 import {
   formatClock,
   formatDuration,
   formatScheduledStart,
   timestampMs,
-} from '/shared/js/format.js?v=7';
+} from '/shared/js/format.js';
 
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
@@ -27,12 +27,32 @@ let lastStreams = null;
 let renderedGate = null;
 let renderedCards = new Map();
 let scheduleDivider = null;
-/// `null` until the status payload arrives, so a Holodex poll that lands first
-/// can still use `stream.switchable`. `false` is the restreaming gate.
+// Status, stream eligibility, and area tokens must all be current before a
+// command can be generated. A stream poll arriving first cannot open the gate.
 let danmakuEnabled = null;
+let statusFresh = false;
+let streamsFresh = false;
+let areasFresh = false;
 /// True while an active node is pushing. Distinct from the config switch: a
 /// restream keeps that on and only gates the processor.
 let restreaming = false;
+
+function rerenderStreams() {
+  if (lastStreams) renderStreams(lastStreams, { fresh: streamsFresh });
+  revalidatePendingStream();
+}
+
+export function setStatusFreshness(fresh) {
+  if (statusFresh === !!fresh) return;
+  statusFresh = !!fresh;
+  rerenderStreams();
+}
+
+export function setStreamsFreshness(fresh) {
+  if (streamsFresh === !!fresh) return;
+  streamsFresh = !!fresh;
+  rerenderStreams();
+}
 
 export function setDanmakuEnabled(enabled, isRestreamingNow) {
   const next = !!enabled;
@@ -42,12 +62,11 @@ export function setDanmakuEnabled(enabled, isRestreamingNow) {
   }
   danmakuEnabled = next;
   restreaming = nextRestreaming;
-  if (lastStreams) {
-    renderStreams(lastStreams);
-  }
+  rerenderStreams();
 }
 
 function streamIsSwitchable(stream) {
+  if (!statusFresh || !streamsFresh || !areasFresh || !areas.some(areaIsUsable)) return false;
   // Same payload as the 转播中 badge (`clusterIsRestreaming`). Do not wait
   // for a second poll: if JP is already pushing, 切换 is not requestable.
   if (restreaming || danmakuEnabled === false) {
@@ -63,6 +82,10 @@ function streamIsSwitchable(stream) {
 }
 
 function switchDisabledReason(stream) {
+  if (!statusFresh) return '直播状态未同步，暂不可点播';
+  if (!streamsFresh) return '直播列表未更新，暂不可点播';
+  if (!areasFresh) return '分区未加载，正在重试';
+  if (!areas.some(areaIsUsable)) return '暂无可用分区';
   if (restreaming) {
     return REASON_LABELS.restreaming;
   }
@@ -91,6 +114,8 @@ let areas = [];
 let pendingStream = null;
 let selectedAreaId = null;
 let copyResetTimer = null;
+let commandAreaId = null;
+let commandSession = 0;
 
 /// Bilibili's catch-all 其他单机. Pinned first, same as the dashboard picker.
 const DEFAULT_AREA_ID = 235;
@@ -105,7 +130,15 @@ function pinDefaultAreaFirst(list) {
 }
 
 export function setAreas(list) {
-  areas = pinDefaultAreaFirst(Array.isArray(list) ? list : []);
+  const next = pinDefaultAreaFirst(Array.isArray(list) ? list : []);
+  const changed = JSON.stringify(areas) !== JSON.stringify(next);
+  areasFresh = Array.isArray(list);
+  areas = next;
+  if (changed && pendingStream) {
+    if (!document.getElementById('command-modal')?.classList.contains('hidden')) closeCommandModal();
+    else if (!document.getElementById('area-modal')?.classList.contains('hidden')) openAreaModal(pendingStream);
+  }
+  rerenderStreams();
 }
 
 /// `%转播%<平台>%<频道>%<分区>` — the format danmaku.rs parses.
@@ -281,6 +314,10 @@ function updateDurations() {
       textEl.textContent = formatDuration(now - startMs);
     }
   });
+  document.querySelectorAll('.holodex-stream-scheduled[data-start]').forEach(el => {
+    const text = formatScheduledStart(el.dataset.start);
+    if (el.textContent !== text) el.textContent = text;
+  });
 }
 
 export function startDurationTicker() {
@@ -289,7 +326,7 @@ export function startDurationTicker() {
     return;
   }
   updateDurations();
-  if (document.querySelector('.holodex-stream-duration[data-tick="live"]')) {
+  if (document.querySelector('.holodex-stream-duration[data-tick="live"], .holodex-stream-scheduled[data-start]')) {
     durationTickerId = setInterval(updateDurations, 1000);
   }
 }
@@ -411,6 +448,7 @@ function createStatusMeta(stream, isLive) {
   if (!isLive) {
     const scheduled = document.createElement('span');
     scheduled.className = 'holodex-stream-scheduled';
+    if (stream.start_scheduled) scheduled.dataset.start = stream.start_scheduled;
     scheduled.textContent = stream.start_scheduled
       ? formatScheduledStart(stream.start_scheduled)
       : '预告';
@@ -497,9 +535,12 @@ function createStreamCard(stream, isLive) {
   return card;
 }
 
-export function renderStreams(streams) {
-  const unchanged = lastStreams === streams && renderedGate === `${danmakuEnabled}:${restreaming}`;
+export function renderStreams(streams, { fresh = true } = {}) {
+  streamsFresh = fresh && Array.isArray(streams);
+  const gate = `${danmakuEnabled}:${restreaming}:${statusFresh}:${streamsFresh}:${areasFresh}:${areas.some(areaIsUsable)}`;
+  const unchanged = lastStreams === streams && renderedGate === gate;
   lastStreams = Array.isArray(streams) ? streams : null;
+  revalidatePendingStream();
   const container = document.getElementById('holodex-streams');
   const status = document.getElementById('holodex-status');
   if (!container) {
@@ -515,12 +556,12 @@ export function renderStreams(streams) {
     return;
   }
 
-  setStatus(status, null);
+  setStatus(status, streamsFresh ? null : '直播列表暂时无法更新，显示上次结果；点播已暂停');
   if (unchanged) {
     startDurationTicker();
     return;
   }
-  renderedGate = `${danmakuEnabled}:${restreaming}`;
+  renderedGate = gate;
   const nextCards = new Map();
   const occurrences = new Map();
   const desired = [];
@@ -581,6 +622,22 @@ export function setStatus(element, message) {
 }
 
 // 点播 flow ------------------------------------------------------------------
+
+function revalidatePendingStream() {
+  if (!pendingStream) return null;
+  const matches = (lastStreams || []).filter(stream => stream.id === pendingStream.id
+    && stream.command_platform === pendingStream.command_platform
+    && stream.command_channel === pendingStream.command_channel);
+  const current = matches.includes(pendingStream) ? pendingStream : matches.length === 1 ? matches[0] : null;
+  if (!current || !streamIsSwitchable(current)
+    || current.command_channel_short !== pendingStream.command_channel_short) {
+    closeAreaModal();
+    closeCommandModal();
+    return null;
+  }
+  pendingStream = current;
+  return current;
+}
 
 function startSwitch(stream) {
   if (!streamIsSwitchable(stream)) {
@@ -662,15 +719,17 @@ function selectArea(id) {
 export function closeAreaModal() {
   document.getElementById('area-modal')?.classList.add('hidden');
   selectedAreaId = null;
+  pendingStream = null;
 }
 
 export function confirmArea() {
+  const stream = revalidatePendingStream();
   const chosen = areaById(selectedAreaId);
-  if (!chosen || !areaIsUsable(chosen) || !pendingStream) {
+  if (!chosen || !areaIsUsable(chosen) || !stream) {
     return;
   }
   closeAreaModal();
-  showCommand(pendingStream, chosen);
+  showCommand(stream, chosen);
 }
 
 /// The command to show, plus a shorter one when the formal names do not fit a
@@ -696,6 +755,7 @@ function commandForms(stream, area) {
 }
 
 function showCommand(stream, area) {
+  if (!streamIsSwitchable(stream)) return;
   const modal = document.getElementById('command-modal');
   const input = document.getElementById('command-text');
   if (!modal || !input) {
@@ -707,6 +767,9 @@ function showCommand(stream, area) {
     return;
   }
 
+  pendingStream = stream;
+  commandAreaId = area.id;
+  commandSession += 1;
   input.value = forms.primary;
   renderShortForm(forms.short);
   renderAlternatives(forms.alternatives);
@@ -741,6 +804,8 @@ function renderAlternatives(aliases) {
 export function closeCommandModal() {
   document.getElementById('command-modal')?.classList.add('hidden');
   pendingStream = null;
+  commandAreaId = null;
+  commandSession += 1;
   resetCopyButtons();
 }
 
@@ -778,16 +843,21 @@ function resetCopyButtons() {
 }
 
 export async function copyCommand(inputId = 'command-text') {
+  const stream = revalidatePendingStream();
+  const area = areaById(commandAreaId);
+  if (!stream || !area || document.getElementById('command-modal')?.classList.contains('hidden')) return;
   const input = document.getElementById(inputId);
   if (!input) {
     return;
   }
 
   const button = copyButtonFor(inputId);
+  const session = commandSession;
   try {
     // Clipboard access needs a secure context; select-and-copy is the
     // fallback when the page is opened over plain http.
     await navigator.clipboard.writeText(input.value);
+    if (session !== commandSession) return;
     setFeedback('已复制，去直播间发送即可。');
     setCopyState(button, true);
     if (copyResetTimer) {
@@ -795,6 +865,7 @@ export async function copyCommand(inputId = 'command-text') {
     }
     copyResetTimer = setTimeout(() => setCopyState(button, false), 1600);
   } catch {
+    if (session !== commandSession) return;
     input.select();
     setCopyState(button, false);
     setFeedback('复制失败，请手动选中并复制。');

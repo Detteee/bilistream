@@ -3,7 +3,7 @@
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
 import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
-import { loadClusterSettings, getClusterConfigFromForm } from './cluster.js';
+import { loadClusterSettings, getClusterConfigFromForm, getClusterConfigBaseline, acceptClusterConfigBaseline } from './cluster.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
@@ -491,8 +491,10 @@ async function saveSystemConfig() {
     }
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
+      if (patch.cluster) patch.expected.cluster = getClusterConfigBaseline();
       const result = await postJsonApi('/api/config', patch);
       if (!result.success) throw new Error(result.message || '未知错误');
+      if (patch.cluster) acceptClusterConfigBaseline(config.cluster);
       // Preserve edits made during the save: advance only to what was sent.
       configBaseline = structuredClone(config);
       await reloadServerConfig();

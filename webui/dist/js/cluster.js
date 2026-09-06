@@ -4,19 +4,25 @@ import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setC
 import { createSelectOption, state, syncMonitorTogglesWithClusterRole } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
-import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
-import { mountNetworkHistory } from './status-cards.js';
-import { selfCheckDisplay } from './cluster-health.js';
+import { createClusterNetwork, updateClusterNetwork } from './cluster-network.js';
+import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason } from './cluster-health.js';
 
 const clusterRefreshInterval = 3000;
 
 let clusterRefreshIntervalId = null;
 
 let clusterRefreshInFlight = false;
+let clusterRefreshQueued = false;
+let clusterRequestGeneration = 0;
+let clusterMutationInFlight = false;
+let clusterConnected = false;
+let confirmedAutoFailover = true;
 
 let lastClusterFetchMs = 0;
 
-let lastClusterRenderSignature = null;
+let renderedClusterNodes = new Map();
+let compactClusterNodes = null;
+let pendingClusterFocus = null;
 
 // Which node serves the public status page, so the node list can mark it.
 let publicStatusNodeId = '';
@@ -26,6 +32,15 @@ let clusterSeenTickerId = null;
 let lastClusterLocalStateSignature = null;
 
 let currentClusterPeers = [];
+let loadedClusterConfig = {};
+
+function acceptClusterConfigBaseline(cluster) {
+  loadedClusterConfig = structuredClone(cluster);
+}
+
+function getClusterConfigBaseline() {
+  return structuredClone(loadedClusterConfig);
+}
 
 function setClusterCardFolded(folded) {
   const card = document.getElementById('cluster-card');
@@ -38,11 +53,17 @@ function setClusterCardFolded(folded) {
     btn.setAttribute('aria-label', folded ? '展开' : '折叠');
     btn.setAttribute('aria-expanded', String(!folded));
   }
-  localStorage.setItem('clusterCardFolded', folded ? '1' : '0');
+  try {
+    localStorage.setItem('clusterCardFolded', folded ? '1' : '0');
+  } catch (_) { /* storage is optional */ }
 }
 
 function initClusterCardFold() {
-  setClusterCardFolded(localStorage.getItem('clusterCardFolded') === '1');
+  let folded = false;
+  try {
+    folded = localStorage.getItem('clusterCardFolded') === '1';
+  } catch (_) { /* storage is optional */ }
+  setClusterCardFolded(folded);
 }
 
 function toggleClusterCardFold() {
@@ -185,6 +206,7 @@ function createClusterIcon(iconType) {
 }
 
 function loadClusterSettings(cluster = {}) {
+  acceptClusterConfigBaseline(cluster);
   setCheckboxChecked('config-cluster-enabled', !!cluster.enabled);
   setCheckboxChecked('config-cluster-sync-channels', !!cluster.sync_monitored_channels);
   setCheckboxChecked('config-cluster-auto-failover', cluster.auto_failover !== false);
@@ -388,7 +410,7 @@ function removeClusterPeer(index) {
 }
 
 function getClusterConfigFromForm() {
-  const existing = window.configData.cluster || {};
+  const existing = loadedClusterConfig;
   const nodeId = document.getElementById('config-cluster-node-id').value.trim();
   const peers = currentClusterPeers
     .map(peer => ({
@@ -419,14 +441,18 @@ function getClusterConfigFromForm() {
 }
 
 async function refreshClusterStatus() {
-  if (clusterRefreshInFlight) {
+  if (clusterRefreshInFlight || clusterMutationInFlight) {
+    clusterRefreshQueued = true;
     return;
   }
 
   clusterRefreshInFlight = true;
+  clusterRefreshQueued = false;
+  const generation = clusterRequestGeneration;
   lastClusterFetchMs = Date.now();
   try {
     const result = await getJson('/api/cluster/status');
+    if (generation !== clusterRequestGeneration) return;
     if (!result.success) {
       renderClusterStatus(null, result.message || '集群状态不可用');
       return;
@@ -435,9 +461,10 @@ async function refreshClusterStatus() {
     renderClusterStatusAndSyncDashboard(result.data, null);
   } catch (error) {
     console.debug('Failed to refresh cluster status:', error);
-    renderClusterStatus(null, '集群状态不可用');
+    if (generation === clusterRequestGeneration) renderClusterStatus(null, '集群状态不可用');
   } finally {
     clusterRefreshInFlight = false;
+    if (clusterRefreshQueued && !clusterMutationInFlight) void refreshClusterStatus();
   }
 }
 
@@ -478,6 +505,7 @@ function getClusterLocalStateSignature(cluster) {
     role: localNode?.role || '',
     draining: !!localNode?.draining,
     network_unstable: !!localNode?.network_unstable,
+    ffmpeg_running: !!localNode?.ffmpeg_running,
     enable_danmaku_command: !!toggles.enable_danmaku_command,
     enable_youtube_monitor: !!toggles.enable_youtube_monitor,
     enable_twitch_monitor: !!toggles.enable_twitch_monitor,
@@ -489,23 +517,54 @@ function getClusterLocalStateSignature(cluster) {
   });
 }
 
-function clusterRenderSignature(cluster, errorMessage) {
-  return JSON.stringify({ cluster, errorMessage }, (key, value) => (
-    (key === 'last_seen' || key === 'lease_until' || key === 'status'
-      || key === 'checked_at' || key === 'last_success_at')
-      ? undefined
-      : value
-  ));
+function clusterNodeStructure(node, configVersion) {
+  return JSON.stringify([
+    node.node_id, node.name, node.api_url, node.is_local, node.role, node.health,
+    node.draining, node.network_unstable, node.ffmpeg_running, node.active_stream,
+    node.config_version, configVersion, !!node.self_check, publicStatusNodeId,
+  ]);
+}
+
+function reconcileClusterChildren(parent, desired) {
+  const retained = new Set(desired);
+  for (const element of [...parent.children]) {
+    if (!retained.has(element)) element.remove();
+  }
+  desired.forEach((element, index) => {
+    if (parent.children[index] !== element) parent.insertBefore(element, parent.children[index] || null);
+  });
+}
+
+function updateClusterNodeMetrics(element, node) {
+  const seen = element.querySelector('.cluster-seen-value');
+  if (seen) {
+    seen.dataset.lastSeen = node.last_seen || 0;
+    const value = formatClusterSeen(node.last_seen);
+    if (seen.textContent !== value) seen.textContent = value;
+  }
+  const label = element.querySelector('.cluster-self-check');
+  if (label) {
+    const display = selfCheckDisplay(node.self_check, node.health?.stale === true);
+    label.dataset.state = display.state;
+    const value = `隧道 ${display.label}`;
+    if (label.textContent !== value) label.textContent = value;
+    label.title = display.title;
+  }
+  updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
 }
 
 function renderClusterStatus(cluster, errorMessage) {
   const indicator = document.getElementById('cluster-status-indicator');
   const nodeList = document.getElementById('cluster-node-list');
+  const focused = document.activeElement;
+  const focusNode = focused?.closest('[data-node-id]')?.dataset.nodeId;
+  const action = focused?.dataset.clusterAction || null;
 
   // Recorded before the no-op early return below, so the gate still
   // tracks ownership changes on renders that draw nothing new.
-  const canEnable = !cluster?.enabled
-    || (!!cluster.active_owner && cluster.active_owner === cluster.local_node_id);
+  clusterConnected = !!cluster;
+  const canEnable = !!cluster && (!cluster.enabled
+    || (!!cluster.active_owner && cluster.active_owner === cluster.local_node_id));
   const roleChanged = state.localNodeCanEnableMonitorToggles !== canEnable;
   state.localNodeCanEnableMonitorToggles = canEnable;
   if (roleChanged) {
@@ -517,18 +576,12 @@ function renderClusterStatus(cluster, errorMessage) {
     return;
   }
 
-  const signature = clusterRenderSignature(cluster, errorMessage);
-  if (signature === lastClusterRenderSignature) {
-    // Nothing displayed changed; just refresh the heartbeat ages.
-    updateClusterSeenTexts(cluster);
-    return;
-  }
-  lastClusterRenderSignature = signature;
-
   if (!cluster || !cluster.enabled) {
     indicator.className = 'status-indicator status-offline';
     nodeList.replaceChildren(createClusterEmptyState(errorMessage || '在配置中启用 cluster 后显示所有节点'));
     updateClusterAutoFailoverToggle(window.configData?.cluster?.auto_failover !== false);
+    renderedClusterNodes.clear();
+    syncClusterActionAvailability();
     return;
   }
 
@@ -539,33 +592,41 @@ function renderClusterStatus(cluster, errorMessage) {
   const nodes = Array.isArray(cluster.nodes) ? cluster.nodes : [];
   if (nodes.length === 0) {
     nodeList.replaceChildren(createClusterEmptyState('暂无节点心跳'));
+    renderedClusterNodes.clear();
+    syncClusterActionAvailability();
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-  // Only nodes with stream detail earn a full card. The rest pack into a
-  // tile grid that soaks up whatever width the cards leave, so a lone
-  // active node no longer sets the height of three empty ones.
+  const nextNodes = new Map();
   const detailed = [];
   const compact = [];
   nodes.forEach(node => {
-    (clusterNodeHasDetail(node) ? detailed : compact).push(node);
+    const signature = clusterNodeStructure(node, cluster.config_version);
+    const previous = renderedClusterNodes.get(node.node_id);
+    const hasDetail = clusterNodeHasDetail(node);
+    const element = previous?.signature === signature ? previous.element
+      : hasDetail ? createClusterNodeCard(node, cluster.config_version)
+        : createClusterNodeTile(node, cluster.config_version);
+    element.dataset.nodeId = node.node_id;
+    updateClusterNodeMetrics(element, node);
+    nextNodes.set(node.node_id, { signature, element });
+    (hasDetail ? detailed : compact).push(element);
   });
 
-  detailed.forEach(node => {
-    fragment.appendChild(createClusterNodeCard(node, cluster.config_version));
-  });
-
+  const desired = [...detailed];
   if (compact.length > 0) {
-    const others = document.createElement('div');
-    others.className = 'cluster-node-others';
-    compact.forEach(node => {
-      others.appendChild(createClusterNodeTile(node, cluster.config_version));
-    });
-    fragment.appendChild(others);
+    compactClusterNodes ||= document.createElement('div');
+    compactClusterNodes.className = 'cluster-node-others';
+    reconcileClusterChildren(compactClusterNodes, compact);
+    desired.push(compactClusterNodes);
   }
-
-  nodeList.replaceChildren(fragment);
+  reconcileClusterChildren(nodeList, desired);
+  renderedClusterNodes = nextNodes;
+  syncClusterActionAvailability();
+  if (action && !focused.isConnected) {
+    pendingClusterFocus = { nodeId: focusNode, action };
+    restoreClusterActionFocus();
+  }
 }
 
 function updateClusterSeenTexts(cluster) {
@@ -604,29 +665,7 @@ function createClusterEmptyState(message) {
 }
 
 function clusterNodeHasDetail(node) {
-  if ((node.role || 'unknown') !== 'active' || node.is_local) {
-    return false;
-  }
-  return !!node.active_stream || clusterNodeHasNetwork(node);
-}
-
-function clusterNodeHasNetwork(node) {
-  return clusterNetworkFlags(node).visible;
-}
-
-function clusterNetworkFlags(node) {
-  const network = node.network || {};
-  const hasPush = node.ffmpeg_running
-    || clusterHasPositiveNumber(network.stream_bitrate_kbps)
-    || clusterHasPositiveNumber(network.stream_speed)
-    || clusterHasPositiveNumber(network.stream_fps)
-    || clusterHasPositiveNumber(network.stream_time_secs)
-    || clusterHasPositiveNumber(network.stream_frame);
-  const hasCache = network.hls_cache_active
-    && (clusterHasPositiveNumber(network.stream_cache_bitrate_kbps)
-      || clusterHasPositiveNumber(network.stream_cache_speed)
-      || clusterHasPositiveNumber(network.stream_cache_time_secs));
-  return { network, hasPush, hasCache, visible: hasPush || hasCache };
+  return !node.is_local && node.ffmpeg_running === true && node.health?.stale !== true;
 }
 
 function createClusterNodeBadge(node, clusterConfigVersion) {
@@ -637,10 +676,9 @@ function createClusterNodeBadge(node, clusterConfigVersion) {
   badge.appendChild(createClusterIcon(clusterStatusIcon(node, role, configState)));
   badge.appendChild(document.createTextNode(formatClusterNodeStatus(node)));
   if (!clusterNodeUsable(node)) {
-    // The display only says usable/故障; keep the cause as a tooltip.
-    badge.title = node.draining
-      ? formatClusterHealthReason('draining')
-      : formatClusterHealthReason(node.health?.reason || '-');
+    const reason = formatClusterHealthReason(node.health?.reason || '-');
+    badge.title = node.draining && node.health?.reason !== 'draining'
+      ? `${formatClusterHealthReason('draining')}；${reason}` : reason;
   }
   return badge;
 }
@@ -687,22 +725,26 @@ function createClusterNodeActions(node) {
   actions.className = 'cluster-node-actions';
 
   const toggleButton = createClusterIconButton(
-    showEnableButton ? '启用' : '禁用',
+    showEnableButton ? '恢复节点（退出维护并重新检测）' : '进入维护（暂停接管）',
     showEnableButton ? 'cluster-enable-btn' : 'cluster-disable-btn',
     () => setClusterDrainForNode(node.node_id || '', !showEnableButton)
   );
   toggleButton.appendChild(createClusterIcon(showEnableButton ? 'enabled' : 'disabled'));
+  toggleButton.dataset.clusterAction = 'maintenance';
 
   const activateButton = createClusterIconButton('切换到此节点（手动设为活跃）', 'cluster-switch-btn', () => {
     setClusterNodeActive(node.node_id || '');
   });
   activateButton.disabled = !usable;
+  activateButton.dataset.unavailable = String(!usable);
+  activateButton.dataset.clusterAction = 'activate';
   activateButton.appendChild(createClusterIcon('switch'));
 
   const restartButton = createClusterIconButton('重启节点程序', 'cluster-restart-btn', () => {
     restartClusterNode(node.node_id || '');
   });
   restartButton.appendChild(createClusterIcon('restart'));
+  restartButton.dataset.clusterAction = 'restart';
 
   actions.append(toggleButton, activateButton, restartButton);
   return actions;
@@ -746,18 +788,17 @@ function createClusterNodeCard(node, clusterConfigVersion) {
   if (titleChip) {
     identity.appendChild(titleChip);
   }
+  const selfCheck = createClusterSelfCheck(node);
+  if (selfCheck) identity.appendChild(selfCheck);
   title.append(identity, createClusterHeartbeat(node));
 
   const meta = document.createElement('div');
   meta.className = 'cluster-node-meta';
 
-  const selfCheck = createClusterSelfCheck(node);
-  if (selfCheck) meta.appendChild(selfCheck);
-
   if (stream) {
     meta.appendChild(createClusterNodeStream(stream));
   }
-  const networkPanel = createClusterNodeNetwork(node);
+  const networkPanel = createClusterNetwork(node);
   if (networkPanel) {
     meta.appendChild(networkPanel);
   }
@@ -894,126 +935,6 @@ function createClusterIconButton(label, extraClass, onClick) {
   return button;
 }
 
-function createClusterNodeNetwork(node) {
-  const { network, hasCache, visible } = clusterNetworkFlags(node);
-  if (!visible) {
-    return null;
-  }
-
-  const panel = document.createElement('div');
-  panel.className = 'cluster-node-network';
-
-  const meters = document.createElement('div');
-  meters.className = 'bili-network-meters';
-
-  // Push first: it is the leg the cluster actually fails over on.
-  const pushMeter = createClusterNetworkMeter(
-    'RTMP TX',
-    node.ffmpeg_running ? clusterSpeedLabel(network.stream_speed) || '-' : '停止',
-    node.ffmpeg_running ? clusterSpeedTone(network.stream_speed) : 'stopped',
-    formatNetworkRate(network.stream_bitrate_kbps),
-    [
-      [clusterMeterTime(network.stream_time_secs), clusterMeterFps(network.stream_fps)]
-    ]
-  );
-  meters.appendChild(pushMeter);
-  pushMeter.dataset.leg = 'tx';
-
-  let cacheMeter = null;
-  if (hasCache) {
-    cacheMeter = createClusterNetworkMeter(
-      'HLS Cache',
-      clusterSpeedLabel(network.stream_cache_speed),
-      clusterSpeedTone(network.stream_cache_speed),
-      formatNetworkRate(network.stream_cache_bitrate_kbps),
-      [[clusterMeterTime(network.stream_cache_time_secs)]]
-    );
-    meters.appendChild(cacheMeter);
-    cacheMeter.dataset.leg = 'rx';
-  }
-
-  panel.appendChild(meters);
-  mountNetworkHistory(panel, network, { showCache: hasCache, pushMeter, cacheMeter });
-  return panel;
-}
-
-function clusterSpeedTone(speed) {
-  if (!Number.isFinite(speed) || speed <= 0) return '';
-  if (speed > 0.97) return 'ok';
-  if (speed > 0.94) return 'warn';
-  return 'danger';
-}
-
-function clusterSpeedLabel(speed) {
-  return Number.isFinite(speed) && speed > 0 ? formatSpeedRatio(speed) : '';
-}
-
-function clusterMeterTime(secs) {
-  return Number.isFinite(secs) && secs >= 0 ? formatStreamTime(secs) : '';
-}
-
-function clusterMeterFps(fps) {
-  return Number.isFinite(fps) && fps >= 0 ? `${formatFps(fps)} fps` : '';
-}
-
-function createClusterNetworkMeter(label, speed, speedTone, value, detailGroups) {
-  const meter = document.createElement('div');
-  meter.className = 'bili-network-meter';
-
-  const meterLabel = document.createElement('div');
-  meterLabel.className = 'bili-network-meter-label';
-
-  const labelSpan = document.createElement('span');
-  labelSpan.textContent = label;
-  meterLabel.appendChild(labelSpan);
-
-  const meterValue = document.createElement('div');
-  meterValue.className = 'bili-network-meter-value';
-
-  const valueSpan = document.createElement('span');
-  valueSpan.textContent = value;
-  meterValue.appendChild(valueSpan);
-
-  // The ratio qualifies the rate, so it rides with it rather than being
-  // flung to the far edge of the label row.
-  if (speed) {
-    const speedSpan = document.createElement('span');
-    speedSpan.className = 'bili-network-meter-speed';
-    if (speedTone) {
-      speedSpan.dataset.tone = speedTone;
-    }
-    speedSpan.textContent = speed;
-    meterValue.appendChild(speedSpan);
-  }
-
-  meter.append(meterLabel, meterValue);
-  for (const group of detailGroups) {
-    const parts = group.filter(Boolean);
-    if (parts.length === 0) continue;
-
-    const detail = document.createElement('div');
-    detail.className = 'bili-network-total';
-    parts.forEach((text, index) => {
-      if (index > 0) {
-        const sep = document.createElement('span');
-        sep.className = 'bili-network-total-sep';
-        sep.textContent = '·';
-        detail.appendChild(sep);
-      }
-      const part = document.createElement('span');
-      part.textContent = text;
-      detail.appendChild(part);
-    });
-    meter.appendChild(detail);
-  }
-
-  return meter;
-}
-
-function clusterHasPositiveNumber(value) {
-  return Number.isFinite(value) && value > 0;
-}
-
 function renderClusterConfigSync(cluster) {
   const version = cluster?.config_version;
   const nodes = Array.isArray(cluster?.nodes) ? cluster.nodes : [];
@@ -1044,21 +965,8 @@ function renderClusterSyncLabel(label, synced = label === '已同步') {
   return wrapper;
 }
 
-function clusterNodeUsable(node) {
-  return !(node.draining || node.network_unstable || node.health?.healthy === false);
-}
-
-function formatClusterNodeStatus(node) {
-  if (node.health?.reason === 'waiting_for_heartbeat') {
-    return '等待';
-  }
-  if (!clusterNodeUsable(node)) {
-    return '故障';
-  }
-  return formatClusterRole(node.role || 'unknown');
-}
-
 function clusterNodeBadgeClass(node, role, configState = '-') {
+  if (node.draining || role === 'draining') return 'draining';
   if (node.health?.reason === 'waiting_for_heartbeat') {
     return '';
   }
@@ -1072,6 +980,7 @@ function clusterNodeBadgeClass(node, role, configState = '-') {
 }
 
 function clusterStatusIcon(node, role, configState = '-') {
+  if (node.draining || role === 'draining') return 'disabled';
   if (node.health?.reason === 'waiting_for_heartbeat') {
     return 'sync-error';
   }
@@ -1082,31 +991,6 @@ function clusterStatusIcon(node, role, configState = '-') {
     return 'sync-error';
   }
   return 'enabled';
-}
-
-function formatClusterRole(role) {
-  switch (role) {
-    case 'active': return '活跃';
-    case 'standby': return '备用';
-    case 'draining': return '故障';
-    case 'unhealthy': return '故障';
-    default: return role || '-';
-  }
-}
-
-function formatClusterHealthReason(reason) {
-  switch (reason) {
-    case 'network_isolated': return '网络隔离';
-    case 'heartbeat_timeout': return '心跳超时';
-    case 'waiting_for_heartbeat': return '等待心跳';
-    case 'api_unreachable': return '节点 API 不可达';
-    case 'external_api_unreachable': return '外部 API 不可达';
-    case 'ffmpeg_repeated_failures': return '推流反复失败';
-    case 'node_fault_latched': return '故障锁定';
-    case 'draining': return '已禁用';
-    case 'network_unstable': return '网络不稳定';
-    default: return reason || '-';
-  }
 }
 
 function formatClusterSeen(lastSeen) {
@@ -1122,132 +1006,102 @@ function formatClusterSeen(lastSeen) {
   return minutes > 0 ? `${hours}h ${minutes}m 前` : `${hours}h 前`;
 }
 
-async function setClusterDrainForNode(nodeId, draining) {
-  try {
-    const result = await postJsonApi('/api/cluster/drain', { node_id: nodeId, draining });
-    if (result.success) {
-      showNotification(result.message || '集群节点状态已更新', 'success');
-      renderClusterStatusAndSyncDashboard(result.data, null, { forceDashboardSync: true });
-    } else {
-      showNotification(result.message || '集群节点状态更新失败', 'error');
-    }
-  } catch (error) {
-    showNotification('集群节点状态更新失败: ' + error.message, 'error');
+function syncClusterActionAvailability() {
+  for (const button of document.querySelectorAll('#cluster-node-list button, #clusterAutoFailoverToggle, #clusterSyncBtn, #public-status-save-btn')) {
+    button.disabled = clusterMutationInFlight || !clusterConnected || button.dataset.unavailable === 'true';
   }
 }
 
-async function triggerClusterFailover(targetNodeId = null) {
-  try {
-    const result = await postJsonApi('/api/cluster/failover', { target_node_id: targetNodeId });
-    if (result.success) {
-      const defaultMessage = targetNodeId
-        ? `已手动切换到节点 ${targetNodeId}`
-        : '已触发自动故障转移';
-      showNotification(result.message || defaultMessage, 'success');
-      renderClusterStatusAndSyncDashboard(result.data, null, { forceDashboardSync: true });
-    } else {
-      const defaultError = targetNodeId
-        ? `手动切换到节点 ${targetNodeId} 失败`
-        : '自动故障转移失败';
-      showNotification(result.message || defaultError, 'error');
-    }
-  } catch (error) {
-    const context = targetNodeId ? '手动切换节点失败' : '自动故障转移失败';
-    showNotification(`${context}: ${error.message}`, 'error');
+function restoreClusterActionFocus() {
+  if (!pendingClusterFocus || clusterMutationInFlight) return;
+  const { nodeId, action } = pendingClusterFocus;
+  pendingClusterFocus = null;
+  if (document.activeElement !== document.body) return;
+  const replacement = [...(renderedClusterNodes.get(nodeId)?.element.querySelectorAll('button') || [])]
+    .find(button => button.dataset.clusterAction === action && !button.disabled);
+  replacement?.focus();
+}
+
+// Cluster actions share one writer because recovery, ownership, and config
+// propagation affect the same snapshot. Reads begun before a write cannot
+// replace its acknowledged result; an SSE refresh during it is replayed.
+async function runClusterMutation(action, context, onSuccess) {
+  if (clusterMutationInFlight) return false;
+  const focused = document.activeElement;
+  if (focused?.dataset.clusterAction) {
+    pendingClusterFocus = {
+      nodeId: focused.closest('[data-node-id]')?.dataset.nodeId,
+      action: focused.dataset.clusterAction,
+    };
   }
+  clusterMutationInFlight = true;
+  clusterRequestGeneration += 1;
+  syncClusterActionAvailability();
+  try {
+    const result = await action();
+    if (result.success) onSuccess?.(result);
+    if (result.data) renderClusterStatusAndSyncDashboard(result.data, null, { forceDashboardSync: true });
+    showNotification(result.message || `${context}${result.success ? '成功' : '失败'}`, result.success ? 'success' : 'error');
+    return !!result.success;
+  } catch (error) {
+    showNotification(`${context}失败: ${error.message}`, 'error');
+    return false;
+  } finally {
+    clusterMutationInFlight = false;
+    updateClusterAutoFailoverToggle(confirmedAutoFailover);
+    syncClusterActionAvailability();
+    restoreClusterActionFocus();
+    void refreshClusterStatus();
+  }
+}
+
+async function setClusterDrainForNode(nodeId, draining) {
+  return runClusterMutation(
+    () => postJsonApi('/api/cluster/drain', { node_id: nodeId, draining }),
+    draining ? '设置节点维护' : '恢复节点',
+  );
 }
 
 async function setClusterNodeActive(nodeId) {
-  if (!nodeId) {
-    showNotification('节点 ID 不能为空', 'error');
-    return;
-  }
-
-  try {
-    // Manual activation should override priority and clear draining first.
-    const undrainResult = await postJsonApi('/api/cluster/drain', {
-      node_id: nodeId,
-      draining: false
-    });
-    if (!undrainResult.success) {
-      showNotification(undrainResult.message || '取消节点禁用失败', 'error');
-      return;
-    }
-
-    await triggerClusterFailover(nodeId);
-  } catch (error) {
-    showNotification('设为活跃节点失败: ' + error.message, 'error');
-  }
+  if (!nodeId) return;
+  return runClusterMutation(async () => {
+    const recovered = await postJsonApi('/api/cluster/drain', { node_id: nodeId, draining: false });
+    if (!recovered.success) return recovered;
+    if (recovered.data) renderClusterStatusAndSyncDashboard(recovered.data, null);
+    return postJsonApi('/api/cluster/failover', { target_node_id: nodeId });
+  }, '切换活跃节点');
 }
 
 async function restartClusterNode(nodeId) {
-  if (!nodeId || !confirm(`确定要重启节点 ${nodeId} 的 bilistream 程序吗？`)) {
-    return;
-  }
-
-  try {
-    const result = await postJsonApi('/api/cluster/restart-node', { node_id: nodeId });
-    if (result.success) {
-      showNotification(result.message || '节点重启命令已发送', 'success');
-      setTimeout(refreshClusterStatus, 3000);
-    } else {
-      showNotification(result.message || '节点重启失败', 'error');
-    }
-  } catch (error) {
-    showNotification('节点重启失败: ' + error.message, 'error');
-  }
+  if (!nodeId || clusterMutationInFlight || !confirm(`确定要重启节点 ${nodeId} 的 bilistream 程序吗？`)) return;
+  const succeeded = await runClusterMutation(
+    () => postJsonApi('/api/cluster/restart-node', { node_id: nodeId }), '重启节点',
+  );
+  if (succeeded) setTimeout(refreshClusterStatus, 3000);
 }
 
 function updateClusterAutoFailoverToggle(enabled) {
+  confirmedAutoFailover = !!enabled;
   const toggle = document.getElementById('clusterAutoFailoverToggle');
-  if (!toggle) {
-    return;
-  }
-  toggle.checked = !!enabled;
+  if (toggle && !clusterMutationInFlight) toggle.checked = confirmedAutoFailover;
 }
 
 async function setClusterAutoFailover(enabled) {
-  const toggle = document.getElementById('clusterAutoFailoverToggle');
-  const previous = toggle ? toggle.checked : true;
-  updateClusterAutoFailoverToggle(enabled);
-  try {
-    const result = await postJsonApi('/api/cluster/auto-failover', { enabled: !!enabled });
-    if (result.success) {
-      if (window.configData?.cluster) {
-        window.configData.cluster.auto_failover = !!enabled;
-      }
-      const configToggle = document.getElementById('config-cluster-auto-failover');
-      if (configToggle) {
-        configToggle.checked = !!enabled;
-      }
-      if (result.data) {
-        renderClusterStatusAndSyncDashboard(result.data, null);
-      } else {
-        updateClusterAutoFailoverToggle(enabled);
-      }
-      showNotification(result.message || (enabled ? '已启用自动故障转移' : '已关闭自动故障转移'), 'success');
-    } else {
-      updateClusterAutoFailoverToggle(previous);
-      showNotification(result.message || '自动故障转移设置失败', 'error');
-    }
-  } catch (error) {
-    updateClusterAutoFailoverToggle(previous);
-    showNotification('自动故障转移设置失败: ' + error.message, 'error');
-  }
+  if (clusterMutationInFlight) return;
+  return runClusterMutation(
+    () => postJsonApi('/api/cluster/auto-failover', { enabled: !!enabled }),
+    '设置自动故障转移',
+    () => {
+      confirmedAutoFailover = !!enabled;
+      if (window.configData?.cluster) window.configData.cluster.auto_failover = !!enabled;
+      // The settings form keeps its loaded draft. An unrelated save must not
+      // re-submit this dashboard change as a stale whole-cluster edit.
+    },
+  );
 }
 
 async function pushClusterConfig() {
-  try {
-    const result = await postJsonApi('/api/cluster/push-config');
-    if (result.success) {
-      showNotification(result.message || '频道配置已同步', 'success');
-      renderClusterStatusAndSyncDashboard(result.data, null);
-    } else {
-      showNotification(result.message || '频道配置同步失败', 'error');
-    }
-  } catch (error) {
-    showNotification('频道配置同步失败: ' + error.message, 'error');
-  }
+  return runClusterMutation(() => postJsonApi('/api/cluster/push-config'), '同步频道配置');
 }
 
 // Public status page --------------------------------------------------------
@@ -1326,19 +1180,15 @@ function loadPublicStatusSettings(cluster = {}) {
 }
 
 async function savePublicStatusSettings() {
+  if (clusterMutationInFlight) return;
   const button = document.getElementById('public-status-save-btn');
   setButtonLoading(button, null, true);
   try {
-    const data = await postJsonApi('/api/cluster/public-status', { config: publicStatusFromForm() });
-    showNotification(data.message || (data.success ? '公开状态页配置已保存' : '保存失败'),
-      data.success ? 'success' : 'error');
-    if (data.success && data.data) {
-      renderClusterStatusAndSyncDashboard(data.data, null);
-    }
-  } catch (error) {
-    showNotification('保存失败: ' + error.message, 'error');
+    const config = publicStatusFromForm();
+    await runClusterMutation(() => postJsonApi('/api/cluster/public-status', { config }), '保存公开状态页配置');
   } finally {
     setButtonLoading(button, null, false);
+    syncClusterActionAvailability();
   }
 }
 
@@ -1390,6 +1240,8 @@ export {
   savePublicStatusSettings,
   updatePublicStatusUrlHint,
   getClusterConfigFromForm,
+  getClusterConfigBaseline,
+  acceptClusterConfigBaseline,
   refreshClusterStatus,
   initClusterControls,
   startClusterRefresh,

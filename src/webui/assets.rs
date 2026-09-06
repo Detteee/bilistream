@@ -13,6 +13,9 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/styles.css"),
     asset!("webui/dist/js/main.js"),
     asset!("webui/dist/js/api.js"),
+    asset!("webui/dist/js/cluster.js"),
+    asset!("webui/dist/js/cluster-health.js"),
+    asset!("webui/dist/js/cluster-network.js"),
     asset!("webui/dist/js/config-draft.js"),
     asset!("webui/dist/js/crop.js"),
     asset!("webui/dist/js/dialog.js"),
@@ -29,6 +32,13 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/js/toggle-save.js"),
     asset!("webui/dist/icon.png"),
     asset!("webui/dist/icon-blue.png"),
+    asset!("webui/public-dist/index.html"),
+    asset!("webui/public-dist/public.css"),
+    asset!("webui/public-dist/js/main.js"),
+    asset!("webui/public-dist/js/nodes.js"),
+    asset!("webui/public-dist/js/request.js"),
+    asset!("webui/public-dist/js/streams.js"),
+    asset!("webui/public-dist/js/theme.js"),
 ];
 
 pub(crate) fn missing_asset_count(directory: &Path) -> usize {
@@ -73,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn every_admin_asset_is_bundled() {
+    fn every_admin_and_public_asset_is_bundled() {
         fn check(directory: &Path) {
             for entry in std::fs::read_dir(directory).unwrap() {
                 let path = entry.unwrap().path();
@@ -91,5 +101,6 @@ mod tests {
             }
         }
         check(&Path::new(env!("CARGO_MANIFEST_DIR")).join("webui/dist"));
+        check(&Path::new(env!("CARGO_MANIFEST_DIR")).join("webui/public-dist"));
     }
 }

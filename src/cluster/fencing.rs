@@ -4,7 +4,7 @@ use super::election::configured_node_ids;
 use super::state::{cluster_state_read, cluster_state_write, now_secs, ClusterState};
 use super::types::*;
 use crate::config::{ClusterConfig, Config};
-use crate::plugins::{is_danmaku_commands_enabled, is_ffmpeg_running};
+use crate::plugins::is_danmaku_commands_enabled;
 use crate::webui::state::{get_status_cache, NetworkStatus};
 
 #[cfg(test)]
@@ -244,7 +244,7 @@ pub(crate) async fn collect_local_snapshot(
     cfg: &Config,
     config_version: String,
 ) -> ClusterNodeSnapshot {
-    let network = collect_network_status();
+    let network = collect_network_status().await;
     let mut status = get_status_cache();
     if let Some(ref mut status) = status {
         // Config stays on during a restream; the processor that accepts `%转播%` does not.
@@ -334,14 +334,14 @@ pub(crate) async fn collect_local_snapshot(
         fault_reason = Some(reason);
     }
 
-    let health = if draining {
-        ClusterHealth::unhealthy("draining", false, false)
-    } else if fault_latched {
+    let health = if fault_latched {
         ClusterHealth::unhealthy(
             fault_reason.unwrap_or_else(|| "node_fault_latched".to_string()),
             false,
             true,
         )
+    } else if draining {
+        ClusterHealth::unhealthy("draining", false, false)
     } else {
         ClusterHealth::healthy()
     };
@@ -358,7 +358,7 @@ pub(crate) async fn collect_local_snapshot(
         health,
         draining,
         network_unstable: fault_latched,
-        ffmpeg_running: is_ffmpeg_running().await,
+        ffmpeg_running: network.ffmpeg_running,
         active_stream,
         status,
         network: Some(network),
@@ -369,8 +369,8 @@ pub(crate) async fn collect_local_snapshot(
     }
 }
 
-pub(crate) fn collect_network_status() -> NetworkStatus {
-    crate::webui::api::current_network_status()
+pub(crate) async fn collect_network_status() -> NetworkStatus {
+    crate::webui::api::current_network_status().await
 }
 
 pub(crate) fn ffmpeg_restart_degraded(cluster: &ClusterConfig, failed_restarts: u32) -> bool {

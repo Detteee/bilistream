@@ -10,7 +10,7 @@
 use axum::body::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -343,33 +343,58 @@ pub(super) fn build_public_streams(
 struct StreamsSnapshot {
     body: Bytes,
     etag: String,
+    confirmed_until: Option<Instant>,
+}
+
+impl StreamsSnapshot {
+    fn response_at(&self, now: Instant) -> Option<(Bytes, String)> {
+        self.confirmed_until.filter(|until| now < *until)?;
+        Some((self.body.clone(), self.etag.clone()))
+    }
 }
 
 static SNAPSHOT: RwLock<Option<StreamsSnapshot>> = RwLock::new(None);
 
-/// The cached list and its ETag, or `None` before the first successful fetch.
+/// A list confirmed within three configured refresh intervals. Repeated
+/// upstream failures must eventually return 503, so viewers stop generating
+/// commands from indefinitely old eligibility data.
 pub(super) fn current_public_streams() -> Option<(Bytes, String)> {
     let guard = SNAPSHOT.read().ok()?;
     let snapshot = guard.as_ref()?;
-    Some((snapshot.body.clone(), snapshot.etag.clone()))
+    snapshot.response_at(Instant::now())
 }
 
-fn store_snapshot(streams: &[PublicStream]) {
+fn store_snapshot(streams: &[PublicStream], confirmed_for: Option<Duration>) {
     let Ok(body) = serde_json::to_vec(streams).map(Bytes::from) else {
         return;
     };
 
     if let Ok(mut guard) = SNAPSHOT.write() {
-        if let Some(previous) = guard.as_ref() {
-            if previous.body == body {
-                return;
-            }
-        }
-        *guard = Some(StreamsSnapshot {
-            etag: super::body_etag(&body),
-            body,
-        });
+        replace_streams_snapshot(&mut guard, body, confirmed_for, Instant::now());
     }
+}
+
+fn replace_streams_snapshot(
+    slot: &mut Option<StreamsSnapshot>,
+    body: Bytes,
+    confirmed_for: Option<Duration>,
+    now: Instant,
+) {
+    // A keyword/area remap changes the body, not the age of its source data.
+    let confirmed_until = confirmed_for
+        .and_then(|limit| now.checked_add(limit))
+        .or_else(|| slot.as_ref().and_then(|snapshot| snapshot.confirmed_until));
+    if let Some(previous) = slot.as_mut() {
+        if previous.body == body {
+            previous.confirmed_until = confirmed_until;
+            return;
+        }
+    }
+    *slot = Some(StreamsSnapshot {
+        etag: super::body_etag(&body),
+        body,
+        confirmed_until,
+    });
 }
 
 /// YouTube channel ids to ask Holodex about: exactly what channels.json lists,
@@ -452,7 +477,16 @@ async fn rebuild_public_streams(cached_only: bool) -> bool {
     super::thumbnails::reconcile(&image_urls(&public)).await;
     rewrite_thumbnails(&mut public);
 
-    store_snapshot(&public);
+    let confirmed_for = (!cached_only).then(|| {
+        Duration::from_secs(
+            cfg.cluster
+                .public_status
+                .holodex_refresh_secs
+                .max(30)
+                .saturating_mul(3),
+        )
+    });
+    store_snapshot(&public, confirmed_for);
     true
 }
 
@@ -512,6 +546,47 @@ mod tests {
     use super::*;
     use crate::config::ChannelPlatforms;
     use crate::plugins::holodex::HolodexChannel;
+
+    #[test]
+    fn unchanged_success_renews_freshness_but_remapping_old_streams_does_not() {
+        let now = Instant::now();
+        let valid_for = Duration::from_secs(90);
+        let mut slot = None;
+        let body = Bytes::from_static(b"[]");
+        replace_streams_snapshot(&mut slot, body.clone(), Some(valid_for), now);
+        let etag = slot.as_ref().unwrap().etag.clone();
+        assert!(slot
+            .as_ref()
+            .unwrap()
+            .response_at(now + valid_for)
+            .is_none());
+        replace_streams_snapshot(
+            &mut slot,
+            body,
+            Some(valid_for),
+            now + Duration::from_secs(60),
+        );
+        assert_eq!(slot.as_ref().unwrap().etag, etag);
+        assert!(slot
+            .as_ref()
+            .unwrap()
+            .response_at(now + valid_for)
+            .is_some());
+        replace_streams_snapshot(
+            &mut slot,
+            Bytes::from_static(b"[1]"),
+            None,
+            now + Duration::from_secs(140),
+        );
+        assert!(slot
+            .as_ref()
+            .unwrap()
+            .response_at(now + Duration::from_secs(150))
+            .is_none());
+        let mut unconfirmed = None;
+        replace_streams_snapshot(&mut unconfirmed, Bytes::from_static(b"[]"), None, now);
+        assert!(unconfirmed.as_ref().unwrap().response_at(now).is_none());
+    }
 
     fn channel(
         name: &str,

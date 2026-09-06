@@ -210,9 +210,9 @@ pub(crate) fn build_status_from_state(
     let mut nodes: Vec<_> = state.nodes.values().cloned().collect();
     for node in &mut nodes {
         node.is_local = node.node_id == cfg.cluster.node_id;
-        node.role = if node.draining || node.network_unstable {
+        node.role = if node.draining {
             ClusterNodeRole::Draining
-        } else if !node.health.healthy {
+        } else if node.network_unstable || !node.health.healthy {
             ClusterNodeRole::Unhealthy
         } else if Some(node.node_id.as_str()) == chosen.as_deref() {
             ClusterNodeRole::Active
@@ -244,8 +244,6 @@ pub(crate) fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now:
         let stale = is_stale(node, cfg, now);
         if stale {
             node.health = ClusterHealth::unhealthy("heartbeat_timeout", true, false);
-        } else if node.draining {
-            node.health = ClusterHealth::unhealthy("draining", false, false);
         } else if node.network_unstable {
             let reason = if node.health.stream_degraded {
                 node.health.reason.clone()
@@ -256,6 +254,8 @@ pub(crate) fn normalize_node_health(state: &mut ClusterState, cfg: &Config, now:
         } else if node.health.stream_degraded {
             node.health.healthy = false;
             node.health.reason = "stream_metrics_degraded".to_string();
+        } else if node.draining {
+            node.health = ClusterHealth::unhealthy("draining", false, false);
         } else {
             // Operator-controlled drain/fault flags can be cleared immediately
             // before a manual handoff. Recover the cached snapshot here so the

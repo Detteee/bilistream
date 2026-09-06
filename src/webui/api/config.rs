@@ -164,6 +164,9 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "youtube_cookies_from_browser": cfg.youtube.cookies_from_browser.as_deref().unwrap_or_default().trim(),
         "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
         "youtube_deno_path": cfg.youtube.deno_path.as_deref().unwrap_or_default().trim(),
+        "niconico_cookies_file": cfg.niconico.cookies_file.as_deref().unwrap_or_default().trim(),
+        "niconico_proxy": cfg.niconico.proxy.as_deref().unwrap_or_default().trim(),
+        "cluster": cfg.cluster,
     })
 }
 
@@ -185,6 +188,31 @@ pub(crate) fn validate_websub(url: Option<&str>, port: Option<u16>) -> Result<()
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn cluster_and_niconico_edits_validate_against_the_loaded_configuration() {
+    let mut cfg = crate::cluster::tests::test_config("local", 0);
+    cfg.niconico.proxy = Some(" http://proxy ".into());
+    let current = config_form_values(&cfg);
+    assert_eq!(current["niconico_proxy"], "http://proxy");
+    assert_eq!(current["niconico_cookies_file"], "");
+    let expected = HashMap::from([("cluster".into(), current["cluster"].clone())]);
+    let patch = json!({"cluster": {"priority": 20}});
+    assert!(validate_edit_preconditions(&current, &patch, Some(&expected)).is_ok());
+    cfg.cluster.public_status.node_id = "peer".into();
+    assert_eq!(
+        validate_edit_preconditions(&config_form_values(&cfg), &patch, Some(&expected)),
+        Err(EDIT_CONFLICT)
+    );
+    // An unrelated form edit does not depend on any cluster field.
+    assert!(validate_edit_preconditions(
+        &config_form_values(&cfg),
+        &json!({"interval": 75}),
+        Some(&HashMap::from([("interval".into(), json!(cfg.interval))]))
+    )
+    .is_ok());
 }
 
 pub(crate) fn config_payload_enables_a_monitor_toggle(

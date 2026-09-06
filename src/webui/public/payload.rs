@@ -68,6 +68,9 @@ pub struct PublicNode {
     pub name: String,
     pub role: ClusterNodeRole,
     pub healthy: bool,
+    /// No heartbeat has arrived yet; distinct from a detected failure.
+    #[serde(default)]
+    pub waiting_for_heartbeat: bool,
     pub ffmpeg_running: bool,
     /// Who is on air, without channel or stream ids.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -194,6 +197,7 @@ impl From<&ClusterStreamIdentity> for PublicNodeStream {
 
 impl From<&ClusterNodeSnapshot> for PublicNode {
     fn from(node: &ClusterNodeSnapshot) -> Self {
+        let publishing = node.ffmpeg_running && !node.health.stale;
         Self {
             // Fall back to the id only when a node was never given a name.
             name: if node.name.trim().is_empty() {
@@ -203,9 +207,18 @@ impl From<&ClusterNodeSnapshot> for PublicNode {
             },
             role: node.role,
             healthy: node.health.healthy,
-            ffmpeg_running: node.ffmpeg_running,
-            stream: node.active_stream.as_ref().map(PublicNodeStream::from),
-            network: node.network.as_ref().map(PublicNetwork::from),
+            waiting_for_heartbeat: node.health.reason == "waiting_for_heartbeat",
+            ffmpeg_running: publishing,
+            stream: node
+                .active_stream
+                .as_ref()
+                .filter(|_| publishing)
+                .map(PublicNodeStream::from),
+            network: node
+                .network
+                .as_ref()
+                .filter(|_| publishing)
+                .map(PublicNetwork::from),
         }
     }
 }
@@ -273,7 +286,7 @@ mod tests {
             health: ClusterHealth::healthy(),
             draining: false,
             network_unstable: false,
-            ffmpeg_running: false,
+            ffmpeg_running: true,
             active_stream: None,
             status: None,
             network: Some(NetworkStatus {
@@ -366,7 +379,14 @@ mod tests {
         );
         assert_eq!(
             keys(&value["nodes"][0]),
-            sorted(&["name", "role", "healthy", "ffmpeg_running", "network"])
+            sorted(&[
+                "name",
+                "role",
+                "healthy",
+                "waiting_for_heartbeat",
+                "ffmpeg_running",
+                "network"
+            ])
         );
         assert_eq!(
             keys(&value["nodes"][0]["network"]),
@@ -427,6 +447,28 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("stream_bitrate_history"));
         assert!(!json.contains("stream_cache_bitrate_history"));
+    }
+
+    #[test]
+    fn stopped_and_stale_nodes_do_not_advertise_old_publishing_metrics() {
+        let mut node = sample_node();
+        node.active_stream = Some(ClusterStreamIdentity {
+            platform: "YT".into(),
+            channel_name: "channel".into(),
+            channel_id: "private".into(),
+            stream_id: None,
+            title: None,
+        });
+        for stale in [false, true] {
+            node.ffmpeg_running = stale;
+            node.health = ClusterHealth::unhealthy("heartbeat_timeout", stale, false);
+            let public = PublicNode::from(&node);
+            assert!(!public.ffmpeg_running);
+            assert!(public.network.is_none());
+            assert!(public.stream.is_none());
+        }
+        node.health = ClusterHealth::unhealthy("waiting_for_heartbeat", true, false);
+        assert!(PublicNode::from(&node).waiting_for_heartbeat);
     }
 
     #[test]

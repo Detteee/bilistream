@@ -1,3 +1,37 @@
+// Wire-state translations shared by admin and public views. Maintenance is
+// operator intent; automatic faults use unhealthy even while fault-latched.
+export function clusterNodeUsable(node) {
+  return !(node.draining || node.role === 'draining' || node.network_unstable
+    || node.role === 'unhealthy' || node.health?.healthy === false || node.healthy === false);
+}
+
+export function formatClusterRole(role) {
+  return { active: '活跃', standby: '备用', draining: '维护', unhealthy: '故障' }[role] || '未知';
+}
+
+export function formatClusterNodeStatus(node) {
+  if (node.draining || node.role === 'draining') return '维护';
+  if (node.health?.reason === 'waiting_for_heartbeat' || node.waiting_for_heartbeat) return '等待';
+  if (!clusterNodeUsable(node)) return '故障';
+  return formatClusterRole(node.role);
+}
+
+export function formatClusterHealthReason(reason) {
+  return {
+    healthy: '健康',
+    network_isolated: '网络隔离',
+    heartbeat_timeout: '心跳超时',
+    waiting_for_heartbeat: '等待心跳',
+    api_unreachable: '节点 API 不可达',
+    external_api_unreachable: '外部 API 不可达',
+    ffmpeg_repeated_failures: '推流反复失败',
+    node_fault_latched: '故障锁定',
+    stream_metrics_degraded: '推流指标异常',
+    draining: '操作员维护，暂停接管',
+    network_unstable: '节点故障锁定',
+  }[reason] || reason || '-';
+}
+
 // Reachability through the node's advertised control URL, including its tunnel.
 export function selfCheckDisplay(check, stale = false) {
   if (stale) {

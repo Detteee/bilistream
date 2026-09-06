@@ -133,7 +133,8 @@ pub(super) async fn current_public_status() -> Option<(Bytes, String)> {
 
 /// Drop the TTL so the next poll rebuilds. Used when the owner's processor
 /// gate flips: 转播 ending enables `%转播%` and the page should not wait 5s
-/// to notice. The last good body is kept, so a failed rebuild still answers.
+/// to notice. Retain bytes for ETag reuse, but never serve an expired snapshot
+/// as current if rebuilding fails.
 pub(crate) fn invalidate_public_status_snapshot() {
     if let Ok(mut guard) = SNAPSHOT.write() {
         if let Some(snap) = guard.as_mut() {
@@ -159,6 +160,9 @@ fn snapshot_is_fresh() -> bool {
 fn read_snapshot() -> Option<(Bytes, String)> {
     let guard = SNAPSHOT.read().ok()?;
     let snapshot = guard.as_ref()?;
+    if snapshot.built_at.elapsed() >= SNAPSHOT_TTL {
+        return None;
+    }
     Some((snapshot.body.clone(), snapshot.etag.clone()))
 }
 

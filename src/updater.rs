@@ -117,6 +117,7 @@ fn should_update_file(relative_path: &str, install_dir: &std::path::Path) -> boo
         || name == "bilistream-tauri"
         || name == "bilistream-tauri.exe"
         || name.starts_with("webui/dist/")
+        || name.starts_with("webui/public-dist/")
     {
         return true;
     }
@@ -412,6 +413,9 @@ mod tests {
         assert!(should_update_file("webui/dist/js/main.js", dir));
         assert!(should_update_file("webui/dist/js/api.js", dir));
         assert!(should_update_file("webui/dist/styles.css", dir));
+        assert!(should_update_file("webui/public-dist/index.html", dir));
+        assert!(should_update_file("webui/public-dist/js/main.js", dir));
+        assert!(should_update_file(r"webui\public-dist\public.css", dir));
         assert!(should_update_file(r"webui\dist\js\cluster.js", dir));
         assert!(!should_update_file("README.md", dir));
         assert!(!should_update_file("config.json", dir));

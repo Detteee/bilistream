@@ -4,9 +4,10 @@
 // paced for a page that may be open in many tabs for hours, and pauses while
 // the tab is hidden.
 
-import { renderStatusCards, setStatusCardsMessage } from '/shared/js/status-cards.js?v=10';
-import { clusterIsRestreaming, renderNodes } from './nodes.js?v=13';
-import { createJsonPoller } from './request.js?v=1';
+import { renderStatusCards, renderNiconicoCard, setStatusCardsMessage } from '/shared/js/status-cards.js';
+import { clusterIsRestreaming, renderNodes } from './nodes.js';
+import { createJsonPoller } from './request.js';
+import { bindDialog, bindListboxKeyboard } from '/shared/js/dialog.js';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -16,30 +17,37 @@ import {
   setAreas,
   setDanmakuEnabled,
   setStatus,
+  setStatusFreshness,
+  setStreamsFreshness,
   startDurationTicker,
   stopDurationTicker,
-} from './streams.js?v=17';
+} from './streams.js';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
 /// 304s. Streams turn over on the server's own 30s timer.
 const STATUS_POLL_MS = 10_000;
 const STREAMS_POLL_MS = 30_000;
+const AREAS_POLL_MS = 60_000;
 
 let statusTimer = null;
 let streamsTimer = null;
+let areasTimer = null;
 const getJson = createJsonPoller();
 let statusCardsSignature = null;
 let nodesSignature = null;
 
-function setSyncBanner(inSync) {
-  document.getElementById('public-sync-banner')?.classList.toggle('hidden', inSync);
+function setSyncBanner(message = '') {
+  const banner = document.getElementById('public-sync-banner');
+  if (!banner) return;
+  banner.textContent = message;
+  banner.classList.toggle('hidden', !message);
 }
 
 async function refreshStatus() {
   try {
     const status = await getJson('/api/public/status');
     if (!status) {
-      return;
+      throw new Error('缺少状态数据');
     }
     // readonly keeps every switch visible but locked, so viewers can see what
     // is on without being offered a control that is not theirs.
@@ -49,6 +57,9 @@ async function refreshStatus() {
     if (nextCards !== statusCardsSignature) {
       renderStatusCards(status, { readonly: true, showNetwork: false });
       statusCardsSignature = nextCards;
+    } else if (status.niconico?.scheduled_start) {
+      // Relative scheduled labels change even when the payload/ETag does not.
+      renderNiconicoCard(status.niconico, { readonly: true });
     }
     const nextNodes = JSON.stringify(status.nodes);
     if (nextNodes !== nodesSignature) {
@@ -59,11 +70,16 @@ async function refreshStatus() {
       status.bilibili?.enable_danmaku_command,
       clusterIsRestreaming(status.nodes),
     );
-    setSyncBanner(status.in_sync !== false);
+    setStatusFreshness(status.in_sync !== false);
+    setSyncBanner(status.in_sync === false ? '正在与直播节点同步，点播暂不可用。' : '');
   } catch (error) {
     console.debug('status refresh failed', error);
     statusCardsSignature = null;
+    nodesSignature = null;
+    setStatusFreshness(false);
     setStatusCardsMessage('连接中断');
+    renderNodes(null, '连接中断，节点状态未知');
+    setSyncBanner('连接中断，状态无法更新；恢复连接后自动重试。');
   }
 }
 
@@ -71,12 +87,13 @@ async function refreshStreams() {
   try {
     const streams = await getJson('/api/public/streams');
     if (!streams) {
-      return;
+      throw new Error('缺少直播列表');
     }
     renderStreams(streams);
   } catch (error) {
     console.debug('streams refresh failed', error);
-    setStatus(null, '暂时无法读取直播列表');
+    setStreamsFreshness(false);
+    setStatus(null, '直播列表暂时无法更新，显示上次结果；点播已暂停');
   }
 }
 
@@ -85,6 +102,7 @@ async function loadAreas() {
     setAreas(await getJson('/api/public/areas'));
   } catch (error) {
     console.debug('areas load failed', error);
+    setAreas(null);
   }
 }
 
@@ -95,6 +113,7 @@ function startPolling() {
   }
   statusTimer = setInterval(refreshStatus, STATUS_POLL_MS);
   streamsTimer = setInterval(refreshStreams, STREAMS_POLL_MS);
+  areasTimer = setInterval(loadAreas, AREAS_POLL_MS);
 }
 
 function stopPolling() {
@@ -105,6 +124,10 @@ function stopPolling() {
   if (streamsTimer) {
     clearInterval(streamsTimer);
     streamsTimer = null;
+  }
+  if (areasTimer) {
+    clearInterval(areasTimer);
+    areasTimer = null;
   }
 }
 
@@ -137,12 +160,9 @@ function initModals() {
     .getElementById('command-short-copy')
     ?.addEventListener('click', () => copyCommand('command-short-text'));
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeAreaModal();
-      closeCommandModal();
-    }
-  });
+  bindDialog('area-modal', closeAreaModal);
+  bindDialog('command-modal', closeCommandModal);
+  bindListboxKeyboard(document.getElementById('area-modal-list'));
 }
 
 function init() {
@@ -160,6 +180,7 @@ function init() {
       startDurationTicker();
       refreshStatus();
       refreshStreams();
+      loadAreas();
       startPolling();
     } else {
       stopPolling();

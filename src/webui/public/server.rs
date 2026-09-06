@@ -23,6 +23,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
 use super::streams::{current_public_streams, start_streams_refresh};
 use super::thumbnails::read_thumbnail;
+use crate::webui::server::static_asset_dir;
 
 /// Nothing here accepts a body; anything larger is refused before it is read.
 const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -52,27 +53,7 @@ async fn public_status(headers: HeaderMap) -> Response {
         return (StatusCode::SERVICE_UNAVAILABLE, "status unavailable").into_response();
     };
 
-    if not_modified(&headers, &etag) {
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
-    }
-
-    (
-        StatusCode::OK,
-        [
-            (header::ETAG, etag),
-            (
-                header::CONTENT_TYPE,
-                "application/json; charset=utf-8".to_string(),
-            ),
-            // The tunnel in front is the thing that absorbs an audience:
-            // letting the edge hold the payload for as long as the snapshot
-            // lives collapses any number of viewers into one origin request
-            // per window.
-            (header::CACHE_CONTROL, cache_control(SNAPSHOT_TTL.as_secs())),
-        ],
-        body,
-    )
-        .into_response()
+    public_json_response(&headers, body, etag, SNAPSHOT_TTL.as_secs())
 }
 
 /// The cached Holodex list. Refreshed on a timer, never on request, so viewer
@@ -84,20 +65,28 @@ async fn public_streams(headers: HeaderMap) -> Response {
         return (StatusCode::SERVICE_UNAVAILABLE, "streams unavailable").into_response();
     };
 
-    if not_modified(&headers, &etag) {
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
-    }
+    public_json_response(&headers, body, etag, STREAMS_MAX_AGE_SECS)
+}
 
+fn public_json_response(
+    headers: &HeaderMap,
+    body: axum::body::Bytes,
+    etag: String,
+    max_age: u64,
+) -> Response {
+    let cache_headers = [
+        (header::ETAG, etag.clone()),
+        (header::CACHE_CONTROL, cache_control(max_age)),
+    ];
+    if not_modified(headers, &etag) {
+        // A 304 must retain the same cache policy as its representation.
+        // Otherwise the fallback no-store header disables conditional caching.
+        return (StatusCode::NOT_MODIFIED, cache_headers).into_response();
+    }
     (
         StatusCode::OK,
-        [
-            (header::ETAG, etag),
-            (
-                header::CONTENT_TYPE,
-                "application/json; charset=utf-8".to_string(),
-            ),
-            (header::CACHE_CONTROL, cache_control(STREAMS_MAX_AGE_SECS)),
-        ],
+        cache_headers,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         body,
     )
         .into_response()
@@ -199,13 +188,23 @@ fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
 /// directory: the public port must not be able to serve the dashboard's own
 /// markup or its admin-only modules.
 fn shared_assets() -> Router {
+    let assets = static_asset_dir("webui/dist");
     Router::new()
-        .route_service("/styles.css", ServeFile::new("webui/dist/styles.css"))
-        .route_service("/js/dom.js", ServeFile::new("webui/dist/js/dom.js"))
-        .route_service("/js/format.js", ServeFile::new("webui/dist/js/format.js"))
+        .route_service("/styles.css", ServeFile::new(assets.join("styles.css")))
+        .route_service("/js/dom.js", ServeFile::new(assets.join("js/dom.js")))
+        .route_service("/js/format.js", ServeFile::new(assets.join("js/format.js")))
+        .route_service("/js/dialog.js", ServeFile::new(assets.join("js/dialog.js")))
+        .route_service(
+            "/js/cluster-health.js",
+            ServeFile::new(assets.join("js/cluster-health.js")),
+        )
+        .route_service(
+            "/js/cluster-network.js",
+            ServeFile::new(assets.join("js/cluster-network.js")),
+        )
         .route_service(
             "/js/status-cards.js",
-            ServeFile::new("webui/dist/js/status-cards.js"),
+            ServeFile::new(assets.join("js/status-cards.js")),
         )
 }
 
@@ -239,7 +238,7 @@ pub fn public_router() -> Router {
     // No not_found_service: the page is a single document with no client-side
     // routing, and falling back to it would answer an admin path with 200
     // instead of the 404 that says the route does not exist here.
-    let page = ServeDir::new("webui/public-dist");
+    let page = ServeDir::new(static_asset_dir("webui/public-dist"));
 
     Router::new()
         .route("/health", get(health))
@@ -535,7 +534,13 @@ mod tests {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
-        for path in ["/shared/styles.css", "/shared/js/status-cards.js"] {
+        for path in [
+            "/shared/styles.css",
+            "/shared/js/status-cards.js",
+            "/shared/js/dialog.js",
+            "/shared/js/cluster-network.js",
+            "/shared/js/cluster-health.js",
+        ] {
             let response = client
                 .get(format!("http://{addr}{path}"))
                 .send()
@@ -615,6 +620,32 @@ mod tests {
             cache_control(5),
             "public, max-age=5, stale-while-revalidate=30"
         );
+    }
+
+    #[tokio::test]
+    async fn conditional_public_responses_retain_the_representation_cache_policy() {
+        let mut headers = HeaderMap::new();
+        let body = axum::body::Bytes::from_static(b"{}");
+        let full = public_json_response(&headers, body.clone(), "\"status\"".into(), 5);
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"status\""),
+        );
+        let unchanged = public_json_response(&headers, body, "\"status\"".into(), 5);
+        assert_eq!(full.status(), StatusCode::OK);
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            full.headers()[header::CACHE_CONTROL],
+            unchanged.headers()[header::CACHE_CONTROL]
+        );
+        assert_eq!(
+            full.headers()[header::ETAG],
+            unchanged.headers()[header::ETAG]
+        );
+        assert!(axum::body::to_bytes(unchanged.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

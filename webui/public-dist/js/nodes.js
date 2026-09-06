@@ -4,18 +4,13 @@
 // actually pushing, compact tiles for the rest. No heartbeat ages, no action
 // buttons, and no links into a node's WebUI.
 
-import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from '/shared/js/format.js?v=8';
-import { mountNetworkHistory } from '/shared/js/status-cards.js?v=10';
+import { createClusterNetwork, updateClusterNetwork } from '/shared/js/cluster-network.js';
+import { formatClusterNodeStatus } from '/shared/js/cluster-health.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-const ROLE_LABELS = {
-  active: '活跃',
-  restreaming: '转播中',
-  standby: '备用',
-  draining: '维护中',
-  unhealthy: '异常',
-};
+let renderedNodes = new Map();
+let compactNodes = null;
 
 const STREAM_PLATFORMS = {
   youtube: { symbol: '#i-youtube', label: 'YouTube' },
@@ -31,14 +26,6 @@ function hasRtmpTx(network) {
   return !!network && (hasPositive(network.stream_bitrate_kbps) || hasPositive(network.stream_speed));
 }
 
-function hasHlsCache(network) {
-  return !!network && network.hls_cache_active && (
-    hasPositive(network.stream_cache_bitrate_kbps)
-    || hasPositive(network.stream_cache_speed)
-    || hasPositive(network.stream_cache_time_secs)
-  );
-}
-
 /// Owner that is actually pushing. An idle active node is 活跃, not 转播中.
 function isRestreaming(node) {
   return !!node.ffmpeg_running && hasRtmpTx(node.network);
@@ -50,31 +37,20 @@ export function clusterIsRestreaming(nodes) {
 }
 
 function hasDetail(node) {
-  return !!node.stream || isRestreaming(node) || hasHlsCache(node.network);
+  return node.ffmpeg_running === true;
 }
 
 function roleLabel(node) {
-  // role is set before healthy is cleared for drain/fault, so check it first
-  // or a 维护中 node would read as 异常.
-  if (node.role === 'draining') {
-    return ROLE_LABELS.draining;
-  }
-  if (!node.healthy) {
-    return ROLE_LABELS.unhealthy;
-  }
-  if (node.role === 'active' && isRestreaming(node)) {
-    return ROLE_LABELS.restreaming;
-  }
-  return ROLE_LABELS[node.role] || '未知';
+  const label = formatClusterNodeStatus(node);
+  return label === '活跃' && isRestreaming(node) ? '转播中' : label;
 }
 
 function roleClass(node) {
   if (node.role === 'draining') {
     return 'draining';
   }
-  if (!node.healthy) {
-    return 'unhealthy';
-  }
+  if (node.waiting_for_heartbeat) return '';
+  if (!node.healthy || node.role === 'unhealthy') return 'fault';
   return node.role === 'active' ? 'active' : '';
 }
 
@@ -165,134 +141,6 @@ function createStream(stream) {
   return block;
 }
 
-function speedTone(speed) {
-  if (!Number.isFinite(speed) || speed <= 0) {
-    return '';
-  }
-  if (speed > 0.97) {
-    return 'ok';
-  }
-  if (speed > 0.94) {
-    return 'warn';
-  }
-  return 'danger';
-}
-
-function speedLabel(speed) {
-  return Number.isFinite(speed) && speed > 0 ? formatSpeedRatio(speed) : '';
-}
-
-function meterTime(secs) {
-  return Number.isFinite(secs) && secs >= 0 ? formatStreamTime(secs) : '';
-}
-
-function meterFps(fps) {
-  return Number.isFinite(fps) && fps >= 0 ? `${formatFps(fps)} fps` : '';
-}
-
-function createNetworkMeter(label, speed, tone, value, detailGroups) {
-  const meter = document.createElement('div');
-  meter.className = 'bili-network-meter';
-
-  const meterLabel = document.createElement('div');
-  meterLabel.className = 'bili-network-meter-label';
-  const labelSpan = document.createElement('span');
-  labelSpan.textContent = label;
-  meterLabel.appendChild(labelSpan);
-
-  const meterValue = document.createElement('div');
-  meterValue.className = 'bili-network-meter-value';
-  const valueSpan = document.createElement('span');
-  valueSpan.textContent = value;
-  meterValue.appendChild(valueSpan);
-
-  if (speed) {
-    const speedSpan = document.createElement('span');
-    speedSpan.className = 'bili-network-meter-speed';
-    if (tone) {
-      speedSpan.dataset.tone = tone;
-    }
-    speedSpan.textContent = speed;
-    meterValue.appendChild(speedSpan);
-  }
-
-  meter.append(meterLabel, meterValue);
-  for (const group of detailGroups) {
-    const parts = group.filter(Boolean);
-    if (parts.length === 0) {
-      continue;
-    }
-
-    const detail = document.createElement('div');
-    detail.className = 'bili-network-total';
-    parts.forEach((text, index) => {
-      if (index > 0) {
-        const sep = document.createElement('span');
-        sep.className = 'bili-network-total-sep';
-        sep.textContent = '·';
-        detail.appendChild(sep);
-      }
-      const part = document.createElement('span');
-      part.textContent = text;
-      detail.appendChild(part);
-    });
-    meter.appendChild(detail);
-  }
-
-  return meter;
-}
-
-/// Same column layout as the dashboard: a mirrored 60s plot when the card
-/// is narrow, a sparkline beside each meter when there is room. The page
-/// still polls every 10s; the samples themselves are 1 Hz on the streaming
-/// node and arrive with each heartbeat.
-function createNetwork(node) {
-  const network = node.network || {};
-  const pushing = isRestreaming(node);
-  const cache = hasHlsCache(network);
-  if (!pushing && !cache) {
-    return null;
-  }
-
-  const panel = document.createElement('div');
-  panel.className = 'cluster-node-network';
-
-  const meters = document.createElement('div');
-  meters.className = 'bili-network-meters';
-
-  let pushMeter = null;
-  if (pushing) {
-    pushMeter = createNetworkMeter(
-      'RTMP TX',
-      speedLabel(network.stream_speed),
-      speedTone(network.stream_speed),
-      formatNetworkRate(network.stream_bitrate_kbps),
-      [
-        [meterTime(network.stream_time_secs), meterFps(network.stream_fps)],
-      ],
-    );
-    meters.appendChild(pushMeter);
-    pushMeter.dataset.leg = 'tx';
-  }
-
-  let cacheMeter = null;
-  if (cache) {
-    cacheMeter = createNetworkMeter(
-      'HLS Cache',
-      speedLabel(network.stream_cache_speed),
-      speedTone(network.stream_cache_speed),
-      formatNetworkRate(network.stream_cache_bitrate_kbps),
-      [[meterTime(network.stream_cache_time_secs)]],
-    );
-    meters.appendChild(cacheMeter);
-    cacheMeter.dataset.leg = 'rx';
-  }
-
-  panel.appendChild(meters);
-  mountNetworkHistory(panel, network, { showCache: cache, pushMeter, cacheMeter });
-  return panel;
-}
-
 function createFeaturedCard(node) {
   const card = document.createElement('div');
   card.className = 'cluster-node-card cluster-node-card-featured';
@@ -308,7 +156,7 @@ function createFeaturedCard(node) {
   if (stream) {
     meta.appendChild(stream);
   }
-  const network = createNetwork(node);
+  const network = createClusterNetwork(node);
   if (network) {
     meta.appendChild(network);
   }
@@ -328,45 +176,58 @@ function createTile(node) {
   return tile;
 }
 
-export function renderNodes(nodes) {
+function reconcile(parent, desired) {
+  const retained = new Set(desired);
+  for (const element of [...parent.children]) {
+    if (!retained.has(element)) element.remove();
+  }
+  desired.forEach((element, index) => {
+    if (parent.children[index] !== element) parent.insertBefore(element, parent.children[index] || null);
+  });
+}
+
+export function renderNodes(nodes, message = '暂无节点状态') {
   const list = document.getElementById('cluster-node-list');
   const indicator = document.getElementById('cluster-status-indicator');
-  if (!list) {
-    return;
-  }
-
+  if (!list) return;
   if (!Array.isArray(nodes) || nodes.length === 0) {
-    list.replaceChildren(emptyState('暂无节点状态'));
-    if (indicator) {
-      indicator.className = 'status-indicator status-offline';
-    }
+    list.replaceChildren(emptyState(message));
+    renderedNodes.clear();
+    if (indicator) indicator.className = 'status-indicator status-offline';
     return;
   }
-
   if (indicator) {
-    const anyActive = nodes.some((node) => node.healthy && node.role === 'active');
+    const anyActive = nodes.some(node => node.healthy && node.role === 'active');
     indicator.className = `status-indicator ${anyActive ? 'status-live' : 'status-offline'}`;
   }
-
+  const nextNodes = new Map();
+  const occurrences = new Map();
   const detailed = [];
   const compact = [];
   for (const node of nodes) {
-    (hasDetail(node) ? detailed : compact).push(node);
+    // The public API deliberately has no node IDs. Rust orders by node ID;
+    // name plus occurrence retains duplicate display names without exposing it.
+    const occurrence = occurrences.get(node.name) || 0;
+    occurrences.set(node.name, occurrence + 1);
+    const key = JSON.stringify([node.name, occurrence]);
+    const signature = JSON.stringify([node.name, node.role, node.healthy,
+      node.waiting_for_heartbeat, node.ffmpeg_running, node.stream, roleLabel(node)]);
+    const previous = renderedNodes.get(key);
+    const element = previous?.signature === signature ? previous.element
+      : hasDetail(node) ? createFeaturedCard(node) : createTile(node);
+    updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
+    nextNodes.set(key, { element, signature });
+    (hasDetail(node) ? detailed : compact).push(element);
   }
-
-  const fragment = document.createDocumentFragment();
-  for (const node of detailed) {
-    fragment.appendChild(createFeaturedCard(node));
+  const desired = [...detailed];
+  if (compact.length) {
+    compactNodes ||= document.createElement('div');
+    compactNodes.className = 'cluster-node-others';
+    reconcile(compactNodes, compact);
+    desired.push(compactNodes);
   }
-  if (compact.length > 0) {
-    const others = document.createElement('div');
-    others.className = 'cluster-node-others';
-    for (const node of compact) {
-      others.appendChild(createTile(node));
-    }
-    fragment.appendChild(others);
-  }
-  list.replaceChildren(fragment);
+  reconcile(list, desired);
+  renderedNodes = nextNodes;
 }
 
 function emptyState(message) {

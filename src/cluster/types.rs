@@ -34,7 +34,10 @@ pub struct ClusterNodeSnapshot {
     pub is_local: bool,
     pub role: ClusterNodeRole,
     pub health: ClusterHealth,
+    /// Explicit operator maintenance. Automatic faults never set this flag.
     pub draining: bool,
+    /// Historical wire name for the local fault latch, including upstream and
+    /// publisher failures as well as network isolation.
     #[serde(default)]
     pub network_unstable: bool,
     pub ffmpeg_running: bool,
@@ -79,9 +82,13 @@ impl ClusterStatus {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ClusterNodeRole {
+    /// Selected owner; may be idle rather than publishing.
     Active,
+    /// Healthy and eligible, but not selected.
     Standby,
+    /// Operator-requested maintenance takes display precedence over faults.
     Draining,
+    /// Detected/latched fault, or missing/stale heartbeat.
     Unhealthy,
 }
 
