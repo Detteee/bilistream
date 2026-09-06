@@ -1,6 +1,6 @@
 // overview.js — extracted from app.js
 
-import { isDashboardVisible, isElementHidden, setElementDisplay, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
+import { isDashboardVisible, isElementHidden, setElementDisplay, reconcileChildren, createStreamThumbnail, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
 import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
@@ -356,6 +356,8 @@ function setHolodexCollapsed(collapsed) {
   if (!section) return;
 
   section.classList.toggle('is-collapsed', collapsed);
+  if (collapsed) stopHolodexDurationTicker();
+  else startHolodexDurationTicker();
   if (button) {
     const label = collapsed ? '展开' : '折叠';
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
@@ -425,6 +427,45 @@ function createHolodexScheduleDivider() {
   return divider;
 }
 let holodexRefreshGeneration = 0;
+let renderedHolodexCards = new Map();
+let holodexScheduleDivider = null;
+
+function updateHolodexViewerCount(card, viewers) {
+  const element = card.querySelector('.holodex-stream-viewers');
+  if (!element) return;
+  const text = Number.isFinite(viewers) && viewers >= 0 ? `• ${viewers.toLocaleString()} 观看` : '';
+  if (element.textContent !== text) element.textContent = text;
+  element.classList.toggle('hidden', !text);
+}
+
+function renderHolodexCards(container, live, scheduled) {
+  const next = new Map();
+  const occurrences = new Map();
+  const elements = [];
+  const append = (stream, isLive) => {
+    const baseKey = `${stream.id || ''}:${stream.external_link || ''}`;
+    const occurrence = occurrences.get(baseKey) || 0;
+    occurrences.set(baseKey, occurrence + 1);
+    const key = `${baseKey}:${occurrence}`;
+    const { live_viewers, ...content } = stream;
+    const configured = holodexCurrentSource === 'favorites' && holodexStreamHasConfiguredChannel(stream);
+    const signature = JSON.stringify([content, holodexCurrentSource, configured]);
+    const previous = renderedHolodexCards.get(key);
+    const element = previous?.signature === signature ? previous.element : createStreamCard(stream, isLive);
+    updateHolodexViewerCount(element, live_viewers);
+    next.set(key, { signature, element });
+    elements.push(element);
+  };
+  live.forEach(stream => append(stream, true));
+  if (live.length && scheduled.length) {
+    holodexScheduleDivider ??= createHolodexScheduleDivider();
+    elements.push(holodexScheduleDivider);
+  }
+  scheduled.forEach(stream => append(stream, false));
+  reconcileChildren(container, elements);
+  renderedHolodexCards = next;
+}
+
 async function refreshHolodexStreams() {
   const generation = ++holodexRefreshGeneration;
   // Start continuous spinning animation
@@ -439,7 +480,11 @@ async function refreshHolodexStreams() {
     return;
   }
 
-  setHolodexStatus(statusDiv, '⏳ 加载中...', 'holodex-status-loading');
+  // Refreshing an existing list should not insert a banner above the cards.
+  streamsDiv.setAttribute('aria-busy', 'true');
+  if (!streamsDiv.childElementCount) {
+    setHolodexStatus(statusDiv, '⏳ 加载中...', 'holodex-status-loading');
+  }
 
   try {
     const favoritesParam = holodexUseFavorites ? 'true' : 'false';
@@ -472,9 +517,10 @@ async function refreshHolodexStreams() {
     const scheduledStreams = streams.filter(s => s.status !== 'live');
     if (generation !== holodexRefreshGeneration) return;
     stopHolodexDurationTicker();
-    streamsDiv.replaceChildren();
 
     if (streams.length === 0) {
+      streamsDiv.replaceChildren();
+      renderedHolodexCards.clear();
       const emptyMessage = isFavorites
         ? '✅ 收藏夹 - 当前无直播或预告'
         : '当前无直播或预告';
@@ -491,21 +537,7 @@ async function refreshHolodexStreams() {
 
     hideHolodexStatus(statusDiv);
 
-    // Render live streams first
-    liveStreams.forEach(stream => {
-      streamsDiv.appendChild(createStreamCard(stream, true));
-    });
-
-    // Add divider if both live and scheduled exist
-    if (liveStreams.length > 0 && scheduledStreams.length > 0) {
-      streamsDiv.appendChild(createHolodexScheduleDivider());
-    }
-
-    // Render scheduled streams (now sorted by time)
-    scheduledStreams.forEach(stream => {
-      streamsDiv.appendChild(createStreamCard(stream, false));
-    });
-
+    renderHolodexCards(streamsDiv, liveStreams, scheduledStreams);
     startHolodexDurationTicker();
 
   } catch (error) {
@@ -513,7 +545,10 @@ async function refreshHolodexStreams() {
     setHolodexStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'holodex-status-error');
   } finally {
     // Stop spinning animation when complete
-    if (generation === holodexRefreshGeneration) setButtonLoading(button, icon, false);
+    if (generation === holodexRefreshGeneration) {
+      setButtonLoading(button, icon, false);
+      streamsDiv.setAttribute('aria-busy', 'false');
+    }
   }
 }
 let holodexDurationIntervalId = null;
@@ -654,15 +689,21 @@ function updateHolodexDurations() {
     const startMs = Number(el.dataset.startMs);
     if (!startMs) return;
     const textEl = el.querySelector('.holodex-duration-text');
-    if (textEl) {
-      textEl.textContent = formatHolodexDuration(now - startMs);
-    }
+    const text = formatHolodexDuration(now - startMs);
+    if (textEl && textEl.textContent !== text) textEl.textContent = text;
+  });
+  document.querySelectorAll('.holodex-stream-scheduled[data-start]').forEach(el => {
+    const text = formatHolodexScheduledStart(el.dataset.start);
+    if (el.textContent !== text) el.textContent = text;
   });
 }
 function startHolodexDurationTicker() {
   stopHolodexDurationTicker();
+  if (!isDashboardVisible() || !isViewActive('overview')
+    || document.getElementById('holodex-section')?.classList.contains('is-collapsed')
+    || isElementHidden(document.getElementById('holodex-streams-section'))) return;
   updateHolodexDurations();
-  if (document.querySelector('.holodex-stream-duration[data-tick="live"]')) {
+  if (document.querySelector('.holodex-stream-duration[data-tick="live"], .holodex-stream-scheduled[data-start]')) {
     holodexDurationIntervalId = setInterval(updateHolodexDurations, 1000);
   }
 }
@@ -693,6 +734,7 @@ function createHolodexAvatarBlock(stream) {
   image.src = photoUrl;
   image.alt = '';
   image.loading = 'lazy';
+  image.decoding = 'async';
   avatar.appendChild(image);
   return avatar;
 }
@@ -801,7 +843,9 @@ function createHolodexStreamActionButton(extraClasses, streamActionData, icon) {
   button.dataset.status = streamActionData.status;
 
   const label = document.createElement('span');
-  label.textContent = '切换';
+  const crop = button.classList.contains('crop-switch-button');
+  label.textContent = crop ? '裁剪切换' : '切换';
+  button.title = crop ? '裁剪后切换转播' : '切换转播';
   button.append(icon, label);
   return button;
 }
@@ -848,8 +892,6 @@ function createStreamCard(stream, isLive) {
       : '')
     : `https://i.ytimg.com/vi/${stream.id}/sddefault.jpg`);
 
-  const viewers = stream.live_viewers ? `${stream.live_viewers.toLocaleString()} 观看` : '';
-
   const areaInfo = document.createElement('p');
   areaInfo.className = 'holodex-stream-area-hint';
   if (stream.suggested_area_id && stream.suggested_area_name) {
@@ -865,19 +907,15 @@ function createStreamCard(stream, isLive) {
     const scheduled = document.createElement('span');
     scheduled.className = 'holodex-stream-scheduled';
     scheduled.textContent = scheduleText;
+    if (stream.start_scheduled) scheduled.dataset.start = stream.start_scheduled;
     statusMeta.appendChild(scheduled);
-  } else if (viewers) {
-    const liveLabel = document.createElement('span');
-    liveLabel.className = 'holodex-stream-live-label';
-    liveLabel.textContent = '直播中';
-    const viewerText = document.createElement('span');
-    viewerText.textContent = `• ${viewers}`;
-    statusMeta.append(liveLabel, viewerText);
   } else {
     const liveLabel = document.createElement('span');
     liveLabel.className = 'holodex-stream-live-label';
     liveLabel.textContent = '直播中';
-    statusMeta.appendChild(liveLabel);
+    const viewerText = document.createElement('span');
+    viewerText.className = 'holodex-stream-viewers';
+    statusMeta.append(liveLabel, viewerText);
   }
 
   const streamActionData = {
@@ -898,11 +936,9 @@ function createStreamCard(stream, isLive) {
   thumbLink.href = watchUrl;
   thumbLink.target = '_blank';
   thumbLink.rel = 'noopener noreferrer';
+  thumbLink.setAttribute('aria-label', `观看 ${stream.channel_name || stream.title || '直播'}`);
   if (thumbUrl) {
-    const image = document.createElement('img');
-    image.src = thumbUrl;
-    image.alt = '';
-    thumbLink.appendChild(image);
+    thumbLink.appendChild(createStreamThumbnail(thumbUrl));
   } else {
     const placeholder = document.createElement('div');
     placeholder.className = 'holodex-stream-thumb-placeholder';
@@ -986,6 +1022,7 @@ function createStreamCard(stream, isLive) {
 
   body.append(contentRow, actions);
   streamCard.append(thumb, body);
+  updateHolodexViewerCount(streamCard, stream.live_viewers);
 
   return streamCard;
 }

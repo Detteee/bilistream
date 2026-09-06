@@ -27,6 +27,8 @@ import {
   initAreaModalControls,
   initStatusRefresh,
   maybeLoadHolodexStreams,
+  startHolodexDurationTicker,
+  stopHolodexDurationTicker,
   loadChannelData,
   refreshStatus,
   switchToHolodexStream,
@@ -83,6 +85,8 @@ function activateView(name, options = {}) {
   } else if (options.reload) {
     loadViewData(name);
   }
+  if (name === 'overview') startHolodexDurationTicker();
+  else stopHolodexDurationTicker();
 }
 
 function initViewRouter() {
@@ -155,10 +159,13 @@ function boot() {
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {
+      startHolodexDurationTicker();
       if (isViewActive('logs')) {
         refreshLogs();
       }
       refreshStatus();
+    } else {
+      stopHolodexDurationTicker();
     }
   });
 

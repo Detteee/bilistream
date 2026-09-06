@@ -12,6 +12,39 @@ function setElementDisplay(element, visible, display = 'block') {
     element.style.display = visible ? display : 'none';
   }
 }
+// Keep unchanged cards attached, including their image state and keyboard focus.
+function reconcileChildren(container, elements) {
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const keep = new Set(elements);
+  for (const child of [...container.children]) {
+    if (!keep.has(child)) child.remove();
+  }
+  elements.forEach((element, index) => {
+    if (container.children[index] !== element) {
+      container.insertBefore(element, container.children[index] || null);
+    }
+  });
+  if (focused?.isConnected && document.activeElement === document.body) {
+    focused.focus({ preventScroll: true });
+  }
+}
+
+function createStreamThumbnail(src) {
+  const image = document.createElement('img');
+  image.alt = '';
+  image.width = 640;
+  image.height = 360;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.addEventListener('error', () => {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'holodex-stream-thumb-placeholder';
+    placeholder.textContent = '封面暂时不可用';
+    image.replaceWith(placeholder);
+  }, { once: true });
+  image.src = src;
+  return image;
+}
 const SVG_NS = 'http://www.w3.org/2000/svg';
 function createSvgIcon(viewBox, pathData, className = '') {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -157,6 +190,8 @@ export {
   isDashboardVisible,
   isElementHidden,
   setElementDisplay,
+  reconcileChildren,
+  createStreamThumbnail,
   createSvgIcon,
   appendAntiCollisionRemoveIcon,
   appendEditIcon,

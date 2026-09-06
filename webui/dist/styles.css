@@ -37,6 +37,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -288,13 +289,6 @@ html.light-theme {
   --net-legend-tx: var(--net-push-end);
 }
 
-/* Do not pump saturation or overlay with cold black on the linen page. */
-html.light-theme .appbar,
-html.light-theme .tabbar {
-  backdrop-filter: blur(14px) saturate(108%);
-  -webkit-backdrop-filter: blur(14px) saturate(108%);
-}
-
 html.light-theme .modal,
 html.light-theme .area-modal,
 html.light-theme .holodex-login-modal,
@@ -390,9 +384,8 @@ use {
   z-index: 60;
   height: var(--appbar-h);
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-1) 82%, transparent);
-  backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  /* Opaque chrome keeps scrolled text out of the navigation and needs no blur. */
+  background: var(--surface-1);
 }
 
 .appbar__inner {
@@ -485,9 +478,7 @@ use {
   top: var(--appbar-h);
   z-index: 50;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--bg);
 }
 
 .tabbar__inner {
@@ -1119,6 +1110,7 @@ input[type="checkbox"] {
   min-width: 0;
   font-size: var(--fs-lg);
   font-weight: 650;
+  word-break: keep-all;
 }
 
 .panel__title svg {
@@ -1985,6 +1977,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
 .holodex-stream-thumb img {
   width: 100%;
+  height: auto;
   aspect-ratio: 16 / 9;
   object-fit: cover;
 }
@@ -2305,6 +2298,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 
 .holodex-stream-btn-crop {
+  flex-grow: 1.4;
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
@@ -3599,8 +3593,15 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
     padding-inline: var(--sp-3);
   }
 
+  .appbar__inner,
+  .brand {
+    gap: var(--sp-2);
+  }
+
   .brand__name {
-    display: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: var(--fs-base);
   }
 
   .panel__head,
