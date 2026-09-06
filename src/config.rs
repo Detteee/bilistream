@@ -524,7 +524,7 @@ fn managed_json_committed() {
     crate::webui::state::request_status_refresh();
 }
 
-fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let (tmp_path, mut tmp_file) = create_unique_tmp_file(path)?;
     let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
     drop(tmp_file);

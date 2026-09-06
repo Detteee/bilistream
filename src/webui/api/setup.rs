@@ -280,14 +280,32 @@ pub async fn trigger_login() -> Result<ApiResponse<String>, StatusCode> {
 #[derive(Serialize)]
 pub struct QrCodeResponse {
     qr_url: String,
+    qr_image: String,
     auth_code: String,
+}
+
+pub(crate) fn qr_code_data_url(text: &str) -> Result<String, qrcode::types::QrError> {
+    use base64::Engine as _;
+    let svg = qrcode::QrCode::new(text.as_bytes())?
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(256, 256)
+        .build();
+    Ok(format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg)
+    ))
 }
 
 pub async fn get_qr_code() -> Result<Json<ApiResponse<QrCodeResponse>>, StatusCode> {
     match bilibili::get_login_qrcode().await {
         Ok((qr_url, auth_code)) => Ok(Json(ApiResponse {
             success: true,
-            data: Some(QrCodeResponse { qr_url, auth_code }),
+            data: Some(QrCodeResponse {
+                qr_image: qr_code_data_url(&qr_url)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                qr_url,
+                auth_code,
+            }),
             message: None,
         })),
         Err(e) => Ok(Json(ApiResponse {

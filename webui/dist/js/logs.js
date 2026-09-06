@@ -8,6 +8,8 @@ import { getJson } from './api.js';
 let logLines = [];
 let maxLogLines = 500;
 let logRefreshIntervalId = null;
+let logRefreshInFlight = false;
+let logGeneration = 0;
 function initLogControls() {
   document
     .getElementById('clear-logs-btn')
@@ -28,6 +30,7 @@ function startLogRefresh() {
   }, 5000);
 }
 function clearLogs() {
+  logGeneration += 1;
   logLines = [];
   const logOutput = document.getElementById('log-output');
   if (logOutput) {
@@ -35,8 +38,12 @@ function clearLogs() {
   }
 }
 async function refreshLogs() {
+  if (logRefreshInFlight) return;
+  logRefreshInFlight = true;
+  const generation = logGeneration;
   try {
     const data = await getJson('/api/logs');
+    if (generation !== logGeneration) return;
     if (data.success && data.logs) {
       // Add new logs
       const newLogs = data.logs.split('\n').filter(line => line.trim());
@@ -62,6 +69,8 @@ async function refreshLogs() {
   } catch (error) {
     // Silently fail - logs are optional
     console.debug('Failed to fetch logs:', error);
+  } finally {
+    logRefreshInFlight = false;
   }
 }
 function renderLogs() {

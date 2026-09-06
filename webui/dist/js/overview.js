@@ -6,14 +6,14 @@ import { managementRequest, managementJsonRequest, getJson, postJsonApi } from '
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
 import { toggleDanmakuCommand } from './settings.js';
-import { openCropConfig, clearCropConfig, loadCapturedCropFrame } from './crop.js';
+import { openCropConfig, clearCropConfig, loadCapturedCropFrame, isCropSessionCurrent } from './crop.js';
+import { bindDialog, bindListboxKeyboard } from './dialog.js';
 import {
   formatHlsCacheStatus,
   formatScheduledStart as formatHolodexScheduledStart,
   getQualityDisplayText,
 } from './format.js';
 import {
-  getBiliNetworkQuality,
   isBiliNetworkLive,
   renderBiliNetworkPanel,
   renderStatusCards,
@@ -28,6 +28,7 @@ let networkRefreshIntervalId = null;
 let statusRefreshInFlight = false;
 let statusRefreshQueued = false;
 let networkRefreshInFlight = false;
+let networkStatusGeneration = 0;
 let faceAuthUrl = null;
 let holodexCurrentSource = 'channels';
 let holodexStreamsRequested = false;
@@ -181,6 +182,7 @@ function initDashboardControls() {
     ?.addEventListener('change', event => setHlsCacheLatencyInputState('tw', event.currentTarget.checked));
 }
 function initHolodexLoginModalControls() {
+  bindDialog('holodex-login-modal', closeHolodexLoginModal);
   document
     .getElementById('holodex-save-api-key-btn')
     ?.addEventListener('click', saveHolodexApiKey);
@@ -233,6 +235,7 @@ function initHolodexLoginModalControls() {
     ?.addEventListener('change', toggleHolodexMonitorGate);
 }
 function initFaceAuthModalControls() {
+  bindDialog('face-auth-modal', closeFaceAuthModal);
   const modal = document.getElementById('face-auth-modal');
   modal?.addEventListener('click', event => {
     if (event.target === modal) {
@@ -421,7 +424,9 @@ function createHolodexScheduleDivider() {
   divider.appendChild(label);
   return divider;
 }
+let holodexRefreshGeneration = 0;
 async function refreshHolodexStreams() {
+  const generation = ++holodexRefreshGeneration;
   // Start continuous spinning animation
   const button = document.getElementById('refreshHolodexBtn');
   const icon = document.getElementById('refreshHolodexIcon');
@@ -434,13 +439,12 @@ async function refreshHolodexStreams() {
     return;
   }
 
-  stopHolodexDurationTicker();
   setHolodexStatus(statusDiv, '⏳ 加载中...', 'holodex-status-loading');
-  streamsDiv.replaceChildren();
 
   try {
     const favoritesParam = holodexUseFavorites ? 'true' : 'false';
     const data = await getJson(`/api/holodex/streams?favorites=${favoritesParam}`);
+    if (generation !== holodexRefreshGeneration) return;
 
     if (!data.success) {
       setHolodexStatus(statusDiv, `⚠️ ${data.message}`, 'holodex-status-warning');
@@ -454,7 +458,9 @@ async function refreshHolodexStreams() {
     if (isFavorites) {
       try {
         await refreshHolodexChannelsData();
+        if (generation !== holodexRefreshGeneration) return;
       } catch (error) {
+        if (generation !== holodexRefreshGeneration) return;
         console.error('Failed to load channels.json for Holodex add controls:', error);
         holodexCurrentSource = 'channels';
         showNotification('加载 channels.json 失败，无法显示添加按钮', 'error');
@@ -464,6 +470,9 @@ async function refreshHolodexStreams() {
     // Separate live and scheduled streams
     const liveStreams = streams.filter(s => s.status === 'live');
     const scheduledStreams = streams.filter(s => s.status !== 'live');
+    if (generation !== holodexRefreshGeneration) return;
+    stopHolodexDurationTicker();
+    streamsDiv.replaceChildren();
 
     if (streams.length === 0) {
       const emptyMessage = isFavorites
@@ -500,10 +509,11 @@ async function refreshHolodexStreams() {
     startHolodexDurationTicker();
 
   } catch (error) {
+    if (generation !== holodexRefreshGeneration) return;
     setHolodexStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'holodex-status-error');
   } finally {
     // Stop spinning animation when complete
-    setButtonLoading(button, icon, false);
+    if (generation === holodexRefreshGeneration) setButtonLoading(button, icon, false);
   }
 }
 let holodexDurationIntervalId = null;
@@ -1065,6 +1075,8 @@ function closeAreaModal() {
 }
 
 function initAreaModalControls() {
+  bindDialog('area-modal', closeAreaModal);
+  bindListboxKeyboard(document.getElementById('modal-area-list'));
   document
     .getElementById('confirm-area-selection-btn')
     ?.addEventListener('click', confirmAreaSelection);
@@ -1072,18 +1084,24 @@ function initAreaModalControls() {
     .getElementById('cancel-area-selection-btn')
     ?.addEventListener('click', closeAreaModal);
 }
-function showFaceAuthModal(qrUrl) {
+function showFaceAuthModal(qrUrl, qrImage) {
   faceAuthUrl = qrUrl;
   const modal = document.getElementById('face-auth-modal');
   const container = document.getElementById('face-auth-qr-container');
   if (!modal || !container) return;
 
-  // Generate QR code using QR Server API, with a clickable fallback if it fails.
+  // The backend renders the QR code locally; verification URLs stay private.
   container.replaceChildren();
+
+  if (!qrImage?.startsWith('data:image/svg+xml;base64,')) {
+    container.appendChild(createFaceAuthQrFallback(qrUrl));
+    modal.classList.add('active');
+    return;
+  }
 
   const qrImg = document.createElement('img');
   qrImg.className = 'face-auth-qr-image';
-  qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrUrl)}`;
+  qrImg.src = qrImage;
   qrImg.alt = 'Bilibili 人脸验证二维码';
   qrImg.addEventListener('error', () => {
     container.replaceChildren(createFaceAuthQrFallback(qrUrl));
@@ -1177,8 +1195,7 @@ async function performSwitch(channelId, areaId, title, topicId, status, platform
 }
 async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform = 'youtube', twitchChannelId = '', externalLink = '') {
   // First, open crop modal and auto-capture
-  document.getElementById('cropModal').classList.add('active');
-  document.getElementById('cropPlatform').value = platform;
+  const session = openCropConfig(platform, { autoCapture: false });
 
   showNotification('正在捕获直播帧...', 'info');
 
@@ -1186,12 +1203,13 @@ async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, t
     const captureUrl = platform === 'twitch'
       ? `/api/crop/capture/twitch?channel_id=${encodeURIComponent(twitchChannelId)}`
       : `/api/crop/capture/youtube?channel_id=${encodeURIComponent(channelId)}`;
-    const result = await postJsonApi(captureUrl);
+    const result = await postJsonApi(captureUrl, undefined, { signal: session.signal });
+    if (!isCropSessionCurrent(session)) return;
 
     if (result.success && result.message) {
       loadCapturedCropFrame(result.message, () => {
         showNotification('直播帧已捕获，请选择裁剪区域后点击"应用裁剪"，然后会自动切换频道', 'success');
-        window.pendingHolodexSwitch = {
+        session.pendingSwitch = {
           channelId,
           suggestedAreaId,
           title,
@@ -1201,11 +1219,12 @@ async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, t
           twitchChannelId,
           externalLink
         };
-      });
+      }, session);
     } else {
       showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
     }
   } catch (error) {
+    if (!isCropSessionCurrent(session)) return;
     showNotification('捕获失败: ' + error.message, 'error');
   }
 }
@@ -1841,19 +1860,16 @@ function schedulePlatformTitleRowCenters() {
   });
 }
 async function refreshNetworkStatus() {
-  if (networkRefreshInFlight || !isBiliNetworkLive()) {
+  if (networkRefreshInFlight || statusRefreshInFlight || !isBiliNetworkLive()) {
     return;
   }
 
   networkRefreshInFlight = true;
+  const generation = networkStatusGeneration;
   try {
     const result = await getJson('/api/network-status');
-    if (result.success && result.data) {
-      renderBiliNetworkPanel({
-        ...result.data,
-        is_live: isBiliNetworkLive(),
-        stream_quality: getBiliNetworkQuality(),
-      });
+    if (result.success && result.data && generation === networkStatusGeneration) {
+      renderBiliNetworkPanel(result.data);
     }
   } catch (error) {
     console.debug('Failed to refresh network status:', error);
@@ -1868,6 +1884,7 @@ async function refreshStatus() {
   }
 
   statusRefreshInFlight = true;
+  networkStatusGeneration += 1;
   statusRefreshQueued = false;
   lastStatusRefreshMs = Date.now();
 
@@ -1889,7 +1906,9 @@ async function refreshStatus() {
   } catch (error) {
     console.error('Failed to refresh status:', error);
 
-    // Suppress network errors (when server is down)
+    setStatusCardsMessage('连接中断，等待重连');
+
+    // Avoid repeated notifications while the connection is unavailable.
     if (error.message && error.message.includes('NetworkError')) {
       return;
     }
@@ -1923,7 +1942,7 @@ async function startStream() {
 
     // Check if face verification is required
     if (data.data && data.data.requires_face_auth) {
-      showFaceAuthModal(data.data.qr_url);
+      showFaceAuthModal(data.data.qr_url, data.data.qr_image);
       showNotification(data.message || '需要人脸验证', 'error');
       return;
     }
@@ -2479,6 +2498,7 @@ async function saveTitleEdit() {
 }
 // Channel management functions
 async function loadChannelData() {
+  const generation = state.managedDataGeneration;
   // Start continuous spinning animation
   const icon = document.getElementById('loadChannelIcon');
   setButtonLoading(null, icon, true);
@@ -2488,6 +2508,7 @@ async function loadChannelData() {
       getJson('/api/channels'),
       getJson('/api/areas')
     ]);
+    if (generation !== state.managedDataGeneration) return loadChannelData();
     state.channelsData = channelsResult;
     state.areasData = normalizeAreaData(areasResult);
 

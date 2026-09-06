@@ -1,7 +1,33 @@
 // api.js — authenticated JSON client for every /api call.
+import { bindDialog } from './dialog.js';
 
 let webUiAccessReady = false;
 let webUiLoginPromise = null;
+
+// Include response-body consumption in the deadline. Aborting a write cannot
+// undo a server commit, so callers must refresh before retrying an uncertain write.
+async function fetchWithDeadline(path, options = {}, consume = response => response) {
+  const { timeoutMs = (options.method && options.method !== 'GET' ? 60000 : 10000), signal, ...request } = options;
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.reason);
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(path, { ...request, signal: controller.signal });
+    return await consume(response);
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) {
+      throw new Error(request.method && request.method !== 'GET'
+        ? '请求超时，请刷新确认操作结果后再重试'
+        : '连接超时，正在等待重连');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 function eventStreamUrl() {
   return '/api/events';
 }
@@ -116,18 +142,19 @@ function showWebUiLoginGate(onSuccess) {
     dialog.append(title, hint, label, input, error, submit);
     gate.appendChild(dialog);
     document.body.appendChild(gate);
+    bindDialog(gate);
 
     dialog.addEventListener('submit', async (event) => {
       event.preventDefault();
       error.textContent = '';
       submit.disabled = true;
       try {
-        const response = await fetch('/api/login', {
+        const { response, body } = await fetchWithDeadline('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: input.value })
-        });
-        const body = await response.json().catch(() => null);
+          body: JSON.stringify({ password: input.value }),
+          timeoutMs: 10000,
+        }, async response => ({ response, body: await response.json().catch(() => null) }));
         if (!response.ok || body?.success === false) {
           error.textContent = body?.message || '密码错误';
           input.focus();
@@ -169,8 +196,7 @@ function promptWebUiLogin() {
 }
 async function ensureWebUiAccess() {
   try {
-    const response = await fetch('/api/auth');
-    const auth = await response.json();
+    const auth = await fetchWithDeadline('/api/auth', {}, response => response.json());
     if (auth.required && !auth.authenticated) {
       await promptWebUiLogin();
     }
@@ -183,13 +209,20 @@ async function ensureWebUiAccess() {
 function isWebUiAccessReady() {
   return webUiAccessReady;
 }
-async function fetchWithWebUiAuth(path, options = {}) {
-  const response = await fetch(path, options);
-  if (response.status !== 401) {
-    return response;
+async function fetchWithWebUiAuth(path, options = {}, consume = response => response) {
+  let unauthorized = false;
+  const result = await fetchWithDeadline(path, options, response => {
+    if (response.status === 401) {
+      unauthorized = true;
+      return null;
+    }
+    return consume(response);
+  });
+  if (!unauthorized) {
+    return result;
   }
   await promptWebUiLogin();
-  return fetch(path, options);
+  return fetchWithDeadline(path, options, consume);
 }
 async function readManagementResponse(response) {
   if (response.status === 401) {
@@ -217,8 +250,7 @@ async function readManagementResponse(response) {
   return result;
 }
 async function managementRequest(path, options = {}) {
-  const response = await fetchWithWebUiAuth(path, options);
-  return readManagementResponse(response);
+  return fetchWithWebUiAuth(path, options, readManagementResponse);
 }
 function managementJsonRequest(path, method, payload) {
   return managementRequest(path, {
@@ -231,6 +263,7 @@ function deleteManagementResource(path) {
   return managementRequest(path, { method: 'DELETE' });
 }
 function formatHttpError(response, bodyText = '') {
+  if (response.status === 409) return '配置已被其他操作修改，请重新加载后再保存';
   const trimmed = bodyText.trim();
   if (trimmed) {
     return trimmed.length > 200 ? `${trimmed.slice(0, 200)}...` : trimmed;
@@ -262,8 +295,9 @@ async function readJsonApiResponse(response) {
   }
   return result;
 }
-async function jsonRequest(method, path, payload) {
+async function jsonRequest(method, path, payload, options = {}) {
   const request = {
+    ...options,
     method,
     headers: { 'Content-Type': 'application/json' }
   };
@@ -271,21 +305,19 @@ async function jsonRequest(method, path, payload) {
     request.body = JSON.stringify(payload);
   }
 
-  const response = await fetchWithWebUiAuth(path, request);
-  return readJsonApiResponse(response);
+  return fetchWithWebUiAuth(path, request, readJsonApiResponse);
 }
 
-async function getJson(path) {
-  const response = await fetchWithWebUiAuth(path);
-  return readJsonApiResponse(response);
+async function getJson(path, options = {}) {
+  return fetchWithWebUiAuth(path, options, readJsonApiResponse);
 }
 
-function postJson(path, payload) {
-  return jsonRequest('POST', path, payload);
+function postJson(path, payload, options = {}) {
+  return jsonRequest('POST', path, payload, options);
 }
 
-function postJsonApi(path, payload) {
-  return postJson(path, payload);
+function postJsonApi(path, payload, options = {}) {
+  return postJson(path, payload, options);
 }
 
 function putJson(path, payload) {

@@ -1,4 +1,5 @@
 pub mod api;
+pub(crate) mod assets;
 pub mod events;
 pub mod listen;
 pub mod restart;

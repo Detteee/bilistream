@@ -55,8 +55,10 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(config_json))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct UpdateConfigRequest {
+    #[serde(skip_serializing)]
+    expected: Option<HashMap<String, serde_json::Value>>,
     interval: Option<u64>,
     auto_cover: Option<bool>,
     enable_anti_collision: Option<bool>,
@@ -77,6 +79,52 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
+}
+
+pub(crate) const EDIT_CONFLICT: &str = "配置已被其他操作修改，请重新加载后再保存";
+pub(crate) const EDIT_INVALID: &str = "配置修改缺少有效的原始值";
+
+/// Check the values the browser actually edited, before applying its patch.
+/// save_config then detects changes racing this request under its write lock.
+pub(crate) fn validate_edit_preconditions(
+    current: &serde_json::Value,
+    patch: &serde_json::Value,
+    expected: Option<&HashMap<String, serde_json::Value>>,
+) -> Result<(), &'static str> {
+    let Some(expected) = expected else {
+        return Ok(()); // Compatible with existing API clients.
+    };
+    for (key, value) in patch.as_object().ok_or(EDIT_INVALID)? {
+        if value.is_null() {
+            continue;
+        }
+        let before = expected.get(key).ok_or(EDIT_INVALID)?;
+        let now = current.get(key).ok_or(EDIT_INVALID)?;
+        if before != now {
+            return Err(EDIT_CONFLICT);
+        }
+    }
+    Ok(())
+}
+
+fn config_form_values(cfg: &Config) -> serde_json::Value {
+    json!({
+        "interval": cfg.interval,
+        "auto_cover": cfg.auto_cover,
+        "enable_anti_collision": cfg.enable_anti_collision,
+        "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
+        "enable_lol_monitor": cfg.enable_lol_monitor,
+        "lol_monitor_interval": cfg.lol_monitor_interval.unwrap_or(1),
+        "riot_api_key": cfg.riot_api_key.as_deref().unwrap_or_default().trim(),
+        "holodex_api_key": cfg.holodex_api_key.as_deref().unwrap_or_default().trim(),
+        "anti_collision_list": cfg.anti_collision_list,
+        "youtube_proxy": cfg.youtube.proxy.as_deref().unwrap_or_default().trim(),
+        "twitch_proxy": cfg.twitch.proxy.as_deref().unwrap_or_default().trim(),
+        "twitch_proxy_region": cfg.twitch.proxy_region,
+        "youtube_cookies_from_browser": cfg.youtube.cookies_from_browser.as_deref().unwrap_or_default().trim(),
+        "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
+        "youtube_deno_path": cfg.youtube.deno_path.as_deref().unwrap_or_default().trim(),
+    })
 }
 
 pub(crate) fn monitor_target_reload_needed(
@@ -128,6 +176,19 @@ pub async fn update_config(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let previous_cfg = cfg.clone();
+
+    validate_edit_preconditions(
+        &config_form_values(&cfg),
+        &serde_json::to_value(&payload).map_err(|_| StatusCode::BAD_REQUEST)?,
+        payload.expected.as_ref(),
+    )
+    .map_err(|error| {
+        if error == EDIT_CONFLICT {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        }
+    })?;
 
     let mut holodex_jwt_saved = false;
 

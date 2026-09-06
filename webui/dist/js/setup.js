@@ -85,6 +85,8 @@ async function checkLoginStatus() {
 }
 let loginPollInterval = null;
 let currentAuthCode = null;
+let qrGeneration = 0;
+let loginPollInFlight = false;
 function setSetupQrStatus(message, isError = false) {
   const qrStatus = document.getElementById('qr-status');
   if (!qrStatus) return;
@@ -93,25 +95,32 @@ function setSetupQrStatus(message, isError = false) {
   qrStatus.classList.toggle('setup-qr-status-error', isError);
 }
 async function showQrCode() {
+  const generation = ++qrGeneration;
+  clearInterval(loginPollInterval);
+  currentAuthCode = null;
   try {
     // Get QR code from API
     const data = await getJson('/api/setup/qrcode');
+    if (generation !== qrGeneration) return;
 
     if (!data.success || !data.data) {
       showNotification(data.message || '获取二维码失败', 'error');
       return;
     }
 
-    const { qr_url, auth_code } = data.data;
+    const { qr_image, auth_code } = data.data;
+    if (!qr_image?.startsWith('data:image/svg+xml;base64,')) {
+      throw new Error('服务器未提供二维码，请更新服务端后重试');
+    }
     currentAuthCode = auth_code;
 
-    // Generate QR code using external API
+    // Rendered by the backend without a third-party QR service.
     const qrContainer = document.getElementById('qr-code-display');
     qrContainer.replaceChildren();
 
-    // Create QR code using QR Server API
     const qrImg = document.createElement('img');
-    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qr_url)}`;
+    qrImg.src = qr_image;
+    qrImg.alt = 'Bilibili 登录二维码';
     qrImg.className = 'setup-qr-image';
     qrContainer.appendChild(qrImg);
 
@@ -125,6 +134,7 @@ async function showQrCode() {
 
     showNotification('请使用 Bilibili APP 扫码登录', 'success');
   } catch (error) {
+    if (generation !== qrGeneration) return;
     console.error('Failed to get QR code:', error);
     showNotification('获取二维码失败: ' + error.message, 'error');
   }
@@ -137,10 +147,14 @@ function startLoginPolling() {
 
   // Poll every 2 seconds
   loginPollInterval = setInterval(async () => {
-    if (!currentAuthCode) return;
+    if (!currentAuthCode || loginPollInFlight) return;
+    const authCode = currentAuthCode;
+    const generation = qrGeneration;
+    loginPollInFlight = true;
 
     try {
-      const data = await postJsonApi('/api/setup/poll-login', { auth_code: currentAuthCode });
+      const data = await postJsonApi('/api/setup/poll-login', { auth_code: authCode }, { timeoutMs: 10000 });
+      if (generation !== qrGeneration || authCode !== currentAuthCode) return;
 
       if (data.success && data.data) {
         const { status, message } = data.data;
@@ -161,6 +175,8 @@ function startLoginPolling() {
       }
     } catch (error) {
       console.error('Poll login failed:', error);
+    } finally {
+      loginPollInFlight = false;
     }
   }, 2000);
 }

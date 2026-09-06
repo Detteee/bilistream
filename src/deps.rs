@@ -60,14 +60,7 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
     if !exe_dir.join("channels.json").exists() {
         total_items += 1;
     }
-    if !exe_dir
-        .join("webui")
-        .join("dist")
-        .join("index.html")
-        .exists()
-    {
-        total_items += 1;
-    }
+    total_items += crate::webui::assets::missing_asset_count(&exe_dir);
 
     #[cfg(target_os = "windows")]
     {
@@ -112,21 +105,21 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
 async fn ensure_required_files() -> Result<(), Box<dyn Error>> {
     let exe_dir = current_exe_dir()?;
 
+    // Make the UI available before any remote data/dependency download.
+    let installed = crate::webui::assets::install_missing_assets(&exe_dir)?;
+    DOWNLOAD_PROGRESS.fetch_add(installed, Ordering::Relaxed);
+
     let mut missing_files = Vec::new();
 
     // Check for required files
     let areas_json = exe_dir.join("areas.json");
     let channels_json = exe_dir.join("channels.json");
-    let webui_index = exe_dir.join("webui").join("dist").join("index.html");
 
     if !areas_json.exists() {
         missing_files.push(("areas.json", "areas.json"));
     }
     if !channels_json.exists() {
         missing_files.push(("channels.json", "channels.json"));
-    }
-    if !webui_index.exists() {
-        missing_files.push(("webui/dist/index.html", "webui/dist/index.html"));
     }
 
     if missing_files.is_empty() {

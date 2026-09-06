@@ -1,7 +1,7 @@
 // main.js — view router, login gate, SSE wakeup, and timers.
 
 import { isDashboardVisible } from './dom.js';
-import { state, isViewActive } from './state.js';
+import { state, isViewActive, invalidateManagedData } from './state.js';
 import { ensureWebUiAccess } from './api.js';
 import { configureEventStream, initEventStream } from './events.js';
 import { startLogRefresh, initLogControls, refreshLogs } from './logs.js';
@@ -115,6 +115,7 @@ function bindEventStream() {
   configureEventStream({
     onStatus: refreshStatus,
     onConfig: () => {
+      invalidateManagedData();
       reloadServerConfig();
       refreshStatus();
     },
@@ -122,6 +123,7 @@ function bindEventStream() {
       state.hooks.refreshClusterStatus?.();
     },
     onRefresh: () => {
+      invalidateManagedData();
       reloadServerConfig();
       refreshStatus();
       state.hooks.refreshClusterStatus?.();

@@ -3,11 +3,13 @@
 import { setElementDisplay, readIntegerInput, setInputValue, setElementText, showNotification } from './dom.js';
 import { state } from './state.js';
 import { getJson, postJsonApi } from './api.js';
+import { bindDialog } from './dialog.js';
 
 function initCropModalControls() {
+  bindDialog('cropModal', closeCropModal);
   document
     .getElementById('cropPlatform')
-    ?.addEventListener('change', loadCurrentCropSettings);
+    ?.addEventListener('change', event => openCropConfig(event.target.value));
   document
     .getElementById('cropImageUpload')
     ?.addEventListener('change', loadCropImage);
@@ -36,6 +38,12 @@ let cropStartY = 0;
 let isDrawing = false;
 let cropCanvas = null;
 let cropCtx = null;
+let cropSession = null;
+let cropSaving = false;
+
+export function isCropSessionCurrent(session) {
+  return !!session && session === cropSession && !session.signal.aborted;
+}
 function readCropRect() {
   return {
     x: readIntegerInput('cropX', 0) || 0,
@@ -98,18 +106,28 @@ function createCropUpdatePayload(platform, enabled, rect = {}) {
 function postCropUpdate(payload) {
   return postJsonApi('/api/crop/update', payload);
 }
-function openCropConfig(platform) {
+function openCropConfig(platform, { autoCapture = true } = {}) {
+  closeCropModal();
+  const controller = new AbortController();
+  const session = { controller, signal: controller.signal, pendingSwitch: null };
+  cropSession = session;
   document.getElementById('cropModal').classList.add('active');
   if (platform) {
     document.getElementById('cropPlatform').value = platform;
   }
-  loadCurrentCropSettings();
+  setCropRectInputs({ x: 0, y: 0, width: 0, height: 0 });
+  loadCurrentCropSettings(session);
   // Auto-capture frame when opening from platform cards
-  if (platform) {
-    setTimeout(() => autoCaptureFrame(), 300);
+  if (platform && autoCapture) {
+    setTimeout(() => {
+      if (isCropSessionCurrent(session)) autoCaptureFrame();
+    }, 300);
   }
+  return session;
 }
 function closeCropModal() {
+  cropSession?.controller.abort();
+  cropSession = null;
   document.getElementById('cropModal').classList.remove('active');
   // Reset canvas
   hideCropCanvasContainer();
@@ -134,59 +152,37 @@ async function clearCropConfig(platform) {
   }
 }
 async function autoCaptureFrame() {
+  const session = cropSession;
+  if (!session) return;
   const platform = document.getElementById('cropPlatform').value;
 
   showNotification('正在捕获直播帧...', 'info');
 
   try {
-    const result = await postJsonApi(`/api/crop/capture/${platform}`);
+    const result = await postJsonApi(`/api/crop/capture/${platform}`, undefined, { signal: session.signal });
+    if (!isCropSessionCurrent(session)) return;
 
     if (result.success && result.message) {
-      // Load the captured image (base64 is in message field)
-      cropImage = new Image();
-      cropImage.onload = function () {
-        cropCanvas = document.getElementById('cropCanvas');
-        cropCtx = cropCanvas.getContext('2d');
-
-        // Show container FIRST so canvas has dimensions
-        showCropCanvasContainer();
-
-        // Set canvas size to image size
-        cropCanvas.width = cropImage.width;
-        cropCanvas.height = cropImage.height;
-
-        // Fill with white background before drawing transparent sources.
-        cropCtx.fillStyle = 'white';
-        cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
-
-        // Draw image
-        cropCtx.drawImage(cropImage, 0, 0);
-
-        // Setup canvas interaction
-        setupCanvasInteraction();
-
+      loadCapturedCropFrame(result.message, () => {
         showNotification('直播帧已捕获，请在图片上选择裁剪区域', 'success');
-      };
-      cropImage.onerror = function (e) {
-        console.error('Image load error:', e);
-        showNotification('图片加载失败', 'error');
-      };
-      cropImage.src = result.message;
+      }, session);
     } else {
       console.error('Capture failed:', result);
       showNotification(result.message || '捕获失败，请确保直播正在进行', 'error');
     }
   } catch (error) {
+    if (!isCropSessionCurrent(session)) return;
     console.error('Capture error:', error);
     showNotification('捕获失败: ' + error.message, 'error');
   }
 }
-async function loadCurrentCropSettings() {
+async function loadCurrentCropSettings(session = cropSession) {
   const platform = document.getElementById('cropPlatform')?.value;
   if (!platform) return;
 
   try {
-    const result = await getJson(`/api/crop/${platform}`);
+    const result = await getJson(`/api/crop/${platform}`, { signal: session?.signal });
+    if (!isCropSessionCurrent(session)) return;
     if (result.success && result.data && result.data.enabled) {
       setCropRectInputs(result.data);
     }
@@ -195,40 +191,16 @@ async function loadCurrentCropSettings() {
   }
 }
 function loadCropImage(event) {
+  const session = cropSession;
   const file = event.target.files?.[0];
   if (!file) return;
 
   const reader = new FileReader();
   reader.onload = function (e) {
-    cropImage = new Image();
-    cropImage.onload = function () {
-      cropCanvas = document.getElementById('cropCanvas');
-      cropCtx = cropCanvas.getContext('2d');
-
-      // Show container FIRST so canvas has dimensions
-      showCropCanvasContainer();
-
-      // Set canvas size to image size
-      cropCanvas.width = cropImage.width;
-      cropCanvas.height = cropImage.height;
-
-      // Fill with white background before drawing transparent sources.
-      cropCtx.fillStyle = 'white';
-      cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
-
-      // Draw image
-      cropCtx.drawImage(cropImage, 0, 0);
-
-      // Setup canvas interaction
-      setupCanvasInteraction();
-
-      showNotification('图片已加载，请在图片上拖动鼠标选择裁剪区域', 'success');
-    };
-    cropImage.onerror = function (err) {
-      console.error('Image load error:', err);
-      showNotification('图片加载失败', 'error');
-    };
-    cropImage.src = e.target.result;
+    if (!isCropSessionCurrent(session)) return;
+    loadCapturedCropFrame(e.target.result, () => {
+      showNotification('图片已加载，请在图片上选择裁剪区域', 'success');
+    }, session);
   };
   reader.onerror = function (err) {
     console.error('FileReader error:', err);
@@ -346,7 +318,10 @@ function setupCanvasInteraction() {
     return cursors[edge] || 'crosshair';
   }
 
-  newCanvas.addEventListener('mousedown', (e) => {
+  newCanvas.style.touchAction = 'none';
+  newCanvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !e.isPrimary) return;
+    newCanvas.setPointerCapture(e.pointerId);
     const rect = newCanvas.getBoundingClientRect();
     const scaleX = newCanvas.width / rect.width;
     const scaleY = newCanvas.height / rect.height;
@@ -391,13 +366,13 @@ function setupCanvasInteraction() {
     }
   });
 
-  newCanvas.addEventListener('mousemove', (e) => {
+  newCanvas.addEventListener('pointermove', (e) => {
     const rect = newCanvas.getBoundingClientRect();
     const scaleX = newCanvas.width / rect.width;
     const scaleY = newCanvas.height / rect.height;
 
-    const currentX = (e.clientX - rect.left) * scaleX;
-    const currentY = (e.clientY - rect.top) * scaleY;
+    const currentX = Math.max(0, Math.min(newCanvas.width, (e.clientX - rect.left) * scaleX));
+    const currentY = Math.max(0, Math.min(newCanvas.height, (e.clientY - rect.top) * scaleY));
 
     const { x, y, width, height } = readCropRect();
 
@@ -573,14 +548,14 @@ function setupCanvasInteraction() {
     }
   });
 
-  newCanvas.addEventListener('mouseup', () => {
+  newCanvas.addEventListener('pointerup', () => {
     isDrawing = false;
     isDragging = false;
     resizeEdge = null;
     newCanvas.style.cursor = 'crosshair';
   });
 
-  newCanvas.addEventListener('mouseleave', () => {
+  newCanvas.addEventListener('lostpointercapture', () => {
     isDrawing = false;
     isDragging = false;
     resizeEdge = null;
@@ -599,9 +574,12 @@ function updateCropBox() {
   const cropBox = document.getElementById('cropBox');
   positionCropBox(cropBox, readCropRect(), scaleX, scaleY);
 }
-function loadCapturedCropFrame(imageSrc, onReady) {
-  cropImage = new Image();
-  cropImage.onload = function () {
+function loadCapturedCropFrame(imageSrc, onReady, session = cropSession) {
+  if (!isCropSessionCurrent(session)) return;
+  const image = new Image();
+  image.onload = function () {
+    if (!isCropSessionCurrent(session)) return;
+    cropImage = image;
     cropCanvas = document.getElementById('cropCanvas');
     cropCtx = cropCanvas.getContext('2d');
     showCropCanvasContainer();
@@ -613,19 +591,18 @@ function loadCapturedCropFrame(imageSrc, onReady) {
     setupCanvasInteraction();
     onReady?.();
   };
-  cropImage.onerror = function (e) {
+  image.onerror = function (e) {
+    if (!isCropSessionCurrent(session)) return;
     console.error('Image load error:', e);
     showNotification('图片加载失败', 'error');
   };
-  cropImage.src = imageSrc;
+  image.src = imageSrc;
 }
 
-async function switchPendingHolodexStream() {
-  const pending = window.pendingHolodexSwitch;
+async function switchPendingHolodexStream(pending) {
   if (!pending) {
     return false;
   }
-  window.pendingHolodexSwitch = null;
   const switchFn = state.hooks.switchToHolodexStream;
   if (typeof switchFn !== 'function') {
     throw new Error('频道切换不可用');
@@ -644,6 +621,12 @@ async function switchPendingHolodexStream() {
 }
 
 async function applyCrop() {
+  return saveCropSelection(false);
+}
+
+async function saveCropSelection(restart) {
+  const session = cropSession;
+  if (!session || cropSaving) return;
   const platform = document.getElementById('cropPlatform').value;
   const cropRect = readCropRect();
   const validationError = validateCropRect(cropRect);
@@ -654,71 +637,38 @@ async function applyCrop() {
   }
   const { x, y, width, height } = cropRect;
 
+  cropSaving = true;
   try {
     const result = await postCropUpdate(createCropUpdatePayload(platform, true, { x, y, width, height }));
+    if (!isCropSessionCurrent(session)) return;
 
     if (result.success) {
       showNotification('裁剪配置已保存', 'success');
       setCropStatusLabel(platform, '开启');
 
-      // Check if there's a pending Holodex switch
-      if (window.pendingHolodexSwitch) {
-        closeCropModal();
+      const pending = session.pendingSwitch;
+      closeCropModal();
+      if (pending) {
         showNotification('裁剪已保存，正在切换频道...', 'info');
-        await switchPendingHolodexStream();
+        await switchPendingHolodexStream(pending);
+      } else if (restart) {
+        const result = await postJsonApi('/api/restart');
+        if (!result.success) throw new Error(result.message || '重启失败');
+        showNotification('裁剪已应用并重启流', 'success');
       } else {
         showNotification('裁剪配置已保存，请重启流使其生效', 'success');
-        closeCropModal();
       }
     } else {
       showNotification(result.message || '保存失败', 'error');
     }
   } catch (error) {
     showNotification('保存失败: ' + error.message, 'error');
+  } finally {
+    cropSaving = false;
   }
 }
 async function applyCropAndRestart() {
-  const platform = document.getElementById('cropPlatform').value;
-  const cropRect = readCropRect();
-  const validationError = validateCropRect(cropRect);
-
-  if (validationError) {
-    showNotification(validationError, 'error');
-    return;
-  }
-  const { x, y, width, height } = cropRect;
-
-  try {
-    // Check if there's a pending Holodex switch
-    if (window.pendingHolodexSwitch) {
-      showNotification('正在切换频道...', 'info');
-      await switchPendingHolodexStream();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    // Step 2: Apply the crop
-    const cropResult = await postCropUpdate(createCropUpdatePayload(platform, true, { x, y, width, height }));
-
-    if (cropResult.success) {
-      showNotification('裁剪配置已保存，正在重启流...', 'success');
-      setCropStatusLabel(platform, '开启');
-
-      closeCropModal();
-
-      // Step 3: Restart the stream
-      const restartResult = await postJsonApi('/api/restart');
-
-      if (restartResult.success) {
-        showNotification('裁剪已应用并重启流', 'success');
-      } else {
-        showNotification('裁剪已保存，但重启失败: ' + (restartResult.message || ''), 'error');
-      }
-    } else {
-      showNotification(cropResult.message || '保存失败', 'error');
-    }
-  } catch (error) {
-    showNotification('操作失败: ' + error.message, 'error');
-  }
+  return saveCropSelection(true);
 }
 async function disableCrop() {
   const platform = document.getElementById('cropPlatform').value;

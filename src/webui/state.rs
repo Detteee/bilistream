@@ -14,6 +14,9 @@ pub struct StatusData {
 #[derive(Serialize, Clone, Default, PartialEq)]
 pub struct BiliStatus {
     pub is_live: bool,
+    /// This node's publisher, independent of the shared Bilibili room state.
+    #[serde(default)]
+    pub ffmpeg_running: bool,
     pub title: String,
     pub area_id: u64,
     pub area_name: String,
@@ -36,6 +39,7 @@ pub struct BiliStatus {
 
 impl BiliStatus {
     pub fn apply_network(&mut self, network: NetworkStatus) {
+        self.ffmpeg_running = network.ffmpeg_running;
         self.stream_speed = network.stream_speed;
         self.stream_cache_speed = network.stream_cache_speed;
         self.stream_bitrate_kbps = network.stream_bitrate_kbps;
@@ -52,6 +56,8 @@ impl BiliStatus {
 
 #[derive(Serialize, Clone, Default, PartialEq)]
 pub struct NetworkStatus {
+    #[serde(default)]
+    pub ffmpeg_running: bool,
     pub stream_speed: Option<f32>,
     pub stream_cache_speed: Option<f32>,
     pub stream_bitrate_kbps: Option<f32>,

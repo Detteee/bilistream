@@ -69,6 +69,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browser_edits_merge_unrelated_changes_but_reject_stale_fields() {
+        let expected = HashMap::from([("interval".to_string(), json!(30))]);
+        let patch = json!({"interval": 75, "auto_cover": null});
+        assert!(validate_edit_preconditions(
+            &json!({"interval": 30, "auto_cover": true}),
+            &patch,
+            Some(&expected)
+        )
+        .is_ok());
+        assert_eq!(
+            validate_edit_preconditions(
+                &json!({"interval": 45, "auto_cover": true}),
+                &patch,
+                Some(&expected)
+            ),
+            Err(EDIT_CONFLICT)
+        );
+        assert_eq!(
+            validate_edit_preconditions(
+                &json!({"interval": 30, "auto_cover": true}),
+                &json!({"interval": 75, "auto_cover": false}),
+                Some(&expected)
+            ),
+            Err(EDIT_INVALID)
+        );
+        assert!(validate_edit_preconditions(&json!({}), &patch, None).is_ok());
+    }
+
+    #[test]
+    fn keyword_preconditions_compare_array_contents() {
+        let expected = HashMap::from([("streaming_banned_keywords".to_string(), json!(["old"]))]);
+        let patch = json!({"streaming_banned_keywords": []});
+        assert_eq!(
+            validate_edit_preconditions(
+                &json!({"streaming_banned_keywords": ["new"]}),
+                &patch,
+                Some(&expected)
+            ),
+            Err(EDIT_CONFLICT)
+        );
+        assert!(validate_edit_preconditions(
+            &json!({"streaming_banned_keywords": ["old"]}),
+            &patch,
+            Some(&expected)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn qr_images_are_local_svg_and_oversized_payloads_fail() {
+        use base64::Engine as _;
+        let image = qr_code_data_url("https://example.invalid/login?token=测试").unwrap();
+        let encoded = image.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        let svg = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(!svg.contains("example.invalid"));
+        assert!(qr_code_data_url(&"x".repeat(10000)).is_err());
+    }
+
+    #[test]
     fn monitor_target_reload_needed_only_for_enable_or_enabled_channel_change() {
         assert!(!monitor_target_reload_needed(
             true, true, "Channel", "Channel", "id", "id",

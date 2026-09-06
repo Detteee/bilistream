@@ -171,10 +171,16 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
     Ok(())
 }
 
-pub(crate) fn current_network_status() -> NetworkStatus {
+pub(crate) async fn current_network_status() -> NetworkStatus {
+    // A live room may be fed by another node. Zero progress is also valid for
+    // a stalled local publisher, so metrics alone cannot indicate ownership.
+    if !crate::plugins::is_ffmpeg_running().await {
+        return NetworkStatus::default();
+    }
     let hls_cache_active = is_ffmpeg_hls_cache_active();
     let network_stats = get_ffmpeg_network_stats();
     NetworkStatus {
+        ffmpeg_running: true,
         stream_speed: get_ffmpeg_speed(),
         stream_cache_speed: if hls_cache_active {
             get_ffmpeg_cache_speed()
@@ -206,8 +212,8 @@ pub(crate) fn current_network_status() -> NetworkStatus {
 }
 
 pub(crate) async fn apply_realtime_stream_metrics(bili: &mut BiliStatus) {
-    let network = current_network_status();
-    bili.stream_quality = if bili.is_live {
+    let network = current_network_status().await;
+    bili.stream_quality = if network.ffmpeg_running {
         network.stream_speed.map(|speed| {
             if speed > 0.97 {
                 "流畅".to_string()
@@ -270,7 +276,7 @@ pub async fn get_status() -> impl IntoResponse {
 pub async fn get_network_status() -> Json<ApiResponse<NetworkStatus>> {
     Json(ApiResponse {
         success: true,
-        data: Some(current_network_status()),
+        data: Some(current_network_status().await),
         message: None,
     })
 }

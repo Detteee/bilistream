@@ -2006,6 +2006,11 @@ mod tests {
     #[tokio::test]
     async fn stale_session_cannot_register_a_worker_for_replacement() {
         *FFMPEG_SUPERVISOR.lock().await = Some(empty_process(FfmpegSession(2)));
+        assert!(
+            crate::webui::api::current_network_status()
+                .await
+                .ffmpeg_running
+        );
         let called = Arc::new(AtomicBool::new(false));
         let worker_called = called.clone();
         assert!(!stop_ffmpeg_session(FfmpegSession(1)).await);
@@ -2027,6 +2032,11 @@ mod tests {
         let process = FFMPEG_SUPERVISOR.lock().await.take().unwrap();
         assert_eq!(process.session, FfmpegSession(2));
         assert!(process.tasks.0.is_empty());
+        // A remote publisher can keep the room live after this local session
+        // ends. The status API must still advertise an idle local publisher.
+        let network = crate::webui::api::current_network_status().await;
+        assert!(!network.ffmpeg_running);
+        assert!(network.stream_bitrate_history.is_empty());
     }
 
     lazy_static::lazy_static! {

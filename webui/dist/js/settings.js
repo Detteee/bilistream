@@ -3,6 +3,13 @@
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
 import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle } from './state.js';
 import { getJson, postJsonApi } from './api.js';
+import { createConfigPatch } from './config-draft.js';
+import { saveBooleanToggle } from './toggle-save.js';
+
+let configBaseline = null;
+let keywordsBaseline = null;
+let settingsLoadGeneration = 0;
+let settingsSaving = false;
 
 function initAntiCollisionControls() {
   document
@@ -65,12 +72,16 @@ function toggleAntiCollisionList() {
   section.classList.toggle('hidden', !checkbox.checked);
 }
 async function loadSystemConfig() {
+  if (settingsSaving) return;
+  const generation = ++settingsLoadGeneration;
+  configBaseline = null;
   try {
     const config = await getJson('/api/config');
+    if (generation !== settingsLoadGeneration) return;
     mergeConfigData(config);
 
     // Load basic settings
-    setInputValue('config-interval', config.interval || 30);
+    setInputValue('config-interval', config.interval ?? 30);
     setCheckboxChecked('config-auto-cover-checkbox', config.auto_cover || false);
     setCheckboxChecked('config-danmaku-command-checkbox', config.bilibili?.enable_danmaku_command !== false);
     setCheckboxChecked('config-anti-collision-checkbox', config.enable_anti_collision || false);
@@ -83,11 +94,11 @@ async function loadSystemConfig() {
     // Load LoL monitor settings
     const lolMonitorEnabled = config.enable_lol_monitor || false;
     setCheckboxChecked('config-lol-monitor-checkbox', lolMonitorEnabled);
-    setInputValue('config-lol-interval', config.lol_monitor_interval || 1);
+    setInputValue('config-lol-interval', config.lol_monitor_interval ?? 1);
     toggleConfigRiotApiKey(); // Show/hide riot API fields based on checkbox
 
     // Load Twitch settings
-    setInputValue('config-tw-region', (config.twitch && config.twitch.proxy_region) || 'asl');
+    setInputValue('config-tw-region', config.twitch?.proxy_region ?? 'asl');
 
     // Load YouTube cookies settings
     setInputValue('config-yt-cookies-browser', (config.youtube && config.youtube.cookies_from_browser) || '');
@@ -102,8 +113,11 @@ async function loadSystemConfig() {
     window.currentAntiCollisionList = config.anti_collision_list || {};
     loadAntiCollisionList(window.currentAntiCollisionList);
 
+    configBaseline = structuredClone(getCurrentConfig());
+
     // Load banned keywords
-    await loadBannedKeywords();
+    await loadBannedKeywords(generation);
+    if (generation !== settingsLoadGeneration) return;
 
     // Load monitor toggle states from the config payload already fetched above.
     updateMonitorToggleStates(config);
@@ -124,14 +138,18 @@ async function loadMonitorToggleStates(config = window.configData) {
     console.error('Failed to load monitor toggle states:', error);
   }
 }
-async function loadBannedKeywords() {
+async function loadBannedKeywords(generation = settingsLoadGeneration) {
+  keywordsBaseline = null;
   try {
     const data = await getJson('/api/banned-keywords');
+    if (generation !== settingsLoadGeneration) return;
 
     setInputValue('streaming-banned-keywords', (data.streaming_banned_keywords || []).join('\n'));
     setInputValue('danmaku-banned-keywords', (data.danmaku_banned_keywords || []).join('\n'));
+    keywordsBaseline = readBannedKeywords();
   } catch (error) {
     console.error('Failed to load banned keywords:', error);
+    showNotification('禁用关键词加载失败；本次不会保存关键词，请重新加载后编辑', 'error');
   }
 }
 // Danmaku Command Toggle Functions
@@ -147,31 +165,12 @@ async function loadDanmakuCommandState(config = window.configData) {
   }
 }
 async function toggleDanmakuCommand() {
-  const toggle = document.getElementById('bili-danmaku-command-toggle');
-  if (!toggle) return;
-  const enabled = toggle.checked;
-
-  try {
-    const result = await postJsonApi('/api/config', {
-      enable_danmaku_command: enabled
-    });
-    if (result.success) {
-      window.configData.bilibili = {
-        ...(window.configData.bilibili || {}),
-        enable_danmaku_command: enabled
-      };
-      showNotification(enabled ? '弹幕指令已启用' : '弹幕指令已禁用', 'success');
-    } else {
-      // Revert toggle if save failed
-      toggle.checked = !enabled;
-      showNotification(result.message || '保存失败', 'error');
-    }
-  } catch (error) {
-    console.error('Failed to toggle danmaku command:', error);
-    // Revert toggle if save failed
-    toggle.checked = !enabled;
-    showNotification('保存失败: ' + error.message, 'error');
-  }
+  return saveBooleanToggle(
+    'bili-danmaku-command-toggle',
+    window.configData.bilibili?.enable_danmaku_command !== false,
+    enabled => postJsonApi('/api/config', { enable_danmaku_command: enabled }),
+    enabled => mergeConfigData({ bilibili: { enable_danmaku_command: enabled } })
+  );
 }
 function loadAntiCollisionList(list) {
   const container = document.getElementById('anti-collision-list');
@@ -295,56 +294,51 @@ function getCurrentConfig() {
   };
 }
 async function saveSystemConfig() {
+  if (settingsSaving) return;
+  settingsSaving = true;
+  const button = document.getElementById('save-system-config-btn');
+  if (button) button.disabled = true;
   try {
-    const config = getCurrentConfig();
-
-    const result = await postJsonApi('/api/config', config);
-
-    if (result.success) {
-      mergeConfigData({
-        ...config,
-        bilibili: {
-          ...(window.configData.bilibili || {}),
-          enable_danmaku_command: config.enable_danmaku_command
-        },
-        youtube: {
-          ...(window.configData.youtube || {}),
-          proxy: config.youtube_proxy,
-          cookies_from_browser: config.youtube_cookies_from_browser,
-          cookies_file: config.youtube_cookies_file,
-          deno_path: config.youtube_deno_path
-        },
-        twitch: {
-          ...(window.configData.twitch || {}),
-          proxy: config.twitch_proxy,
-          proxy_region: config.twitch_proxy_region
-        }
-      });
-      updateDanmakuCommandToggle(config.enable_danmaku_command);
-      try {
-        await saveBannedKeywords();
-        showNotification(result.message || '配置保存成功', 'success');
-      } catch (keywordError) {
-        console.error('Failed to save banned keywords:', keywordError);
-        showNotification(`配置已保存，但禁用关键词保存失败: ${keywordError.message}`, 'error');
-      }
-    } else {
-      showNotification('配置保存失败: ' + (result.error || '未知错误'), 'error');
+    const config = structuredClone(getCurrentConfig());
+    const patch = createConfigPatch(config, configBaseline);
+    if (patch) {
+      const result = await postJsonApi('/api/config', patch);
+      if (!result.success) throw new Error(result.message || '未知错误');
+      // Preserve edits made during the save: advance only to what was sent.
+      configBaseline = structuredClone(config);
+      await reloadServerConfig();
+    }
+    try {
+      await saveBannedKeywords();
+      showNotification(keywordsBaseline ? '配置已保存' : '系统配置已保存；关键词未加载，未保存关键词', 'success');
+    } catch (keywordError) {
+      showNotification(`系统配置已保存，但禁用关键词保存失败: ${keywordError.message}`, 'error');
     }
   } catch (error) {
     console.error('Failed to save system config:', error);
-    showNotification('配置保存失败', 'error');
+    showNotification(`配置保存失败: ${error.message}`, 'error');
+  } finally {
+    settingsSaving = false;
+    if (button) button.disabled = false;
   }
 }
 async function saveBannedKeywords() {
-  const result = await postJsonApi('/api/banned-keywords', {
-    streaming_banned_keywords: readBannedKeywordLines('streaming-banned-keywords'),
-    danmaku_banned_keywords: readBannedKeywordLines('danmaku-banned-keywords')
-  });
+  if (!keywordsBaseline) return;
+  const keywords = readBannedKeywords();
+  const patch = createConfigPatch(keywords, keywordsBaseline);
+  if (!patch) return;
+  const result = await postJsonApi('/api/banned-keywords', patch);
   if (!result.success) {
     throw new Error(result.message || '未知错误');
   }
+  keywordsBaseline = keywords;
   document.dispatchEvent(new Event('areas-json-changed'));
+}
+function readBannedKeywords() {
+  return {
+    streaming_banned_keywords: readBannedKeywordLines('streaming-banned-keywords'),
+    danmaku_banned_keywords: readBannedKeywordLines('danmaku-banned-keywords')
+  };
 }
 function readBannedKeywordLines(elementId) {
   const value = document.getElementById(elementId)?.value || '';

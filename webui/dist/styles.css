@@ -157,7 +157,7 @@ code {
   /* Text */
   --text: #d9e0f5;
   --text-dim: #a9b1cd;
-  --text-mute: #757e9c;
+  --text-mute: #8b95b1;
   --text-on-accent: #0e0e16;
 
   /* Brand + semantic accents */
@@ -260,7 +260,7 @@ html.light-theme {
   --brand: #176ae5;
   --brand-hi: #0f57db;
   --brand-2: #4b51c3;
-  --ok: #479a53;
+  --ok: #276932;
   --warn: #b7791f;
   --danger: #c4454a;
   --info: #176ae5;

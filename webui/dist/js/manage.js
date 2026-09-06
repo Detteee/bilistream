@@ -2,9 +2,10 @@
 
 import { appendAntiCollisionRemoveIcon, appendEditIcon, readInputValue, parseCommaSeparatedInput, readIntegerInput, setInputValue, setElementText, showNotification, setButtonLoading } from './dom.js';
 import { managementRequest, managementJsonRequest, deleteManagementResource } from './api.js';
+import { state, invalidateManagedData } from './state.js';
 
 let editingAreaId = null;
-let isEditingChannel = false;
+let editingChannelName = null;
 function submitAreaForm() {
   if (editingAreaId !== null) {
     return updateArea(editingAreaId);
@@ -12,7 +13,7 @@ function submitAreaForm() {
   return addArea();
 }
 function submitChannelForm() {
-  if (isEditingChannel) {
+  if (editingChannelName !== null) {
     return updateChannel();
   }
   return addChannel();
@@ -77,10 +78,13 @@ function loadManagementListsOnce() {
 }
 // Area management functions
 async function loadAreas() {
+  const generation = state.managedDataGeneration;
   try {
     const result = await managementRequest('/api/manage/areas');
+    if (generation !== state.managedDataGeneration) return loadAreas();
 
     if (result.success) {
+      state.areasData = result.data;
       const areasContent = document.getElementById('areas-content');
       if (!areasContent) return;
       areasContent.dataset.loaded = 'true';
@@ -171,6 +175,7 @@ async function addArea() {
   }
 }
 function showManagementSuccess(result, fallbackMessage) {
+  invalidateManagedData();
   showNotification(result.message || fallbackMessage, 'success');
 }
 function notifyAreasJsonChanged() {
@@ -186,10 +191,13 @@ function readAreaForm() {
 }
 // Channel management functions
 async function loadChannels() {
+  const generation = state.managedDataGeneration;
   try {
     const result = await managementRequest('/api/manage/channels');
+    if (generation !== state.managedDataGeneration) return loadChannels();
 
     if (result.success) {
+      state.channelsData = result.data;
       const channelsContent = document.getElementById('channels-content');
       if (!channelsContent) return;
       channelsContent.dataset.loaded = 'true';
@@ -292,6 +300,11 @@ async function addChannel() {
 async function updateChannel() {
   const payload = readChannelForm();
 
+  if (payload.name !== editingChannelName) {
+    showNotification('频道名称是配置标识，编辑时不能更改；请另行添加频道', 'error');
+    return;
+  }
+
   if (!payload.name) {
     showNotification('请填写频道名称', 'error');
     return;
@@ -350,7 +363,8 @@ async function editChannel(channelName) {
     setInputValue('channel-twitch', platforms.twitch || '');
     setInputValue('channel-riot', channel.riot_puuid || '');
 
-    isEditingChannel = true;
+    editingChannelName = channel.name;
+    document.getElementById('channel-name').readOnly = true;
     setElementText('channel-form-title', '编辑频道');
     setElementText('channel-submit-btn', '更新频道');
     document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
@@ -365,7 +379,8 @@ function clearChannelForm() {
   setInputValue('channel-twitch', '');
   setInputValue('channel-riot', '');
 
-  isEditingChannel = false;
+  editingChannelName = null;
+  document.getElementById('channel-name').readOnly = false;
   setElementText('channel-form-title', '添加频道');
   setElementText('channel-submit-btn', '添加频道');
 }
@@ -389,6 +404,7 @@ async function editArea(areaId) {
     setInputValue('area-aliases', (area.aliases || []).join(', '));
 
     editingAreaId = areaId;
+    document.getElementById('area-id').readOnly = true;
     setElementText('area-form-title', '编辑分区');
     setElementText('area-submit-btn', '更新分区');
     document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
@@ -403,11 +419,17 @@ function clearAreaForm() {
   setInputValue('area-aliases', '');
 
   editingAreaId = null;
+  document.getElementById('area-id').readOnly = false;
   setElementText('area-form-title', '添加新分区');
   setElementText('area-submit-btn', '添加分区');
 }
 async function updateArea(originalId) {
   const area = readAreaForm();
+
+  if (area.id !== originalId) {
+    showNotification('分区 ID 是配置标识，编辑时不能更改；请另行添加分区', 'error');
+    return;
+  }
 
   if (!area.id || !area.name) {
     showNotification('请填写分区ID和名称', 'error');
@@ -415,28 +437,6 @@ async function updateArea(originalId) {
   }
 
   try {
-    // If ID changed, we need to delete the old one and add the new one
-    if (originalId !== area.id) {
-      // Delete old area
-      const deleteResult = await deleteManagementResource(`/api/manage/areas/${originalId}`);
-      if (!deleteResult.success) {
-        throw new Error(deleteResult.message || '删除原分区失败');
-      }
-
-      // Add new area with new ID
-      const result = await managementJsonRequest('/api/manage/areas', 'POST', area);
-      if (result.success) {
-        showManagementSuccess(result, '分区更新成功');
-        clearAreaForm();
-        loadAreas();
-        notifyAreasJsonChanged();
-      } else {
-        showNotification(`更新失败: ${result.message}`, 'error');
-      }
-      return;
-    }
-
-    // Update existing area (ID unchanged)
     const result = await managementJsonRequest('/api/manage/areas', 'PUT', area);
     if (result.success) {
       showManagementSuccess(result, '分区更新成功');
@@ -551,5 +551,5 @@ export {
   refreshAreas,
   refreshChannels,
   editingAreaId,
-  isEditingChannel,
+  editingChannelName,
 };

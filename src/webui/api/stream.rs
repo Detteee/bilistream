@@ -33,7 +33,8 @@ pub async fn start_stream(
                     success: false,
                     data: Some(json!({
                         "requires_face_auth": true,
-                        "qr_url": qr_url
+                        "qr_url": qr_url,
+                        "qr_image": qr_code_data_url(qr_url).ok(),
                     })),
                     message: Some("需要人脸验证，请扫描二维码完成验证后重试".to_string()),
                 })
@@ -373,8 +374,10 @@ pub async fn get_banned_keywords() -> Result<Json<BannedKeywordsResponse>, Statu
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct UpdateBannedKeywordsRequest {
+    #[serde(skip_serializing)]
+    expected: Option<HashMap<String, serde_json::Value>>,
     danmaku_banned_keywords: Option<Vec<String>>,
     streaming_banned_keywords: Option<Vec<String>>,
 }
@@ -386,7 +389,14 @@ pub async fn update_banned_keywords(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .with_file_name("areas.json");
 
-    crate::config::mutate_json_file(areas_path, move |data: &mut serde_json::Value| {
+    let patch = serde_json::to_value(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let result = crate::config::mutate_json_file(areas_path, move |data: &mut serde_json::Value| {
+        let current = json!({
+            "danmaku_banned_keywords": data.get("banned_keywords").cloned().unwrap_or_else(|| json!([])),
+            "streaming_banned_keywords": data.get("streaming_banned_keywords").cloned().unwrap_or_else(|| json!([])),
+        });
+        validate_edit_preconditions(&current, &patch, payload.expected.as_ref())
+            .map_err(str::to_owned)?;
         if let Some(keywords) = payload.danmaku_banned_keywords {
             data["banned_keywords"] = serde_json::json!(keywords);
         }
@@ -395,8 +405,16 @@ pub async fn update_banned_keywords(
         }
         Ok(())
     })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await;
+    if let Err(error) = result {
+        return Err(if error == EDIT_CONFLICT {
+            StatusCode::CONFLICT
+        } else if error == EDIT_INVALID {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        });
+    }
     set_config_updated();
 
     Ok(ApiResponse {

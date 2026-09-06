@@ -24,8 +24,7 @@ const biliNetworkHistoryLimit = 60;
 let lastBiliNetworkLive = false;
 let lastBiliNetworkQuality = null;
 
-/// True while the Bilibili room is known to be live, so callers can skip
-/// polling the network endpoint when there is nothing to draw.
+/// True while this node runs a publisher, including a stalled publisher.
 export function isBiliNetworkLive() {
   return lastBiliNetworkLive;
 }
@@ -84,7 +83,7 @@ function sliceNetworkHistory(series, width) {
 
 function setToggleChecked(id, checked) {
   const toggle = document.getElementById(id);
-  if (toggle && typeof checked === 'boolean') {
+  if (toggle && toggle.dataset.saving !== 'true' && typeof checked === 'boolean') {
     toggle.checked = checked;
   }
 }
@@ -212,20 +211,16 @@ export function renderBiliNetworkPanel(bili) {
     return;
   }
 
-  lastBiliNetworkLive = typeof bili.is_live === 'boolean' ? bili.is_live : lastBiliNetworkLive;
-  lastBiliNetworkQuality = bili.stream_quality || lastBiliNetworkQuality;
-  const hasPush = Number.isFinite(bili.stream_bitrate_kbps)
-    || Number.isFinite(bili.stream_speed)
-    || Number.isFinite(bili.stream_fps)
-    || Number.isFinite(bili.stream_time_secs)
-    || Number.isFinite(bili.stream_frame);
-  const hasCache = bili.hls_cache_active && (
-    Number.isFinite(bili.stream_cache_bitrate_kbps)
-    || Number.isFinite(bili.stream_cache_speed)
-    || Number.isFinite(bili.stream_cache_time_secs)
-  );
-  if (!lastBiliNetworkLive || (!hasPush && !hasCache && !lastBiliNetworkQuality)) {
+  lastBiliNetworkLive = bili.ffmpeg_running === true;
+  lastBiliNetworkQuality = lastBiliNetworkLive
+    ? (Number.isFinite(bili.stream_speed)
+      ? (bili.stream_speed > 0.97 ? '流畅' : bili.stream_speed > 0.94 ? '波动' : '卡顿')
+      : bili.stream_quality || null)
+    : null;
+  const hasCache = !!bili.hls_cache_active;
+  if (!lastBiliNetworkLive) {
     panel.classList.add('hidden');
+    document.getElementById('bili-network-graph')?.replaceChildren();
     return;
   }
 
@@ -234,7 +229,7 @@ export function renderBiliNetworkPanel(bili) {
 
   const quality = document.getElementById('bili-network-quality');
   if (quality) {
-    quality.textContent = lastBiliNetworkQuality || 'Live';
+    quality.textContent = lastBiliNetworkQuality || '等待推流数据';
     applyBiliStreamQualityColor(quality, lastBiliNetworkQuality);
   }
 
@@ -332,6 +327,12 @@ export function renderStatusCards(status) {
 /// Replaces the channel/title fields with a short message when the status
 /// payload could not be read at all.
 export function setStatusCardsMessage(message) {
+  for (const id of ['bili-status', 'yt-status', 'tw-status']) {
+    setStatusIndicator(id, 'status-offline');
+  }
+  updateAppLiveBadge(false);
+  setElementText('app-live-badge-text', '连接中断');
+  renderBiliNetworkPanel({ ffmpeg_running: false });
   setElementText('bili-title', message);
   setElementText('yt-channel-name', message);
   setElementText('tw-channel-name', message);

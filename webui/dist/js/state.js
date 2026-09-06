@@ -3,6 +3,7 @@
 export const state = {
   channelsData: null,
   areasData: null,
+  managedDataGeneration: 0,
   activeView: 'overview',
   monitorToggleSaveState: new Map(),
   hooks: {},
@@ -21,12 +22,9 @@ function mergeConfigData(config) {
   window.configData = {
     ...window.configData,
     ...config,
-    enable_lol_monitor: config.enable_lol_monitor || false,
-    riot_api_key: config.riot_api_key || '',
-    holodex_api_key: config.holodex_api_key || '',
-    bilibili: config.bilibili || window.configData.bilibili || {},
-    youtube: config.youtube || window.configData.youtube || {},
-    twitch: config.twitch || window.configData.twitch || {}
+    bilibili: { ...window.configData.bilibili, ...config.bilibili },
+    youtube: { ...window.configData.youtube, ...config.youtube },
+    twitch: { ...window.configData.twitch, ...config.twitch }
   };
   return window.configData;
 }
@@ -56,7 +54,17 @@ function applyMonitorToggleConfigState(toggle, toggleId, enabled) {
 function updateDanmakuCommandToggle(enabled) {
   const toggle = document.getElementById('bili-danmaku-command-toggle');
   if (toggle && typeof enabled === 'boolean') {
-    toggle.checked = enabled;
+    applyMonitorToggleConfigState(toggle, 'bili-danmaku-command-toggle', enabled);
+  }
+}
+
+export function invalidateManagedData() {
+  state.managedDataGeneration += 1;
+  state.channelsData = null;
+  state.areasData = null;
+  for (const id of ['channels-content', 'areas-content']) {
+    const list = document.getElementById(id);
+    if (list) delete list.dataset.loaded;
   }
 }
 function isViewActive(name) {
