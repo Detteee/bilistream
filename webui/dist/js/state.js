@@ -46,7 +46,7 @@ function updateMonitorToggleStates(config = window.configData) {
 function applyPriorityAutoRestartToggle(config = window.configData) {
   const autoRestartToggle = document.getElementById('priority-auto-restart-toggle');
   if (autoRestartToggle && config.priority_channel) {
-    autoRestartToggle.checked = config.priority_channel.auto_restart || false;
+    applyMonitorToggleConfigState(autoRestartToggle, 'priority-auto-restart-toggle', !!config.priority_channel.auto_restart);
   }
 }
 function applyMonitorToggleConfigState(toggle, toggleId, enabled) {

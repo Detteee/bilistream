@@ -391,8 +391,10 @@ pub async fn update_config(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct UpdatePriorityChannelRequest {
+    #[serde(skip_serializing)]
+    expected: Option<HashMap<String, serde_json::Value>>,
     enabled: Option<bool>,
     channel_name: Option<String>,
     default_area: Option<u64>,
@@ -405,6 +407,24 @@ pub async fn update_priority_channel(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    validate_edit_preconditions(
+        &json!({
+            "enabled": cfg.priority_channel.enabled,
+            "auto_restart": cfg.priority_channel.auto_restart,
+            "channel_name": cfg.priority_channel.channel_name,
+            "default_area": cfg.priority_channel.default_area,
+        }),
+        &serde_json::to_value(&payload).map_err(|_| StatusCode::BAD_REQUEST)?,
+        payload.expected.as_ref(),
+    )
+    .map_err(|error| {
+        if error == EDIT_CONFLICT {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        }
+    })?;
 
     // Update fields
     if let Some(enabled) = payload.enabled {

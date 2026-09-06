@@ -1,13 +1,14 @@
 // overview.js — extracted from app.js
 
 import { isDashboardVisible, isElementHidden, setElementDisplay, reconcileChildren, createStreamThumbnail, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions, getAreaName } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, applyMonitorToggleConfigState, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions, getAreaName } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
 import { toggleDanmakuCommand } from './settings.js';
 import { openCropConfig, clearCropConfig, loadCapturedCropFrame, isCropSessionCurrent } from './crop.js';
 import { bindDialog, bindListboxKeyboard } from './dialog.js';
+import { saveBooleanToggle } from './toggle-save.js';
 import {
   formatHlsCacheStatus,
   formatScheduledStart as formatHolodexScheduledStart,
@@ -1322,46 +1323,25 @@ async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, t
 }
 
 async function togglePriorityChannel() {
-  const toggle = document.getElementById('priority-toggle');
-  const enabled = toggle.checked;
-
-  try {
-    const result = await postJsonApi('/api/priority-channel', { enabled });
-    if (result.success) {
-      showNotification(enabled ? '优先频道已启用' : '优先频道已禁用', 'success');
-      await refreshStatus();
-    } else {
-      toggle.checked = !enabled;
-      showNotification(result.message || '保存失败', 'error');
-    }
-  } catch (error) {
-    console.error('Failed to toggle priority channel:', error);
-    toggle.checked = !enabled;
-    showNotification('保存失败: ' + error.message, 'error');
-  }
+  return saveBooleanToggle(
+    'priority-toggle', !!window.configData.priority_channel?.enabled,
+    enabled => postJsonApi('/api/priority-channel', { enabled }),
+    enabled => mergeConfigData({ priority_channel: { enabled } })
+  );
 }
 
 async function togglePriorityAutoRestart() {
-  const toggle = document.getElementById('priority-auto-restart-toggle');
-  if (!toggle) return;
-  const enabled = toggle.checked;
-
-  try {
-    const result = await postJsonApi('/api/priority-channel', { auto_restart: enabled });
-    if (result.success) {
-      showNotification(enabled ? '自动重启流已启用' : '自动重启流已禁用', 'success');
-    } else {
-      toggle.checked = !enabled;
-      showNotification(result.message || '保存失败', 'error');
-    }
-  } catch (error) {
-    console.error('Failed to toggle auto restart:', error);
-    toggle.checked = !enabled;
-    showNotification('保存失败: ' + error.message, 'error');
-  }
+  return saveBooleanToggle(
+    'priority-auto-restart-toggle', !!window.configData.priority_channel?.auto_restart,
+    auto_restart => postJsonApi('/api/priority-channel', { auto_restart }),
+    auto_restart => mergeConfigData({ priority_channel: { auto_restart } })
+  );
 }
 
+let priorityChannelEditOriginal = null;
+let priorityAreaEditOriginal = null;
 async function togglePriorityChannelEdit() {
+  priorityChannelEditOriginal = window.configData.priority_channel?.channel_name ?? null;
   const channelSpan = document.getElementById('priority-channel-name');
   const editContainer = document.getElementById('priority-channel-edit-container');
   const editSelect = document.getElementById('priority-channel-edit-select');
@@ -1395,6 +1375,7 @@ async function loadChannelsForPriorityInline() {
 }
 
 function cancelPriorityChannelEdit() {
+  priorityChannelEditOriginal = null;
   const channelSpan = document.getElementById('priority-channel-name');
   const editContainer = document.getElementById('priority-channel-edit-container');
 
@@ -1405,18 +1386,15 @@ async function savePriorityChannelEdit() {
   const editSelect = document.getElementById('priority-channel-edit-select');
   const newChannel = editSelect.value;
 
-  if (!newChannel) {
+  if (!newChannel || priorityChannelEditOriginal === null) {
     showNotification('请选择一个频道', 'error');
     return;
   }
 
   try {
-    const configData = await getJson('/api/config');
-
     const priorityConfig = {
-      enabled: configData.priority_channel?.enabled || false,
       channel_name: newChannel,
-      default_area: configData.priority_channel?.default_area || 235
+      expected: { channel_name: priorityChannelEditOriginal },
     };
 
     const result = await postJsonApi('/api/priority-channel', priorityConfig);
@@ -1434,6 +1412,7 @@ async function savePriorityChannelEdit() {
 }
 
 async function togglePriorityAreaEdit() {
+  priorityAreaEditOriginal = window.configData.priority_channel?.default_area ?? null;
   const areaSpan = document.getElementById('priority-default-area');
   const editContainer = document.getElementById('priority-area-edit-container');
   const editSelect = document.getElementById('priority-area-edit-select');
@@ -1470,6 +1449,7 @@ async function loadAreasForPriorityInline() {
 }
 
 function cancelPriorityAreaEdit() {
+  priorityAreaEditOriginal = null;
   const areaSpan = document.getElementById('priority-default-area');
   const editContainer = document.getElementById('priority-area-edit-container');
 
@@ -1480,18 +1460,15 @@ async function savePriorityAreaEdit() {
   const editSelect = document.getElementById('priority-area-edit-select');
   const newAreaId = parseInteger(editSelect.value, 0);
 
-  if (!newAreaId) {
+  if (!newAreaId || priorityAreaEditOriginal === null) {
     showNotification('请选择一个分区', 'error');
     return;
   }
 
   try {
-    const configData = await getJson('/api/config');
-
     const priorityConfig = {
-      enabled: configData.priority_channel?.enabled || false,
-      channel_name: configData.priority_channel?.channel_name || '',
-      default_area: newAreaId
+      default_area: newAreaId,
+      expected: { default_area: priorityAreaEditOriginal },
     };
 
     const result = await postJsonApi('/api/priority-channel', priorityConfig);
@@ -2126,17 +2103,17 @@ function renderPriorityChannelStatus(priority) {
   priorityCard.style.display = '';
 
   if (!priority) {
-    priorityToggle.checked = false;
+    applyMonitorToggleConfigState(priorityToggle, 'priority-toggle', false);
     if (priorityAutoRestartToggle) {
-      priorityAutoRestartToggle.checked = false;
+      applyMonitorToggleConfigState(priorityAutoRestartToggle, 'priority-auto-restart-toggle', false);
     }
     setPriorityStatusFields(null, '未启用', '-', '-');
     return;
   }
 
-  priorityToggle.checked = priority.enabled;
+  applyMonitorToggleConfigState(priorityToggle, 'priority-toggle', !!priority.enabled);
   if (priorityAutoRestartToggle) {
-    priorityAutoRestartToggle.checked = priority.auto_restart || false;
+    applyMonitorToggleConfigState(priorityAutoRestartToggle, 'priority-auto-restart-toggle', !!priority.auto_restart);
   }
   window.configData.priority_channel = {
     ...(window.configData.priority_channel || {}),
@@ -2242,6 +2219,8 @@ async function refreshStatus() {
     console.error('Failed to refresh status:', error);
 
     setStatusCardsMessage('连接中断，等待重连');
+    setPriorityStatusFields(null, '连接中断', '-', '-');
+    setElementText('priority-channel-name', '连接中断');
 
     // Avoid repeated notifications while the connection is unavailable.
     if (error.message && error.message.includes('NetworkError')) {
