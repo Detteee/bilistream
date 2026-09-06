@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, LockResult, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, LockResult, Mutex, OnceLock, RwLock};
+#[cfg(test)]
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 use tokio::sync::{broadcast, Notify};
 
 use crate::cluster::ClusterState;
@@ -63,12 +65,12 @@ impl AppState {
         &Self::process_inner().cluster_node_mode_apply
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn cluster_read(&self) -> RwLockReadGuard<'_, ClusterState> {
         recover_lock(self.inner.cluster.read(), "cluster state")
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn cluster_write(&self) -> RwLockWriteGuard<'_, ClusterState> {
         recover_lock(self.inner.cluster.write(), "cluster state")
     }
