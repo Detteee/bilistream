@@ -1231,6 +1231,8 @@ input[type="checkbox"] {
 
 .card {
   --platform: var(--brand);
+  --card-accent: color-mix(in srgb, var(--platform) 70%, var(--brand-2));
+  --card-accent-edge: color-mix(in srgb, var(--card-accent) 28%, var(--surface-2));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1240,24 +1242,48 @@ input[type="checkbox"] {
   border-radius: var(--r-lg);
   background: var(--surface-2);
   box-shadow: var(--sh-1);
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition: border-color var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease);
 }
 
 .card::before {
   content: "";
   position: absolute;
   inset: 0 0 auto;
-  height: 2px;
+  height: 3px;
   background: linear-gradient(
     90deg,
-    var(--platform),
-    color-mix(in srgb, var(--platform) 20%, transparent)
+    var(--card-accent-edge),
+    color-mix(in srgb, var(--card-accent) 78%, var(--surface-1)) 35%,
+    var(--card-accent) 70%,
+    var(--card-accent-edge)
   );
+  opacity: 0;
+  transform: translateY(-100%);
+  transition: transform var(--dur-slow) var(--ease), opacity var(--dur-slow) var(--ease);
+  pointer-events: none;
 }
 
-.card:hover {
-  border-color: color-mix(in srgb, var(--platform) 34%, var(--line));
+.card:has(:focus-visible) {
+  border-color: color-mix(in srgb, var(--card-accent) 40%, var(--line));
   box-shadow: var(--sh-2);
+}
+
+.card:has(:focus-visible)::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Keep hover styling on devices with a precise, hover-capable pointer. */
+@media (hover: hover) and (pointer: fine) {
+  .card:hover {
+    border-color: color-mix(in srgb, var(--card-accent) 40%, var(--line));
+    box-shadow: var(--sh-2);
+  }
+
+  .card:hover::before {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .card[data-platform="bilibili"] {
