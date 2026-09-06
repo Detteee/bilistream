@@ -546,8 +546,7 @@ function updateClusterNodeMetrics(element, node) {
   if (label) {
     const display = selfCheckDisplay(node.self_check, node.health?.stale === true);
     label.dataset.state = display.state;
-    const value = `隧道 ${display.label}`;
-    if (label.textContent !== value) label.textContent = value;
+    if (label.textContent !== display.label) label.textContent = display.label;
     label.title = display.title;
   }
   updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
@@ -710,7 +709,7 @@ function createClusterSelfCheck(node) {
   const label = document.createElement('span');
   label.className = 'cluster-self-check';
   label.dataset.state = display.state;
-  label.textContent = `隧道 ${display.label}`;
+  label.textContent = display.label;
   label.title = display.title;
   return label;
 }

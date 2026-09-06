@@ -35,20 +35,20 @@ export function formatClusterHealthReason(reason) {
 // Reachability through the node's advertised control URL, including its tunnel.
 export function selfCheckDisplay(check, stale = false) {
   if (stale) {
-    return { state: 'pending', label: '已过期', title: '节点心跳已过期，等待新的隧道自检结果' };
+    return { state: 'pending', label: '已过期', title: '节点心跳已过期，等待新的 API 自检结果' };
   }
   switch (check?.state) {
     case 'healthy': {
       const latency = Number.isFinite(check.latency_ms) && check.latency_ms >= 0
-        ? ` · ${check.latency_ms} ms` : '';
-      return { state: 'healthy', label: `可达${latency}`, title: '已通过本节点对外 URL 验证节点身份和即时响应' };
+        ? `${check.latency_ms} ms` : '—';
+      return { state: 'healthy', label: latency, title: 'API 自检：本节点对外 URL 可达，已验证节点身份和即时响应；延迟为往返耗时' };
     }
     case 'failing':
-      return { state: 'failing', label: '检测失败', title: selfCheckFailureMessage(check.failure) };
+      return { state: 'failing', label: '检测失败', title: `API 自检失败：${selfCheckFailureMessage(check.failure)}` };
     case 'unreachable':
-      return { state: 'unreachable', label: '不可达', title: `连续自检失败；${selfCheckFailureMessage(check.failure)}` };
+      return { state: 'unreachable', label: '不可达', title: `API 自检连续失败；${selfCheckFailureMessage(check.failure)}` };
     default:
-      return { state: 'pending', label: '待检测', title: '等待本节点通过对外 URL 完成隧道自检' };
+      return { state: 'pending', label: '待检测', title: '等待本节点通过对外 URL 完成 API 自检' };
   }
 }
 
