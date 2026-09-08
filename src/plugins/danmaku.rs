@@ -1,5 +1,5 @@
 use super::twitch::get_twitch_status;
-use super::youtube::get_youtube_status;
+use super::youtube::{get_youtube_area_topic, get_youtube_status};
 use crate::config::load_config;
 use crate::config::Config;
 use crate::plugins::banned_keywords::{
@@ -229,27 +229,48 @@ async fn update_config(
     let mut config = load_config()
         .await
         .map_err(|error| io::Error::other(error.to_string()))?;
-    match platform {
-        "YT" => {
-            config.youtube.channel_id = channel_id.to_owned();
-            config.youtube.channel_name = channel_name.to_owned();
-            config.youtube.area_v2 = area_id;
-        }
-        "TW" => {
-            config.twitch.channel_id = channel_id.to_owned();
-            config.twitch.channel_name = channel_name.to_owned();
-            config.twitch.area_v2 = area_id;
-        }
+    if !apply_danmaku_target(&mut config, platform, channel_name, channel_id, area_id)? {
+        return Ok(false);
+    }
+    crate::config::save_config(&mut config)
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(true)
+}
+
+fn apply_danmaku_target(
+    config: &mut Config,
+    platform: &str,
+    channel_name: &str,
+    channel_id: &str,
+    area_id: u64,
+) -> io::Result<bool> {
+    let (current_name, current_id, current_area) = match platform {
+        "YT" => (
+            &mut config.youtube.channel_name,
+            &mut config.youtube.channel_id,
+            &mut config.youtube.area_v2,
+        ),
+        "TW" => (
+            &mut config.twitch.channel_name,
+            &mut config.twitch.channel_id,
+            &mut config.twitch.area_v2,
+        ),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unknown platform",
             ))
         }
+    };
+    // This comparison receives the corrected area, after live metadata has
+    // been checked. A repeated command can therefore repair a saved wrong area.
+    if current_name == channel_name && current_id == channel_id && *current_area == area_id {
+        return Ok(false);
     }
-    crate::config::save_config(&mut config)
-        .await
-        .map_err(|error| io::Error::other(error.to_string()))?;
+    *current_name = channel_name.to_owned();
+    *current_id = channel_id.to_owned();
+    *current_area = area_id;
     Ok(true)
 }
 
@@ -505,62 +526,10 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             }
         };
 
-        // Early config check to avoid expensive live status API calls
-        let exe_path = std::env::current_exe().map_err(|e| {
-            tracing::error!("无法获取可执行文件路径: {}", e);
-        });
-        if let Ok(exe_path) = exe_path {
-            let config_path = exe_path.with_file_name("config.json");
-
-            // Read the existing config.json
-            if let Ok(config_content) = fs::read_to_string(&config_path) {
-                // Deserialize JSON into Config struct
-                if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
-                    // Check if update is needed
-                    let needs_update = if platform == "YT" {
-                        config.youtube.channel_id != channel_id_str
-                            || config.youtube.channel_name != resolved_channel_name
-                            || config.youtube.area_v2 != area_id
-                    } else if platform == "TW" {
-                        config.twitch.channel_id != channel_id_str
-                            || config.twitch.channel_name != resolved_channel_name
-                            || config.twitch.area_v2 != area_id
-                    } else {
-                        false
-                    };
-
-                    if !needs_update {
-                        let area_name = match get_area_name(area_id) {
-                            Some(name) => name,
-                            None => {
-                                tracing::error!("无法获取分区名称");
-                                return;
-                            }
-                        };
-                        let _ = bilibili::send_danmaku(
-                            &cfg,
-                            &format!(
-                                "{} 监听对象已是：{} - {}",
-                                platform, resolved_channel_name, area_name
-                            ),
-                        )
-                        .await;
-                        tracing::info!(
-                            "{} 监听对象已是：{} - {}",
-                            platform,
-                            resolved_channel_name,
-                            area_name
-                        );
-                        return;
-                    }
-                }
-            }
-        }
-
-        let (live_title, live_topic) = if platform.eq_ignore_ascii_case("YT") {
+        let (live_title, live_topic, youtube_video_id) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
             match get_youtube_status(channel_id_str).await {
-                Ok((_, topic, title, _, _, _)) => {
+                Ok((_, topic, title, _, _, video_id)) => {
                     let t = match title {
                         Some(t) => t,
                         None => {
@@ -579,7 +548,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                             }
                         }
                     };
-                    (t, topic.unwrap_or_default())
+                    (t, topic.unwrap_or_default(), video_id)
                 }
                 Err(e) => {
                     tracing::error!("获取YT直播标题时出错: {}", e);
@@ -618,7 +587,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                             }
                         }
                     };
-                    (t, topic.unwrap_or_default())
+                    (t, topic.unwrap_or_default(), None)
                 }
                 Err(e) => {
                     tracing::error!("获取TW状态时出错: {}", e);
@@ -645,9 +614,17 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             return;
         }
 
-        // Now you can use channel_id_str where needed without moving channel_id
-        // let new_title = format!("【转播】{}", channel_name);
-        let updated_area_id = check_area_id_with_title(&live_topic_title, area_id);
+        // Area matching needs the same game/topic that powers WebUI suggestions.
+        // Keep this optional lookup separate from command validation and liveness.
+        let area_topic = if platform == "YT" && live_topic.trim().is_empty() {
+            get_youtube_area_topic(channel_id_str, youtube_video_id.as_deref()).await
+        } else {
+            Some(live_topic)
+        };
+        let updated_area_id = check_area_id_with_title(
+            &stream_area_haystack(area_topic.as_deref(), &live_title),
+            area_id,
+        );
 
         let updated_area_name = match get_area_name(updated_area_id) {
             Some(name) => name,
@@ -657,6 +634,15 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             }
         };
 
+        if updated_area_id != area_id {
+            tracing::info!(
+                "🔄 按直播标题/游戏关键词修正弹幕分区: {} -> {} (ID: {})",
+                area_name,
+                updated_area_name,
+                updated_area_id
+            );
+        }
+
         match update_config(
             &platform,
             &resolved_channel_name,
@@ -665,7 +651,15 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         )
         .await
         {
-            Ok(_) => {
+            Ok(false) => {
+                let message = format!(
+                    "{} 监听对象已是：{} - {}",
+                    platform, resolved_channel_name, updated_area_name
+                );
+                tracing::info!("{}", message);
+                let _ = bilibili::send_danmaku(&cfg, &message).await;
+            }
+            Ok(true) => {
                 // Clear warning flag when user manually changes channel
                 clear_warning_stop();
 
@@ -954,6 +948,69 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gta_topic_corrects_a_repeated_other_online_games_request_to_235() {
+        let title =
+            "【#SURGETown 】Cafe ニャイトメア素敵な悪夢よ届け!【 #折咲もしゅ #MOSHULIVE #REJECT】";
+        let areas = serde_json::json!({"areas": [
+            { "id": 107, "name": "其他网游", "title_keywords": [] },
+            { "id": 235, "name": "其他单机", "title_keywords": [
+                "pokemon", "core keeper", "terraria", "tgc card shop simulator",
+                "stardew valley", "rust", "gta"
+            ], "aliases": ["单机", "其他游戏"] }
+        ]});
+        let requested_area = 107;
+        assert_eq!(area_id_matching_keywords(title, &areas), None);
+        let corrected_area =
+            area_id_matching_keywords(&stream_area_haystack(Some("GTA"), title), &areas)
+                .unwrap_or(requested_area);
+        assert_eq!(
+            corrected_area, 235,
+            "a keyword hit on 235 is a correction, not a fallback"
+        );
+
+        let mut cfg: Config = serde_json::from_value(serde_json::json!({
+            "auto_cover": false, "enable_anti_collision": false, "interval": 15,
+            "bililive": { "enable_danmaku_command": true, "room": 1, "bili_rtmp_url": "", "bili_rtmp_key": "" },
+            "youtube": { "channel_id": "moshu", "channel_name": "折咲もしゅ", "area_v2": requested_area },
+            "twitch": { "channel_id": "moshu", "channel_name": "折咲もしゅ", "area_v2": requested_area },
+            "enable_lol_monitor": false, "anti_collision_list": {}
+        })).unwrap();
+        for platform in ["YT", "TW"] {
+            assert!(apply_danmaku_target(
+                &mut cfg,
+                platform,
+                "折咲もしゅ",
+                "moshu",
+                corrected_area
+            )
+            .unwrap());
+            assert!(!apply_danmaku_target(
+                &mut cfg,
+                platform,
+                "折咲もしゅ",
+                "moshu",
+                corrected_area
+            )
+            .unwrap());
+        }
+        assert_eq!(cfg.youtube.area_v2, 235);
+        assert_eq!(cfg.twitch.area_v2, 235);
+    }
+
+    #[test]
+    fn unmatched_metadata_keeps_the_requested_area() {
+        let areas = serde_json::json!({"areas": [
+            { "id": 235, "title_keywords": ["gta", "rust"] }
+        ]});
+        for topic in [None, Some("unmapped game")] {
+            let area =
+                area_id_matching_keywords(&stream_area_haystack(topic, "初めてのゲーム"), &areas)
+                    .unwrap_or(107);
+            assert_eq!(area, 107);
+        }
+    }
 
     #[test]
     fn stream_area_haystack_joins_topic_and_title() {

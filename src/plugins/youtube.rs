@@ -305,6 +305,55 @@ pub async fn get_youtube_channel_metadata(
     ))
 }
 
+/// yt-dlp does not supply Holodex's game/topic. Look it up separately for area
+/// correction without making Holodex a live-status gate when that is disabled.
+pub(crate) async fn get_youtube_area_topic(
+    channel_id: &str,
+    video_id: Option<&str>,
+) -> Option<String> {
+    let video_id = video_id.filter(|id| !id.is_empty())?;
+    let cfg = load_config().await.ok()?;
+    cfg.holodex_api_key
+        .as_deref()
+        .filter(|key| !key.is_empty())?;
+
+    let streams = match tokio::time::timeout(
+        Duration::from_secs(5),
+        get_holodex_streams(vec![channel_id.to_string()], false),
+    )
+    .await
+    {
+        Ok(Ok(streams)) => streams,
+        Ok(Err(error)) => {
+            tracing::debug!("弹幕分区补充游戏信息失败: {}", error);
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!("弹幕分区补充游戏信息超时，使用已获取的标题");
+            return None;
+        }
+    };
+    youtube_area_topic_for_video(channel_id, video_id, &streams)
+}
+
+fn youtube_area_topic_for_video(
+    channel_id: &str,
+    video_id: &str,
+    streams: &[HolodexStream],
+) -> Option<String> {
+    streams
+        .iter()
+        .find(|stream| {
+            stream.id == video_id
+                && stream.channel.id == channel_id
+                && stream.stream_type != "placeholder"
+                && matches!(stream.status.as_str(), "live" | "upcoming")
+        })?
+        .topic_id
+        .clone()
+        .filter(|topic| !topic.trim().is_empty())
+}
+
 pub async fn get_youtube_status(
     channel_id: &str,
 ) -> Result<
@@ -594,6 +643,42 @@ mod tests {
             thumbnail: None,
             placeholder_type: None,
         }
+    }
+
+    #[test]
+    fn area_topic_uses_only_the_video_resolved_by_youtube() {
+        let mut current = holodex_stream("gta-live", "live", None);
+        current.topic_id = Some("GTA".into());
+        let mut later = holodex_stream("later", "upcoming", None);
+        later.topic_id = Some("minecraft".into());
+        let mut streams = [later, current];
+        assert_eq!(
+            youtube_area_topic_for_video("channel-id", "gta-live", &streams).as_deref(),
+            Some("GTA")
+        );
+        assert_eq!(
+            youtube_area_topic_for_video("channel-id", "different-video", &streams),
+            None
+        );
+        assert_eq!(
+            youtube_area_topic_for_video("another-channel", "gta-live", &streams),
+            None
+        );
+        streams[1].stream_type = "placeholder".into();
+        assert_eq!(
+            youtube_area_topic_for_video("channel-id", "gta-live", &streams),
+            None
+        );
+        streams[1].stream_type = "stream".into();
+        streams[1].status = "past".into();
+        assert_eq!(
+            youtube_area_topic_for_video("channel-id", "gta-live", &streams),
+            None
+        );
+        assert_eq!(
+            youtube_area_topic_for_video("channel-id", "later", &streams).as_deref(),
+            Some("minecraft")
+        );
     }
 
     fn at(rfc3339: &str) -> DateTime<chrono::Utc> {
