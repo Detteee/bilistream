@@ -1,6 +1,4 @@
 use serde::Serialize;
-#[cfg(test)]
-use std::sync::LockResult;
 
 use crate::config::Config;
 
@@ -222,33 +220,4 @@ pub fn refresh_status_cache_config_from(cfg: &Config) {
             }
         });
     });
-}
-
-#[cfg(test)]
-fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
-    lock.unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {}", name);
-        poisoned.into_inner()
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    use std::sync::Mutex;
-
-    #[test]
-    fn recover_lock_returns_inner_after_poison() {
-        let lock = Mutex::new(7);
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = lock.lock().unwrap();
-            panic!("poison test lock");
-        }));
-
-        let mut guard = recover_lock(lock.lock(), "test lock");
-        *guard += 1;
-
-        assert_eq!(*guard, 8);
-    }
 }

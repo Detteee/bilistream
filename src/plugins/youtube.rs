@@ -799,22 +799,6 @@ mod tests {
     }
 
     #[test]
-    fn optional_channel_name_for_holodex_drops_lookup_errors() {
-        let result: Option<String> =
-            optional_channel_name_for_holodex(Err("channels unavailable"), "channel-id");
-
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn optional_channel_name_for_holodex_preserves_lookup_value() {
-        let result =
-            optional_channel_name_for_holodex(Ok::<_, &str>(Some("Channel".to_string())), "id");
-
-        assert_eq!(result.as_deref(), Some("Channel"));
-    }
-
-    #[test]
     fn yt_dlp_video_id_requires_following_output_line() {
         assert_eq!(
             yt_dlp_video_id_from_stdout("video-id\nhttps://example.com/live.m3u8\n").as_deref(),

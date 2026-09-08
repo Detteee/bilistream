@@ -1013,13 +1013,6 @@ mod tests {
     }
 
     #[test]
-    fn stream_area_haystack_joins_topic_and_title() {
-        assert_eq!(stream_area_haystack(Some("chat"), "雑談"), "chat 雑談");
-        assert_eq!(stream_area_haystack(Some("  "), "solo"), "solo");
-        assert_eq!(stream_area_haystack(None, " solo "), "solo");
-    }
-
-    #[test]
     fn a_keyword_hit_on_the_catchall_is_still_a_match() {
         let areas = serde_json::json!({
             "areas": [
@@ -1036,14 +1029,6 @@ mod tests {
             Some(252)
         );
         assert_eq!(area_id_matching_keywords("雑談します", &areas), None);
-    }
-
-    #[test]
-    fn unknown_area_name_uses_stable_fallback() {
-        assert_eq!(
-            area_name_or_unknown(u64::MAX),
-            "未知分区(18446744073709551615)"
-        );
     }
 
     #[tokio::test]

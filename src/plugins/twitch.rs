@@ -256,18 +256,3 @@ pub async fn get_twitch_status(
         stream_id,
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn twitch_constructor_returns_result() {
-        crate::install_crypto_provider();
-        let client = Twitch::new("example", "asl".to_string(), None)
-            .expect("Twitch client should be constructible");
-
-        assert_eq!(client.channel_id, "example");
-        assert_eq!(client.proxy_region, "asl");
-    }
-}

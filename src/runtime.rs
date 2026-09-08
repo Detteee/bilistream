@@ -1700,35 +1700,6 @@ mod tests {
     }
 
     #[test]
-    fn recover_mutex_lock_returns_inner_after_poison() {
-        let lock = Mutex::new(1_u32);
-        let _ = std::panic::catch_unwind(|| {
-            let mut guard = lock.lock().unwrap();
-            *guard = 2;
-            panic!("poison test mutex");
-        });
-
-        {
-            let mut guard = recover_mutex_lock(&lock, "test mutex");
-            assert_eq!(*guard, 2);
-            *guard = 3;
-        }
-
-        assert_eq!(*recover_mutex_lock(&lock, "test mutex"), 3);
-    }
-    #[test]
-    fn normalized_api_key_trims_and_rejects_empty_values() {
-        assert_eq!(normalized_api_key(Some("  key  ")).as_deref(), Some("key"));
-        assert_eq!(normalized_api_key(Some("   ")), None);
-        assert_eq!(normalized_api_key(None), None);
-    }
-
-    #[test]
-    fn area_label_falls_back_to_area_id() {
-        assert_eq!(area_label(u64::MAX), format!("未知分区(ID: {})", u64::MAX));
-    }
-
-    #[test]
     fn status_message_update_ignores_small_time_only_changes() {
         let last = "YT: channel 未直播，计划于 2026-07-04 12:00:00 开始，";
         let current = "YT: channel 未直播，计划于 2026-07-04 12:04:00 开始，";

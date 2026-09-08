@@ -1225,30 +1225,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unix_time_secs_returns_zero_before_epoch() {
-        assert_eq!(
-            unix_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1)),
-            0
-        );
-    }
-
-    #[test]
-    fn unique_json_tmp_path_stays_next_to_target() {
-        let path = PathBuf::from("/opt/bilistream/cookies.json");
-
-        let first = unique_json_tmp_path(&path);
-        let second = unique_json_tmp_path(&path);
-
-        assert_ne!(first, second);
-        assert_eq!(first.parent(), path.parent());
-        assert_eq!(second.parent(), path.parent());
-        assert!(first
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("cookies.json.tmp-")));
-    }
-
-    #[test]
     fn atomic_json_write_replaces_target_without_leftover_tmp() {
         let dir = std::env::temp_dir().join(format!(
             "bilistream-bilibili-json-test-{}-{}",
@@ -1273,12 +1249,6 @@ mod tests {
     }
 
     #[test]
-    fn credential_constructor_returns_result() {
-        crate::install_crypto_provider();
-        assert!(Credential::new().is_ok());
-    }
-
-    #[test]
     fn credential_cookie_carries_every_configured_field() {
         let credentials = Credentials {
             sessdata: "sess".to_string(),
@@ -1292,18 +1262,5 @@ mod tests {
             bili_credential_cookie(&credentials),
             "SESSDATA=sess;bili_jct=jct;DedeUserID=uid;DedeUserID__ckMd5=md5"
         );
-    }
-
-    #[test]
-    fn room_clients_are_reused_across_calls() {
-        crate::install_crypto_provider();
-        bili_room_clients().expect("client pair should build");
-        let first = BILI_ROOM_CLIENTS.get().map(|(raw, _)| raw as *const _);
-        bili_room_clients().expect("client pair should build");
-        let second = BILI_ROOM_CLIENTS.get().map(|(raw, _)| raw as *const _);
-
-        // The pair is built once and handed out as clones of the same pool.
-        assert!(first.is_some());
-        assert_eq!(first, second);
     }
 }

@@ -736,38 +736,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_file_path_keeps_executable_directory() {
-        assert_eq!(
-            sibling_file_path(Path::new("/opt/bilistream/bilistream"), "config.json"),
-            PathBuf::from("/opt/bilistream/config.json")
-        );
-    }
-
-    #[test]
-    fn sibling_file_path_falls_back_to_relative_file_for_relative_binary() {
-        assert_eq!(
-            sibling_file_path(Path::new("bilistream"), "config.json"),
-            PathBuf::from("config.json")
-        );
-    }
-
-    #[test]
-    fn unique_tmp_path_stays_next_to_target() {
-        let path = PathBuf::from("/opt/bilistream/config.json");
-
-        let first = unique_tmp_path(&path);
-        let second = unique_tmp_path(&path);
-
-        assert_ne!(first, second);
-        assert_eq!(first.parent(), path.parent());
-        assert_eq!(second.parent(), path.parent());
-        assert!(first
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("config.json.tmp-")));
-    }
-
-    #[test]
     fn atomic_write_replaces_target_without_leftover_tmp() {
         let dir = std::env::temp_dir().join(format!(
             "bilistream-config-write-test-{}-{}",

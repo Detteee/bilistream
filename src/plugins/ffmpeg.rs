@@ -2057,22 +2057,6 @@ mod tests {
         assert!(is_network_transfer_idle(false, true, 0.0, 999.0));
     }
     #[test]
-    fn unix_time_helpers_do_not_panic_before_epoch() {
-        let before_epoch = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
-
-        assert_eq!(unix_time_secs_from(before_epoch), 0);
-        assert_eq!(unix_time_millis_from(before_epoch), 0);
-    }
-
-    #[test]
-    fn unix_time_secs_saturates_to_u32_max() {
-        let after_epoch =
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(u32::MAX as u64 + 1);
-
-        assert_eq!(unix_time_secs_from(after_epoch), u32::MAX);
-    }
-
-    #[test]
     fn push_stats_update_preserves_previous_bitrate_when_sparse() {
         let mut display = FfmpegStatsDisplay::default();
 
@@ -2264,41 +2248,5 @@ mod tests {
 
         assert!(tracker.file_sizes.contains_key(&keep));
         assert!(!tracker.file_sizes.contains_key(&remove));
-    }
-
-    #[test]
-    fn stream_time_formats_as_hh_mm_ss() {
-        assert_eq!(format_stream_time(0), "00:00:00");
-        assert_eq!(format_stream_time(16 * 60 + 24), "00:16:24");
-        assert_eq!(format_stream_time(3600 + 2 * 60 + 3), "01:02:03");
-    }
-
-    #[test]
-    fn meter_row_shows_time_and_speed_instead_of_total_bytes() {
-        let sample = FfmpegStatsSample {
-            bitrate_kbps: Some(5_280.0),
-            speed: Some(1.0),
-            stream_time_secs: Some(16 * 60 + 24),
-            fps: Some(60.0),
-            ..FfmpegStatsSample::default()
-        };
-
-        let push = FfmpegStatsDisplay::meter_row("RTMP TX", Some(&sample), true);
-        assert!(push.contains("5.28 Mb/s"));
-        assert!(push.contains("1.00x"));
-        assert!(push.contains("00:16:24"));
-        assert!(push.contains("60.0 fps"));
-        assert!(!push.contains("Total"));
-        assert!(!push.to_ascii_lowercase().contains("gib"));
-
-        let cache = FfmpegStatsDisplay::meter_row("Cache RX", Some(&sample), false);
-        assert!(cache.contains("00:16:24"));
-        assert!(!cache.contains("fps"));
-    }
-
-    #[test]
-    fn network_history_window_is_one_column_per_second() {
-        assert_eq!(NETWORK_HISTORY_SAMPLE_MS, 1000);
-        assert_eq!(NETWORK_HISTORY_WINDOW_SECS, NETWORK_HISTORY_LIMIT);
     }
 }

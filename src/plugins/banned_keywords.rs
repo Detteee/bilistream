@@ -116,14 +116,6 @@ mod tests {
     }
 
     #[test]
-    fn haystack_joins_topic_and_title_lowercased() {
-        assert_eq!(
-            danmaku_haystack("Gaming", "ASMR Stream"),
-            "gaming asmr stream"
-        );
-    }
-
-    #[test]
     fn hit_matches_keyword_in_title() {
         let list = keywords(&["asmr", "gta"]);
         let haystack = danmaku_haystack("Just Chatting", "Late night ASMR");

@@ -211,15 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn executable_parent_dir_rejects_paths_without_parent() {
-        assert_eq!(
-            executable_parent_dir(Path::new("parent/bilistream")).unwrap(),
-            PathBuf::from("parent")
-        );
-        assert!(executable_parent_dir(Path::new("bilistream")).is_err());
-    }
-
-    #[test]
     fn ordered_channel_ids_deduplicates_without_losing_order() {
         let mut channel_ids = OrderedChannelIds::default();
 

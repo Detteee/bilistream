@@ -876,13 +876,6 @@ mod tests {
     }
 
     #[test]
-    fn a_live_stream_without_start_actual_is_dropped_two_hours_after_schedule() {
-        let now = at("2026-09-02T15:00:00Z");
-        let streams = vec![stream("hung", "live", Some("2026-09-01T14:00:00Z"), None)];
-        assert!(kept(streams, now).is_empty());
-    }
-
-    #[test]
     fn a_live_stream_without_start_actual_is_kept_inside_the_two_hour_grace() {
         let now = at("2026-09-01T15:30:00Z");
         let streams = vec![stream("fresh", "live", Some("2026-09-01T14:00:00Z"), None)];

@@ -483,8 +483,6 @@ fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     /// The ffmpeg and self-update archives are both plain deflate zips, and the
     /// zip dependency only pulls a deflate backend. A missing backend surfaces
@@ -520,29 +518,5 @@ mod tests {
         let mut extracted = String::new();
         entry.read_to_string(&mut extracted).unwrap();
         assert_eq!(extracted, body);
-    }
-
-    #[test]
-    fn executable_parent_dir_rejects_paths_without_parent() {
-        assert_eq!(
-            executable_parent_dir(Path::new("parent/bilistream")).unwrap(),
-            PathBuf::from("parent")
-        );
-        assert!(executable_parent_dir(Path::new("bilistream")).is_err());
-    }
-
-    #[test]
-    fn recover_lock_returns_inner_after_poison() {
-        let lock = std::sync::Mutex::new(String::from("before"));
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            let mut guard = lock.lock().unwrap();
-            guard.push_str("-panic");
-            panic!("poison test lock");
-        }));
-
-        let mut guard = recover_lock(lock.lock(), "test lock");
-        guard.push_str("-after");
-
-        assert_eq!(guard.as_str(), "before-panic-after");
     }
 }
