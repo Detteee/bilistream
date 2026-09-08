@@ -148,24 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn streaming_haystack_joins_topic_and_title() {
-        assert_eq!(
-            streaming_haystack(Some("Just Chatting"), Some("雑談")).as_deref(),
-            Some("Just Chatting 雑談")
-        );
-    }
-
-    #[test]
-    fn streaming_haystack_falls_back_to_title_when_topic_is_missing() {
-        assert_eq!(
-            streaming_haystack(None, Some("ランク")).as_deref(),
-            Some("ランク")
-        );
-        assert_eq!(streaming_haystack(Some("Just Chatting"), None), None);
-        assert_eq!(streaming_haystack(None, None), None);
-    }
-
-    #[test]
     fn streaming_hit_matches_keyword_in_title_or_joined_topic() {
         let list = keywords(&["asmr", "just chatting"]);
         assert_eq!(

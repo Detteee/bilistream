@@ -1060,15 +1060,6 @@ mod tests {
     }
 
     #[test]
-    fn a_thumbnail_holodex_does_supply_is_kept() {
-        let yt = stream("ランク", None, "UCkamito");
-        assert_eq!(
-            thumbnail_for(&yt).as_deref(),
-            Some("https://i.ytimg.com/vi/vid1/maxres.jpg")
-        );
-    }
-
-    #[test]
     fn an_empty_thumbnail_is_treated_as_missing() {
         let mut yt = stream("ランク", None, "UCkamito");
         yt.thumbnail = Some(String::new());

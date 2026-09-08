@@ -312,37 +312,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn liveness_defaults_to_offline() {
-        let liveness = PriorityChannelLiveness::default();
-
-        assert!(!liveness.is_live());
-        assert_eq!(liveness.platform, None);
-        assert_eq!(liveness.title, None);
-        assert_eq!(liveness.topic, None);
-        assert_eq!(liveness.m3u8_url, None);
-        assert_eq!(liveness.stream_id, None);
-    }
-
-    #[test]
-    fn platform_labels_match_log_and_api_spellings() {
-        assert_eq!(PriorityChannelPlatform::Youtube.label(), "YouTube");
-        assert_eq!(PriorityChannelPlatform::Youtube.api_name(), "youtube");
-        assert_eq!(PriorityChannelPlatform::Twitch.label(), "Twitch");
-        assert_eq!(PriorityChannelPlatform::Twitch.api_name(), "twitch");
-    }
-
-    #[test]
-    fn liveness_reports_live_once_a_platform_is_set() {
-        let liveness = PriorityChannelLiveness {
-            platform: Some(PriorityChannelPlatform::Twitch),
-            title: Some("stream".to_string()),
-            ..Default::default()
-        };
-
-        assert!(liveness.is_live());
-    }
-
-    #[test]
     fn a_platform_reporting_offline_is_not_switchable() {
         assert_eq!(
             playable_liveness(

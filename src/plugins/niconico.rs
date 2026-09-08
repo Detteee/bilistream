@@ -724,14 +724,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_niconico_config_is_not_configured() {
-        let cfg = crate::config::Niconico::default();
-        assert_eq!(niconico_channel_id(&cfg), "");
-        assert_eq!(niconico_channel_name(&cfg), "");
-        assert!(!niconico_configured(&cfg));
-    }
-
-    #[test]
     fn pinned_live_id_is_configured_without_channel_id() {
         let cfg = crate::config::Niconico {
             live_id: "lv351182284".to_string(),

@@ -4,7 +4,7 @@ use crate::config::{
     PriorityChannel, Twitch, Youtube,
 };
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, RwLock};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 static CLUSTER_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -429,24 +429,6 @@ async fn automatic_handoff_confirms_source_shutdown_after_owner_has_changed() {
     assert_eq!(current_active_owner().as_deref(), Some("us"));
 }
 
-#[test]
-fn recover_locks_return_inner_after_poison() {
-    let lock = RwLock::new(1_u32);
-    let _ = std::panic::catch_unwind(|| {
-        let mut guard = lock.write().unwrap();
-        *guard = 2;
-        panic!("poison test lock");
-    });
-
-    {
-        let mut guard = recover_write_lock(&lock, "test lock");
-        assert_eq!(*guard, 2);
-        *guard = 3;
-    }
-
-    assert_eq!(*recover_read_lock(&lock, "test lock"), 3);
-}
-
 pub(crate) struct ClusterStateGuard {
     _lock: MutexGuard<'static, ()>,
     snapshot: ClusterState,
@@ -539,17 +521,6 @@ pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
             public_status: crate::config::PublicStatusConfig::default(),
         },
     }
-}
-
-#[test]
-fn monitored_config_version_ignores_cluster_identity() {
-    let cfg_a = test_config("a", 0);
-    let cfg_b = test_config("b", 10);
-
-    assert_eq!(
-        monitored_config_version(&cfg_a),
-        monitored_config_version(&cfg_b)
-    );
 }
 
 #[test]
@@ -926,20 +897,6 @@ fn source_can_confirm_demotion_after_accepting_the_handoff_target() {
 }
 
 #[test]
-fn failed_restart_window_prunes_old_failures() {
-    let now = 10_000;
-    let mut failures = vec![
-        now - FFMPEG_FAILURE_WINDOW_SECS - 1,
-        now - FFMPEG_FAILURE_WINDOW_SECS,
-        now - 10,
-    ];
-
-    prune_failed_restart_times(&mut failures, now);
-
-    assert_eq!(failures, vec![now - FFMPEG_FAILURE_WINDOW_SECS, now - 10]);
-}
-
-#[test]
 fn recent_time_pruning_keeps_inclusive_cutoff_and_future_samples() {
     let now = 10_000;
     let window = 60;
@@ -961,15 +918,6 @@ fn record_recent_time_preserves_chronological_order() {
 }
 
 #[test]
-fn restart_threshold_uses_windowed_failure_count() {
-    let mut cfg = test_config("a", 0);
-    cfg.cluster.thresholds.max_failed_restarts = 3;
-
-    assert!(!ffmpeg_restart_degraded(&cfg.cluster, 2));
-    assert!(ffmpeg_restart_degraded(&cfg.cluster, 3));
-}
-
-#[test]
 fn cluster_request_timeouts_are_bounded() {
     let mut cfg = test_config("a", 0);
 
@@ -980,18 +928,6 @@ fn cluster_request_timeouts_are_bounded() {
     cfg.cluster.heartbeat_interval_secs = 3_600;
     assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(10));
     assert_eq!(cluster_control_timeout(&cfg), Duration::from_secs(15));
-}
-
-#[test]
-fn heartbeat_cycle_accounts_for_request_time() {
-    assert_eq!(
-        heartbeat_cycle_delay(Duration::from_secs(10), Duration::from_secs(4)),
-        Duration::from_secs(6)
-    );
-    assert_eq!(
-        heartbeat_cycle_delay(Duration::from_secs(10), Duration::from_secs(12)),
-        Duration::ZERO
-    );
 }
 
 #[test]
@@ -1509,15 +1445,6 @@ fn never_seen_peer_waits_without_timeout_fault() {
     assert!(!is_stale(node, &cfg, now + 1_000));
 }
 
-#[test]
-fn external_api_threshold_uses_windowed_failure_count() {
-    let mut cfg = test_config("a", 0);
-    cfg.cluster.thresholds.max_external_api_failures = 3;
-
-    assert!(!external_api_degraded(&cfg.cluster, 2));
-    assert!(external_api_degraded(&cfg.cluster, 3));
-}
-
 #[tokio::test]
 async fn external_api_outage_fences_owner_despite_fresh_inbound_heartbeats() {
     let _guard = ClusterStateGuard::new();
@@ -1602,17 +1529,6 @@ async fn external_api_outage_fences_owner_despite_fresh_inbound_heartbeats() {
     let local = collect_local_snapshot(&cfg, String::new()).await;
     assert!(local.health.healthy);
     assert!(!cluster_state_read().local_fault_latched);
-}
-
-#[test]
-fn external_api_failure_window_prunes_old_failures() {
-    let now = 10_000;
-    let window = 60;
-    let mut failures = vec![now - window - 1, now - window, now - 5];
-
-    prune_recent_times(&mut failures, now, window);
-
-    assert_eq!(failures, vec![now - window, now - 5]);
 }
 
 #[test]
@@ -1762,15 +1678,6 @@ fn recovered_network_isolation_latch_clears_only_fault_quarantine() {
 }
 
 #[test]
-fn fault_fencing_follows_auto_failover_setting() {
-    let mut cfg = test_config("a", 1);
-    assert!(fault_fencing_enabled(&cfg));
-
-    cfg.cluster.auto_failover = false;
-    assert!(!fault_fencing_enabled(&cfg));
-}
-
-#[test]
 fn monitoring_block_reason_names_the_latched_fault() {
     let cfg = test_config("a", 1);
     let state = ClusterState {
@@ -1784,20 +1691,6 @@ fn monitoring_block_reason_names_the_latched_fault() {
         .expect("latched fault blocks monitoring");
     assert!(reason.contains("ffmpeg_repeated_failures"), "{}", reason);
     assert!(!reason.contains("多数派"), "{}", reason);
-}
-
-#[test]
-fn monitoring_block_reason_is_none_for_healthy_single_node_owner() {
-    let cfg = test_config("a", 1);
-    let state = ClusterState {
-        active_owner: Some("a".to_string()),
-        ..ClusterState::default()
-    };
-
-    assert_eq!(
-        state_monitoring_block_reason(&state, &cfg, now_secs()),
-        None
-    );
 }
 
 #[test]

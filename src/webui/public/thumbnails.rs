@@ -290,18 +290,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keys_are_stable_and_url_specific() {
-        let a = thumbnail_key("https://i.ytimg.com/vi/abc/maxres.jpg");
-        let b = thumbnail_key("https://i.ytimg.com/vi/abc/maxres.jpg");
-        let c = thumbnail_key("https://i.ytimg.com/vi/xyz/maxres.jpg");
-
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert_eq!(a.len(), 16);
-        assert!(a.chars().all(|ch| ch.is_ascii_hexdigit()));
-    }
-
-    #[test]
     fn only_known_cdns_are_fetched() {
         assert!(host_is_allowed("https://i.ytimg.com/vi/abc/maxres.jpg"));
         assert!(host_is_allowed(

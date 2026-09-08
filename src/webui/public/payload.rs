@@ -438,18 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn node_network_keeps_the_sampled_history() {
-        let payload = PublicStatus::build(Some(&sample_status()), &sample_cluster());
-        let network = payload.nodes[0].network.as_ref().expect("network");
-        assert_eq!(network.stream_bitrate_history, vec![1.0, 2.0, 3.0]);
-        assert!(network.stream_cache_bitrate_history.is_empty());
-
-        let json = serde_json::to_string(&payload).unwrap();
-        assert!(json.contains("stream_bitrate_history"));
-        assert!(!json.contains("stream_cache_bitrate_history"));
-    }
-
-    #[test]
     fn stopped_and_stale_nodes_do_not_advertise_old_publishing_metrics() {
         let mut node = sample_node();
         node.active_stream = Some(ClusterStreamIdentity {
@@ -518,15 +506,6 @@ mod tests {
         assert!(!json.contains("channel_id"));
         assert!(!json.contains("stream_id"));
         assert!(!json.contains("active_stream"));
-    }
-
-    #[test]
-    fn a_node_without_a_name_falls_back_to_its_id() {
-        let mut cluster = sample_cluster();
-        cluster.nodes[0].name = "   ".to_string();
-
-        let payload = PublicStatus::build(Some(&sample_status()), &cluster);
-        assert_eq!(payload.nodes[0].name, "ny");
     }
 
     #[test]

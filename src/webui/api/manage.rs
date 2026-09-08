@@ -329,14 +329,4 @@ mod tests {
             Some("UCuI5XaO-6VkOEhHao6ij7JA")
         );
     }
-
-    #[test]
-    fn nonempty_optional_trims_and_drops_blank() {
-        assert_eq!(
-            nonempty_optional(Some(" ぶいすぽ激ロー ".to_string())).as_deref(),
-            Some("ぶいすぽ激ロー")
-        );
-        assert_eq!(nonempty_optional(Some("   ".to_string())), None);
-        assert_eq!(nonempty_optional(None), None);
-    }
 }

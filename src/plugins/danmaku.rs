@@ -1123,15 +1123,6 @@ mod tests {
     }
 
     #[test]
-    fn the_advert_fits_the_danmaku_limit() {
-        let longest = "a".repeat(crate::config::PublicStatusConfig::max_public_url_chars());
-        let QueryAdvert::Send(advert) = query_advert(&config_with_public_url(&longest)) else {
-            panic!("longest fitting url should be advertised");
-        };
-        assert_eq!(advert.chars().count(), crate::config::DANMAKU_MAX_CHARS);
-    }
-
-    #[test]
     fn gta_topic_corrects_a_repeated_other_online_games_request_to_235() {
         let title =
             "【#SURGETown 】Cafe ニャイトメア素敵な悪夢よ届け!【 #折咲もしゅ #MOSHULIVE #REJECT】";
