@@ -104,16 +104,9 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 }
 
 pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> Result<(), String> {
-    let (is_live, title, area_id) = match get_bili_live_status(cfg.bililive.room).await {
-        Ok(status) => {
-            crate::cluster::record_external_api_result(true);
-            status
-        }
-        Err(e) => {
-            crate::cluster::record_external_api_result(false);
-            return Err(e.to_string());
-        }
-    };
+    let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room)
+        .await
+        .map_err(|e| e.to_string())?;
     let area_name = crate::plugins::get_area_name(area_id)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", area_id));
 

@@ -253,22 +253,43 @@ impl AppKeyStore {
 pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<dyn Error>> {
     // Reuse the shared clients; this runs every monitor cycle.
     let (raw_client, client) = bili_status_clients()?;
+    let url = bili_live_status_url(&raw_client, room).await?;
 
-    let mut params = BTreeMap::new();
-    params.insert("room_id", room.to_string());
-    let query_string = super::wbi::signed_query(&raw_client, params).await?;
+    let res: Value = client.get(url).send().await?.json().await?;
+    parse_bili_live_status(res)
+}
 
-    // Make the GET request to check the live status
-    let res: Value = client
-        .get(format!(
-            "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
-            query_string
-        ))
+/// Cluster health sampling must not wait for the monitor's five retries.
+/// The caller bounds the entire attempt, including signing-key lookup and body.
+pub(crate) async fn get_bili_live_status_once(
+    room: i32,
+) -> Result<(bool, String, u64), Box<dyn Error>> {
+    let (client, _) = bili_status_clients()?;
+    let url = bili_live_status_url(&client, room).await?;
+    let res = client
+        .get(url)
         .send()
         .await?
+        .error_for_status()?
         .json()
         .await?;
+    parse_bili_live_status(res)
+}
 
+async fn bili_live_status_url(
+    client: &reqwest::Client,
+    room: i32,
+) -> Result<String, Box<dyn Error>> {
+    let mut params = BTreeMap::new();
+    params.insert("room_id", room.to_string());
+    let query_string = super::wbi::signed_query(client, params).await?;
+    Ok(format!(
+        "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
+        query_string
+    ))
+}
+
+fn parse_bili_live_status(res: Value) -> Result<(bool, String, u64), Box<dyn Error>> {
     let title = res["data"]["title"].to_string();
     let title = title.trim_matches('"');
 

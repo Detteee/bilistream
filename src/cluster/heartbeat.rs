@@ -17,7 +17,10 @@ use super::sync::{adopt_auto_failover_from_peer_view, finalize_cluster_node_swit
 use super::types::*;
 use super::version::monitored_config_version;
 use crate::config::Config;
-use crate::plugins::{is_ffmpeg_running, set_manual_restart, stop_ffmpeg};
+use crate::plugins::{
+    enable_danmaku_commands, is_danmaku_running, is_ffmpeg_running, set_manual_restart,
+    stop_danmaku, stop_ffmpeg,
+};
 use axum::body::Bytes;
 use futures_util::future::join_all;
 use std::collections::hash_map::DefaultHasher;
@@ -30,12 +33,14 @@ pub(crate) static AUTO_TRANSITION_IN_FLIGHT: AtomicBool = AtomicBool::new(false)
 pub struct ClusterWorker {
     heartbeat: tokio::task::JoinHandle<()>,
     self_check: tokio::task::JoinHandle<()>,
+    external_api: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for ClusterWorker {
     fn drop(&mut self) {
         self.heartbeat.abort();
         self.self_check.abort();
+        self.external_api.abort();
     }
 }
 
@@ -77,6 +82,11 @@ pub fn start_cluster_worker() -> ClusterWorker {
                     clear_local_stream();
                     stop_ffmpeg().await;
                 }
+                enable_danmaku_commands(false);
+                if is_danmaku_running() {
+                    tracing::info!("{}，停止本节点弹幕客户端", reason);
+                    stop_danmaku().await;
+                }
             }
 
             tokio::time::sleep(heartbeat_cycle_delay(
@@ -90,6 +100,7 @@ pub fn start_cluster_worker() -> ClusterWorker {
     ClusterWorker {
         heartbeat,
         self_check: tokio::spawn(super::self_check::run_self_checks()),
+        external_api: tokio::spawn(super::external_api::run_external_api_checks()),
     }
 }
 

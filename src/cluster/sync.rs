@@ -444,6 +444,7 @@ async fn finalize_cluster_node_switch_inner(
                     }
                     .to_string(),
                 ),
+                handoff_target_node_id: Some(target_node_id.to_string()),
             },
             "disable_previous_active",
         )
@@ -464,6 +465,7 @@ async fn finalize_cluster_node_switch_inner(
             monitor_toggles: Some(source_toggles),
             channel_targets: Some(source_channel_targets),
             expected_active_owner: Some(source_node_id.to_string()),
+            handoff_target_node_id: None,
         },
         "enable_new_active",
     )
@@ -756,6 +758,7 @@ async fn apply_cluster_node_mode_inner(
         payload.expected_active_owner.as_deref(),
         active,
         &cfg.cluster.node_id,
+        payload.handoff_target_node_id.as_deref(),
     )?;
     if active {
         let state = cluster_state_read();
@@ -832,11 +835,20 @@ pub(crate) fn validate_node_mode_precondition(
     expected_owner: Option<&str>,
     active: bool,
     local_node_id: &str,
+    handoff_target_node_id: Option<&str>,
 ) -> Result<(), String> {
     let Some(expected_owner) = expected_owner else {
         return Ok(());
     };
     if current_owner == Some(expected_owner) || (active && current_owner == Some(local_node_id)) {
+        return Ok(());
+    }
+    if !active
+        && expected_owner == local_node_id
+        && handoff_target_node_id.is_some()
+        && handoff_target_node_id != Some(local_node_id)
+        && current_owner == handoff_target_node_id
+    {
         return Ok(());
     }
     Err(format!(

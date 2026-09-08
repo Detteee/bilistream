@@ -20,6 +20,26 @@ pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     local_monitoring_block_reason(cfg).is_none()
 }
 
+pub(crate) fn notify_monitoring_changed() {
+    crate::AppState::process_cluster_monitoring_notify().notify_waiters();
+}
+
+/// Wake on owner/acknowledgement changes rather than spending a full heartbeat
+/// interval asleep after the cluster has already allowed this node to execute.
+pub(crate) async fn wait_for_local_monitoring(cfg: &Config) {
+    loop {
+        // Register before checking the gate so a concurrent confirmation
+        // cannot be lost between the check and the await.
+        let changed = crate::AppState::process_cluster_monitoring_notify().notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        if local_monitoring_allowed(cfg) {
+            return;
+        }
+        changed.await;
+    }
+}
+
 /// `None` means this node may keep monitoring/pushing; `Some(reason)` is a
 /// human-readable Chinese reason suitable for logging.
 pub(crate) fn local_monitoring_block_reason(cfg: &Config) -> Option<String> {
@@ -160,7 +180,7 @@ pub fn record_stream_exit(success: bool) {
     state.local_failed_restarts = state.local_failed_restart_times.len() as u32;
 }
 
-pub fn record_external_api_result(success: bool) {
+pub(crate) fn record_external_api_result(success: bool) {
     let mut state = cluster_state_write();
     let now = now_secs();
     prune_recent_times(
@@ -329,6 +349,12 @@ pub(crate) async fn collect_local_snapshot(
             "ffmpeg_repeated_failures"
         }
         .to_string();
+        tracing::warn!(
+            "集群本节点故障: {}（外部 API 失败 {} 次，ffmpeg 失败 {} 次），暂停执行并等待自动转移",
+            reason,
+            external_api_failures,
+            failed_restarts
+        );
         latch_local_fault(reason.clone());
         fault_latched = true;
         fault_reason = Some(reason);

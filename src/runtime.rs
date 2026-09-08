@@ -291,18 +291,14 @@ async fn source_client_status(client: &Option<SourceClient<'_>>) -> SourceStatus
     }
 }
 
-/// Fetches Bilibili live status while feeding the cluster external-API health
-/// tracker. Errors are logged; callers decide the fallback.
+/// Errors are logged; callers decide the fallback. Cluster health is sampled
+/// independently so this request's retry budget cannot delay fault detection.
 async fn fetch_bili_live_status_logged(
     room: i32,
 ) -> Result<(bool, String, u64), Box<dyn std::error::Error>> {
     match get_bili_live_status(room).await {
-        Ok(status) => {
-            cluster::record_external_api_result(true);
-            Ok(status)
-        }
+        Ok(status) => Ok(status),
         Err(e) => {
-            cluster::record_external_api_result(false);
             tracing::error!("获取B站直播状态失败: {}", e);
             Err(e)
         }
@@ -484,18 +480,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
     // Credential renewal is explicit and runs after the interface is available.
     bilistream::config::refresh_credentials().await?;
-    // Load config to check danmaku command setting
-    let initial_cfg = load_config().await?;
-
-    // Start danmaku client in background if not already running and if danmaku commands are enabled
-    if !is_danmaku_running()
-        && initial_cfg.bililive.enable_danmaku_command
-        && cluster::local_monitoring_allowed(&initial_cfg)
-    {
-        run_danmaku();
-        // Give the client a moment to start
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let mut cluster_wait: Option<(std::time::Instant, String)> = None;
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -516,9 +501,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id);
         bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
 
-        if !cluster::local_monitoring_allowed(&cfg) {
+        if let Some(reason) = cluster::local_monitoring_block_reason(&cfg) {
+            let (_, last_reason) =
+                cluster_wait.get_or_insert_with(|| (std::time::Instant::now(), String::new()));
+            if *last_reason != reason {
+                tracing::info!("⏳ 等待集群允许监控: {}", reason);
+                last_reason.clone_from(&reason);
+            }
             if is_danmaku_running() {
-                tracing::info!("⏸️ 集群备用或隔离节点停止弹幕客户端");
+                tracing::info!("⏸️ {}，停止弹幕客户端", reason);
                 stop_danmaku().await;
             }
             let retry_secs = cfg
@@ -526,8 +517,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 .heartbeat_interval_secs
                 .max(1)
                 .min(cfg.interval.max(1));
-            wait_config_update_or_timeout(Duration::from_secs(retry_secs)).await;
+            tokio::select! {
+                _ = cluster::wait_for_local_monitoring(&cfg) => {}
+                _ = wait_config_update_or_timeout(Duration::from_secs(retry_secs)) => {}
+            }
             continue 'outer;
+        }
+        if let Some((started, _)) = cluster_wait.take() {
+            tracing::info!(
+                "✅ 集群监控条件已就绪，等待耗时 {:.2} 秒",
+                started.elapsed().as_secs_f64()
+            );
         }
 
         // Handle danmaku client based on enable_danmaku_command setting

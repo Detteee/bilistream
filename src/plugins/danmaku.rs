@@ -8,6 +8,7 @@ use crate::plugins::banned_keywords::{
 use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,6 +17,7 @@ use tokio::sync::Notify;
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
 static DANMAKU_STOP_SIGNAL: AtomicBool = AtomicBool::new(false);
+static DANMAKU_LIFECYCLE: Mutex<()> = Mutex::new(());
 
 lazy_static! {
     static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -65,6 +67,25 @@ pub async fn wait_danmaku_stop_signal() {
     }
     notified.await;
 }
+
+/// The stop must interrupt the whole operation, including DNS, HTTP setup,
+/// WebSocket writes and command processing, rather than just retry sleeps.
+pub(crate) async fn until_danmaku_stopped<T>(operation: impl Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = wait_danmaku_stop_signal() => None,
+        result = operation => Some(result),
+    }
+}
+
+struct DanmakuRunningGuard;
+
+impl Drop for DanmakuRunningGuard {
+    fn drop(&mut self) {
+        set_danmaku_running(false);
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Platforms {
     youtube: Option<String>,
@@ -752,6 +773,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
 /// The client runs continuously and monitors for WARNING/CUT_OFF messages.
 /// Danmaku commands are only processed when enabled via set_danmaku_commands_enabled().
 pub fn run_danmaku() {
+    let _lifecycle = DANMAKU_LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
     if DANMAKU_RUNNING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -762,57 +784,66 @@ pub fn run_danmaku() {
 
     set_danmaku_stop_signal(false);
 
-    std::thread::spawn(|| {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!("创建弹幕客户端运行时失败: {}", e);
-                return;
-            }
-        };
-        rt.block_on(async {
-            tracing::info!("🚀 启动弹幕客户端");
-
-            let cfg = match load_config().await {
-                Ok(cfg) => cfg,
+    let running_guard = DanmakuRunningGuard;
+    let spawned = std::thread::Builder::new()
+        .name("bilistream-danmaku".to_string())
+        .spawn(move || {
+            let _running_guard = running_guard;
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
                 Err(e) => {
-                    tracing::error!("加载弹幕客户端配置失败: {}", e);
-                    set_danmaku_running(false);
+                    tracing::error!("创建弹幕客户端运行时失败: {}", e);
                     return;
                 }
             };
-            let room_id = cfg.bililive.room;
+            rt.block_on(async {
+                tracing::info!("🚀 启动弹幕客户端");
+                until_danmaku_stopped(async {
+                    let cfg = match load_config().await {
+                        Ok(cfg) => cfg,
+                        Err(e) => {
+                            tracing::error!("加载弹幕客户端配置失败: {}", e);
+                            return;
+                        }
+                    };
+                    let room_id = cfg.bililive.room;
 
-            // Create danmaku client config
-            let danmaku_config = crate::plugins::danmaku_client::DanmakuConfig {
-                room_id: room_id as u64,
-                sessdata: cfg.bililive.credentials.sessdata.clone(),
-                bili_jct: cfg.bililive.credentials.bili_jct.clone(),
-                dede_user_id: cfg.bililive.credentials.dede_user_id.clone(),
-                dede_user_id_ckmd5: cfg.bililive.credentials.dede_user_id_ckmd5.clone(),
-                buvid3: cfg.bililive.credentials.buvid3.clone(),
-            };
+                    // Create danmaku client config
+                    let danmaku_config = crate::plugins::danmaku_client::DanmakuConfig {
+                        room_id: room_id as u64,
+                        sessdata: cfg.bililive.credentials.sessdata.clone(),
+                        bili_jct: cfg.bililive.credentials.bili_jct.clone(),
+                        dede_user_id: cfg.bililive.credentials.dede_user_id.clone(),
+                        dede_user_id_ckmd5: cfg.bililive.credentials.dede_user_id_ckmd5.clone(),
+                        buvid3: cfg.bililive.credentials.buvid3.clone(),
+                    };
 
-            // Wrap config in Arc for sharing across tasks
-            let cfg_arc = Arc::new(cfg);
-            // Use the global DANMAKU_COMMANDS_ENABLED Arc
-            let enable_commands = DANMAKU_COMMANDS_ENABLED.clone();
+                    // Wrap config in Arc for sharing across tasks
+                    let cfg_arc = Arc::new(cfg);
+                    // Use the global DANMAKU_COMMANDS_ENABLED Arc
+                    let enable_commands = DANMAKU_COMMANDS_ENABLED.clone();
 
-            // Run danmaku client - it will keep running
-            if let Err(e) = crate::plugins::danmaku_client::run_native_danmaku_client(
-                danmaku_config,
-                cfg_arc,
-                enable_commands,
-            )
-            .await
-            {
-                tracing::error!("弹幕客户端错误: {}", e);
-            }
-
-            set_danmaku_running(false);
-            tracing::info!("弹幕客户端已停止");
+                    // Run danmaku client - it will keep running
+                    if let Err(e) = crate::plugins::danmaku_client::run_native_danmaku_client(
+                        danmaku_config,
+                        cfg_arc,
+                        enable_commands,
+                    )
+                    .await
+                    {
+                        tracing::error!("弹幕客户端错误: {}", e);
+                    }
+                })
+                .await;
+                tracing::info!("弹幕客户端已停止");
+            });
+            // A cancelled DNS lookup can leave a blocking resolver task behind.
+            // It must not hold up stopping this client or starting its replacement.
+            rt.shutdown_timeout(Duration::from_secs(1));
         });
-    });
+    if let Err(error) = spawned {
+        tracing::error!("创建弹幕客户端线程失败: {}", error);
+    }
 }
 
 /// Enable or disable danmaku command processing.
@@ -836,13 +867,18 @@ pub fn enable_danmaku_commands(enabled: bool) {
 
 /// Stop the danmaku client
 pub async fn stop_danmaku() {
-    if !is_danmaku_running() {
-        tracing::warn!("弹幕客户端未在运行");
-        return;
-    }
+    {
+        let _lifecycle = DANMAKU_LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+        if !is_danmaku_running() {
+            return;
+        }
 
-    tracing::info!("🛑 停止弹幕客户端");
-    set_danmaku_stop_signal(true);
+        if !should_stop_danmaku() {
+            tracing::info!("🛑 停止弹幕客户端");
+        }
+        set_danmaku_stop_signal(true);
+    }
+    enable_danmaku_commands(false);
 
     // Wait for the client to stop gracefully without blocking the runtime.
     let mut attempts = 0;
@@ -855,7 +891,8 @@ pub async fn stop_danmaku() {
         tracing::warn!("弹幕客户端停止超时，保持停止信号等待后台退出");
     } else {
         tracing::info!("✅ 弹幕客户端已成功停止");
-        set_danmaku_stop_signal(false);
+        // Only the next run clears the signal. A concurrent stop must not
+        // clear a cancellation that another caller is still relying on.
     }
 }
 
@@ -1010,6 +1047,46 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stopping_cancels_inflight_setup_and_leaves_the_signal_set() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                set_danmaku_running(false);
+                set_danmaku_stop_signal(false);
+            }
+        }
+        let _reset = Reset;
+        set_danmaku_stop_signal(false);
+        set_danmaku_running(true);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let operation = tokio::spawn(async move {
+            let _running = DanmakuRunningGuard;
+            until_danmaku_stopped(async {
+                started.send(()).unwrap();
+                // Simulates a resolver, API request, WebSocket write or
+                // message handler that never completes on its own.
+                std::future::pending::<()>().await;
+            })
+            .await
+        });
+        ready.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop_danmaku())
+            .await
+            .expect("stop must cancel setup before its network timeout");
+        assert!(operation.await.unwrap().is_none());
+        assert!(!is_danmaku_running());
+        assert!(should_stop_danmaku());
+        assert!(
+            until_danmaku_stopped(async { panic!("stopped client must not reconnect") })
+                .await
+                .is_none()
+        );
+
+        set_danmaku_stop_signal(false);
+        assert_eq!(until_danmaku_stopped(async { 42 }).await, Some(42));
+    }
 
     fn config_with_public_url(url: &str) -> Config {
         let mut cfg = crate::cluster::tests::test_config("jp", 0);

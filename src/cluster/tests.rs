@@ -113,6 +113,105 @@ fn a_new_local_owner_waits_for_handoff_even_with_agreement() {
     assert!(state_monitoring_block_reason(&state, &cfg, now).is_some());
 }
 
+fn startup_monitoring_fixture() -> (Config, ClusterStatus) {
+    let mut cfg = test_config("jp", 100);
+    cfg.cluster.heartbeat_interval_secs = 15;
+    cfg.cluster.peers = ["us", "eu"]
+        .into_iter()
+        .map(|id| crate::config::ClusterPeer {
+            node_id: id.into(),
+            name: id.into(),
+            api_url: format!("http://{id}"),
+            priority: 50,
+        })
+        .collect();
+    let now = now_secs();
+    let mut state = ClusterState {
+        active_owner: Some("jp".into()),
+        ..Default::default()
+    };
+    for id in ["jp", "us", "eu"] {
+        let mut node = empty_node(
+            id,
+            id,
+            &format!("http://{id}"),
+            if id == "jp" { 100 } else { 50 },
+            id == "jp",
+            now,
+        );
+        node.last_seen = Some(now);
+        node.health = ClusterHealth::healthy();
+        state.nodes.insert(id.into(), node);
+    }
+    *cluster_state_write() = state;
+    let mut peer_status = compute_cluster_status(&cfg);
+    peer_status.local_node_id = "us".into();
+    (cfg, peer_status)
+}
+
+#[tokio::test]
+async fn startup_monitor_wakes_on_quorum_before_the_next_heartbeat_interval() {
+    let _guard = ClusterStateGuard::new();
+    let (cfg, peer_status) = startup_monitoring_fixture();
+    let signature = cluster_ui_signature(&compute_cluster_status(&cfg));
+    let ready = wait_for_local_monitoring(&cfg);
+    tokio::pin!(ready);
+    assert!(futures_util::poll!(&mut ready).is_pending());
+
+    let started = std::time::Instant::now();
+    // One direct, agreeing peer plus JP is a majority. EU can still be slow;
+    // do not wait for the worker's full fan-out or its next 15-second tick.
+    merge_direct_peer_status(peer_status, "us", &cfg, true);
+    tokio::time::timeout(Duration::from_millis(250), &mut ready)
+        .await
+        .expect("quorum confirmation must wake the monitor immediately");
+    assert!(local_monitoring_allowed(&cfg));
+    assert_eq!(
+        signature,
+        cluster_ui_signature(&compute_cluster_status(&cfg))
+    );
+    println!(
+        "startup wake after quorum: {:?}; configured heartbeat interval: {} s",
+        started.elapsed(),
+        cfg.cluster.heartbeat_interval_secs
+    );
+
+    // A confirmation just before the waiter registers cannot be lost either.
+    tokio::time::timeout(Duration::from_millis(250), wait_for_local_monitoring(&cfg))
+        .await
+        .expect("an already-ready node should not wait for another notification");
+}
+
+#[tokio::test]
+async fn startup_monitor_wait_preserves_owner_agreement_and_handoff_fencing() {
+    let _guard = ClusterStateGuard::new();
+    let (cfg, peer_status) = startup_monitoring_fixture();
+    let ready = wait_for_local_monitoring(&cfg);
+    tokio::pin!(ready);
+    assert!(futures_util::poll!(&mut ready).is_pending());
+
+    let mut disagreement = peer_status.clone();
+    disagreement.active_owner = Some("us".into());
+    merge_direct_peer_status(disagreement, "us", &cfg, true);
+    assert!(futures_util::poll!(&mut ready).is_pending());
+
+    {
+        let mut state = cluster_state_write();
+        state.pending_handoff_source = Some("us".into());
+        state.local_execution_held = true;
+    }
+    merge_direct_peer_status(peer_status, "us", &cfg, true);
+    assert!(futures_util::poll!(&mut ready).is_pending());
+    cluster_state_write().pending_handoff_source = None;
+    compute_cluster_status(&cfg);
+    assert!(futures_util::poll!(&mut ready).is_pending());
+    cluster_state_write().local_execution_held = false;
+    compute_cluster_status(&cfg);
+    tokio::time::timeout(Duration::from_millis(250), &mut ready)
+        .await
+        .expect("confirmed handoff should release the waiting monitor");
+}
+
 #[tokio::test]
 async fn failed_source_demotion_never_sends_target_promotion() {
     use axum::{routing::post, Json, Router};
@@ -194,6 +293,140 @@ async fn failed_source_demotion_never_sends_target_promotion() {
     assert!(validate_node_mode_response(&before, "source", false).is_err());
     before.nodes[0].ffmpeg_running = false;
     assert!(validate_node_mode_response(&before, "source", false).is_ok());
+}
+
+#[tokio::test]
+async fn automatic_handoff_confirms_source_shutdown_after_owner_has_changed() {
+    use axum::{
+        routing::{get, post},
+        Json, Router,
+    };
+    use std::sync::Arc;
+
+    let _guard = ClusterStateGuard::new();
+    crate::install_crypto_provider();
+    let mut source_cfg = test_config("jp", 100);
+    source_cfg.bililive.enable_danmaku_command = true;
+    let source_toggles = monitor_toggle_state_from_config(&source_cfg);
+    let source_targets = channel_target_state_from_config(&source_cfg);
+    let exported = cluster_sync_config_from_config(&source_cfg);
+    let now = now_secs();
+    let mut jp = empty_node("jp", "JP", "", 100, false, now);
+    jp.last_seen = Some(now);
+    jp.network_unstable = true;
+    jp.health = ClusterHealth::unhealthy("external_api_unreachable", false, true);
+    jp.monitor_toggles = source_toggles.clone();
+    jp.channel_targets = source_targets.clone();
+    jp.ffmpeg_running = true;
+    let mut us = empty_node("us", "US", "", 50, false, now);
+    us.last_seen = Some(now);
+    us.health = ClusterHealth::healthy();
+    let before = ClusterStatus {
+        enabled: true,
+        local_node_id: "coordinator".into(),
+        // Both elections have already moved off JP, but its configuration
+        // still has the old monitor toggles enabled until demotion is applied.
+        active_owner: Some("us".into()),
+        lease_until: None,
+        config_version: String::new(),
+        auto_failover: true,
+        public_status: Default::default(),
+        nodes: vec![jp, us],
+    };
+    let mut source_reply = before.clone();
+    source_reply.local_node_id = "jp".into();
+    source_reply.nodes[0].monitor_toggles = all_monitor_toggles_off();
+    source_reply.nodes[0].ffmpeg_running = false;
+    let mut target_reply = source_reply.clone();
+    target_reply.local_node_id = "us".into();
+
+    let calls = Arc::new(Mutex::new(
+        Vec::<(String, ClusterApplyNodeModeRequest)>::new(),
+    ));
+    let source_calls = calls.clone();
+    let target_calls = calls.clone();
+    let app = Router::new()
+        .route(
+            "/jp/api/cluster/export-config",
+            get(move || {
+                let payload = exported.clone();
+                async move { Json(serde_json::json!({"success": true, "data": payload})) }
+            }),
+        )
+        .route(
+            "/jp/api/cluster/apply-node-mode",
+            post(move |Json(payload): Json<ClusterApplyNodeModeRequest>| {
+                let calls = source_calls.clone();
+                let reply = source_reply.clone();
+                async move {
+                    if let Err(error) = validate_node_mode_precondition(
+                        Some("us"),
+                        payload.expected_active_owner.as_deref(),
+                        payload.active,
+                        "jp",
+                        payload.handoff_target_node_id.as_deref(),
+                    ) {
+                        return Json(serde_json::json!({"success": false, "message": error}));
+                    }
+                    calls.lock().unwrap().push(("jp".into(), payload));
+                    Json(serde_json::json!({"success": true, "data": reply}))
+                }
+            }),
+        )
+        .route(
+            "/us/api/cluster/apply-node-mode",
+            post(move |Json(payload): Json<ClusterApplyNodeModeRequest>| {
+                let calls = target_calls.clone();
+                let mut reply = target_reply.clone();
+                async move {
+                    assert_eq!(calls.lock().unwrap().len(), 1, "source must confirm first");
+                    reply.nodes[1].monitor_toggles = payload.monitor_toggles.clone().unwrap();
+                    reply.nodes[1].channel_targets = payload.channel_targets.clone().unwrap();
+                    calls.lock().unwrap().push(("us".into(), payload));
+                    Json(serde_json::json!({"success": true, "data": reply}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut cfg = test_config("coordinator", 0);
+    cfg.cluster.peers = before
+        .nodes
+        .iter()
+        .map(|node| crate::config::ClusterPeer {
+            node_id: node.node_id.clone(),
+            name: node.name.clone(),
+            api_url: format!("http://{address}/{}", node.node_id),
+            priority: node.priority,
+        })
+        .collect();
+    {
+        let mut state = cluster_state_write();
+        *state = ClusterState {
+            active_owner: Some("us".into()),
+            nodes: before
+                .nodes
+                .iter()
+                .map(|node| (node.node_id.clone(), node.clone()))
+                .collect(),
+            ..Default::default()
+        };
+    }
+
+    let result = finalize_cluster_node_switch(&cfg, &before, "jp", "us", false).await;
+    server.abort();
+    result.unwrap();
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "jp");
+    assert!(!calls[0].1.active);
+    assert_eq!(calls[0].1.monitor_toggles, Some(all_monitor_toggles_off()));
+    assert_eq!(calls[1].0, "us");
+    assert!(calls[1].1.active);
+    assert_eq!(calls[1].1.monitor_toggles, Some(source_toggles));
+    assert_eq!(calls[1].1.channel_targets, Some(source_targets));
+    assert_eq!(current_active_owner().as_deref(), Some("us"));
 }
 
 #[test]
@@ -665,11 +898,31 @@ fn demoted_node_mode_clears_unspecified_monitor_toggles() {
 
 #[test]
 fn node_mode_precondition_rejects_delayed_reverse_transition() {
-    assert!(validate_node_mode_precondition(Some("a"), Some("b"), false, "a").is_err());
-    assert!(validate_node_mode_precondition(Some("b"), Some("b"), false, "a").is_ok());
-    assert!(validate_node_mode_precondition(Some("b"), Some("a"), true, "b").is_ok());
-    assert!(validate_node_mode_precondition(Some("a"), Some("a"), true, "b").is_ok());
-    assert!(validate_node_mode_precondition(Some("c"), Some("a"), true, "b").is_err());
+    assert!(validate_node_mode_precondition(Some("a"), Some("b"), false, "a", None).is_err());
+    assert!(validate_node_mode_precondition(Some("b"), Some("b"), false, "a", None).is_ok());
+    assert!(validate_node_mode_precondition(Some("b"), Some("a"), true, "b", None).is_ok());
+    assert!(validate_node_mode_precondition(Some("a"), Some("a"), true, "b", None).is_ok());
+    assert!(validate_node_mode_precondition(Some("c"), Some("a"), true, "b", None).is_err());
+}
+
+#[test]
+fn source_can_confirm_demotion_after_accepting_the_handoff_target() {
+    for owner in ["jp", "us"] {
+        assert!(
+            validate_node_mode_precondition(Some(owner), Some("jp"), false, "jp", Some("us"))
+                .is_ok()
+        );
+    }
+    for (owner, expected, target) in [
+        ("eu", "jp", Some("us")),
+        ("jp", "us", Some("jp")),
+        ("us", "jp", None),
+    ] {
+        assert!(
+            validate_node_mode_precondition(Some(owner), Some(expected), false, "jp", target)
+                .is_err()
+        );
+    }
 }
 
 #[test]
@@ -1263,6 +1516,92 @@ fn external_api_threshold_uses_windowed_failure_count() {
 
     assert!(!external_api_degraded(&cfg.cluster, 2));
     assert!(external_api_degraded(&cfg.cluster, 3));
+}
+
+#[tokio::test]
+async fn external_api_outage_fences_owner_despite_fresh_inbound_heartbeats() {
+    let _guard = ClusterStateGuard::new();
+    let mut cfg = test_config("jp", 100);
+    cfg.cluster.peers = ["us", "eu"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| crate::config::ClusterPeer {
+            node_id: id.into(),
+            name: id.into(),
+            api_url: format!("http://{id}"),
+            priority: 50 - index as i32,
+        })
+        .collect();
+    let now = now_secs();
+    {
+        let mut state = cluster_state_write();
+        *state = ClusterState {
+            active_owner: Some("jp".into()),
+            ..Default::default()
+        };
+        for peer in &cfg.cluster.peers {
+            let mut node = empty_node(
+                &peer.node_id,
+                &peer.name,
+                &peer.api_url,
+                peer.priority,
+                false,
+                now,
+            );
+            node.last_seen = Some(now);
+            node.health = ClusterHealth::healthy();
+            state.nodes.insert(peer.node_id.clone(), node);
+            state.peer_heartbeat_acks.insert(peer.node_id.clone(), now);
+            state.peer_owner_views.insert(
+                peer.node_id.clone(),
+                peer_view("jp", &["jp", "us", "eu"], now),
+            );
+        }
+        for _ in 0..3 {
+            super::self_check::record_self_check(
+                &mut state.local_self_check,
+                &cfg.cluster,
+                Err(SelfCheckFailure::RequestFailed),
+                std::time::Instant::now(),
+                now,
+            );
+        }
+    }
+
+    // A failed loop through the tunnel alone does not override live peers.
+    let local = collect_local_snapshot(&cfg, String::new()).await;
+    update_node(local, "jp");
+    assert_eq!(
+        compute_cluster_status(&cfg).active_owner.as_deref(),
+        Some("jp")
+    );
+    assert!(local_monitoring_allowed(&cfg));
+    for failure in 1..=cfg.cluster.thresholds.max_external_api_failures {
+        record_external_api_result(false);
+        let local = collect_local_snapshot(&cfg, String::new()).await;
+        update_node(local, "jp");
+        let status = compute_cluster_status(&cfg);
+        let jp = status
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "jp")
+            .unwrap();
+        assert!(!jp.health.stale);
+        if failure < cfg.cluster.thresholds.max_external_api_failures {
+            assert_eq!(status.active_owner.as_deref(), Some("jp"));
+        } else {
+            assert_eq!(status.active_owner.as_deref(), Some("us"));
+            assert_eq!(jp.health.reason, "external_api_unreachable");
+            assert_eq!(jp.role, ClusterNodeRole::Unhealthy);
+            assert!(!local_monitoring_allowed(&cfg));
+        }
+    }
+
+    // Manual-only mode retains its existing operator-controlled behavior.
+    cfg.cluster.auto_failover = false;
+    let local = collect_local_snapshot(&cfg, String::new()).await;
+    assert!(local.health.healthy);
+    assert!(!cluster_state_read().local_fault_latched);
 }
 
 #[test]

@@ -703,7 +703,12 @@ pub async fn run_native_danmaku_client(
             break;
         }
 
-        match client.connect().await {
+        let Some(result) = crate::plugins::danmaku::until_danmaku_stopped(client.connect()).await
+        else {
+            info!("🛑 收到停止信号，退出弹幕客户端");
+            break;
+        };
+        match result {
             Ok(_) => {
                 info!("Danmaku client disconnected normally");
                 reconnect_attempts = 0; // Reset counter on successful connection

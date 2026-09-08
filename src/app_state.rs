@@ -30,6 +30,7 @@ struct Inner {
     status_refresh: Notify,
     events: broadcast::Sender<&'static str>,
     cluster: RwLock<ClusterState>,
+    cluster_monitoring_changed: Notify,
     cluster_node_mode_apply: tokio::sync::Mutex<()>,
     cluster_switch: tokio::sync::Mutex<()>,
 }
@@ -43,6 +44,7 @@ impl AppState {
                 status_refresh: Notify::new(),
                 events: broadcast::channel(EVENT_BUS_CAPACITY).0,
                 cluster: RwLock::new(ClusterState::default()),
+                cluster_monitoring_changed: Notify::new(),
                 cluster_node_mode_apply: tokio::sync::Mutex::new(()),
                 cluster_switch: tokio::sync::Mutex::new(()),
             }),
@@ -55,6 +57,10 @@ impl AppState {
 
     pub(crate) fn process_cluster() -> &'static RwLock<ClusterState> {
         &Self::process_inner().cluster
+    }
+
+    pub(crate) fn process_cluster_monitoring_notify() -> &'static Notify {
+        &Self::process_inner().cluster_monitoring_changed
     }
 
     pub(crate) fn process_cluster_switch_lock() -> &'static tokio::sync::Mutex<()> {

@@ -3,6 +3,7 @@
 //! Submodules are layered so heartbeat can call sync, but sync never calls heartbeat.
 
 mod election;
+mod external_api;
 mod fencing;
 mod heartbeat;
 mod self_check;

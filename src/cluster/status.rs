@@ -4,7 +4,7 @@ use super::election::{
     adopt_owner_view, choose_owner_with_configured, clear_invalid_forced_owner,
     configured_node_ids, is_stale,
 };
-use super::fencing::collect_local_snapshot;
+use super::fencing::{collect_local_snapshot, notify_monitoring_changed};
 use super::state::{
     cluster_state_read, cluster_state_write, now_secs, ClusterState, PeerOwnerView,
 };
@@ -139,6 +139,9 @@ pub(crate) fn cluster_ui_signature(status: &ClusterStatus) -> u64 {
 }
 
 pub(crate) fn publish_cluster_status_change(status: &ClusterStatus) {
+    // Execution readiness can change without a visible UI change (for example,
+    // a new quorum acknowledgement or completion of a pending handoff).
+    notify_monitoring_changed();
     let signature = cluster_ui_signature(status);
     if LAST_CLUSTER_UI_SIG.swap(signature, Ordering::AcqRel) != signature {
         crate::webui::events::publish(crate::webui::events::CLUSTER);
@@ -470,6 +473,9 @@ pub(crate) fn merge_direct_peer_status(
     let next_gate = owner_danmaku_gate(&state);
     let peer_is_owner = state.active_owner.as_deref() == Some(peer_node_id);
     drop(state);
+    // A sufficient quorum may be ready while the heartbeat worker is still
+    // awaiting a slow peer. Let the monitor recheck its gate immediately.
+    notify_monitoring_changed();
     if prev_gate != next_gate {
         crate::webui::public::snapshot::invalidate_public_status_snapshot();
     }

@@ -46,7 +46,7 @@ export function selfCheckDisplay(check, stale = false) {
     case 'failing':
       return { state: 'failing', label: '检测失败', title: `API 自检失败：${selfCheckFailureMessage(check.failure)}` };
     case 'unreachable':
-      return { state: 'unreachable', label: '不可达', title: `API 自检连续失败；${selfCheckFailureMessage(check.failure)}` };
+      return { state: 'unreachable', label: '自检不通', title: `本节点访问自身对外 URL 连续失败；${selfCheckFailureMessage(check.failure)}。此路径与浏览器访问、节点心跳独立，可能同时存在心跳` };
     default:
       return { state: 'pending', label: '待检测', title: '等待本节点通过对外 URL 完成 API 自检' };
   }

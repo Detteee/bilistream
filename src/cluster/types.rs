@@ -192,6 +192,10 @@ pub struct ClusterApplyNodeModeRequest {
     pub channel_targets: Option<ChannelTargetState>,
     #[serde(default)]
     pub expected_active_owner: Option<String>,
+    /// Allows the source to acknowledge demotion after its election has
+    /// already accepted this replacement as owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_target_node_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
