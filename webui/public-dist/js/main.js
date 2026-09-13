@@ -50,11 +50,13 @@ async function refreshStatus() {
       throw new Error('缺少状态数据');
     }
     // Public cards show confirmed settings as text instead of editable switches.
+    const hideRoomStats = clusterIsRestreaming(status.nodes);
     const nextCards = JSON.stringify([
       status.bilibili, status.youtube, status.twitch, status.niconico, status.priority_channel,
+      hideRoomStats,
     ]);
     if (nextCards !== statusCardsSignature) {
-      renderStatusCards(status, { readonly: true, showNetwork: false });
+      renderStatusCards(status, { readonly: true, showNetwork: false, hideRoomStats });
       statusCardsSignature = nextCards;
     } else if (status.niconico?.scheduled_start) {
       // Relative scheduled labels change even when the payload/ETag does not.

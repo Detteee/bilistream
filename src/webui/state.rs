@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::plugins::bilibili::BiliLiveStatus;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct StatusData {
@@ -33,6 +34,10 @@ pub struct BiliStatus {
     pub title: String,
     pub area_id: u64,
     pub area_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_start_ts: Option<i64>,
     pub stream_quality: Option<String>,
     pub stream_speed: Option<f32>,
     pub stream_cache_speed: Option<f32>,
@@ -51,6 +56,24 @@ pub struct BiliStatus {
 }
 
 impl BiliStatus {
+    pub fn apply_live_status(&mut self, live: &BiliLiveStatus) {
+        self.is_live = live.is_live;
+        self.title = live.title.clone();
+        self.area_id = live.area_id;
+        self.area_name = if !live.area_name.is_empty() {
+            live.area_name.clone()
+        } else {
+            crate::plugins::get_area_name(live.area_id)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", live.area_id))
+        };
+        self.online = live.is_live.then_some(live.online);
+        self.live_start_ts = if live.is_live {
+            live.live_start_ts
+        } else {
+            None
+        };
+    }
+
     pub fn apply_network(&mut self, network: NetworkStatus) {
         self.ffmpeg_running = network.ffmpeg_running;
         self.stream_speed = network.stream_speed;

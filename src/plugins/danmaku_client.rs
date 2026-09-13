@@ -500,7 +500,8 @@ impl BilibiliDanmakuClient {
                     tokio::spawn(async move {
                         // Get current streaming channel from bili title
                         match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
-                            Ok((_, title, _)) => {
+                            Ok(status) => {
+                                let title = status.title;
                                 if title.contains("【转播】") {
                                     let channel_name = title.split("【转播】").last().unwrap_or("");
                                     if !channel_name.is_empty() {
@@ -545,7 +546,8 @@ impl BilibiliDanmakuClient {
                 tokio::spawn(async move {
                     // Get current streaming channel from bili title
                     match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
-                        Ok((_, title, _)) => {
+                        Ok(status) => {
+                            let title = status.title;
                             if title.contains("【转播】") {
                                 let channel_name = title.split("【转播】").last().unwrap_or("");
                                 if !channel_name.is_empty() {

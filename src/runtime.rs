@@ -295,7 +295,7 @@ async fn source_client_status(client: &Option<SourceClient<'_>>) -> SourceStatus
 /// independently so this request's retry budget cannot delay fault detection.
 async fn fetch_bili_live_status_logged(
     room: i32,
-) -> Result<(bool, String, u64), Box<dyn std::error::Error>> {
+) -> Result<bilibili::BiliLiveStatus, Box<dyn std::error::Error>> {
     match get_bili_live_status(room).await {
         Ok(status) => Ok(status),
         Err(e) => {
@@ -773,28 +773,26 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
 
         // Get Bilibili status
-        let (bili_is_live, bili_title, bili_area_id) =
-            match fetch_bili_live_status_logged(cfg.bililive.room).await {
-                Ok(status) => status,
-                Err(_) => {
-                    tracing::warn!("⚠️ 将在下次循环重试");
-                    wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
-                    continue 'outer;
-                }
-            };
-        let bili_area_name = get_area_name(bili_area_id)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", bili_area_id));
+        let bili_live = match fetch_bili_live_status_logged(cfg.bililive.room).await {
+            Ok(status) => status,
+            Err(_) => {
+                tracing::warn!("⚠️ 将在下次循环重试");
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
+                continue 'outer;
+            }
+        };
+        let bili_is_live = bili_live.is_live;
+        let bili_title = bili_live.title.clone();
+        let bili_area_id = bili_live.area_id;
+        let mut bili_status = bilistream::BiliStatus {
+            enable_danmaku_command: cfg.bililive.enable_danmaku_command,
+            ..Default::default()
+        };
+        bili_status.apply_live_status(&bili_live);
 
         // Update status cache for WebUI
         bilistream::update_status_cache(bilistream::StatusData {
-            bilibili: bilistream::BiliStatus {
-                is_live: bili_is_live,
-                title: bili_title.clone(),
-                area_id: bili_area_id,
-                area_name: bili_area_name,
-                enable_danmaku_command: cfg.bililive.enable_danmaku_command,
-                ..Default::default()
-            },
+            bilibili: bili_status,
             youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
                 let yt_area_name = get_area_name(cfg.youtube.area_v2)
                     .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
@@ -1363,9 +1361,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let (current_is_live, _, _, new_m3u8_url, _, _) =
                     source_client_status(&source_client).await;
                 // On error, assume still live and retry next iteration.
-                let (bili_is_live, _, _) = fetch_bili_live_status_logged(cfg.bililive.room)
+                let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
                     .await
-                    .unwrap_or((true, String::new(), 0));
+                    .map(|status| status.is_live)
+                    .unwrap_or(true);
                 let manual_restart_requested = was_manual_restart();
                 let manual_stop_requested = was_manual_stop();
                 let config_updated_now = is_config_updated();
@@ -1476,9 +1475,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Check current live status to determine what actually happened
             let (current_is_live, _, _, _, _, _) = source_client_status(&source_client).await;
             // On error, assume still live to avoid incorrect status messages.
-            let (bili_is_live, _, _) = fetch_bili_live_status_logged(cfg.bililive.room)
+            let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
                 .await
-                .unwrap_or((true, String::new(), 0));
+                .map(|status| status.is_live)
+                .unwrap_or(true);
 
             // Determine what happened and send appropriate message
             if restart_exit_should_skip_danmaku {
@@ -1989,14 +1989,15 @@ async fn check_collision(
     let cfg = load_config().await?;
     for (room_name, room_id) in cfg.anti_collision_list {
         match get_bili_live_status(room_id).await {
-            Ok((true, title, _)) => {
+            Ok(status) if status.is_live => {
+                let title = &status.title;
                 // Check if title contains the target name or aliases
                 let contains_target = title.contains(target_name)
                     || aliases.iter().any(|alias| title.contains(alias));
 
                 if contains_target {
                     // Check if this is a multi-channel stream (contains multiple channels)
-                    let is_multi_channel = is_multi_channel_stream(&title);
+                    let is_multi_channel = is_multi_channel_stream(title);
 
                     if is_multi_channel {
                         tracing::debug!(

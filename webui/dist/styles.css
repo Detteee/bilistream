@@ -1675,9 +1675,9 @@ input[type="checkbox"] {
 
 .bili-network-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   margin-bottom: var(--sp-2);
   color: var(--text-mute);
   font-size: var(--fs-xs);
@@ -1686,22 +1686,39 @@ input[type="checkbox"] {
   text-transform: uppercase;
 }
 
-.bili-network-quality {
-  color: var(--text-dim);
+.bili-network-title {
+  flex: 0 0 auto;
+}
+
+.bili-live-stats {
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: var(--sp-4);
+  min-width: 0;
+  flex: 1;
   letter-spacing: 0;
   text-transform: none;
+  font-weight: 600;
 }
 
-.bili-network-quality-smooth {
-  color: var(--ok);
+.bili-live-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
-.bili-network-quality-unstable {
-  color: var(--warn);
+.bili-live-stat-value {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 
-.bili-network-quality-stalled {
-  color: var(--danger);
+.bili-live-stat-label {
+  color: var(--text-mute);
+  font-weight: 500;
 }
 
 .bili-network-graph {
@@ -2165,6 +2182,12 @@ a.cluster-node-name-link {
   margin-top: var(--sp-1);
   padding-top: var(--sp-2);
   border-top: 1px solid var(--line);
+}
+
+.cluster-node-network > .cluster-live-stats {
+  justify-content: flex-start;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-2);
 }
 
 .cluster-network-row {

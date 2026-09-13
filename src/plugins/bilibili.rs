@@ -239,41 +239,82 @@ impl AppKeyStore {
     }
 }
 
-/// Retrieves the live status of a Bilibili room.
-///
-/// # Arguments
-///
-/// * `room` - The room ID to check.
-///
-/// # Returns
-///
-/// * `(bool, String, u64)` - Returns `true` if the room is live, otherwise `false`.
-/// * `String` - The title of the room.
-/// * `u64` - The area ID of the room.
-pub async fn get_bili_live_status(room: i32) -> Result<(bool, String, u64), Box<dyn Error>> {
+/// Room snapshot from `room/v1/Room/get_info`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BiliLiveStatus {
+    pub is_live: bool,
+    pub title: String,
+    pub area_id: u64,
+    pub area_name: String,
+    pub online: u64,
+    pub live_start_ts: Option<i64>,
+}
+
+fn json_string(value: &Value) -> String {
+    value.as_str().unwrap_or_default().to_string()
+}
+
+fn json_u64(value: &Value) -> u64 {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok()))
+        .unwrap_or(0)
+}
+
+/// Parses Bilibili's naive `live_time` (`YYYY-MM-DD HH:MM:SS`, local wall clock).
+/// `"0000-00-00 00:00:00"` means the room is not live.
+fn parse_bili_live_time_str(live_time_str: &str) -> Option<chrono::DateTime<chrono::Local>> {
+    if live_time_str.is_empty() || live_time_str.starts_with("0000") || live_time_str == "0" {
+        return None;
+    }
+    let naive = chrono::NaiveDateTime::parse_from_str(live_time_str, "%Y-%m-%d %H:%M:%S").ok()?;
+    chrono::Local.from_local_datetime(&naive).single()
+}
+
+pub(crate) fn parse_bili_live_status(res: &Value) -> Result<BiliLiveStatus, Box<dyn Error>> {
+    let data = &res["data"];
+    if data.is_null() {
+        return Err("Missing data in API response".into());
+    }
+
+    let area_id = data["area_id"]
+        .as_u64()
+        .ok_or("Missing or invalid area_id in API response")?;
+
+    Ok(BiliLiveStatus {
+        is_live: data["live_status"] == 1,
+        title: json_string(&data["title"]),
+        area_id,
+        area_name: json_string(&data["area_name"]),
+        online: json_u64(&data["online"]),
+        live_start_ts: parse_bili_live_time_str(&json_string(&data["live_time"]))
+            .map(|dt| dt.timestamp()),
+    })
+}
+
+/// Retrieves the live status of a Bilibili room from `get_info`.
+pub async fn get_bili_live_status(room: i32) -> Result<BiliLiveStatus, Box<dyn Error>> {
     // Reuse the shared clients; this runs every monitor cycle.
     let (raw_client, client) = bili_status_clients()?;
     let url = bili_live_status_url(&raw_client, room).await?;
 
     let res: Value = client.get(url).send().await?.json().await?;
-    parse_bili_live_status(res)
+    parse_bili_live_status(&res)
 }
 
 /// Cluster health sampling must not wait for the monitor's five retries.
 /// The caller bounds the entire attempt, including signing-key lookup and body.
-pub(crate) async fn get_bili_live_status_once(
-    room: i32,
-) -> Result<(bool, String, u64), Box<dyn Error>> {
+pub(crate) async fn get_bili_live_status_once(room: i32) -> Result<BiliLiveStatus, Box<dyn Error>> {
     let (client, _) = bili_status_clients()?;
     let url = bili_live_status_url(&client, room).await?;
-    let res = client
+    let res: Value = client
         .get(url)
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
-    parse_bili_live_status(res)
+    parse_bili_live_status(&res)
 }
 
 async fn bili_live_status_url(
@@ -287,18 +328,6 @@ async fn bili_live_status_url(
         "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
         query_string
     ))
-}
-
-fn parse_bili_live_status(res: Value) -> Result<(bool, String, u64), Box<dyn Error>> {
-    let title = res["data"]["title"].to_string();
-    let title = title.trim_matches('"');
-
-    let area_id = res["data"]["area_id"]
-        .as_u64()
-        .ok_or("Missing or invalid area_id in API response")?;
-
-    // Determine live status based on the response
-    Ok((res["data"]["live_status"] == 1, title.to_string(), area_id))
 }
 
 /// Gets the live start time of a Bilibili room from the API.
@@ -329,22 +358,11 @@ pub async fn get_bili_live_time(
         .json()
         .await?;
 
-    let live_time_str = res["data"]["live_time"]
-        .as_str()
-        .unwrap_or("0000-00-00 00:00:00");
-
-    // "0000-00-00 00:00:00" means not live
-    if live_time_str.starts_with("0000") || live_time_str == "0" {
-        return Ok(None);
-    }
-
-    let naive = chrono::NaiveDateTime::parse_from_str(live_time_str, "%Y-%m-%d %H:%M:%S")
-        .map_err(|e| format!("Failed to parse live_time '{}': {}", live_time_str, e))?;
-    let dt = chrono::Local
-        .from_local_datetime(&naive)
-        .single()
-        .ok_or_else(|| format!("Ambiguous or invalid local datetime: {}", naive))?;
-    Ok(Some(dt))
+    Ok(parse_bili_live_time_str(
+        res["data"]["live_time"]
+            .as_str()
+            .unwrap_or("0000-00-00 00:00:00"),
+    ))
 }
 
 /// Starts a Bilibili live stream.
@@ -1312,5 +1330,50 @@ mod tests {
             bili_credential_cookie(&credentials),
             "SESSDATA=sess;bili_jct=jct;DedeUserID=uid;DedeUserID__ckMd5=md5"
         );
+    }
+
+    #[test]
+    fn parse_bili_live_status_keeps_room_stats_and_quoted_titles() {
+        let res = serde_json::json!({
+            "code": 0,
+            "data": {
+                "title": "Foo \"bar\"",
+                "live_status": 1,
+                "area_id": 371,
+                "area_name": "虚拟Gamer",
+                "parent_area_name": "虚拟主播",
+                "online": 89012,
+                "attention": 1234567,
+                "live_time": "2024-01-01 12:00:00"
+            }
+        });
+
+        let status = parse_bili_live_status(&res).expect("parse live room");
+        assert!(status.is_live);
+        assert_eq!(status.title, "Foo \"bar\"");
+        assert_eq!(status.area_id, 371);
+        assert_eq!(status.area_name, "虚拟Gamer");
+        assert_eq!(status.online, 89012);
+        assert!(status.live_start_ts.is_some());
+    }
+
+    #[test]
+    fn parse_bili_live_status_treats_zero_live_time_as_offline_clock() {
+        let res = serde_json::json!({
+            "data": {
+                "title": "idle",
+                "live_status": 0,
+                "area_id": 235,
+                "area_name": "其他单机",
+                "online": 0,
+                "live_time": "0000-00-00 00:00:00"
+            }
+        });
+
+        let status = parse_bili_live_status(&res).expect("parse idle room");
+        assert!(!status.is_live);
+        assert_eq!(status.title, "idle");
+        assert_eq!(status.online, 0);
+        assert_eq!(status.live_start_ts, None);
     }
 }

@@ -5,8 +5,10 @@
 //! by default. Everything public is listed by hand below, and
 //! `serialized_keys_are_the_allowlist` fails if that stops being true.
 //!
-//! Excluded on purpose: room and RTMP details, credentials, channel ids, file
-//! paths, peer API urls, heartbeat timestamps, and the per-node WebUI link.
+//! Excluded on purpose: credentials, channel ids, file paths, peer API urls,
+//! heartbeat timestamps, and the per-node WebUI link. Room popularity is
+//! included only after get_info succeeds: on the Bilibili card for a
+//! standalone node, and on the publishing node card in a cluster.
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,10 @@ pub struct PublicBiliStatus {
     /// Drives the 切换 buttons: with danmaku commands off, nothing is
     /// requestable and every button greys out.
     pub enable_danmaku_command: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_start_ts: Option<i64>,
 }
 
 /// YouTube and Twitch differ only in what the second line is called, so they
@@ -76,6 +82,12 @@ pub struct PublicNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<PublicNodeStream>,
     pub network: Option<PublicNetwork>,
+    /// Bilibili room popularity from that node's last successful get_info.
+    /// Omitted when the node could not fetch it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_start_ts: Option<i64>,
 }
 
 /// The inset on the featured node card. Platform is the same `YT` / `TW` /
@@ -115,6 +127,8 @@ impl From<&BiliStatus> for PublicBiliStatus {
             area_id: bili.area_id,
             area_name: bili.area_name.clone(),
             enable_danmaku_command: bili.enable_danmaku_command,
+            online: bili.online,
+            live_start_ts: bili.live_start_ts,
         }
     }
 }
@@ -198,6 +212,7 @@ impl From<&ClusterStreamIdentity> for PublicNodeStream {
 impl From<&ClusterNodeSnapshot> for PublicNode {
     fn from(node: &ClusterNodeSnapshot) -> Self {
         let publishing = node.ffmpeg_running && !node.health.stale;
+        let bili = node.status.as_ref().map(|status| &status.bilibili);
         Self {
             // Fall back to the id only when a node was never given a name.
             name: if node.name.trim().is_empty() {
@@ -219,6 +234,10 @@ impl From<&ClusterNodeSnapshot> for PublicNode {
                 .as_ref()
                 .filter(|_| publishing)
                 .map(PublicNetwork::from),
+            online: bili.filter(|_| publishing).and_then(|bili| bili.online),
+            live_start_ts: bili
+                .filter(|_| publishing)
+                .and_then(|bili| bili.live_start_ts),
         }
     }
 }
@@ -454,6 +473,8 @@ mod tests {
             assert!(!public.ffmpeg_running);
             assert!(public.network.is_none());
             assert!(public.stream.is_none());
+            assert!(public.online.is_none());
+            assert!(public.live_start_ts.is_none());
         }
         node.health = ClusterHealth::unhealthy("waiting_for_heartbeat", true, false);
         assert!(PublicNode::from(&node).waiting_for_heartbeat);
@@ -516,9 +537,36 @@ mod tests {
         assert!(!payload.bilibili.is_live);
         assert!(payload.bilibili.title.is_empty());
         assert!(!payload.bilibili.enable_danmaku_command);
+        assert!(payload.bilibili.online.is_none());
         assert!(payload.youtube.is_none());
         // Node cards still render: the page can say which servers are up even
         // when it cannot see the stream.
         assert_eq!(payload.nodes.len(), 1);
+    }
+
+    #[test]
+    fn publishing_node_carries_room_stats_only_when_fetched() {
+        let mut node = sample_node();
+        node.status = Some(sample_status());
+        node.status.as_mut().unwrap().bilibili.online = Some(12_345);
+        node.status.as_mut().unwrap().bilibili.live_start_ts = Some(1_700_000_000);
+        let public = PublicNode::from(&node);
+        assert_eq!(public.online, Some(12_345));
+        assert_eq!(public.live_start_ts, Some(1_700_000_000));
+
+        node.ffmpeg_running = false;
+        let idle = PublicNode::from(&node);
+        assert!(idle.online.is_none());
+        assert!(idle.live_start_ts.is_none());
+    }
+
+    #[test]
+    fn public_bili_card_carries_room_stats_when_fetched() {
+        let mut status = sample_status();
+        status.bilibili.online = Some(3);
+        status.bilibili.live_start_ts = Some(9);
+        let payload = PublicStatus::build(Some(&status), &sample_cluster());
+        assert_eq!(payload.bilibili.online, Some(3));
+        assert_eq!(payload.bilibili.live_start_ts, Some(9));
     }
 }

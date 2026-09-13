@@ -10,9 +10,13 @@
 import { setElementDisplay, setElementText } from './dom.js';
 import {
   asBitrateHistory,
+  biliRoomStats,
   formatAreaText,
+  formatCount,
   formatFps,
   formatHlsCacheStatus,
+  formatLiveClock,
+  formatLiveDuration,
   formatNetworkRate,
   formatScheduledStart,
   formatSpeedRatio,
@@ -73,11 +77,6 @@ export function setPlatformLiveInfoVisibility(platform, isLive) {
   }
 }
 
-function applyBiliStreamQualityColor(element, quality) {
-  element.classList.toggle('bili-network-quality-smooth', quality === '流畅');
-  element.classList.toggle('bili-network-quality-unstable', quality === '波动');
-  element.classList.toggle('bili-network-quality-stalled', quality === '卡顿');
-}
 
 function sliceNetworkHistory(series, width) {
   const start = Math.max(0, series.length - width);
@@ -353,6 +352,41 @@ function updateBiliNetworkMeter(kind, metrics) {
   setElementText(`bili-network-${kind}-time`, metrics.detail);
 }
 
+function setLiveStatHidden(id, hidden) {
+  const el = document.getElementById(id);
+  if (!el) {
+    return;
+  }
+  const item = typeof el.closest === 'function' ? el.closest('.bili-live-stat, .info-row') : null;
+  (item || el).classList.toggle('hidden', hidden);
+}
+
+/// 人气 / 开播 only when get_info actually returned them. On the admin card
+/// they live inside the publisher network panel; a spare (no ffmpeg) hides
+/// them so the cluster featured card can own the same numbers.
+function paintBiliLiveStats(bili, options = {}) {
+  const { showNetwork = true } = options;
+  const stats = document.getElementById('bili-live-stats');
+  const { online, liveStartTs } = biliRoomStats(bili);
+  const publishing = bili.ffmpeg_running === true;
+  const show = (online != null || liveStartTs != null)
+    && !options.hideRoomStats
+    && (!showNetwork || publishing);
+  stats?.classList.toggle('hidden', !show);
+  setLiveStatHidden('bili-online', !show || online == null);
+  setLiveStatHidden('bili-live-time', !show || liveStartTs == null);
+  if (online != null) {
+    setElementText('bili-online', formatCount(online));
+  }
+  if (liveStartTs != null) {
+    setElementText('bili-live-time', formatLiveDuration(liveStartTs));
+    const liveClock = formatLiveClock(liveStartTs);
+    setElementText('bili-live-time-label', liveClock ? `开播 ${liveClock}` : '开播');
+  } else {
+    setElementText('bili-live-time-label', '开播');
+  }
+}
+
 /// Paints the platform-card meters, and the bar graph when `options.showGraph`
 /// is set. The public Bilibili card still omits that graph; node cards paint
 /// the same 60s window from the heartbeat snapshot instead.
@@ -370,20 +404,16 @@ export function renderBiliNetworkPanel(bili, options = {}) {
       : bili.stream_quality || null)
     : null;
   const hasCache = !!bili.hls_cache_active;
+  // Spare / idle-owner room-live state belongs on the multi-server card.
   if (!lastBiliNetworkLive) {
     panel.classList.add('hidden');
+    panel.classList.remove('single-sided');
     document.getElementById('bili-network-graph')?.replaceChildren();
     return;
   }
 
   panel.classList.remove('hidden');
   panel.classList.toggle('single-sided', !hasCache);
-
-  const quality = document.getElementById('bili-network-quality');
-  if (quality) {
-    quality.textContent = lastBiliNetworkQuality || '等待推流数据';
-    applyBiliStreamQualityColor(quality, lastBiliNetworkQuality);
-  }
 
   updateBiliNetworkMeter('push', {
     bitrateKbps: bili.stream_bitrate_kbps,
@@ -417,6 +447,7 @@ export function renderBilibiliCard(bili, options = {}) {
   updateAppLiveBadge(bili.is_live);
   setElementText('bili-title', bili.title || '-');
   setElementText('bili-area', formatAreaText(bili.area_name, bili.area_id));
+  paintBiliLiveStats(bili, options);
 
   if (showNetwork) {
     renderBiliNetworkPanel(bili, options);
@@ -561,6 +592,7 @@ export function setStatusCardsMessage(message) {
   updateAppLiveBadge(false);
   setElementText('app-live-badge-text', '连接中断');
   renderBiliNetworkPanel({ ffmpeg_running: false });
+  paintBiliLiveStats({});
   setElementText('bili-title', message);
   setElementText('yt-channel-name', message);
   setElementText('tw-channel-name', message);

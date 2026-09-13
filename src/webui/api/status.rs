@@ -104,18 +104,13 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 }
 
 pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> Result<(), String> {
-    let (is_live, title, area_id) = get_bili_live_status(cfg.bililive.room)
+    let live = get_bili_live_status(cfg.bililive.room)
         .await
         .map_err(|e| e.to_string())?;
-    let area_name = crate::plugins::get_area_name(area_id)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", area_id));
 
     crate::config::with_current_config(cfg, || {
         update_status_cache_with(|status| {
-            status.bilibili.is_live = is_live;
-            status.bilibili.title = title;
-            status.bilibili.area_id = area_id;
-            status.bilibili.area_name = area_name;
+            status.bilibili.apply_live_status(&live);
             status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
         })
     });

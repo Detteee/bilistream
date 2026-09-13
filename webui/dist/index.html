@@ -620,8 +620,17 @@
 
               <div class="bili-network-panel hidden" id="bili-network-panel">
                 <div class="bili-network-header">
-                  <span>Network</span>
-                  <span class="bili-network-quality" id="bili-network-quality">-</span>
+                  <span class="bili-network-title">Network</span>
+                  <div class="bili-live-stats" id="bili-live-stats" aria-label="人气与开播时长">
+                    <span class="bili-live-stat">
+                      <span class="bili-live-stat-value" id="bili-online">-</span>
+                      <span class="bili-live-stat-label">人气</span>
+                    </span>
+                    <span class="bili-live-stat">
+                      <span class="bili-live-stat-value" id="bili-live-time">-</span>
+                      <span class="bili-live-stat-label" id="bili-live-time-label">开播</span>
+                    </span>
+                  </div>
                 </div>
                 <div class="bili-network-graph" id="bili-network-graph"></div>
                 <div class="bili-network-graph-axis" aria-hidden="true">

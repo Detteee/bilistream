@@ -1,6 +1,15 @@
 // Network detail shared by admin and public node cards. A node's publisher
 // lifecycle owns visibility; old rate samples cannot keep an idle card alive.
-import { formatFps, formatNetworkRate, formatSpeedRatio, formatStreamTime } from './format.js';
+import {
+  biliRoomStats,
+  formatCount,
+  formatFps,
+  formatLiveClock,
+  formatLiveDuration,
+  formatNetworkRate,
+  formatSpeedRatio,
+  formatStreamTime,
+} from './format.js';
 import { mountNetworkHistory, paintNetworkGraph } from './status-cards.js';
 
 const panels = new WeakMap();
@@ -11,6 +20,45 @@ function text(element, value) {
 
 function history(series) {
   return Array.isArray(series) ? series.slice(-60).map(value => Number.isFinite(value) && value > 0 ? value : 0) : [];
+}
+
+function liveStat(label, value) {
+  const item = document.createElement('span');
+  item.className = 'bili-live-stat';
+  const valueEl = document.createElement('span');
+  valueEl.className = 'bili-live-stat-value';
+  valueEl.textContent = value;
+  const labelEl = document.createElement('span');
+  labelEl.className = 'bili-live-stat-label';
+  labelEl.textContent = label;
+  item.append(valueEl, labelEl);
+  return item;
+}
+
+function paintClusterLiveStats(panel, node) {
+  const { online, liveStartTs } = biliRoomStats(node);
+  let stats = panel.querySelector(':scope > .cluster-live-stats');
+  if (online == null && liveStartTs == null) {
+    stats?.remove();
+    return;
+  }
+  if (!stats) {
+    stats = document.createElement('div');
+    stats.className = 'bili-live-stats cluster-live-stats';
+    stats.setAttribute('aria-label', '人气与开播时长');
+  }
+  if (panel.firstChild !== stats) {
+    panel.insertBefore(stats, panel.firstChild);
+  }
+  const parts = [];
+  if (online != null) {
+    parts.push(liveStat('人气', formatCount(online)));
+  }
+  if (liveStartTs != null) {
+    const clock = formatLiveClock(liveStartTs);
+    parts.push(liveStat(clock ? `开播 ${clock}` : '开播', formatLiveDuration(liveStartTs)));
+  }
+  stats.replaceChildren(...parts);
 }
 
 function createMeter(label, leg) {
@@ -83,6 +131,7 @@ export function updateClusterNetwork(panel, node) {
   }
   updateMeter(parts.push, network, false);
   updateMeter(parts.cache, network, true);
+  paintClusterLiveStats(panel, node);
 
   const historySignature = JSON.stringify([pushHistory, cacheHistory]);
   if (parts.historySignature === historySignature) return;

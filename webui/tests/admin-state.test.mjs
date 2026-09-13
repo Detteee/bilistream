@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConfigPatch } from '../dist/js/config-draft.js';
+import { biliRoomStats, formatCount, formatLiveClock, formatLiveDuration } from '../dist/js/format.js';
 
 // The renderer's null-safe public contract needs only the named output nodes.
 const nodes = new Map();
@@ -113,9 +114,66 @@ test('settings edits submit only changed fields and their loaded values', () => 
   assert.deepEqual(createConfigPatch({ keywords: [] }, baseline), { keywords: [], expected: { keywords: ['a'] } });
 });
 
-test('room stays live after handoff, but local network panel disappears', () => {
+test('biliRoomStats hides missing get_info fields instead of fabricating dashes', () => {
+  assert.deepEqual(biliRoomStats({ is_live: true }), { online: null, liveStartTs: null });
+  assert.deepEqual(biliRoomStats({ online: 12, live_start_ts: 1_700_000_000 }), {
+    online: 12, liveStartTs: 1_700_000_000,
+  });
+  assert.equal(biliRoomStats({ status: { bilibili: { online: 9 } } }).online, 9);
+  assert.equal(biliRoomStats({ online: 4, ffmpeg_running: true }).online, 4);
+});
+
+test('bilibili card paints popularity and live duration from get_info', () => {
+  const title = node('bili-title');
+  const area = node('bili-area');
+  const online = node('bili-online');
+  const liveTime = node('bili-live-time');
+  const liveTimeLabel = node('bili-live-time-label');
+  const liveStats = node('bili-live-stats');
   const panel = node('bili-network-panel');
-  node('bili-network-quality');
+  node('bili-status');
+  node('bili-danmaku-command-toggle');
+  const start = Math.floor(Date.now() / 1000) - 90;
+  const live = {
+    is_live: true,
+    title: 'Hello',
+    area_name: '虚拟Gamer',
+    area_id: 371,
+    online: 89012,
+    live_start_ts: start,
+  };
+
+  // Spare / idle-owner: room is live but this node is not publishing, so
+  // the network block (and its 人气/开播) stays off the Bilibili card.
+  cards.renderBilibiliCard(live);
+  assert.equal(title.textContent, 'Hello');
+  assert.equal(area.textContent, '虚拟Gamer (371)');
+  assert.equal(panel.classList.contains('hidden'), true);
+  assert.equal(liveStats.classList.contains('hidden'), true);
+
+  cards.renderBilibiliCard({ ...live, ffmpeg_running: true });
+  assert.equal(panel.classList.contains('hidden'), false);
+  assert.equal(liveStats.classList.contains('hidden'), false);
+  assert.equal(online.textContent, formatCount(89012));
+  assert.equal(liveTime.textContent, formatLiveDuration(start));
+  assert.equal(liveTimeLabel.textContent, `开播 ${formatLiveClock(start)}`);
+
+  cards.renderBilibiliCard({ ...live, ffmpeg_running: true }, { hideRoomStats: true });
+  assert.equal(liveStats.classList.contains('hidden'), true);
+
+  cards.renderBilibiliCard(live, { showNetwork: false });
+  assert.equal(liveStats.classList.contains('hidden'), false);
+  assert.equal(panel.classList.contains('hidden'), true);
+
+  cards.renderBilibiliCard({ is_live: true, ffmpeg_running: true, title: 'Hello', area_name: '虚拟Gamer', area_id: 371 });
+  assert.equal(liveStats.classList.contains('hidden'), true);
+
+  cards.renderBilibiliCard({ is_live: false, title: 'Idle', area_name: '其他单机', area_id: 235 });
+  assert.equal(panel.classList.contains('hidden'), true);
+});
+
+test('room stays live after handoff, but local network graph disappears', () => {
+  const panel = node('bili-network-panel');
   cards.renderBiliNetworkPanel({ is_live: true, ffmpeg_running: true, stream_speed: 1 });
   assert.equal(panel.classList.contains('hidden'), false);
   cards.renderBiliNetworkPanel({ is_live: true, ffmpeg_running: false, stream_speed: 0, stream_quality: '流畅' });
@@ -126,12 +184,12 @@ test('room stays live after handoff, but local network panel disappears', () => 
 
 test('running stalled publisher stays visible; old quality is not reused', () => {
   const panel = node('bili-network-panel');
-  const quality = node('bili-network-quality');
   cards.renderBiliNetworkPanel({ ffmpeg_running: true, stream_speed: 0 });
   assert.equal(panel.classList.contains('hidden'), false);
-  assert.equal(quality.textContent, '卡顿');
+  assert.equal(cards.getBiliNetworkQuality(), '卡顿');
   cards.renderBiliNetworkPanel({ ffmpeg_running: true });
-  assert.equal(quality.textContent, '等待推流数据');
+  assert.equal(panel.classList.contains('hidden'), false);
+  assert.equal(cards.getBiliNetworkQuality(), null);
 });
 
 test('animated digits rebuild on change and skip unchanged text', () => {

@@ -146,16 +146,6 @@ export function formatAreaText(areaName, areaId) {
 }
 
 // YouTube Data API key pool (/api/youtube/keys) for the settings view.
-function formatCount(value) {
-  return (Number.isFinite(value) ? value : 0).toLocaleString('en-US');
-}
-
-function formatClock(iso) {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return '';
-  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
-}
-
 // WebSub subscriptions and the last push; '' while WebSub is off.
 export function formatWebSubStatus(websub) {
   if (!websub) return '';
@@ -292,4 +282,46 @@ export function formatGoliveSummary(playlist, rows) {
   const slowest = Math.max(...timed.map(row => row.intervalSecs));
   const busiest = rows.reduce((best, row) => (row.share > best.share ? row : best));
   return `开播最多 ${busiest.hour} 点（${Math.round(busiest.share * 100)}%）· 最快 ${fastest.hour} 点每 ${fastest.intervalSecs}s · 最慢每 ${slowest}s`;
+}
+
+export function formatCount(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    return '-';
+  }
+  return Math.round(value).toLocaleString('zh-CN');
+}
+
+// Room stats from get_info. Missing fields mean this node could not fetch
+// them; callers should hide the row rather than paint "-".
+export function biliRoomStats(source) {
+  const bili = source?.status?.bilibili || source || {};
+  const online = bili.online ?? source?.online;
+  const liveStartTs = bili.live_start_ts ?? source?.live_start_ts;
+  return {
+    online: Number.isFinite(online) && online >= 0 ? online : null,
+    liveStartTs: Number.isFinite(liveStartTs) && liveStartTs > 0 ? liveStartTs : null,
+  };
+}
+
+export function formatLiveDuration(unixSeconds) {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
+    return '-';
+  }
+  const start = new Date(unixSeconds * 1000);
+  if (Number.isNaN(start.getTime())) {
+    return '-';
+  }
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - start.getTime()) / 1000));
+  return formatStreamTime(elapsedSec);
+}
+
+export function formatLiveClock(unixSeconds) {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
+    return '';
+  }
+  const start = new Date(unixSeconds * 1000);
+  if (Number.isNaN(start.getTime())) {
+    return '';
+  }
+  return `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
 }
