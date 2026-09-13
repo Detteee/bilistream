@@ -67,13 +67,20 @@ function createMeter(label, leg) {
   meter.dataset.leg = leg;
   const title = document.createElement('div');
   title.className = 'bili-network-meter-label';
-  title.textContent = label;
+  const name = document.createElement('span');
+  name.textContent = label;
   const value = document.createElement('div');
   value.className = 'bili-network-meter-value';
   const rate = document.createElement('span');
   const speed = document.createElement('span');
   speed.className = 'bili-network-meter-speed';
-  value.append(rate, speed);
+  if (leg === 'rx') {
+    title.append(name, speed);
+    value.append(rate);
+  } else {
+    title.append(name);
+    value.append(rate, speed);
+  }
   const detail = document.createElement('div');
   detail.className = 'bili-network-total';
   meter.append(title, value, detail);
