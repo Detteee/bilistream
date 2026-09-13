@@ -1726,10 +1726,14 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 .bili-network-meter-label {
   display: flex;
   align-items: baseline;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: var(--sp-2);
   color: var(--text-mute);
   font-size: var(--fs-sm);
+}
+
+.bili-network-meter-label .bili-network-meter-speed {
+  margin-left: auto;
 }
 
 /* Meter names double as the plot legend: TX tip and RX tip of the ramp. */
