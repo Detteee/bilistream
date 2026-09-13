@@ -1725,7 +1725,8 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
 .bili-network-meter-label {
   display: flex;
-  justify-content: space-between;
+  align-items: baseline;
+  justify-content: flex-start;
   gap: var(--sp-2);
   color: var(--text-mute);
   font-size: var(--fs-sm);
@@ -1755,6 +1756,7 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 
 .bili-network-meter-speed {
+  color: var(--text);
   font-size: var(--fs-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
