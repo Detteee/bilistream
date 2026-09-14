@@ -80,8 +80,8 @@ html.light-theme {
 
 /* Shown when the serving node cannot see the streaming node, so the cards
    are not silently presenting stale numbers as current. */
-/* Admin 人气/开播 sit in the network header; on this page they are ordinary
-   info rows, so undo the compact inline header layout when they appear. */
+/* Admin 开播 sits in the network header; on this page it is an ordinary
+   info row, so undo the compact inline header layout when it appears. */
 .public-shell .bili-live-stats:not(.hidden) {
   display: flex;
   flex-direction: column;

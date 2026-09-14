@@ -12,7 +12,6 @@ import {
   asBitrateHistory,
   biliRoomStats,
   formatAreaText,
-  formatCount,
   formatFps,
   formatHlsCacheStatus,
   formatLiveClock,
@@ -361,23 +360,19 @@ function setLiveStatHidden(id, hidden) {
   (item || el).classList.toggle('hidden', hidden);
 }
 
-/// 人气 / 开播 only when get_info actually returned them. On the admin card
-/// they live inside the publisher network panel; a spare (no ffmpeg) hides
-/// them so the cluster featured card can own the same numbers.
+/// 开播 only when get_info returned a start time. On the admin card it lives
+/// inside the publisher network panel; a spare hides it so the cluster card
+/// can own the same number.
 function paintBiliLiveStats(bili, options = {}) {
   const { showNetwork = true } = options;
   const stats = document.getElementById('bili-live-stats');
-  const { online, liveStartTs } = biliRoomStats(bili);
+  const { liveStartTs } = biliRoomStats(bili);
   const publishing = bili.ffmpeg_running === true;
-  const show = (online != null || liveStartTs != null)
+  const show = liveStartTs != null
     && !options.hideRoomStats
     && (!showNetwork || publishing);
   stats?.classList.toggle('hidden', !show);
-  setLiveStatHidden('bili-online', !show || online == null);
-  setLiveStatHidden('bili-live-time', !show || liveStartTs == null);
-  if (online != null) {
-    setElementText('bili-online', formatCount(online));
-  }
+  setLiveStatHidden('bili-live-time', !show);
   if (liveStartTs != null) {
     setElementText('bili-live-time', formatLiveDuration(liveStartTs));
     const liveClock = formatLiveClock(liveStartTs);

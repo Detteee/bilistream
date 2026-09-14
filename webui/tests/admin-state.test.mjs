@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConfigPatch } from '../dist/js/config-draft.js';
-import { biliRoomStats, formatCount, formatLiveClock, formatLiveDuration } from '../dist/js/format.js';
+import { biliRoomStats, formatLiveClock, formatLiveDuration } from '../dist/js/format.js';
 
 // The renderer's null-safe public contract needs only the named output nodes.
 const nodes = new Map();
@@ -123,10 +123,9 @@ test('biliRoomStats hides missing get_info fields instead of fabricating dashes'
   assert.equal(biliRoomStats({ online: 4, ffmpeg_running: true }).online, 4);
 });
 
-test('bilibili card paints popularity and live duration from get_info', () => {
+test('bilibili card paints live duration from get_info, not popularity', () => {
   const title = node('bili-title');
   const area = node('bili-area');
-  const online = node('bili-online');
   const liveTime = node('bili-live-time');
   const liveTimeLabel = node('bili-live-time-label');
   const liveStats = node('bili-live-stats');
@@ -144,7 +143,7 @@ test('bilibili card paints popularity and live duration from get_info', () => {
   };
 
   // Spare / idle-owner: room is live but this node is not publishing, so
-  // the network block (and its 人气/开播) stays off the Bilibili card.
+  // the network block (and its 开播) stays off the Bilibili card.
   cards.renderBilibiliCard(live);
   assert.equal(title.textContent, 'Hello');
   assert.equal(area.textContent, '虚拟Gamer (371)');
@@ -154,7 +153,6 @@ test('bilibili card paints popularity and live duration from get_info', () => {
   cards.renderBilibiliCard({ ...live, ffmpeg_running: true });
   assert.equal(panel.classList.contains('hidden'), false);
   assert.equal(liveStats.classList.contains('hidden'), false);
-  assert.equal(online.textContent, formatCount(89012));
   assert.equal(liveTime.textContent, formatLiveDuration(start));
   assert.equal(liveTimeLabel.textContent, `开播 ${formatLiveClock(start)}`);
 

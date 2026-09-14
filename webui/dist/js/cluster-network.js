@@ -2,7 +2,6 @@
 // lifecycle owns visibility; old rate samples cannot keep an idle card alive.
 import {
   biliRoomStats,
-  formatCount,
   formatFps,
   formatLiveClock,
   formatLiveDuration,
@@ -36,29 +35,22 @@ function liveStat(label, value) {
 }
 
 function paintClusterLiveStats(panel, node) {
-  const { online, liveStartTs } = biliRoomStats(node);
+  const { liveStartTs } = biliRoomStats(node);
   let stats = panel.querySelector(':scope > .cluster-live-stats');
-  if (online == null && liveStartTs == null) {
+  if (liveStartTs == null) {
     stats?.remove();
     return;
   }
   if (!stats) {
     stats = document.createElement('div');
     stats.className = 'bili-live-stats cluster-live-stats';
-    stats.setAttribute('aria-label', '人气与开播时长');
+    stats.setAttribute('aria-label', '开播时长');
   }
   if (panel.firstChild !== stats) {
     panel.insertBefore(stats, panel.firstChild);
   }
-  const parts = [];
-  if (online != null) {
-    parts.push(liveStat('人气', formatCount(online)));
-  }
-  if (liveStartTs != null) {
-    const clock = formatLiveClock(liveStartTs);
-    parts.push(liveStat(clock ? `开播 ${clock}` : '开播', formatLiveDuration(liveStartTs)));
-  }
-  stats.replaceChildren(...parts);
+  const clock = formatLiveClock(liveStartTs);
+  stats.replaceChildren(liveStat(clock ? `开播 ${clock}` : '开播', formatLiveDuration(liveStartTs)));
 }
 
 function createMeter(label, leg) {
@@ -74,13 +66,8 @@ function createMeter(label, leg) {
   const rate = document.createElement('span');
   const speed = document.createElement('span');
   speed.className = 'bili-network-meter-speed';
-  if (leg === 'rx') {
-    title.append(name, speed);
-    value.append(rate);
-  } else {
-    title.append(name);
-    value.append(rate, speed);
-  }
+  title.append(name, speed);
+  value.append(rate);
   const detail = document.createElement('div');
   detail.className = 'bili-network-total';
   meter.append(title, value, detail);

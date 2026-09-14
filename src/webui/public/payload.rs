@@ -6,7 +6,7 @@
 //! `serialized_keys_are_the_allowlist` fails if that stops being true.
 //!
 //! Excluded on purpose: credentials, channel ids, file paths, peer API urls,
-//! heartbeat timestamps, and the per-node WebUI link. Room popularity is
+//! heartbeat timestamps, and the per-node WebUI link. Live duration is
 //! included only after get_info succeeds: on the Bilibili card for a
 //! standalone node, and on the publishing node card in a cluster.
 
