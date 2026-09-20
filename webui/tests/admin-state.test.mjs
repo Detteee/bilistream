@@ -171,14 +171,14 @@ test('animated digits rebuild on change and skip unchanged text', () => {
   assert.equal(host.rebuilds, 4);
 });
 
-test('meter speed and bitrate pop in; time stays plain text', () => {
+test('bili network meters stay plain text; time stays plain text', () => {
   const panel = node('bili-network-panel');
   const cacheMeter = node('bili-network-cache-meter');
-  const cacheRate = instrumentDigitHost(node('bili-network-cache-rate'));
-  const cacheSpeed = instrumentDigitHost(node('bili-network-cache-speed-ratio'));
+  const cacheRate = node('bili-network-cache-rate');
+  const cacheSpeed = node('bili-network-cache-speed-ratio');
   const cacheTime = node('bili-network-cache-time');
-  const rate = instrumentDigitHost(node('bili-network-push-rate'));
-  const speed = instrumentDigitHost(node('bili-network-push-speed-ratio'));
+  const rate = node('bili-network-push-rate');
+  const speed = node('bili-network-push-speed-ratio');
   const time = node('bili-network-push-time');
   const live = {
     ffmpeg_running: true,
@@ -194,33 +194,25 @@ test('meter speed and bitrate pop in; time stays plain text', () => {
   cards.renderBiliNetworkPanel(live);
   assert.equal(panel.classList.contains('hidden'), false);
   assert.equal(cacheMeter.style.display, '');
-  assert.equal(digitText(rate), '1.50 Mb/s');
-  assert.equal(glyphNodes(rate).map(child => child.textContent).join(''), '1.50');
-  assert.equal(suffixNode(rate)?.textContent, ' Mb/s');
-  assert.equal(digitText(speed), '1.00x');
-  assert.equal(suffixNode(speed), null);
-  assert.equal(digitText(cacheRate), '800 Kb/s');
-  assert.equal(glyphNodes(cacheRate).map(child => child.textContent).join(''), '800');
-  assert.equal(suffixNode(cacheRate)?.textContent, ' Kb/s');
-  assert.equal(digitText(cacheSpeed), '1.02x');
+  assert.equal(rate.textContent, '1.50 Mb/s');
+  assert.equal(rate.children.length, 0);
+  assert.equal(speed.textContent, '1.00x');
+  assert.equal(speed.children.length, 0);
+  assert.equal(cacheRate.textContent, '800 Kb/s');
+  assert.equal(cacheRate.children.length, 0);
+  assert.equal(cacheSpeed.textContent, '1.02x');
   assert.equal(time.textContent, '0:10 · 30.0 fps');
   assert.equal(cacheTime.textContent, '0:09');
   assert.equal(time.children.length, 0);
   assert.equal(cacheTime.children.length, 0);
-  assert.equal(rate.rebuilds, 1);
-  assert.equal(speed.rebuilds, 1);
-  assert.equal(cacheRate.rebuilds, 1);
-  assert.equal(cacheSpeed.rebuilds, 1);
   assert.equal(speed.dataset.tone, 'ok');
   assert.equal(cacheSpeed.dataset.tone, 'ok');
 
   cards.renderBiliNetworkPanel({ ...live, stream_time_secs: 11, stream_cache_time_secs: 10 });
   assert.equal(time.textContent, '0:11 · 30.0 fps');
   assert.equal(cacheTime.textContent, '0:10');
-  assert.equal(rate.rebuilds, 1);
-  assert.equal(speed.rebuilds, 1);
-  assert.equal(cacheRate.rebuilds, 1);
-  assert.equal(cacheSpeed.rebuilds, 1);
+  assert.equal(rate.textContent, '1.50 Mb/s');
+  assert.equal(speed.textContent, '1.00x');
 
   cards.renderBiliNetworkPanel({
     ...live,
@@ -231,16 +223,11 @@ test('meter speed and bitrate pop in; time stays plain text', () => {
     stream_cache_speed: 0.93,
     stream_cache_time_secs: 10,
   });
-  assert.equal(digitText(rate), '2.00 Mb/s');
-  assert.equal(suffixNode(rate)?.textContent, ' Mb/s');
-  assert.equal(digitText(speed), '0.95x');
-  assert.equal(digitText(cacheRate), '900 Kb/s');
-  assert.equal(suffixNode(cacheRate)?.textContent, ' Kb/s');
-  assert.equal(digitText(cacheSpeed), '0.93x');
-  assert.equal(rate.rebuilds, 2);
-  assert.equal(speed.rebuilds, 2);
-  assert.equal(cacheRate.rebuilds, 2);
-  assert.equal(cacheSpeed.rebuilds, 2);
+  assert.equal(rate.textContent, '2.00 Mb/s');
+  assert.equal(rate.children.length, 0);
+  assert.equal(speed.textContent, '0.95x');
+  assert.equal(cacheRate.textContent, '900 Kb/s');
+  assert.equal(cacheSpeed.textContent, '0.93x');
   assert.equal(speed.dataset.tone, 'warn');
   assert.equal(cacheSpeed.dataset.tone, 'danger');
 });

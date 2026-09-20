@@ -6,7 +6,7 @@
 // markup (no quality / crop / HLS cache rows, no network graph) and simply
 // omits the elements it does not want.
 
-import { setAnimatedDigits, setElementDisplay, setElementText } from './dom.js';
+import { setElementDisplay, setElementText } from './dom.js';
 import {
   asBitrateHistory,
   formatAreaText,
@@ -195,10 +195,12 @@ function meterDetail(timeSecs, fps) {
 }
 
 function updateBiliNetworkMeter(kind, metrics) {
-  setAnimatedDigits(document.getElementById(`bili-network-${kind}-rate`), formatNetworkRate(metrics.bitrateKbps));
+  setElementText(`bili-network-${kind}-rate`, formatNetworkRate(metrics.bitrateKbps));
   const speedEl = document.getElementById(`bili-network-${kind}-speed-ratio`);
-  setAnimatedDigits(speedEl, formatSpeedRatio(metrics.speed));
-  applySpeedTone(speedEl, metrics.speed);
+  if (speedEl) {
+    speedEl.textContent = formatSpeedRatio(metrics.speed);
+    applySpeedTone(speedEl, metrics.speed);
+  }
   setElementText(`bili-network-${kind}-time`, metrics.detail);
 }
 
