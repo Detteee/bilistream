@@ -163,6 +163,15 @@ function splitRateUnit(text) {
   return match ? { glyphs: match[1], suffix: match[2] } : { glyphs: text, suffix: '' };
 }
 
+function commonPrefixLength(left, right) {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
 function setAnimatedDigits(element, value) {
   if (!element) {
     return;
@@ -171,18 +180,24 @@ function setAnimatedDigits(element, value) {
   if (element.dataset.digitText === text) {
     return;
   }
-  element.dataset.digitText = text;
-  element.classList.add('t-digit-group');
-  element.classList.remove('is-animating');
   const { glyphs, suffix } = splitRateUnit(text);
+  const prefixLen = commonPrefixLength(element.dataset.digitGlyphs || '', glyphs);
+  element.dataset.digitText = text;
+  element.dataset.digitGlyphs = glyphs;
+  element.classList.add('t-digit-group');
   const children = [];
+  const popping = [];
   for (let index = 0; index < glyphs.length; index += 1) {
     const digit = document.createElement('span');
     digit.classList.add('t-digit');
     digit.textContent = glyphs[index];
-    digit.style.setProperty('--digit-i', String(index));
-    if (index > 0) {
-      digit.dataset.stagger = String(index);
+    if (index >= prefixLen) {
+      const stagger = index - prefixLen;
+      digit.style.setProperty('--digit-i', String(stagger));
+      if (stagger > 0) {
+        digit.dataset.stagger = String(stagger);
+      }
+      popping.push(digit);
     }
     children.push(digit);
   }
@@ -194,7 +209,9 @@ function setAnimatedDigits(element, value) {
   }
   element.replaceChildren(...children);
   void element.offsetWidth;
-  element.classList.add('is-animating');
+  for (const digit of popping) {
+    digit.classList.add('is-animating');
+  }
 }
 function setCheckboxChecked(id, checked) {
   const checkbox = document.getElementById(id);

@@ -91,6 +91,12 @@ function glyphNodes(element) {
 function suffixNode(element) {
   return element.children.find(child => child.classList.contains('t-digit-suffix')) || null;
 }
+function glyphText(element, animating) {
+  return glyphNodes(element)
+    .filter(child => child.classList.contains('is-animating') === animating)
+    .map(child => child.textContent)
+    .join('');
+}
 const cards = await import('../dist/js/status-cards.js');
 const { setAnimatedDigits } = await import('../dist/js/dom.js');
 const api = await import('../dist/js/api.js');
@@ -138,33 +144,31 @@ test('animated digits rebuild on change and skip unchanged text', () => {
   assert.equal(host.children[1].dataset.stagger, '1');
   assert.equal(host.children[1].style['--digit-i'], '1');
   assert.equal(host.classList.contains('t-digit-group'), true);
-  assert.equal(host.classList.contains('is-animating'), true);
+  assert.equal(glyphText(host, true), '1.00x');
+  assert.equal(glyphText(host, false), '');
   assert.equal(host.rebuilds, 1);
   assert.equal(host.reflows, 1);
-  assert.equal(host.animAdds, 1);
-  assert.equal(host.animRemoves, 1);
 
   setAnimatedDigits(host, '1.00x');
   assert.equal(host.rebuilds, 1);
   assert.equal(host.reflows, 1);
-  assert.equal(host.animAdds, 1);
-  assert.equal(host.animRemoves, 1);
   assert.equal(digitText(host), '1.00x');
 
   setAnimatedDigits(host, '1.01x');
   assert.equal(digitText(host), '1.01x');
-  assert.equal(host.classList.contains('is-animating'), true);
+  assert.equal(glyphText(host, false), '1.0');
+  assert.equal(glyphText(host, true), '1x');
   assert.equal(host.rebuilds, 2);
   assert.equal(host.reflows, 2);
-  assert.equal(host.animAdds, 2);
-  assert.equal(host.animRemoves, 2);
 
-  setAnimatedDigits(host, '1.50 Mb/s');
-  assert.equal(digitText(host), '1.50 Mb/s');
-  assert.equal(glyphNodes(host).map(child => child.textContent).join(''), '1.50');
+  setAnimatedDigits(host, '3.01 Mb/s');
+  setAnimatedDigits(host, '3.12 Mb/s');
+  assert.equal(digitText(host), '3.12 Mb/s');
+  assert.equal(glyphText(host, false), '3.');
+  assert.equal(glyphText(host, true), '12');
   assert.equal(suffixNode(host)?.textContent, ' Mb/s');
   assert.equal(suffixNode(host)?.classList.contains('t-digit'), false);
-  assert.equal(host.rebuilds, 3);
+  assert.equal(host.rebuilds, 4);
 });
 
 test('meter speed and bitrate pop in; time stays plain text', () => {
@@ -217,10 +221,6 @@ test('meter speed and bitrate pop in; time stays plain text', () => {
   assert.equal(speed.rebuilds, 1);
   assert.equal(cacheRate.rebuilds, 1);
   assert.equal(cacheSpeed.rebuilds, 1);
-  assert.equal(rate.animAdds, 1);
-  assert.equal(speed.animAdds, 1);
-  assert.equal(cacheRate.animAdds, 1);
-  assert.equal(cacheSpeed.animAdds, 1);
 
   cards.renderBiliNetworkPanel({
     ...live,

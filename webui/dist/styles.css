@@ -3736,17 +3736,15 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   display: inline-block;
   white-space: pre;
 }
-.t-digit-group.is-animating .t-digit {
+.t-digit.is-animating {
   animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
+  animation-delay: calc(var(--digit-stagger) * var(--digit-i, 0));
 }
-.t-digit-group.is-animating .t-digit[data-stagger="1"] {
+.t-digit.is-animating[data-stagger="1"] {
   animation-delay: var(--digit-stagger);
 }
-.t-digit-group.is-animating .t-digit[data-stagger="2"] {
+.t-digit.is-animating[data-stagger="2"] {
   animation-delay: calc(var(--digit-stagger) * 2);
-}
-.t-digit-group.is-animating .t-digit {
-  animation-delay: calc(var(--digit-stagger) * var(--digit-i, 0));
 }
 
 @media (prefers-reduced-motion: reduce) {
