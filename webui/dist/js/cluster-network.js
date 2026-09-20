@@ -9,6 +9,7 @@ import {
   formatSpeedRatio,
   formatStreamTime,
 } from './format.js';
+import { setAnimatedDigits } from './dom.js';
 import { mountNetworkHistory, paintNetworkGraph } from './status-cards.js';
 
 const panels = new WeakMap();
@@ -79,8 +80,8 @@ function updateMeter(parts, network, cache) {
   const rate = cache ? network.stream_cache_bitrate_kbps : network.stream_bitrate_kbps;
   const speed = cache ? network.stream_cache_speed : network.stream_speed;
   const seconds = cache ? network.stream_cache_time_secs : network.stream_time_secs;
-  text(parts.rate, rate === 0 ? '0 Kb/s' : formatNetworkRate(rate));
-  text(parts.speed, speed === 0 ? '0.00x' : formatSpeedRatio(speed));
+  setAnimatedDigits(parts.rate, rate === 0 ? '0 Kb/s' : formatNetworkRate(rate));
+  setAnimatedDigits(parts.speed, speed === 0 ? '0.00x' : formatSpeedRatio(speed));
   parts.speed.dataset.tone = Number.isFinite(speed)
     ? speed > 0.97 ? 'ok' : speed > 0.94 ? 'warn' : 'danger'
     : '';
