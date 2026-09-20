@@ -18,6 +18,7 @@
    15. Toasts
    16. Setup wizard
    17. Reduced motion
+   18. Digit pop-in
    ========================================================================== */
 
 /* ==========================================================================
@@ -3672,4 +3673,78 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ==========================================================================
+   18. Digit pop-in
+   ========================================================================== */
+
+/* Transitions.dev — Number pop-in */
+
+/*
+  Usage:
+    <span class="t-digit-group is-animating">
+      <span class="t-digit">1</span>
+      <span class="t-digit">2</span>
+      <span class="t-digit" data-stagger="1">.</span>
+      <span class="t-digit" data-stagger="2">3</span>
+    </span>
+
+  Replay:
+    - Remove `.is-animating`, re-render digits (or swap text),
+      force a reflow, then re-add `.is-animating`.
+    - Use data-stagger="1", "2", … to delay individual
+      digits by `n * var(--digit-stagger)`.
+
+  Direction:
+    --digit-dir-x / --digit-dir-y are unit-less multipliers
+    (e.g. 1, -1, 0) applied to --digit-distance.
+*/
+
+:root {
+  --digit-dur: 500ms;
+  --digit-distance: 8px;
+  --digit-stagger: 70ms;
+  --digit-blur: 2px;
+  --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --digit-dir-x: 0;
+  --digit-dir-y: 1;
+}
+
+@keyframes t-digit-pop-in {
+  0%   {
+    transform: translate(
+      calc(var(--digit-distance) * var(--digit-dir-x)),
+      calc(var(--digit-distance) * var(--digit-dir-y))
+    );
+    opacity: 0;
+    filter: blur(var(--digit-blur));
+  }
+  100% { transform: translate(0, 0); opacity: 1; filter: blur(0); }
+}
+
+.t-digit-group {
+  display: inline-flex;
+  align-items: baseline;
+}
+.t-digit {
+  display: inline-block;
+  white-space: pre;
+  will-change: transform, opacity, filter;
+}
+.t-digit-group.is-animating .t-digit {
+  animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
+}
+.t-digit-group.is-animating .t-digit[data-stagger="1"] {
+  animation-delay: var(--digit-stagger);
+}
+.t-digit-group.is-animating .t-digit[data-stagger="2"] {
+  animation-delay: calc(var(--digit-stagger) * 2);
+}
+.t-digit-group.is-animating .t-digit {
+  animation-delay: calc(var(--digit-stagger) * var(--digit-i, 0));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-digit-group .t-digit { animation: none !important; }
 }

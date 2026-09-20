@@ -158,6 +158,32 @@ function setElementText(id, value) {
     element.textContent = value;
   }
 }
+function setAnimatedDigits(element, value) {
+  if (!element) {
+    return;
+  }
+  const text = String(value);
+  if (element.dataset.digitText === text) {
+    return;
+  }
+  element.dataset.digitText = text;
+  element.classList.add('t-digit-group');
+  element.classList.remove('is-animating');
+  const digits = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const digit = document.createElement('span');
+    digit.classList.add('t-digit');
+    digit.textContent = text[index];
+    digit.style.setProperty('--digit-i', String(index));
+    if (index > 0) {
+      digit.dataset.stagger = String(index);
+    }
+    digits.push(digit);
+  }
+  element.replaceChildren(...digits);
+  void element.offsetWidth;
+  element.classList.add('is-animating');
+}
 function setCheckboxChecked(id, checked) {
   const checkbox = document.getElementById(id);
   if (checkbox) {
@@ -201,6 +227,7 @@ export {
   readIntegerInput,
   setInputValue,
   setElementText,
+  setAnimatedDigits,
   setCheckboxChecked,
   showNotification,
   setButtonLoading,

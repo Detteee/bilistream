@@ -4,21 +4,89 @@ import { createConfigPatch } from '../dist/js/config-draft.js';
 
 // The renderer's null-safe public contract needs only the named output nodes.
 const nodes = new Map();
-globalThis.window = {};
-globalThis.document = { addEventListener() {}, getElementById: id => nodes.get(id) || null };
-function node(id) {
+function createMockElement() {
   const classes = new Set();
-  const element = { dataset: {}, style: {}, textContent: '', checked: false,
+  const children = [];
+  const style = {
+    setProperty(name, value) {
+      this[name] = value;
+    },
+  };
+  return {
+    dataset: {},
+    style,
+    children,
+    textContent: '',
+    checked: false,
+    offsetWidth: 1,
     classList: {
-      add: name => classes.add(name), remove: name => classes.delete(name),
+      add: name => classes.add(name),
+      remove: name => classes.delete(name),
       contains: name => classes.has(name),
       toggle(name, force) { if (force ?? !classes.has(name)) classes.add(name); else classes.delete(name); },
     },
+    replaceChildren(...next) {
+      children.length = 0;
+      children.push(...next);
+    },
+    appendChild(child) {
+      children.push(child);
+      return child;
+    },
   };
+}
+function instrumentDigitHost(element) {
+  element.rebuilds = 0;
+  element.animAdds = 0;
+  element.animRemoves = 0;
+  element.reflows = 0;
+  const width = element.offsetWidth;
+  Object.defineProperty(element, 'offsetWidth', {
+    configurable: true,
+    get() {
+      element.reflows += 1;
+      return width;
+    },
+  });
+  const replaceChildren = element.replaceChildren;
+  const add = element.classList.add;
+  const remove = element.classList.remove;
+  element.replaceChildren = (...next) => {
+    element.rebuilds += 1;
+    replaceChildren.apply(element, next);
+  };
+  element.classList.add = name => {
+    if (name === 'is-animating') {
+      element.animAdds += 1;
+    }
+    add(name);
+  };
+  element.classList.remove = name => {
+    if (name === 'is-animating') {
+      element.animRemoves += 1;
+    }
+    remove(name);
+  };
+  return element;
+}
+globalThis.window = {};
+globalThis.document = {
+  addEventListener() {},
+  getElementById: id => nodes.get(id) || null,
+  createElement() {
+    return createMockElement();
+  },
+};
+function node(id) {
+  const element = createMockElement();
   nodes.set(id, element);
   return element;
 }
+function digitText(element) {
+  return element.children.map(child => child.textContent).join('');
+}
 const cards = await import('../dist/js/status-cards.js');
+const { setAnimatedDigits } = await import('../dist/js/dom.js');
 const api = await import('../dist/js/api.js');
 const { saveBooleanToggle } = await import('../dist/js/toggle-save.js');
 const { applyMonitorToggleConfigState } = await import('../dist/js/state.js');
@@ -51,6 +119,110 @@ test('running stalled publisher stays visible; old quality is not reused', () =>
   assert.equal(quality.textContent, '卡顿');
   cards.renderBiliNetworkPanel({ ffmpeg_running: true });
   assert.equal(quality.textContent, '等待推流数据');
+});
+
+test('animated digits rebuild on change and skip unchanged text', () => {
+  const host = instrumentDigitHost(createMockElement());
+  setAnimatedDigits(null, '1.00x');
+  setAnimatedDigits(host, '1.00x');
+  assert.equal(digitText(host), '1.00x');
+  assert.equal(host.children.length, 5);
+  assert.equal(host.children[0].classList.contains('t-digit'), true);
+  assert.equal(host.children[0].dataset.stagger, undefined);
+  assert.equal(host.children[1].dataset.stagger, '1');
+  assert.equal(host.children[1].style['--digit-i'], '1');
+  assert.equal(host.classList.contains('t-digit-group'), true);
+  assert.equal(host.classList.contains('is-animating'), true);
+  assert.equal(host.rebuilds, 1);
+  assert.equal(host.reflows, 1);
+  assert.equal(host.animAdds, 1);
+  assert.equal(host.animRemoves, 1);
+
+  setAnimatedDigits(host, '1.00x');
+  assert.equal(host.rebuilds, 1);
+  assert.equal(host.reflows, 1);
+  assert.equal(host.animAdds, 1);
+  assert.equal(host.animRemoves, 1);
+  assert.equal(digitText(host), '1.00x');
+
+  setAnimatedDigits(host, '1.01x');
+  assert.equal(digitText(host), '1.01x');
+  assert.equal(host.classList.contains('is-animating'), true);
+  assert.equal(host.rebuilds, 2);
+  assert.equal(host.reflows, 2);
+  assert.equal(host.animAdds, 2);
+  assert.equal(host.animRemoves, 2);
+});
+
+test('meter speed and bitrate pop in; time stays plain text', () => {
+  const panel = node('bili-network-panel');
+  const cacheMeter = node('bili-network-cache-meter');
+  const cacheRate = instrumentDigitHost(node('bili-network-cache-rate'));
+  const cacheSpeed = instrumentDigitHost(node('bili-network-cache-speed-ratio'));
+  const cacheTime = node('bili-network-cache-time');
+  const rate = instrumentDigitHost(node('bili-network-push-rate'));
+  const speed = instrumentDigitHost(node('bili-network-push-speed-ratio'));
+  const time = node('bili-network-push-time');
+  const live = {
+    ffmpeg_running: true,
+    hls_cache_active: true,
+    stream_bitrate_kbps: 1500,
+    stream_speed: 1,
+    stream_time_secs: 10,
+    stream_fps: 30,
+    stream_cache_bitrate_kbps: 800,
+    stream_cache_speed: 1.02,
+    stream_cache_time_secs: 9,
+  };
+  cards.renderBiliNetworkPanel(live);
+  assert.equal(panel.classList.contains('hidden'), false);
+  assert.equal(cacheMeter.style.display, '');
+  assert.equal(digitText(rate), '1.50 Mb/s');
+  assert.equal(digitText(speed), '1.00x');
+  assert.equal(digitText(cacheRate), '800 Kb/s');
+  assert.equal(digitText(cacheSpeed), '1.02x');
+  assert.equal(time.textContent, '0:10 · 30.0 fps');
+  assert.equal(cacheTime.textContent, '0:09');
+  assert.equal(time.children.length, 0);
+  assert.equal(cacheTime.children.length, 0);
+  assert.equal(rate.rebuilds, 1);
+  assert.equal(speed.rebuilds, 1);
+  assert.equal(cacheRate.rebuilds, 1);
+  assert.equal(cacheSpeed.rebuilds, 1);
+  assert.equal(speed.dataset.tone, 'ok');
+  assert.equal(cacheSpeed.dataset.tone, 'ok');
+
+  cards.renderBiliNetworkPanel({ ...live, stream_time_secs: 11, stream_cache_time_secs: 10 });
+  assert.equal(time.textContent, '0:11 · 30.0 fps');
+  assert.equal(cacheTime.textContent, '0:10');
+  assert.equal(rate.rebuilds, 1);
+  assert.equal(speed.rebuilds, 1);
+  assert.equal(cacheRate.rebuilds, 1);
+  assert.equal(cacheSpeed.rebuilds, 1);
+  assert.equal(rate.animAdds, 1);
+  assert.equal(speed.animAdds, 1);
+  assert.equal(cacheRate.animAdds, 1);
+  assert.equal(cacheSpeed.animAdds, 1);
+
+  cards.renderBiliNetworkPanel({
+    ...live,
+    stream_bitrate_kbps: 2000,
+    stream_speed: 0.95,
+    stream_time_secs: 11,
+    stream_cache_bitrate_kbps: 900,
+    stream_cache_speed: 0.93,
+    stream_cache_time_secs: 10,
+  });
+  assert.equal(digitText(rate), '2.00 Mb/s');
+  assert.equal(digitText(speed), '0.95x');
+  assert.equal(digitText(cacheRate), '900 Kb/s');
+  assert.equal(digitText(cacheSpeed), '0.93x');
+  assert.equal(rate.rebuilds, 2);
+  assert.equal(speed.rebuilds, 2);
+  assert.equal(cacheRate.rebuilds, 2);
+  assert.equal(cacheSpeed.rebuilds, 2);
+  assert.equal(speed.dataset.tone, 'warn');
+  assert.equal(cacheSpeed.dataset.tone, 'danger');
 });
 
 test('authenticated request times out and a later refresh succeeds', async t => {
