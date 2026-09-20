@@ -158,6 +158,11 @@ function setElementText(id, value) {
     element.textContent = value;
   }
 }
+function splitRateUnit(text) {
+  const match = text.match(/^(.*\S)(\s+[MK]b\/s)$/);
+  return match ? { glyphs: match[1], suffix: match[2] } : { glyphs: text, suffix: '' };
+}
+
 function setAnimatedDigits(element, value) {
   if (!element) {
     return;
@@ -169,18 +174,25 @@ function setAnimatedDigits(element, value) {
   element.dataset.digitText = text;
   element.classList.add('t-digit-group');
   element.classList.remove('is-animating');
-  const digits = [];
-  for (let index = 0; index < text.length; index += 1) {
+  const { glyphs, suffix } = splitRateUnit(text);
+  const children = [];
+  for (let index = 0; index < glyphs.length; index += 1) {
     const digit = document.createElement('span');
     digit.classList.add('t-digit');
-    digit.textContent = text[index];
+    digit.textContent = glyphs[index];
     digit.style.setProperty('--digit-i', String(index));
     if (index > 0) {
       digit.dataset.stagger = String(index);
     }
-    digits.push(digit);
+    children.push(digit);
   }
-  element.replaceChildren(...digits);
+  if (suffix) {
+    const unit = document.createElement('span');
+    unit.classList.add('t-digit-suffix');
+    unit.textContent = suffix;
+    children.push(unit);
+  }
+  element.replaceChildren(...children);
   void element.offsetWidth;
   element.classList.add('is-animating');
 }

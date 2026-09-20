@@ -85,6 +85,12 @@ function node(id) {
 function digitText(element) {
   return element.children.map(child => child.textContent).join('');
 }
+function glyphNodes(element) {
+  return element.children.filter(child => child.classList.contains('t-digit'));
+}
+function suffixNode(element) {
+  return element.children.find(child => child.classList.contains('t-digit-suffix')) || null;
+}
 const cards = await import('../dist/js/status-cards.js');
 const { setAnimatedDigits } = await import('../dist/js/dom.js');
 const api = await import('../dist/js/api.js');
@@ -152,6 +158,13 @@ test('animated digits rebuild on change and skip unchanged text', () => {
   assert.equal(host.reflows, 2);
   assert.equal(host.animAdds, 2);
   assert.equal(host.animRemoves, 2);
+
+  setAnimatedDigits(host, '1.50 Mb/s');
+  assert.equal(digitText(host), '1.50 Mb/s');
+  assert.equal(glyphNodes(host).map(child => child.textContent).join(''), '1.50');
+  assert.equal(suffixNode(host)?.textContent, ' Mb/s');
+  assert.equal(suffixNode(host)?.classList.contains('t-digit'), false);
+  assert.equal(host.rebuilds, 3);
 });
 
 test('meter speed and bitrate pop in; time stays plain text', () => {
@@ -178,8 +191,13 @@ test('meter speed and bitrate pop in; time stays plain text', () => {
   assert.equal(panel.classList.contains('hidden'), false);
   assert.equal(cacheMeter.style.display, '');
   assert.equal(digitText(rate), '1.50 Mb/s');
+  assert.equal(glyphNodes(rate).map(child => child.textContent).join(''), '1.50');
+  assert.equal(suffixNode(rate)?.textContent, ' Mb/s');
   assert.equal(digitText(speed), '1.00x');
+  assert.equal(suffixNode(speed), null);
   assert.equal(digitText(cacheRate), '800 Kb/s');
+  assert.equal(glyphNodes(cacheRate).map(child => child.textContent).join(''), '800');
+  assert.equal(suffixNode(cacheRate)?.textContent, ' Kb/s');
   assert.equal(digitText(cacheSpeed), '1.02x');
   assert.equal(time.textContent, '0:10 · 30.0 fps');
   assert.equal(cacheTime.textContent, '0:09');
@@ -214,8 +232,10 @@ test('meter speed and bitrate pop in; time stays plain text', () => {
     stream_cache_time_secs: 10,
   });
   assert.equal(digitText(rate), '2.00 Mb/s');
+  assert.equal(suffixNode(rate)?.textContent, ' Mb/s');
   assert.equal(digitText(speed), '0.95x');
   assert.equal(digitText(cacheRate), '900 Kb/s');
+  assert.equal(suffixNode(cacheRate)?.textContent, ' Kb/s');
   assert.equal(digitText(cacheSpeed), '0.93x');
   assert.equal(rate.rebuilds, 2);
   assert.equal(speed.rebuilds, 2);

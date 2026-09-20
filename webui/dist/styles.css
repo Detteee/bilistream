@@ -3702,9 +3702,9 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 */
 
 :root {
-  --digit-dur: 500ms;
+  --digit-dur: 220ms;
   --digit-distance: 8px;
-  --digit-stagger: 70ms;
+  --digit-stagger: 30ms;
   --digit-blur: 2px;
   --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
   --digit-dir-x: 0;
@@ -3731,6 +3731,10 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   display: inline-block;
   white-space: pre;
   will-change: transform, opacity, filter;
+}
+.t-digit-suffix {
+  display: inline-block;
+  white-space: pre;
 }
 .t-digit-group.is-animating .t-digit {
   animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
