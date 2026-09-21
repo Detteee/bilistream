@@ -624,6 +624,9 @@ impl BilibiliDanmakuClient {
                 // Room stats update - suppress (too frequent)
             }
             "COVER_AUDIT_STATUS_CHANGED"
+            | "PLAYURL_RELOAD_MASTER"
+            | "VOICE_JOIN_SWITCH"
+            | "VOICE_JOIN_SWITCH_V2"
             | "VOICE_REPORT_LIKE"
             | "FLOW_REWARD_CARD"
             | "COMMON_NOTICE_DANMAKU"
