@@ -120,6 +120,7 @@ mod tests {
             link: None,
             thumbnail: None,
             placeholder_type: None,
+            yt_confirmed: false,
         }
     }
 

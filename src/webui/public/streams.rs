@@ -638,6 +638,7 @@ mod tests {
             link: None,
             thumbnail: Some(format!("https://i.ytimg.com/vi/{id}/maxres.jpg")),
             placeholder_type: None,
+            yt_confirmed: false,
         }
     }
 

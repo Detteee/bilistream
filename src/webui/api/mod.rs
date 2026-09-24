@@ -649,6 +649,7 @@ mod tests {
             holodex_username: None,
             holodex_skip_jwt_verify: false,
             holodex_monitor_gate: true,
+            youtube_api_key: None,
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: None,
