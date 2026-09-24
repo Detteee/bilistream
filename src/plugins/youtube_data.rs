@@ -5,7 +5,10 @@
 //! YouTube's own `liveStreamingDetails` for up to 50 known video IDs per unit,
 //! so the rows Holodex already sent are re-classified from that instead.
 //!
-//! Everything here degrades to the Holodex rows unchanged: no key, the daily
+//! `youtube_api_key` may hold several keys (from different Google projects);
+//! calls draw on a pool with a daily budget per key.
+//!
+//! Everything here degrades to the Holodex rows unchanged: no key, every
 //! budget spent, or any API error.
 
 use super::holodex::HolodexStream;
@@ -19,9 +22,9 @@ use std::time::{Duration, Instant};
 
 const VIDEOS_URL: &str = "https://www.googleapis.com/youtube/v3/videos";
 const MAX_IDS_PER_CALL: usize = 50;
-/// Google's default is 10,000 units/day; stop short so retries and the other
-/// methods a later discovery pass needs still fit.
-const DAILY_UNIT_BUDGET: u32 = 8_000;
+/// Per key. Google's default is 10,000 units/day; stop short so retries and
+/// calls made before the local count noticed a new day still fit.
+pub(crate) const DAILY_UNIT_BUDGET: u32 = 8_000;
 /// Panel refreshes and monitor ticks inside this window reuse one answer.
 const CACHE_TTL: Duration = Duration::from_secs(15);
 
@@ -149,27 +152,214 @@ fn pacific_day(now: chrono::DateTime<chrono::Utc>) -> i64 {
         .div_euclid(86_400)
 }
 
-#[derive(Default)]
-struct QuotaCounter {
-    day: i64,
-    used: u32,
+/// Which key pays for a call. Each key has its own daily budget; the one with
+/// the most budget left is used, so load spreads and a new key takes over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bench {
+    /// Google said the key's quota is spent; usable again on this Pacific day.
+    UntilDay(i64),
+    /// Google rejected the key; usable again once the key list changes.
+    UntilConfigChange,
 }
 
-impl QuotaCounter {
-    fn try_spend(&mut self, units: u32, day: i64) -> bool {
+#[derive(Debug, Default)]
+struct KeyState {
+    used: u32,
+    benched: Option<Bench>,
+}
+
+#[derive(Default)]
+struct KeyPool {
+    day: i64,
+    keys: HashMap<String, KeyState>,
+}
+
+impl KeyPool {
+    /// Follow the configured list and the Pacific day. Spend on keys that stay
+    /// in the list is kept; any change to the list lifts rejected-key benches.
+    fn sync(&mut self, keys: &[String], day: i64) {
+        let changed =
+            keys.len() != self.keys.len() || keys.iter().any(|key| !self.keys.contains_key(key));
+        if changed {
+            self.keys.retain(|key, _| keys.contains(key));
+            for key in keys {
+                self.keys.entry(key.clone()).or_default();
+            }
+            for state in self.keys.values_mut() {
+                if state.benched == Some(Bench::UntilConfigChange) {
+                    state.benched = None;
+                }
+            }
+        }
         if self.day != day {
             self.day = day;
-            self.used = 0;
+            for state in self.keys.values_mut() {
+                state.used = 0;
+                if matches!(state.benched, Some(Bench::UntilDay(until)) if until <= day) {
+                    state.benched = None;
+                }
+            }
         }
-        if self.used + units > DAILY_UNIT_BUDGET {
-            return false;
+    }
+
+    fn usable(&self, key: &str, units: u32) -> bool {
+        self.keys
+            .get(key)
+            .is_some_and(|state| state.benched.is_none() && state.used + units <= DAILY_UNIT_BUDGET)
+    }
+
+    /// Spend `units` on the usable key with the most budget left, skipping
+    /// `tried`.
+    fn pick(&mut self, keys: &[String], units: u32, day: i64, tried: &[String]) -> Option<String> {
+        self.sync(keys, day);
+        let key = keys
+            .iter()
+            .filter(|key| !tried.contains(key) && self.usable(key, units))
+            .min_by_key(|key| self.keys[*key].used)?
+            .clone();
+        if let Some(state) = self.keys.get_mut(&key) {
+            state.used += units;
         }
-        self.used += units;
-        true
+        Some(key)
+    }
+
+    fn bench(&mut self, key: &str, bench: Bench) {
+        if let Some(state) = self.keys.get_mut(key) {
+            state.benched = Some(bench);
+        }
+    }
+
+    fn usable_count(&mut self, keys: &[String], day: i64) -> usize {
+        self.sync(keys, day);
+        keys.iter().filter(|key| self.usable(key, 1)).count()
     }
 }
 
-static QUOTA: Mutex<QuotaCounter> = Mutex::new(QuotaCounter { day: 0, used: 0 });
+static POOL: Mutex<Option<KeyPool>> = Mutex::new(None);
+
+fn with_pool<T>(f: impl FnOnce(&mut KeyPool) -> T) -> T {
+    let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(KeyPool::default))
+}
+
+/// Keys whose daily budget is not spent and that Google has not rejected.
+pub(crate) fn usable_key_count(keys: &[String]) -> usize {
+    with_pool(|pool| pool.usable_count(keys, pacific_day(chrono::Utc::now())))
+}
+
+/// Short stable tag for logs; the key itself must never be logged.
+fn fingerprint(key: &str) -> String {
+    // FNV-1a
+    let hash = key.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    });
+    format!("{:06x}", hash & 0x00ff_ffff)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyFault {
+    /// Daily quota spent: bench until tomorrow, try another key.
+    Exhausted,
+    /// Short-term rate limit: try another key, no bench.
+    RateLimited,
+    /// Bad, blocked, or API-disabled key: bench until the config changes.
+    Rejected,
+}
+
+/// Google puts the reason in `error.errors[].reason` (legacy) and
+/// `error.details[].reason` (ErrorInfo); an invalid key only shows up in the
+/// latter (`badRequest` / `API_KEY_INVALID`).
+fn key_fault(body: &serde_json::Value) -> Option<KeyFault> {
+    let error = body.get("error")?;
+    let reasons = ["errors", "details"]
+        .iter()
+        .filter_map(|field| error.get(*field)?.as_array())
+        .flatten()
+        .filter_map(|item| item.get("reason")?.as_str());
+    let mut fault = None;
+    for reason in reasons {
+        let this = match reason {
+            "quotaExceeded" | "dailyLimitExceeded" => KeyFault::Exhausted,
+            "rateLimitExceeded" | "userRateLimitExceeded" => KeyFault::RateLimited,
+            "keyInvalid"
+            | "keyExpired"
+            | "API_KEY_INVALID"
+            | "API_KEY_SERVICE_BLOCKED"
+            | "API_KEY_HTTP_REFERRER_BLOCKED"
+            | "API_KEY_IP_ADDRESS_BLOCKED"
+            | "accessNotConfigured"
+            | "SERVICE_DISABLED" => KeyFault::Rejected,
+            _ => continue,
+        };
+        // A rejected key outranks a quota reason reported alongside it.
+        if fault != Some(KeyFault::Rejected) {
+            fault = Some(this);
+        }
+    }
+    fault
+}
+
+/// GET a Data API endpoint with a key from the pool. A key-specific failure
+/// (quota, rate limit, rejected key) benches that key as needed and retries
+/// once on another. `Ok(None)` is a 404, e.g. `playlistNotFound`.
+pub(crate) async fn google_get<T: serde::de::DeserializeOwned>(
+    keys: &[String],
+    proxy: Option<&str>,
+    url: &str,
+    query: &[(&str, &str)],
+    units: u32,
+) -> Result<Option<T>, Box<dyn Error>> {
+    let client = pooled_client(proxy)?;
+    let day = pacific_day(chrono::Utc::now());
+    let mut tried: Vec<String> = Vec::new();
+    while tried.len() < 2 {
+        let Some(key) = with_pool(|pool| pool.pick(keys, units, day, &tried)) else {
+            break;
+        };
+        tried.push(key.clone());
+        let mut pairs = query.to_vec();
+        pairs.push(("key", &key));
+        let response = client
+            .get(format!("{url}?{}", serde_urlencoded::to_string(&pairs)?))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            // The URL carries the key; keep it out of error messages and logs.
+            .map_err(reqwest::Error::without_url)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(Some(response_json_limited(response).await?));
+        }
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let body: serde_json::Value = response_json_limited(response).await.unwrap_or_default();
+        let tag = fingerprint(&key);
+        match key_fault(&body) {
+            Some(KeyFault::Exhausted) => {
+                tracing::warn!("YouTube API key {} 今日配额已用尽，换用其他 key", tag);
+                with_pool(|pool| pool.bench(&key, Bench::UntilDay(day + 1)));
+            }
+            Some(KeyFault::Rejected) => {
+                tracing::warn!(
+                    "YouTube API key {} 被拒绝 ({})，修改配置前不再使用",
+                    tag,
+                    status
+                );
+                with_pool(|pool| pool.bench(&key, Bench::UntilConfigChange));
+            }
+            Some(KeyFault::RateLimited) => {
+                tracing::debug!("YouTube API key {} 触发短时限流，换用其他 key", tag);
+            }
+            None => return Err(format!("YouTube Data API error: {status}").into()),
+        }
+    }
+    Err(if tried.is_empty() {
+        "YouTube Data API daily budget used up".into()
+    } else {
+        "YouTube Data API: no usable key left".into()
+    })
+}
 
 /// Answers per video ID; `None` records that YouTube omitted the ID so it is
 /// not asked for again inside the TTL.
@@ -177,41 +367,25 @@ type VideoCache = HashMap<String, (Instant, Option<YtVideo>)>;
 static CACHE: Mutex<Option<VideoCache>> = Mutex::new(None);
 
 async fn fetch_videos(
-    api_key: &str,
+    keys: &[String],
     proxy: Option<&str>,
     ids: &[String],
 ) -> Result<Vec<YtVideo>, Box<dyn Error>> {
-    let client = pooled_client(proxy)?;
     let mut videos = Vec::new();
     for chunk in ids.chunks(MAX_IDS_PER_CALL) {
-        let spent = QUOTA
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .try_spend(1, pacific_day(chrono::Utc::now()));
-        if !spent {
-            return Err("YouTube Data API daily budget used up".into());
-        }
-        let query = serde_urlencoded::to_string([
+        let ids = chunk.join(",");
+        let query = [
             ("part", "snippet,liveStreamingDetails"),
-            ("id", &chunk.join(",")),
-            ("key", api_key),
-        ])?;
-        let response = client
-            .get(format!("{VIDEOS_URL}?{query}"))
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            return Err(format!("YouTube Data API error: {}", response.status()).into());
-        }
-        let body: VideosResponse = response_json_limited(response).await?;
-        videos.extend(body.items);
+            ("id", ids.as_str()),
+        ];
+        let body: Option<VideosResponse> = google_get(keys, proxy, VIDEOS_URL, &query, 1).await?;
+        videos.extend(body.map(|body| body.items).unwrap_or_default());
     }
     Ok(videos)
 }
 
 pub(crate) async fn videos_for(
-    api_key: &str,
+    keys: &[String],
     proxy: Option<&str>,
     ids: Vec<String>,
 ) -> Result<HashMap<String, YtVideo>, Box<dyn Error>> {
@@ -236,7 +410,7 @@ pub(crate) async fn videos_for(
         return Ok(answered);
     }
 
-    let fetched = fetch_videos(api_key, proxy, &missing).await?;
+    let fetched = fetch_videos(keys, proxy, &missing).await?;
     let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let cache = guard.get_or_insert_with(HashMap::new);
     let mut returned: HashMap<String, YtVideo> = fetched
@@ -258,9 +432,10 @@ pub async fn apply_youtube_overlay(streams: Vec<HolodexStream>) -> Vec<HolodexSt
     let Ok(cfg) = load_config().await else {
         return streams;
     };
-    let Some(api_key) = cfg.youtube_api_key.as_deref().filter(|key| !key.is_empty()) else {
+    let keys = cfg.youtube_api_keys();
+    if keys.is_empty() {
         return streams;
-    };
+    }
 
     let mut seen = HashSet::new();
     let ids: Vec<String> = streams
@@ -273,7 +448,7 @@ pub async fn apply_youtube_overlay(streams: Vec<HolodexStream>) -> Vec<HolodexSt
         return streams;
     }
 
-    match videos_for(api_key, cfg.youtube.proxy.as_deref(), ids).await {
+    match videos_for(&keys, cfg.youtube.proxy.as_deref(), ids).await {
         Ok(videos) => overlay(streams, &videos),
         Err(e) => {
             tracing::warn!("YouTube Data API 校正失败，沿用 Holodex 状态: {}", e);
@@ -409,12 +584,84 @@ mod tests {
         assert!(out.iter().all(|s| s.title == "holodex title"));
     }
 
+    fn keys(list: &[&str]) -> Vec<String> {
+        list.iter().map(|key| key.to_string()).collect()
+    }
+
     #[test]
-    fn the_quota_counter_stops_at_the_budget_and_resets_each_pacific_day() {
-        let mut quota = QuotaCounter::default();
-        assert!(quota.try_spend(DAILY_UNIT_BUDGET, 1));
-        assert!(!quota.try_spend(1, 1));
-        assert!(quota.try_spend(1, 2));
+    fn one_key_stops_at_the_budget_and_resets_each_pacific_day() {
+        let one = keys(&["a"]);
+        let mut pool = KeyPool::default();
+        assert_eq!(
+            pool.pick(&one, DAILY_UNIT_BUDGET, 1, &[]).as_deref(),
+            Some("a")
+        );
+        assert_eq!(pool.pick(&one, 1, 1, &[]), None);
+        assert_eq!(pool.pick(&one, 1, 2, &[]).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn the_pool_spreads_spend_and_skips_tried_and_benched_keys() {
+        let two = keys(&["a", "b"]);
+        let mut pool = KeyPool::default();
+        let picks: Vec<String> = (0..4).filter_map(|_| pool.pick(&two, 1, 1, &[])).collect();
+        assert_eq!(picks, keys(&["a", "b", "a", "b"]));
+        assert_eq!(pool.pick(&two, 1, 1, &keys(&["a"])).as_deref(), Some("b"));
+
+        pool.bench("a", Bench::UntilDay(2));
+        assert_eq!(pool.usable_count(&two, 1), 1);
+        assert_eq!(pool.pick(&two, 1, 1, &keys(&["b"])), None);
+        assert_eq!(pool.usable_count(&two, 2), 2);
+    }
+
+    #[test]
+    fn a_rejected_key_waits_for_a_key_list_change() {
+        let two = keys(&["a", "b"]);
+        let mut pool = KeyPool::default();
+        pool.sync(&two, 1);
+        pool.bench("a", Bench::UntilConfigChange);
+        assert_eq!(pool.usable_count(&two, 5), 1);
+        pool.pick(&two, 7, 5, &[]);
+
+        let three = keys(&["a", "b", "c"]);
+        assert_eq!(pool.usable_count(&three, 5), 3);
+        assert_eq!(
+            pool.keys["b"].used, 7,
+            "spend on kept keys survives the change"
+        );
+    }
+
+    #[test]
+    fn google_error_reasons_map_to_key_faults() {
+        let legacy = |reason: &str| serde_json::json!({"error": {"code": 403, "errors": [{"reason": reason}]}});
+        assert_eq!(
+            key_fault(&legacy("quotaExceeded")),
+            Some(KeyFault::Exhausted)
+        );
+        assert_eq!(
+            key_fault(&legacy("dailyLimitExceeded")),
+            Some(KeyFault::Exhausted)
+        );
+        assert_eq!(
+            key_fault(&legacy("rateLimitExceeded")),
+            Some(KeyFault::RateLimited)
+        );
+        assert_eq!(key_fault(&legacy("videoNotFound")), None);
+        let invalid = serde_json::json!({"error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "errors": [{"reason": "badRequest"}],
+            "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID"}]
+        }});
+        assert_eq!(key_fault(&invalid), Some(KeyFault::Rejected));
+        assert_eq!(key_fault(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn key_fingerprints_are_short_and_stable() {
+        assert_eq!(fingerprint("AIzaSyExample").len(), 6);
+        assert_eq!(fingerprint("AIzaSyExample"), fingerprint("AIzaSyExample"));
+        assert_ne!(fingerprint("AIzaSyExample"), fingerprint("AIzaSyExamplf"));
     }
 
     #[test]

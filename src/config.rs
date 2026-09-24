@@ -120,8 +120,9 @@ pub struct Config {
     /// 5-min yt-dlp safety probe. When false, yt-dlp queries YouTube every tick.
     #[serde(default = "default_true")]
     pub holodex_monitor_gate: bool,
-    /// Optional YouTube Data API key. When set, Holodex rows are re-classified
-    /// with `videos.list` before the monitor and the Holodex panel use them.
+    /// Optional YouTube Data API keys, one per line or comma separated (see
+    /// `youtube_api_keys`). When set, Holodex rows are re-classified with
+    /// `videos.list` before the monitor and the Holodex panel use them.
     #[serde(default)]
     pub youtube_api_key: Option<String>,
     pub riot_api_key: Option<String>,
@@ -238,6 +239,28 @@ fn default_quality() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+/// Keys in a `youtube_api_key` value: one per line or comma separated,
+/// trimmed and deduplicated in order.
+pub fn parse_api_keys(raw: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for key in raw.split(|c: char| c == ',' || c.is_whitespace()) {
+        if !key.is_empty() && !keys.iter().any(|seen| seen == key) {
+            keys.push(key.to_string());
+        }
+    }
+    keys
+}
+
+impl Config {
+    /// The YouTube Data API key pool; empty turns the feature off.
+    pub fn youtube_api_keys(&self) -> Vec<String> {
+        self.youtube_api_key
+            .as_deref()
+            .map(parse_api_keys)
+            .unwrap_or_default()
+    }
 }
 
 /// Structs to mirror the structure of cookies.json
@@ -618,6 +641,17 @@ mod tests {
             "youtube": {}, "twitch": {}, "enable_lol_monitor": false, "anti_collision_list": {}
         })).unwrap();
         serde_json::to_value(config).unwrap()
+    }
+
+    #[test]
+    fn api_keys_split_on_lines_and_commas_without_duplicates() {
+        assert!(parse_api_keys("").is_empty());
+        assert!(parse_api_keys(" \n ,, ").is_empty());
+        assert_eq!(parse_api_keys("one"), vec!["one"]);
+        assert_eq!(
+            parse_api_keys(" one\r\ntwo, three,\n\none "),
+            vec!["one", "two", "three"]
+        );
     }
 
     #[tokio::test]

@@ -47,7 +47,12 @@ pub async fn response_bytes_limited(
         return Err(oversized());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(io::Error::other)? {
+    // Without the URL: some carry API keys, and this error ends up in logs.
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| io::Error::other(e.without_url()))?
+    {
         if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(oversized());
         }

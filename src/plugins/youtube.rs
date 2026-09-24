@@ -248,7 +248,7 @@ pub fn monitor_mode(cfg: &crate::config::Config) -> MonitorMode {
     monitor_mode_for(
         cfg.holodex_monitor_gate,
         has_key(&cfg.holodex_api_key),
-        has_key(&cfg.youtube_api_key),
+        !cfg.youtube_api_keys().is_empty(),
     )
 }
 
