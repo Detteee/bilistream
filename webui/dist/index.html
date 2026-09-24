@@ -953,9 +953,9 @@
               <svg aria-hidden="true"><use href="#i-holodex" /></svg>
               Holodex 直播监控
             </h2>
-            <label class="holodex-monitor-gate" title="关闭后，监控循环与状态刷新改用 yt-dlp 查询 YouTube">
+            <label class="holodex-monitor-gate" title="yt-dlp 兜底：开启后监控每次都直接用 yt-dlp 查询 YouTube（最终兜底，忽略 Holodex / YouTube API 的结果）。关闭时按 Holodex 与 YouTube API 索引判断，每 5 分钟 yt-dlp 安全探测一次">
               <span class="toggle-switch">
-                <input type="checkbox" id="holodex-monitor-gate-toggle" checked aria-label="使用 Holodex 查询状态">
+                <input type="checkbox" id="holodex-monitor-gate-toggle" aria-label="yt-dlp 兜底">
                 <span class="toggle-slider"></span>
               </span>
             </label>

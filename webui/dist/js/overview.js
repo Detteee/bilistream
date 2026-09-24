@@ -324,10 +324,11 @@ function applyHolodexSectionVisibility(apiKeyConfigured) {
   setElementDisplay(document.getElementById('holodex-login-btn'), apiKeyConfigured, 'inline-flex');
   maybeLoadHolodexStreams();
 }
+// Stored as holodex_monitor_gate; the switch shows the inverse, yt-dlp 兜底.
 function applyHolodexMonitorGateToggle(enabled) {
   const toggle = document.getElementById('holodex-monitor-gate-toggle');
   if (toggle) {
-    toggle.checked = !!enabled;
+    toggle.checked = !enabled;
   }
 }
 // The stream list is only worth fetching once the API key is known to be
@@ -1407,10 +1408,10 @@ async function toggleHolodexMonitorGate() {
   if (!toggle) return;
 
   try {
-    const data = await postJsonApi('/api/config', { holodex_monitor_gate: toggle.checked });
+    const data = await postJsonApi('/api/config', { holodex_monitor_gate: !toggle.checked });
     if (data.success) {
       showNotification(
-        toggle.checked ? '已启用 Holodex 状态查询' : '已改用 yt-dlp 查询 YouTube',
+        toggle.checked ? '已开启 yt-dlp 兜底：每次监控都直接查询 YouTube' : '已关闭 yt-dlp 兜底：按索引判断，每 5 分钟 yt-dlp 安全探测',
         'success'
       );
       refreshYouTubeStatus();

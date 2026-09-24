@@ -10,11 +10,11 @@ use super::utils::{
 use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::process::Command;
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 // Helper function to get yt-dlp command path
 fn get_yt_dlp_command() -> String {
@@ -136,7 +136,7 @@ impl Youtube {
         ),
         Box<dyn Error>,
     > {
-        get_youtube_status(&self.channel_id).await
+        get_youtube_status_with(&self.channel_id, Probe::Throttled).await
     }
 }
 
@@ -230,14 +230,139 @@ pub fn select_holodex_channel_status(
     select_holodex_channel_status_at(channel_id, streams, chrono::Utc::now())
 }
 
-/// Holodex is the monitor's first gate only when the toggle is on and a key
-/// is configured. Otherwise yt-dlp talks to YouTube directly.
-pub fn holodex_monitor_gate_enabled(cfg: &crate::config::Config) -> bool {
-    holodex_monitor_gate_is_on(cfg.holodex_monitor_gate, cfg.holodex_api_key.as_deref())
+/// How the monitor decides whether a YouTube channel is live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitorMode {
+    /// yt-dlp 兜底: yt-dlp every tick, whatever the other sources say.
+    Rescue,
+    /// Holodex rows plus discovered rows, corrected by `videos.list`. yt-dlp
+    /// confirms live streams and runs as a throttled safety probe.
+    Index,
 }
 
-fn holodex_monitor_gate_is_on(gate: bool, api_key: Option<&str>) -> bool {
-    gate && api_key.is_some_and(|key| !key.is_empty())
+/// The dashboard switch is stored as `holodex_monitor_gate`, where `false`
+/// means rescue. Without any Holodex or YouTube key there is no index to
+/// consult, so that also means rescue.
+pub fn monitor_mode(cfg: &crate::config::Config) -> MonitorMode {
+    let has_key = |key: &Option<String>| key.as_deref().is_some_and(|key| !key.trim().is_empty());
+    monitor_mode_for(
+        cfg.holodex_monitor_gate,
+        has_key(&cfg.holodex_api_key),
+        has_key(&cfg.youtube_api_key),
+    )
+}
+
+fn monitor_mode_for(gate: bool, has_holodex_key: bool, has_youtube_key: bool) -> MonitorMode {
+    if gate && (has_holodex_key || has_youtube_key) {
+        MonitorMode::Index
+    } else {
+        MonitorMode::Rescue
+    }
+}
+
+/// Whether a caller may skip yt-dlp between safety probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    /// One-off checks (danmaku 转播, switch preflight): with no index answer,
+    /// ask yt-dlp now.
+    Now,
+    /// The monitor loop: when the index says not live, run yt-dlp at most
+    /// once per `SAFETY_PROBE_INTERVAL`.
+    Throttled,
+}
+
+const SAFETY_PROBE_INTERVAL: Duration = Duration::from_secs(300);
+
+/// What the index says about one channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexView {
+    /// Rescue mode, or the index could not be read.
+    Unavailable,
+    Live,
+    /// Not live, and Holodex itself sent a row for the channel.
+    Upcoming,
+    /// Nothing but discovered waiting rooms, or nothing at all.
+    NoAnswer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonitorAction {
+    YtDlp,
+    ConfirmLive,
+    IndexAnswer,
+}
+
+fn decide_monitor_action(
+    view: IndexView,
+    probe: Probe,
+    since_last_probe: Option<Duration>,
+) -> MonitorAction {
+    match view {
+        IndexView::Unavailable => MonitorAction::YtDlp,
+        IndexView::Live => MonitorAction::ConfirmLive,
+        IndexView::Upcoming | IndexView::NoAnswer if probe == Probe::Throttled => {
+            match since_last_probe {
+                Some(age) if age < SAFETY_PROBE_INTERVAL => MonitorAction::IndexAnswer,
+                _ => MonitorAction::YtDlp,
+            }
+        }
+        IndexView::Upcoming => MonitorAction::IndexAnswer,
+        IndexView::NoAnswer => MonitorAction::YtDlp,
+    }
+}
+
+type YoutubeStatus = (
+    bool,                    // is_live
+    Option<String>,          // topic
+    Option<String>,          // title
+    Option<String>,          // m3u8_url
+    Option<DateTime<Local>>, // start_time
+    Option<String>,          // video_id
+);
+
+/// Last safety probe per channel, with its not-live answer so ticks between
+/// probes keep yt-dlp's title and schedule. A probe that finds live removes
+/// the entry, so the next tick probes again instead of reusing a stale URL.
+type SafetyProbes = HashMap<String, (Instant, Option<YoutubeStatus>)>;
+static SAFETY_PROBES: Mutex<Option<SafetyProbes>> = Mutex::new(None);
+
+fn last_safety_probe(channel_id: &str) -> Option<(Duration, Option<YoutubeStatus>)> {
+    let guard = SAFETY_PROBES.lock().unwrap_or_else(|e| e.into_inner());
+    let (at, status) = guard.as_ref()?.get(channel_id)?;
+    Some((at.elapsed(), status.clone()))
+}
+
+fn record_safety_probe(channel_id: &str, status: Option<YoutubeStatus>) {
+    let mut guard = SAFETY_PROBES.lock().unwrap_or_else(|e| e.into_inner());
+    let probes = guard.get_or_insert_with(HashMap::new);
+    if status.as_ref().is_some_and(|status| status.0) {
+        probes.remove(channel_id);
+    } else {
+        probes.insert(channel_id.to_string(), (Instant::now(), status));
+    }
+}
+
+/// Holodex rows (when a Holodex key is set) plus this channel's discovered
+/// rows, corrected by YouTube, and the IDs Holodex itself sent.
+async fn index_rows(
+    cfg: &crate::config::Config,
+    channel_id: &str,
+) -> Result<(Vec<HolodexStream>, HashSet<String>), String> {
+    let has_holodex_key = cfg
+        .holodex_api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty());
+    let holodex = if has_holodex_key {
+        get_holodex_streams(vec![channel_id.to_string()], false)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let holodex_ids = holodex.iter().map(|s| s.id.clone()).collect();
+    let streams = with_discovered_rows(channel_id, holodex);
+    let streams = super::youtube_data::apply_youtube_overlay(streams).await;
+    Ok((streams, holodex_ids))
 }
 
 fn youtube_channel_status_from_probe(
@@ -258,14 +383,14 @@ fn youtube_channel_status_from_probe(
 
 /// Channel status without a playable URL.
 ///
-/// When the Holodex monitor gate is on this is a Holodex read, cheap enough
-/// for the WebUI poller. When the gate is off it takes the same yt-dlp path
-/// as the monitor loop so the dashboard cannot disagree about live/upcoming.
+/// In index mode this is an index read, cheap enough for the WebUI poller.
+/// In rescue mode it takes the same yt-dlp path as the monitor loop so the
+/// dashboard cannot disagree about live/upcoming.
 pub async fn get_youtube_channel_status(
     channel_id: &str,
 ) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
     let cfg = load_config().await?;
-    if !holodex_monitor_gate_enabled(&cfg) {
+    if monitor_mode(&cfg) == MonitorMode::Rescue {
         let (is_live, topic, title, _, scheduled_start, video_id) =
             get_youtube_status(channel_id).await?;
         return Ok(youtube_channel_status_from_probe(
@@ -277,9 +402,7 @@ pub async fn get_youtube_channel_status(
         ));
     }
 
-    let streams = get_holodex_streams(vec![channel_id.to_string()], false).await?;
-    let streams = with_discovered_rows(channel_id, streams);
-    let streams = super::youtube_data::apply_youtube_overlay(streams).await;
+    let (streams, _) = index_rows(&cfg, channel_id).await?;
     Ok(select_holodex_channel_status(channel_id, &streams))
 }
 
@@ -291,17 +414,17 @@ fn with_discovered_rows(channel_id: &str, streams: Vec<HolodexStream>) -> Vec<Ho
         .collect()
 }
 
-/// Channel status without a playable URL, falling back to yt-dlp when Holodex
-/// is not the monitor gate.
+/// Channel status without a playable URL, falling back to yt-dlp in rescue
+/// mode.
 ///
-/// With the gate on this stays a Holodex-only read. With it off (or with no
-/// API key) it uses `get_youtube_status`, which resolves a stream URL as a
-/// side effect of answering.
+/// In index mode this stays an index read. In rescue mode it uses
+/// `get_youtube_status`, which resolves a stream URL as a side effect of
+/// answering.
 pub async fn get_youtube_channel_metadata(
     channel_id: &str,
 ) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
     let cfg = load_config().await?;
-    if holodex_monitor_gate_enabled(&cfg) {
+    if monitor_mode(&cfg) == MonitorMode::Index {
         return get_youtube_channel_status(channel_id).await;
     }
 
@@ -365,19 +488,14 @@ fn youtube_area_topic_for_video(
         .filter(|topic| !topic.trim().is_empty())
 }
 
-pub async fn get_youtube_status(
+pub async fn get_youtube_status(channel_id: &str) -> Result<YoutubeStatus, Box<dyn Error>> {
+    get_youtube_status_with(channel_id, Probe::Now).await
+}
+
+async fn get_youtube_status_with(
     channel_id: &str,
-) -> Result<
-    (
-        bool,                    // is_live
-        Option<String>,          // topic
-        Option<String>,          // title
-        Option<String>,          // m3u8_url
-        Option<DateTime<Local>>, // start_time
-        Option<String>,          // video_id
-    ),
-    Box<dyn Error>,
-> {
+    probe: Probe,
+) -> Result<YoutubeStatus, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.youtube.proxy.clone();
     let quality = cfg.youtube.quality.clone();
@@ -385,98 +503,115 @@ pub async fn get_youtube_status(
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let deno_path = &cfg.youtube.deno_path;
 
-    if !holodex_monitor_gate_enabled(&cfg) {
-        tracing::debug!("Holodex monitor gate off, using yt-dlp for {}", channel_id);
-        let title = get_youtube_live_title(channel_id).await?;
-        return get_status_with_yt_dlp(
-            channel_id,
-            proxy,
-            title,
-            Some(&quality),
-            cookies_file,
-            cookies_from_browser,
-            deno_path,
-        )
-        .await;
-    }
-
-    // Use the multi-channel function for single channel
-    //
-    // The error is reduced to a String right away: Box<dyn Error> is not Send,
-    // and as the match scrutinee it would stay live across the awaits in the
-    // fallback arm, making this whole future unspawnable.
-    let holodex = match get_holodex_streams(vec![channel_id.to_string()], false)
-        .await
-        .map_err(|e| e.to_string())
-    {
-        Ok(streams) => {
-            let holodex_ids: HashSet<String> = streams.iter().map(|s| s.id.clone()).collect();
-            let streams = with_discovered_rows(channel_id, streams);
-            let streams = super::youtube_data::apply_youtube_overlay(streams).await;
-            let status = select_holodex_channel_status(channel_id, &streams);
-            let answered = status.is_live
-                || streams
+    // The error is reduced to a String inside `index_rows`: Box<dyn Error> is
+    // not Send, and held across the awaits below it would make this whole
+    // future unspawnable.
+    let (view, status) = match monitor_mode(&cfg) {
+        MonitorMode::Rescue => {
+            tracing::debug!("yt-dlp 兜底模式，直接查询 {}", channel_id);
+            (IndexView::Unavailable, YoutubeChannelStatus::default())
+        }
+        MonitorMode::Index => match index_rows(&cfg, channel_id).await {
+            Ok((streams, holodex_ids)) => {
+                let status = select_holodex_channel_status(channel_id, &streams);
+                // Holodex omits some streams entirely, so only its own row for
+                // this channel (or a stream YouTube calls live) answers. A
+                // discovered waiting room alone must not hide a stream that
+                // went live on another video.
+                let answered = streams
                     .iter()
                     .any(|s| s.channel.id == channel_id && holodex_ids.contains(&s.id));
-            Ok(answered.then_some(status))
-        }
-        Err(e) => Err(e),
+                let view = if status.is_live {
+                    IndexView::Live
+                } else if answered {
+                    IndexView::Upcoming
+                } else {
+                    IndexView::NoAnswer
+                };
+                (view, status)
+            }
+            Err(e) => {
+                tracing::error!("Holodex API failed: {}, using yt-dlp", e);
+                (IndexView::Unavailable, YoutubeChannelStatus::default())
+            }
+        },
     };
-    match holodex {
-        // Holodex omits some streams entirely, so only its own row for this
-        // channel (or a discovered stream YouTube calls live) lets it answer;
-        // otherwise yt-dlp checks the channel directly. A discovered waiting
-        // room alone must not hide a stream that went live on another video.
-        Ok(Some(status)) => {
-            if status.is_live {
-                // Holodex knows the stream; yt-dlp resolves the playable URL and
-                // has the final say on whether it is actually live.
-                let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
-                    channel_id,
-                    proxy.clone(),
-                    status.title.clone(),
-                    Some(&quality),
-                    cookies_file,
-                    cookies_from_browser,
-                    deno_path,
-                )
-                .await?;
-                return Ok((
-                    is_live,
-                    status.topic,
-                    status.title,
-                    m3u8_url,
-                    None,
-                    status.video_id,
-                ));
-            }
 
-            Ok((
-                false,
-                status.topic,
-                status.title,
-                None,
-                status.scheduled_start,
-                status.video_id,
-            ))
-        }
-        result => {
-            match result {
-                Err(e) => tracing::error!("Holodex API failed: {}, using yt-dlp", e),
-                Ok(_) => tracing::debug!("Holodex has no stream for {}, using yt-dlp", channel_id),
-            }
-            let title = get_youtube_live_title(channel_id).await?;
-            let (is_live, _, _, m3u8_url, start_time, video_id) = get_status_with_yt_dlp(
+    let last_probe = match probe {
+        Probe::Throttled => last_safety_probe(channel_id),
+        Probe::Now => None,
+    };
+    let index_answer = |status: YoutubeChannelStatus| {
+        (
+            false,
+            status.topic,
+            status.title,
+            None,
+            status.scheduled_start,
+            status.video_id,
+        )
+    };
+
+    match decide_monitor_action(view, probe, last_probe.as_ref().map(|(age, _)| *age)) {
+        MonitorAction::ConfirmLive => {
+            // The index knows the stream; yt-dlp resolves the playable URL and
+            // has the final say on whether it is actually live.
+            let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
                 channel_id,
                 proxy,
-                None,
+                status.title.clone(),
                 Some(&quality),
                 cookies_file,
                 cookies_from_browser,
                 deno_path,
             )
             .await?;
-            Ok((is_live, None, title, m3u8_url, start_time, video_id))
+            Ok((
+                is_live,
+                status.topic,
+                status.title,
+                m3u8_url,
+                None,
+                status.video_id,
+            ))
+        }
+        MonitorAction::IndexAnswer => match view {
+            IndexView::Upcoming => Ok(index_answer(status)),
+            // Between safety probes with nothing listed, repeat the last
+            // probe's answer.
+            _ => Ok(last_probe
+                .and_then(|(_, status)| status)
+                .unwrap_or((false, None, None, None, None, None))),
+        },
+        MonitorAction::YtDlp => {
+            if view != IndexView::Unavailable {
+                tracing::debug!("yt-dlp 安全探测 {} ({:?})", channel_id, view);
+            }
+            // Recorded before running, so a failing yt-dlp is not retried
+            // every tick.
+            record_safety_probe(channel_id, None);
+            let title = get_youtube_live_title(channel_id).await?;
+            // Passing the title in keeps yt-dlp from looking it up again.
+            let probed = get_status_with_yt_dlp(
+                channel_id,
+                proxy,
+                title,
+                Some(&quality),
+                cookies_file,
+                cookies_from_browser,
+                deno_path,
+            )
+            .await?;
+            let (is_live, _, title, m3u8_url, start_time, video_id) = probed;
+            let result = if !is_live && view == IndexView::Upcoming {
+                // YouTube's schedule for the listed stream beats yt-dlp's
+                // rounded "begins in N hours".
+                index_answer(status)
+            } else {
+                (is_live, None, title, m3u8_url, start_time, video_id)
+            };
+            record_safety_probe(channel_id, Some(result.clone()));
+            Ok(result)
         }
     }
 }
@@ -614,9 +749,9 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
         Ok::<_, Box<dyn Error>>(title)
     };
 
-    // Try Holodex API if it is the monitor's first gate. Holodex omits some
-    // streams, so a missing title also falls back to yt-dlp.
-    if holodex_monitor_gate_enabled(&cfg) {
+    // In index mode try Holodex first. Holodex omits some streams, so a
+    // missing title also falls back to yt-dlp.
+    if monitor_mode(&cfg) == MonitorMode::Index {
         if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
             match get_holodex_live_title(&key, channel_id, channel_name.as_deref()).await {
                 Ok(Some(title)) => return Ok(Some(title)),
@@ -638,11 +773,54 @@ mod tests {
     use crate::plugins::holodex::HolodexChannel;
 
     #[test]
-    fn holodex_monitor_gate_requires_both_flag_and_key() {
-        assert!(!holodex_monitor_gate_is_on(true, None));
-        assert!(!holodex_monitor_gate_is_on(true, Some("")));
-        assert!(!holodex_monitor_gate_is_on(false, Some("key")));
-        assert!(holodex_monitor_gate_is_on(true, Some("key")));
+    fn index_mode_needs_the_switch_off_and_some_key() {
+        use MonitorMode::{Index, Rescue};
+        assert_eq!(monitor_mode_for(false, true, true), Rescue);
+        assert_eq!(monitor_mode_for(true, false, false), Rescue);
+        assert_eq!(monitor_mode_for(true, true, false), Index);
+        assert_eq!(monitor_mode_for(true, false, true), Index);
+    }
+
+    #[test]
+    fn monitor_actions_follow_the_decision_table() {
+        use IndexView::*;
+        use MonitorAction::*;
+        let fresh = Some(Duration::from_secs(60));
+        let stale = Some(SAFETY_PROBE_INTERVAL);
+        let cases = [
+            (Unavailable, Probe::Throttled, fresh, YtDlp),
+            (Unavailable, Probe::Now, None, YtDlp),
+            (Live, Probe::Throttled, fresh, ConfirmLive),
+            (Live, Probe::Now, None, ConfirmLive),
+            (Upcoming, Probe::Now, None, IndexAnswer),
+            (NoAnswer, Probe::Now, None, YtDlp),
+            (Upcoming, Probe::Throttled, fresh, IndexAnswer),
+            (NoAnswer, Probe::Throttled, fresh, IndexAnswer),
+            (Upcoming, Probe::Throttled, stale, YtDlp),
+            (NoAnswer, Probe::Throttled, stale, YtDlp),
+            (NoAnswer, Probe::Throttled, None, YtDlp),
+        ];
+        for (view, probe, age, expected) in cases {
+            assert_eq!(
+                decide_monitor_action(view, probe, age),
+                expected,
+                "{view:?} {probe:?} {age:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_probe_that_finds_live_is_not_reused() {
+        let offline: YoutubeStatus = (false, None, Some("t".to_string()), None, None, None);
+        record_safety_probe("UCprobe-offline", Some(offline.clone()));
+        let (age, cached) = last_safety_probe("UCprobe-offline").unwrap();
+        assert!(age < SAFETY_PROBE_INTERVAL);
+        assert_eq!(cached, Some(offline));
+
+        record_safety_probe("UCprobe-live", None);
+        let live: YoutubeStatus = (true, None, None, Some("u".to_string()), None, None);
+        record_safety_probe("UCprobe-live", Some(live));
+        assert!(last_safety_probe("UCprobe-live").is_none());
     }
 
     #[test]
@@ -652,6 +830,7 @@ mod tests {
         fn assert_send<T: Send>(_: T) {}
 
         assert_send(get_youtube_status("channel-id"));
+        assert_send(get_youtube_status_with("channel-id", Probe::Throttled));
         assert_send(get_youtube_channel_status("channel-id"));
     }
 
