@@ -400,6 +400,7 @@ pub async fn api_get_holodex_streams(
             }
         };
 
+        let streams = crate::plugins::youtube_rss::merge_discovered(streams);
         let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
         let filtered_streams = filter_holodex_streams(streams, fav_ids);
         let streams_with_area = map_holodex_streams_with_area(filtered_streams);
@@ -470,6 +471,7 @@ pub async fn api_get_holodex_streams(
         }
     };
 
+    let streams = crate::plugins::youtube_rss::merge_discovered(streams);
     let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
     let filtered_streams = filter_holodex_streams(streams, queried_channels);
     let streams_with_area = map_holodex_streams_with_area(filtered_streams);

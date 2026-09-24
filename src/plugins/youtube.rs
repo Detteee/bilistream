@@ -10,6 +10,7 @@ use super::utils::{
 use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
+use std::collections::HashSet;
 use std::error::Error;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -277,8 +278,17 @@ pub async fn get_youtube_channel_status(
     }
 
     let streams = get_holodex_streams(vec![channel_id.to_string()], false).await?;
+    let streams = with_discovered_rows(channel_id, streams);
     let streams = super::youtube_data::apply_youtube_overlay(streams).await;
     Ok(select_holodex_channel_status(channel_id, &streams))
+}
+
+/// Holodex rows plus this channel's streams found by RSS discovery.
+fn with_discovered_rows(channel_id: &str, streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+    super::youtube_rss::merge_discovered(streams)
+        .into_iter()
+        .filter(|s| s.channel.id == channel_id)
+        .collect()
 }
 
 /// Channel status without a playable URL, falling back to yt-dlp when Holodex
@@ -399,15 +409,25 @@ pub async fn get_youtube_status(
         .await
         .map_err(|e| e.to_string())
     {
-        Ok(streams) => Ok(super::youtube_data::apply_youtube_overlay(streams).await),
+        Ok(streams) => {
+            let holodex_ids: HashSet<String> = streams.iter().map(|s| s.id.clone()).collect();
+            let streams = with_discovered_rows(channel_id, streams);
+            let streams = super::youtube_data::apply_youtube_overlay(streams).await;
+            let status = select_holodex_channel_status(channel_id, &streams);
+            let answered = status.is_live
+                || streams
+                    .iter()
+                    .any(|s| s.channel.id == channel_id && holodex_ids.contains(&s.id));
+            Ok(answered.then_some(status))
+        }
         Err(e) => Err(e),
     };
     match holodex {
-        // Holodex omits some streams entirely, so only a row for this channel
-        // lets it answer; otherwise yt-dlp checks the channel directly.
-        Ok(streams) if streams.iter().any(|s| s.channel.id == channel_id) => {
-            let status = select_holodex_channel_status(channel_id, &streams);
-
+        // Holodex omits some streams entirely, so only its own row for this
+        // channel (or a discovered stream YouTube calls live) lets it answer;
+        // otherwise yt-dlp checks the channel directly. A discovered waiting
+        // room alone must not hide a stream that went live on another video.
+        Ok(Some(status)) => {
             if status.is_live {
                 // Holodex knows the stream; yt-dlp resolves the playable URL and
                 // has the final say on whether it is actually live.

@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Refresh Holodex JWT when within this many seconds of `exp`.
 pub const HOLODEX_JWT_REFRESH_BEFORE_EXPIRY_SECS: u64 = 3600 * 24 * 30;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HolodexStream {
     pub id: String,
     pub title: String,
@@ -43,7 +43,7 @@ pub struct HolodexFavoriteChannel {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct HolodexChannel {
     pub id: String,
     #[serde(default)]

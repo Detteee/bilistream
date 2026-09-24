@@ -210,7 +210,7 @@ async fn fetch_videos(
     Ok(videos)
 }
 
-async fn videos_for(
+pub(crate) async fn videos_for(
     api_key: &str,
     proxy: Option<&str>,
     ids: Vec<String>,

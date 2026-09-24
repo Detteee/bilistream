@@ -11,6 +11,7 @@ pub mod utils;
 pub mod wbi;
 pub mod youtube;
 pub mod youtube_data;
+pub mod youtube_rss;
 // Re-export commonly used items
 pub use bilibili::*;
 pub use danmaku::*;
