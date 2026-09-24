@@ -14,6 +14,7 @@ window.configData = {
   enable_lol_monitor: false,
   riot_api_key: '',
   holodex_api_key: '',
+  youtube_api_key: '',
   bilibili: {},
   youtube: {},
   twitch: {}

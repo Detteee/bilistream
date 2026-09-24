@@ -19,6 +19,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             .is_some_and(|j| !j.is_empty()),
         "holodex_skip_jwt_verify": cfg.holodex_skip_jwt_verify,
         "holodex_monitor_gate": cfg.holodex_monitor_gate,
+        "youtube_api_key": cfg.youtube_api_key.clone().unwrap_or_default(),
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
@@ -69,6 +70,7 @@ pub struct UpdateConfigRequest {
     holodex_jwt: Option<String>,
     holodex_skip_jwt_verify: Option<bool>,
     holodex_monitor_gate: Option<bool>,
+    youtube_api_key: Option<String>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
     youtube_proxy: Option<String>,
@@ -117,6 +119,7 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "lol_monitor_interval": cfg.lol_monitor_interval.unwrap_or(1),
         "riot_api_key": cfg.riot_api_key.as_deref().unwrap_or_default().trim(),
         "holodex_api_key": cfg.holodex_api_key.as_deref().unwrap_or_default().trim(),
+        "youtube_api_key": cfg.youtube_api_key.as_deref().unwrap_or_default().trim(),
         "anti_collision_list": cfg.anti_collision_list,
         "youtube_proxy": cfg.youtube.proxy.as_deref().unwrap_or_default().trim(),
         "twitch_proxy": cfg.twitch.proxy.as_deref().unwrap_or_default().trim(),
@@ -221,6 +224,10 @@ pub async fn update_config(
         } else {
             cfg.holodex_api_key = None;
         }
+    }
+    if let Some(youtube_api_key) = payload.youtube_api_key {
+        let key = youtube_api_key.trim();
+        cfg.youtube_api_key = (!key.is_empty()).then(|| key.to_string());
     }
     if let Some(holodex_jwt) = payload.holodex_jwt {
         let jwt = holodex_jwt.trim();

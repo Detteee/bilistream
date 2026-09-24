@@ -89,6 +89,7 @@ async function loadSystemConfig() {
 
     // Load API keys
     setInputValue('config-holodex-key', config.holodex_api_key || '');
+    setInputValue('config-youtube-api-key', config.youtube_api_key || '');
     setInputValue('config-riot-key', config.riot_api_key || '');
 
     // Load LoL monitor settings
@@ -281,6 +282,7 @@ function getCurrentConfig() {
     enable_danmaku_command: document.getElementById('config-danmaku-command-checkbox').checked,
     enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
     holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
+    youtube_api_key: document.getElementById('config-youtube-api-key').value.trim(),
     riot_api_key: document.getElementById('config-riot-key').value.trim(),
     enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
     lol_monitor_interval: readIntegerInput('config-lol-interval', 1),

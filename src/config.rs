@@ -118,6 +118,10 @@ pub struct Config {
     /// key is configured. When false, yt-dlp queries YouTube directly.
     #[serde(default = "default_true")]
     pub holodex_monitor_gate: bool,
+    /// Optional YouTube Data API key. When set, Holodex rows are re-classified
+    /// with `videos.list` before the monitor and the Holodex panel use them.
+    #[serde(default)]
+    pub youtube_api_key: Option<String>,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,

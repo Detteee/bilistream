@@ -277,6 +277,7 @@ pub async fn get_youtube_channel_status(
     }
 
     let streams = get_holodex_streams(vec![channel_id.to_string()], false).await?;
+    let streams = super::youtube_data::apply_youtube_overlay(streams).await;
     Ok(select_holodex_channel_status(channel_id, &streams))
 }
 
@@ -394,11 +395,17 @@ pub async fn get_youtube_status(
     // The error is reduced to a String right away: Box<dyn Error> is not Send,
     // and as the match scrutinee it would stay live across the awaits in the
     // fallback arm, making this whole future unspawnable.
-    match get_holodex_streams(vec![channel_id.to_string()], false)
+    let holodex = match get_holodex_streams(vec![channel_id.to_string()], false)
         .await
         .map_err(|e| e.to_string())
     {
-        Ok(streams) => {
+        Ok(streams) => Ok(super::youtube_data::apply_youtube_overlay(streams).await),
+        Err(e) => Err(e),
+    };
+    match holodex {
+        // Holodex omits some streams entirely, so only a row for this channel
+        // lets it answer; otherwise yt-dlp checks the channel directly.
+        Ok(streams) if streams.iter().any(|s| s.channel.id == channel_id) => {
             let status = select_holodex_channel_status(channel_id, &streams);
 
             if status.is_live {
@@ -433,8 +440,11 @@ pub async fn get_youtube_status(
                 status.video_id,
             ))
         }
-        Err(e) => {
-            tracing::error!("Holodex API failed: {}, using yt-dlp", e);
+        result => {
+            match result {
+                Err(e) => tracing::error!("Holodex API failed: {}, using yt-dlp", e),
+                Ok(_) => tracing::debug!("Holodex has no stream for {}, using yt-dlp", channel_id),
+            }
             let title = get_youtube_live_title(channel_id).await?;
             let (is_live, _, _, m3u8_url, start_time, video_id) = get_status_with_yt_dlp(
                 channel_id,
@@ -584,12 +594,14 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
         Ok::<_, Box<dyn Error>>(title)
     };
 
-    // Try Holodex API if it is the monitor's first gate.
+    // Try Holodex API if it is the monitor's first gate. Holodex omits some
+    // streams, so a missing title also falls back to yt-dlp.
     if holodex_monitor_gate_enabled(&cfg) {
         if let Some(key) = cfg.holodex_api_key.clone().filter(|k| !k.is_empty()) {
             match get_holodex_live_title(&key, channel_id, channel_name.as_deref()).await {
-                Ok(title) => return Ok(title),
-                _ => {
+                Ok(Some(title)) => return Ok(Some(title)),
+                Ok(None) => {}
+                Err(_) => {
                     tracing::warn!("Holodex API failed, falling back to yt-dlp");
                 }
             }
@@ -642,6 +654,7 @@ mod tests {
             link: None,
             thumbnail: None,
             placeholder_type: None,
+            yt_confirmed: false,
         }
     }
 

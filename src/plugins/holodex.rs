@@ -30,6 +30,10 @@ pub struct HolodexStream {
     pub thumbnail: Option<String>,
     #[serde(default, rename = "placeholderType")]
     pub placeholder_type: Option<String>,
+    /// Set when YouTube `videos.list` classified this row, so its status is
+    /// trusted over Holodex's stale-schedule heuristics.
+    #[serde(skip)]
+    pub yt_confirmed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

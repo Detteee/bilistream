@@ -51,6 +51,7 @@ impl OrderedChannelIds {
 
 /// Holodex Favorites/Home drop streams that never got `start_actual` once the
 /// schedule is more than two hours old (`!start_actual && now > scheduled + 2h`).
+/// Rows YouTube classified skip this: its `actualStartTime` is authoritative.
 fn holodex_has_start_actual(stream: &crate::plugins::holodex::HolodexStream) -> bool {
     stream
         .start_actual
@@ -70,7 +71,7 @@ fn holodex_unconfirmed_and_stale(
     stream: &crate::plugins::holodex::HolodexStream,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    if holodex_has_start_actual(stream) {
+    if stream.yt_confirmed || holodex_has_start_actual(stream) {
         return false;
     }
     holodex_scheduled_at(stream)
@@ -399,6 +400,7 @@ pub async fn api_get_holodex_streams(
             }
         };
 
+        let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
         let filtered_streams = filter_holodex_streams(streams, fav_ids);
         let streams_with_area = map_holodex_streams_with_area(filtered_streams);
 
@@ -468,6 +470,7 @@ pub async fn api_get_holodex_streams(
         }
     };
 
+    let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
     let filtered_streams = filter_holodex_streams(streams, queried_channels);
     let streams_with_area = map_holodex_streams_with_area(filtered_streams);
 
@@ -849,6 +852,7 @@ mod tests {
             link: None,
             thumbnail: None,
             placeholder_type: None,
+            yt_confirmed: false,
         }
     }
 
@@ -928,5 +932,13 @@ mod tests {
             stream("later", "upcoming", Some("2026-09-02T20:00:00Z"), None),
         ];
         assert_eq!(kept(streams, now), vec!["later"]);
+    }
+
+    #[test]
+    fn a_youtube_confirmed_upcoming_past_its_schedule_is_kept() {
+        let now = at("2026-09-02T15:00:00Z");
+        let mut late = stream("late", "upcoming", Some("2026-09-01T14:00:00Z"), None);
+        late.yt_confirmed = true;
+        assert_eq!(kept(vec![late], now), vec!["late"]);
     }
 }
