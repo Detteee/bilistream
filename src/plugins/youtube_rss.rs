@@ -879,22 +879,32 @@ impl Worker {
     }
 }
 
-/// Holodex rows plus discovered live/upcoming rows Holodex did not send.
-/// Callers filter by channel and horizon afterwards as usual.
+/// Holodex rows plus discovered live/upcoming rows Holodex did not send, and
+/// streams seen live moments ago that both have since dropped (see
+/// `youtube_data::recent_live_rows`). Callers filter by channel and horizon
+/// afterwards as usual.
 pub fn merge_discovered(streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
-    let guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(state) = guard.as_ref() else {
-        return streams;
-    };
-    merge_rows(streams, state.found.values())
+    let found: Vec<HolodexStream> = DISCOVERY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|state| state.found.values().cloned().collect())
+        .unwrap_or_default();
+    let present: HashSet<String> = streams.iter().chain(&found).map(|s| s.id.clone()).collect();
+    let recent = super::youtube_data::recent_live_rows(&present);
+    merge_rows(streams, found.iter().chain(&recent))
 }
 
 fn merge_rows<'a>(
     mut streams: Vec<HolodexStream>,
     found: impl Iterator<Item = &'a HolodexStream>,
 ) -> Vec<HolodexStream> {
-    let present: HashSet<String> = streams.iter().map(|s| s.id.clone()).collect();
-    streams.extend(found.filter(|row| !present.contains(&row.id)).cloned());
+    let mut present: HashSet<String> = streams.iter().map(|s| s.id.clone()).collect();
+    for row in found {
+        if present.insert(row.id.clone()) {
+            streams.push(row.clone());
+        }
+    }
     streams
 }
 
@@ -983,6 +993,12 @@ mod tests {
         let ids: Vec<&str> = merged.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["shared", "missing"]);
         assert_eq!(merged[0].title, "holodex");
+
+        // A row both discovered and recently live is added once.
+        let recent = [base_row(&entry("missing")), base_row(&entry("dropped"))];
+        let merged = merge_rows(Vec::new(), found.iter().chain(&recent));
+        let ids: Vec<&str> = merged.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["shared", "missing", "dropped"]);
     }
 
     fn roster(n: usize) -> Vec<String> {

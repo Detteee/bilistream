@@ -810,6 +810,41 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_stream_only_reaches_its_own_channels_monitor() {
+        let live = |id: &str, channel: &str| HolodexStream {
+            id: id.to_string(),
+            title: String::new(),
+            stream_type: "stream".to_string(),
+            topic_id: None,
+            published_at: None,
+            available_at: None,
+            status: "live".to_string(),
+            start_scheduled: None,
+            start_actual: Some("2026-09-25T10:00:00Z".to_string()),
+            live_viewers: None,
+            channel: HolodexChannel {
+                id: channel.to_string(),
+                ..Default::default()
+            },
+            link: None,
+            thumbnail: None,
+            placeholder_type: None,
+            yt_confirmed: true,
+        };
+        super::super::youtube_data::remember_live_for_test(live("drop-a", "UCdropA"));
+        super::super::youtube_data::remember_live_for_test(live("drop-b", "UCdropB"));
+
+        // Holodex sent nothing for A during the outage: A's stream is back as live.
+        let rows = with_discovered_rows("UCdropA", Vec::new());
+        let ids: Vec<&str> = rows.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["drop-a"]);
+        assert!(select_holodex_channel_status("UCdropA", &rows).is_live);
+
+        // After a switch to C, neither dropped stream touches C's view.
+        assert!(with_discovered_rows("UCdropC", Vec::new()).is_empty());
+    }
+
+    #[test]
     fn a_probe_that_finds_live_is_not_reused() {
         let offline: YoutubeStatus = (false, None, Some("t".to_string()), None, None, None);
         record_safety_probe("UCprobe-offline", Some(offline.clone()));
