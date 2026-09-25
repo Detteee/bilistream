@@ -418,6 +418,22 @@ pub async fn cluster_export_config(
     }))
 }
 
+/// The owner's YouTube index for peers (`cluster::yt_index`).
+pub async fn cluster_yt_index() -> Json<ApiResponse<crate::cluster::YtIndexPayload>> {
+    match crate::cluster::owner_yt_index() {
+        Some(index) => Json(ApiResponse {
+            success: true,
+            data: Some((*index).clone()),
+            message: None,
+        }),
+        None => Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("本节点不负责集群的 YouTube 索引".to_string()),
+        }),
+    }
+}
+
 pub async fn cluster_apply_node_mode(
     Json(payload): Json<ClusterApplyNodeModeRequest>,
 ) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
@@ -1140,5 +1156,19 @@ mod public_status_tests {
             apply_public_status_url("http://ny.example.com:3150/"),
             "http://ny.example.com:3150/api/cluster/apply-public-status"
         );
+    }
+}
+
+#[cfg(test)]
+mod yt_index_tests {
+    use super::*;
+
+    /// A peer that asks a node which is not the index owner must get a
+    /// refusal, not an empty index that reads as "nothing is live".
+    #[tokio::test]
+    async fn only_the_index_owner_serves_the_youtube_index() {
+        let reply = cluster_yt_index().await.0;
+        assert!(!reply.success);
+        assert!(reply.data.is_none());
     }
 }

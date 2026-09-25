@@ -79,6 +79,7 @@ pub async fn start_webui_on_listener(
             post(api::cluster_apply_public_status),
         )
         .route("/cluster/export-config", get(api::cluster_export_config))
+        .route(crate::cluster::YT_INDEX_ROUTE, get(api::cluster_yt_index))
         .route(
             "/cluster/apply-node-mode",
             post(api::cluster_apply_node_mode),

@@ -34,6 +34,7 @@ pub struct ClusterWorker {
     heartbeat: tokio::task::JoinHandle<()>,
     self_check: tokio::task::JoinHandle<()>,
     external_api: tokio::task::JoinHandle<()>,
+    yt_index: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for ClusterWorker {
@@ -41,6 +42,7 @@ impl Drop for ClusterWorker {
         self.heartbeat.abort();
         self.self_check.abort();
         self.external_api.abort();
+        self.yt_index.abort();
     }
 }
 
@@ -96,11 +98,13 @@ pub fn start_cluster_worker() -> ClusterWorker {
             .await;
         }
     });
-    // Self-check latency cannot delay heartbeats to healthy peers.
+    // Self-check latency cannot delay heartbeats to healthy peers, and neither
+    // can YouTube index fetches or the owner's Google calls.
     ClusterWorker {
         heartbeat,
         self_check: tokio::spawn(super::self_check::run_self_checks()),
         external_api: tokio::spawn(super::external_api::run_external_api_checks()),
+        yt_index: tokio::spawn(super::yt_index::run_yt_index()),
     }
 }
 

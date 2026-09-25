@@ -317,6 +317,7 @@ mod tests {
             failed_restarts: 2,
             monitor_toggles: Default::default(),
             channel_targets: Default::default(),
+            yt_index_version: None,
         }
     }
 

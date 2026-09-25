@@ -27,7 +27,7 @@ pub(crate) const MAX_IDS_PER_CALL: usize = 50;
 /// calls made before the local count noticed a new day still fit.
 pub(crate) const DAILY_UNIT_BUDGET: u32 = 9_000;
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct YtLiveDetails {
     pub actual_start_time: Option<String>,
@@ -36,7 +36,7 @@ pub struct YtLiveDetails {
     pub concurrent_viewers: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct YtSnippet {
     #[serde(default)]
     pub title: String,
@@ -44,7 +44,7 @@ pub struct YtSnippet {
     pub channel_id: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct YtVideo {
     pub id: String,
@@ -629,6 +629,11 @@ pub(crate) async fn videos_within(
     ids: Vec<String>,
     max_age: Option<Duration>,
 ) -> Result<HashMap<String, YtVideo>, Box<dyn Error>> {
+    // A peer answers from the public-status node's index and makes no call, so
+    // `max_age` cannot apply there.
+    if let crate::cluster::YtIndexRole::Peer(index) = crate::cluster::yt_index_role() {
+        return Ok(index.answers(&ids));
+    }
     super::youtube_index::store_videos(keys, proxy, ids, max_age).await
 }
 
@@ -718,6 +723,11 @@ pub async fn apply_youtube_overlay_within(
     streams: Vec<HolodexStream>,
     max_age: Option<Duration>,
 ) -> Vec<HolodexStream> {
+    if let crate::cluster::YtIndexRole::Peer(index) = crate::cluster::yt_index_role() {
+        // The public-status node answers for the cluster: no key and no Google call here.
+        let videos = index.answers(streams.iter().map(|stream| &stream.id));
+        return overlay(streams, &videos);
+    }
     let Ok(cfg) = load_config().await else {
         return streams;
     };

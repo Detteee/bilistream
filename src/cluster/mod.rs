@@ -12,6 +12,7 @@ mod status;
 mod sync;
 mod types;
 mod version;
+mod yt_index;
 
 pub(crate) use election::*;
 pub use fencing::*;
@@ -25,6 +26,9 @@ pub use status::*;
 pub use sync::*;
 pub use types::*;
 pub use version::*;
+#[cfg(test)]
+pub(crate) use yt_index::with_yt_index_role;
+pub(crate) use yt_index::{owner_yt_index, yt_index_role, YtIndexRole, YT_INDEX_ROUTE};
 
 #[cfg(test)]
 mod election_tests;

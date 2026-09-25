@@ -1,9 +1,11 @@
 //! Cluster snapshots, requests, and monitor-toggle / channel-target helpers.
 
 use crate::config::{Config, PriorityChannel, Twitch, Youtube};
+use crate::plugins::holodex::HolodexStream;
+use crate::plugins::youtube_data::YtVideo;
 use crate::webui::state::{NetworkStatus, StatusData};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const NETWORK_ISOLATED_REASON: &str = "network_isolated";
 pub(crate) const NETWORK_UNSTABLE_REASON: &str = "network_unstable";
@@ -50,6 +52,10 @@ pub struct ClusterNodeSnapshot {
     pub monitor_toggles: MonitorToggleState,
     #[serde(default)]
     pub channel_targets: ChannelTargetState,
+    /// Version of the YouTube index this node serves while it answers for the
+    /// cluster (`cluster::yt_index`). Older nodes neither send nor read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yt_index_version: Option<String>,
 }
 
 impl ClusterNodeSnapshot {
@@ -253,6 +259,30 @@ pub struct ChannelTargetState {
     pub priority_youtube_channel_id: String,
     #[serde(default)]
     pub priority_twitch_channel_id: String,
+}
+
+/// The owner's YouTube index, served to peers at `GET /api/cluster/yt-index`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct YtIndexPayload {
+    pub version: String,
+    /// `videos.list` answers by video ID. `None` means YouTube omitted the ID
+    /// (private, members-only, deleted).
+    pub videos: BTreeMap<String, Option<YtVideo>>,
+    /// Discovered and recently live rows the owner merges into Holodex's.
+    pub discovered: Vec<HolodexStream>,
+}
+
+impl YtIndexPayload {
+    /// The owner's answers for `ids`. IDs without one are left out, so the
+    /// overlay keeps Holodex's values for them.
+    pub(crate) fn answers<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a String>,
+    ) -> HashMap<String, YtVideo> {
+        ids.into_iter()
+            .filter_map(|id| Some((id.clone(), self.videos.get(id)?.clone()?)))
+            .collect()
+    }
 }
 
 #[derive(Deserialize)]

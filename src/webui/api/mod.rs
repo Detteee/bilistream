@@ -710,6 +710,7 @@ mod tests {
             failed_restarts: 0,
             monitor_toggles,
             channel_targets,
+            yt_index_version: None,
         }
     }
 

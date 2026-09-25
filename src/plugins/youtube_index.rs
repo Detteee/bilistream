@@ -9,17 +9,22 @@
 //! stretch only when the key pool can no longer cover the protected lane's
 //! need (`LaneBook::protected_stretch`); the roster's playlist polling never
 //! slows them. Every answer also feeds the go-live hours (`youtube_hours`).
+//!
+//! On the cluster's public-status node the store is also published as the
+//! index peers answer from (see `cluster::yt_index`).
 
+use super::holodex::HolodexStream;
 use super::youtube_data::{
     classify, fetch_videos, lane_book, YtLiveState, YtVideo, MAX_IDS_PER_CALL,
 };
+use crate::cluster::YtIndexPayload;
 use crate::config::{load_config, Config};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// End detection for live streams.
 const LIVE: Duration = Duration::from_secs(60);
@@ -93,11 +98,16 @@ struct Store {
     retry_at: Option<Instant>,
     /// `youtube::monitored_channels`, from the last refresher pass.
     monitored: HashSet<String>,
+    /// Content of the published index, to tell whether it changed.
+    shipped: Vec<u8>,
+    published: Option<Arc<YtIndexPayload>>,
     units: u32,
     stats_since: Option<Instant>,
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
+/// Outlives `clear`, so a version is never reused within one process.
+static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> T {
     let mut guard = STORE.lock().unwrap_or_else(|e| e.into_inner());
@@ -166,6 +176,18 @@ fn plan<'a>(urgencies: impl IntoIterator<Item = (&'a str, f64)>) -> Vec<String> 
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
     ranked.truncate(due.div_ceil(MAX_IDS_PER_CALL) * MAX_IDS_PER_CALL);
     ranked.into_iter().map(|(id, _)| id.to_string()).collect()
+}
+
+/// Tells this process's versions apart from those of a restarted owner.
+fn boot_tag() -> &'static str {
+    static TAG: OnceLock<String> = OnceLock::new();
+    TAG.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("{nanos:x}")
+    })
 }
 
 impl Store {
@@ -258,6 +280,34 @@ impl Store {
         for (_, id) in by_wanted.into_iter().take(excess) {
             self.entries.remove(&id);
         }
+    }
+
+    /// Rebuilds the index peers download, under a new version only when it
+    /// changed. Nothing is published until there is something to serve, so
+    /// peers keep answering for themselves meanwhile.
+    fn publish(&mut self, discovered: Vec<HolodexStream>, now: Instant, utc: DateTime<Utc>) {
+        let stretch = self.stretch();
+        let monitored = &self.monitored;
+        let videos: BTreeMap<String, Option<YtVideo>> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.fresh(now, utc, stretch, monitored))
+            .map(|(id, entry)| (id.clone(), entry.video.clone()))
+            .collect();
+        if self.published.is_none() && videos.is_empty() && discovered.is_empty() {
+            return;
+        }
+        let content = serde_json::to_vec(&(&videos, &discovered)).unwrap_or_default();
+        if self.published.is_some() && content == self.shipped {
+            return;
+        }
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        self.shipped = content;
+        self.published = Some(Arc::new(YtIndexPayload {
+            version: format!("{}-{seq}", boot_tag()),
+            videos,
+            discovered,
+        }));
     }
 
     fn log_stats(&mut self, now: Instant) {
@@ -369,13 +419,37 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
         }
     }
 
+    if matches!(crate::cluster::yt_index_role(), crate::cluster::YtIndexRole::Owner) {
+        let mut discovered = super::youtube_rss::merge_discovered(Vec::new());
+        discovered.sort_by(|a, b| a.id.cmp(&b.id));
+        with_store(|store| store.publish(discovered, Instant::now(), Utc::now()));
+    }
     with_store(|store| store.log_stats(now));
     recorded
+}
+
+/// Drops everything once this node answers from another node's index.
+pub(crate) fn clear() {
+    *STORE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// The index peers download, once there is one.
+pub(crate) fn published() -> Option<Arc<YtIndexPayload>> {
+    STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()?
+        .published
+        .clone()
 }
 
 /// One refresher pass for `cfg`. Without a key the store is dropped: nothing
 /// is tracked and no call is made.
 pub(crate) async fn refresh_tick(cfg: &Config) {
+    // A peer answers from the public-status node's index and calls nothing.
+    if matches!(crate::cluster::yt_index_role(), crate::cluster::YtIndexRole::Peer(_)) {
+        return;
+    }
     let keys = cfg.youtube_api_keys();
     if keys.is_empty() {
         *STORE.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -640,5 +714,49 @@ mod tests {
             store.lookup(ids(&["live"]), t0 + Duration::from_secs(16), utc, cap);
         assert!(answered.is_empty());
         assert_eq!(missing, ids(&["live"]));
+    }
+
+    #[test]
+    fn the_index_gets_a_new_version_only_when_it_changes() {
+        let t0 = Instant::now();
+        let utc = at("2026-09-25T12:00:00Z");
+        let mut store = Store::default();
+        store.publish(Vec::new(), t0, utc);
+        assert!(store.published.is_none(), "nothing to serve yet");
+
+        store.record(&ids(&["live", "omitted"]), vec![live("live")], t0);
+        store.publish(Vec::new(), t0, utc);
+        let first = store.published.clone().unwrap();
+        assert_eq!(first.videos.get("live"), Some(&Some(live("live"))));
+        assert_eq!(first.videos.get("omitted"), Some(&None));
+
+        store.record(&ids(&["live", "omitted"]), vec![live("live")], t0 + LIVE);
+        store.publish(Vec::new(), t0 + LIVE, utc);
+        assert_eq!(store.published.as_ref().unwrap().version, first.version);
+
+        let mut more_viewers = live("live");
+        more_viewers
+            .live_streaming_details
+            .as_mut()
+            .unwrap()
+            .concurrent_viewers = Some("250".to_string());
+        store.record(&ids(&["live"]), vec![more_viewers], t0 + 2 * LIVE);
+        store.publish(Vec::new(), t0 + 2 * LIVE, utc);
+        assert_ne!(store.published.as_ref().unwrap().version, first.version);
+    }
+
+    #[test]
+    fn answers_refreshes_failed_to_renew_leave_the_index() {
+        let t0 = Instant::now();
+        let utc = at("2026-09-25T12:00:00Z");
+        let mut store = Store::default();
+        store.record(&ids(&["live"]), vec![live("live")], t0);
+        store.publish(Vec::new(), t0, utc);
+        let first = store.published.clone().unwrap();
+
+        store.publish(Vec::new(), t0 + 2 * LIVE, utc);
+        let now = store.published.clone().unwrap();
+        assert!(now.videos.is_empty());
+        assert_ne!(now.version, first.version);
     }
 }

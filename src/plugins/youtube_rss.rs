@@ -993,6 +993,10 @@ struct Worker {
 
 impl Worker {
     async fn tick(&mut self) -> Result<(), String> {
+        if crate::cluster::yt_index_role().is_peer() {
+            // The owner node discovers for the cluster; its rows come with the index.
+            return Ok(());
+        }
         let cfg = load_config().await.map_err(|e| e.to_string())?;
         let keys = cfg.youtube_api_keys();
         if keys.is_empty() {
@@ -1420,6 +1424,10 @@ impl Worker {
 /// `youtube_data::recent_live_rows`). Callers filter by channel and horizon
 /// afterwards as usual.
 pub fn merge_discovered(streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+    if let crate::cluster::YtIndexRole::Peer(index) = crate::cluster::yt_index_role() {
+        // The owner's discovered and recently live rows.
+        return merge_rows(streams, index.discovered.iter());
+    }
     let found: Vec<HolodexStream> = DISCOVERY
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -2029,5 +2037,17 @@ mod tests {
                 published: Some("2026-09-24T10:59:38Z".to_string()),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn a_cluster_peer_leaves_discovery_to_the_owner() {
+        let peer = crate::cluster::YtIndexRole::Peer(Default::default());
+        let mut worker = Worker {
+            roster: roster(3),
+            ..Worker::default()
+        };
+        let result = crate::cluster::with_yt_index_role(peer, worker.tick()).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(worker.roster, roster(3), "no config read, no feed planned");
     }
 }

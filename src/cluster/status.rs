@@ -348,6 +348,7 @@ pub(crate) fn empty_node(
         failed_restarts: 0,
         monitor_toggles: all_monitor_toggles_off(),
         channel_targets: ChannelTargetState::default(),
+        yt_index_version: None,
     }
 }
 
