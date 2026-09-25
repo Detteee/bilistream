@@ -456,10 +456,10 @@ async fn rebuild_public_streams(cached_only: bool) -> bool {
         }
     };
 
-    // Same filter the dashboard applies: a collab shows up under a channel we
-    // do not monitor, and an upcoming entry is noise once the channel is live
-    // or if it is more than a day out.
-    let streams = crate::webui::api::filter_holodex_streams(streams, ids.into_iter().collect());
+    // Same corrections and filter as the dashboard. A collab shows up under a
+    // channel we do not monitor, and an upcoming entry is noise once the
+    // channel is live or if it is more than a day out.
+    let streams = corrected_rows(streams, ids).await;
 
     // Config stays on during a restream; the processor gate does not. Use the
     // same owner-facing flag the status cards do, or 切换 stays green while
@@ -488,6 +488,16 @@ async fn rebuild_public_streams(cached_only: bool) -> bool {
     });
     store_snapshot(&public, confirmed_for);
     true
+}
+
+/// Holodex rows as the dashboard shows them (`api/holodex.rs`): discovered and
+/// recently live rows merged in, YouTube's answers over Holodex's, then the
+/// channel and horizon filter. On the index owner the answers come from its
+/// store, so a remap costs no Google call.
+async fn corrected_rows(streams: Vec<HolodexStream>, ids: Vec<String>) -> Vec<HolodexStream> {
+    let streams = crate::plugins::youtube_rss::merge_discovered(streams);
+    let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
+    crate::webui::api::filter_holodex_streams(streams, ids.into_iter().collect())
 }
 
 /// Thumbnails and avatars the node will fetch for this list.
@@ -546,6 +556,8 @@ mod tests {
     use super::*;
     use crate::config::ChannelPlatforms;
     use crate::plugins::holodex::HolodexChannel;
+    use crate::plugins::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
+    use std::collections::BTreeMap;
 
     #[test]
     fn unchanged_success_renews_freshness_but_remapping_old_streams_does_not() {
@@ -1143,5 +1155,53 @@ mod tests {
         assert!(!serde_json::to_string(&built[0])
             .unwrap()
             .contains("UCkamito"));
+    }
+
+    fn youtube_answer(id: &str, end: Option<&str>) -> YtVideo {
+        YtVideo {
+            id: id.to_string(),
+            snippet: YtSnippet::default(),
+            live_streaming_details: Some(YtLiveDetails {
+                actual_start_time: Some("2026-09-25T10:00:00Z".to_string()),
+                actual_end_time: end.map(str::to_string),
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// The dashboard's corrections reach the public list: a waiting room
+    /// YouTube says ended is gone even though Holodex still lists it, and a
+    /// stream Holodex dropped during an encoder outage stays while YouTube
+    /// says it is live. They are on different channels, since a live stream
+    /// would hide its own channel's waiting room anyway.
+    #[tokio::test]
+    async fn the_public_list_follows_the_youtube_index() {
+        let mut dropped = stream_on("dropped", "ランク", None, "UCnazuna", "live", None);
+        dropped.yt_confirmed = true;
+        let index = crate::cluster::YtIndexPayload {
+            version: "v1".to_string(),
+            videos: BTreeMap::from([
+                (
+                    "ended".to_string(),
+                    Some(youtube_answer("ended", Some("2026-09-25T11:00:00Z"))),
+                ),
+                ("dropped".to_string(), Some(youtube_answer("dropped", None))),
+            ]),
+            discovered: vec![dropped],
+        };
+        let holodex = vec![stream_on(
+            "ended", "雑談", None, "UCkamito", "upcoming", None,
+        )];
+
+        let rows = crate::cluster::with_yt_index_role(
+            crate::cluster::YtIndexRole::Peer(std::sync::Arc::new(index)),
+            corrected_rows(
+                holodex,
+                vec!["UCkamito".to_string(), "UCnazuna".to_string()],
+            ),
+        )
+        .await;
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, vec!["dropped"]);
     }
 }
