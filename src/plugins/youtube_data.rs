@@ -14,7 +14,7 @@
 use super::holodex::HolodexStream;
 use super::http::{pooled_client, response_json_limited};
 use crate::config::load_config;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Mutex;
@@ -24,7 +24,7 @@ const VIDEOS_URL: &str = "https://www.googleapis.com/youtube/v3/videos";
 const MAX_IDS_PER_CALL: usize = 50;
 /// Per key. Google's default is 10,000 units/day; stop short so retries and
 /// calls made before the local count noticed a new day still fit.
-pub(crate) const DAILY_UNIT_BUDGET: u32 = 8_000;
+pub(crate) const DAILY_UNIT_BUDGET: u32 = 9_000;
 /// Panel refreshes and monitor ticks inside this window reuse one answer.
 const CACHE_TTL: Duration = Duration::from_secs(15);
 
@@ -154,6 +154,20 @@ fn pacific_day(now: chrono::DateTime<chrono::Utc>) -> i64 {
         .div_euclid(86_400)
 }
 
+/// Share of the current Pacific day (as `pacific_day` counts it) still ahead.
+pub(crate) fn pacific_day_left(now: chrono::DateTime<chrono::Utc>) -> f64 {
+    let elapsed = (now - chrono::Duration::hours(8))
+        .timestamp()
+        .rem_euclid(86_400);
+    1.0 - elapsed as f64 / 86_400.0
+}
+
+/// When `pacific_day` next rolls over, i.e. when the local counts reset.
+fn pacific_day_end(now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    let start = (pacific_day(now) + 1) * 86_400 + 8 * 3_600;
+    chrono::DateTime::from_timestamp(start, 0).unwrap_or(now)
+}
+
 /// Which key pays for a call. Each key has its own daily budget; the one with
 /// the most budget left is used, so load spreads and a new key takes over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +249,59 @@ impl KeyPool {
         self.sync(keys, day);
         keys.iter().filter(|key| self.usable(key, 1)).count()
     }
+
+    /// Unspent units on keys Google has not benched, as a share of every
+    /// key's full budget.
+    fn remaining_fraction(&mut self, keys: &[String], day: i64) -> f64 {
+        self.sync(keys, day);
+        if keys.is_empty() {
+            return 0.0;
+        }
+        let left: u32 = keys
+            .iter()
+            .filter_map(|key| self.keys.get(key))
+            .filter(|state| state.benched.is_none())
+            .map(|state| DAILY_UNIT_BUDGET.saturating_sub(state.used))
+            .sum();
+        f64::from(left) / (keys.len() as f64 * f64::from(DAILY_UNIT_BUDGET))
+    }
+
+    fn status(&mut self, keys: &[String], day: i64) -> Vec<KeyStatus> {
+        self.sync(keys, day);
+        keys.iter()
+            .filter_map(|key| {
+                let state = self.keys.get(key)?;
+                Some(KeyStatus {
+                    fingerprint: fingerprint(key),
+                    used: state.used,
+                    state: match state.benched {
+                        Some(Bench::UntilConfigChange) => KeyUse::Rejected,
+                        Some(Bench::UntilDay(_)) => KeyUse::Exhausted,
+                        None if !self.usable(key, 1) => KeyUse::Exhausted,
+                        None => KeyUse::Usable,
+                    },
+                })
+            })
+            .collect()
+    }
+}
+
+/// One key as the settings view shows it. Never carries the key itself.
+#[derive(Serialize)]
+struct KeyStatus {
+    fingerprint: String,
+    used: u32,
+    state: KeyUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum KeyUse {
+    Usable,
+    /// Today's budget is spent; usable again after the Pacific reset.
+    Exhausted,
+    /// Google rejected the key; usable again once the key list changes.
+    Rejected,
 }
 
 static POOL: Mutex<Option<KeyPool>> = Mutex::new(None);
@@ -247,6 +314,42 @@ fn with_pool<T>(f: impl FnOnce(&mut KeyPool) -> T) -> T {
 /// Keys whose daily budget is not spent and that Google has not rejected.
 pub(crate) fn usable_key_count(keys: &[String]) -> usize {
     with_pool(|pool| pool.usable_count(keys, pacific_day(chrono::Utc::now())))
+}
+
+/// How much of the pool's daily budget is left, from 0 to 1.
+pub(crate) fn budget_remaining_fraction(keys: &[String]) -> f64 {
+    with_pool(|pool| pool.remaining_fraction(keys, pacific_day(chrono::Utc::now())))
+}
+
+pub(crate) const MAX_STRETCH: u32 = 8;
+
+/// Interval multiplier: 1 while the pool has at least as large a share of its
+/// daily budget left as of the day, otherwise enough to fall back in step.
+pub(crate) fn stretch(remaining: f64, day_left: f64) -> u32 {
+    if remaining >= day_left {
+        1
+    } else if remaining <= 0.0 {
+        MAX_STRETCH
+    } else {
+        ((day_left / remaining).ceil() as u32).min(MAX_STRETCH)
+    }
+}
+
+/// The pool for the settings view: per-key spend and state, the share left
+/// and when the local counts reset.
+pub(crate) fn key_pool_status(keys: &[String]) -> serde_json::Value {
+    let now = chrono::Utc::now();
+    let (keys, remaining) = with_pool(|pool| {
+        let day = pacific_day(now);
+        (pool.status(keys, day), pool.remaining_fraction(keys, day))
+    });
+    serde_json::json!({
+        "keys": keys,
+        "budget_per_key": DAILY_UNIT_BUDGET,
+        "remaining_fraction": remaining,
+        "day_left": pacific_day_left(now),
+        "resets_at": pacific_day_end(now).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    })
 }
 
 /// Short stable tag for logs; the key itself must never be logged.
@@ -811,6 +914,60 @@ mod tests {
     }
 
     #[test]
+    fn the_remaining_budget_counts_only_unbenched_keys() {
+        let two = keys(&["a", "b"]);
+        let mut pool = KeyPool::default();
+        assert_eq!(pool.remaining_fraction(&two, 1), 1.0);
+        pool.pick(&keys(&["a"]), DAILY_UNIT_BUDGET / 2, 1, &[]);
+        assert_eq!(pool.remaining_fraction(&two, 1), 0.75);
+        pool.bench("b", Bench::UntilDay(2));
+        assert_eq!(pool.remaining_fraction(&two, 1), 0.25);
+        assert_eq!(
+            pool.remaining_fraction(&two, 2),
+            1.0,
+            "a new day resets both"
+        );
+        assert_eq!(pool.remaining_fraction(&[], 2), 0.0);
+    }
+
+    #[test]
+    fn intervals_stretch_when_the_budget_runs_ahead_of_the_day() {
+        assert_eq!(stretch(0.5, 0.5), 1);
+        assert_eq!(stretch(0.9, 0.5), 1);
+        assert_eq!(stretch(0.4, 0.5), 2);
+        assert_eq!(stretch(0.1, 0.5), 5);
+        assert_eq!(stretch(0.01, 0.5), MAX_STRETCH);
+        assert_eq!(stretch(0.0, 0.5), MAX_STRETCH);
+    }
+
+    #[test]
+    fn key_status_names_keys_by_fingerprint_and_state_only() {
+        let secret = keys(&[
+            "AIzaSyUsable",
+            "AIzaSySpent",
+            "AIzaSyRejected",
+            "AIzaSyFull",
+        ]);
+        let mut pool = KeyPool::default();
+        pool.sync(&secret, 1);
+        pool.keys.get_mut("AIzaSyUsable").unwrap().used = 1_234;
+        pool.bench("AIzaSySpent", Bench::UntilDay(2));
+        pool.bench("AIzaSyRejected", Bench::UntilConfigChange);
+        pool.keys.get_mut("AIzaSyFull").unwrap().used = DAILY_UNIT_BUDGET;
+        let json = serde_json::to_value(pool.status(&secret, 1)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([
+                {"fingerprint": fingerprint("AIzaSyUsable"), "used": 1_234, "state": "usable"},
+                {"fingerprint": fingerprint("AIzaSySpent"), "used": 0, "state": "exhausted"},
+                {"fingerprint": fingerprint("AIzaSyRejected"), "used": 0, "state": "rejected"},
+                {"fingerprint": fingerprint("AIzaSyFull"), "used": DAILY_UNIT_BUDGET, "state": "exhausted"},
+            ])
+        );
+        assert!(!json.to_string().contains("AIzaSy"));
+    }
+
+    #[test]
     fn google_error_reasons_map_to_key_faults() {
         let legacy = |reason: &str| serde_json::json!({"error": {"code": 403, "errors": [{"reason": reason}]}});
         assert_eq!(
@@ -853,5 +1010,15 @@ mod tests {
         let before = pacific_day(at("2026-09-24T07:59:59Z"));
         assert_eq!(pacific_day(at("2026-09-24T08:00:00Z")), before + 1);
         assert_eq!(pacific_day(at("2026-09-24T00:00:00Z")), before);
+        assert_eq!(pacific_day_left(at("2026-09-24T08:00:00Z")), 1.0);
+        assert_eq!(pacific_day_left(at("2026-09-24T20:00:00Z")), 0.5);
+        assert_eq!(
+            pacific_day_end(at("2026-09-24T07:59:59Z")),
+            at("2026-09-24T08:00:00Z")
+        );
+        assert_eq!(
+            pacific_day_end(at("2026-09-24T08:00:00Z")),
+            at("2026-09-25T08:00:00Z")
+        );
     }
 }

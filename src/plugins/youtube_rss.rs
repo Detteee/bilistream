@@ -19,7 +19,10 @@
 
 use super::holodex::{HolodexChannel, HolodexStream};
 use super::http::{pooled_client, response_bytes_limited};
-use super::youtube_data::{google_get, usable_key_count, DAILY_UNIT_BUDGET};
+use super::youtube_data::{
+    budget_remaining_fraction, google_get, pacific_day_left, stretch, usable_key_count,
+    DAILY_UNIT_BUDGET,
+};
 use crate::config::{load_config, Config};
 use futures_util::stream::{self, StreamExt};
 use regex::Regex;
@@ -557,6 +560,52 @@ fn playlist_interval(channels: usize, usable_keys: usize) -> Option<Duration> {
     Some(Duration::from_secs(secs).max(MIN_PLAYLIST_INTERVAL))
 }
 
+/// The interval stretched while spend runs ahead of the day, and whether it is
+/// used: only while it beats the RSS tick, or while RSS is down.
+fn paced_interval(
+    base: Option<Duration>,
+    stretch: u32,
+    rss_down: bool,
+) -> (Option<Duration>, bool) {
+    let interval = base.map(|interval| interval * stretch);
+    let on = interval.is_some_and(|interval| interval < RSS_TICK || rss_down);
+    (interval, on)
+}
+
+/// Fewest usable keys whose interval beats the RSS tick for this roster.
+fn keys_needed(channels: usize) -> Option<usize> {
+    if channels == 0 {
+        return None;
+    }
+    (1..)
+        .find(|keys| playlist_interval(channels, *keys).is_some_and(|interval| interval < RSS_TICK))
+}
+
+/// What the last `poll_playlists` decided, for the settings view.
+#[derive(Clone, Copy)]
+struct PlaylistStatus {
+    on: bool,
+    interval: Option<Duration>,
+    stretch: u32,
+    rss_down: bool,
+    roster_len: usize,
+}
+
+static PLAYLIST_STATUS: Mutex<Option<PlaylistStatus>> = Mutex::new(None);
+
+/// Uploads-playlist polling as of the worker's last loop; `None` before the
+/// first loop or without a key.
+pub(crate) fn playlist_status() -> Option<serde_json::Value> {
+    let status = (*PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()))?;
+    Some(serde_json::json!({
+        "on": status.on,
+        "interval_secs": status.interval.map(|interval| interval.as_secs()),
+        "stretch": status.stretch,
+        "rss_down": status.rss_down,
+        "keys_needed": keys_needed(status.roster_len),
+    }))
+}
+
 enum PlaylistOutcome {
     Entries(Vec<FeedEntry>),
     NotFound,
@@ -620,6 +669,8 @@ struct Worker {
     /// Re-check of known rows and retry after a failed classification.
     next_recheck: Option<Instant>,
     playlist_on: bool,
+    /// Last interval multiplier from the pool's spend.
+    stretch: u32,
     /// Next uploads-playlist poll per channel.
     playlist_due: HashMap<String, Instant>,
     /// What each uploads playlist last listed.
@@ -635,6 +686,7 @@ impl Worker {
         if keys.is_empty() {
             // Nothing can be classified without a key; drop stale rows too.
             *DISCOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *self = Worker::default();
             return Ok(());
         }
@@ -708,18 +760,51 @@ impl Worker {
         fresh: &mut HashMap<String, Source>,
         now: Instant,
     ) {
-        let interval = playlist_interval(roster.len(), usable_key_count(keys));
+        let base = playlist_interval(roster.len(), usable_key_count(keys));
+        let stretch = stretch(
+            budget_remaining_fraction(keys),
+            pacific_day_left(chrono::Utc::now()),
+        );
         let degraded = self.rss.degraded(now);
-        let active = interval.filter(|interval| *interval < RSS_TICK || degraded);
-        if active.is_some() != self.playlist_on {
-            self.playlist_on = active.is_some();
+        let (interval, on) = paced_interval(base, stretch, degraded);
+        *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(PlaylistStatus {
+            on,
+            interval,
+            stretch,
+            rss_down: degraded,
+            roster_len: roster.len(),
+        });
+        let stretch_changed = stretch != self.stretch;
+        self.stretch = stretch;
+        let stretched = if stretch > 1 {
+            format!(" (配额消耗快于时间进度，间隔放大 {stretch} 倍)")
+        } else {
+            String::new()
+        };
+        let active = interval.filter(|_| on);
+        if on != self.playlist_on {
+            self.playlist_on = on;
             match active {
                 Some(interval) => tracing::info!(
-                    "YouTube 上传列表轮询开启: 每频道 {}s{}",
+                    "YouTube 上传列表轮询开启: 每频道 {}s{}{}",
                     interval.as_secs(),
+                    stretched,
                     if degraded { " (RSS 不可用)" } else { "" }
                 ),
-                None => tracing::info!("YouTube 上传列表轮询关闭"),
+                None => tracing::info!("YouTube 上传列表轮询关闭{}", stretched),
+            }
+        } else if let Some(interval) = active.filter(|_| stretch_changed) {
+            if stretch > 1 {
+                tracing::info!(
+                    "YouTube 配额消耗快于时间进度，上传列表轮询间隔放大 {} 倍: 每频道 {}s",
+                    stretch,
+                    interval.as_secs()
+                );
+            } else {
+                tracing::info!(
+                    "YouTube 配额进度恢复，上传列表轮询间隔恢复正常: 每频道 {}s",
+                    interval.as_secs()
+                );
             }
         }
         let Some(interval) = active else {
@@ -1140,13 +1225,40 @@ mod tests {
     fn playlist_interval_follows_the_key_count() {
         let secs = |keys| playlist_interval(37, keys).map(|d| d.as_secs());
         assert_eq!(secs(0), None);
-        assert_eq!(secs(1), Some(640));
-        assert_eq!(secs(2), Some(246));
-        assert_eq!(secs(3), Some(153));
-        assert_eq!(secs(4), Some(111));
-        assert_eq!(secs(6), Some(72));
+        assert_eq!(secs(1), Some(533));
+        assert_eq!(secs(2), Some(214));
+        assert_eq!(secs(3), Some(134));
+        assert_eq!(secs(4), Some(97));
+        assert_eq!(secs(6), Some(63));
         assert_eq!(playlist_interval(3, 6), Some(MIN_PLAYLIST_INTERVAL));
         assert_eq!(playlist_interval(0, 2), None);
+    }
+
+    #[test]
+    fn a_stretch_slows_polling_and_turns_it_off_once_rss_is_faster() {
+        let three_keys = playlist_interval(37, 3);
+        let secs = |(interval, on): (Option<Duration>, bool)| (interval.map(|d| d.as_secs()), on);
+        assert_eq!(
+            secs(paced_interval(three_keys, 1, false)),
+            (Some(134), true)
+        );
+        assert_eq!(
+            secs(paced_interval(three_keys, 2, false)),
+            (Some(268), false)
+        );
+        assert_eq!(
+            secs(paced_interval(three_keys, 2, true)),
+            (Some(268), true),
+            "RSS down keeps polling at the stretched cadence"
+        );
+        assert_eq!(secs(paced_interval(None, 2, true)), (None, false));
+    }
+
+    #[test]
+    fn keys_needed_is_the_fewest_that_beat_rss() {
+        assert_eq!(keys_needed(37), Some(3));
+        assert_eq!(keys_needed(1), Some(1));
+        assert_eq!(keys_needed(0), None);
     }
 
     #[test]

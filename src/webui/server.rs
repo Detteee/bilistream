@@ -73,6 +73,7 @@ pub async fn start_webui_on_listener(
         .route("/deps/status", get(api::get_deps_status))
         .route("/holodex/streams", get(api::api_get_holodex_streams))
         .route("/holodex/auth/status", get(api::api_holodex_auth_status))
+        .route("/youtube/keys", get(api::api_youtube_key_status))
         .route("/holodex/switch", post(api::switch_to_holodex_stream))
         .route("/refresh/youtube", get(api::refresh_youtube_status))
         .route("/refresh/twitch", get(api::refresh_twitch_status))

@@ -5,6 +5,7 @@ import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle 
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
+import { formatKeyPoolSummary, formatKeyState, formatPlaylistPolling } from './format.js';
 
 let configBaseline = null;
 let keywordsBaseline = null;
@@ -115,6 +116,7 @@ async function loadSystemConfig() {
     loadAntiCollisionList(window.currentAntiCollisionList);
 
     configBaseline = structuredClone(getCurrentConfig());
+    loadYoutubeKeyStatus();
 
     // Load banned keywords
     await loadBannedKeywords(generation);
@@ -127,6 +129,34 @@ async function loadSystemConfig() {
     console.error('Failed to load system config:', error);
     showNotification('加载配置失败', 'error');
   }
+}
+// Key pool state under the YouTube key field; hidden without a key.
+async function loadYoutubeKeyStatus() {
+  const block = document.getElementById('youtube-key-status');
+  if (!block) return;
+  let data = null;
+  try {
+    const result = await getJson('/api/youtube/keys');
+    if (result.success) data = result.data;
+  } catch (error) {
+    console.debug('Failed to load YouTube key status:', error);
+  }
+  if (!data?.configured) {
+    block.hidden = true;
+    block.replaceChildren();
+    return;
+  }
+  const lines = [
+    formatKeyPoolSummary(data),
+    ...(data.keys || []).map(formatKeyState),
+    formatPlaylistPolling(data.playlist),
+  ].filter(Boolean);
+  block.replaceChildren(...lines.map(text => {
+    const line = document.createElement('div');
+    line.textContent = text;
+    return line;
+  }));
+  block.hidden = false;
 }
 async function loadMonitorToggleStates(config = window.configData) {
   try {
@@ -309,6 +339,7 @@ async function saveSystemConfig() {
       // Preserve edits made during the save: advance only to what was sent.
       configBaseline = structuredClone(config);
       await reloadServerConfig();
+      if ('youtube_api_key' in patch) loadYoutubeKeyStatus();
     }
     try {
       await saveBannedKeywords();
@@ -585,6 +616,7 @@ export {
   toggleConfigRiotApiKey,
   toggleAntiCollisionList,
   loadSystemConfig,
+  loadYoutubeKeyStatus,
   loadMonitorToggleStates,
   loadBannedKeywords,
   loadDanmakuCommandState,

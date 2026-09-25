@@ -1228,10 +1228,11 @@
                 <textarea id="config-youtube-api-key" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据校正 Holodex 的开播状态（每行一个 key）"></textarea>
                 <small class="settings-help-text">
-                  可填多个 key（每行一个），来自不同 Google 项目的额度可叠加，每个 key 每天用 8,000 单位；2 个以上会额外轮询上传列表，更快发现未预告的直播。
+                  可填多个 key（每行一个），来自不同 Google 项目的额度可叠加，每个 key 每天最多用 9,000 单位。key 越多，上传列表轮询越快：快于 RSS（每 3 分钟）时自动开启，RSS 故障时也会开启。
                   获取：<a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
                     rel="noopener noreferrer" class="settings-help-link">Google Cloud Console</a>
                 </small>
+                <div id="youtube-key-status" class="settings-help-text" hidden></div>
               </div>
               <div class="control-group">
                 <label class="toggle-label settings-toggle-row">

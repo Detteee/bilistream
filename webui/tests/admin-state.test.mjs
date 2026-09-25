@@ -276,3 +276,50 @@ test('concurrent clicks serialize and polling cannot overwrite pending intent', 
   assert.deepEqual(saved, [true, false]);
   assert.equal(toggle.checked, false);
 });
+
+test('YouTube key pool status reads as one line per fact', async () => {
+  const { formatKeyPoolSummary, formatKeyState, formatPlaylistPolling } = await import('../dist/js/format.js');
+  const resetsAt = '2026-09-26T08:00:00Z';
+  const at = new Date(resetsAt);
+  const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  const data = {
+    configured: true,
+    keys: [
+      { fingerprint: 'a1b2c3', used: 1234, state: 'usable' },
+      { fingerprint: 'd4e5f6', used: 9000, state: 'exhausted' },
+      { fingerprint: '0f9e8d', used: 0, state: 'rejected' },
+    ],
+    budget_per_key: 9000,
+    remaining_fraction: 0.29,
+    resets_at: resetsAt,
+  };
+  assert.equal(
+    formatKeyPoolSummary(data),
+    `今日已用 10,234 / 27,000 单位 · 剩余 29% · 1/3 个 key 可用 · ${clock} 重置`,
+  );
+  assert.deepEqual(data.keys.map(formatKeyState), [
+    'a1b2c3 · 1,234',
+    'd4e5f6 · 今日额度已用完',
+    '0f9e8d · 被拒绝（检查 key 或 API 是否启用）',
+  ]);
+
+  const playlist = { on: true, interval_secs: 134, stretch: 1, rss_down: false, keys_needed: 3 };
+  assert.equal(formatPlaylistPolling(playlist), '上传列表轮询：每频道 134s');
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, interval_secs: 268, stretch: 2, rss_down: true }),
+    'RSS 故障，上传列表每频道 268s（配额偏快，间隔 ×2）',
+  );
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, on: false, interval_secs: 533 }),
+    '上传列表轮询：关闭（RSS 正常；3 个可用 key 起常规轮询）',
+  );
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, on: false, interval_secs: 268, stretch: 2 }),
+    '上传列表轮询：关闭（配额偏快，间隔 ×2 后慢于 RSS）',
+  );
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, on: false, interval_secs: null }),
+    '上传列表轮询：关闭（没有可用 key）',
+  );
+  assert.equal(formatPlaylistPolling(null), '', 'no line before the worker has run');
+});
