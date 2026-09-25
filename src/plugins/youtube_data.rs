@@ -969,11 +969,18 @@ mod tests {
 
     #[test]
     fn google_error_reasons_map_to_key_faults() {
+        // Google's documented 403 body for a spent daily quota, verbatim.
+        let quota = serde_json::json!({"error": {
+            "code": 403,
+            "message": "The request cannot be completed because you have exceeded your quota.",
+            "errors": [{
+                "domain": "youtube.quota",
+                "reason": "quotaExceeded",
+                "message": "The request cannot be completed because you have exceeded your quota."
+            }]
+        }});
+        assert_eq!(key_fault(&quota), Some(KeyFault::Exhausted));
         let legacy = |reason: &str| serde_json::json!({"error": {"code": 403, "errors": [{"reason": reason}]}});
-        assert_eq!(
-            key_fault(&legacy("quotaExceeded")),
-            Some(KeyFault::Exhausted)
-        );
         assert_eq!(
             key_fault(&legacy("dailyLimitExceeded")),
             Some(KeyFault::Exhausted)
