@@ -21,7 +21,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
-use super::streams::{current_public_streams, start_streams_refresh};
+use super::streams::{current_public_streams, start_streams_watch};
 use super::thumbnails::read_thumbnail;
 use crate::webui::server::static_asset_dir;
 
@@ -32,8 +32,7 @@ const MAX_BODY_BYTES: usize = 4 * 1024;
 /// may hold them far longer than the status payload.
 const AREAS_MAX_AGE_SECS: u64 = 300;
 
-/// Matches the refresh timer's floor, so the edge never holds a list longer
-/// than the origin would have kept it.
+/// Viewers poll every 30s; the edge never holds a list longer than that.
 const STREAMS_MAX_AGE_SECS: u64 = 30;
 
 #[derive(Serialize)]
@@ -56,10 +55,10 @@ async fn public_status(headers: HeaderMap) -> Response {
     public_json_response(&headers, body, etag, SNAPSHOT_TTL.as_secs())
 }
 
-/// The cached Holodex list. Refreshed on a timer, never on request, so viewer
-/// traffic cannot reach Holodex at all.
+/// The cached stream list. Rebuilt from the channels list, never on request,
+/// so viewer traffic cannot reach Holodex or Google at all.
 async fn public_streams(headers: HeaderMap) -> Response {
-    let Some((body, etag)) = current_public_streams() else {
+    let Some((body, etag)) = current_public_streams().await else {
         // Before the first successful fetch there is nothing to show; say so
         // rather than serving an empty list that reads as "nobody is live".
         return (StatusCode::SERVICE_UNAVAILABLE, "streams unavailable").into_response();
@@ -278,9 +277,8 @@ pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
                             tracing::info!("🌐 公开状态页已启动: http://{}", wanted.addr);
                             running = Some(RunningListener {
                                 addr: wanted.addr,
-                                refresh: wanted.refresh,
                                 stop_server: stop,
-                                stop_refresh: start_streams_refresh(wanted.refresh),
+                                stop_refresh: start_streams_watch(),
                             });
                         }
                         Err(e) => tracing::error!("公开状态页启动失败 ({}): {}", wanted.addr, e),
@@ -297,20 +295,18 @@ pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
 
 struct RunningListener {
     addr: SocketAddr,
-    refresh: Duration,
     stop_server: tokio::sync::oneshot::Sender<()>,
     stop_refresh: tokio::sync::oneshot::Sender<()>,
 }
 
 impl RunningListener {
     fn matches(&self, wanted: &DesiredListener) -> bool {
-        self.addr == wanted.addr && self.refresh == wanted.refresh
+        self.addr == wanted.addr
     }
 }
 
 struct DesiredListener {
     addr: SocketAddr,
-    refresh: Duration,
 }
 
 fn stop_listener(running: Option<RunningListener>) {
@@ -337,7 +333,6 @@ async fn desired_listener() -> Option<DesiredListener> {
     let bind = crate::webui::parse_bind(&public.bind).ok()?;
     Some(DesiredListener {
         addr: SocketAddr::new(bind, public.port),
-        refresh: Duration::from_secs(public.holodex_refresh_secs),
     })
 }
 

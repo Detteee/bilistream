@@ -272,6 +272,9 @@ pub struct PublicStatusConfig {
     pub bind: String,
     #[serde(default = "default_public_status_port")]
     pub port: u16,
+    /// Unused: the public page follows the channels list, whose Holodex
+    /// backstop runs every 5 min with a YouTube key (60s without). Kept so
+    /// saved configs still load.
     #[serde(default = "default_public_status_holodex_refresh_secs")]
     pub holodex_refresh_secs: u64,
     /// Advertised in reply to the `%查询` danmaku command. Empty means silent.
@@ -298,10 +301,6 @@ pub const DANMAKU_MAX_CHARS: usize = 30;
 /// `%查询` answers carry the page as `详情：<url>`; the prefix eats into the
 /// same 30-character budget.
 pub const DANMAKU_ADVERT_PREFIX: &str = "详情：";
-
-/// Slower than this and the page shows visibly stale streams; faster and every
-/// node behind the tunnel hammers Holodex for no gain.
-const MIN_PUBLIC_STATUS_REFRESH_SECS: u64 = 10;
 
 impl PublicStatusConfig {
     /// Whether this node is the one that should serve the page.
@@ -339,12 +338,6 @@ impl PublicStatusConfig {
             return Err("公开状态页监听地址不能为空".to_string());
         }
         crate::webui::parse_bind(&self.bind)?;
-        if self.holodex_refresh_secs < MIN_PUBLIC_STATUS_REFRESH_SECS {
-            return Err(format!(
-                "Holodex 刷新间隔不能小于 {} 秒",
-                MIN_PUBLIC_STATUS_REFRESH_SECS
-            ));
-        }
         let url = self.public_url.trim();
         if !url.is_empty() && url.chars().count() > Self::max_public_url_chars() {
             return Err(format!(
@@ -1286,9 +1279,10 @@ mod tests {
         cfg.bind = "not-an-address".to_string();
         assert!(cfg.validate().is_err());
 
+        // Unused and no longer validated, so an old value never blocks saving.
         let mut cfg = public_status("ny");
         cfg.holodex_refresh_secs = 1;
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
 
         let mut cfg = public_status("ny");
         cfg.public_url = "https://mango-tree-quiet-fox.trycloudflare.com".to_string();

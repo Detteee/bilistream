@@ -1,20 +1,17 @@
-//! Holodex stream list for the public page.
+//! Stream list for the public page.
 //!
-//! Refreshed on a timer here rather than on request: viewers only ever read a
-//! snapshot, so upstream cost is fixed at one call per interval no matter how
-//! many people have the page open, and there is no refresh button to hammer.
-//!
-//! Only channels listed in channels.json are fetched, and the JWT/favorites
-//! branch of the Holodex client is never reached.
+//! Built from `main`'s channels list (`webui::holodex_list`), the rows the
+//! dashboard shows, whenever that list or the cluster changes. Viewers only
+//! ever read the snapshot, so their traffic never reaches Holodex or Google.
 
 use axum::body::Bytes;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Channel, Config};
+use crate::config::Channel;
 use crate::plugins::banned_keywords::{banned_keyword_hits, danmaku_banned_keywords};
 use crate::plugins::holodex::HolodexStream;
 
@@ -340,91 +337,94 @@ pub(super) fn build_public_streams(
 
 // Snapshot -------------------------------------------------------------------
 
+/// The list rebuilds from `main`'s channels list whenever it, the cluster (the
+/// danmaku gate) or the areas change, and at least this often, which keeps the
+/// channels list leased (10 min) while the page is served.
+const KEEP_LEASE: Duration = Duration::from_secs(4 * 60);
+/// Events arriving together share one rebuild.
+const DEBOUNCE: Duration = Duration::from_secs(1);
+/// Holodex counts as fresh for this many of its intervals, so two missed
+/// backstop fetches in a row are tolerated.
+const HOLODEX_GRACE_INTERVALS: u32 = 3;
+
 struct StreamsSnapshot {
     body: Bytes,
     etag: String,
-    confirmed_until: Option<Instant>,
+    /// When Holodex last answered for the list this body came from.
+    holodex_ok_at: Option<Instant>,
+    holodex_every: Duration,
 }
 
 impl StreamsSnapshot {
-    fn response_at(&self, now: Instant) -> Option<(Bytes, String)> {
-        self.confirmed_until.filter(|until| now < *until)?;
-        Some((self.body.clone(), self.etag.clone()))
+    /// Served while either source is healthy: Holodex answered within
+    /// `HOLODEX_GRACE_INTERVALS` of its cadence, or the YouTube store answers.
+    /// With neither, viewers get 503 rather than commands built on stale data.
+    fn response_at(&self, now: Instant, youtube_answering: bool) -> Option<(Bytes, String)> {
+        let holodex_fresh = self.holodex_ok_at.is_some_and(|at| {
+            now.saturating_duration_since(at) < self.holodex_every * HOLODEX_GRACE_INTERVALS
+        });
+        (holodex_fresh || youtube_answering).then(|| (self.body.clone(), self.etag.clone()))
     }
 }
 
 static SNAPSHOT: RwLock<Option<StreamsSnapshot>> = RwLock::new(None);
 
-/// A list confirmed within three configured refresh intervals. Repeated
-/// upstream failures must eventually return 503, so viewers stop generating
-/// commands from indefinitely old eligibility data.
-pub(super) fn current_public_streams() -> Option<(Bytes, String)> {
+pub(super) async fn current_public_streams() -> Option<(Bytes, String)> {
+    let youtube_answering = crate::config::load_config()
+        .await
+        .is_ok_and(|cfg| crate::plugins::youtube_index::answering(&cfg));
     let guard = SNAPSHOT.read().ok()?;
-    let snapshot = guard.as_ref()?;
-    snapshot.response_at(Instant::now())
+    guard
+        .as_ref()?
+        .response_at(Instant::now(), youtube_answering)
 }
 
-fn store_snapshot(streams: &[PublicStream], confirmed_for: Option<Duration>) {
+fn store_snapshot(
+    streams: &[PublicStream],
+    holodex_ok_at: Option<Instant>,
+    holodex_every: Duration,
+) {
     let Ok(body) = serde_json::to_vec(streams).map(Bytes::from) else {
         return;
     };
-
     if let Ok(mut guard) = SNAPSHOT.write() {
-        replace_streams_snapshot(&mut guard, body, confirmed_for, Instant::now());
+        replace_streams_snapshot(&mut guard, body, holodex_ok_at, holodex_every);
     }
 }
 
+/// An unchanged body keeps its ETag, so viewers' polls settle for a 304.
 fn replace_streams_snapshot(
     slot: &mut Option<StreamsSnapshot>,
     body: Bytes,
-    confirmed_for: Option<Duration>,
-    now: Instant,
+    holodex_ok_at: Option<Instant>,
+    holodex_every: Duration,
 ) {
-    // A keyword/area remap changes the body, not the age of its source data.
-    let confirmed_until = confirmed_for
-        .and_then(|limit| now.checked_add(limit))
-        .or_else(|| slot.as_ref().and_then(|snapshot| snapshot.confirmed_until));
     if let Some(previous) = slot.as_mut() {
         if previous.body == body {
-            previous.confirmed_until = confirmed_until;
+            previous.holodex_ok_at = holodex_ok_at;
+            previous.holodex_every = holodex_every;
             return;
         }
     }
     *slot = Some(StreamsSnapshot {
         etag: super::body_etag(&body),
         body,
-        confirmed_until,
+        holodex_ok_at,
+        holodex_every,
     });
 }
 
-/// YouTube channel ids to ask Holodex about: exactly what channels.json lists,
-/// plus whatever channel is configured right now.
-fn holodex_channel_ids(cfg: &Config, channels: &[Channel]) -> Vec<String> {
-    let mut seen = HashSet::with_capacity(channels.len() + 1);
-    channels
-        .iter()
-        .filter_map(|channel| channel.platforms.youtube.as_deref())
-        .chain(std::iter::once(cfg.youtube.channel_id.trim()))
-        .filter(|id| !id.is_empty() && seen.insert(*id))
-        .map(str::to_owned)
-        .collect()
-}
-
-/// One refresh cycle. Returns false when the list could not be refreshed, so
-/// the caller knows the snapshot it still holds is the last good one.
-async fn refresh_public_streams() -> bool {
-    rebuild_public_streams(false).await
-}
-
-/// Re-applies current areas.json keywords and danmaku bans to the last Holodex
-/// payload so a management edit shows up without waiting for the poll timer.
+/// Re-applies current areas.json keywords and danmaku bans after an edit,
+/// without waiting for the next list change.
 pub fn remap_after_areas_change() {
     tokio::spawn(async {
-        let _ = rebuild_public_streams(true).await;
+        rebuild_public_streams().await;
     });
 }
 
-async fn rebuild_public_streams(cached_only: bool) -> bool {
+/// One rebuild from the channels list. Returns false when there is no list,
+/// leaving the last snapshot to age out.
+async fn rebuild_public_streams() -> bool {
     let Ok(cfg) = crate::config::load_config().await else {
         return false;
     };
@@ -433,33 +433,20 @@ async fn rebuild_public_streams(cached_only: bool) -> bool {
     };
     let channels = channels_data.channels;
 
-    let ids = holodex_channel_ids(&cfg, &channels);
-    if ids.is_empty() {
-        return false;
-    }
-
-    let streams = if cached_only {
-        match super::holodex_cache::get_cached(&ids) {
-            Some(streams) => streams,
-            None => return false,
-        }
-    } else {
-        // A dashboard fetch on this node counts as this interval's call, so the
-        // two together stay at one upstream request per interval.
-        let max_age = Duration::from_secs(cfg.cluster.public_status.holodex_refresh_secs);
-        match super::holodex_cache::get_or_fetch(ids.clone(), max_age).await {
-            Ok(streams) => streams,
-            Err(e) => {
-                tracing::debug!("公开状态页 Holodex 刷新失败: {}", e);
-                return false;
-            }
+    // Already merged with discovery, overlaid by YouTube and filtered, the same
+    // rows the dashboard shows. Reading it also extends the list's lease.
+    let list = match crate::webui::holodex_list::current(
+        crate::webui::holodex_list::ListKind::Channels,
+        false,
+    )
+    .await
+    {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::debug!("公开状态页读取直播列表失败: {}", e);
+            return false;
         }
     };
-
-    // Same corrections and filter as the dashboard. A collab shows up under a
-    // channel we do not monitor, and an upcoming entry is noise once the
-    // channel is live or if it is more than a day out.
-    let streams = corrected_rows(streams, ids).await;
 
     // Config stays on during a restream; the processor gate does not. Use the
     // same owner-facing flag the status cards do, or 切换 stays green while
@@ -468,36 +455,15 @@ async fn rebuild_public_streams(cached_only: bool) -> bool {
     let danmaku_enabled = super::snapshot::public_danmaku_enabled(&cluster);
 
     let banned = danmaku_banned_keywords();
-    let mut public = build_public_streams(streams, &channels, danmaku_enabled, &banned);
+    let mut public = build_public_streams(list.rows.clone(), &channels, danmaku_enabled, &banned);
 
-    // A failed poll returns early above and leaves the cache alone. Cached-only
-    // remaps reuse the last Holodex payload after areas.json changed.
     // Channel photos use the same cache: the page's CSP only allows same-origin
     // images, and those CDNs are often unreachable from the viewer's network.
     super::thumbnails::reconcile(&image_urls(&public)).await;
     rewrite_thumbnails(&mut public);
 
-    let confirmed_for = (!cached_only).then(|| {
-        Duration::from_secs(
-            cfg.cluster
-                .public_status
-                .holodex_refresh_secs
-                .max(30)
-                .saturating_mul(3),
-        )
-    });
-    store_snapshot(&public, confirmed_for);
+    store_snapshot(&public, list.holodex_ok_at, list.holodex_every);
     true
-}
-
-/// Holodex rows as the dashboard shows them (`api/holodex.rs`): discovered and
-/// recently live rows merged in, YouTube's answers over Holodex's, then the
-/// channel and horizon filter. On the index owner the answers come from its
-/// store, so a remap costs no Google call.
-async fn corrected_rows(streams: Vec<HolodexStream>, ids: Vec<String>) -> Vec<HolodexStream> {
-    let streams = crate::plugins::youtube_rss::merge_discovered(streams);
-    let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
-    crate::webui::api::filter_holodex_streams(streams, ids.into_iter().collect())
 }
 
 /// Thumbnails and avatars the node will fetch for this list.
@@ -532,18 +498,45 @@ fn rewrite_image(url: &mut Option<String>) {
     }
 }
 
-/// Refreshes on the configured interval for as long as this node serves the
-/// page. Stops when the page moves elsewhere.
-pub(super) fn start_streams_refresh(interval: Duration) -> tokio::sync::oneshot::Sender<()> {
+/// Whether a server event can change the public list: the channels list
+/// changed, the cluster (the danmaku gate) changed, or events were missed.
+fn rebuild_on(
+    event: Result<&'static str, tokio::sync::broadcast::error::RecvError>,
+) -> Option<bool> {
+    use tokio::sync::broadcast::error::RecvError;
+    match event {
+        Ok(kind) => {
+            Some(kind == crate::webui::events::HOLODEX || kind == crate::webui::events::CLUSTER)
+        }
+        Err(RecvError::Lagged(_)) => Some(true),
+        Err(RecvError::Closed) => None,
+    }
+}
+
+/// Rebuilds on list and cluster events, and every `KEEP_LEASE`, for as long as
+/// this node serves the page. Stops when the page moves elsewhere.
+pub(super) fn start_streams_watch() -> tokio::sync::oneshot::Sender<()> {
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
+        let mut events = crate::AppState::current().subscribe_events();
         loop {
-            refresh_public_streams().await;
-
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
-                _ = &mut stop_rx => break,
+            rebuild_public_streams().await;
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => return,
+                    _ = tokio::time::sleep(KEEP_LEASE) => break,
+                    event = events.recv() => match rebuild_on(event) {
+                        Some(true) => {
+                            tokio::time::sleep(DEBOUNCE).await;
+                            // Events in the window share this rebuild.
+                            while events.try_recv().is_ok() {}
+                            break;
+                        }
+                        Some(false) => {}
+                        None => return,
+                    },
+                }
             }
         }
     });
@@ -560,44 +553,52 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn unchanged_success_renews_freshness_but_remapping_old_streams_does_not() {
+    fn the_list_is_served_while_either_source_is_healthy() {
         let now = Instant::now();
-        let valid_for = Duration::from_secs(90);
+        let every = Duration::from_secs(300);
         let mut slot = None;
         let body = Bytes::from_static(b"[]");
-        replace_streams_snapshot(&mut slot, body.clone(), Some(valid_for), now);
+        replace_streams_snapshot(&mut slot, body.clone(), Some(now), every);
+        let snapshot = slot.as_ref().unwrap();
+        let stale = now + every * HOLODEX_GRACE_INTERVALS;
+        assert!(
+            snapshot
+                .response_at(stale - Duration::from_secs(1), false)
+                .is_some(),
+            "Holodex only"
+        );
+        assert!(snapshot.response_at(stale, true).is_some(), "YouTube only");
+        assert!(snapshot.response_at(stale, false).is_none(), "neither: 503");
+
+        let mut never = None;
+        replace_streams_snapshot(&mut never, body.clone(), None, every);
+        assert!(never.as_ref().unwrap().response_at(now, false).is_none());
+        assert!(never.as_ref().unwrap().response_at(now, true).is_some());
+    }
+
+    #[test]
+    fn an_unchanged_body_keeps_its_etag_and_takes_the_new_holodex_time() {
+        let now = Instant::now();
+        let every = Duration::from_secs(60);
+        let mut slot = None;
+        replace_streams_snapshot(&mut slot, Bytes::from_static(b"[]"), Some(now), every);
         let etag = slot.as_ref().unwrap().etag.clone();
-        assert!(slot
-            .as_ref()
-            .unwrap()
-            .response_at(now + valid_for)
-            .is_none());
-        replace_streams_snapshot(
-            &mut slot,
-            body,
-            Some(valid_for),
-            now + Duration::from_secs(60),
-        );
+        let later = now + Duration::from_secs(120);
+        replace_streams_snapshot(&mut slot, Bytes::from_static(b"[]"), Some(later), every);
         assert_eq!(slot.as_ref().unwrap().etag, etag);
-        assert!(slot
-            .as_ref()
-            .unwrap()
-            .response_at(now + valid_for)
-            .is_some());
-        replace_streams_snapshot(
-            &mut slot,
-            Bytes::from_static(b"[1]"),
-            None,
-            now + Duration::from_secs(140),
-        );
-        assert!(slot
-            .as_ref()
-            .unwrap()
-            .response_at(now + Duration::from_secs(150))
-            .is_none());
-        let mut unconfirmed = None;
-        replace_streams_snapshot(&mut unconfirmed, Bytes::from_static(b"[]"), None, now);
-        assert!(unconfirmed.as_ref().unwrap().response_at(now).is_none());
+        assert_eq!(slot.as_ref().unwrap().holodex_ok_at, Some(later));
+        replace_streams_snapshot(&mut slot, Bytes::from_static(b"[1]"), Some(later), every);
+        assert_ne!(slot.as_ref().unwrap().etag, etag);
+    }
+
+    #[test]
+    fn only_list_and_cluster_events_rebuild() {
+        use tokio::sync::broadcast::error::RecvError;
+        assert_eq!(rebuild_on(Ok(crate::webui::events::HOLODEX)), Some(true));
+        assert_eq!(rebuild_on(Ok(crate::webui::events::CLUSTER)), Some(true));
+        assert_eq!(rebuild_on(Ok(crate::webui::events::STATUS)), Some(false));
+        assert_eq!(rebuild_on(Err(RecvError::Lagged(3))), Some(true));
+        assert_eq!(rebuild_on(Err(RecvError::Closed)), None);
     }
 
     fn channel(
@@ -1020,32 +1021,6 @@ mod tests {
         assert_eq!(twitch_login_from_link(None), None);
     }
 
-    #[test]
-    fn channel_ids_come_from_channels_json_without_duplicates() {
-        let mut cfg = crate::cluster::tests::test_config("ny", 0);
-        cfg.youtube.channel_id = "UCkamito".to_string();
-
-        let channels = vec![
-            channel("Kamito", &[], Some("UCkamito"), None),
-            channel("Nazuna", &[], Some("UCnazuna"), None),
-            channel("NoYouTube", &[], None, Some("tw_only")),
-        ];
-
-        assert_eq!(
-            holodex_channel_ids(&cfg, &channels),
-            vec!["UCkamito".to_string(), "UCnazuna".to_string()]
-        );
-    }
-
-    #[test]
-    fn the_configured_channel_is_queried_even_if_unlisted() {
-        let mut cfg = crate::cluster::tests::test_config("ny", 0);
-        cfg.youtube.channel_id = "UCnotinfile".to_string();
-
-        let ids = holodex_channel_ids(&cfg, &kamito());
-        assert_eq!(ids, vec!["UCkamito".to_string(), "UCnotinfile".to_string()]);
-    }
-
     /// Holodex leaves these null, and a card with no image is what the page
     /// showed before the fallback existed.
     #[test]
@@ -1195,10 +1170,18 @@ mod tests {
 
         let rows = crate::cluster::with_yt_index_role(
             crate::cluster::YtIndexRole::Peer(std::sync::Arc::new(index)),
-            corrected_rows(
-                holodex,
-                vec!["UCkamito".to_string(), "UCnazuna".to_string()],
-            ),
+            // The channels list's steps (`holodex_list::build`).
+            async {
+                let rows = crate::plugins::youtube_rss::merge_discovered(holodex);
+                let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
+                crate::webui::api::filter_holodex_streams(
+                    rows,
+                    ["UCkamito", "UCnazuna"]
+                        .map(str::to_string)
+                        .into_iter()
+                        .collect(),
+                )
+            },
         )
         .await;
         let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();

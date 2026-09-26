@@ -5,7 +5,7 @@ use crate::config::Config;
 
 use super::banned_keywords::streaming_banned_hit;
 use super::twitch::{get_twitch_status, Twitch};
-use super::youtube::{get_youtube_channel_metadata, get_youtube_status};
+use super::youtube::{get_youtube_channel_metadata, get_youtube_status_ytdlp};
 
 /// How long the URL confirmed at switch time may be reused by the main loop.
 ///
@@ -262,7 +262,7 @@ fn playable_liveness(
 /// switchable, and the next platform still gets its turn.
 pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelLiveness {
     if !cfg.priority_channel.youtube_channel_id.is_empty() {
-        match get_youtube_status(&cfg.priority_channel.youtube_channel_id).await {
+        match get_youtube_status_ytdlp(&cfg.priority_channel.youtube_channel_id).await {
             Ok((is_live, topic, title, m3u8_url, _, stream_id)) => {
                 if let Some(liveness) = playable_liveness(
                     PriorityChannelPlatform::Youtube,

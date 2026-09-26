@@ -49,6 +49,10 @@ impl ListKind {
 /// What a list serves: corrected, filtered rows, before any consumer's mapping.
 pub(crate) struct ListSnapshot {
     pub(crate) rows: Vec<HolodexStream>,
+    /// When Holodex last answered for this list; `None` before any success.
+    pub(crate) holodex_ok_at: Option<Instant>,
+    /// The Holodex cadence this build ran on (`holodex_every`).
+    pub(crate) holodex_every: Duration,
 }
 
 struct HolodexRows {
@@ -59,8 +63,9 @@ struct HolodexRows {
 
 #[derive(Default)]
 struct ListState {
-    /// Last successful fetch.
+    /// Last successful fetch, and when it answered.
     holodex: Option<HolodexRows>,
+    holodex_ok_at: Option<Instant>,
     /// Last fetch attempt, successful or not, and its inputs hash.
     attempt: Option<(Instant, u64)>,
     /// The last failed fetch's message, served while there are no rows.
@@ -210,6 +215,7 @@ fn note_success(state: &mut ListState, rows: HolodexRows) {
     state.failing = false;
     state.last_error = None;
     state.holodex = Some(rows);
+    state.holodex_ok_at = Some(Instant::now());
 }
 
 /// Fetches Holodex when due, then returns its rows and the channels the list
@@ -220,7 +226,7 @@ async fn holodex_rows(
     cfg: &mut Config,
     force: bool,
 ) -> Result<(Vec<HolodexStream>, HashSet<String>), String> {
-    let has_yt = !cfg.youtube_api_keys().is_empty();
+    let has_yt = crate::plugins::youtube_data::youtube_configured(cfg);
     let usable_yt = crate::plugins::youtube_data::youtube_answers_available(cfg);
     let now = Instant::now();
     let roster = match kind {
@@ -266,7 +272,10 @@ async fn holodex_rows(
             }
         }
         Some(_) => {}
-        None => state.holodex = None,
+        None => {
+            state.holodex = None;
+            state.holodex_ok_at = None;
+        }
     }
 
     if state.holodex.is_none() && (kind == ListKind::Favorites || !has_yt) {
@@ -327,7 +336,12 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
         events::publish(events::HOLODEX);
     }
     state.built_at = Some(Instant::now());
-    let snapshot = Arc::new(ListSnapshot { rows });
+    let usable_yt = crate::plugins::youtube_data::youtube_answers_available(&cfg);
+    let snapshot = Arc::new(ListSnapshot {
+        rows,
+        holodex_ok_at: state.holodex_ok_at,
+        holodex_every: holodex_every(usable_yt),
+    });
     list.set_snapshot(Some(snapshot.clone()));
     Ok(snapshot)
 }
@@ -499,5 +513,19 @@ mod tests {
             &mut slot,
             serde_json::json!([{"id": "b"}])
         ));
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_last_success_time() {
+        let mut state = ListState::default();
+        let rows = || HolodexRows {
+            rows: Vec::new(),
+            favorites: HashSet::new(),
+        };
+        note_success(&mut state, rows());
+        let ok_at = state.holodex_ok_at;
+        assert!(ok_at.is_some());
+        note_failure(&mut state, "down".to_string());
+        assert_eq!(state.holodex_ok_at, ok_at);
     }
 }

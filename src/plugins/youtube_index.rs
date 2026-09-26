@@ -155,7 +155,7 @@ fn interval(video: Option<&YtVideo>, now: DateTime<Utc>, monitored: bool) -> Dur
 
 /// Whether `next` turns the video live: its previous answer was missing or
 /// not live.
-fn went_live(previous: Option<&YtVideo>, next: &YtVideo) -> bool {
+pub(crate) fn went_live(previous: Option<&YtVideo>, next: &YtVideo) -> bool {
     let is_live = |video: &YtVideo| matches!(classify(video), YtLiveState::Live { .. });
     is_live(next) && !previous.is_some_and(is_live)
 }
@@ -444,6 +444,19 @@ pub(crate) fn published() -> Option<Arc<YtIndexPayload>> {
         .as_ref()?
         .published
         .clone()
+}
+
+/// Whether the store can answer now: a usable key, and no failed refresh
+/// still backing off.
+pub(crate) fn answering(cfg: &Config) -> bool {
+    if super::youtube_data::usable_key_count(&cfg.youtube_api_keys()) == 0 {
+        return false;
+    }
+    with_store(|store| store_answering(store, Instant::now()))
+}
+
+fn store_answering(store: &Store, now: Instant) -> bool {
+    store.retry_at.is_none_or(|at| now >= at)
 }
 
 /// One refresher pass for `cfg`. Without a key the store is dropped: nothing
@@ -764,5 +777,15 @@ mod tests {
         let now = store.published.clone().unwrap();
         assert!(now.videos.is_empty());
         assert_ne!(now.version, first.version);
+    }
+
+    #[test]
+    fn a_failed_refresh_stops_answering_until_its_back_off_ends() {
+        let now = Instant::now();
+        let mut store = Store::default();
+        assert!(store_answering(&store, now));
+        store.retry_at = Some(now + RETRY_AFTER);
+        assert!(!store_answering(&store, now));
+        assert!(store_answering(&store, now + RETRY_AFTER));
     }
 }

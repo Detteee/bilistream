@@ -141,6 +141,33 @@ fn peer_role(copy: Option<&PeerCopy>, owner: &str, timeout: Duration, now: Insta
     }
 }
 
+/// Monitored channels whose video the new copy answers live and the previous
+/// copy did not.
+fn went_live_channels(
+    previous: Option<&YtIndexPayload>,
+    next: &YtIndexPayload,
+    monitored: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut channels: Vec<String> = next
+        .videos
+        .iter()
+        .filter_map(|(id, video)| {
+            let video = video.as_ref()?;
+            let channel = &video.snippet.channel_id;
+            if !monitored.contains(channel) {
+                return None;
+            }
+            let before = previous
+                .and_then(|copy| copy.videos.get(id))
+                .and_then(Option::as_ref);
+            crate::plugins::youtube_index::went_live(before, video).then(|| channel.clone())
+        })
+        .collect();
+    channels.sort();
+    channels.dedup();
+    channels
+}
+
 async fn fetch_index(cfg: &Config, owner: &str) -> Result<YtIndexPayload, String> {
     let peer = cfg
         .cluster
@@ -220,6 +247,14 @@ impl Worker {
             _ => match fetch_index(cfg, &owner).await {
                 Ok(index) => {
                     self.fetch_failing = false;
+                    // The active node is usually a peer with no store of its
+                    // own, so its monitor learns of a go-live here.
+                    let monitored = crate::plugins::youtube::monitored_channels(cfg);
+                    let previous = self.copy.as_ref().map(|copy| copy.index.as_ref());
+                    for channel in went_live_channels(previous, &index, &monitored) {
+                        crate::plugins::youtube::wake_monitor(&channel);
+                    }
+                    crate::webui::holodex_list::wake();
                     self.copy = Some(PeerCopy {
                         owner: owner.clone(),
                         index: Arc::new(index),
@@ -453,6 +488,40 @@ mod tests {
                 .collect::<BTreeMap<_, _>>(),
             discovered,
         }))
+    }
+
+    #[test]
+    fn an_adopted_copy_wakes_only_monitored_channels_that_went_live() {
+        let on = |id: &str, channel: &str, end: Option<&str>| {
+            let mut v = video(id, end);
+            v.snippet.channel_id = channel.to_string();
+            (id.to_string(), Some(v))
+        };
+        let payload = |videos: Vec<(String, Option<YtVideo>)>| YtIndexPayload {
+            version: "v".to_string(),
+            videos: videos.into_iter().collect(),
+            discovered: Vec::new(),
+        };
+        let monitored: std::collections::HashSet<String> =
+            ["UCtarget", "UCpriority"].map(str::to_string).into();
+        let before = payload(vec![
+            on("was_live", "UCtarget", None),
+            on("ended_now", "UCpriority", Some("2026-09-25T11:00:00Z")),
+        ]);
+        let after = payload(vec![
+            on("was_live", "UCtarget", None),
+            on("ended_now", "UCpriority", None),
+            on("other", "UCroster", None),
+        ]);
+        assert_eq!(
+            went_live_channels(Some(&before), &after, &monitored),
+            vec!["UCpriority".to_string()]
+        );
+        assert_eq!(
+            went_live_channels(None, &after, &monitored),
+            vec!["UCpriority".to_string(), "UCtarget".to_string()],
+            "a first copy counts every live answer"
+        );
     }
 
     fn statuses(rows: &[HolodexStream]) -> HashMap<&str, &str> {

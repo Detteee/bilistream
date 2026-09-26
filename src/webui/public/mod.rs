@@ -5,7 +5,6 @@
 //! is usually a standby, so the streaming node's state is read out of the
 //! cluster snapshots that heartbeats already carry.
 
-pub mod holodex_cache;
 pub mod payload;
 pub mod server;
 pub mod snapshot;

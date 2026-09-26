@@ -1641,6 +1641,24 @@ fn should_probe_priority(cfg: &Config, current_channel_name: &str) -> bool {
             || !cfg.priority_channel.twitch_channel_id.is_empty())
 }
 
+/// Waits `delay` in 2s steps, ending early when YouTube answers the priority
+/// channel live. Wakes are per channel, so the restream target's never land here.
+async fn wait_priority(delay: Duration, priority_channel_id: &str) {
+    let step = Duration::from_secs(2);
+    let mut waited = Duration::ZERO;
+    while waited < delay {
+        if !priority_channel_id.is_empty()
+            && bilistream::plugins::youtube::take_monitor_wake(priority_channel_id)
+        {
+            tracing::info!("🔔 YouTube 显示优先频道已开播，立即检查");
+            return;
+        }
+        let next = step.min(delay - waited);
+        tokio::time::sleep(next).await;
+        waited += next;
+    }
+}
+
 /// Each monitor belongs to one FFmpeg session, including its initial delay and
 /// in-flight probes. Shutdown/restart aborts it even when the channel is unchanged.
 async fn monitor_priority_channel_background(
@@ -1659,21 +1677,23 @@ async fn monitor_priority_channel_background(
         };
         let delay = Duration::from_secs(cfg.interval.max(1).saturating_mul(2));
         if !should_probe_priority(&cfg, &current_channel_name) {
-            tokio::time::sleep(delay).await;
+            wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
             continue;
         }
+        // This probe asks yt-dlp anyway, so a wake from before it adds nothing.
+        bilistream::plugins::youtube::take_monitor_wake(&cfg.priority_channel.youtube_channel_id);
         let liveness = resolve_playable_priority_channel(&cfg).await;
         let keywords = bilistream::plugins::banned_keywords::streaming_banned_keywords();
         if let Some(keyword) = liveness.banned_streaming_keyword(&keywords) {
             tracing::warn!("优先频道包含禁用关键词 {keyword}，跳过自动切换");
-            tokio::time::sleep(delay).await;
+            wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
             continue;
         }
         let Some(prefetched) = liveness.prefetched_stream(
             &cfg.priority_channel.youtube_channel_id,
             &cfg.priority_channel.twitch_channel_id,
         ) else {
-            tokio::time::sleep(delay).await;
+            wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
             continue;
         };
         if cfg.enable_anti_collision {
@@ -1684,7 +1704,7 @@ async fn monitor_priority_channel_background(
             {
                 Ok(None) => {}
                 Ok(Some(_)) | Err(_) => {
-                    tokio::time::sleep(delay).await;
+                    wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
                     continue;
                 }
             }
@@ -1734,7 +1754,7 @@ async fn monitor_priority_channel_background(
         {
             break;
         }
-        tokio::time::sleep(delay).await;
+        wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
     }
 }
 

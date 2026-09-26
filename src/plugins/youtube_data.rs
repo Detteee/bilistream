@@ -638,8 +638,15 @@ pub(crate) async fn videos_within(
 }
 
 /// Whether YouTube can answer right now: a key with budget left.
+/// On a peer the public-status node's index answers, keys or not.
 pub(crate) fn youtube_answers_available(cfg: &crate::config::Config) -> bool {
-    usable_key_count(&cfg.youtube_api_keys()) > 0
+    crate::cluster::yt_index_role().is_peer() || usable_key_count(&cfg.youtube_api_keys()) > 0
+}
+
+/// Whether YouTube is set up to answer at all (a key, or a peer's index),
+/// budget aside.
+pub(crate) fn youtube_configured(cfg: &crate::config::Config) -> bool {
+    crate::cluster::yt_index_role().is_peer() || !cfg.youtube_api_keys().is_empty()
 }
 
 /// A dropped encoder can reconnect under the same video ID while YouTube holds

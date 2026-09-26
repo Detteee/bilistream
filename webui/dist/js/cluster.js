@@ -1118,7 +1118,6 @@ function publicStatusFromForm() {
     node_id: document.getElementById('config-public-status-node')?.value.trim() || '',
     bind: document.getElementById('config-public-status-bind')?.value.trim() || '127.0.0.1',
     port: readIntegerInput('config-public-status-port', 23234),
-    holodex_refresh_secs: readIntegerInput('config-public-status-refresh', 30),
     public_url: document.getElementById('config-public-status-url')?.value.trim() || '',
   };
 }
@@ -1173,7 +1172,6 @@ function loadPublicStatusSettings(cluster = {}) {
   renderPublicStatusNodeOptions(cluster, (publicStatus.node_id || '').trim());
   setInputValue('config-public-status-bind', publicStatus.bind || '127.0.0.1');
   setInputValue('config-public-status-port', publicStatus.port || 23234);
-  setInputValue('config-public-status-refresh', publicStatus.holodex_refresh_secs || 30);
   setInputValue('config-public-status-url', publicStatus.public_url || '');
   updatePublicStatusUrlHint();
 }

@@ -24,7 +24,8 @@ import {
 } from './streams.js';
 
 /// The status snapshot lives 5s on the server; polling much faster only costs
-/// 304s. Streams turn over on the server's own 30s timer.
+/// 304s. Streams turn over when YouTube or Holodex changes the server's list,
+/// and an unchanged list answers 304.
 const STATUS_POLL_MS = 10_000;
 const STREAMS_POLL_MS = 30_000;
 const AREAS_POLL_MS = 60_000;

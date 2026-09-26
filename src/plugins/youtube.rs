@@ -269,6 +269,10 @@ enum Probe {
     /// The monitor loop: when the index says not live, run yt-dlp at most
     /// once per `SAFETY_PROBE_INTERVAL`.
     Throttled,
+    /// The priority-channel probe during another restream: yt-dlp every
+    /// time, whatever the index says. An unscheduled go-live has no video ID
+    /// until it starts, so the index cannot be trusted to know it.
+    Always,
 }
 
 const SAFETY_PROBE_INTERVAL: Duration = Duration::from_secs(300);
@@ -281,7 +285,7 @@ const ONE_OFF_MAX_AGE: Duration = Duration::from_secs(15);
 fn overlay_max_age(probe: Probe) -> Option<Duration> {
     match probe {
         Probe::Now => Some(ONE_OFF_MAX_AGE),
-        Probe::Throttled => None,
+        Probe::Throttled | Probe::Always => None,
     }
 }
 
@@ -291,6 +295,11 @@ pub(crate) fn monitored_channels(cfg: &crate::config::Config) -> HashSet<String>
     let mut channels = HashSet::new();
     if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
         channels.insert(cfg.youtube.channel_id.clone());
+    }
+    // The priority probe waits on its own wake while another channel restreams.
+    let priority = &cfg.priority_channel;
+    if priority.enabled && priority.auto_restart && !priority.youtube_channel_id.is_empty() {
+        channels.insert(priority.youtube_channel_id.clone());
     }
     channels
 }
@@ -387,6 +396,7 @@ fn decide_monitor_action(
     match view {
         IndexView::Unavailable => MonitorAction::YtDlp,
         IndexView::Live => MonitorAction::ConfirmLive,
+        _ if probe == Probe::Always => MonitorAction::YtDlp,
         IndexView::Upcoming | IndexView::NoAnswer if probe == Probe::Throttled => {
             match since_last_probe {
                 Some(age) if age < SAFETY_PROBE_INTERVAL => MonitorAction::IndexAnswer,
@@ -580,6 +590,11 @@ pub async fn get_youtube_status(channel_id: &str) -> Result<YoutubeStatus, Box<d
     get_youtube_status_with(channel_id, Probe::Now).await
 }
 
+/// `get_youtube_status` that always asks yt-dlp (see `Probe::Always`).
+pub async fn get_youtube_status_ytdlp(channel_id: &str) -> Result<YoutubeStatus, Box<dyn Error>> {
+    get_youtube_status_with(channel_id, Probe::Always).await
+}
+
 async fn get_youtube_status_with(
     channel_id: &str,
     probe: Probe,
@@ -627,7 +642,7 @@ async fn get_youtube_status_with(
 
     let last_probe = match probe {
         Probe::Throttled => last_safety_probe(channel_id),
-        Probe::Now => None,
+        Probe::Now | Probe::Always => None,
     };
     let index_answer = |status: YoutubeChannelStatus| {
         (
@@ -694,7 +709,9 @@ async fn get_youtube_status_with(
             }
             // Recorded before running, so a failing yt-dlp is not retried
             // every tick.
-            record_safety_probe(channel_id, None);
+            if probe == Probe::Throttled {
+                record_safety_probe(channel_id, None);
+            }
             let title = get_youtube_live_title(channel_id).await?;
             // Passing the title in keeps yt-dlp from looking it up again.
             let probed = get_status_with_yt_dlp(
@@ -715,7 +732,9 @@ async fn get_youtube_status_with(
             } else {
                 (is_live, None, title, m3u8_url, start_time, video_id)
             };
-            record_safety_probe(channel_id, Some(result.clone()));
+            if probe == Probe::Throttled {
+                record_safety_probe(channel_id, Some(result.clone()));
+            }
             Ok(result)
         }
     }
@@ -904,6 +923,9 @@ mod tests {
             (Upcoming, Probe::Throttled, stale, YtDlp),
             (NoAnswer, Probe::Throttled, stale, YtDlp),
             (NoAnswer, Probe::Throttled, None, YtDlp),
+            (Upcoming, Probe::Always, None, YtDlp),
+            (NoAnswer, Probe::Always, None, YtDlp),
+            (Live, Probe::Always, None, ConfirmLive),
         ];
         for (view, probe, age, expected) in cases {
             assert_eq!(
@@ -974,6 +996,19 @@ mod tests {
         cfg.youtube.enable_monitor = true;
         cfg.youtube.channel_id.clear();
         assert!(monitored_channels(&cfg).is_empty(), "no channel");
+        cfg.priority_channel.youtube_channel_id = "UCpriority".to_string();
+        cfg.priority_channel.enabled = true;
+        cfg.priority_channel.auto_restart = true;
+        assert_eq!(
+            monitored_channels(&cfg),
+            HashSet::from(["UCpriority".to_string()]),
+            "priority switching on"
+        );
+        cfg.priority_channel.auto_restart = false;
+        assert!(
+            monitored_channels(&cfg).is_empty(),
+            "priority switching off"
+        );
     }
 
     #[test]
