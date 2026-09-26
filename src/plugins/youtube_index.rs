@@ -474,7 +474,16 @@ pub(crate) async fn refresh_tick(cfg: &Config) {
         *STORE.lock().unwrap_or_else(|e| e.into_inner()) = None;
         return;
     }
-    let monitored = super::youtube::monitored_channels(cfg);
+    // The public-status node is usually idle with its monitors off; the late
+    // steps belong to whatever the active node monitors.
+    let monitored = if matches!(
+        crate::cluster::yt_index_role(),
+        crate::cluster::YtIndexRole::Owner
+    ) {
+        crate::cluster::cluster_monitored_channels(cfg)
+    } else {
+        super::youtube::monitored_channels(cfg)
+    };
     with_store(|store| store.monitored = monitored);
     if refresh(&keys, cfg.youtube.proxy.as_deref()).await {
         crate::webui::holodex_list::wake();

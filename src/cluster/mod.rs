@@ -28,7 +28,9 @@ pub use types::*;
 pub use version::*;
 #[cfg(test)]
 pub(crate) use yt_index::with_yt_index_role;
-pub(crate) use yt_index::{owner_yt_index, yt_index_role, YtIndexRole, YT_INDEX_ROUTE};
+pub(crate) use yt_index::{
+    cluster_monitored_channels, owner_yt_index, yt_index_role, YtIndexRole, YT_INDEX_ROUTE,
+};
 
 #[cfg(test)]
 mod election_tests;

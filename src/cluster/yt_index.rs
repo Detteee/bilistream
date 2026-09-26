@@ -141,6 +141,42 @@ fn peer_role(copy: Option<&PeerCopy>, owner: &str, timeout: Duration, now: Insta
     }
 }
 
+/// Channels whose monitor acts on a go-live anywhere in the cluster. The
+/// public-status node runs the only store, but is usually idle with every
+/// monitor off, so it takes the channels from the nodes' heartbeats: each
+/// node's toggles with its own channel targets, plus this node's config.
+pub(crate) fn cluster_monitored_channels(cfg: &Config) -> std::collections::HashSet<String> {
+    let mut channels = crate::plugins::youtube::monitored_channels(cfg);
+    let state = cluster_state_read();
+    channels.extend(monitored_from_nodes(
+        state
+            .nodes
+            .values()
+            .filter(|node| node.is_local || !node.health.stale),
+    ));
+    channels
+}
+
+fn monitored_from_nodes<'a>(
+    nodes: impl IntoIterator<Item = &'a ClusterNodeSnapshot>,
+) -> std::collections::HashSet<String> {
+    let mut channels = std::collections::HashSet::new();
+    for node in nodes {
+        let toggles = &node.monitor_toggles;
+        let targets = &node.channel_targets;
+        if toggles.youtube_enable_monitor && !targets.youtube_channel_id.is_empty() {
+            channels.insert(targets.youtube_channel_id.clone());
+        }
+        if toggles.priority_channel_enabled
+            && toggles.priority_channel_auto_restart
+            && !targets.priority_youtube_channel_id.is_empty()
+        {
+            channels.insert(targets.priority_youtube_channel_id.clone());
+        }
+    }
+    channels
+}
+
 /// Monitored channels whose video the new copy answers live and the previous
 /// copy did not.
 fn went_live_channels(
@@ -368,6 +404,28 @@ mod tests {
         node.last_seen = Some(last_seen);
         node.yt_index_version = version.map(str::to_string);
         node
+    }
+
+    #[test]
+    fn the_store_follows_the_active_nodes_monitors_not_the_idle_ones() {
+        let mut active = owner(None, 1);
+        active.monitor_toggles.youtube_enable_monitor = true;
+        active.monitor_toggles.priority_channel_enabled = true;
+        active.monitor_toggles.priority_channel_auto_restart = true;
+        active.channel_targets.youtube_channel_id = "UCtarget".to_string();
+        active.channel_targets.priority_youtube_channel_id = "UCpriority".to_string();
+        let mut idle = owner(None, 1);
+        idle.channel_targets = active.channel_targets.clone();
+        assert!(monitored_from_nodes([&idle]).is_empty(), "idle: all off");
+        assert_eq!(
+            monitored_from_nodes([&idle, &active]),
+            ["UCtarget", "UCpriority"].map(str::to_string).into()
+        );
+        active.monitor_toggles.priority_channel_auto_restart = false;
+        assert_eq!(
+            monitored_from_nodes([&active]),
+            ["UCtarget"].map(str::to_string).into()
+        );
     }
 
     #[test]
