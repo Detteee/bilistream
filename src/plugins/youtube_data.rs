@@ -21,12 +21,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const VIDEOS_URL: &str = "https://www.googleapis.com/youtube/v3/videos";
-const MAX_IDS_PER_CALL: usize = 50;
+pub(crate) const MAX_IDS_PER_CALL: usize = 50;
 /// Per key. Google's default is 10,000 units/day; stop short so retries and
 /// calls made before the local count noticed a new day still fit.
 pub(crate) const DAILY_UNIT_BUDGET: u32 = 9_000;
-/// Panel refreshes and monitor ticks inside this window reuse one answer.
-const CACHE_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +39,8 @@ pub struct YtLiveDetails {
 pub struct YtSnippet {
     #[serde(default)]
     pub title: String,
+    #[serde(rename = "channelId", default)]
+    pub channel_id: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -466,12 +466,7 @@ pub(crate) async fn google_get<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Answers per video ID; `None` records that YouTube omitted the ID so it is
-/// not asked for again inside the TTL.
-type VideoCache = HashMap<String, (Instant, Option<YtVideo>)>;
-static CACHE: Mutex<Option<VideoCache>> = Mutex::new(None);
-
-async fn fetch_videos(
+pub(crate) async fn fetch_videos(
     keys: &[String],
     proxy: Option<&str>,
     ids: &[String],
@@ -494,42 +489,17 @@ pub(crate) async fn videos_for(
     proxy: Option<&str>,
     ids: Vec<String>,
 ) -> Result<HashMap<String, YtVideo>, Box<dyn Error>> {
-    let now = Instant::now();
-    let mut answered = HashMap::new();
-    let mut missing = Vec::new();
-    {
-        let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        let cache = guard.get_or_insert_with(HashMap::new);
-        cache.retain(|_, (at, _)| now.duration_since(*at) < CACHE_TTL);
-        for id in ids {
-            match cache.get(&id) {
-                Some((_, Some(video))) => {
-                    answered.insert(id, video.clone());
-                }
-                Some((_, None)) => {}
-                None => missing.push(id),
-            }
-        }
-    }
-    if missing.is_empty() {
-        return Ok(answered);
-    }
+    videos_within(keys, proxy, ids, None).await
+}
 
-    let fetched = fetch_videos(keys, proxy, &missing).await?;
-    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = guard.get_or_insert_with(HashMap::new);
-    let mut returned: HashMap<String, YtVideo> = fetched
-        .into_iter()
-        .map(|video| (video.id.clone(), video))
-        .collect();
-    for id in missing {
-        let video = returned.remove(&id);
-        cache.insert(id.clone(), (now, video.clone()));
-        if let Some(video) = video {
-            answered.insert(id, video);
-        }
-    }
-    Ok(answered)
+/// `max_age`: re-fetch answers older than this instead of waiting for their tier.
+pub(crate) async fn videos_within(
+    keys: &[String],
+    proxy: Option<&str>,
+    ids: Vec<String>,
+    max_age: Option<Duration>,
+) -> Result<HashMap<String, YtVideo>, Box<dyn Error>> {
+    super::youtube_index::store_videos(keys, proxy, ids, max_age).await
 }
 
 /// A dropped encoder can reconnect under the same video ID while YouTube holds
@@ -605,6 +575,14 @@ fn record_recent_live(
 
 /// Holodex rows corrected by YouTube, or unchanged when the overlay is off or fails.
 pub async fn apply_youtube_overlay(streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+    apply_youtube_overlay_within(streams, None).await
+}
+
+/// `apply_youtube_overlay` that re-fetches answers older than `max_age`.
+pub async fn apply_youtube_overlay_within(
+    streams: Vec<HolodexStream>,
+    max_age: Option<Duration>,
+) -> Vec<HolodexStream> {
     let Ok(cfg) = load_config().await else {
         return streams;
     };
@@ -629,7 +607,7 @@ pub async fn apply_youtube_overlay(streams: Vec<HolodexStream>) -> Vec<HolodexSt
         return streams;
     }
 
-    match videos_for(&keys, cfg.youtube.proxy.as_deref(), ids.clone()).await {
+    match videos_within(&keys, cfg.youtube.proxy.as_deref(), ids.clone(), max_age).await {
         Ok(videos) => {
             let result = overlay(streams, &videos);
             with_recent_live(|recent| record_recent_live(recent, &ids, &result, Instant::now()));
@@ -672,6 +650,7 @@ mod tests {
             id: id.to_string(),
             snippet: YtSnippet {
                 title: "youtube title".to_string(),
+                ..YtSnippet::default()
             },
             live_streaming_details: details,
         }

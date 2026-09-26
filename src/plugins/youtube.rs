@@ -272,6 +272,45 @@ enum Probe {
 }
 
 const SAFETY_PROBE_INTERVAL: Duration = Duration::from_secs(300);
+/// One-off checks trust an "upcoming" answer without yt-dlp, so they re-fetch
+/// any answer older than this.
+const ONE_OFF_MAX_AGE: Duration = Duration::from_secs(15);
+
+/// How old a `videos.list` answer a caller accepts. The monitor loop takes the
+/// store's tiers; 检测间隔 paces only its Holodex check and yt-dlp on live.
+fn overlay_max_age(probe: Probe) -> Option<Duration> {
+    match probe {
+        Probe::Now => Some(ONE_OFF_MAX_AGE),
+        Probe::Throttled => None,
+    }
+}
+
+/// Channels whose monitor acts on a go-live: late steps in the store's
+/// re-checks, and a wake when YouTube answers live.
+pub(crate) fn monitored_channels(cfg: &crate::config::Config) -> HashSet<String> {
+    let mut channels = HashSet::new();
+    if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
+        channels.insert(cfg.youtube.channel_id.clone());
+    }
+    channels
+}
+
+/// Channels whose go-live YouTube answered and no monitor pass picked up yet.
+static MONITOR_WAKES: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Ends the channel's monitor wait early: YouTube answered live.
+pub(crate) fn wake_monitor(channel_id: &str) {
+    let mut guard = MONITOR_WAKES.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(HashSet::new)
+        .insert(channel_id.to_string());
+}
+
+/// Whether the channel has a wake waiting; taking it clears it.
+pub fn take_monitor_wake(channel_id: &str) -> bool {
+    let mut guard = MONITOR_WAKES.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_mut().is_some_and(|wakes| wakes.remove(channel_id))
+}
 
 /// What the index says about one channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,6 +386,7 @@ fn record_safety_probe(channel_id: &str, status: Option<YoutubeStatus>) {
 async fn index_rows(
     cfg: &crate::config::Config,
     channel_id: &str,
+    max_age: Option<Duration>,
 ) -> Result<(Vec<HolodexStream>, HashSet<String>), String> {
     let has_holodex_key = cfg
         .holodex_api_key
@@ -361,7 +401,7 @@ async fn index_rows(
     };
     let holodex_ids = holodex.iter().map(|s| s.id.clone()).collect();
     let streams = with_discovered_rows(channel_id, holodex);
-    let streams = super::youtube_data::apply_youtube_overlay(streams).await;
+    let streams = super::youtube_data::apply_youtube_overlay_within(streams, max_age).await;
     Ok((streams, holodex_ids))
 }
 
@@ -402,7 +442,7 @@ pub async fn get_youtube_channel_status(
         ));
     }
 
-    let (streams, _) = index_rows(&cfg, channel_id).await?;
+    let (streams, _) = index_rows(&cfg, channel_id, None).await?;
     Ok(select_holodex_channel_status(channel_id, &streams))
 }
 
@@ -511,7 +551,7 @@ async fn get_youtube_status_with(
             tracing::debug!("yt-dlp 兜底模式，直接查询 {}", channel_id);
             (IndexView::Unavailable, YoutubeChannelStatus::default())
         }
-        MonitorMode::Index => match index_rows(&cfg, channel_id).await {
+        MonitorMode::Index => match index_rows(&cfg, channel_id, overlay_max_age(probe)).await {
             Ok((streams, holodex_ids)) => {
                 let status = select_holodex_channel_status(channel_id, &streams);
                 // Holodex omits some streams entirely, so only its own row for
@@ -842,6 +882,41 @@ mod tests {
 
         // After a switch to C, neither dropped stream touches C's view.
         assert!(with_discovered_rows("UCdropC", Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn one_off_checks_cap_answer_age_and_the_monitor_loop_does_not() {
+        assert_eq!(overlay_max_age(Probe::Now), Some(Duration::from_secs(15)));
+        assert_eq!(overlay_max_age(Probe::Throttled), None);
+    }
+
+    #[test]
+    fn only_a_monitored_configured_channel_counts() {
+        let mut cfg: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "auto_cover": false, "enable_anti_collision": false, "interval": 15,
+            "bililive": { "enable_danmaku_command": false, "room": 1, "bili_rtmp_url": "", "bili_rtmp_key": "" },
+            "youtube": {}, "twitch": {}, "enable_lol_monitor": false, "anti_collision_list": {}
+        }))
+        .unwrap();
+        cfg.youtube.channel_id = "UCtarget".to_string();
+        cfg.youtube.enable_monitor = true;
+        assert_eq!(
+            monitored_channels(&cfg),
+            HashSet::from(["UCtarget".to_string()])
+        );
+        cfg.youtube.enable_monitor = false;
+        assert!(monitored_channels(&cfg).is_empty(), "monitor off");
+        cfg.youtube.enable_monitor = true;
+        cfg.youtube.channel_id.clear();
+        assert!(monitored_channels(&cfg).is_empty(), "no channel");
+    }
+
+    #[test]
+    fn a_wake_reaches_only_its_own_channel_once() {
+        wake_monitor("UCwakeA");
+        assert!(!take_monitor_wake("UCwakeB"));
+        assert!(take_monitor_wake("UCwakeA"));
+        assert!(!take_monitor_wake("UCwakeA"), "taking it clears it");
     }
 
     #[test]

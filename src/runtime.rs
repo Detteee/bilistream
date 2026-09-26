@@ -348,6 +348,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // load_config() remain set and will be picked up by the checks below.
         clear_config_updated();
         let mut cfg = load_config().await?;
+        // This pass checks the target anyway, so a go-live wake from before it adds nothing.
+        bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id);
 
         // Handle danmaku client based on enable_danmaku_command setting
         if cfg.bililive.enable_danmaku_command {
@@ -1068,6 +1070,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     continue 'outer;
                 }
                 elapsed += sleep_time;
+
+                if bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id) {
+                    tracing::info!("🔔 YouTube 显示目标频道已开播，立即检查");
+                    continue 'outer;
+                }
 
                 // Check if config was updated during sleep
                 if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
