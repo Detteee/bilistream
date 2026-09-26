@@ -125,7 +125,7 @@ pub fn parse_feed(xml: &str) -> Vec<FeedEntry> {
 }
 
 /// YouTube channel IDs from channels.json plus the active channel.
-async fn roster_channel_ids(cfg: &Config) -> Vec<String> {
+pub(crate) async fn roster_channel_ids(cfg: &Config) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = HashSet::new();
     let mut push = |id: &str| {
@@ -688,6 +688,7 @@ impl Worker {
             *DISCOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *self = Worker::default();
+            crate::webui::holodex_list::wake();
             return Ok(());
         }
         let roster = roster_channel_ids(&cfg).await;
@@ -960,6 +961,8 @@ impl Worker {
                 state.ignored.insert(id);
             }
         }
+        drop(guard);
+        crate::webui::holodex_list::wake();
         Ok(())
     }
 }

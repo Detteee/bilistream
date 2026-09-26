@@ -1,6 +1,7 @@
 pub mod api;
 pub(crate) mod assets;
 pub mod events;
+pub(crate) mod holodex_list;
 pub mod listen;
 pub mod restart;
 pub mod server;

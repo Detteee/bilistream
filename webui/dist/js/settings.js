@@ -46,14 +46,17 @@ function initThemeControls() {
 }
 // Re-apply server config to the config-driven controls without touching
 // refresh timers (used when the server signals a config change).
+// Resolves to the reloaded config, or null when it could not be loaded.
 async function reloadServerConfig() {
   try {
     const config = await getJson('/api/config');
     mergeConfigData(config);
     updateMonitorToggleStates(config);
     updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
+    return config;
   } catch (error) {
     console.debug('Failed to reload config:', error);
+    return null;
   }
 }
 function toggleConfigRiotApiKey() {
@@ -365,7 +368,6 @@ async function saveBannedKeywords() {
     throw new Error(result.message || '未知错误');
   }
   keywordsBaseline = keywords;
-  document.dispatchEvent(new Event('areas-json-changed'));
 }
 function readBannedKeywords() {
   return {

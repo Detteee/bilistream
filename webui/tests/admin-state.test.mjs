@@ -102,6 +102,7 @@ const { setAnimatedDigits } = await import('../dist/js/dom.js');
 const api = await import('../dist/js/api.js');
 const { saveBooleanToggle } = await import('../dist/js/toggle-save.js');
 const { applyMonitorToggleConfigState } = await import('../dist/js/state.js');
+const { holodexKeepAliveDue } = await import('../dist/js/overview.js');
 
 test('settings edits submit only changed fields and their loaded values', () => {
   const baseline = { interval: 30, enable_danmaku_command: true, api_key: 'old', keywords: ['a'] };
@@ -322,4 +323,12 @@ test('YouTube key pool status reads as one line per fact', async () => {
     '上传列表轮询：关闭（没有可用 key）',
   );
   assert.equal(formatPlaylistPolling(null), '', 'no line before the worker has run');
+});
+
+test('an open Holodex panel renews its lease every 4 min, every minute without SSE', () => {
+  const minute = 60 * 1000;
+  assert.equal(holodexKeepAliveDue(4 * minute - 1, true), false);
+  assert.equal(holodexKeepAliveDue(4 * minute, true), true);
+  assert.equal(holodexKeepAliveDue(minute - 1, false), false);
+  assert.equal(holodexKeepAliveDue(minute, false), true);
 });

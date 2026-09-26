@@ -411,6 +411,7 @@ async fn save_config_inner(
         }));
         invalidate_config_cache();
         crate::webui::events::publish(crate::webui::events::CONFIG);
+        crate::webui::holodex_list::wake();
         crate::webui::state::request_status_refresh();
         Ok(saved)
     })
@@ -551,6 +552,7 @@ fn managed_json_committed() {
     invalidate_config_cache();
     crate::plugins::set_config_updated();
     crate::webui::state::request_status_refresh();
+    crate::webui::holodex_list::wake();
 }
 
 pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

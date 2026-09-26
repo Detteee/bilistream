@@ -20,6 +20,7 @@ import {
 import { checkSetupStatus, initSetupControls } from './setup.js';
 import { initCropModalControls } from './crop.js';
 import {
+  applyHolodexConfig,
   initDashboardControls,
   initHolodexFold,
   initHolodexLoginModalControls,
@@ -82,7 +83,8 @@ function activateView(name, options = {}) {
   if (!viewsLoaded.has(name)) {
     viewsLoaded.add(name);
     loadViewData(name);
-  } else if (options.reload) {
+  } else if (options.reload || name === 'overview') {
+    // The Holodex panel catches up every time the overview comes back.
     loadViewData(name);
   }
   if (name === 'overview') startHolodexDurationTicker();
@@ -115,20 +117,30 @@ function initViewRouter() {
   activateView(saved || 'overview');
 }
 
+// Reloads the config and re-applies the Holodex panel's key layout, which
+// also refetches an open panel.
+function reloadConfigAndHolodexPanel() {
+  reloadServerConfig().then(config => {
+    if (config) applyHolodexConfig(config);
+    else maybeLoadHolodexStreams();
+  });
+}
+
 function bindEventStream() {
   configureEventStream({
     onStatus: refreshStatus,
     onConfig: () => {
       invalidateManagedData();
-      reloadServerConfig();
+      reloadConfigAndHolodexPanel();
       refreshStatus();
     },
+    onHolodex: maybeLoadHolodexStreams,
     onCluster: () => {
       state.hooks.refreshClusterStatus?.();
     },
     onRefresh: () => {
       invalidateManagedData();
-      reloadServerConfig();
+      reloadConfigAndHolodexPanel();
       refreshStatus();
       state.hooks.refreshClusterStatus?.();
     },
@@ -164,6 +176,7 @@ function boot() {
         refreshLogs();
       }
       refreshStatus();
+      maybeLoadHolodexStreams();
     } else {
       stopHolodexDurationTicker();
     }

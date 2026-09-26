@@ -209,20 +209,4 @@ mod tests {
         assert_eq!(crop.x, 10);
         assert_eq!(crop.y, 20);
     }
-
-    #[test]
-    fn ordered_channel_ids_deduplicates_without_losing_order() {
-        let mut channel_ids = OrderedChannelIds::default();
-
-        assert!(channel_ids.insert(" first "));
-        assert!(channel_ids.insert("second"));
-        assert!(!channel_ids.insert("first"));
-        assert!(!channel_ids.insert("  "));
-
-        let (ordered, seen) = channel_ids.into_parts();
-        assert_eq!(ordered, vec!["first".to_string(), "second".to_string()]);
-        assert!(seen.contains("first"));
-        assert!(seen.contains("second"));
-        assert_eq!(seen.len(), 2);
-    }
 }

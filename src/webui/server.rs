@@ -40,6 +40,7 @@ pub async fn start_webui_on_listener(
     let _status_worker = api::start_status_refresh_worker();
     let _rss_worker = crate::plugins::youtube_rss::start_rss_discovery_worker();
     let _store_worker = crate::plugins::youtube_index::start_store_refresh_worker();
+    let _list_worker = super::holodex_list::start_holodex_list_worker();
 
     // API router
     let api_router = Router::new()

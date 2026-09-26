@@ -24,31 +24,6 @@ pub struct HolodexStreamWithArea {
     pub thumbnail: Option<String>,
 }
 
-#[derive(Default)]
-pub(crate) struct OrderedChannelIds {
-    ordered: Vec<String>,
-    seen: HashSet<String>,
-}
-
-impl OrderedChannelIds {
-    pub(crate) fn insert(&mut self, channel_id: &str) -> bool {
-        let channel_id = channel_id.trim();
-        if channel_id.is_empty() || !self.seen.insert(channel_id.to_string()) {
-            return false;
-        }
-        self.ordered.push(channel_id.to_string());
-        true
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.ordered.is_empty()
-    }
-
-    pub(crate) fn into_parts(self) -> (Vec<String>, HashSet<String>) {
-        (self.ordered, self.seen)
-    }
-}
-
 /// Holodex Favorites/Home drop streams that never got `start_actual` once the
 /// schedule is more than two hours old (`!start_actual && now > scheduled + 2h`).
 /// Rows YouTube classified skip this: its `actualStartTime` is authoritative.
@@ -363,146 +338,28 @@ pub struct HolodexStreamsQuery {
     /// When true, fetch account favorites (requires JWT). Otherwise uses channels.json.
     #[serde(default)]
     favorites: bool,
+    /// When true, fetch Holodex now instead of waiting for its cadence.
+    #[serde(default)]
+    force: bool,
 }
 
 pub async fn api_get_holodex_streams(
     Query(query): Query<HolodexStreamsQuery>,
 ) -> Json<serde_json::Value> {
-    let mut cfg = match load_config().await {
-        Ok(c) => c,
-        Err(e) => {
-            return Json(json!({
-                "success": false,
-                "message": format!("Failed to load config: {}", e)
-            }));
-        }
+    use crate::webui::holodex_list::{current, ListKind};
+    let kind = if query.favorites {
+        ListKind::Favorites
+    } else {
+        ListKind::Channels
     };
-
-    let api_key = match cfg.holodex_api_key.as_ref().filter(|k| !k.is_empty()) {
-        Some(key) => key.clone(),
-        None => {
-            return Json(json!({
-                "success": false,
-                "message": "Holodex API key not configured"
-            }));
-        }
-    };
-
-    // Favorites mode: JWT + includePlaceholder (YouTube + Twitch external streams)
-    if query.favorites {
-        if cfg.holodex_jwt.as_ref().is_none_or(|j| j.is_empty()) {
-            return Json(json!({
-                "success": false,
-                "message": "Holodex JWT required for favorites mode"
-            }));
-        }
-
-        let active_jwt = match apply_holodex_jwt_sync(&mut cfg).await {
-            Ok((jwt, _)) => jwt,
-            Err(e) => {
-                return Json(json!({
-                    "success": false,
-                    "message": format!("Failed to refresh Holodex JWT: {}", e)
-                }));
-            }
-        };
-
-        let (fav_ids, streams) = match crate::plugins::holodex::get_holodex_favorites_live(
-            &api_key,
-            &active_jwt,
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                return Json(json!({
-                    "success": false,
-                    "message": format!("Failed to fetch Holodex favorites: {}", e)
-                }));
-            }
-        };
-
-        let streams = crate::plugins::youtube_rss::merge_discovered(streams);
-        let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
-        let filtered_streams = filter_holodex_streams(streams, fav_ids);
-        let streams_with_area = map_holodex_streams_with_area(filtered_streams);
-
-        return Json(json!({
+    match current(kind, query.force).await {
+        Ok(snapshot) => Json(json!({
             "success": true,
-            "source": "favorites",
-            "data": streams_with_area
-        }));
+            "source": kind.source(),
+            "data": map_holodex_streams_with_area(snapshot.rows.clone())
+        })),
+        Err(message) => Json(json!({ "success": false, "message": message })),
     }
-
-    // channels.json preset list (YouTube + Twitch placeholders via ?channels=...&includePlaceholder=true)
-    let mut channel_ids = OrderedChannelIds::default();
-
-    // Load channels.json for all channels
-    let channels_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.join("channels.json")));
-
-    if let Some(path) = channels_path {
-        if let Ok(channels_content) = tokio::fs::read_to_string(path).await {
-            if let Ok(channels_json) = serde_json::from_str::<serde_json::Value>(&channels_content)
-            {
-                // Try new format: channels[].platforms.youtube
-                if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
-                    for channel in channels {
-                        if let Some(platforms) = channel.get("platforms") {
-                            if let Some(yt_id) = platforms.get("youtube").and_then(|v| v.as_str()) {
-                                channel_ids.insert(yt_id);
-                            }
-                        }
-                    }
-                }
-                // Try old format: YT_channels[].channel_id (for backward compatibility)
-                else if let Some(yt_channels) =
-                    channels_json.get("YT_channels").and_then(|v| v.as_array())
-                {
-                    for channel in yt_channels {
-                        if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
-                            channel_ids.insert(id);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Also add the currently configured channel if not already in list
-    channel_ids.insert(&cfg.youtube.channel_id);
-
-    if channel_ids.is_empty() {
-        return Json(json!({
-            "success": false,
-            "message": "No YouTube channels configured"
-        }));
-    }
-
-    let (channel_ids, queried_channels) = channel_ids.into_parts();
-
-    // Call Holodex directly for configured YouTube channels.
-    let streams = match crate::plugins::holodex::get_holodex_streams(channel_ids, true).await {
-        Ok(s) => s,
-        Err(e) => {
-            return Json(json!({
-                "success": false,
-                "message": format!("Failed to fetch from Holodex: {}", e)
-            }));
-        }
-    };
-
-    let streams = crate::plugins::youtube_rss::merge_discovered(streams);
-    let streams = crate::plugins::youtube_data::apply_youtube_overlay(streams).await;
-    let filtered_streams = filter_holodex_streams(streams, queried_channels);
-    let streams_with_area = map_holodex_streams_with_area(filtered_streams);
-
-    Json(json!({
-        "success": true,
-        "source": "channels",
-        "data": streams_with_area
-    }))
 }
 
 // Switch to a Holodex stream

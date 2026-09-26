@@ -502,6 +502,11 @@ pub(crate) async fn videos_within(
     super::youtube_index::store_videos(keys, proxy, ids, max_age).await
 }
 
+/// Whether YouTube can answer right now: a key with budget left.
+pub(crate) fn youtube_answers_available(cfg: &crate::config::Config) -> bool {
+    usable_key_count(&cfg.youtube_api_keys()) > 0
+}
+
 /// A dropped encoder can reconnect under the same video ID while YouTube holds
 /// the broadcast open (2–5 min), and Holodex often drops the row meanwhile.
 /// A stream seen live is re-added for this long after Holodex and discovery

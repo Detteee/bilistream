@@ -370,7 +370,9 @@ pub(crate) async fn refresh_tick(cfg: &Config) {
     }
     let monitored = super::youtube::monitored_channels(cfg);
     with_store(|store| store.monitored = monitored);
-    refresh(&keys, cfg.youtube.proxy.as_deref()).await;
+    if refresh(&keys, cfg.youtube.proxy.as_deref()).await {
+        crate::webui::holodex_list::wake();
+    }
 }
 
 static REFRESH_WORKER_STARTED: AtomicBool = AtomicBool::new(false);

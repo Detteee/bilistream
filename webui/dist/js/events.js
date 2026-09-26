@@ -8,6 +8,7 @@ const eventHandlers = {
   onStatus: null,
   onCluster: null,
   onConfig: null,
+  onHolodex: null,
   onRefresh: null,
 };
 
@@ -40,6 +41,9 @@ function initEventStream() {
   });
   dashboardEventSource.addEventListener('config', () => {
     runHandler(eventHandlers.onConfig);
+  });
+  dashboardEventSource.addEventListener('holodex', () => {
+    runHandler(eventHandlers.onHolodex);
   });
   dashboardEventSource.addEventListener('refresh', () => {
     runHandler(eventHandlers.onRefresh);

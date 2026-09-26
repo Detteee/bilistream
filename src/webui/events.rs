@@ -13,6 +13,8 @@ pub const STATUS: &str = "status";
 pub const CLUSTER: &str = "cluster";
 /// Persisted configuration changed.
 pub const CONFIG: &str = "config";
+/// A Holodex panel list (channels or favorites) changed.
+pub const HOLODEX: &str = "holodex";
 
 /// Notify all connected WebUI clients that `kind` changed. Never blocks; if no
 /// client is connected the event is dropped.

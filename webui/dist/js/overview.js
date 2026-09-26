@@ -31,7 +31,14 @@ let networkRefreshInFlight = false;
 let networkStatusGeneration = 0;
 let faceAuthUrl = null;
 let holodexCurrentSource = 'channels';
-let holodexStreamsRequested = false;
+let holodexKeyConfigured = false;
+let holodexLastFetchMs = 0;
+let holodexKeepAliveId = null;
+// The server keeps a list for 10 min after the last request; SSE announces
+// its changes, so an open panel only has to renew that lease.
+const holodexKeepAliveMs = 4 * 60 * 1000;
+const holodexKeepAliveWithoutEventsMs = 60 * 1000;
+const holodexKeepAliveCheckMs = 60 * 1000;
 const monitorToggleSaveDebounceMs = 160;
 function initDashboardControls() {
   document
@@ -60,12 +67,7 @@ function initDashboardControls() {
     ?.addEventListener('click', refreshTwitchStatus);
   document
     .getElementById('refreshHolodexBtn')
-    ?.addEventListener('click', refreshHolodexStreams);
-  document.addEventListener('areas-json-changed', () => {
-    if (holodexStreamsRequested) {
-      refreshHolodexStreams();
-    }
-  });
+    ?.addEventListener('click', () => refreshHolodexStreams({ force: true }));
   document
     .getElementById('bili-title-edit-btn')
     ?.addEventListener('click', toggleTitleEdit);
@@ -267,12 +269,8 @@ async function initStatusRefresh() {
     updateMonitorToggleStates(config);
     updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
-    const holodexApiKeyConfigured = !!config.holodex_api_key?.trim();
     applyHolodexMonitorGateToggle(config.holodex_monitor_gate !== false);
-    applyHolodexSectionVisibility(holodexApiKeyConfigured);
-    if (holodexApiKeyConfigured) {
-      loadHolodexAuthStatus();
-    }
+    applyHolodexConfig(config);
 
     if (config.interval) {
       statusRefreshInterval = config.interval * 1000; // Convert to milliseconds
@@ -305,6 +303,15 @@ async function initStatusRefresh() {
     }
   }, networkRefreshInterval);
 
+  if (holodexKeepAliveId) {
+    clearInterval(holodexKeepAliveId);
+  }
+  holodexKeepAliveId = setInterval(() => {
+    if (holodexKeepAliveDue(Date.now() - holodexLastFetchMs, eventStreamHealthy())) {
+      maybeLoadHolodexStreams();
+    }
+  }, holodexKeepAliveCheckMs);
+
   // Initial refresh
   refreshStatus();
   refreshNetworkStatus();
@@ -316,13 +323,37 @@ async function initStatusRefresh() {
   });
 
 }
-function applyHolodexSectionVisibility(apiKeyConfigured) {
+// The list shows with either key: Holodex rows, or what YouTube discovery
+// finds. Favorites and login need the Holodex key.
+function applyHolodexSectionVisibility(holodexKey, youtubeKey) {
+  const listAvailable = holodexKey || youtubeKey;
   setElementDisplay(document.getElementById('holodex-section'), true);
   setElementDisplay(document.getElementById('holodex-init-hint'), false);
-  setElementDisplay(document.getElementById('holodex-api-config'), !apiKeyConfigured);
-  setElementDisplay(document.getElementById('holodex-streams-section'), apiKeyConfigured);
-  setElementDisplay(document.getElementById('holodex-login-btn'), apiKeyConfigured, 'inline-flex');
+  setElementDisplay(document.getElementById('holodex-api-config'), !listAvailable);
+  setElementDisplay(document.getElementById('holodex-streams-section'), listAvailable);
+  setElementDisplay(document.getElementById('holodex-toolbar'), holodexKey, 'flex');
+  setElementDisplay(document.getElementById('holodex-login-btn'), holodexKey, 'inline-flex');
   maybeLoadHolodexStreams();
+}
+// Applies the panel's key-driven layout from a loaded config. The auth status
+// may renew the JWT upstream, so it loads only when the Holodex key appears.
+function applyHolodexConfig(config) {
+  const holodexKey = !!config.holodex_api_key?.trim();
+  const youtubeKey = !!config.youtube_api_key?.trim();
+  const holodexKeyAdded = holodexKey && !holodexKeyConfigured;
+  holodexKeyConfigured = holodexKey;
+  if (!holodexKey) {
+    holodexUseFavorites = false;
+    holodexUseFavoritesInitialized = false;
+  }
+  applyHolodexSectionVisibility(holodexKey, youtubeKey);
+  if (holodexKeyAdded) {
+    // The first fetch went out in channels mode; follow a login to favorites.
+    const usedFavorites = holodexUseFavorites;
+    loadHolodexAuthStatus().then(() => {
+      if (holodexUseFavorites !== usedFavorites) maybeLoadHolodexStreams();
+    });
+  }
 }
 // Stored as holodex_monitor_gate; the switch shows the inverse, yt-dlp 兜底.
 function applyHolodexMonitorGateToggle(enabled) {
@@ -331,25 +362,25 @@ function applyHolodexMonitorGateToggle(enabled) {
     toggle.checked = !enabled;
   }
 }
-// The stream list is only worth fetching once the API key is known to be
-// configured, the overview is the visible view, and the panel is open.
+// The overview is the visible view of a visible dashboard, and the panel is
+// open with its list shown.
+function isHolodexPanelOpen() {
+  return isDashboardVisible()
+    && isViewActive('overview')
+    && !document.getElementById('holodex-section')?.classList.contains('is-collapsed')
+    && !isElementHidden(document.getElementById('holodex-streams-section'));
+}
+// Every trigger (SSE, opening the panel, the tab coming back, the keep-alive)
+// refetches only while the panel is open; a closed one catches up on opening.
 function maybeLoadHolodexStreams() {
-  if (holodexStreamsRequested || !isViewActive('overview')) {
-    return;
+  if (isHolodexPanelOpen()) {
+    refreshHolodexStreams();
   }
-
-  const section = document.getElementById('holodex-section');
-  if (section?.classList.contains('is-collapsed')) {
-    return;
-  }
-
-  const streams = document.getElementById('holodex-streams-section');
-  if (!streams || getComputedStyle(streams).display === 'none') {
-    return;
-  }
-
-  holodexStreamsRequested = true;
-  refreshHolodexStreams();
+}
+// Renews the server's lease: every 4 min, or every minute while SSE is down
+// and can't announce changes.
+function holodexKeepAliveDue(sinceLastFetchMs, eventsHealthy) {
+  return sinceLastFetchMs >= (eventsHealthy ? holodexKeepAliveMs : holodexKeepAliveWithoutEventsMs);
 }
 function setHolodexCollapsed(collapsed) {
   const section = document.getElementById('holodex-section');
@@ -379,7 +410,7 @@ function toggleHolodexFold() {
   }
 
   if (!collapsed) {
-    // Opening the panel is what triggers the first fetch.
+    // Opening the panel catches up on what changed while it was closed.
     maybeLoadHolodexStreams();
   }
 }
@@ -467,8 +498,11 @@ function renderHolodexCards(container, live, scheduled) {
   renderedHolodexCards = next;
 }
 
-async function refreshHolodexStreams() {
+// `force`: the refresh button; the server asks Holodex now instead of
+// answering from its list.
+async function refreshHolodexStreams({ force = false } = {}) {
   const generation = ++holodexRefreshGeneration;
+  holodexLastFetchMs = Date.now();
   // Start continuous spinning animation
   const button = document.getElementById('refreshHolodexBtn');
   const icon = document.getElementById('refreshHolodexIcon');
@@ -489,7 +523,8 @@ async function refreshHolodexStreams() {
 
   try {
     const favoritesParam = holodexUseFavorites ? 'true' : 'false';
-    const data = await getJson(`/api/holodex/streams?favorites=${favoritesParam}`);
+    const forceParam = force ? '&force=true' : '';
+    const data = await getJson(`/api/holodex/streams?favorites=${favoritesParam}${forceParam}`);
     if (generation !== holodexRefreshGeneration) return;
 
     if (!data.success) {
@@ -700,9 +735,7 @@ function updateHolodexDurations() {
 }
 function startHolodexDurationTicker() {
   stopHolodexDurationTicker();
-  if (!isDashboardVisible() || !isViewActive('overview')
-    || document.getElementById('holodex-section')?.classList.contains('is-collapsed')
-    || isElementHidden(document.getElementById('holodex-streams-section'))) return;
+  if (!isHolodexPanelOpen()) return;
   updateHolodexDurations();
   if (document.querySelector('.holodex-stream-duration[data-tick="live"], .holodex-stream-scheduled[data-start]')) {
     holodexDurationIntervalId = setInterval(updateHolodexDurations, 1000);
@@ -2897,7 +2930,10 @@ export {
   initFaceAuthModalControls,
   initStatusRefresh,
   applyHolodexSectionVisibility,
+  applyHolodexConfig,
+  isHolodexPanelOpen,
   maybeLoadHolodexStreams,
+  holodexKeepAliveDue,
   setHolodexCollapsed,
   toggleHolodexFold,
   initHolodexFold,
@@ -3049,7 +3085,9 @@ export {
   networkRefreshInFlight,
   faceAuthUrl,
   holodexCurrentSource,
-  holodexStreamsRequested,
+  holodexKeyConfigured,
+  holodexLastFetchMs,
+  holodexKeepAliveId,
   monitorToggleSaveDebounceMs,
   lastStatusRefreshMs,
   HOLODEX_STATUS_STATE_CLASSES,
