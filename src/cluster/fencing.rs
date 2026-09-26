@@ -393,6 +393,13 @@ pub(crate) async fn collect_local_snapshot(
         monitor_toggles: monitor_toggle_state_from_config(cfg),
         channel_targets: channel_target_state_from_config(cfg),
         yt_index_version: super::yt_index::advertised_version(),
+        websub: crate::plugins::youtube_websub::counts().map(|(verified, pending, failed)| {
+            super::types::WebSubCounts {
+                verified,
+                pending,
+                failed,
+            }
+        }),
     }
 }
 

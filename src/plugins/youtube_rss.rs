@@ -1846,6 +1846,51 @@ mod tests {
         assert_eq!(fit(&dry).1, Fit::Paused);
     }
 
+    /// Peers get pushed streams through the index's `discovered` rows, which
+    /// the index node publishes from `merge_discovered(Vec::new())`.
+    #[tokio::test]
+    async fn a_pushed_live_stream_is_part_of_the_published_discovered_rows() {
+        use super::super::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
+        let entry = FeedEntry {
+            video_id: "pushLiveVid1".to_string(),
+            channel_id: "UCpushlive".to_string(),
+            channel_name: "Name".to_string(),
+            title: "Live now".to_string(),
+            published: None,
+        };
+        super::super::youtube_index::record_for_test(
+            std::slice::from_ref(&entry.video_id),
+            vec![YtVideo {
+                id: entry.video_id.clone(),
+                snippet: YtSnippet {
+                    title: "Live now".to_string(),
+                    channel_id: "UCpushlive".to_string(),
+                },
+                live_streaming_details: Some(YtLiveDetails {
+                    actual_start_time: Some("2026-09-27T00:00:00Z".to_string()),
+                    ..Default::default()
+                }),
+            }],
+        );
+        let fresh: HashMap<String, Source> = [(entry.video_id.clone(), Source::WebSub)]
+            .into_iter()
+            .collect();
+        Worker::default()
+            .classify(
+                &["key".to_string()],
+                None,
+                &fresh,
+                std::slice::from_ref(&entry),
+                Instant::now(),
+            )
+            .await
+            .unwrap();
+        let published = merge_discovered(Vec::new());
+        assert!(published
+            .iter()
+            .any(|row| row.id == entry.video_id && row.status == "live"));
+    }
+
     #[tokio::test]
     async fn pushes_for_old_or_private_videos_add_no_row() {
         use super::super::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};

@@ -208,6 +208,7 @@ mod tests {
             monitor_toggles: Default::default(),
             channel_targets: Default::default(),
             yt_index_version: None,
+            websub: None,
         }
     }
 

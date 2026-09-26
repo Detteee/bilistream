@@ -349,6 +349,7 @@ pub(crate) fn empty_node(
         monitor_toggles: all_monitor_toggles_off(),
         channel_targets: ChannelTargetState::default(),
         yt_index_version: None,
+        websub: None,
     }
 }
 

@@ -422,6 +422,14 @@ pub(crate) fn healthy() -> bool {
         .is_some_and(|hub| hub.healthy(Instant::now()))
 }
 
+/// Verified / pending / failed subscriptions while this node subscribes.
+pub fn counts() -> Option<(usize, usize, usize)> {
+    let guard = HUB.lock().unwrap_or_else(|e| e.into_inner());
+    let hub = guard.as_ref()?;
+    let counts = hub.counts();
+    (counts != (0, 0, 0)).then_some(counts)
+}
+
 /// Subscriptions and pushes for the settings view; `None` while WebSub is off.
 pub(crate) fn status() -> Option<serde_json::Value> {
     let guard = HUB.lock().unwrap_or_else(|e| e.into_inner());

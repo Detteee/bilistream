@@ -141,6 +141,14 @@ fn peer_role(copy: Option<&PeerCopy>, owner: &str, timeout: Duration, now: Insta
     }
 }
 
+/// Only the index node subscribes at the WebSub hub, so the hub pushes once
+/// and one node spends `videos.list` confirming. A clustered node that fell
+/// back to answering for itself stays quiet (RSS and the playlist backstop
+/// cover the outage); with the cluster off, a node behaves as on `main`.
+fn websub_allowed(cfg: &Config, role: &YtIndexRole) -> bool {
+    !cfg.cluster.enabled || matches!(role, YtIndexRole::Owner)
+}
+
 /// Channels whose monitor acts on a go-live anywhere in the cluster. The
 /// public-status node runs the only store, but is usually idle with every
 /// monitor off, so it takes the channels from the nodes' heartbeats: each
@@ -367,6 +375,7 @@ pub(crate) async fn run_yt_index() {
         let role = worker.cycle(&cfg).await;
         worker.note(&role);
         let peer = matches!(role, YtIndexRole::Peer(_));
+        crate::plugins::youtube_websub::set_enabled(websub_allowed(&cfg, &role));
         *recover_write_lock(&ROLE, "YouTube index role") = role;
         // `main`'s store worker is the one refresher (and publishes on the
         // public-status node); a peer keeps no store of its own.
@@ -404,6 +413,19 @@ mod tests {
         node.last_seen = Some(last_seen);
         node.yt_index_version = version.map(str::to_string);
         node
+    }
+
+    #[test]
+    fn only_the_index_node_subscribes_to_websub_in_a_cluster() {
+        let mut cfg = peer_config("peer");
+        assert!(websub_allowed(&cfg, &YtIndexRole::Owner));
+        assert!(
+            !websub_allowed(&cfg, &YtIndexRole::Standalone),
+            "fallback stays quiet"
+        );
+        assert!(!websub_allowed(&cfg, &index(Vec::new(), Vec::new())));
+        cfg.cluster.enabled = false;
+        assert!(websub_allowed(&cfg, &YtIndexRole::Standalone), "as on main");
     }
 
     #[test]
@@ -497,6 +519,17 @@ mod tests {
 
         let value = serde_json::to_value(owner(Some("v1"), 1)).unwrap();
         assert_eq!(value["yt_index_version"], "v1");
+
+        assert!(value.get("websub").is_none(), "no counts, no field");
+        assert_eq!(parsed.websub, None);
+        let mut subscribed = owner(Some("v1"), 1);
+        subscribed.websub = Some(super::super::types::WebSubCounts {
+            verified: 3,
+            pending: 1,
+            failed: 0,
+        });
+        let value = serde_json::to_value(&subscribed).unwrap();
+        assert_eq!(value["websub"]["verified"], 3);
     }
 
     fn row(id: &str, status: &str) -> HolodexStream {

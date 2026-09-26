@@ -56,6 +56,17 @@ pub struct ClusterNodeSnapshot {
     /// cluster (`cluster::yt_index`). Older nodes neither send nor read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yt_index_version: Option<String>,
+    /// This node's WebSub subscriptions while it subscribes (the index node).
+    /// Older nodes neither send nor read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websub: Option<WebSubCounts>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebSubCounts {
+    pub verified: usize,
+    pub pending: usize,
+    pub failed: usize,
 }
 
 impl ClusterNodeSnapshot {

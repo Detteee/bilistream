@@ -697,6 +697,7 @@ mod tests {
             monitor_toggles,
             channel_targets,
             yt_index_version: None,
+            websub: None,
         }
     }
 
