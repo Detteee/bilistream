@@ -198,20 +198,19 @@ fn refetch_skipped_youtube(stream: &StreamCandidate) -> bool {
         && bilistream::plugins::youtube::clear_skipped_live(&stream.channel_id)
 }
 
+/// The first playable candidate: a live priority channel (YouTube, then
+/// Twitch) first, then Niconico, YouTube, Twitch.
 fn select_stream(
     yt: &StreamCandidate,
     tw: &StreamCandidate,
     nico: &StreamCandidate,
 ) -> Option<StreamCandidate> {
-    if yt.is_playable() {
-        Some(yt.clone())
-    } else if tw.is_playable() {
-        Some(tw.clone())
-    } else if nico.is_playable() {
-        Some(nico.clone())
-    } else {
-        None
-    }
+    [yt, tw]
+        .into_iter()
+        .filter(|candidate| candidate.is_priority)
+        .chain([nico, yt, tw])
+        .find(|candidate| candidate.is_playable())
+        .cloned()
 }
 
 /// (is_live, topic, title, m3u8_url, scheduled_start, stream_id) as returned by
@@ -2452,14 +2451,28 @@ mod tests {
     }
 
     #[test]
-    fn select_stream_prefers_youtube_when_both_live() {
+    fn select_stream_prefers_niconico_then_youtube_then_twitch() {
         let yt = test_stream_candidate(StreamPlatform::Youtube, true);
         let tw = test_stream_candidate(StreamPlatform::Twitch, true);
-        let nico = test_stream_candidate(StreamPlatform::Niconico, true);
+        let mut nico = test_stream_candidate(StreamPlatform::Niconico, true);
 
         let selected = select_stream(&yt, &tw, &nico).expect("live stream should be selected");
+        assert_eq!(selected.platform, StreamPlatform::Niconico);
 
+        nico.is_live = false;
+        let selected = select_stream(&yt, &tw, &nico).expect("live stream should be selected");
         assert_eq!(selected.platform, StreamPlatform::Youtube);
+    }
+
+    #[test]
+    fn a_live_priority_channel_still_beats_niconico() {
+        let yt = test_stream_candidate(StreamPlatform::Youtube, false);
+        let mut tw = test_stream_candidate(StreamPlatform::Twitch, true);
+        tw.is_priority = true;
+        let nico = test_stream_candidate(StreamPlatform::Niconico, true);
+
+        let selected = select_stream(&yt, &tw, &nico).expect("priority should be selected");
+        assert_eq!(selected.platform, StreamPlatform::Twitch);
     }
 
     #[test]
