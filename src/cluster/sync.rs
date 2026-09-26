@@ -353,14 +353,43 @@ pub async fn finalize_cluster_node_switch(
     target_node_id: &str,
     preserve_source_drain: bool,
 ) -> Result<(), String> {
+    finalize_cluster_node_switch_with(
+        cfg,
+        before,
+        source_node_id,
+        target_node_id,
+        preserve_source_drain,
+        false,
+    )
+    .await
+}
+
+/// `automatic`: the heartbeat's failover, which may take over from a source
+/// that cannot be reached (`may_take_over_unconfirmed`). Panel switches pass
+/// false and always need the source's confirmation.
+pub(crate) async fn finalize_cluster_node_switch_with(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    target_node_id: &str,
+    preserve_source_drain: bool,
+    automatic: bool,
+) -> Result<(), String> {
     // Complete the ordered handoff even if the requesting HTTP client disconnects.
     let cfg = cfg.clone();
     let before = before.clone();
     let source = source_node_id.to_string();
     let target = target_node_id.to_string();
     tokio::spawn(async move {
-        finalize_cluster_node_switch_inner(&cfg, &before, &source, &target, preserve_source_drain)
-            .await
+        finalize_cluster_node_switch_inner(
+            &cfg,
+            &before,
+            &source,
+            &target,
+            preserve_source_drain,
+            automatic,
+        )
+        .await
     })
     .await
     .map_err(|e| format!("集群交接任务失败: {e}"))?
@@ -372,6 +401,7 @@ async fn finalize_cluster_node_switch_inner(
     source_node_id: &str,
     target_node_id: &str,
     preserve_source_drain: bool,
+    automatic: bool,
 ) -> Result<(), String> {
     let _switch_guard = cluster_switch_lock().lock().await;
     let pending_source = (target_node_id == cfg.cluster.node_id)
@@ -423,9 +453,11 @@ async fn finalize_cluster_node_switch_inner(
     );
 
     // Never enable the replacement until the source confirms persisted all-off
-    // toggles and a stopped process. An unreachable source leaves handoff pending.
+    // toggles and a stopped process. An automatic failover may take over from a
+    // source that cannot be reached once its self-fence has provably run out
+    // (`may_take_over_unconfirmed`); anything else leaves the handoff pending.
     if source_node_id != target_node_id {
-        apply_cluster_node_mode_to_node_with_retry(
+        let disabled = apply_node_mode_with_retry_classified(
             &client,
             cfg,
             source_node_id,
@@ -448,8 +480,29 @@ async fn finalize_cluster_node_switch_inner(
             },
             "disable_previous_active",
         )
-        .await
-        .map_err(|e| format!("源节点尚未确认停止，取消接管: {e}"))?;
+        .await;
+        if let Err(e) = disabled {
+            let source_last_seen = cluster_state_read()
+                .nodes
+                .get(source_node_id)
+                .and_then(|node| node.last_seen);
+            if !(may_take_over_unconfirmed(
+                automatic,
+                &e,
+                source_last_seen,
+                &cfg.cluster,
+                now_secs(),
+            ) && super::fencing::local_has_fresh_quorum(cfg))
+            {
+                return Err(format!("源节点尚未确认停止，取消接管: {e}"));
+            }
+            tracing::warn!(
+                "源节点 {} 无法连接且已超过自隔离时限，未经确认接管: {}",
+                source_node_id,
+                e
+            );
+            cluster_state_write().unconfirmed_demotion = Some(source_node_id.to_string());
+        }
     }
 
     ensure_handoff_target_is_eligible(cfg, target_node_id)?;
@@ -627,6 +680,113 @@ pub(crate) async fn export_cluster_config_from_node(
     }
 }
 
+/// When this process started, standing in for a source never heard from.
+static PROCESS_STARTED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+pub(crate) fn mark_process_started() {
+    PROCESS_STARTED.get_or_init(now_secs);
+}
+
+/// An unreachable source fences itself: without a fresh quorum its ffmpeg
+/// loop and heartbeat stop pushing within `failover_timeout`. Past that, plus
+/// one loop tick and a margin, nothing can still be pushing there.
+pub(crate) fn source_fence_deadline_secs(cluster: &crate::config::ClusterConfig) -> u64 {
+    cluster.failover_timeout_secs.max(1) + 2 * cluster.heartbeat_interval_secs.max(1) + 5
+}
+
+/// Whether an automatic failover may enable the replacement although the
+/// source never confirmed its stop.
+pub(crate) fn may_take_over_unconfirmed(
+    automatic: bool,
+    error: &NodeModeError,
+    source_last_seen: Option<u64>,
+    cluster: &crate::config::ClusterConfig,
+    now: u64,
+) -> bool {
+    if !automatic || !matches!(error, NodeModeError::Unreachable(_)) {
+        return false;
+    }
+    let Some(heard) = source_last_seen.or_else(|| PROCESS_STARTED.get().copied()) else {
+        return false;
+    };
+    now.saturating_sub(heard) > source_fence_deadline_secs(cluster)
+}
+
+/// Delivers the all-off demotion owed to a source taken over without its
+/// confirmation, once it answers. One attempt per heartbeat.
+pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
+    let source = {
+        let mut state = cluster_state_write();
+        let Some(source) = state.unconfirmed_demotion.clone() else {
+            return;
+        };
+        let still_owed = state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())
+            && configured_node_ids(cfg).contains(source.as_str());
+        if !still_owed {
+            state.unconfirmed_demotion = None;
+            return;
+        }
+        source
+    };
+    let payload = ClusterApplyNodeModeRequest {
+        monitored_config: None,
+        active: false,
+        restart: false,
+        preserve_drain: true,
+        monitor_toggles: Some(all_monitor_toggles_off()),
+        channel_targets: None,
+        expected_active_owner: Some(cfg.cluster.node_id.clone()),
+        handoff_target_node_id: Some(cfg.cluster.node_id.clone()),
+    };
+    match apply_node_mode_classified(&CLUSTER_HTTP_CLIENT, cfg, &source, &payload).await {
+        Ok(()) => {
+            let mut state = cluster_state_write();
+            if state.unconfirmed_demotion.as_deref() == Some(source.as_str()) {
+                state.unconfirmed_demotion = None;
+            }
+            tracing::info!("已确认源节点 {} 停止并关闭监控", source);
+        }
+        Err(e) => tracing::debug!("源节点 {} 仍未确认停止: {}", source, e),
+    }
+}
+
+/// Three attempts; a refusal on any attempt wins over later timeouts, since
+/// the node was alive to answer.
+async fn apply_node_mode_with_retry_classified(
+    client: &reqwest::Client,
+    cfg: &Config,
+    node_id: &str,
+    payload: ClusterApplyNodeModeRequest,
+    phase: &str,
+) -> Result<(), NodeModeError> {
+    let max_attempts = 3;
+    let mut refused: Option<NodeModeError> = None;
+    let mut last_error = NodeModeError::Unreachable(String::new());
+    for attempt in 1..=max_attempts {
+        match apply_node_mode_classified(client, cfg, node_id, &payload).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                    phase,
+                    attempt,
+                    max_attempts,
+                    node_id,
+                    e
+                );
+                if matches!(e, NodeModeError::Refused(_)) {
+                    refused = Some(e.clone());
+                }
+                last_error = e;
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    Err(refused.unwrap_or(last_error))
+}
+
 pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
     client: &reqwest::Client,
     cfg: &Config,
@@ -634,39 +794,46 @@ pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
     payload: ClusterApplyNodeModeRequest,
     phase: &str,
 ) -> Result<(), String> {
-    let max_attempts = 3;
-    let mut last_error = String::new();
-    for attempt in 1..=max_attempts {
-        match apply_cluster_node_mode_to_node(client, cfg, node_id, &payload).await {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_error = e;
-                tracing::warn!(
-                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
-                    phase,
-                    attempt,
-                    max_attempts,
-                    node_id,
-                    last_error
-                );
-                if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
-                }
+    apply_node_mode_with_retry_classified(client, cfg, node_id, payload, phase)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Why a node-mode request failed: the node did not answer (down, or its
+/// tunnel has no origin), or it answered and refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NodeModeError {
+    Unreachable(String),
+    Refused(String),
+}
+
+impl std::fmt::Display for NodeModeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeModeError::Unreachable(message) | NodeModeError::Refused(message) => {
+                f.write_str(message)
             }
         }
     }
-    Err(last_error)
 }
 
-pub(crate) async fn apply_cluster_node_mode_to_node(
+/// 502–504 and Cloudflare's 520–530 mean the origin behind the URL is down.
+pub(crate) fn origin_down_status(status: u16) -> bool {
+    matches!(status, 502..=504 | 520..=530)
+}
+
+async fn apply_node_mode_classified(
     client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: &ClusterApplyNodeModeRequest,
-) -> Result<(), String> {
+) -> Result<(), NodeModeError> {
+    use NodeModeError::{Refused, Unreachable};
     if node_id == cfg.cluster.node_id {
-        let status = apply_cluster_node_mode_locally(payload.clone()).await?;
-        return validate_node_mode_response(&status, node_id, payload.active);
+        let status = apply_cluster_node_mode_locally(payload.clone())
+            .await
+            .map_err(Refused)?;
+        return validate_node_mode_response(&status, node_id, payload.active).map_err(Refused);
     }
 
     let peer = cfg
@@ -674,7 +841,7 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
         .peers
         .iter()
         .find(|peer| peer.node_id == node_id)
-        .ok_or_else(|| format!("未找到目标节点 {}", node_id))?;
+        .ok_or_else(|| Refused(format!("未找到目标节点 {}", node_id)))?;
     let url = format!(
         "{}/api/cluster/apply-node-mode",
         peer.api_url.trim_end_matches('/')
@@ -685,32 +852,40 @@ pub(crate) async fn apply_cluster_node_mode_to_node(
         .timeout(cluster_control_timeout(cfg))
         .send()
         .await
-        .map_err(|e| format!("更新节点 {} 模式失败: {}", node_id, e))?;
+        .map_err(|e| {
+            let message = format!("更新节点 {} 模式失败: {}", node_id, e);
+            if e.is_connect() || e.is_timeout() || e.is_request() {
+                Unreachable(message)
+            } else {
+                Refused(message)
+            }
+        })?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "更新节点 {} 模式失败: HTTP {}",
-            node_id,
-            response.status()
-        ));
+        let message = format!("更新节点 {} 模式失败: HTTP {}", node_id, response.status());
+        return Err(if origin_down_status(response.status().as_u16()) {
+            Unreachable(message)
+        } else {
+            Refused(message)
+        });
     }
 
     let envelope = response
         .json::<PeerApiResponse<ClusterStatus>>()
         .await
-        .map_err(|e| format!("解析节点 {} 模式响应失败: {}", node_id, e))?;
+        .map_err(|e| Refused(format!("解析节点 {} 模式响应失败: {}", node_id, e)))?;
 
     if envelope.success {
         let status = envelope
             .data
-            .ok_or_else(|| format!("节点 {node_id} 未返回模式确认状态"))?;
-        validate_node_mode_response(&status, node_id, payload.active)?;
-        merge_cluster_status_from_direct_peer(status, node_id, cfg)?;
+            .ok_or_else(|| Refused(format!("节点 {node_id} 未返回模式确认状态")))?;
+        validate_node_mode_response(&status, node_id, payload.active).map_err(Refused)?;
+        merge_cluster_status_from_direct_peer(status, node_id, cfg).map_err(Refused)?;
         Ok(())
     } else {
-        Err(envelope
-            .message
-            .unwrap_or_else(|| format!("节点 {} 拒绝模式更新", node_id)))
+        Err(Refused(envelope.message.unwrap_or_else(|| {
+            format!("节点 {} 拒绝模式更新", node_id)
+        })))
     }
 }
 

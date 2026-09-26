@@ -2074,3 +2074,112 @@ fn freshly_enabled_handoff_target_becomes_eligible_immediately() {
     assert!(ensure_handoff_target_is_eligible(&cfg, "target").is_ok());
     assert!(cluster_state_read().nodes["target"].health.healthy);
 }
+
+/// The unconfirmed takeover (`may_take_over_unconfirmed`) is safe only because
+/// an isolated active node stops pushing once its quorum goes stale. This test
+/// fails if the execution gate stops requiring a fresh quorum.
+#[test]
+fn an_isolated_active_node_fences_itself_once_its_quorum_is_stale() {
+    let now = 100;
+    let mut cfg = test_config("a", 0);
+    cfg.cluster.failover_timeout_secs = 15;
+    cfg.cluster.peers = ["b", "c"]
+        .into_iter()
+        .map(|id| crate::config::ClusterPeer {
+            node_id: id.to_string(),
+            name: id.to_string(),
+            api_url: format!("http://{id}"),
+            priority: 0,
+        })
+        .collect();
+    let mut state = ClusterState {
+        active_owner: Some("a".to_string()),
+        ..Default::default()
+    };
+    for peer in ["b", "c"] {
+        state.peer_heartbeat_acks.insert(peer.to_string(), now);
+        state
+            .peer_owner_views
+            .insert(peer.to_string(), peer_view("a", &["a", "b", "c"], now));
+    }
+    assert_eq!(state_monitoring_block_reason(&state, &cfg, now + 15), None);
+    assert!(state_monitoring_block_reason(&state, &cfg, now + 16).is_some());
+    assert!(!state_has_fresh_quorum(&state, &cfg, now + 16));
+}
+
+#[test]
+fn only_a_down_origin_counts_as_unreachable() {
+    for status in [502, 503, 504, 520, 522, 530] {
+        assert!(super::sync::origin_down_status(status), "{status}");
+    }
+    for status in [400, 401, 403, 404, 409, 500, 501, 505, 531] {
+        assert!(!super::sync::origin_down_status(status), "{status}");
+    }
+}
+
+#[test]
+fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_deadline() {
+    use super::sync::{may_take_over_unconfirmed, source_fence_deadline_secs, NodeModeError};
+    let cfg = test_config("ca", 0);
+    let deadline = source_fence_deadline_secs(&cfg.cluster);
+    assert_eq!(
+        deadline,
+        cfg.cluster.failover_timeout_secs + 2 * cfg.cluster.heartbeat_interval_secs + 5
+    );
+    let down = NodeModeError::Unreachable("HTTP 530".into());
+    let refused = NodeModeError::Refused("HTTP 409".into());
+    let seen = Some(1_000);
+    let after = 1_000 + deadline + 1;
+
+    assert!(may_take_over_unconfirmed(
+        true,
+        &down,
+        seen,
+        &cfg.cluster,
+        after
+    ));
+    assert!(
+        !may_take_over_unconfirmed(true, &down, seen, &cfg.cluster, 1_000 + deadline),
+        "not past the deadline"
+    );
+    assert!(
+        !may_take_over_unconfirmed(true, &refused, seen, &cfg.cluster, after),
+        "alive and refusing"
+    );
+    assert!(
+        !may_take_over_unconfirmed(false, &down, seen, &cfg.cluster, after),
+        "a panel switch"
+    );
+}
+
+#[tokio::test]
+async fn an_owed_demotion_is_dropped_once_this_node_is_not_the_owner() {
+    crate::install_crypto_provider();
+    let _guard = ClusterStateGuard::new();
+    let mut cfg = test_config("ca", 0);
+    cfg.cluster.peers = vec![crate::config::ClusterPeer {
+        node_id: "jp".into(),
+        name: "jp".into(),
+        api_url: "http://127.0.0.1:9".into(),
+        priority: 0,
+    }];
+    {
+        let mut state = cluster_state_write();
+        state.active_owner = Some("jp".into());
+        state.unconfirmed_demotion = Some("jp".into());
+    }
+    super::sync::retry_unconfirmed_demotion(&cfg).await;
+    assert_eq!(cluster_state_read().unconfirmed_demotion, None);
+
+    {
+        let mut state = cluster_state_write();
+        state.active_owner = Some("ca".into());
+        state.unconfirmed_demotion = Some("jp".into());
+    }
+    // Still unreachable: the demotion stays owed for the next heartbeat.
+    super::sync::retry_unconfirmed_demotion(&cfg).await;
+    assert_eq!(
+        cluster_state_read().unconfirmed_demotion.as_deref(),
+        Some("jp")
+    );
+}

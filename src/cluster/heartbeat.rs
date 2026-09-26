@@ -13,7 +13,7 @@ use super::status::{
     canonicalize_node_membership, compute_cluster_status_with_version, current_active_owner,
     empty_node, heartbeat_response_is_valid, merge_direct_peer_status, update_node,
 };
-use super::sync::{adopt_auto_failover_from_peer_view, finalize_cluster_node_switch};
+use super::sync::{adopt_auto_failover_from_peer_view, retry_unconfirmed_demotion};
 use super::types::*;
 use super::version::monitored_config_version;
 use crate::config::Config;
@@ -47,6 +47,7 @@ impl Drop for ClusterWorker {
 }
 
 pub fn start_cluster_worker() -> ClusterWorker {
+    super::sync::mark_process_started();
     let heartbeat = tokio::spawn(async {
         let client = CLUSTER_HTTP_CLIENT.clone();
 
@@ -76,6 +77,7 @@ pub fn start_cluster_worker() -> ClusterWorker {
             send_heartbeats(&client, &cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
             schedule_auto_owner_transition(&cfg, previous_owner, &status);
+            schedule_unconfirmed_demotion(&cfg);
             let block_reason = local_monitoring_block_reason(&cfg);
             if let Some(reason) = block_reason {
                 if is_ffmpeg_running().await {
@@ -182,12 +184,13 @@ pub(crate) fn schedule_auto_owner_transition(
             previous_owner,
             new_owner
         );
-        if let Err(e) = finalize_cluster_node_switch(
+        if let Err(e) = super::sync::finalize_cluster_node_switch_with(
             &cfg,
             &status,
             &previous_owner,
             &new_owner,
             preserve_source_drain,
+            true,
         )
         .await
         {
@@ -199,6 +202,25 @@ pub(crate) fn schedule_auto_owner_transition(
             );
         }
         AUTO_TRANSITION_IN_FLIGHT.store(false, Ordering::Release);
+    });
+}
+
+static DEMOTION_RETRY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Off the heartbeat path: a timeout to a dead source must not delay
+/// heartbeats to healthy peers.
+fn schedule_unconfirmed_demotion(cfg: &Config) {
+    if cluster_state_read().unconfirmed_demotion.is_none()
+        || DEMOTION_RETRY_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return;
+    }
+    let cfg = cfg.clone();
+    tokio::spawn(async move {
+        retry_unconfirmed_demotion(&cfg).await;
+        DEMOTION_RETRY_IN_FLIGHT.store(false, Ordering::Release);
     });
 }
 

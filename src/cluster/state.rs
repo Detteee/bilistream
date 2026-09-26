@@ -97,6 +97,9 @@ pub(crate) struct ClusterState {
     pub(crate) peer_observations: HashMap<String, HashMap<String, u64>>,
     pub(crate) last_known_active_toggles: Option<MonitorToggleState>,
     pub(crate) last_known_active_channel_targets: Option<ChannelTargetState>,
+    /// A source taken over without its confirmation (it was unreachable):
+    /// the all-off demotion is still owed to it.
+    pub(crate) unconfirmed_demotion: Option<String>,
 }
 
 #[derive(Clone, Debug)]
