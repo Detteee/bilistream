@@ -55,7 +55,10 @@ const OUTAGE_PROBE_EVERY: Duration = Duration::from_secs(10 * 60);
 const OUTAGE_MIN_FEEDS: usize = 4;
 /// Daily units per pool kept for classification, the overlays and the monitor.
 const RESERVED_UNITS: u64 = 3_000;
+/// Daily units for the restream target's 60s uploads-playlist poll.
+const TARGET_RESERVED_UNITS: u64 = 1_440;
 const MIN_PLAYLIST_INTERVAL: Duration = Duration::from_secs(60);
+const TARGET_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeedEntry {
@@ -163,6 +166,13 @@ pub(crate) async fn roster_channel_ids(cfg: &Config) -> Vec<String> {
     }
     push(&cfg.youtube.channel_id);
     ids
+}
+
+/// Uploads-playlist poll for the restream target: index mode, monitor on.
+fn restream_target(cfg: &Config) -> Option<String> {
+    (super::youtube::monitor_mode(cfg) == super::youtube::MonitorMode::Index)
+        .then(|| super::youtube::monitored_channels(cfg).into_iter().next())
+        .flatten()
 }
 
 #[derive(Default)]
@@ -551,13 +561,42 @@ fn playlist_entries(channel_id: &str, response: PlaylistResponse) -> Vec<FeedEnt
 }
 
 /// Per-channel poll interval the pool's budget allows, never under a minute.
-fn playlist_interval(channels: usize, usable_keys: usize) -> Option<Duration> {
-    let budget = (usable_keys as u64 * u64::from(DAILY_UNIT_BUDGET)).checked_sub(RESERVED_UNITS)?;
+fn playlist_interval(
+    channels: usize,
+    usable_keys: usize,
+    target_reserved: bool,
+) -> Option<Duration> {
+    let reserved = RESERVED_UNITS
+        + if target_reserved {
+            TARGET_RESERVED_UNITS
+        } else {
+            0
+        };
+    let budget = (usable_keys as u64 * u64::from(DAILY_UNIT_BUDGET)).checked_sub(reserved)?;
     if channels == 0 || budget == 0 {
         return None;
     }
     let secs = (86_400 * channels as u64).div_ceil(budget);
     Some(Duration::from_secs(secs).max(MIN_PLAYLIST_INTERVAL))
+}
+
+/// The restream target's uploads-playlist cadence, stretched with the pool.
+fn target_poll_interval(stretch: u32) -> Duration {
+    TARGET_POLL_INTERVAL * stretch.max(1)
+}
+
+/// Whether to fetch the restream target's uploads playlist this cycle.
+fn should_poll_target(
+    now: Instant,
+    target_due: Option<Instant>,
+    live: bool,
+    already_due: bool,
+    no_playlist: bool,
+) -> bool {
+    if live || already_due || no_playlist {
+        return false;
+    }
+    target_due.is_none_or(|at| at <= now)
 }
 
 /// The interval stretched while spend runs ahead of the day, and whether it is
@@ -573,12 +612,14 @@ fn paced_interval(
 }
 
 /// Fewest usable keys whose interval beats the RSS tick for this roster.
-fn keys_needed(channels: usize) -> Option<usize> {
+fn keys_needed(channels: usize, target_reserved: bool) -> Option<usize> {
     if channels == 0 {
         return None;
     }
-    (1..)
-        .find(|keys| playlist_interval(channels, *keys).is_some_and(|interval| interval < RSS_TICK))
+    (1..).find(|keys| {
+        playlist_interval(channels, *keys, target_reserved)
+            .is_some_and(|interval| interval < RSS_TICK)
+    })
 }
 
 /// What the last `poll_playlists` decided, for the settings view.
@@ -589,6 +630,7 @@ struct PlaylistStatus {
     stretch: u32,
     rss_down: bool,
     roster_len: usize,
+    target_reserved: bool,
 }
 
 static PLAYLIST_STATUS: Mutex<Option<PlaylistStatus>> = Mutex::new(None);
@@ -602,7 +644,7 @@ pub(crate) fn playlist_status() -> Option<serde_json::Value> {
         "interval_secs": status.interval.map(|interval| interval.as_secs()),
         "stretch": status.stretch,
         "rss_down": status.rss_down,
-        "keys_needed": keys_needed(status.roster_len),
+        "keys_needed": keys_needed(status.roster_len, status.target_reserved),
     }))
 }
 
@@ -677,6 +719,9 @@ struct Worker {
     playlist_seen: HashMap<String, Vec<FeedEntry>>,
     /// Channels without an uploads playlist, until the roster changes.
     no_playlist: HashSet<String>,
+    /// Restream target last polled on the 60s cadence.
+    target_id: Option<String>,
+    target_due: Option<Instant>,
 }
 
 impl Worker {
@@ -692,10 +737,12 @@ impl Worker {
             return Ok(());
         }
         let roster = roster_channel_ids(&cfg).await;
+        let target = restream_target(&cfg);
         if roster != self.roster {
             self.no_playlist.clear();
             self.playlist_due.retain(|id, _| roster.contains(id));
-            self.playlist_seen.retain(|id, _| roster.contains(id));
+            self.playlist_seen
+                .retain(|id, _| roster.contains(id) || target.as_deref() == Some(id.as_str()));
             self.roster = roster.clone();
         }
         let proxy = cfg.youtube.proxy.clone();
@@ -708,7 +755,7 @@ impl Worker {
             self.read_feeds(&roster, proxy.as_deref(), &mut fresh)
                 .await?;
         }
-        self.poll_playlists(&roster, &keys, proxy, &mut fresh, now)
+        self.poll_playlists(&roster, &keys, proxy, &mut fresh, now, target)
             .await;
         self.classify(&keys, cfg.youtube.proxy.as_deref(), &fresh, now)
             .await
@@ -760,8 +807,10 @@ impl Worker {
         proxy: Option<String>,
         fresh: &mut HashMap<String, Source>,
         now: Instant,
+        target: Option<String>,
     ) {
-        let base = playlist_interval(roster.len(), usable_key_count(keys));
+        let target_reserved = target.is_some();
+        let base = playlist_interval(roster.len(), usable_key_count(keys), target_reserved);
         let stretch = stretch(
             budget_remaining_fraction(keys),
             pacific_day_left(chrono::Utc::now()),
@@ -774,6 +823,7 @@ impl Worker {
             stretch,
             rss_down: degraded,
             roster_len: roster.len(),
+            target_reserved,
         });
         let stretch_changed = stretch != self.stretch;
         self.stretch = stretch;
@@ -808,19 +858,7 @@ impl Worker {
                 );
             }
         }
-        let Some(interval) = active else {
-            self.playlist_due.clear();
-            self.playlist_seen.clear();
-            return;
-        };
 
-        // Spread first polls evenly over one interval.
-        let count = roster.len().max(1) as u32;
-        for (index, id) in roster.iter().enumerate() {
-            self.playlist_due
-                .entry(id.clone())
-                .or_insert(now + interval * index as u32 / count);
-        }
         let live_channels: HashSet<String> = {
             let guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
             guard
@@ -830,14 +868,61 @@ impl Worker {
                 .map(|row| row.channel.id.clone())
                 .collect()
         };
-        let due: Vec<String> = roster
-            .iter()
-            .filter(|id| !self.no_playlist.contains(*id) && !live_channels.contains(*id))
-            .filter(|id| self.playlist_due.get(*id).is_some_and(|at| *at <= now))
-            .cloned()
-            .collect();
-        for id in &due {
-            self.playlist_due.insert(id.clone(), now + interval);
+
+        let mut due: Vec<String> = Vec::new();
+        if let Some(interval) = active {
+            // Spread first polls evenly over one interval.
+            let count = roster.len().max(1) as u32;
+            for (index, id) in roster.iter().enumerate() {
+                self.playlist_due
+                    .entry(id.clone())
+                    .or_insert(now + interval * index as u32 / count);
+            }
+            due = roster
+                .iter()
+                .filter(|id| !self.no_playlist.contains(*id) && !live_channels.contains(*id))
+                .filter(|id| self.playlist_due.get(*id).is_some_and(|at| *at <= now))
+                .cloned()
+                .collect();
+            for id in &due {
+                self.playlist_due.insert(id.clone(), now + interval);
+            }
+        } else {
+            self.playlist_due.clear();
+            if let Some(ref id) = target {
+                self.playlist_seen.retain(|k, _| k == id);
+            } else {
+                self.playlist_seen.clear();
+            }
+        }
+
+        if self.target_id.as_deref() != target.as_deref() {
+            if let Some(ref id) = target {
+                tracing::info!(
+                    "YouTube 转播目标 {} 上传列表轮询: 每 {}s",
+                    id,
+                    target_poll_interval(stretch).as_secs()
+                );
+            }
+            self.target_id = target.clone();
+            self.target_due = None;
+        }
+        if let Some(ref id) = target {
+            let live = live_channels.contains(id);
+            let already_due = due.iter().any(|due_id| due_id == id);
+            let no_playlist = self.no_playlist.contains(id);
+            if already_due {
+                self.target_due = Some(now + target_poll_interval(stretch));
+            } else if should_poll_target(now, self.target_due, live, already_due, no_playlist) {
+                due.push(id.clone());
+                self.target_due = Some(now + target_poll_interval(stretch));
+            }
+        } else {
+            self.target_due = None;
+        }
+
+        if due.is_empty() {
+            return;
         }
 
         let results: Vec<(String, PlaylistOutcome)> = stream::iter(due)
@@ -1226,20 +1311,20 @@ mod tests {
 
     #[test]
     fn playlist_interval_follows_the_key_count() {
-        let secs = |keys| playlist_interval(37, keys).map(|d| d.as_secs());
+        let secs = |keys| playlist_interval(37, keys, false).map(|d| d.as_secs());
         assert_eq!(secs(0), None);
         assert_eq!(secs(1), Some(533));
         assert_eq!(secs(2), Some(214));
         assert_eq!(secs(3), Some(134));
         assert_eq!(secs(4), Some(97));
         assert_eq!(secs(6), Some(63));
-        assert_eq!(playlist_interval(3, 6), Some(MIN_PLAYLIST_INTERVAL));
-        assert_eq!(playlist_interval(0, 2), None);
+        assert_eq!(playlist_interval(3, 6, false), Some(MIN_PLAYLIST_INTERVAL));
+        assert_eq!(playlist_interval(0, 2, false), None);
     }
 
     #[test]
     fn a_stretch_slows_polling_and_turns_it_off_once_rss_is_faster() {
-        let three_keys = playlist_interval(37, 3);
+        let three_keys = playlist_interval(37, 3, false);
         let secs = |(interval, on): (Option<Duration>, bool)| (interval.map(|d| d.as_secs()), on);
         assert_eq!(
             secs(paced_interval(three_keys, 1, false)),
@@ -1259,9 +1344,75 @@ mod tests {
 
     #[test]
     fn keys_needed_is_the_fewest_that_beat_rss() {
-        assert_eq!(keys_needed(37), Some(3));
-        assert_eq!(keys_needed(1), Some(1));
-        assert_eq!(keys_needed(0), None);
+        assert_eq!(keys_needed(37, false), Some(3));
+        assert_eq!(keys_needed(1, false), Some(1));
+        assert_eq!(keys_needed(0, false), None);
+    }
+
+    #[test]
+    fn the_target_reserve_lengthens_the_roster_interval() {
+        assert_eq!(
+            playlist_interval(37, 1, true).map(|d| d.as_secs()),
+            Some(702)
+        );
+        assert_eq!(keys_needed(30, false), Some(2));
+        assert_eq!(
+            keys_needed(30, true),
+            Some(3),
+            "the 1,440-unit target reserve can cost a key"
+        );
+        assert_eq!(keys_needed(37, true), Some(3));
+    }
+
+    #[test]
+    fn the_restream_target_polls_every_minute_unless_live_or_already_due() {
+        let now = Instant::now();
+        assert_eq!(target_poll_interval(1), TARGET_POLL_INTERVAL);
+        assert_eq!(target_poll_interval(2), TARGET_POLL_INTERVAL * 2);
+        assert!(should_poll_target(now, None, false, false, false));
+        assert!(!should_poll_target(
+            now,
+            Some(now + TARGET_POLL_INTERVAL),
+            false,
+            false,
+            false
+        ));
+        assert!(should_poll_target(
+            now + TARGET_POLL_INTERVAL,
+            Some(now + TARGET_POLL_INTERVAL),
+            false,
+            false,
+            false
+        ));
+        assert!(
+            !should_poll_target(now, None, true, false, false),
+            "already live in discovery"
+        );
+        assert!(
+            !should_poll_target(now, None, false, true, false),
+            "roster poll already has it"
+        );
+        assert!(!should_poll_target(now, None, false, false, true));
+    }
+
+    #[test]
+    fn restream_target_needs_index_mode_and_the_monitor() {
+        let mut cfg: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "auto_cover": false, "enable_anti_collision": false, "interval": 15,
+            "bililive": { "enable_danmaku_command": false, "room": 1, "bili_rtmp_url": "", "bili_rtmp_key": "" },
+            "youtube": {}, "twitch": {}, "enable_lol_monitor": false, "anti_collision_list": {}
+        }))
+        .unwrap();
+        cfg.youtube.channel_id = "UCtarget".to_string();
+        cfg.youtube.enable_monitor = true;
+        cfg.holodex_monitor_gate = true;
+        cfg.youtube_api_key = Some("key".to_string());
+        assert_eq!(restream_target(&cfg).as_deref(), Some("UCtarget"));
+        cfg.holodex_monitor_gate = false;
+        assert_eq!(restream_target(&cfg), None, "rescue mode");
+        cfg.holodex_monitor_gate = true;
+        cfg.youtube.enable_monitor = false;
+        assert_eq!(restream_target(&cfg), None);
     }
 
     #[test]

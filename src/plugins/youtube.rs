@@ -312,6 +312,34 @@ pub fn take_monitor_wake(channel_id: &str) -> bool {
     guard.as_mut().is_some_and(|wakes| wakes.remove(channel_id))
 }
 
+/// Live video IDs the monitor is skipping (warning/cut-off or banned keyword).
+/// Later ticks reuse the index answer instead of running yt-dlp for the m3u8.
+static SKIPPED_LIVE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn with_skipped_live<T>(f: impl FnOnce(&mut HashMap<String, String>) -> T) -> T {
+    let mut guard = SKIPPED_LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(HashMap::new))
+}
+
+/// Remember that this channel's live video is being skipped.
+pub fn mark_skipped_live(channel_id: &str, video_id: &str) {
+    if channel_id.is_empty() || video_id.is_empty() {
+        return;
+    }
+    with_skipped_live(|skipped| {
+        skipped.insert(channel_id.to_string(), video_id.to_string());
+    });
+}
+
+/// Drop the skip mark for this channel. `true` if it had one.
+pub fn clear_skipped_live(channel_id: &str) -> bool {
+    with_skipped_live(|skipped| skipped.remove(channel_id).is_some())
+}
+
+fn skipped_video(channel_id: &str) -> Option<String> {
+    with_skipped_live(|skipped| skipped.get(channel_id).cloned())
+}
+
 /// What the index says about one channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IndexView {
@@ -322,6 +350,26 @@ enum IndexView {
     Upcoming,
     /// Nothing but discovered waiting rooms, or nothing at all.
     NoAnswer,
+}
+
+/// Reuse the index's live answer instead of running yt-dlp for the same video.
+fn skip_reuse(
+    view: IndexView,
+    probe: Probe,
+    marked_video_id: Option<&str>,
+    video_id: Option<&str>,
+) -> bool {
+    probe == Probe::Throttled
+        && view == IndexView::Live
+        && marked_video_id.is_some()
+        && marked_video_id == video_id
+}
+
+fn drop_skipped_live_if_stale(channel_id: &str, view: IndexView, video_id: Option<&str>) {
+    let marked = skipped_video(channel_id);
+    if marked.is_some() && (view != IndexView::Live || marked.as_deref() != video_id) {
+        clear_skipped_live(channel_id);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,6 +639,23 @@ async fn get_youtube_status_with(
             status.video_id,
         )
     };
+
+    if skip_reuse(
+        view,
+        probe,
+        skipped_video(channel_id).as_deref(),
+        status.video_id.as_deref(),
+    ) {
+        return Ok((
+            true,
+            status.topic,
+            status.title,
+            None,
+            None,
+            status.video_id,
+        ));
+    }
+    drop_skipped_live_if_stale(channel_id, view, status.video_id.as_deref());
 
     match decide_monitor_action(view, probe, last_probe.as_ref().map(|(age, _)| *age)) {
         MonitorAction::ConfirmLive => {
@@ -917,6 +982,40 @@ mod tests {
         assert!(!take_monitor_wake("UCwakeB"));
         assert!(take_monitor_wake("UCwakeA"));
         assert!(!take_monitor_wake("UCwakeA"), "taking it clears it");
+    }
+
+    #[test]
+    fn a_skipped_live_id_is_reused_until_it_changes() {
+        use IndexView::*;
+        let cases = [
+            (Live, Probe::Throttled, Some("v1"), Some("v1"), true),
+            (Live, Probe::Throttled, Some("v1"), Some("v2"), false),
+            (Live, Probe::Throttled, None, Some("v1"), false),
+            (Live, Probe::Throttled, None, None, false),
+            (Live, Probe::Throttled, Some("v1"), None, false),
+            (Live, Probe::Now, Some("v1"), Some("v1"), false),
+            (Upcoming, Probe::Throttled, Some("v1"), Some("v1"), false),
+            (NoAnswer, Probe::Throttled, Some("v1"), Some("v1"), false),
+            (Unavailable, Probe::Throttled, Some("v1"), Some("v1"), false),
+        ];
+        for (view, probe, marked, video_id, expected) in cases {
+            assert_eq!(
+                skip_reuse(view, probe, marked, video_id),
+                expected,
+                "{view:?} {probe:?} {marked:?} {video_id:?}"
+            );
+        }
+
+        mark_skipped_live("UCskip-stale", "vid-a");
+        drop_skipped_live_if_stale("UCskip-stale", IndexView::Live, Some("vid-a"));
+        assert_eq!(skipped_video("UCskip-stale").as_deref(), Some("vid-a"));
+        drop_skipped_live_if_stale("UCskip-stale", IndexView::Live, Some("vid-b"));
+        assert!(skipped_video("UCskip-stale").is_none(), "new id drops it");
+
+        mark_skipped_live("UCskip-ended", "vid-a");
+        drop_skipped_live_if_stale("UCskip-ended", IndexView::Upcoming, Some("vid-a"));
+        assert!(skipped_video("UCskip-ended").is_none(), "not live drops it");
+        assert!(!clear_skipped_live("UCskip-ended"));
     }
 
     #[test]

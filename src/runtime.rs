@@ -132,6 +132,26 @@ impl StreamCandidate {
     }
 }
 
+/// The YouTube candidate was live, then a warning or banned-keyword skip
+/// dropped it. Later ticks reuse the index instead of fetching the m3u8.
+fn mark_youtube_skipped_live(stream: &StreamCandidate, was_live: bool) {
+    if !was_live || stream.is_live {
+        return;
+    }
+    let Some(video_id) = stream.stream_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    bilistream::plugins::youtube::mark_skipped_live(&stream.channel_id, video_id);
+}
+
+/// A skipped live stream is no longer skipped: drop the mark so the next pass
+/// runs yt-dlp for the m3u8 immediately, without waiting 检测间隔.
+fn refetch_skipped_youtube(stream: &StreamCandidate) -> bool {
+    stream.is_live
+        && stream.m3u8_url.is_none()
+        && bilistream::plugins::youtube::clear_skipped_live(&stream.channel_id)
+}
+
 fn select_stream(yt: &StreamCandidate, tw: &StreamCandidate) -> Option<StreamCandidate> {
     if yt.is_playable() {
         Some(yt.clone())
@@ -556,6 +576,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         if yt_stream.is_live || tw_stream.is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
+            let yt_was_live = yt_stream.is_live;
 
             // Skip channels previously stopped due to a warning/cut-off.
             skip_stream_if_previously_warned(&mut yt_stream, &cfg).await;
@@ -570,6 +591,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // If both channels are skipped after filtering, continue to next iteration
             if !yt_stream.is_live && !tw_stream.is_live {
+                mark_youtube_skipped_live(&yt_stream, yt_was_live);
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
@@ -578,6 +600,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 bilistream::plugins::banned_keywords::streaming_banned_keywords();
             skip_stream_if_banned_keyword(&mut yt_stream, &streaming_banned_keywords, &cfg).await;
             skip_stream_if_banned_keyword(&mut tw_stream, &streaming_banned_keywords, &cfg).await;
+
+            mark_youtube_skipped_live(&yt_stream, yt_was_live);
+            if refetch_skipped_youtube(&yt_stream) {
+                continue 'outer;
+            }
 
             if !yt_stream.is_live && !tw_stream.is_live {
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
@@ -613,6 +640,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Clear warning stop since we have a playable stream candidate.
             clear_warning_stop();
+            if selected_stream.platform == StreamPlatform::Youtube {
+                bilistream::plugins::youtube::clear_skipped_live(&selected_stream.channel_id);
+            }
 
             let platform = selected_stream.platform.code();
             let channel_name = selected_stream.channel_name.clone();
@@ -1647,6 +1677,30 @@ mod tests {
             channel_id: "channel-id".to_string(),
             area_v2: 235,
         }
+    }
+
+    #[test]
+    fn a_skipped_youtube_stream_is_marked_and_refetches_once() {
+        let mut stream = test_stream_candidate(StreamPlatform::Youtube, true);
+        stream.channel_id = "UCskip-runtime".to_string();
+        stream.stream_id = Some("vid-skip".to_string());
+
+        mark_youtube_skipped_live(&stream, true);
+        assert!(
+            !refetch_skipped_youtube(&stream),
+            "still live with an m3u8 is not a skip"
+        );
+
+        stream.is_live = false;
+        mark_youtube_skipped_live(&stream, true);
+
+        stream.is_live = true;
+        stream.m3u8_url = None;
+        assert!(refetch_skipped_youtube(&stream));
+        assert!(
+            !refetch_skipped_youtube(&stream),
+            "clearing the mark must not loop"
+        );
     }
 
     #[test]
