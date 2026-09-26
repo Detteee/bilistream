@@ -5,7 +5,7 @@ import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle 
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
-import { formatKeyPoolSummary, formatKeyState, formatPlaylistPolling } from './format.js';
+import { discoveryTiles, formatKeyPoolSummary, keyMeterRows } from './format.js';
 
 let configBaseline = null;
 let keywordsBaseline = null;
@@ -94,6 +94,8 @@ async function loadSystemConfig() {
     // Load API keys
     setInputValue('config-holodex-key', config.holodex_api_key || '');
     setInputValue('config-youtube-api-key', config.youtube_api_key || '');
+    setInputValue('config-websub-callback-url', config.youtube_websub_callback_url || '');
+    setInputValue('config-websub-port', config.youtube_websub_port ?? 3151);
     setInputValue('config-riot-key', config.riot_api_key || '');
 
     // Load LoL monitor settings
@@ -149,17 +151,56 @@ async function loadYoutubeKeyStatus() {
     block.replaceChildren();
     return;
   }
-  const lines = [
-    formatKeyPoolSummary(data),
-    ...(data.keys || []).map(formatKeyState),
-    formatPlaylistPolling(data.playlist),
-  ].filter(Boolean);
-  block.replaceChildren(...lines.map(text => {
-    const line = document.createElement('div');
-    line.textContent = text;
-    return line;
-  }));
+  block.replaceChildren(
+    renderPoolHeadline(data),
+    ...keyMeterRows(data).map(renderKeyMeter),
+    renderDiscoveryTiles(discoveryTiles(data)),
+  );
   block.hidden = false;
+}
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+function renderPoolHeadline(data) {
+  const left = Math.round((data.remaining_fraction || 0) * 100);
+  const row = el('div', 'key-pool-headline');
+  row.append(el('span', 'key-pool-left', `${left}%`), el('span', 'key-pool-caption', formatKeyPoolSummary(data)));
+  return row;
+}
+// One bar per key: fill = share of today's budget used, tick = even-spend pace.
+function renderKeyMeter(meter) {
+  const row = el('div', `key-meter key-meter--${meter.state}`);
+  row.title = `${meter.label}: ${meter.value}`;
+  const track = el('div', 'key-meter-track');
+  track.setAttribute('role', 'meter');
+  track.setAttribute('aria-label', `${meter.label} 今日用量`);
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  track.setAttribute('aria-valuenow', String(Math.round(meter.fraction * 100)));
+  const fill = el('div', 'key-meter-fill');
+  fill.style.width = `${meter.fraction * 100}%`;
+  const pace = el('div', 'key-meter-pace');
+  pace.style.left = `${meter.pace * 100}%`;
+  pace.title = '按时间进度应已用到这里';
+  track.append(fill, pace);
+  row.append(el('span', 'key-meter-label', meter.label), track, el('span', 'key-meter-value', meter.value));
+  return row;
+}
+function renderDiscoveryTiles(tiles) {
+  const row = el('div', 'discovery-tiles');
+  for (const tile of tiles) {
+    const card = el('div', `discovery-tile discovery-tile--${tile.tone}`);
+    card.title = tile.detail || '';
+    const head = el('div', 'discovery-tile-name');
+    head.append(el('span', 'discovery-tile-dot'), document.createTextNode(tile.name));
+    card.append(head, el('div', 'discovery-tile-label', tile.label));
+    if (tile.detail) card.append(el('div', 'discovery-tile-detail', tile.detail));
+    row.append(card);
+  }
+  return row;
 }
 async function loadMonitorToggleStates(config = window.configData) {
   try {
@@ -316,6 +357,8 @@ function getCurrentConfig() {
     enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
     holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
     youtube_api_key: document.getElementById('config-youtube-api-key').value.trim(),
+    youtube_websub_callback_url: document.getElementById('config-websub-callback-url').value.trim(),
+    youtube_websub_port: readIntegerInput('config-websub-port', 3151),
     riot_api_key: document.getElementById('config-riot-key').value.trim(),
     enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
     lol_monitor_interval: readIntegerInput('config-lol-interval', 1),
@@ -342,7 +385,9 @@ async function saveSystemConfig() {
       // Preserve edits made during the save: advance only to what was sent.
       configBaseline = structuredClone(config);
       await reloadServerConfig();
-      if ('youtube_api_key' in patch) loadYoutubeKeyStatus();
+      if (['youtube_api_key', 'youtube_websub_callback_url', 'youtube_websub_port'].some(key => key in patch)) {
+        loadYoutubeKeyStatus();
+      }
     }
     try {
       await saveBannedKeywords();

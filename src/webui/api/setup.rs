@@ -128,6 +128,8 @@ pub async fn save_setup_config(
             holodex_skip_jwt_verify: false,
             holodex_monitor_gate: true,
             youtube_api_key: None,
+            youtube_websub_callback_url: None,
+            youtube_websub_port: crate::config::default_websub_port(),
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: Some(1),

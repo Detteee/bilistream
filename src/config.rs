@@ -125,6 +125,13 @@ pub struct Config {
     /// `videos.list` before the monitor and the Holodex panel use them.
     #[serde(default)]
     pub youtube_api_key: Option<String>,
+    /// Public URL YouTube's WebSub hub calls, e.g.
+    /// `https://yt.example.com/websub/youtube`. Empty turns WebSub off.
+    #[serde(default)]
+    pub youtube_websub_callback_url: Option<String>,
+    /// Port of the callback-only listener (never the WebUI port).
+    #[serde(default = "default_websub_port")]
+    pub youtube_websub_port: u16,
     pub riot_api_key: Option<String>,
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
@@ -235,6 +242,10 @@ pub struct CropConfig {
 
 fn default_quality() -> String {
     "best".to_string()
+}
+
+pub(crate) fn default_websub_port() -> u16 {
+    3151
 }
 
 fn default_true() -> bool {

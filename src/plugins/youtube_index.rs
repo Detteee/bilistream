@@ -103,6 +103,15 @@ fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> T {
     f(guard.get_or_insert_with(Store::default))
 }
 
+/// Seed answers (and omissions, for asked IDs missing from `videos`) as if
+/// `videos.list` had just returned them.
+#[cfg(test)]
+pub(crate) fn record_for_test(asked: &[String], videos: Vec<YtVideo>) {
+    with_store(|store| {
+        store.record(asked, videos, Instant::now());
+    });
+}
+
 /// How often an answer is re-checked, before stretching. `monitored`: the
 /// video is a monitored channel's.
 fn interval(video: Option<&YtVideo>, now: DateTime<Utc>, monitored: bool) -> Duration {

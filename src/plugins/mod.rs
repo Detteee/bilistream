@@ -13,6 +13,7 @@ pub mod youtube;
 pub mod youtube_data;
 pub mod youtube_index;
 pub mod youtube_rss;
+pub mod youtube_websub;
 // Re-export commonly used items
 pub use bilibili::*;
 pub use danmaku::*;

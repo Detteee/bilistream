@@ -20,6 +20,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
         "holodex_skip_jwt_verify": cfg.holodex_skip_jwt_verify,
         "holodex_monitor_gate": cfg.holodex_monitor_gate,
         "youtube_api_key": cfg.youtube_api_key.clone().unwrap_or_default(),
+        "youtube_websub_callback_url": cfg.youtube_websub_callback_url.clone().unwrap_or_default(),
+        "youtube_websub_port": cfg.youtube_websub_port,
         "anti_collision_list": cfg.anti_collision_list.clone(),
         "bilibili": {
             "room": cfg.bililive.room,
@@ -71,6 +73,8 @@ pub struct UpdateConfigRequest {
     holodex_skip_jwt_verify: Option<bool>,
     holodex_monitor_gate: Option<bool>,
     youtube_api_key: Option<String>,
+    youtube_websub_callback_url: Option<String>,
+    youtube_websub_port: Option<u16>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
     youtube_proxy: Option<String>,
@@ -120,6 +124,8 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "riot_api_key": cfg.riot_api_key.as_deref().unwrap_or_default().trim(),
         "holodex_api_key": cfg.holodex_api_key.as_deref().unwrap_or_default().trim(),
         "youtube_api_key": cfg.youtube_api_key.as_deref().unwrap_or_default().trim(),
+        "youtube_websub_callback_url": cfg.youtube_websub_callback_url.as_deref().unwrap_or_default().trim(),
+        "youtube_websub_port": cfg.youtube_websub_port,
         "anti_collision_list": cfg.anti_collision_list,
         "youtube_proxy": cfg.youtube.proxy.as_deref().unwrap_or_default().trim(),
         "twitch_proxy": cfg.twitch.proxy.as_deref().unwrap_or_default().trim(),
@@ -128,6 +134,26 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
         "youtube_deno_path": cfg.youtube.deno_path.as_deref().unwrap_or_default().trim(),
     })
+}
+
+/// The callback URL must be empty or `http(s)`, and the callback port must be
+/// a real port other than the WebUI's.
+pub(crate) fn validate_websub(url: Option<&str>, port: Option<u16>) -> Result<(), String> {
+    if let Some(url) = url.map(str::trim).filter(|url| !url.is_empty()) {
+        let parsed = reqwest::Url::parse(url).map_err(|_| "WebSub 回调地址无效".to_string())?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err("WebSub 回调地址必须是 http(s) 地址".to_string());
+        }
+    }
+    if let Some(port) = port {
+        if port == 0 {
+            return Err("WebSub 回调端口无效".to_string());
+        }
+        if Some(port) == crate::plugins::youtube_websub::webui_port() {
+            return Err("WebSub 回调端口不能与 Web UI 端口相同".to_string());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn monitor_target_reload_needed(
@@ -193,6 +219,17 @@ pub async fn update_config(
         }
     })?;
 
+    if let Err(message) = validate_websub(
+        payload.youtube_websub_callback_url.as_deref(),
+        payload.youtube_websub_port,
+    ) {
+        return Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(message),
+        });
+    }
+
     let mut holodex_jwt_saved = false;
 
     // Update fields
@@ -228,6 +265,13 @@ pub async fn update_config(
     if let Some(youtube_api_key) = payload.youtube_api_key {
         let key = youtube_api_key.trim();
         cfg.youtube_api_key = (!key.is_empty()).then(|| key.to_string());
+    }
+    if let Some(url) = payload.youtube_websub_callback_url {
+        let url = url.trim();
+        cfg.youtube_websub_callback_url = (!url.is_empty()).then(|| url.to_string());
+    }
+    if let Some(port) = payload.youtube_websub_port {
+        cfg.youtube_websub_port = port;
     }
     if let Some(holodex_jwt) = payload.holodex_jwt {
         let jwt = holodex_jwt.trim();

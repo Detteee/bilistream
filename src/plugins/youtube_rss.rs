@@ -59,6 +59,8 @@ const RESERVED_UNITS: u64 = 3_000;
 const TARGET_RESERVED_UNITS: u64 = 1_440;
 const MIN_PLAYLIST_INTERVAL: Duration = Duration::from_secs(60);
 const TARGET_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// Pushes are classified this long after the first one, in one batch.
+const PUSH_DEBOUNCE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeedEntry {
@@ -611,6 +613,13 @@ fn paced_interval(
     (interval, on)
 }
 
+/// The roster interval, doubled while WebSub pushes are healthy. Applied after
+/// the on/off decision, so it only slows polling and never switches it off.
+/// The restream target's cadence never reads it.
+fn websub_backstop(interval: Option<Duration>, slowed: bool) -> Option<Duration> {
+    interval.map(|interval| if slowed { interval * 2 } else { interval })
+}
+
 /// Fewest usable keys whose interval beats the RSS tick for this roster.
 fn keys_needed(channels: usize, target_reserved: bool) -> Option<usize> {
     if channels == 0 {
@@ -631,6 +640,7 @@ struct PlaylistStatus {
     rss_down: bool,
     roster_len: usize,
     target_reserved: bool,
+    websub_slowed: bool,
 }
 
 static PLAYLIST_STATUS: Mutex<Option<PlaylistStatus>> = Mutex::new(None);
@@ -645,6 +655,7 @@ pub(crate) fn playlist_status() -> Option<serde_json::Value> {
         "stretch": status.stretch,
         "rss_down": status.rss_down,
         "keys_needed": keys_needed(status.roster_len, status.target_reserved),
+        "websub_slowed": status.websub_slowed,
     }))
 }
 
@@ -686,6 +697,7 @@ async fn fetch_playlist(
 enum Source {
     Rss,
     Playlist,
+    WebSub,
 }
 
 impl Source {
@@ -693,6 +705,7 @@ impl Source {
         match self {
             Source::Rss => "rss",
             Source::Playlist => "playlist",
+            Source::WebSub => "websub",
         }
     }
 }
@@ -722,6 +735,8 @@ struct Worker {
     /// Restream target last polled on the 60s cadence.
     target_id: Option<String>,
     target_due: Option<Instant>,
+    /// Roster polling halved because WebSub pushes are healthy.
+    websub_slowed: bool,
 }
 
 impl Worker {
@@ -747,8 +762,12 @@ impl Worker {
         }
         let proxy = cfg.youtube.proxy.clone();
         let now = Instant::now();
-        // IDs listed by a fetch made in this loop.
+        // IDs listed by a fetch made in this loop, or pushed since the last.
         let mut fresh: HashMap<String, Source> = HashMap::new();
+        let (pushed, pushed_fresh) = super::youtube_websub::pushed_entries();
+        for id in pushed_fresh {
+            fresh.insert(id, Source::WebSub);
+        }
 
         if self.next_rss.is_none_or(|at| at <= now) {
             self.next_rss = Some(now + RSS_TICK);
@@ -757,7 +776,7 @@ impl Worker {
         }
         self.poll_playlists(&roster, &keys, proxy, &mut fresh, now, target)
             .await;
-        self.classify(&keys, cfg.youtube.proxy.as_deref(), &fresh, now)
+        self.classify(&keys, cfg.youtube.proxy.as_deref(), &fresh, &pushed, now)
             .await
     }
 
@@ -817,6 +836,21 @@ impl Worker {
         );
         let degraded = self.rss.degraded(now);
         let (interval, on) = paced_interval(base, stretch, degraded);
+        let websub_slowed = super::youtube_websub::healthy();
+        let interval = websub_backstop(interval, websub_slowed);
+        if websub_slowed != self.websub_slowed {
+            self.websub_slowed = websub_slowed;
+            if on {
+                tracing::info!(
+                    "{}",
+                    if websub_slowed {
+                        "WebSub 推送正常，上传列表轮询放慢一倍 (转播目标不变)"
+                    } else {
+                        "WebSub 推送中断，上传列表轮询恢复原速"
+                    }
+                );
+            }
+        }
         *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(PlaylistStatus {
             on,
             interval,
@@ -824,6 +858,7 @@ impl Worker {
             rss_down: degraded,
             roster_len: roster.len(),
             target_reserved,
+            websub_slowed,
         });
         let stretch_changed = stretch != self.stretch;
         self.stretch = stretch;
@@ -954,23 +989,40 @@ impl Worker {
         keys: &[String],
         proxy: Option<&str>,
         fresh: &HashMap<String, Source>,
+        pushed: &[FeedEntry],
         now: Instant,
     ) -> Result<(), String> {
         let mut entries: HashMap<String, (FeedEntry, Source)> = HashMap::new();
+        for entry in pushed {
+            entries.insert(entry.video_id.clone(), (entry.clone(), Source::WebSub));
+        }
         for entry in self.rss.entries() {
-            entries.insert(entry.video_id.clone(), (entry.clone(), Source::Rss));
+            entries
+                .entry(entry.video_id.clone())
+                .or_insert_with(|| (entry.clone(), Source::Rss));
         }
         for entry in self.playlist_seen.values().flatten() {
             entries
                 .entry(entry.video_id.clone())
                 .or_insert_with(|| (entry.clone(), Source::Playlist));
         }
-        let recheck = self.next_recheck.is_none_or(|at| at <= now);
+        let pushed_known = |state: &Discovery| {
+            fresh.iter().any(|(id, source)| {
+                *source == Source::WebSub
+                    && state
+                        .found
+                        .get(id)
+                        .is_some_and(|row| row.status == "upcoming")
+            })
+        };
 
+        let recheck;
         let (candidates, known) = {
             let mut guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
             let state = guard.get_or_insert_with(Discovery::default);
             state.ignored.retain(|id| entries.contains_key(id));
+            // A push for a known waiting room re-checks the known rows now.
+            recheck = self.next_recheck.is_none_or(|at| at <= now) || pushed_known(state);
             let known: Vec<HolodexStream> = if recheck {
                 state.found.values().cloned().collect()
             } else {
@@ -1102,7 +1154,13 @@ pub fn start_rss_discovery_worker() -> Option<RssDiscoveryWorker> {
             if let Err(e) = worker.tick().await {
                 tracing::warn!("YouTube 直播发现失败: {}", e);
             }
-            tokio::time::sleep(LOOP).await;
+            tokio::select! {
+                _ = tokio::time::sleep(LOOP) => {}
+                _ = super::youtube_websub::pushed() => {
+                    // Let a burst of pushes land in one videos.list batch.
+                    tokio::time::sleep(PUSH_DEBOUNCE).await;
+                }
+            }
         }
     })))
 }
@@ -1320,6 +1378,79 @@ mod tests {
         assert_eq!(secs(6), Some(63));
         assert_eq!(playlist_interval(3, 6, false), Some(MIN_PLAYLIST_INTERVAL));
         assert_eq!(playlist_interval(0, 2, false), None);
+    }
+
+    #[test]
+    fn healthy_websub_doubles_the_roster_interval_without_switching_it_off() {
+        let three_keys = playlist_interval(37, 3, true);
+        let (interval, on) = paced_interval(three_keys, 1, false);
+        assert!(on);
+        let slowed = websub_backstop(interval, true).unwrap();
+        assert_eq!(slowed, interval.unwrap() * 2);
+        assert!(slowed > RSS_TICK, "past the RSS tick, yet still on");
+        assert_eq!(
+            websub_backstop(interval, false),
+            interval,
+            "24h silent or failing"
+        );
+        assert_eq!(
+            target_poll_interval(1),
+            TARGET_POLL_INTERVAL,
+            "the restream target keeps its 60s cadence"
+        );
+    }
+
+    #[tokio::test]
+    async fn pushes_for_old_or_private_videos_add_no_row() {
+        use super::super::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
+        let entry = |id: &str| FeedEntry {
+            video_id: id.to_string(),
+            channel_id: "UCpushtest".to_string(),
+            channel_name: "Name".to_string(),
+            title: "Edited title".to_string(),
+            published: None,
+        };
+        let old = entry("pushOldVid01");
+        let private = entry("pushPrivate1");
+        super::super::youtube_index::record_for_test(
+            &[old.video_id.clone(), private.video_id.clone()],
+            vec![YtVideo {
+                id: old.video_id.clone(),
+                snippet: YtSnippet {
+                    title: "Edited title".to_string(),
+                    channel_id: "UCpushtest".to_string(),
+                },
+                live_streaming_details: Some(YtLiveDetails {
+                    actual_start_time: Some("2026-09-01T00:00:00Z".to_string()),
+                    actual_end_time: Some("2026-09-01T02:00:00Z".to_string()),
+                    scheduled_start_time: None,
+                    concurrent_viewers: None,
+                }),
+            }],
+        );
+        let fresh: HashMap<String, Source> = [
+            (old.video_id.clone(), Source::WebSub),
+            (private.video_id.clone(), Source::WebSub),
+        ]
+        .into_iter()
+        .collect();
+        let mut worker = Worker::default();
+        worker
+            .classify(
+                &["key".to_string()],
+                None,
+                &fresh,
+                &[old.clone(), private.clone()],
+                Instant::now(),
+            )
+            .await
+            .unwrap();
+        let guard = DISCOVERY.lock().unwrap();
+        let state = guard.as_ref().unwrap();
+        for id in [&old.video_id, &private.video_id] {
+            assert!(!state.found.contains_key(id), "{id} added");
+            assert!(state.ignored.contains(id), "{id} not ignored");
+        }
     }
 
     #[test]

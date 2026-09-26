@@ -325,6 +325,36 @@ test('YouTube key pool status reads as one line per fact', async () => {
   assert.equal(formatPlaylistPolling(null), '', 'no line before the worker has run');
 });
 
+test('key meters and discovery tiles carry state as label, not color alone', async () => {
+  const { keyMeterRows, discoveryTiles } = await import('../dist/js/format.js');
+  const rows = keyMeterRows({
+    keys: [
+      { fingerprint: 'a1b2c3', used: 4500, state: 'usable' },
+      { fingerprint: 'd4e5f6', used: 9000, state: 'exhausted' },
+      { fingerprint: '0f9e8d', used: 0, state: 'rejected' },
+    ],
+    budget_per_key: 9000,
+    day_left: 0.75,
+  });
+  assert.deepEqual(rows.map(r => [r.fraction, r.pace, r.value]), [
+    [0.5, 0.25, '4,500 / 9,000'],
+    [1, 0.25, '今日额度已用完'],
+    [0, 0.25, '被拒绝（检查 key 或 API 是否启用）'],
+  ]);
+
+  const playlist = { on: true, interval_secs: 268, stretch: 1, rss_down: false, websub_slowed: true };
+  const websub = { verified: 37, pending: 0, failed: 0, last_push: null, healthy: false, error: null };
+  const tiles = discoveryTiles({ playlist, websub });
+  assert.deepEqual(tiles.map(t => [t.name, t.tone, t.label]), [
+    ['RSS', 'ok', '正常'],
+    ['上传列表', 'ok', '每频道 268s'],
+    ['WebSub', 'warn', '37 已验证'],
+  ]);
+  assert.equal(tiles[1].detail, '上传列表轮询：每频道 268s（WebSub 正常，放慢一倍）');
+  assert.equal(tiles[2].detail, 'WebSub 订阅：已验证 37 · 等待 0 · 失败 0 · 尚未收到推送');
+  assert.equal(discoveryTiles({ playlist }).length, 2, 'no WebSub tile while it is off');
+});
+
 test('an open Holodex panel renews its lease every 4 min, every minute without SSE', () => {
   const minute = 60 * 1000;
   assert.equal(holodexKeepAliveDue(4 * minute - 1, true), false);

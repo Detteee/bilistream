@@ -121,6 +121,62 @@ function formatClock(iso) {
   return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
 }
 
+// WebSub subscriptions and the last push; '' while WebSub is off.
+export function formatWebSubStatus(websub) {
+  if (!websub) return '';
+  if (websub.error) return websub.error;
+  const parts = [`WebSub 订阅：已验证 ${websub.verified} · 等待 ${websub.pending} · 失败 ${websub.failed}`];
+  const last = websub.last_push ? formatClock(websub.last_push) : '';
+  parts.push(last ? `上次推送 ${last}` : '尚未收到推送');
+  return parts.join(' · ');
+}
+
+// Rows for the key meters: share of the daily budget used, and the even-spend
+// pace for this point of the Pacific day (the tick on each bar).
+export function keyMeterRows(data) {
+  const budget = data?.budget_per_key || 0;
+  const pace = Math.min(1, Math.max(0, 1 - (data?.day_left ?? 1)));
+  return (Array.isArray(data?.keys) ? data.keys : []).map(key => {
+    const used = Number.isFinite(key.used) ? key.used : 0;
+    return {
+      label: key.fingerprint,
+      state: key.state,
+      fraction: key.state === 'exhausted' ? 1 : budget ? Math.min(1, used / budget) : 0,
+      pace,
+      value: key.state === 'usable' ? `${formatCount(used)} / ${formatCount(budget)}` : formatKeyState(key).split(' · ')[1],
+    };
+  });
+}
+
+// Status tiles: { name, tone: 'ok' | 'warn' | 'bad' | 'off', label, detail }.
+export function discoveryTiles(data) {
+  const playlist = data?.playlist;
+  const websub = data?.websub;
+  const tiles = [
+    {
+      name: 'RSS',
+      tone: playlist?.rss_down ? 'bad' : 'ok',
+      label: playlist?.rss_down ? '故障' : '正常',
+      detail: playlist?.rss_down ? '上传列表接替' : '每 3 分钟',
+    },
+    {
+      name: '上传列表',
+      tone: !playlist ? 'off' : playlist.on ? (playlist.stretch > 1 ? 'warn' : 'ok') : 'off',
+      label: !playlist ? '—' : playlist.on ? `每频道 ${playlist.interval_secs}s` : '关闭',
+      detail: formatPlaylistPolling(playlist),
+    },
+  ];
+  if (websub) {
+    tiles.push({
+      name: 'WebSub',
+      tone: websub.error || websub.failed ? 'bad' : websub.healthy ? 'ok' : 'warn',
+      label: websub.error ? '无法监听' : `${websub.verified} 已验证`,
+      detail: formatWebSubStatus(websub),
+    });
+  }
+  return tiles;
+}
+
 export function formatKeyPoolSummary(data) {
   const keys = Array.isArray(data?.keys) ? data.keys : [];
   const used = keys.reduce((sum, key) => sum + (Number.isFinite(key.used) ? key.used : 0), 0);
@@ -151,10 +207,11 @@ export function formatKeyState(key) {
 export function formatPlaylistPolling(playlist) {
   if (!playlist) return '';
   const stretched = playlist.stretch > 1 ? `（配额偏快，间隔 ×${playlist.stretch}）` : '';
+  const slowed = playlist.websub_slowed ? '（WebSub 正常，放慢一倍）' : '';
   if (playlist.on) {
     return playlist.rss_down
-      ? `RSS 故障，上传列表每频道 ${playlist.interval_secs}s${stretched}`
-      : `上传列表轮询：每频道 ${playlist.interval_secs}s${stretched}`;
+      ? `RSS 故障，上传列表每频道 ${playlist.interval_secs}s${stretched}${slowed}`
+      : `上传列表轮询：每频道 ${playlist.interval_secs}s${stretched}${slowed}`;
   }
   if (playlist.interval_secs == null) return '上传列表轮询：关闭（没有可用 key）';
   if (playlist.stretch > 1) return `上传列表轮询：关闭（配额偏快，间隔 ×${playlist.stretch} 后慢于 RSS）`;

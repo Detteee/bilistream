@@ -69,6 +69,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn websub_settings_accept_only_http_urls_and_real_ports() {
+        assert!(validate_websub(None, None).is_ok());
+        assert!(validate_websub(Some(""), Some(3151)).is_ok());
+        assert!(validate_websub(Some("https://yt.example.com/websub/youtube"), None).is_ok());
+        assert!(validate_websub(Some("http://1.2.3.4:3151/websub/youtube"), None).is_ok());
+        assert!(validate_websub(Some("ftp://example.com/x"), None).is_err());
+        assert!(validate_websub(Some("example.com/websub"), None).is_err());
+        assert!(validate_websub(None, Some(0)).is_err());
+    }
+
+    #[test]
     fn browser_edits_merge_unrelated_changes_but_reject_stale_fields() {
         let expected = HashMap::from([("interval".to_string(), json!(30))]);
         let patch = json!({"interval": 75, "auto_cover": null});

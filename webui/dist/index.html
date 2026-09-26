@@ -1235,6 +1235,16 @@
                 <div id="youtube-key-status" class="settings-help-text" hidden></div>
               </div>
               <div class="control-group">
+                <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
+                <input type="text" id="config-websub-callback-url"
+                  placeholder="https://yt.example.com/websub/youtube">
+                <label for="config-websub-port">WebSub 回调端口</label>
+                <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
+                <small class="settings-help-text">
+                  YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 <code>/websub/youtube</code>，不会暴露 Web UI；用隧道或反向代理把公网地址转发到本机这个端口，再把公网地址填到上面。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。留空即关闭。
+                </small>
+              </div>
+              <div class="control-group">
                 <label class="toggle-label settings-toggle-row">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-lol-monitor-checkbox">

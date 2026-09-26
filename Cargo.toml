@@ -78,6 +78,9 @@ base64 = "0.23"
 zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 # System tray dependencies (platform-specific)
 open = "5.0"
+hmac = "0.13"
+sha1 = "0.11"
+getrandom = "0.3"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 ksni = "0.3"
