@@ -423,6 +423,71 @@ type YoutubeStatus = (
 type SafetyProbes = HashMap<String, (Instant, Option<YoutubeStatus>)>;
 static SAFETY_PROBES: Mutex<Option<SafetyProbes>> = Mutex::new(None);
 
+/// Probes for different channels (the target and the priority channel) stay
+/// at least this far apart, so yt-dlp never hits YouTube for both at once.
+const PROBE_GAP: Duration = Duration::from_secs(120);
+
+/// A turn nobody claimed within this long lapses, so a channel that stopped
+/// probing (priority switched off) cannot hold the other back.
+const TURN_EXPIRES: Duration = Duration::from_secs(300);
+
+/// Probe spacing across channels. A channel held back by the gap gets the
+/// next turn, so a channel probing every tick (rescue mode) cannot starve the
+/// other.
+#[derive(Default)]
+struct ProbeTurns {
+    last: Option<(Instant, String)>,
+    waiting: Option<(Instant, String)>,
+}
+
+impl ProbeTurns {
+    /// Whether `channel_id` may run yt-dlp now; records the probe when it may.
+    fn claim(&mut self, channel_id: &str, now: Instant) -> bool {
+        if self
+            .waiting
+            .as_ref()
+            .is_some_and(|(since, _)| now.saturating_duration_since(*since) >= TURN_EXPIRES)
+        {
+            self.waiting = None;
+        }
+        let recent_other = self.last.as_ref().is_some_and(|(at, id)| {
+            id != channel_id && now.saturating_duration_since(*at) < PROBE_GAP
+        });
+        let other_waiting = self
+            .waiting
+            .as_ref()
+            .is_some_and(|(_, id)| id != channel_id);
+        if recent_other || other_waiting {
+            if self.waiting.is_none() {
+                self.waiting = Some((now, channel_id.to_string()));
+            }
+            return false;
+        }
+        if self
+            .waiting
+            .as_ref()
+            .is_some_and(|(_, id)| id == channel_id)
+        {
+            self.waiting = None;
+        }
+        self.last = Some((now, channel_id.to_string()));
+        true
+    }
+
+    /// A probe that runs regardless (the priority probe during a restream)
+    /// still counts against the other channel's gap.
+    fn note(&mut self, channel_id: &str, now: Instant) {
+        self.last = Some((now, channel_id.to_string()));
+    }
+}
+
+static PROBE_TURNS: Mutex<Option<ProbeTurns>> = Mutex::new(None);
+
+fn with_probe_turns<T>(f: impl FnOnce(&mut ProbeTurns) -> T) -> T {
+    let mut guard = PROBE_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(ProbeTurns::default))
+}
+
 fn last_safety_probe(channel_id: &str) -> Option<(Duration, Option<YoutubeStatus>)> {
     let guard = SAFETY_PROBES.lock().unwrap_or_else(|e| e.into_inner());
     let (at, status) = guard.as_ref()?.get(channel_id)?;
@@ -672,7 +737,21 @@ async fn get_youtube_status_with(
     }
     drop_skipped_live_if_stale(channel_id, view, status.video_id.as_deref());
 
-    match decide_monitor_action(view, probe, last_probe.as_ref().map(|(age, _)| *age)) {
+    let mut action = decide_monitor_action(view, probe, last_probe.as_ref().map(|(age, _)| *age));
+    if action == MonitorAction::YtDlp {
+        let now = Instant::now();
+        if probe == Probe::Throttled {
+            if !with_probe_turns(|turns| turns.claim(channel_id, now)) {
+                // Another channel was probed within 2 min: answer from the
+                // index or the last probe, and probe on a later tick.
+                tracing::debug!("yt-dlp 探测 {} 延后: 另一频道 2 分钟内刚探测过", channel_id);
+                action = MonitorAction::IndexAnswer;
+            }
+        } else {
+            with_probe_turns(|turns| turns.note(channel_id, now));
+        }
+    }
+    match action {
         MonitorAction::ConfirmLive => {
             // The index knows the stream; yt-dlp resolves the playable URL and
             // has the final say on whether it is actually live.
@@ -903,6 +982,37 @@ mod tests {
         assert_eq!(monitor_mode_for(true, false, false), Rescue);
         assert_eq!(monitor_mode_for(true, true, false), Index);
         assert_eq!(monitor_mode_for(true, false, true), Index);
+    }
+
+    #[test]
+    fn probes_of_two_channels_stay_two_minutes_apart_and_take_turns() {
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let mut turns = ProbeTurns::default();
+        assert!(turns.claim("target", at(0)));
+        assert!(
+            !turns.claim("priority", at(60)),
+            "within 2 min of the target"
+        );
+        assert!(
+            !turns.claim("target", at(120)),
+            "priority waited, so it goes next"
+        );
+        assert!(turns.claim("priority", at(120)));
+        assert!(!turns.claim("target", at(180)));
+        assert!(turns.claim("target", at(240)), "its turn after the gap");
+
+        let mut turns = ProbeTurns::default();
+        assert!(turns.claim("target", at(0)));
+        assert!(!turns.claim("priority", at(30)));
+        // Priority switched off and never came back for its turn.
+        assert!(!turns.claim("target", at(200)));
+        assert!(turns.claim("target", at(330)), "an unclaimed turn lapses");
+
+        let mut turns = ProbeTurns::default();
+        turns.note("priority", at(0));
+        assert!(!turns.claim("target", at(100)), "a forced probe counts too");
+        assert!(turns.claim("target", at(400)));
     }
 
     #[test]
