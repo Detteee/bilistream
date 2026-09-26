@@ -498,6 +498,8 @@ pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
         holodex_skip_jwt_verify: false,
         holodex_monitor_gate: true,
         youtube_api_key: None,
+        youtube_websub_callback_url: None,
+        youtube_websub_port: crate::config::default_websub_port(),
         riot_api_key: None,
         enable_lol_monitor: false,
         lol_monitor_interval: None,

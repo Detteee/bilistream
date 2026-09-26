@@ -419,7 +419,10 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
         }
     }
 
-    if matches!(crate::cluster::yt_index_role(), crate::cluster::YtIndexRole::Owner) {
+    if matches!(
+        crate::cluster::yt_index_role(),
+        crate::cluster::YtIndexRole::Owner
+    ) {
         let mut discovered = super::youtube_rss::merge_discovered(Vec::new());
         discovered.sort_by(|a, b| a.id.cmp(&b.id));
         with_store(|store| store.publish(discovered, Instant::now(), Utc::now()));
@@ -447,7 +450,10 @@ pub(crate) fn published() -> Option<Arc<YtIndexPayload>> {
 /// is tracked and no call is made.
 pub(crate) async fn refresh_tick(cfg: &Config) {
     // A peer answers from the public-status node's index and calls nothing.
-    if matches!(crate::cluster::yt_index_role(), crate::cluster::YtIndexRole::Peer(_)) {
+    if matches!(
+        crate::cluster::yt_index_role(),
+        crate::cluster::YtIndexRole::Peer(_)
+    ) {
         return;
     }
     let keys = cfg.youtube_api_keys();

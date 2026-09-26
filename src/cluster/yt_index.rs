@@ -434,6 +434,7 @@ mod tests {
             id: id.to_string(),
             snippet: YtSnippet {
                 title: "youtube title".to_string(),
+                ..Default::default()
             },
             live_streaming_details: Some(YtLiveDetails {
                 actual_start_time: Some("2026-09-25T10:00:00Z".to_string()),

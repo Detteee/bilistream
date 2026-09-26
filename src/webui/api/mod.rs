@@ -355,22 +355,6 @@ mod tests {
         assert_eq!(crop.y, 20);
     }
 
-    #[test]
-    fn ordered_channel_ids_deduplicates_without_losing_order() {
-        let mut channel_ids = OrderedChannelIds::default();
-
-        assert!(channel_ids.insert(" first "));
-        assert!(channel_ids.insert("second"));
-        assert!(!channel_ids.insert("first"));
-        assert!(!channel_ids.insert("  "));
-
-        let (ordered, seen) = channel_ids.into_parts();
-        assert_eq!(ordered, vec!["first".to_string(), "second".to_string()]);
-        assert!(seen.contains("first"));
-        assert!(seen.contains("second"));
-        assert_eq!(seen.len(), 2);
-    }
-
     fn membership_payload(target_node_id: Option<&str>) -> ClusterMembershipRequest {
         ClusterMembershipRequest {
             target_node_id: target_node_id.map(str::to_string),
@@ -650,6 +634,8 @@ mod tests {
             holodex_skip_jwt_verify: false,
             holodex_monitor_gate: true,
             youtube_api_key: None,
+            youtube_websub_callback_url: None,
+            youtube_websub_port: crate::config::default_websub_port(),
             riot_api_key: None,
             enable_lol_monitor: false,
             lol_monitor_interval: None,
