@@ -39,6 +39,9 @@ const TICK: Duration = Duration::from_secs(30);
 /// A subscription the hub hasn't verified by then counts as failed.
 const PENDING_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(10 * 60);
+/// After turning off, the listener stays up this long so the hub can verify
+/// the unsubscribes.
+const UNSUB_GRACE: Duration = Duration::from_secs(10 * 60);
 /// Pushed entries stay discovery candidates this long.
 const PUSH_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 /// Pushes count as healthy while one was verified within this window.
@@ -431,9 +434,115 @@ struct Worker {
     listener: Option<Listener>,
     callback: Option<String>,
     counts: (usize, usize, usize),
+    /// After turning off: keep answering the hub's unsubscribe verifications
+    /// until then.
+    retire_until: Option<Instant>,
+}
+
+/// Moves every verified or pending subscription to the unsubscribe set and
+/// returns the channels to unsubscribe. Pushes stop counting at once.
+fn retire_subscriptions(hub: &mut Hub) -> Vec<String> {
+    let owed: Vec<String> = hub
+        .subs
+        .drain()
+        .filter(|(_, state)| !matches!(state, SubState::Failed { .. }))
+        .map(|(id, _)| id)
+        .collect();
+    hub.unsubs.extend(owed.iter().cloned());
+    hub.roster.clear();
+    owed
+}
+
+/// Whether the listener can close: every unsubscribe was verified, or the
+/// grace ran out.
+fn retirement_done(hub_unsubs_left: bool, until: Option<Instant>, now: Instant) -> bool {
+    !hub_unsubs_left || until.is_none_or(|until| now >= until)
+}
+
+/// Subscribe (`true`) or unsubscribe requests, four at a time. A failed
+/// subscribe is retried later; a failed unsubscribe is given up.
+async fn send_hub_requests(proxy: Option<&str>, callback: String, jobs: Vec<(bool, String)>) {
+    if jobs.is_empty() {
+        return;
+    }
+    let client = match pooled_client(proxy) {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!("WebSub 无法创建 HTTP 客户端: {}", e);
+            return;
+        }
+    };
+    let results: Vec<(bool, String, Result<(), String>)> = stream::iter(jobs)
+        .map(|(subscribe, id)| {
+            let client = client.clone();
+            let callback = callback.clone();
+            async move {
+                let (id, result) = hub_request(client, subscribe, callback, id).await;
+                (subscribe, id, result)
+            }
+        })
+        .buffer_unordered(HUB_CONCURRENCY)
+        .collect()
+        .await;
+    with_hub(|hub| {
+        for (subscribe, id, result) in results {
+            let Err(e) = result else { continue };
+            let mode = if subscribe { "订阅" } else { "退订" };
+            tracing::debug!("WebSub {} {} 失败: {}", mode, id, e);
+            if subscribe {
+                hub.subs.insert(
+                    id,
+                    SubState::Failed {
+                        retry_at: Instant::now() + RETRY_AFTER_FAILURE,
+                    },
+                );
+            } else {
+                hub.unsubs.remove(&id);
+            }
+        }
+    });
 }
 
 impl Worker {
+    /// Turned off (no URL, no key, or gated): unsubscribe everything under the
+    /// last callback, answer the hub's verifications for up to `UNSUB_GRACE`,
+    /// then close the listener.
+    async fn go_inactive(&mut self, proxy: Option<&str>) {
+        let now = Instant::now();
+        if let Some(callback) = self.callback.take() {
+            let owed = with_hub(retire_subscriptions);
+            if owed.is_empty() || self.listener.is_none() {
+                tracing::info!("WebSub 已关闭");
+            } else {
+                tracing::info!("WebSub 已关闭，正在退订 {} 个频道", owed.len());
+                self.retire_until = Some(now + UNSUB_GRACE);
+                send_hub_requests(
+                    proxy,
+                    callback,
+                    owed.into_iter().map(|id| (false, id)).collect(),
+                )
+                .await;
+            }
+        }
+        let unsubs_left = {
+            let guard = HUB.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().is_some_and(|hub| !hub.unsubs.is_empty())
+        };
+        if self.listener.is_some() && !retirement_done(unsubs_left, self.retire_until, now) {
+            return;
+        }
+        if self.retire_until.take().is_some() {
+            if unsubs_left {
+                tracing::info!("WebSub 退订未全部确认，关闭回调监听");
+            } else {
+                tracing::info!("WebSub 已退订全部频道");
+            }
+        }
+        self.stop_listener().await;
+        *HUB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.counts = (0, 0, 0);
+    }
+
     async fn stop_listener(&mut self) {
         if let Some(listener) = self.listener.take() {
             listener.task.abort();
@@ -498,24 +607,32 @@ impl Worker {
             && !cfg.youtube_api_keys().is_empty()
             && ENABLED.load(Ordering::SeqCst);
         let Some(callback) = callback.filter(|_| active) else {
-            if self.callback.take().is_some() {
-                tracing::info!("WebSub 已关闭");
-            }
-            self.stop_listener().await;
-            *HUB.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            self.counts = (0, 0, 0);
+            self.go_inactive(cfg.youtube.proxy.as_deref()).await;
             return;
         };
+        self.retire_until = None;
         self.reconcile_listener(cfg.youtube_websub_port).await;
 
         let roster = roster_channel_ids(&cfg).await;
         let now = Instant::now();
-        let callback_changed = self.callback.as_deref() != Some(callback.as_str());
+        // A new callback URL: the old subscriptions point elsewhere, so retire
+        // them there before subscribing under the new one.
+        if let Some(old) = self
+            .callback
+            .as_deref()
+            .filter(|old| *old != callback.as_str())
+            .map(str::to_string)
+        {
+            let owed = with_hub(retire_subscriptions);
+            send_hub_requests(
+                cfg.youtube.proxy.as_deref(),
+                old,
+                owed.into_iter().map(|id| (false, id)).collect(),
+            )
+            .await;
+        }
         self.callback = Some(callback.clone());
         let (subscribe, unsubscribe) = with_hub(|hub| {
-            if callback_changed {
-                hub.subs.clear();
-            }
             hub.roster = roster.iter().cloned().collect();
             let removed: Vec<String> = hub
                 .subs
@@ -554,49 +671,13 @@ impl Worker {
             (due, removed)
         });
 
-        if !subscribe.is_empty() || !unsubscribe.is_empty() {
-            match pooled_client(cfg.youtube.proxy.as_deref()) {
-                Ok(client) => {
-                    // Owned items: borrowing futures make tick() unspawnable.
-                    let jobs: Vec<(bool, String)> = subscribe
-                        .into_iter()
-                        .map(|id| (true, id))
-                        .chain(unsubscribe.into_iter().map(|id| (false, id)))
-                        .collect();
-                    let results: Vec<(bool, String, Result<(), String>)> = stream::iter(jobs)
-                        .map(|(subscribe, id)| {
-                            let client = client.clone();
-                            let callback = callback.clone();
-                            async move {
-                                let (id, result) =
-                                    hub_request(client, subscribe, callback, id).await;
-                                (subscribe, id, result)
-                            }
-                        })
-                        .buffer_unordered(HUB_CONCURRENCY)
-                        .collect()
-                        .await;
-                    with_hub(|hub| {
-                        for (subscribe, id, result) in results {
-                            let Err(e) = result else { continue };
-                            let mode = if subscribe { "订阅" } else { "退订" };
-                            tracing::debug!("WebSub {} {} 失败: {}", mode, id, e);
-                            if subscribe {
-                                hub.subs.insert(
-                                    id,
-                                    SubState::Failed {
-                                        retry_at: Instant::now() + RETRY_AFTER_FAILURE,
-                                    },
-                                );
-                            } else {
-                                hub.unsubs.remove(&id);
-                            }
-                        }
-                    });
-                }
-                Err(e) => tracing::warn!("WebSub 无法创建 HTTP 客户端: {}", e),
-            }
-        }
+        // Owned items: borrowing futures make tick() unspawnable.
+        let jobs: Vec<(bool, String)> = subscribe
+            .into_iter()
+            .map(|id| (true, id))
+            .chain(unsubscribe.into_iter().map(|id| (false, id)))
+            .collect();
+        send_hub_requests(cfg.youtube.proxy.as_deref(), callback, jobs).await;
 
         let counts = with_hub(|hub| hub.counts());
         if counts != self.counts {
@@ -772,6 +853,42 @@ mod tests {
         hub.subs
             .insert("UCother".to_string(), SubState::Failed { retry_at: now });
         assert!(!hub.healthy(now), "a failing subscription");
+    }
+
+    #[test]
+    fn turning_off_unsubscribes_live_subscriptions_and_waits_for_the_hub() {
+        let now = Instant::now();
+        let mut hub = hub_with_roster(now);
+        hub.subs
+            .insert(CHANNEL.to_string(), SubState::Verified { renew_at: now });
+        hub.subs
+            .insert("UCpending".to_string(), SubState::Pending { since: now });
+        hub.subs
+            .insert("UCfailed".to_string(), SubState::Failed { retry_at: now });
+        let mut owed = retire_subscriptions(&mut hub);
+        owed.sort();
+        assert_eq!(owed, vec![CHANNEL.to_string(), "UCpending".to_string()]);
+        assert!(hub.subs.is_empty());
+        assert!(hub.roster.is_empty(), "pushes stop counting");
+
+        // The hub's verification of an unsubscribe is still answered.
+        let q = query(&[
+            ("hub.mode", "unsubscribe"),
+            ("hub.topic", &topic(CHANNEL)),
+            ("hub.challenge", "bye"),
+        ]);
+        assert_eq!(hub.verify(&q, now), Some("bye".to_string()));
+
+        let until = Some(now + UNSUB_GRACE);
+        assert!(
+            !retirement_done(true, until, now),
+            "verifications outstanding"
+        );
+        assert!(retirement_done(false, until, now), "all verified");
+        assert!(
+            retirement_done(true, until, now + UNSUB_GRACE),
+            "grace over"
+        );
     }
 
     #[test]
