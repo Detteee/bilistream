@@ -497,8 +497,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 load_config().await?
             }
         };
-        // This pass checks the target anyway, so a go-live wake from before it adds nothing.
-        bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id);
+        // This pass checks these channels anyway, so a go-live wake from before it adds nothing.
+        for channel in idle_wake_channels(&cfg) {
+            bilistream::plugins::youtube::take_monitor_wake(channel);
+        }
         bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
 
         if let Some(reason) = cluster::local_monitoring_block_reason(&cfg) {
@@ -1612,8 +1614,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 elapsed += sleep_time;
 
-                if bilistream::plugins::youtube::take_monitor_wake(&cfg.youtube.channel_id) {
-                    tracing::info!("🔔 YouTube 显示目标频道已开播，立即检查");
+                if let Some(channel) = idle_wake_channels(&cfg)
+                    .into_iter()
+                    .find(|channel| bilistream::plugins::youtube::take_monitor_wake(channel))
+                {
+                    if channel == cfg.youtube.channel_id {
+                        tracing::info!("🔔 YouTube 显示目标频道已开播，立即检查");
+                    } else {
+                        tracing::info!("🔔 YouTube 显示优先频道已开播，立即检查");
+                    }
                     continue 'outer;
                 }
                 if bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id) {
@@ -1639,6 +1648,19 @@ fn should_probe_priority(cfg: &Config, current_channel_name: &str) -> bool {
         && cfg.priority_channel.channel_name != current_channel_name
         && (!cfg.priority_channel.youtube_channel_id.is_empty()
             || !cfg.priority_channel.twitch_channel_id.is_empty())
+}
+
+/// Channels whose go-live ends the main loop's not-live wait: the target, and
+/// the priority channel while priority switching is on (the pass checks it too).
+fn idle_wake_channels(cfg: &Config) -> Vec<&str> {
+    let mut channels = vec![cfg.youtube.channel_id.as_str()];
+    let priority = &cfg.priority_channel;
+    let id = priority.youtube_channel_id.as_str();
+    if priority.enabled && priority.auto_restart && !id.is_empty() && id != channels[0] {
+        channels.push(id);
+    }
+    channels.retain(|id| !id.is_empty());
+    channels
 }
 
 /// Waits `delay` in 2s steps, ending early when YouTube answers the priority
@@ -2322,6 +2344,26 @@ mod tests {
             area_v2: 235,
             is_priority: false,
         }
+    }
+
+    #[test]
+    fn the_idle_wait_wakes_on_the_priority_channel_only_while_switching_is_on() {
+        let mut cfg = test_config();
+        cfg.youtube.channel_id = "UCtarget".to_string();
+        cfg.priority_channel.youtube_channel_id = "UCpriority".to_string();
+        cfg.priority_channel.enabled = true;
+        cfg.priority_channel.auto_restart = false;
+        assert_eq!(idle_wake_channels(&cfg), vec!["UCtarget"]);
+        cfg.priority_channel.auto_restart = true;
+        assert_eq!(idle_wake_channels(&cfg), vec!["UCtarget", "UCpriority"]);
+        cfg.youtube.channel_id = "UCpriority".to_string();
+        assert_eq!(
+            idle_wake_channels(&cfg),
+            vec!["UCpriority"],
+            "priority is the target"
+        );
+        cfg.youtube.channel_id.clear();
+        assert_eq!(idle_wake_channels(&cfg), vec!["UCpriority"]);
     }
 
     fn test_config() -> Config {
