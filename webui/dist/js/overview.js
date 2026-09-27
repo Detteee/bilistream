@@ -329,7 +329,9 @@ function applyHolodexSectionVisibility(holodexKey, youtubeKey) {
   setElementDisplay(document.getElementById('holodex-api-config'), !listAvailable);
   setElementDisplay(document.getElementById('holodex-streams-section'), listAvailable);
   setElementDisplay(document.getElementById('holodex-toolbar'), holodexKey, 'flex');
-  setElementDisplay(document.getElementById('holodex-login-btn'), holodexKey, 'inline-flex');
+  // Auth status owns the login button. A later config reload must not show it
+  // again while the favorites bar is already in use.
+  updateHolodexAuthBar();
   maybeLoadHolodexStreams();
 }
 // Applies the panel's key-driven layout from a loaded config. The auth status
