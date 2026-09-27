@@ -592,7 +592,7 @@ mod tests {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
-        for path in ["/", "/public.css", "/js/main.js", "/shared/styles.css"] {
+        for path in ["/", "/public.css", "/js/main.js", "/shared/styles.css", "/icon.png", "/icon-blue.png"] {
             let response = client
                 .get(format!("http://{addr}{path}"))
                 .send()

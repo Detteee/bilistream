@@ -72,12 +72,6 @@ html.light-theme {
   color: var(--ok);
 }
 
-/* Path fills on the Holodex mark are gradients. Inherited currentColor from
-   .panel__title svg would paint over them and the icon would vanish. */
-.panel__title-mark {
-  fill: none;
-}
-
 /* Shown when the serving node cannot see the streaming node, so the cards
    are not silently presenting stale numbers as current. */
 /* Admin 开播 sits in the network header; on this page it is an ordinary
