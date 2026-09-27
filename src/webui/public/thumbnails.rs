@@ -29,6 +29,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "vod-secure.twitch.tv",
     "nicovideo.cdn.nimg.jp",
     "img.cdn.nimg.jp",
+    "listing-thumbnail.live.nicovideo.jp",
     "holodex.net",
 ];
 
@@ -296,6 +297,9 @@ mod tests {
             "https://static-cdn.jtvnw.net/previews/x.jpg"
         ));
         assert!(host_is_allowed("https://yt3.ggpht.com/a/photo.jpg"));
+        assert!(host_is_allowed(
+            "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360"
+        ));
 
         assert!(!host_is_allowed("https://evil.example.com/x.jpg"));
         assert!(!host_is_allowed("https://127.0.0.1/x.jpg"));

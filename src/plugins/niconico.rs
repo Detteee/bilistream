@@ -33,6 +33,8 @@ lazy_static! {
         Regex::new(r#"content="([^"]+)"\s+property="og:image""#).unwrap();
     static ref LISTING_W: Regex = Regex::new(r"([?&]w=)\d+").unwrap();
     static ref LISTING_H: Regex = Regex::new(r"([?&]h=)\d+").unwrap();
+    static ref LISTING_THUMB_SRC: Regex =
+        Regex::new(r#"src="(https://listing-thumbnail\.live\.nicovideo\.jp[^"]+)""#).unwrap();
 }
 
 /// Bilibili `new_room_cover` accepts Twitch 640×360 and YouTube sddefault
@@ -274,6 +276,7 @@ pub(crate) struct ChannelProgram {
     pub(crate) live_id: String,
     pub(crate) title: Option<String>,
     pub(crate) start_at: Option<DateTime<Local>>,
+    pub(crate) thumbnail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,6 +358,7 @@ fn parse_channel_program(section: &str) -> Option<ChannelProgram> {
         live_id,
         title,
         start_at,
+        thumbnail: parse_program_thumbnail(section),
     })
 }
 
@@ -370,6 +374,10 @@ fn parse_channel_live_listing(html: &str) -> ChannelLiveListing {
 
 fn parse_program_start(section: &str) -> Option<DateTime<Local>> {
     parse_program_start_at(section, Utc::now().with_timezone(&niconico_jst()))
+}
+
+fn parse_program_thumbnail(section: &str) -> Option<String> {
+    regex_first(&LISTING_THUMB_SRC, section).and_then(|url| bili_ready_listing_url(&url))
 }
 
 fn parse_program_start_at(
@@ -923,6 +931,33 @@ mod tests {
 </section>
 "#;
         assert_eq!(parse_channel_live_listing(html), ChannelLiveListing::Idle);
+    }
+
+    #[test]
+    fn parse_channel_program_reads_the_listing_thumbnail() {
+        let html = r#"
+<section class="sub future">
+  <li class="item">
+    <a href="https://live.nicovideo.jp/watch/lv351462902" class="thumb_live">
+      <img src="https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351462902/thumbnail_1790327497200.jpg&amp;w=352&amp;h=198&amp;v=1790327497200" alt="クイズ激ロー">
+    </a>
+    <h2 class="title"><a href="https://live.nicovideo.jp/watch/lv351462902">クイズ激ロー</a></h2>
+    <p class="date">開演：<strong class="fs14">09月28日 (月) 19時50分</strong></p>
+  </li>
+</section>
+"#;
+        match parse_channel_live_listing(html) {
+            ChannelLiveListing::Scheduled(program) => {
+                assert_eq!(program.live_id, "lv351462902");
+                assert_eq!(
+                    program.thumbnail.as_deref(),
+                    Some(
+                        "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351462902/thumbnail_1790327497200.jpg&w=640&h=360&v=1790327497200"
+                    )
+                );
+            }
+            other => panic!("expected scheduled, got {other:?}"),
+        }
     }
 
     #[test]

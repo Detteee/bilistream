@@ -1123,6 +1123,25 @@ mod tests {
     }
 
     #[test]
+    fn a_niconico_listing_thumbnail_is_kept() {
+        let mut placeholder = stream("激ロー", None, "UCkamito");
+        placeholder.id = "niconico-lv351182284".to_string();
+        placeholder.stream_type = "placeholder".to_string();
+        placeholder.link = Some("https://live.nicovideo.jp/watch/lv351182284".to_string());
+        placeholder.thumbnail = Some(
+            "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
+                .to_string(),
+        );
+
+        assert_eq!(
+            thumbnail_for(&placeholder).as_deref(),
+            Some(
+                "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
+            )
+        );
+    }
+
+    #[test]
     fn an_empty_thumbnail_is_treated_as_missing() {
         let mut yt = stream("ランク", None, "UCkamito");
         yt.thumbnail = Some(String::new());

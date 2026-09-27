@@ -568,6 +568,13 @@ fn upsert(
             }
             row.available_at = Some(start);
         }
+        if let Some(thumbnail) = program
+            .thumbnail
+            .as_deref()
+            .filter(|thumbnail| !thumbnail.is_empty())
+        {
+            row.thumbnail = Some(thumbnail.to_string());
+        }
     } else {
         rows.push(new_row(entry, program, status, rows));
     }
@@ -612,7 +619,7 @@ fn new_row(
         live_viewers: None,
         channel,
         link: Some(watch_url(&program.live_id)),
-        thumbnail: None,
+        thumbnail: program.thumbnail.clone(),
         placeholder_type: Some("external-stream".to_string()),
         yt_confirmed: false,
     }
@@ -668,6 +675,7 @@ mod tests {
                     .unwrap()
                     .with_timezone(&chrono::Local)
             }),
+            thumbnail: None,
         }
     }
 
@@ -747,6 +755,22 @@ mod tests {
         assert_eq!(added.channel.id, "UCvspo");
         assert_eq!(added.channel.name, "ぶいすぽ holodex");
         assert!(added.start_actual.is_some());
+    }
+
+    #[test]
+    fn a_listing_thumbnail_is_copied_onto_the_niconico_row() {
+        let mut listing = program("lv351182284", "激ロー", true);
+        listing.thumbnail = Some(
+            "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
+                .to_string(),
+        );
+        let rows = apply(Vec::new(), &answers(ChannelLiveListing::OnAir(listing)));
+        assert_eq!(
+            rows[0].thumbnail.as_deref(),
+            Some(
+                "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
+            )
+        );
     }
 
     #[test]
