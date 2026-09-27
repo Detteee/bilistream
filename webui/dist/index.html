@@ -1227,21 +1227,27 @@
                 <label for="config-youtube-api-key">YouTube Data API Key (可选)</label>
                 <textarea id="config-youtube-api-key" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
-                <small class="settings-help-text">
-                  可填多个 key（每行一个），来自不同 Google 项目的额度可叠加，每个 key 每天最多用 9,000 单位。key 越多，上传列表轮询越快：快于 RSS（每 3 分钟）时自动开启，RSS 故障时也会开启。
-                  获取：<a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
-                    rel="noopener noreferrer" class="settings-help-link">Google Cloud Console</a>
+                <small class="settings-help-text" title="每个 key 每天最多用 9,000 单位；key 越多，上传列表轮询越快（快于 RSS 每 3 分钟时自动开启，RSS 故障时也会开启）。">
+                  每行一个，多个 Google 项目的额度可叠加 ·
+                  <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
+                    rel="noopener noreferrer" class="settings-help-link">获取 key</a>
                 </small>
                 <div id="youtube-key-status" class="settings-help-text" hidden></div>
               </div>
               <div class="control-group">
-                <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
-                <input type="text" id="config-websub-callback-url"
-                  placeholder="https://yt.example.com/websub/youtube">
-                <label for="config-websub-port">WebSub 回调端口</label>
-                <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
-                <small class="settings-help-text">
-                  YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 <code>/websub/youtube</code>，不会暴露 Web UI；用隧道或反向代理把公网地址转发到本机这个端口，再把公网地址填到上面。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。留空即关闭。
+                <div class="settings-inline-pair">
+                  <div>
+                    <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
+                    <input type="text" id="config-websub-callback-url"
+                      placeholder="https://yt.example.com/websub/youtube">
+                  </div>
+                  <div>
+                    <label for="config-websub-port">端口</label>
+                    <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
+                  </div>
+                </div>
+                <small class="settings-help-text" title="YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 /websub/youtube，不会暴露 Web UI。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。">
+                  用隧道把公网地址转发到此端口，只响应 <code>/websub/youtube</code>；留空关闭
                 </small>
               </div>
               <div class="control-group">

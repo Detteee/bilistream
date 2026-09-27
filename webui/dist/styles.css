@@ -2559,6 +2559,16 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 
 .settings-field-help,
+.settings-inline-pair {
+  display: grid;
+  grid-template-columns: 1fr 7em;
+  gap: var(--sp-2);
+}
+
+.settings-inline-pair input {
+  width: 100%;
+}
+
 #youtube-key-status {
   display: grid;
   gap: var(--sp-2);
@@ -2659,13 +2669,6 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   font-size: var(--fs-base);
   font-weight: 600;
 }
-.discovery-tile-detail {
-  margin-top: 2px;
-  color: var(--text-mute);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
-}
-
 .settings-help-text {
   display: block;
   margin-top: var(--sp-1);

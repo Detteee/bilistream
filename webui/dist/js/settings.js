@@ -1,7 +1,7 @@
 // settings.js — extracted from app.js
 
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
-import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle } from './state.js';
+import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
@@ -20,7 +20,18 @@ function initAntiCollisionControls() {
     .getElementById('anti-collision-add-btn')
     ?.addEventListener('click', addAntiCollisionEntry);
 }
+// Key spend moves with every YouTube call; keep it current while settings
+// are on screen instead of only on load.
+const KEY_STATUS_REFRESH_MS = 30_000;
+function startKeyStatusRefresh() {
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && isViewActive('settings')) {
+      loadYoutubeKeyStatus();
+    }
+  }, KEY_STATUS_REFRESH_MS);
+}
 function initSystemSettingsActions() {
+  startKeyStatusRefresh();
   document
     .getElementById('save-system-config-btn')
     ?.addEventListener('click', saveSystemConfig);
@@ -197,7 +208,6 @@ function renderDiscoveryTiles(tiles) {
     const head = el('div', 'discovery-tile-name');
     head.append(el('span', 'discovery-tile-dot'), document.createTextNode(tile.name));
     card.append(head, el('div', 'discovery-tile-label', tile.label));
-    if (tile.detail) card.append(el('div', 'discovery-tile-detail', tile.detail));
     row.append(card);
   }
   return row;
