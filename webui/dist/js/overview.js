@@ -1,7 +1,7 @@
 // overview.js — extracted from app.js
 
 import { isDashboardVisible, isElementHidden, setElementDisplay, reconcileChildren, createStreamThumbnail, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
@@ -232,9 +232,6 @@ function initHolodexLoginModalControls() {
   document
     .getElementById('holodex-skip-jwt-verify')
     ?.addEventListener('change', toggleHolodexSkipJwtVerify);
-  document
-    .getElementById('holodex-monitor-gate-toggle')
-    ?.addEventListener('change', toggleHolodexMonitorGate);
 }
 function initFaceAuthModalControls() {
   bindDialog('face-auth-modal', closeFaceAuthModal);
@@ -353,13 +350,6 @@ function applyHolodexConfig(config) {
     loadHolodexAuthStatus().then(() => {
       if (holodexUseFavorites !== usedFavorites) maybeLoadHolodexStreams();
     });
-  }
-}
-// Stored as holodex_monitor_gate; the switch shows the inverse, yt-dlp 兜底.
-function applyHolodexMonitorGateToggle(enabled) {
-  const toggle = document.getElementById('holodex-monitor-gate-toggle');
-  if (toggle) {
-    toggle.checked = !enabled;
   }
 }
 // The overview is the visible view of a visible dashboard, and the panel is
@@ -1427,27 +1417,6 @@ async function toggleHolodexSkipJwtVerify() {
       showNotification(toggle.checked ? '已跳过 JWT 校验' : '已启用 JWT 校验', 'success');
       await loadHolodexAuthStatus();
       await refreshHolodexStreams();
-    } else {
-      toggle.checked = !toggle.checked;
-      showNotification('更新失败: ' + (data.message || '未知错误'), 'error');
-    }
-  } catch (error) {
-    toggle.checked = !toggle.checked;
-    showNotification('更新失败: ' + error.message, 'error');
-  }
-}
-async function toggleHolodexMonitorGate() {
-  const toggle = document.getElementById('holodex-monitor-gate-toggle');
-  if (!toggle) return;
-
-  try {
-    const data = await postJsonApi('/api/config', { holodex_monitor_gate: !toggle.checked });
-    if (data.success) {
-      showNotification(
-        toggle.checked ? '已开启 yt-dlp 兜底：每次监控都直接查询 YouTube' : '已关闭 yt-dlp 兜底：按索引判断，每 5 分钟 yt-dlp 安全探测',
-        'success'
-      );
-      refreshYouTubeStatus();
     } else {
       toggle.checked = !toggle.checked;
       showNotification('更新失败: ' + (data.message || '未知错误'), 'error');

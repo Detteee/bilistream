@@ -240,7 +240,7 @@ pub enum MonitorMode {
     Index,
 }
 
-/// The dashboard switch is stored as `holodex_monitor_gate`, where `false`
+/// The 基础设置 switch is stored as `holodex_monitor_gate`, where `false`
 /// means rescue. Without any Holodex or YouTube key there is no index to
 /// consult, so that also means rescue.
 pub fn monitor_mode(cfg: &crate::config::Config) -> MonitorMode {

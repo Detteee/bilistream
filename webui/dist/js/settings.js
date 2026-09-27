@@ -1,7 +1,7 @@
 // settings.js — extracted from app.js
 
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
-import { mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, isViewActive } from './state.js';
+import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
@@ -99,6 +99,7 @@ async function loadSystemConfig() {
     setInputValue('config-interval', config.interval ?? 30);
     setCheckboxChecked('config-auto-cover-checkbox', config.auto_cover || false);
     setCheckboxChecked('config-danmaku-command-checkbox', config.bilibili?.enable_danmaku_command !== false);
+    applyHolodexMonitorGateToggle(config.holodex_monitor_gate !== false);
     setCheckboxChecked('config-anti-collision-checkbox', config.enable_anti_collision || false);
     toggleAntiCollisionList(); // Show/hide anti-collision section based on checkbox
 
@@ -364,6 +365,7 @@ function getCurrentConfig() {
     interval: readIntegerInput('config-interval', 30),
     auto_cover: document.getElementById('config-auto-cover-checkbox').checked,
     enable_danmaku_command: document.getElementById('config-danmaku-command-checkbox').checked,
+    holodex_monitor_gate: !document.getElementById('holodex-monitor-gate-toggle')?.checked,
     enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
     holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
     youtube_api_key: document.getElementById('config-youtube-api-key').value.trim(),
@@ -397,6 +399,9 @@ async function saveSystemConfig() {
       await reloadServerConfig();
       if (['youtube_api_key', 'youtube_websub_callback_url', 'youtube_websub_port'].some(key => key in patch)) {
         loadYoutubeKeyStatus();
+      }
+      if ('holodex_monitor_gate' in patch) {
+        state.hooks.refreshStatus?.();
       }
     }
     try {

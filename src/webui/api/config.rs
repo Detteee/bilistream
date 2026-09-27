@@ -119,6 +119,7 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "auto_cover": cfg.auto_cover,
         "enable_anti_collision": cfg.enable_anti_collision,
         "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
+        "holodex_monitor_gate": cfg.holodex_monitor_gate,
         "enable_lol_monitor": cfg.enable_lol_monitor,
         "lol_monitor_interval": cfg.lol_monitor_interval.unwrap_or(1),
         "riot_api_key": cfg.riot_api_key.as_deref().unwrap_or_default().trim(),

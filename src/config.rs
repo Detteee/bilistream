@@ -114,7 +114,7 @@ pub struct Config {
     /// When true, use stored JWT as-is without expiry checks or auto-refresh.
     #[serde(default)]
     pub holodex_skip_jwt_verify: bool,
-    /// Inverse of the dashboard's yt-dlp 兜底 (rescue) switch. When true
+    /// Inverse of the 基础设置 yt-dlp 兜底 (rescue) switch. When true
     /// (default) and a Holodex or YouTube key is set, the YouTube monitor
     /// trusts the index (Holodex + discovery, corrected by `videos.list`) with a
     /// 5-min yt-dlp safety probe. When false, yt-dlp queries YouTube every tick.

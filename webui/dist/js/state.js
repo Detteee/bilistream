@@ -58,6 +58,13 @@ function updateDanmakuCommandToggle(enabled) {
     applyMonitorToggleConfigState(toggle, 'bili-danmaku-command-toggle', enabled);
   }
 }
+// Stored as holodex_monitor_gate; the switch shows the inverse, yt-dlp 兜底.
+function applyHolodexMonitorGateToggle(enabled) {
+  const toggle = document.getElementById('holodex-monitor-gate-toggle');
+  if (toggle) {
+    toggle.checked = !enabled;
+  }
+}
 
 export function invalidateManagedData() {
   state.managedDataGeneration += 1;
@@ -141,6 +148,7 @@ export {
   updateMonitorToggleStates,
   applyMonitorToggleConfigState,
   updateDanmakuCommandToggle,
+  applyHolodexMonitorGateToggle,
   isViewActive,
   createAreaOption,
   createSelectOption,
