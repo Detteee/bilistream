@@ -100,11 +100,24 @@ export function ytIndexChip(node) {
   };
 }
 
-// Quiet title-row caption on other nodes' cards, or null.
+// Chip on a node that answers YouTube from another node's index: "YT · US",
+// where the second half is that node's display name. Null otherwise.
+export function ytIndexFollowChip(node, nodes) {
+  const state = node?.yt_index;
+  if (!state || node.health?.stale || state.state !== 'follows') return null;
+  const id = (state.node || '').trim();
+  const owner = (nodes || []).find(item => (item?.node_id || '').trim() === id);
+  const label = (owner?.name || id || '?').trim() || '?';
+  return {
+    text: `YT · ${label}`,
+    title: `跟随 ${label} 的 YouTube 索引`,
+  };
+}
+
+// Quiet title-row caption when a node had to fall back to its own query.
 export function ytIndexPeerLine(node) {
   const state = node?.yt_index;
   if (!state || node.health?.stale) return null;
-  if (state.state === 'follows') return `跟随 ${state.node} 的 YouTube 索引`;
   if (state.state === 'local' && state.reason === 'index_down') return 'YouTube 本地查询（索引节点不可用）';
   return null;
 }

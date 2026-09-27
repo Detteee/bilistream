@@ -5,7 +5,7 @@ import { createSelectOption, state, syncMonitorTogglesWithClusterRole } from './
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { createClusterNetwork, updateClusterNetwork } from './cluster-network.js';
-import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, ytIndexChip, ytIndexPeerLine } from './cluster-health.js';
+import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, ytIndexChip, ytIndexFollowChip, ytIndexPeerLine } from './cluster-health.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -517,12 +517,13 @@ function getClusterLocalStateSignature(cluster) {
   });
 }
 
-function clusterNodeStructure(node, configVersion) {
+function clusterNodeStructure(node, configVersion, nodes) {
+  const follow = node?.yt_index?.state === 'follows' ? ytIndexFollowChip(node, nodes)?.text : '';
   return JSON.stringify([
     node.node_id, node.name, node.api_url, node.is_local, node.role, node.health,
     node.draining, node.network_unstable, node.ffmpeg_running, node.active_stream,
     node.config_version, configVersion, !!node.self_check, publicStatusNodeId,
-    node.yt_index, node.websub,
+    node.yt_index, node.websub, follow,
   ]);
 }
 
@@ -601,11 +602,11 @@ function renderClusterStatus(cluster, errorMessage) {
   const detailed = [];
   const compact = [];
   nodes.forEach(node => {
-    const signature = clusterNodeStructure(node, cluster.config_version);
+    const signature = clusterNodeStructure(node, cluster.config_version, nodes);
     const previous = renderedClusterNodes.get(node.node_id);
     const hasDetail = clusterNodeHasDetail(node);
     const element = previous?.signature === signature ? previous.element
-      : hasDetail ? createClusterNodeCard(node, cluster.config_version)
+      : hasDetail ? createClusterNodeCard(node, cluster.config_version, nodes)
         : createClusterNodeTile(node, cluster.config_version);
     element.dataset.nodeId = node.node_id;
     updateClusterNodeMetrics(element, node);
@@ -774,7 +775,7 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   return tile;
 }
 
-function createClusterNodeCard(node, clusterConfigVersion) {
+function createClusterNodeCard(node, clusterConfigVersion, nodes) {
   const stream = node.active_stream;
 
   const card = document.createElement('div');
@@ -790,7 +791,7 @@ function createClusterNodeCard(node, clusterConfigVersion) {
   if (titleChip) {
     identity.appendChild(titleChip);
   }
-  const indexChip = createYtIndexChip(node);
+  const indexChip = createYtIndexChip(node) || createYtFollowChip(node, nodes);
   if (indexChip) identity.appendChild(indexChip);
   const selfCheck = createClusterSelfCheck(node);
   if (selfCheck) identity.appendChild(selfCheck);
@@ -838,6 +839,16 @@ function createPublicStatusChip(node) {
 function createYtIndexChip(node) {
   const model = ytIndexChip(node);
   if (!model) return null;
+  return ytIndexBadge(model);
+}
+
+function createYtFollowChip(node, nodes) {
+  const model = ytIndexFollowChip(node, nodes);
+  if (!model) return null;
+  return ytIndexBadge(model);
+}
+
+function ytIndexBadge(model) {
   const chip = document.createElement('span');
   chip.className = `cluster-badge cluster-badge-yt-index${model.warn ? ' is-warn' : ''}`;
   chip.textContent = model.text;
