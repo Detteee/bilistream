@@ -2,3 +2,4 @@
 config.yaml
 /src-tauri/gen/schemas/
 niconico_cookies.txt
+youtube_quota.json

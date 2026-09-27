@@ -246,9 +246,60 @@ struct KeyPool {
     lane_used: [u64; 2],
     /// Whether a restream target is polled, so its units are reserved.
     target_reserved: bool,
+    /// Spend read back from disk, by fingerprint, until its key is configured.
+    restored: HashMap<String, SavedKey>,
+    /// What was last written, so unchanged state is not rewritten.
+    saved: Option<SavedPool>,
+}
+
+/// The pool as kept across restarts: spend and exhaustion per key fingerprint
+/// for one Pacific day. Rejections are not kept; a restart re-reads the keys.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct SavedPool {
+    day: i64,
+    keys: HashMap<String, SavedKey>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+struct SavedKey {
+    used: u32,
+    #[serde(default)]
+    exhausted_until: Option<i64>,
 }
 
 impl KeyPool {
+    fn restore(saved: SavedPool) -> Self {
+        Self {
+            day: saved.day,
+            restored: saved.keys.clone(),
+            saved: Some(saved),
+            ..Self::default()
+        }
+    }
+
+    fn snapshot(&self) -> SavedPool {
+        SavedPool {
+            day: self.day,
+            keys: self
+                .keys
+                .iter()
+                .map(|(key, state)| {
+                    let exhausted_until = match state.benched {
+                        Some(Bench::UntilDay(day)) => Some(day),
+                        _ => None,
+                    };
+                    (
+                        fingerprint(key),
+                        SavedKey {
+                            used: state.used,
+                            exhausted_until,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
     /// Follow the configured list and the Pacific day. Spend on keys that stay
     /// in the list is kept; any change to the list lifts rejected-key benches.
     fn sync(&mut self, keys: &[String], day: i64) {
@@ -257,7 +308,17 @@ impl KeyPool {
         if changed {
             self.keys.retain(|key, _| keys.contains(key));
             for key in keys {
-                self.keys.entry(key.clone()).or_default();
+                if !self.keys.contains_key(key) {
+                    let state = self
+                        .restored
+                        .remove(&fingerprint(key))
+                        .map(|saved| KeyState {
+                            used: saved.used,
+                            benched: saved.exhausted_until.map(Bench::UntilDay),
+                        })
+                        .unwrap_or_default();
+                    self.keys.insert(key.clone(), state);
+                }
             }
             for state in self.keys.values_mut() {
                 if state.benched == Some(Bench::UntilConfigChange) {
@@ -376,9 +437,44 @@ enum KeyUse {
 
 static POOL: Mutex<Option<KeyPool>> = Mutex::new(None);
 
+const POOL_FILE: &str = "youtube_quota.json";
+
+fn load_pool() -> KeyPool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path.with_file_name(POOL_FILE)).ok())
+        .and_then(|data| serde_json::from_str::<SavedPool>(&data).ok())
+        .map(KeyPool::restore)
+        .unwrap_or_default()
+}
+
+fn save_pool(saved: &SavedPool) {
+    let Ok(path) = std::env::current_exe().map(|path| path.with_file_name(POOL_FILE)) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    let result = serde_json::to_vec(saved)
+        .map_err(std::io::Error::other)
+        .and_then(|data| std::fs::write(&tmp, data))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(e) = result {
+        tracing::warn!("保存 YouTube API 配额用量失败: {}", e);
+    }
+}
+
 fn with_pool<T>(f: impl FnOnce(&mut KeyPool) -> T) -> T {
     let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    f(guard.get_or_insert_with(KeyPool::default))
+    let pool = guard.get_or_insert_with(load_pool);
+    let result = f(pool);
+    // Keys not configured yet keep their restored spend out of the snapshot.
+    if !pool.keys.is_empty() {
+        let snapshot = pool.snapshot();
+        if pool.saved.as_ref() != Some(&snapshot) {
+            save_pool(&snapshot);
+            pool.saved = Some(snapshot);
+        }
+    }
+    result
 }
 
 /// Keys whose daily budget is not spent and that Google has not rejected.
@@ -995,6 +1091,25 @@ mod tests {
         upcoming.status = "upcoming".to_string();
         record_recent_live(&mut recent, &ids(&["v"]), &[upcoming], t0);
         assert!(recent.is_empty());
+    }
+
+    #[test]
+    fn a_saved_pool_restores_spend_on_the_same_pacific_day_only() {
+        let list = keys(&["a", "b"]);
+        let mut pool = KeyPool::default();
+        pool.pick(&list, 40, 100, &[], Lane::Protected);
+        pool.bench("b", Bench::UntilDay(101));
+        let saved = pool.snapshot();
+
+        let mut same_day = KeyPool::restore(saved.clone());
+        same_day.sync(&list, 100);
+        assert_eq!(same_day.keys["a"].used + same_day.keys["b"].used, 40);
+        assert_eq!(same_day.keys["b"].benched, Some(Bench::UntilDay(101)));
+        assert_eq!(same_day.snapshot(), saved);
+
+        let mut next_day = KeyPool::restore(saved);
+        next_day.sync(&list, 101);
+        assert!(next_day.keys.values().all(|state| state.used == 0 && state.benched.is_none()));
     }
 
     fn keys(list: &[&str]) -> Vec<String> {
