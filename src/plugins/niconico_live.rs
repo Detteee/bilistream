@@ -79,6 +79,42 @@ struct PollState {
 }
 
 impl PollState {
+    /// Picks the due channels and marks them attempted. A loaded roster that
+    /// differs from the recorded one is recorded now, even if nothing is due:
+    /// the target's fresh listing (asked for the monitor while no list was
+    /// leased, so with no roster) would otherwise not overlay until that
+    /// channel is due again. Returns the due ids and whether the roster
+    /// changed.
+    fn begin_pass(
+        &mut self,
+        ids: &[String],
+        roster: &[RosterChannel],
+        now: Instant,
+        now_local: DateTime<Local>,
+    ) -> (Vec<String>, bool) {
+        let due: Vec<String> = ids
+            .iter()
+            .filter(|id| {
+                channel_due(
+                    self.last_attempt.get(*id).copied(),
+                    self.answers.listings.get(*id),
+                    self.failed.contains(*id),
+                    now,
+                    now_local,
+                )
+            })
+            .cloned()
+            .collect();
+        for id in &due {
+            self.last_attempt.insert(id.clone(), now);
+        }
+        let adopted = !roster.is_empty() && roster != self.answers.roster.as_slice();
+        if adopted {
+            self.answers.roster = roster.to_vec();
+        }
+        (due, adopted)
+    }
+
     /// Keeps a successful (possibly partial) answer. Failed channels keep
     /// their last listing. Unasked channels that are still in `keep` keep
     /// theirs too. Returns the target channel when it turned live, and
@@ -409,7 +445,8 @@ pub async fn monitor_status(
 }
 
 /// Asks the listing pages when due: about the roster while a list is leased,
-/// and about the target while its monitor is on.
+/// and about the target while its monitor is on. A leased pass records the
+/// roster even when no channel is due.
 async fn poll_pass(cfg: &Config) {
     let target = target_channel(cfg.niconico.enable_monitor, &cfg.niconico.channel_id);
     let roster = if crate::webui::holodex_list::any_leased() {
@@ -429,26 +466,11 @@ async fn poll_pass(cfg: &Config) {
     }
     let now = Instant::now();
     let now_local = Local::now();
-    let due = with_state(|state| {
-        let due: Vec<String> = ids
-            .iter()
-            .filter(|id| {
-                channel_due(
-                    state.last_attempt.get(*id).copied(),
-                    state.answers.listings.get(*id),
-                    state.failed.contains(*id),
-                    now,
-                    now_local,
-                )
-            })
-            .cloned()
-            .collect();
-        for id in &due {
-            state.last_attempt.insert(id.clone(), now);
-        }
-        due
-    });
+    let (due, adopted) = with_state(|state| state.begin_pass(&ids, &roster, now, now_local));
     if due.is_empty() {
+        if adopted {
+            crate::webui::holodex_list::wake();
+        }
         return;
     }
     let keep: HashSet<String> = ids.iter().cloned().collect();
@@ -491,7 +513,7 @@ async fn poll_pass(cfg: &Config) {
     if let Some(channel_id) = woken {
         wake_monitor(&channel_id);
     }
-    if changed {
+    if adopted || changed {
         crate::webui::holodex_list::wake();
     }
 }
@@ -1129,5 +1151,78 @@ mod tests {
             state.answers.listings.get("ch2"),
             Some(ChannelLiveListing::Idle)
         ));
+    }
+
+    /// The active node: its monitor asked about the target while no list was
+    /// leased, so the answer came with no roster. Once a list is leased the
+    /// roster overlays that answer without waiting for the target to be due.
+    #[test]
+    fn a_leased_pass_overlays_the_target_s_fresh_listing_with_nothing_due() {
+        let t0 = Instant::now();
+        let now_local = program_start() - chrono::Duration::hours(48);
+        let mut state = PollState::default();
+        let asked = ["vspo".to_string()];
+        state.last_attempt.insert("vspo".to_string(), t0);
+        state.record(
+            [(
+                "vspo".to_string(),
+                ChannelLiveListing::Scheduled(program("lv1", "激ロー", true)),
+            )]
+            .into_iter()
+            .collect(),
+            Vec::new(),
+            &asked,
+            &keep(&asked),
+            Some("vspo"),
+            t0,
+        );
+        assert!(apply(Vec::new(), &state.answers).is_empty());
+
+        let later = t0 + Duration::from_secs(60);
+        let (due, adopted) = state.begin_pass(&asked, &[vspo()], later, now_local);
+        assert!(due.is_empty(), "the target's listing is still fresh");
+        assert!(adopted);
+        assert_eq!(state.last_attempt.get("vspo"), Some(&t0));
+        let rows = apply(Vec::new(), &state.answers);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "niconico-lv1");
+        assert_eq!(rows[0].status, "upcoming");
+        assert_eq!(rows[0].channel.id, "UCvspo");
+
+        assert_eq!(
+            state.begin_pass(&asked, &[vspo()], later, now_local),
+            (Vec::new(), false),
+            "the same roster does not rebuild the lists every tick"
+        );
+        assert_eq!(
+            state.begin_pass(&asked, &[], later, now_local),
+            (Vec::new(), false),
+            "an unleased pass leaves the roster alone"
+        );
+        assert_eq!(state.answers.roster, vec![vspo()]);
+    }
+
+    #[test]
+    fn a_pass_marks_only_due_channels_attempted() {
+        let t0 = Instant::now();
+        let now_local = program_start() - chrono::Duration::hours(48);
+        let mut state = PollState::default();
+        state.last_attempt.insert("vspo".to_string(), t0);
+        state
+            .answers
+            .listings
+            .insert("vspo".to_string(), ChannelLiveListing::Idle);
+        let other = RosterChannel {
+            channel_id: "ch2".to_string(),
+            youtube_id: "UCch2".to_string(),
+            name: "other".to_string(),
+        };
+        let ids = ["vspo".to_string(), "ch2".to_string()];
+        let later = t0 + Duration::from_secs(60);
+        let (due, adopted) = state.begin_pass(&ids, &[vspo(), other], later, now_local);
+        assert_eq!(due, ["ch2".to_string()]);
+        assert!(adopted);
+        assert_eq!(state.last_attempt.get("vspo"), Some(&t0));
+        assert_eq!(state.last_attempt.get("ch2"), Some(&later));
     }
 }
