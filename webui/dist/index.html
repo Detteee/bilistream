@@ -1777,32 +1777,35 @@
                 <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
                 <span>公开状态页</span>
               </div>
-              <div class="cluster-settings-add-grid">
-                <div class="control-group">
+              <div class="cluster-public-status-grid">
+                <div class="control-group cluster-public-status-node">
                   <label for="config-public-status-node">提供节点</label>
                   <select id="config-public-status-node">
                     <option value="">不启用</option>
                   </select>
-                  <small class="settings-field-help">所选节点同时为集群提供 YouTube 查询和 WebSub 推送，需要在该节点配置它自己的 YouTube key（key 不在节点间同步）。</small>
+                  <small class="settings-help-text">所选节点同时为集群提供 YouTube 查询和 WebSub 推送，需要在该节点配置它自己的 YouTube key（key 不在节点间同步）。</small>
                 </div>
-                <div class="control-group">
-                  <label for="config-public-status-bind">监听地址</label>
-                  <input type="text" id="config-public-status-bind" placeholder="127.0.0.1">
-                </div>
-                <div class="control-group">
-                  <label for="config-public-status-port">端口</label>
-                  <input type="number" id="config-public-status-port" min="1" max="65535" placeholder="23234">
-                </div>
-                <div class="control-group cluster-settings-add-url">
-                  <label for="config-public-status-url">公开地址</label>
-                  <input type="text" id="config-public-status-url" placeholder="s.example.com">
-                  <small class="settings-field-help" id="public-status-url-hint">
-                    收到 %查询 弹幕时播报「详情：地址」，留空则不播报。
-                  </small>
-                </div>
-                <div class="control-group cluster-settings-add-action">
-                  <button id="public-status-save-btn" type="button"
-                    class="btn-secondary cluster-settings-add-btn">保存并同步</button>
+                <div class="cluster-public-status-fields">
+                  <div class="control-group">
+                    <label for="config-public-status-bind">监听地址</label>
+                    <input type="text" id="config-public-status-bind" placeholder="127.0.0.1">
+                  </div>
+                  <div class="control-group cluster-public-status-port">
+                    <label for="config-public-status-port">端口</label>
+                    <input type="number" id="config-public-status-port" min="1" max="65535" placeholder="23234">
+                  </div>
+                  <div class="control-group cluster-public-status-url">
+                    <label for="config-public-status-url">公开地址</label>
+                    <input type="text" id="config-public-status-url" placeholder="s.example.com">
+                    <small class="settings-help-text" id="public-status-url-hint">
+                      收到 %查询 弹幕时播报「详情：地址」，留空则不播报。
+                    </small>
+                  </div>
+                  <div class="control-group cluster-public-status-action">
+                    <label class="cluster-public-status-action-label" for="public-status-save-btn">操作</label>
+                    <button id="public-status-save-btn" type="button"
+                      class="btn-secondary cluster-settings-add-btn">保存并同步</button>
+                  </div>
                 </div>
               </div>
             </div>

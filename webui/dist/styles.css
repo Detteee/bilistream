@@ -2587,6 +2587,51 @@ a.cluster-node-name-link {
   width: 100%;
 }
 
+.cluster-public-status-grid {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.cluster-public-status-node select {
+  max-width: 22rem;
+}
+
+.cluster-public-status-fields {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) 7.5rem minmax(12rem, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-3);
+}
+
+.cluster-public-status-action-label {
+  visibility: hidden;
+}
+
+.cluster-public-status-action .cluster-settings-add-btn {
+  width: auto;
+  min-width: 8.5rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+  .cluster-public-status-fields {
+    grid-template-columns: 1fr 7.5rem;
+  }
+
+  .cluster-public-status-url,
+  .cluster-public-status-action {
+    grid-column: 1 / -1;
+  }
+
+  .cluster-public-status-action-label {
+    display: none;
+  }
+
+  .cluster-public-status-action .cluster-settings-add-btn {
+    width: 100%;
+  }
+}
+
 /* Peer cards ------------------------------------------------------------- */
 
 .cluster-peer-list {
@@ -3510,7 +3555,15 @@ a.cluster-node-name-link {
   font-weight: 600;
 }
 
-.settings-field-help,
+.settings-field-help {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
 .settings-inline-pair {
   display: grid;
   grid-template-columns: 1fr 7em;
@@ -3754,6 +3807,7 @@ a.cluster-node-name-link {
 
 /* A hint that has turned into a warning: the value is saved-blocking, so it
    should not still read as neutral guidance. */
+.settings-help-text.is-invalid,
 .settings-field-help.is-invalid {
   color: var(--danger);
 }
