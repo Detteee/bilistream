@@ -79,12 +79,12 @@ export function ytIndexChip(node) {
   if (!state || node.health?.stale) return null;
   if (state.state === 'index') {
     const websub = node.websub;
-    const lines = ['为集群提供 YouTube 查询'];
+    const lines = ['YouTube 索引：为集群提供 YouTube 查询'];
     if (websub) {
       lines.push(`WebSub 订阅：已验证 ${websub.verified} · 等待 ${websub.pending} · 失败 ${websub.failed}`);
     }
     return {
-      text: 'YT 索引',
+      text: 'YT',
       title: lines.join('\n'),
       warn: false,
       websub: websub ? (websub.pending || websub.failed ? 'warn' : 'ok') : null,
@@ -93,8 +93,8 @@ export function ytIndexChip(node) {
   const reason = YT_INDEX_REASONS[state.state === 'local' ? state.reason : ''];
   if (!reason) return null;
   return {
-    text: 'YT 索引 ⚠',
-    title: `${reason}，未为集群提供 YouTube 查询\n其他节点改用各自的 key；没有 key 的节点只用 Holodex`,
+    text: 'YT ⚠',
+    title: `YouTube 索引：${reason}，未为集群提供 YouTube 查询\n其他节点改用各自的 key；没有 key 的节点只用 Holodex`,
     warn: true,
     websub: null,
   };

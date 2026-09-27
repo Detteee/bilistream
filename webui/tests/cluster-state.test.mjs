@@ -34,7 +34,7 @@ test('the YouTube index chip names the index node and warns when it cannot serve
   const index = { yt_index: { state: 'index' }, health: { stale: false } };
   assert.deepEqual(
     { ...ytIndexChip(index), title: undefined },
-    { text: 'YT 索引', title: undefined, warn: false, websub: null },
+    { text: 'YT', title: undefined, warn: false, websub: null },
   );
   const subscribed = { ...index, websub: { verified: 36, pending: 1, failed: 0 } };
   assert.equal(ytIndexChip(subscribed).websub, 'warn');
@@ -42,7 +42,7 @@ test('the YouTube index chip names the index node and warns when it cannot serve
   assert.equal(ytIndexChip({ ...index, websub: { verified: 37, pending: 0, failed: 0 } }).websub, 'ok');
 
   const noKey = { yt_index: { state: 'local', reason: 'no_key' }, health: { stale: false } };
-  assert.equal(ytIndexChip(noKey).text, 'YT 索引 ⚠');
+  assert.equal(ytIndexChip(noKey).text, 'YT ⚠');
   assert.equal(ytIndexChip(noKey).warn, true);
   assert.match(ytIndexChip(noKey).title, /没有可用的 YouTube key/);
   assert.match(ytIndexChip({ ...noKey, yt_index: { state: 'local', reason: 'budget_spent' } }).title, /配额已用完/);
