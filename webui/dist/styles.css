@@ -2537,6 +2537,22 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   gap: var(--sp-5);
 }
 
+.settings-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--sp-5);
+  align-items: start;
+}
+
+.settings-websub,
+.settings-lol {
+  margin-top: var(--sp-5);
+}
+
+.settings-lol .settings-dependent-group {
+  max-width: 28rem;
+}
+
 .settings-dependent-group {
   display: none;
   gap: var(--sp-2);
@@ -2569,10 +2585,18 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   width: 100%;
 }
 
+@media (max-width: 560px) {
+  .settings-inline-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
 #youtube-key-status {
   display: grid;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
 }
 #youtube-key-status[hidden] {
   display: none;
@@ -2635,8 +2659,14 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 .discovery-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-2);
+}
+
+@media (max-width: 720px) {
+  .discovery-tiles {
+    grid-template-columns: 1fr;
+  }
 }
 .discovery-tile {
   padding: var(--sp-2) var(--sp-3);

@@ -1214,7 +1214,7 @@
             </h2>
           </div>
           <div class="panel__body">
-            <div class="settings-grid">
+            <div class="settings-keys">
               <div class="control-group">
                 <label for="config-holodex-key">Holodex API Key (可选)</label>
                 <input type="text" id="config-holodex-key" placeholder="补充 Twitch 等外部配信、游戏分类和其他频道的预定">
@@ -1232,44 +1232,44 @@
                   <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
                     rel="noopener noreferrer" class="settings-help-link">获取 key</a>
                 </small>
-                <div id="youtube-key-status" class="settings-help-text" hidden></div>
               </div>
-              <div class="control-group">
-                <div class="settings-inline-pair">
-                  <div>
-                    <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
-                    <input type="text" id="config-websub-callback-url"
-                      placeholder="https://yt.example.com/websub/youtube">
-                  </div>
-                  <div>
-                    <label for="config-websub-port">端口</label>
-                    <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
-                  </div>
+            </div>
+            <div id="youtube-key-status" class="settings-help-text" hidden></div>
+            <div class="control-group settings-websub">
+              <div class="settings-inline-pair">
+                <div>
+                  <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
+                  <input type="text" id="config-websub-callback-url"
+                    placeholder="https://yt.example.com/websub/youtube">
                 </div>
-                <small class="settings-help-text" title="YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 /websub/youtube，不会暴露 Web UI。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。">
-                  用隧道把公网地址转发到此端口，只响应 <code>/websub/youtube</code>；留空关闭
+                <div>
+                  <label for="config-websub-port">端口</label>
+                  <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
+                </div>
+              </div>
+              <small class="settings-help-text" title="YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 /websub/youtube，不会暴露 Web UI。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。">
+                用隧道把公网地址转发到此端口，只响应 <code>/websub/youtube</code>；留空关闭
+              </small>
+            </div>
+            <div class="control-group settings-lol">
+              <label class="toggle-label settings-toggle-row">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-lol-monitor-checkbox">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>启用英雄联盟玩家ID监控</span>
+              </label>
+              <div id="config-riot-api-group" class="settings-dependent-group">
+                <label for="config-riot-key">Riot API Key</label>
+                <input type="text" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
+                <small class="settings-help-text">
+                  获取：<a href="https://developer.riotgames.com/" target="_blank" rel="noopener noreferrer"
+                    class="settings-help-link">developer.riotgames.com</a>
                 </small>
               </div>
-              <div class="control-group">
-                <label class="toggle-label settings-toggle-row">
-                  <span class="toggle-switch">
-                    <input type="checkbox" id="config-lol-monitor-checkbox">
-                    <span class="toggle-slider"></span>
-                  </span>
-                  <span>启用英雄联盟玩家ID监控</span>
-                </label>
-                <div id="config-riot-api-group" class="settings-dependent-group">
-                  <label for="config-riot-key">Riot API Key</label>
-                  <input type="text" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
-                  <small class="settings-help-text">
-                    获取：<a href="https://developer.riotgames.com/" target="_blank" rel="noopener noreferrer"
-                      class="settings-help-link">developer.riotgames.com</a>
-                  </small>
-                </div>
-                <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
-                  <label for="config-lol-interval">LoL 监控间隔 (分钟)</label>
-                  <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
-                </div>
+              <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
+                <label for="config-lol-interval">LoL 监控间隔 (分钟)</label>
+                <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
               </div>
             </div>
           </div>
