@@ -3546,8 +3546,6 @@ export {
   updateHolodexLoginButton,
   updateHolodexModalHint,
   toggleHolodexSkipJwtVerify,
-  toggleHolodexMonitorGate,
-  applyHolodexMonitorGateToggle,
   openHolodexLogin,
   loadHolodexAuthStatus,
   saveHolodexJwt,
