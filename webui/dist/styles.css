@@ -2006,13 +2006,22 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 
   .cluster-node-card-featured > .cluster-node-meta {
     grid-area: meta;
-    grid-template-columns: minmax(200px, 0.85fr) minmax(320px, 2.2fr);
     align-items: stretch;
     gap: var(--sp-4);
   }
 
-  .cluster-node-card-featured > .cluster-node-meta:has(> :only-child) {
-    grid-template-columns: 1fr;
+  /* Two columns are stream | network. :only-child used to collapse the
+     grid, but any extra sibling stole the plot's track. */
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) {
+    grid-template-columns: minmax(200px, 0.85fr) minmax(320px, 2.2fr);
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) > .cluster-node-stream {
+    grid-column: 1;
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) > .cluster-node-network {
+    grid-column: 2;
   }
 
   .cluster-node-card-featured .cluster-node-network {
@@ -2467,7 +2476,11 @@ a.cluster-node-name-link {
 .cluster-yt-index-websub.is-warn { background: var(--warn); }
 
 .cluster-node-yt-index {
-  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-mute);
   font-size: var(--fs-xs);
 }

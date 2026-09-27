@@ -100,7 +100,7 @@ export function ytIndexChip(node) {
   };
 }
 
-// The quiet line on other nodes' cards, or null.
+// Quiet title-row caption on other nodes' cards, or null.
 export function ytIndexPeerLine(node) {
   const state = node?.yt_index;
   if (!state || node.health?.stale) return null;

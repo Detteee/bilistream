@@ -522,6 +522,7 @@ function clusterNodeStructure(node, configVersion) {
     node.node_id, node.name, node.api_url, node.is_local, node.role, node.health,
     node.draining, node.network_unstable, node.ffmpeg_running, node.active_stream,
     node.config_version, configVersion, !!node.self_check, publicStatusNodeId,
+    node.yt_index, node.websub,
   ]);
 }
 
@@ -793,20 +794,23 @@ function createClusterNodeCard(node, clusterConfigVersion) {
   if (indexChip) identity.appendChild(indexChip);
   const selfCheck = createClusterSelfCheck(node);
   if (selfCheck) identity.appendChild(selfCheck);
-  title.append(identity, createClusterHeartbeat(node));
+  title.appendChild(identity);
+  // Title-row caption: putting this in meta sat it in the network column.
+  const peerLine = ytIndexPeerLine(node);
+  if (peerLine) {
+    const line = document.createElement('small');
+    line.className = 'cluster-node-yt-index';
+    line.textContent = peerLine;
+    line.title = peerLine;
+    title.appendChild(line);
+  }
+  title.appendChild(createClusterHeartbeat(node));
 
   const meta = document.createElement('div');
   meta.className = 'cluster-node-meta';
 
   if (stream) {
     meta.appendChild(createClusterNodeStream(stream));
-  }
-  const peerLine = ytIndexPeerLine(node);
-  if (peerLine) {
-    const line = document.createElement('small');
-    line.className = 'cluster-node-yt-index';
-    line.textContent = peerLine;
-    meta.appendChild(line);
   }
   const networkPanel = createClusterNetwork(node);
   if (networkPanel) {
