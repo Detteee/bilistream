@@ -1123,6 +1123,14 @@ input[type="checkbox"] {
   fill: currentColor;
 }
 
+.panel__title-mark {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
 .panel__sub {
   color: var(--text-mute);
   font-size: var(--fs-sm);
