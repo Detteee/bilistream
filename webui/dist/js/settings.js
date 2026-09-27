@@ -170,9 +170,11 @@ async function loadYoutubeKeyStatus() {
     renderHoursChart(null);
     return;
   }
+  const meters = el('div', 'key-meters');
+  meters.append(...keyMeterRows(data).map(renderKeyMeter));
   block.replaceChildren(
     renderPoolHeadline(data),
-    ...keyMeterRows(data).map(renderKeyMeter),
+    meters,
     renderDiscoveryTiles(discoveryTiles(data)),
   );
   block.hidden = false;

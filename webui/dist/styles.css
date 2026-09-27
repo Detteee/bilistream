@@ -3582,7 +3582,9 @@ a.cluster-node-name-link {
 
 #youtube-key-status {
   display: grid;
-  gap: var(--sp-3);
+  grid-template-columns: minmax(18rem, 24rem) minmax(16rem, 1fr);
+  align-items: start;
+  gap: var(--sp-3) var(--sp-5);
   margin-top: var(--sp-5);
   padding-top: var(--sp-4);
   border-top: 1px solid var(--line);
@@ -3592,6 +3594,7 @@ a.cluster-node-name-link {
 }
 .key-pool-headline {
   display: flex;
+  grid-column: 1 / -1;
   align-items: baseline;
   gap: var(--sp-2);
   flex-wrap: wrap;
@@ -3605,9 +3608,15 @@ a.cluster-node-name-link {
 .key-pool-caption {
   color: var(--text-mute);
 }
+.key-meters {
+  display: grid;
+  gap: var(--sp-2);
+  max-width: 24rem;
+  align-content: start;
+}
 .key-meter {
   display: grid;
-  grid-template-columns: 6.5em 1fr auto;
+  grid-template-columns: 5.5em minmax(5rem, 1fr) 7.5em;
   align-items: center;
   gap: var(--sp-2);
 }
@@ -3754,9 +3763,14 @@ a.cluster-node-name-link {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-2);
+  align-self: start;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
+  #youtube-key-status {
+    grid-template-columns: 1fr;
+  }
+
   .discovery-tiles {
     grid-template-columns: 1fr;
   }
