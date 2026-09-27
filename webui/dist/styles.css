@@ -2977,21 +2977,25 @@ a.cluster-node-name-link {
 }
 
 .holodex-stream-duration-twitch .holodex-duration-hover,
+.holodex-stream-duration-niconico .holodex-duration-hover,
 .holodex-stream-duration-radio .holodex-duration-hover {
   display: none;
 }
 
 .holodex-stream-duration-twitch:hover .holodex-duration-text,
+.holodex-stream-duration-niconico:hover .holodex-duration-text,
 .holodex-stream-duration-radio:hover .holodex-duration-text {
   display: none;
 }
 
 .holodex-stream-duration-twitch:hover .holodex-duration-hover,
+.holodex-stream-duration-niconico:hover .holodex-duration-hover,
 .holodex-stream-duration-radio:hover .holodex-duration-hover {
   display: inline;
 }
 
 .holodex-duration-twitch-icon,
+.holodex-duration-niconico-icon,
 .holodex-duration-radio-icon {
   display: inline-flex;
   align-items: center;
@@ -3002,6 +3006,7 @@ a.cluster-node-name-link {
 }
 
 .holodex-duration-twitch-icon svg,
+.holodex-duration-niconico-icon svg,
 .holodex-duration-radio-icon svg {
   width: 15px;
   height: 15px;

@@ -60,15 +60,38 @@ pub(crate) fn filter_holodex_streams(
     filter_holodex_streams_at(streams, allowed_channel_ids, chrono::Utc::now())
 }
 
+/// Roster membership and Holodex avatars use the YouTube channel id, including
+/// Niconico/Twitch placeholders. Upcoming rows are hidden only when *that
+/// platform* is already live, so 激ロー and the official YouTube relay both
+/// stay on the panel.
+fn live_slot_key(stream: &crate::plugins::holodex::HolodexStream) -> String {
+    if stream
+        .link
+        .as_deref()
+        .and_then(crate::plugins::live_id_from_link)
+        .is_some()
+    {
+        return format!("NC:{}", stream.channel.id);
+    }
+    if let Some(login) = stream
+        .link
+        .as_deref()
+        .and_then(parse_twitch_login_from_link)
+    {
+        return format!("TW:{login}");
+    }
+    format!("YT:{}", stream.channel.id)
+}
+
 fn filter_holodex_streams_at(
     streams: Vec<crate::plugins::holodex::HolodexStream>,
     allowed_channel_ids: HashSet<String>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<crate::plugins::holodex::HolodexStream> {
-    let mut live_channels: HashSet<String> = HashSet::new();
+    let mut live_slots: HashSet<String> = HashSet::new();
     for stream in &streams {
         if stream.status == "live" && !holodex_unconfirmed_and_stale(stream, now) {
-            live_channels.insert(stream.channel.id.clone());
+            live_slots.insert(live_slot_key(stream));
         }
     }
 
@@ -89,7 +112,7 @@ fn filter_holodex_streams_at(
                 return true;
             }
 
-            if live_channels.contains(&stream.channel.id) {
+            if live_slots.contains(&live_slot_key(stream)) {
                 return false;
             }
 
@@ -397,22 +420,62 @@ pub(crate) fn parse_twitch_login_from_link(link: &str) -> Option<String> {
     None
 }
 
+fn lookup_platform_id_from_channels(
+    channels_json: &serde_json::Value,
+    youtube_channel_id: &str,
+    platform: &str,
+) -> Option<String> {
+    let channels = channels_json.get("channels")?.as_array()?;
+    for channel in channels {
+        let platforms = channel.get("platforms")?;
+        if platforms.get("youtube").and_then(|v| v.as_str()) != Some(youtube_channel_id) {
+            continue;
+        }
+        let id = platforms.get(platform).and_then(|v| v.as_str())?.trim();
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 pub(crate) fn lookup_twitch_id_from_channels(
     channels_json: &serde_json::Value,
     youtube_channel_id: &str,
 ) -> Option<String> {
-    if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
-        for channel in channels {
-            if let Some(platforms) = channel.get("platforms") {
-                if platforms.get("youtube").and_then(|v| v.as_str()) == Some(youtube_channel_id) {
-                    if let Some(twitch_id) = platforms.get("twitch").and_then(|v| v.as_str()) {
-                        if !twitch_id.is_empty() {
-                            return Some(twitch_id.to_string());
-                        }
-                    }
-                }
-            }
+    lookup_platform_id_from_channels(channels_json, youtube_channel_id, "twitch")
+}
+
+pub(crate) fn lookup_niconico_id_from_channels(
+    channels_json: &serde_json::Value,
+    youtube_channel_id: &str,
+) -> Option<String> {
+    lookup_platform_id_from_channels(channels_json, youtube_channel_id, "niconico")
+        .map(|id| crate::plugins::normalize_channel_id(&id))
+        .filter(|id| !id.is_empty())
+}
+
+fn lookup_niconico_name_from_channels(
+    channels_json: &serde_json::Value,
+    youtube_channel_id: &str,
+) -> Option<String> {
+    let channels = channels_json.get("channels")?.as_array()?;
+    for channel in channels {
+        let platforms = channel.get("platforms")?;
+        if platforms.get("youtube").and_then(|v| v.as_str()) != Some(youtube_channel_id) {
+            continue;
         }
+        let niconico_name = channel
+            .get("niconico_name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let name = channel
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        return niconico_name.or(name).map(str::to_string);
     }
     None
 }
@@ -526,12 +589,116 @@ pub async fn switch_to_holodex_stream(
 
     let channel_name = channel_name.unwrap_or_else(|| payload.channel_id.clone());
 
+    let niconico_live_id = payload
+        .external_link
+        .as_deref()
+        .and_then(crate::plugins::live_id_from_link);
+    let is_niconico = payload
+        .platform
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("niconico"))
+        || niconico_live_id.is_some();
     let is_twitch = payload
         .platform
         .as_deref()
-        .map(|p| p.eq_ignore_ascii_case("twitch"))
-        .unwrap_or(false)
-        || payload.external_link.is_some();
+        .is_some_and(|p| p.eq_ignore_ascii_case("twitch"))
+        || payload
+            .external_link
+            .as_deref()
+            .and_then(parse_twitch_login_from_link)
+            .is_some();
+
+    if is_niconico {
+        let niconico_channel_id =
+            lookup_niconico_id_from_channels(&channels_json, &payload.channel_id)
+                .unwrap_or_default();
+        if niconico_channel_id.is_empty() && niconico_live_id.is_none() {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(
+                    "无法解析 Niconico 频道，请检查 external_link 或 channels.json".to_string(),
+                ),
+            });
+        }
+
+        let niconico_name = lookup_niconico_name_from_channels(&channels_json, &payload.channel_id)
+            .unwrap_or_else(|| channel_name.clone());
+        cfg.niconico.channel_id = niconico_channel_id;
+        cfg.niconico.channel_name = niconico_name;
+        cfg.niconico.live_id = niconico_live_id.clone().unwrap_or_default();
+        if let Some(area_id) = payload.area_id {
+            cfg.niconico.area_v2 = area_id;
+        }
+
+        if let Err(e) = crate::config::save_config(&mut cfg).await {
+            tracing::error!("Failed to save config: {}", e);
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("Failed to save config: {}", e)),
+            });
+        }
+
+        tracing::info!(
+            "Successfully switched to Niconico channel: {} ({})",
+            cfg.niconico.channel_name,
+            cfg.niconico.channel_id
+        );
+
+        if niconico_monitor_reload_needed(&previous_cfg, &cfg) {
+            set_config_updated();
+        }
+        refresh_status_cache_config_from(&cfg);
+
+        let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
+            sync_monitored_config_after_change(&cfg).await
+        } else {
+            String::new()
+        };
+
+        let is_live = payload
+            .status
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase() == "live")
+            .unwrap_or(false);
+        let stream_title = payload.title.unwrap_or_else(|| "未知标题".to_string());
+
+        let mut current_cache = get_status_cache().unwrap_or_default();
+        let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
+            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+
+        current_cache.niconico = Some(NicoStatus {
+            is_live,
+            enable_monitor: cfg.niconico.enable_monitor,
+            title: Some(stream_title),
+            channel_name: cfg.niconico.channel_name.clone(),
+            channel_id: cfg.niconico.channel_id.clone(),
+            live_id: niconico_live_id,
+            scheduled_start: None,
+            quality: cfg.niconico.quality.clone(),
+            area_id: cfg.niconico.area_v2,
+            area_name: nico_area_name,
+            crop_enabled: cfg.niconico.crop.is_some(),
+            ffmpeg_cache_enabled: cfg.niconico.ffmpeg_cache.enabled,
+            ffmpeg_cache_latency_secs: cfg.niconico.ffmpeg_cache.latency_secs,
+        });
+
+        update_status_cache(current_cache);
+
+        return Ok(ApiResponse {
+            success: true,
+            data: Some(()),
+            message: Some(format!(
+                "已切换到 Niconico {} (分区: {}) - {}{}",
+                cfg.niconico.channel_name,
+                cfg.niconico.area_v2,
+                if is_live { "直播中" } else { "预定直播" },
+                sync_message
+            )),
+        });
+    }
 
     if is_twitch {
         let twitch_channel_id = payload
@@ -841,5 +1008,87 @@ mod tests {
         let mut late = stream("late", "upcoming", Some("2026-09-01T14:00:00Z"), None);
         late.yt_confirmed = true;
         assert_eq!(kept(vec![late], now), vec!["late"]);
+    }
+
+    fn niconico_live(id: &str) -> HolodexStream {
+        let mut stream = stream(
+            id,
+            "live",
+            Some("2026-09-02T14:00:00Z"),
+            Some("2026-09-02T14:00:00Z"),
+        );
+        stream.stream_type = "placeholder".to_string();
+        stream.link = Some("https://live.nicovideo.jp/watch/lv351182284".to_string());
+        stream
+    }
+
+    fn niconico_upcoming(id: &str) -> HolodexStream {
+        let mut stream = stream(id, "upcoming", Some("2026-09-02T20:00:00Z"), None);
+        stream.stream_type = "placeholder".to_string();
+        stream.link = Some("https://live.nicovideo.jp/watch/lv351230205".to_string());
+        stream
+    }
+
+    #[test]
+    fn a_niconico_live_and_the_same_channel_s_youtube_live_are_both_kept() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![
+            niconico_live("niconico-lv1"),
+            stream(
+                "yt-live",
+                "live",
+                Some("2026-09-02T14:05:00Z"),
+                Some("2026-09-02T14:05:00Z"),
+            ),
+        ];
+        assert_eq!(kept(streams, now), vec!["niconico-lv1", "yt-live"]);
+    }
+
+    #[test]
+    fn a_niconico_live_does_not_hide_the_same_channel_s_youtube_upcoming() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![
+            niconico_live("niconico-lv1"),
+            stream("yt-up", "upcoming", Some("2026-09-02T20:00:00Z"), None),
+        ];
+        assert_eq!(kept(streams, now), vec!["niconico-lv1", "yt-up"]);
+    }
+
+    #[test]
+    fn a_youtube_live_does_not_hide_the_same_channel_s_niconico_upcoming() {
+        let now = at("2026-09-02T15:00:00Z");
+        let streams = vec![
+            stream(
+                "yt-live",
+                "live",
+                Some("2026-09-02T14:05:00Z"),
+                Some("2026-09-02T14:05:00Z"),
+            ),
+            niconico_upcoming("niconico-lv2"),
+        ];
+        assert_eq!(kept(streams, now), vec!["yt-live", "niconico-lv2"]);
+    }
+
+    #[test]
+    fn niconico_ids_and_names_are_read_from_the_youtube_channel() {
+        let json = serde_json::json!({
+            "channels": [{
+                "name": "ぶいすぽっ!【公式】",
+                "niconico_name": "ぶいすぽ激ロー",
+                "platforms": {
+                    "youtube": "UCvspo",
+                    "niconico": " https://ch.nicovideo.jp/vspo "
+                }
+            }]
+        });
+        assert_eq!(
+            lookup_niconico_id_from_channels(&json, "UCvspo").as_deref(),
+            Some("vspo")
+        );
+        assert_eq!(
+            lookup_niconico_name_from_channels(&json, "UCvspo").as_deref(),
+            Some("ぶいすぽ激ロー")
+        );
+        assert_eq!(lookup_niconico_id_from_channels(&json, "UCother"), None);
     }
 }

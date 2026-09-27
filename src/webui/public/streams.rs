@@ -128,9 +128,17 @@ fn twitch_login_from_link(link: Option<&str>) -> Option<String> {
 }
 
 /// `%转播%` names a platform and a channel, not a video, so two Holodex rows
-/// for the same YouTube channel (or the same Twitch login) are one switch
-/// target. A unique fallback keeps unkeyed rows from grouping together.
+/// for the same YouTube channel (or the same Twitch login, or the same
+/// Niconico program) are one switch target. A unique fallback keeps unkeyed
+/// rows from grouping together.
 fn switch_group_key(stream: &HolodexStream) -> String {
+    if let Some(live_id) = stream
+        .link
+        .as_deref()
+        .and_then(crate::plugins::live_id_from_link)
+    {
+        return format!("NC:{live_id}");
+    }
     if let Some(login) = twitch_login_from_link(stream.link.as_deref()) {
         return format!("TW:{login}");
     }
@@ -218,7 +226,10 @@ impl<'a> ChannelIndex<'a> {
         youtube_channel_id: &str,
         link: Option<&str>,
     ) -> Option<CommandTarget> {
-        let (platform, channel) = if let Some(login) = twitch_login_from_link(link) {
+        let (platform, channel) = if crate::plugins::live_id_from_link(link.unwrap_or("")).is_some()
+        {
+            ("NC", *self.youtube.get(youtube_channel_id)?)
+        } else if let Some(login) = twitch_login_from_link(link) {
             ("TW", *self.twitch.get(&login)?)
         } else {
             ("YT", *self.youtube.get(youtube_channel_id)?)
@@ -963,6 +974,59 @@ mod tests {
         assert!(built[0].switchable);
     }
 
+    /// Holodex does not list Niconico, so overlay rows are placeholders keyed
+    /// by the YouTube channel. `%转播%` still cannot name NC.
+    #[test]
+    fn a_niconico_placeholder_cannot_be_requested() {
+        let mut placeholder = stream("激ロー", None, "UCkamito");
+        placeholder.stream_type = "placeholder".to_string();
+        placeholder.link = Some("https://live.nicovideo.jp/watch/lv351182284".to_string());
+
+        let built = build(vec![placeholder], true, &[]);
+
+        assert!(built[0].is_placeholder);
+        assert!(!built[0].switchable);
+        assert_eq!(built[0].reason, Some(NotSwitchable::UnsupportedPlatform));
+        assert_eq!(built[0].command_platform.as_deref(), Some("NC"));
+        assert_eq!(built[0].command_channel.as_deref(), Some("Kamito"));
+    }
+
+    /// Niconico is a different target than YouTube, even when the overlay
+    /// keys the placeholder by the same YouTube channel.
+    #[test]
+    fn a_niconico_placeholder_does_not_block_youtube_on_the_same_channel() {
+        let mut niconico = stream_on(
+            "niconico-lv351182284",
+            "雑談",
+            None,
+            "UCkamito",
+            "live",
+            None,
+        );
+        niconico.stream_type = "placeholder".to_string();
+        niconico.link = Some("https://live.nicovideo.jp/watch/lv351182284".to_string());
+
+        let built = build(
+            vec![
+                niconico,
+                stream_on(
+                    "morning",
+                    "ランク",
+                    None,
+                    "UCkamito",
+                    "upcoming",
+                    Some("2026-09-02T20:00:00+09:00"),
+                ),
+            ],
+            true,
+            &["雑談"],
+        );
+
+        assert_eq!(built[0].reason, Some(NotSwitchable::UnsupportedPlatform));
+        assert!(built[1].switchable);
+        assert_eq!(built[1].command_platform.as_deref(), Some("YT"));
+    }
+
     #[test]
     fn a_name_the_parser_could_never_match_is_not_offered() {
         // Every candidate has whitespace, which the command parser strips
@@ -1045,6 +1109,17 @@ mod tests {
             thumbnail_for(&placeholder).as_deref(),
             Some("https://static-cdn.jtvnw.net/previews-ttv/live_user_kamito_jp-640x360.jpg")
         );
+    }
+
+    #[test]
+    fn a_niconico_placeholder_has_no_youtube_thumbnail() {
+        let mut placeholder = stream("激ロー", None, "UCkamito");
+        placeholder.id = "niconico-lv351182284".to_string();
+        placeholder.stream_type = "placeholder".to_string();
+        placeholder.link = Some("https://live.nicovideo.jp/watch/lv351182284".to_string());
+        placeholder.thumbnail = None;
+
+        assert_eq!(thumbnail_for(&placeholder), None);
     }
 
     #[test]
@@ -1174,6 +1249,8 @@ mod tests {
             async {
                 let rows = crate::plugins::youtube_rss::merge_discovered(holodex);
                 let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
+                let rows = crate::plugins::twitch_live::overlay(rows);
+                let rows = crate::plugins::niconico_live::overlay(rows);
                 crate::webui::api::filter_holodex_streams(
                     rows,
                     ["UCkamito", "UCnazuna"]

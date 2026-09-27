@@ -501,6 +501,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             bilistream::plugins::youtube::take_monitor_wake(channel);
         }
         bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
+        bilistream::plugins::niconico_live::take_monitor_wake(&cfg.niconico.channel_id);
 
         if let Some(reason) = cluster::local_monitoring_block_reason(&cfg) {
             let (_, last_reason) =
@@ -757,9 +758,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             None
         };
         let (nico_is_live, nico_title, nico_scheduled_start, nico_stream_id) =
-            if let Some(ref client) = nico_live {
+            if nico_live.is_some() {
                 let (is_live, _, title, _, scheduled_start, stream_id) =
-                    client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS);
+                    bilistream::plugins::niconico_live::monitor_status(&cfg.niconico, false)
+                        .await
+                        .unwrap_or(OFFLINE_SOURCE_STATUS);
                 (is_live, title, scheduled_start, stream_id)
             } else {
                 (false, None, None, None)
@@ -1626,6 +1629,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 if bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id) {
                     tracing::info!("🔔 Twitch 显示目标频道已开播，立即检查");
+                    continue 'outer;
+                }
+                if bilistream::plugins::niconico_live::take_monitor_wake(&cfg.niconico.channel_id) {
+                    tracing::info!("🔔 Niconico 显示目标频道已开播，立即检查");
                     continue 'outer;
                 }
 

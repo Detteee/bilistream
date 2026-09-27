@@ -206,6 +206,9 @@ function streamStartMs(stream, isLive) {
 
 function placeholderKind(stream) {
   const link = (stream.link || '').toLowerCase();
+  if (link.includes('nicovideo.jp')) {
+    return 'niconico';
+  }
   if (stream.placeholder_type === 'twitch' || link.includes('twitch.tv')) {
     return 'twitch';
   }
@@ -237,12 +240,21 @@ function createPlayIcon() {
 
 function createPlaceholderIcon(kind) {
   const wrapper = document.createElement('span');
-  wrapper.className = kind === 'twitch'
-    ? 'holodex-duration-twitch-icon'
-    : 'holodex-duration-radio-icon';
-  wrapper.appendChild(kind === 'twitch'
-    ? createSvgIcon('0 0 24 24', 'M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z')
-    : createSvgIcon('0 0 24 24', 'M12 10C10.9 10 10 10.9 10 12S10.9 14 12 14 14 13.1 14 12 13.1 10 12 10M18 12C18 8.7 15.3 6 12 6S6 8.7 6 12C6 14.2 7.2 16.1 9 17.2L10 15.5C8.8 14.8 8 13.5 8 12.1C8 9.9 9.8 8.1 12 8.1S16 9.9 16 12.1C16 13.6 15.2 14.9 14 15.5L15 17.2C16.8 16.2 18 14.2 18 12M12 2C6.5 2 2 6.5 2 12C2 15.7 4 18.9 7 20.6L8 18.9C5.6 17.5 4 14.9 4 12C4 7.6 7.6 4 12 4S20 7.6 20 12C20 15 18.4 17.5 16 18.9L17 20.6C20 18.9 22 15.7 22 12C22 6.5 17.5 2 12 2Z'));
+  wrapper.className = kind === 'niconico'
+    ? 'holodex-duration-niconico-icon'
+    : kind === 'twitch'
+      ? 'holodex-duration-twitch-icon'
+      : 'holodex-duration-radio-icon';
+  if (kind === 'niconico') {
+    wrapper.appendChild(createSvgIcon(
+      '0 0 24 24',
+      'M.4787 7.534v12.1279A2.0213 2.0213 0 0 0 2.5 21.6832h2.3888l1.323 2.0948a.4778.4778 0 0 0 .4043.2205.4778.4778 0 0 0 .441-.2205l1.323-2.0948h6.9828l1.323 2.0948a.4778.4778 0 0 0 .441.2205c.1838 0 .3308-.0735.4043-.2205l1.323-2.0948h2.6462a2.0213 2.0213 0 0 0 2.0213-2.0213V7.5339a2.0213 2.0213 0 0 0-2.0213-1.9845h-7.681l4.4468-4.4469L17.1637 0l-5.1452 5.1452L6.8 0 5.6973 1.1025l4.4102 4.4102H2.5367a2.0213 2.0213 0 0 0-2.058 2.058z',
+    ));
+  } else if (kind === 'twitch') {
+    wrapper.appendChild(createSvgIcon('0 0 24 24', 'M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z'));
+  } else {
+    wrapper.appendChild(createSvgIcon('0 0 24 24', 'M12 10C10.9 10 10 10.9 10 12S10.9 14 12 14 14 13.1 14 12 13.1 10 12 10M18 12C18 8.7 15.3 6 12 6S6 8.7 6 12C6 14.2 7.2 16.1 9 17.2L10 15.5C8.8 14.8 8 13.5 8 12.1C8 9.9 9.8 8.1 12 8.1S16 9.9 16 12.1C16 13.6 15.2 14.9 14 15.5L15 17.2C16.8 16.2 18 14.2 18 12M12 2C6.5 2 2 6.5 2 12C2 15.7 4 18.9 7 20.6L8 18.9C5.6 17.5 4 14.9 4 12C4 7.6 7.6 4 12 4S20 7.6 20 12C20 15 18.4 17.5 16 18.9L17 20.6C20 18.9 22 15.7 22 12C22 6.5 17.5 2 12 2Z'));
+  }
   return wrapper;
 }
 
@@ -256,9 +268,11 @@ function appendDurationText(duration, text) {
 function createPlaceholderDurationOverlay(stream, isLive) {
   const kind = placeholderKind(stream);
   const duration = document.createElement('div');
-  duration.className = kind === 'twitch'
-    ? 'holodex-stream-duration holodex-stream-duration-twitch'
-    : 'holodex-stream-duration holodex-stream-duration-radio';
+  duration.className = kind === 'niconico'
+    ? 'holodex-stream-duration holodex-stream-duration-niconico'
+    : kind === 'twitch'
+      ? 'holodex-stream-duration holodex-stream-duration-twitch'
+      : 'holodex-stream-duration holodex-stream-duration-radio';
 
   const startMs = streamStartMs(stream, isLive);
   if (isLive && startMs) {
@@ -272,7 +286,7 @@ function createPlaceholderDurationOverlay(stream, isLive) {
 
   const hover = document.createElement('span');
   hover.className = 'holodex-duration-hover';
-  hover.textContent = kind === 'twitch' ? '外部配信' : '外部直播';
+  hover.textContent = kind === 'niconico' ? 'ニコニコ' : kind === 'twitch' ? '外部配信' : '外部直播';
   duration.append(hover, createPlaceholderIcon(kind));
   return duration;
 }

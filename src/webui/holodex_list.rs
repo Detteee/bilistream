@@ -2,11 +2,12 @@
 //!
 //! Each list (the roster's channels, or the Holodex account's favorites) is
 //! rebuilt from the last Holodex rows, the rows discovery found and recently
-//! live rows, corrected by the `videos.list` store and by Twitch GQL. YouTube
-//! and Twitch GQL drive the updates: discovery, the store, Twitch liveness and
-//! config commits call `wake()`, and a rebuild that changes the panel's
-//! content publishes `events::HOLODEX`. Holodex is a one-minute backstop. A
-//! list is kept only while someone reads it (a 10-min lease).
+//! live rows, corrected by the `videos.list` store, Twitch GQL, and Niconico
+//! channel listing pages. YouTube, Twitch GQL and Niconico listings drive the
+//! updates: discovery, the store, Twitch and Niconico liveness and config
+//! commits call `wake()`, and a rebuild that changes the panel's content
+//! publishes `events::HOLODEX`. Holodex is a one-minute backstop. A list is
+//! kept only while someone reads it (a 10-min lease).
 
 use super::api::{filter_holodex_streams, map_holodex_streams_with_area};
 use super::events;
@@ -326,6 +327,7 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
     let rows = crate::plugins::youtube_rss::merge_discovered(rows);
     let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
     let rows = crate::plugins::twitch_live::overlay(rows);
+    let rows = crate::plugins::niconico_live::overlay(rows);
     let rows = filter_holodex_streams(rows, allowed);
 
     // Discovered rows come in hash order; compare by ID so order alone is no change.
@@ -353,6 +355,7 @@ pub(crate) async fn current(kind: ListKind, force: bool) -> Result<Arc<ListSnaps
     let was_leased = list.extend_lease(Instant::now());
     if !was_leased {
         crate::plugins::twitch_live::wake();
+        crate::plugins::niconico_live::wake();
     }
     if !force && was_leased {
         if let Some(snapshot) = list.snapshot() {
@@ -367,8 +370,8 @@ pub(crate) fn wake() {
     WAKE.notify_one();
 }
 
-/// Whether either list is still within its lease; Twitch GQL polls the roster
-/// only while someone is reading a list.
+/// Whether either list is still within its lease; Twitch GQL and Niconico
+/// listing pages poll the roster only while someone is reading a list.
 pub(crate) fn any_leased() -> bool {
     let now = Instant::now();
     leased(CHANNELS.lease(), now) || leased(FAVORITES.lease(), now)

@@ -77,10 +77,11 @@ pub fn normalize_live_id(input: &str) -> String {
         return String::new();
     }
 
-    let last = trimmed
-        .rsplit(['/', '?'])
+    let path = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+    let last = path
+        .rsplit('/')
         .find(|part| !part.is_empty())
-        .unwrap_or(trimmed);
+        .unwrap_or(path);
 
     if last.starts_with("lv") {
         last.to_string()
@@ -120,6 +121,15 @@ pub fn watch_url(live_id: &str) -> String {
         "https://live.nicovideo.jp/watch/{}",
         normalize_live_id(live_id)
     )
+}
+
+/// The `lv…` id of a `live.nicovideo.jp/watch/` link.
+pub fn live_id_from_link(link: &str) -> Option<String> {
+    if !link.contains("nicovideo.jp") {
+        return None;
+    }
+    let id = normalize_live_id(link);
+    id.starts_with("lv").then_some(id)
 }
 
 pub fn channel_live_url(channel_id: &str) -> String {
@@ -260,14 +270,14 @@ pub(crate) fn user_session_from_cookies_file(path: &Path) -> Result<String, Box<
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ChannelProgram {
-    live_id: String,
-    title: Option<String>,
-    start_at: Option<DateTime<Local>>,
+pub(crate) struct ChannelProgram {
+    pub(crate) live_id: String,
+    pub(crate) title: Option<String>,
+    pub(crate) start_at: Option<DateTime<Local>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ChannelLiveListing {
+pub(crate) enum ChannelLiveListing {
     OnAir(ChannelProgram),
     Scheduled(ChannelProgram),
     Idle,
@@ -438,7 +448,7 @@ fn niconico_page_request(
         .version(reqwest::Version::HTTP_11))
 }
 
-async fn fetch_channel_listing(
+pub(crate) async fn fetch_channel_listing(
     channel_id: &str,
     proxy: Option<&str>,
 ) -> Result<ChannelLiveListing, Box<dyn Error>> {
@@ -703,8 +713,22 @@ mod tests {
             normalize_live_id("https://live.nicovideo.jp/watch/lv351182284"),
             "lv351182284"
         );
+        assert_eq!(
+            normalize_live_id("https://live.nicovideo.jp/watch/lv351182284?ref=1"),
+            "lv351182284"
+        );
         assert_eq!(normalize_live_id(" lv123 "), "lv123");
         assert_eq!(normalize_live_id(""), "");
+    }
+
+    #[test]
+    fn live_id_from_link_needs_a_nicovideo_watch_url() {
+        assert_eq!(
+            live_id_from_link("https://live.nicovideo.jp/watch/lv351182284?ref=1").as_deref(),
+            Some("lv351182284")
+        );
+        assert_eq!(live_id_from_link("https://www.twitch.tv/vspo"), None);
+        assert_eq!(live_id_from_link("https://ch.nicovideo.jp/vspo/live"), None);
     }
 
     #[test]

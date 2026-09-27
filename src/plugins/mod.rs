@@ -6,6 +6,7 @@ pub mod ffmpeg;
 pub mod holodex;
 pub mod http;
 pub mod niconico;
+pub mod niconico_live;
 pub mod priority;
 pub mod riot;
 pub mod twitch;
