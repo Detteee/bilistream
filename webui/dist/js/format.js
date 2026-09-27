@@ -131,18 +131,15 @@ export function formatWebSubStatus(websub) {
   return parts.join(' · ');
 }
 
-// Rows for the key meters: share of the daily budget used, and the even-spend
-// pace for this point of the Pacific day (the tick on each bar).
+// Rows for the key meters: share of the daily budget used.
 export function keyMeterRows(data) {
   const budget = data?.budget_per_key || 0;
-  const pace = Math.min(1, Math.max(0, 1 - (data?.day_left ?? 1)));
   return (Array.isArray(data?.keys) ? data.keys : []).map(key => {
     const used = Number.isFinite(key.used) ? key.used : 0;
     return {
       label: key.fingerprint,
       state: key.state,
       fraction: key.state === 'exhausted' ? 1 : budget ? Math.min(1, used / budget) : 0,
-      pace,
       value: key.state === 'usable' ? `${formatCount(used)} / ${formatCount(budget)}` : formatKeyState(key).split(' · ')[1],
     };
   });

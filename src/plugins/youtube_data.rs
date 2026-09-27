@@ -14,6 +14,7 @@
 use super::holodex::HolodexStream;
 use super::http::{pooled_client, response_json_limited};
 use crate::config::load_config;
+use chrono::{Datelike, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -145,18 +146,56 @@ pub fn overlay(
         .collect()
 }
 
-/// Day index that rolls over at midnight Pacific. Uses PST all year: during
-/// daylight time this resets an hour after Google does, which only makes the
-/// local count more conservative.
+/// Hours to subtract from UTC to get US Pacific local time. PDT is 7, PST is 8.
+/// DST: 10:00 UTC on the second Sunday of March through 09:00 UTC on the first
+/// Sunday of November (02:00 local, which is Google's "Pacific Time").
+fn pacific_offset_hours(now: chrono::DateTime<chrono::Utc>) -> i64 {
+    let year = now.year();
+    if now >= us_pacific_dst_switch(year, 3, 2, 10) && now < us_pacific_dst_switch(year, 11, 1, 9) {
+        7
+    } else {
+        8
+    }
+}
+
+fn us_pacific_dst_switch(
+    year: i32,
+    month: u32,
+    nth_sunday: u32,
+    hour_utc: u32,
+) -> chrono::DateTime<chrono::Utc> {
+    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1).expect("month");
+    let to_sunday = (7 - first.weekday().num_days_from_sunday()) % 7;
+    let date = first + chrono::Days::new(u64::from(to_sunday + 7 * (nth_sunday - 1)));
+    chrono::Utc.from_utc_datetime(&date.and_hms_opt(hour_utc, 0, 0).expect("hour"))
+}
+
+fn pacific_local_date(now: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDate {
+    (now - chrono::Duration::hours(pacific_offset_hours(now))).date_naive()
+}
+
+/// UTC instant of midnight Pacific on `date`.
+fn pacific_midnight(date: chrono::NaiveDate) -> chrono::DateTime<chrono::Utc> {
+    let midnight = date.and_hms_opt(0, 0, 0).expect("midnight");
+    for hours in [7_i64, 8] {
+        let utc = chrono::Utc.from_utc_datetime(&(midnight + chrono::Duration::hours(hours)));
+        if pacific_offset_hours(utc) == hours && pacific_local_date(utc) == date {
+            return utc;
+        }
+    }
+    chrono::Utc.from_utc_datetime(&(midnight + chrono::Duration::hours(8)))
+}
+
+/// Day index that rolls over at midnight Pacific Time, including DST.
 fn pacific_day(now: chrono::DateTime<chrono::Utc>) -> i64 {
-    (now - chrono::Duration::hours(8))
+    (now - chrono::Duration::hours(pacific_offset_hours(now)))
         .timestamp()
         .div_euclid(86_400)
 }
 
 /// Share of the current Pacific day (as `pacific_day` counts it) still ahead.
 pub(crate) fn pacific_day_left(now: chrono::DateTime<chrono::Utc>) -> f64 {
-    let elapsed = (now - chrono::Duration::hours(8))
+    let elapsed = (now - chrono::Duration::hours(pacific_offset_hours(now)))
         .timestamp()
         .rem_euclid(86_400);
     1.0 - elapsed as f64 / 86_400.0
@@ -164,8 +203,7 @@ pub(crate) fn pacific_day_left(now: chrono::DateTime<chrono::Utc>) -> f64 {
 
 /// When `pacific_day` next rolls over, i.e. when the local counts reset.
 fn pacific_day_end(now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
-    let start = (pacific_day(now) + 1) * 86_400 + 8 * 3_600;
-    chrono::DateTime::from_timestamp(start, 0).unwrap_or(now)
+    pacific_midnight(pacific_local_date(now) + chrono::Days::new(1))
 }
 
 /// Which key pays for a call. Each key has its own daily budget; the one with
@@ -322,14 +360,20 @@ pub(crate) fn budget_remaining_fraction(keys: &[String]) -> f64 {
 }
 
 pub(crate) const MAX_STRETCH: u32 = 8;
+/// Remaining-budget share the pool may trail the day by before intervals
+/// stretch. The first videos.list after Pacific midnight spends a few units
+/// while `day_left` is still ~1, so without slack `ceil` jumps to 2× and then
+/// flips back as the clock catches up. 1% is about 15 minutes of even pace.
+const STRETCH_SLACK: f64 = 0.01;
 
 /// Interval multiplier: 1 while the pool has at least as large a share of its
-/// daily budget left as of the day, otherwise enough to fall back in step.
+/// daily budget left as of the day (plus a small slack), otherwise enough to
+/// fall back in step.
 pub(crate) fn stretch(remaining: f64, day_left: f64) -> u32 {
-    if remaining >= day_left {
-        1
-    } else if remaining <= 0.0 {
+    if remaining <= 0.0 {
         MAX_STRETCH
+    } else if remaining + STRETCH_SLACK >= day_left {
+        1
     } else {
         ((day_left / remaining).ceil() as u32).min(MAX_STRETCH)
     }
@@ -347,7 +391,6 @@ pub(crate) fn key_pool_status(keys: &[String]) -> serde_json::Value {
         "keys": keys,
         "budget_per_key": DAILY_UNIT_BUDGET,
         "remaining_fraction": remaining,
-        "day_left": pacific_day_left(now),
         "resets_at": pacific_day_end(now).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     })
 }
@@ -922,6 +965,18 @@ mod tests {
         assert_eq!(stretch(0.1, 0.5), 5);
         assert_eq!(stretch(0.01, 0.5), MAX_STRETCH);
         assert_eq!(stretch(0.0, 0.5), MAX_STRETCH);
+        // 47 units across 3 keys, 6s after Pacific midnight: the first
+        // videos.list pass after local counts zero. Slack keeps this at 1×.
+        let remaining = 1.0 - 47.0 / (3.0 * f64::from(DAILY_UNIT_BUDGET));
+        let day_left = 1.0 - 6.0 / 86_400.0;
+        assert_eq!(stretch(remaining, day_left), 1);
+        // 16:00 in China during PDT: Google's day is already an hour in.
+        assert_eq!(stretch(remaining, 1.0 - 3_600.0 / 86_400.0), 1);
+        assert_eq!(
+            stretch(0.8, 1.0 - 60.0 / 86_400.0),
+            2,
+            "20% of the pool in the first minute is actually ahead"
+        );
     }
 
     #[test]
@@ -992,24 +1047,54 @@ mod tests {
     }
 
     #[test]
-    fn the_pacific_day_rolls_over_at_eight_utc() {
+    fn the_pacific_day_follows_us_dst() {
         let at = |s: &str| {
             chrono::DateTime::parse_from_rfc3339(s)
                 .unwrap()
                 .with_timezone(&chrono::Utc)
         };
-        let before = pacific_day(at("2026-09-24T07:59:59Z"));
+        // Late September is PDT: Google resets at 07:00 UTC (15:00 in China).
+        let before = pacific_day(at("2026-09-24T06:59:59Z"));
+        assert_eq!(pacific_day(at("2026-09-24T07:00:00Z")), before + 1);
         assert_eq!(pacific_day(at("2026-09-24T08:00:00Z")), before + 1);
-        assert_eq!(pacific_day(at("2026-09-24T00:00:00Z")), before);
-        assert_eq!(pacific_day_left(at("2026-09-24T08:00:00Z")), 1.0);
-        assert_eq!(pacific_day_left(at("2026-09-24T20:00:00Z")), 0.5);
+        assert_eq!(pacific_day_left(at("2026-09-24T07:00:00Z")), 1.0);
         assert_eq!(
-            pacific_day_end(at("2026-09-24T07:59:59Z")),
-            at("2026-09-24T08:00:00Z")
+            pacific_day_left(at("2026-09-24T08:00:00Z")),
+            1.0 - 3_600.0 / 86_400.0
+        );
+        assert_eq!(pacific_day_left(at("2026-09-24T19:00:00Z")), 0.5);
+        assert_eq!(
+            pacific_day_end(at("2026-09-24T06:59:59Z")),
+            at("2026-09-24T07:00:00Z")
         );
         assert_eq!(
             pacific_day_end(at("2026-09-24T08:00:00Z")),
-            at("2026-09-25T08:00:00Z")
+            at("2026-09-25T07:00:00Z")
+        );
+
+        let jan = pacific_day(at("2026-01-15T07:59:59Z"));
+        assert_eq!(pacific_day(at("2026-01-15T08:00:00Z")), jan + 1);
+        assert_eq!(pacific_day_left(at("2026-01-15T08:00:00Z")), 1.0);
+        assert_eq!(
+            pacific_day_end(at("2026-01-15T08:00:00Z")),
+            at("2026-01-16T08:00:00Z")
+        );
+
+        assert_eq!(
+            pacific_day_end(at("2026-03-07T08:00:00Z")),
+            at("2026-03-08T08:00:00Z")
+        );
+        assert_eq!(
+            pacific_day_end(at("2026-03-08T08:00:00Z")),
+            at("2026-03-09T07:00:00Z")
+        );
+        assert_eq!(
+            pacific_day_end(at("2026-10-31T07:00:00Z")),
+            at("2026-11-01T07:00:00Z")
+        );
+        assert_eq!(
+            pacific_day_end(at("2026-11-01T07:00:00Z")),
+            at("2026-11-02T08:00:00Z")
         );
     }
 }

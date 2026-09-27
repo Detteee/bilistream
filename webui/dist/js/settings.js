@@ -182,7 +182,7 @@ function renderPoolHeadline(data) {
   row.append(el('span', 'key-pool-left', `${left}%`), el('span', 'key-pool-caption', formatKeyPoolSummary(data)));
   return row;
 }
-// One bar per key: fill = share of today's budget used, tick = even-spend pace.
+// One bar per key: fill = share of today's budget used.
 function renderKeyMeter(meter) {
   const row = el('div', `key-meter key-meter--${meter.state}`);
   row.title = `${meter.label}: ${meter.value}`;
@@ -194,10 +194,7 @@ function renderKeyMeter(meter) {
   track.setAttribute('aria-valuenow', String(Math.round(meter.fraction * 100)));
   const fill = el('div', 'key-meter-fill');
   fill.style.width = `${meter.fraction * 100}%`;
-  const pace = el('div', 'key-meter-pace');
-  pace.style.left = `${meter.pace * 100}%`;
-  pace.title = '按时间进度应已用到这里';
-  track.append(fill, pace);
+  track.append(fill);
   row.append(el('span', 'key-meter-label', meter.label), track, el('span', 'key-meter-value', meter.value));
   return row;
 }

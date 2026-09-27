@@ -334,12 +334,11 @@ test('key meters and discovery tiles carry state as label, not color alone', asy
       { fingerprint: '0f9e8d', used: 0, state: 'rejected' },
     ],
     budget_per_key: 9000,
-    day_left: 0.75,
   });
-  assert.deepEqual(rows.map(r => [r.fraction, r.pace, r.value]), [
-    [0.5, 0.25, '4,500 / 9,000'],
-    [1, 0.25, '今日额度已用完'],
-    [0, 0.25, '被拒绝（检查 key 或 API 是否启用）'],
+  assert.deepEqual(rows.map(r => [r.fraction, r.value]), [
+    [0.5, '4,500 / 9,000'],
+    [1, '今日额度已用完'],
+    [0, '被拒绝（检查 key 或 API 是否启用）'],
   ]);
 
   const playlist = { on: true, interval_secs: 268, stretch: 1, rss_down: false, websub_slowed: true };

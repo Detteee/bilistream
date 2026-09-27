@@ -2632,7 +2632,6 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   font-variant-numeric: tabular-nums;
 }
 .key-meter-track {
-  position: relative;
   height: 8px;
   border-radius: var(--r-pill);
   background: var(--line);
@@ -2641,15 +2640,6 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   height: 100%;
   border-radius: var(--r-pill);
   background: var(--brand);
-}
-.key-meter-pace {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: var(--text-dim);
 }
 .key-meter--exhausted .key-meter-fill {
   background: var(--warn);
