@@ -2442,6 +2442,36 @@ a.cluster-node-name-link {
   color: var(--brand-2);
 }
 
+.cluster-badge-yt-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-color: color-mix(in srgb, var(--brand) 44%, transparent);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  color: var(--brand);
+}
+
+.cluster-badge-yt-index.is-warn {
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.cluster-yt-index-websub {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.cluster-yt-index-websub.is-ok { background: var(--ok); }
+.cluster-yt-index-websub.is-warn { background: var(--warn); }
+
+.cluster-node-yt-index {
+  display: block;
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+}
+
 .cluster-label-with-icon {
   display: inline-flex;
   align-items: center;

@@ -42,6 +42,44 @@ impl YtIndexRole {
 }
 
 static ROLE: RwLock<YtIndexRole> = RwLock::new(YtIndexRole::Standalone);
+/// What this node's heartbeat says about its role, set with `ROLE`.
+static NODE_STATE: RwLock<Option<super::types::YtIndexNodeState>> = RwLock::new(None);
+
+/// How this node answers YouTube, for its heartbeat.
+pub(crate) fn node_state() -> Option<super::types::YtIndexNodeState> {
+    recover_read_lock(&NODE_STATE, "YouTube index node state").clone()
+}
+
+/// The panel's view of a role. A standalone public-status node says why it
+/// cannot serve; any other standalone node lost the index.
+fn describe_role(
+    cfg: &Config,
+    role: &YtIndexRole,
+    followed: Option<&str>,
+    has_keys: bool,
+) -> Option<super::types::YtIndexNodeState> {
+    use super::types::YtIndexNodeState::{Follows, Index, Local};
+    let public = &cfg.cluster.public_status;
+    if !cfg.cluster.enabled || !public.is_enabled() {
+        return None;
+    }
+    Some(match role {
+        YtIndexRole::Owner => Index,
+        YtIndexRole::Peer(_) => Follows {
+            node: followed.unwrap_or_default().to_string(),
+        },
+        YtIndexRole::Standalone => Local {
+            reason: if !public.runs_on(&cfg.cluster.node_id) {
+                "index_down"
+            } else if has_keys {
+                "budget_spent"
+            } else {
+                "no_key"
+            }
+            .to_string(),
+        },
+    })
+}
 
 #[cfg(test)]
 tokio::task_local! {
@@ -376,6 +414,12 @@ pub(crate) async fn run_yt_index() {
         worker.note(&role);
         let peer = matches!(role, YtIndexRole::Peer(_));
         crate::plugins::youtube_websub::set_enabled(websub_allowed(&cfg, &role));
+        *recover_write_lock(&NODE_STATE, "YouTube index node state") = describe_role(
+            &cfg,
+            &role,
+            worker.copy.as_ref().map(|copy| copy.owner.as_str()),
+            !cfg.youtube_api_keys().is_empty(),
+        );
         *recover_write_lock(&ROLE, "YouTube index role") = role;
         // `main`'s store worker is the one refresher (and publishes on the
         // public-status node); a peer keeps no store of its own.
@@ -413,6 +457,80 @@ mod tests {
         node.last_seen = Some(last_seen);
         node.yt_index_version = version.map(str::to_string);
         node
+    }
+
+    #[test]
+    fn the_panel_state_says_who_answers_and_why_not() {
+        use super::super::types::YtIndexNodeState::{Follows, Index, Local};
+        let local = |reason: &str| {
+            Some(Local {
+                reason: reason.to_string(),
+            })
+        };
+        let mut peer = peer_config("peer");
+        assert_eq!(
+            describe_role(&peer, &YtIndexRole::Owner, None, true),
+            Some(Index)
+        );
+        assert_eq!(
+            describe_role(&peer, &index(Vec::new(), Vec::new()), Some("owner"), false),
+            Some(Follows {
+                node: "owner".to_string()
+            })
+        );
+        assert_eq!(
+            describe_role(&peer, &YtIndexRole::Standalone, None, true),
+            local("index_down")
+        );
+
+        let mut public = peer_config("owner");
+        public.cluster.public_status.node_id = "owner".to_string();
+        assert_eq!(
+            describe_role(&public, &YtIndexRole::Standalone, None, false),
+            local("no_key")
+        );
+        assert_eq!(
+            describe_role(&public, &YtIndexRole::Standalone, None, true),
+            local("budget_spent")
+        );
+
+        peer.cluster.enabled = false;
+        assert_eq!(
+            describe_role(&peer, &YtIndexRole::Owner, None, true),
+            None,
+            "no cluster"
+        );
+    }
+
+    #[test]
+    fn the_node_state_round_trips_and_is_absent_when_unset() {
+        use super::super::types::YtIndexNodeState;
+        let mut node = owner(None, 1);
+        assert!(serde_json::to_value(&node)
+            .unwrap()
+            .get("yt_index")
+            .is_none());
+        for state in [
+            YtIndexNodeState::Index,
+            YtIndexNodeState::Follows {
+                node: "ny".to_string(),
+            },
+            YtIndexNodeState::Local {
+                reason: "no_key".to_string(),
+            },
+        ] {
+            node.yt_index = Some(state.clone());
+            let value = serde_json::to_value(&node).unwrap();
+            let parsed: ClusterNodeSnapshot = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed.yt_index, Some(state));
+        }
+        let value = serde_json::json!({ "state": "follows", "node": "ny" });
+        assert_eq!(
+            serde_json::from_value::<YtIndexNodeState>(value).unwrap(),
+            YtIndexNodeState::Follows {
+                node: "ny".to_string()
+            }
+        );
     }
 
     #[test]

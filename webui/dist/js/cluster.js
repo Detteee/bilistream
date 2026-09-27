@@ -5,7 +5,7 @@ import { createSelectOption, state, syncMonitorTogglesWithClusterRole } from './
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { createClusterNetwork, updateClusterNetwork } from './cluster-network.js';
-import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason } from './cluster-health.js';
+import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, ytIndexChip, ytIndexPeerLine } from './cluster-health.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -760,6 +760,8 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   if (tileChip) {
     head.appendChild(tileChip);
   }
+  const tileIndexChip = createYtIndexChip(node);
+  if (tileIndexChip) head.appendChild(tileIndexChip);
 
   const seen = createClusterSeenValue(node);
   seen.classList.add('cluster-node-tile-seen');
@@ -787,6 +789,8 @@ function createClusterNodeCard(node, clusterConfigVersion) {
   if (titleChip) {
     identity.appendChild(titleChip);
   }
+  const indexChip = createYtIndexChip(node);
+  if (indexChip) identity.appendChild(indexChip);
   const selfCheck = createClusterSelfCheck(node);
   if (selfCheck) identity.appendChild(selfCheck);
   title.append(identity, createClusterHeartbeat(node));
@@ -796,6 +800,13 @@ function createClusterNodeCard(node, clusterConfigVersion) {
 
   if (stream) {
     meta.appendChild(createClusterNodeStream(stream));
+  }
+  const peerLine = ytIndexPeerLine(node);
+  if (peerLine) {
+    const line = document.createElement('small');
+    line.className = 'cluster-node-yt-index';
+    line.textContent = peerLine;
+    meta.appendChild(line);
   }
   const networkPanel = createClusterNetwork(node);
   if (networkPanel) {
@@ -816,6 +827,22 @@ function createPublicStatusChip(node) {
   chip.className = 'cluster-badge cluster-badge-public-status';
   chip.textContent = '状态页';
   chip.title = '此节点提供公开状态页';
+  return chip;
+}
+
+// Whether this node answers YouTube for the cluster (or should and cannot).
+function createYtIndexChip(node) {
+  const model = ytIndexChip(node);
+  if (!model) return null;
+  const chip = document.createElement('span');
+  chip.className = `cluster-badge cluster-badge-yt-index${model.warn ? ' is-warn' : ''}`;
+  chip.textContent = model.text;
+  chip.title = model.title;
+  if (model.websub) {
+    const dot = document.createElement('span');
+    dot.className = `cluster-yt-index-websub is-${model.websub}`;
+    chip.appendChild(dot);
+  }
   return chip;
 }
 

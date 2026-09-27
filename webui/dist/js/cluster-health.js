@@ -65,3 +65,46 @@ function selfCheckFailureMessage(failure) {
     default: return '无法通过对外 URL 访问本节点';
   }
 }
+
+const YT_INDEX_REASONS = {
+  no_key: '没有可用的 YouTube key',
+  budget_spent: '今日 YouTube 配额已用完',
+};
+
+// The public-status node's YouTube index chip: { text, title, warn, websub }
+// or null. websub is 'ok' / 'warn' while it subscribes, else null. An offline
+// node already reads as offline, so it gets no chip.
+export function ytIndexChip(node) {
+  const state = node?.yt_index;
+  if (!state || node.health?.stale) return null;
+  if (state.state === 'index') {
+    const websub = node.websub;
+    const lines = ['为集群提供 YouTube 查询'];
+    if (websub) {
+      lines.push(`WebSub 订阅：已验证 ${websub.verified} · 等待 ${websub.pending} · 失败 ${websub.failed}`);
+    }
+    return {
+      text: 'YT 索引',
+      title: lines.join('\n'),
+      warn: false,
+      websub: websub ? (websub.pending || websub.failed ? 'warn' : 'ok') : null,
+    };
+  }
+  const reason = YT_INDEX_REASONS[state.state === 'local' ? state.reason : ''];
+  if (!reason) return null;
+  return {
+    text: 'YT 索引 ⚠',
+    title: `${reason}，未为集群提供 YouTube 查询\n其他节点改用各自的 key；没有 key 的节点只用 Holodex`,
+    warn: true,
+    websub: null,
+  };
+}
+
+// The quiet line on other nodes' cards, or null.
+export function ytIndexPeerLine(node) {
+  const state = node?.yt_index;
+  if (!state || node.health?.stale) return null;
+  if (state.state === 'follows') return `跟随 ${state.node} 的 YouTube 索引`;
+  if (state.state === 'local' && state.reason === 'index_down') return 'YouTube 本地查询（索引节点不可用）';
+  return null;
+}

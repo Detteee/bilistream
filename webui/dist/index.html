@@ -1531,7 +1531,7 @@
                 <label for="config-youtube-api-key">YouTube Data API Key (可选)</label>
                 <textarea id="config-youtube-api-key" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
-                <small class="settings-help-text" title="每个 key 每天最多用 9,000 单位；key 越多，上传列表轮询越快（快于 RSS 每 3 分钟时自动开启，RSS 故障时也会开启）。">
+                <small class="settings-help-text" title="每个 key 每天最多用 9,000 单位；key 越多，上传列表轮询越快（快于 RSS 每 3 分钟时自动开启，RSS 故障时也会开启）。集群中只有提供状态页的节点消耗 key；其他节点只在它不可用时用自己的 key。">
                   每行一个，多个 Google 项目的额度可叠加 ·
                   <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
                     rel="noopener noreferrer" class="settings-help-link">获取 key</a>
@@ -1788,6 +1788,7 @@
                   <select id="config-public-status-node">
                     <option value="">不启用</option>
                   </select>
+                  <small class="settings-field-help">所选节点同时为集群提供 YouTube 查询和 WebSub 推送，需要在该节点配置它自己的 YouTube key（key 不在节点间同步）。</small>
                 </div>
                 <div class="control-group">
                   <label for="config-public-status-bind">监听地址</label>

@@ -1974,6 +1974,7 @@ async fn standby_denied_push_does_not_keep_candidate_stream() {
 
 #[test]
 fn cached_toggles_fallback_when_previous_owner_snapshot_missing() {
+    let _guard = ClusterStateGuard::new();
     let cached = MonitorToggleState {
         enable_danmaku_command: true,
         enable_youtube_monitor: true,

@@ -698,6 +698,7 @@ mod tests {
             channel_targets,
             yt_index_version: None,
             websub: None,
+            yt_index: None,
         }
     }
 

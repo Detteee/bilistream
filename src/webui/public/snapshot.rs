@@ -209,6 +209,7 @@ mod tests {
             channel_targets: Default::default(),
             yt_index_version: None,
             websub: None,
+            yt_index: None,
         }
     }
 

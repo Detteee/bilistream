@@ -60,6 +60,22 @@ pub struct ClusterNodeSnapshot {
     /// Older nodes neither send nor read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub websub: Option<WebSubCounts>,
+    /// How this node answers YouTube; `None` without a cluster or public node.
+    /// Older nodes neither send nor read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yt_index: Option<YtIndexNodeState>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum YtIndexNodeState {
+    /// Answers YouTube for the cluster.
+    Index,
+    /// Answers from `node`'s index copy.
+    Follows { node: String },
+    /// Answers for itself. `reason`: `no_key` / `budget_spent` (the
+    /// public-status node cannot serve), or `index_down`.
+    Local { reason: String },
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

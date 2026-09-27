@@ -350,6 +350,7 @@ pub(crate) fn empty_node(
         channel_targets: ChannelTargetState::default(),
         yt_index_version: None,
         websub: None,
+        yt_index: None,
     }
 }
 
