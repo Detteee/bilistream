@@ -2,10 +2,11 @@
 //!
 //! Each list (the roster's channels, or the Holodex account's favorites) is
 //! rebuilt from the last Holodex rows, the rows discovery found and recently
-//! live rows, corrected by the `videos.list` store. YouTube drives the updates:
-//! discovery, the store and config commits call `wake()`, and a rebuild that
-//! changes the panel's content publishes `events::HOLODEX`. Holodex is a slow
-//! backstop. A list is kept only while someone reads it (a 10-min lease).
+//! live rows, corrected by the `videos.list` store and by Twitch GQL. YouTube
+//! and Twitch GQL drive the updates: discovery, the store, Twitch liveness and
+//! config commits call `wake()`, and a rebuild that changes the panel's
+//! content publishes `events::HOLODEX`. Holodex is a one-minute backstop. A
+//! list is kept only while someone reads it (a 10-min lease).
 
 use super::api::{filter_holodex_streams, map_holodex_streams_with_area};
 use super::events;
@@ -24,9 +25,7 @@ const LEASE: Duration = Duration::from_secs(10 * 60);
 /// A leased list is rebuilt at least this often, which keeps its IDs wanted
 /// in the store and drops rows past the horizon.
 const KEEP_WANTED: Duration = Duration::from_secs(5 * 60);
-const HOLODEX_EVERY: Duration = Duration::from_secs(5 * 60);
-/// Without a usable YouTube key, Holodex is the only source of changes.
-const HOLODEX_EVERY_WITHOUT_YT: Duration = Duration::from_secs(60);
+const HOLODEX_EVERY: Duration = Duration::from_secs(60);
 /// Forced and input-change fetches stay at least this far apart.
 const FORCE_GAP: Duration = Duration::from_secs(10);
 const DEBOUNCE: Duration = Duration::from_secs(1);
@@ -126,12 +125,8 @@ fn list(kind: ListKind) -> &'static List {
     }
 }
 
-fn holodex_every(usable_yt: bool) -> Duration {
-    if usable_yt {
-        HOLODEX_EVERY
-    } else {
-        HOLODEX_EVERY_WITHOUT_YT
-    }
+fn holodex_every(_usable_yt: bool) -> Duration {
+    HOLODEX_EVERY
 }
 
 fn holodex_due(
@@ -321,6 +316,7 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
     };
     let rows = crate::plugins::youtube_rss::merge_discovered(rows);
     let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
+    let rows = crate::plugins::twitch_live::overlay(rows);
     let rows = filter_holodex_streams(rows, allowed);
 
     // Discovered rows come in hash order; compare by ID so order alone is no change.
@@ -341,6 +337,9 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
 pub(crate) async fn current(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String> {
     let list = list(kind);
     let was_leased = list.extend_lease(Instant::now());
+    if !was_leased {
+        crate::plugins::twitch_live::wake();
+    }
     if !force && was_leased {
         if let Some(snapshot) = list.snapshot() {
             return Ok(snapshot);
@@ -352,6 +351,13 @@ pub(crate) async fn current(kind: ListKind, force: bool) -> Result<Arc<ListSnaps
 /// An input changed: rebuild the leased lists shortly.
 pub(crate) fn wake() {
     WAKE.notify_one();
+}
+
+/// Whether either list is still within its lease; Twitch GQL polls the roster
+/// only while someone is reading a list.
+pub(crate) fn any_leased() -> bool {
+    let now = Instant::now();
+    leased(CHANNELS.lease(), now) || leased(FAVORITES.lease(), now)
 }
 
 /// Forgets an idle list, so no Holodex call or rebuild runs for it.
@@ -430,8 +436,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn holodex_is_a_five_minute_backstop_while_youtube_answers() {
-        assert_eq!(holodex_every(true), Duration::from_secs(5 * 60));
+    fn holodex_is_a_one_minute_backstop() {
+        assert_eq!(holodex_every(true), Duration::from_secs(60));
         assert_eq!(holodex_every(false), Duration::from_secs(60));
     }
 
@@ -442,8 +448,8 @@ mod tests {
         assert!(holodex_due(None, 1, false, true, t0), "first fetch");
         let tried = Some((t0, 1));
         // Cadence with and without a usable key; a failed attempt counts too.
-        assert!(!holodex_due(tried, 1, false, true, t0 + s(299)));
-        assert!(holodex_due(tried, 1, false, true, t0 + s(300)));
+        assert!(!holodex_due(tried, 1, false, true, t0 + s(59)));
+        assert!(holodex_due(tried, 1, false, true, t0 + s(60)));
         assert!(!holodex_due(tried, 1, false, false, t0 + s(59)));
         assert!(holodex_due(tried, 1, false, false, t0 + s(60)));
         // Changed inputs and forced fetches, at most once per 10s.

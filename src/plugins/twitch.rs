@@ -11,6 +11,8 @@ use std::time::Duration;
 use super::utils::{command_output_with_timeout, configure_no_window};
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
+/// The Twitch web client's public GQL client ID.
+pub(crate) const GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 
 pub struct Twitch {
     pub channel_id: String,
@@ -218,7 +220,7 @@ pub async fn get_twitch_status(
     let response = client
         .post("https://gql.twitch.tv/gql")
         .timeout(Duration::from_secs(15))
-        .header("Client-ID", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+        .header("Client-ID", GQL_CLIENT_ID)
         .json(&json!({
             "query": query,
             "variables": variables

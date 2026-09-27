@@ -41,6 +41,7 @@ pub async fn start_webui_on_listener(
     let _rss_worker = crate::plugins::youtube_rss::start_rss_discovery_worker();
     let _store_worker = crate::plugins::youtube_index::start_store_refresh_worker();
     let _list_worker = super::holodex_list::start_holodex_list_worker();
+    let _twitch_live_worker = crate::plugins::twitch_live::start_twitch_live_worker();
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
 
