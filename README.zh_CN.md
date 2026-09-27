@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1>
-  <img src="icon.svg" alt="Bilistream" width="48" height="48" style="vertical-align: middle;">
+  <img src="icon.png" alt="Bilistream" width="48" height="48" style="vertical-align: middle;">
   Bilistream
 </h1>
 

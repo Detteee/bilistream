@@ -407,6 +407,8 @@ use {
   width: 30px;
   height: 30px;
   flex: 0 0 30px;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .brand__name {
