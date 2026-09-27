@@ -64,7 +64,7 @@ export function setPlatformLiveInfoVisibility(platform, isLive) {
     : platform === 'twitch'
       ? ['tw-title-row', 'tw-game-row']
       : platform === 'niconico'
-        ? ['nc-title-row', 'nc-live-id-row']
+        ? ['nc-title-row']
         : platform === 'priority'
         ? ['priority-title-row']
         : [];
@@ -535,7 +535,6 @@ export function renderNiconicoCard(nc, options = {}) {
       scheduledRow.style.display = 'none';
     }
     setNcChannelDisplay('-', '');
-    setElementText('nc-live-id', '-');
     setElementText('nc-title', '-');
     setElementText('nc-scheduled', '-');
     setElementText('nc-area', '-');
@@ -557,7 +556,6 @@ export function renderNiconicoCard(nc, options = {}) {
     scheduledRow.style.display = nc.scheduled_start && !nc.is_live ? '' : 'none';
   }
   setNcChannelDisplay(nc.channel_name, nc.channel_id);
-  setElementText('nc-live-id', nc.live_id || '-');
   setElementText('nc-title', nc.title || '-');
   setElementText('nc-scheduled', nc.scheduled_start ? formatScheduledStart(nc.scheduled_start) : '-');
   setElementText('nc-area', formatAreaText(nc.area_name, nc.area_id));
