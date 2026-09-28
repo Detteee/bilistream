@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, selfCheckDisplay, ytIndexChip, ytIndexPeerLine } from '../dist/js/cluster-health.js';
+import { clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, selfCheckDisplay, ytIndexChip, ytIndexFollowChip, ytIndexPeerLine } from '../dist/js/cluster-health.js';
 
 test('maintenance intent takes precedence while automatic faults remain faults on both surfaces', () => {
   for (const node of [
@@ -53,7 +53,17 @@ test('the YouTube index chip names the index node and warns when it cannot serve
 });
 
 test('other nodes say whose index they follow', () => {
-  assert.equal(ytIndexPeerLine({ yt_index: { state: 'follows', node: 'ny' } }), '跟随 ny 的 YouTube 索引');
+  const follows = { yt_index: { state: 'follows', node: 'ny' }, health: { stale: false } };
+  const nodes = [{ node_id: 'ny', name: 'New York' }, { node_id: 'jp' }];
+  assert.deepEqual(ytIndexFollowChip(follows, nodes), {
+    text: 'YT · New York',
+    title: '跟随 New York 的 YouTube 索引',
+  });
+  assert.equal(ytIndexFollowChip(follows, [{ node_id: 'ny' }]).text, 'YT · ny', 'no name: the id');
+  assert.equal(ytIndexFollowChip({ ...follows, health: { stale: true } }, nodes), null, 'offline already shows');
+  assert.equal(ytIndexFollowChip({ yt_index: { state: 'index' } }, nodes), null);
+  // Following is the chip's job; the caption is only for a fallback.
+  assert.equal(ytIndexPeerLine(follows), null);
   assert.equal(
     ytIndexPeerLine({ yt_index: { state: 'local', reason: 'index_down' } }),
     'YouTube 本地查询（索引节点不可用）',
