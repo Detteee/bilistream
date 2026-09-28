@@ -259,16 +259,28 @@ fn resolve_cookies_path(cfg: &NiconicoConfig) -> Result<PathBuf, Box<dyn Error>>
 pub(crate) fn user_session_from_cookies_file(path: &Path) -> Result<String, Box<dyn Error>> {
     let content = std::fs::read_to_string(path)?;
     for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        let Some(record) = netscape_cookie_record(line) else {
             continue;
-        }
-        let parts: Vec<&str> = trimmed.split('\t').collect();
+        };
+        let parts: Vec<&str> = record.split('\t').collect();
         if parts.len() >= 7 && parts[5] == "user_session" && !parts[6].is_empty() {
             return Ok(parts[6].to_string());
         }
     }
     Err("niconico cookies file is missing user_session".into())
+}
+
+/// Cookie-Editor / curl mark HttpOnly cookies with a `#HttpOnly_` prefix on
+/// the domain. Those are still records, not comments.
+fn netscape_cookie_record(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(record) = trimmed.strip_prefix("#HttpOnly_") {
+        return (!record.is_empty()).then_some(record);
+    }
+    (!trimmed.starts_with('#')).then_some(trimmed)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1011,6 +1023,26 @@ mod tests {
         std::fs::write(&path, "# empty\n").unwrap();
 
         assert!(user_session_from_cookies_file(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn user_session_reads_httponly_netscape_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-nico-cookie-httponly-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cookies.txt");
+        std::fs::write(
+            &path,
+            "# Netscape HTTP Cookie File\n#HttpOnly_.nicovideo.jp\tTRUE\t/\tTRUE\t0\tuser_session\thttponly-session\n.nicovideo.jp\tTRUE\t/\tTRUE\t0\tnicosid\tsid\n",
+        )
+        .unwrap();
+
+        let session = user_session_from_cookies_file(&path).unwrap();
+        assert_eq!(session, "httponly-session");
+
         std::fs::remove_dir_all(dir).unwrap();
     }
 
