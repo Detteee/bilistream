@@ -2547,9 +2547,17 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   align-items: start;
 }
 
-.settings-websub,
+.settings-websub-row,
 .settings-lol {
   margin-top: var(--sp-5);
+}
+
+/* WebSub fields and the go-live chart share a row when two columns fit. */
+.settings-websub-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--sp-5);
+  align-items: start;
 }
 
 .settings-lol .settings-dependent-group {
@@ -2649,6 +2657,120 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 .key-meter--rejected .key-meter-value {
   color: var(--danger);
+}
+.hours-chart {
+  margin: 0;
+  display: grid;
+  gap: var(--sp-2);
+  position: relative;
+}
+.hours-chart[hidden] {
+  display: none;
+}
+.hours-chart-title {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.hours-chart-plot {
+  display: grid;
+  gap: 2px;
+}
+.hours-chart-plot-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+}
+.hours-chart-bars {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  align-items: end;
+  height: 44px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.hours-chart-col {
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 1px;
+  outline: none;
+  cursor: default;
+}
+.hours-chart-bar {
+  width: 100%;
+  max-width: 24px;
+  margin: 0 auto;
+  min-height: 1px;
+  border-radius: 4px 4px 0 0;
+  background: var(--brand);
+  opacity: 0.45;
+  transition: opacity var(--dur) var(--ease);
+}
+.hours-chart-col.is-current .hours-chart-bar,
+.hours-chart-col:hover .hours-chart-bar,
+.hours-chart-col:focus-visible .hours-chart-bar {
+  opacity: 1;
+}
+.hours-chart-col:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  border-radius: var(--r-xs);
+}
+.hours-chart-axis {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.hours-chart-axis span {
+  white-space: nowrap;
+  overflow: visible;
+}
+.hours-chart-axis .is-current {
+  color: var(--text);
+  font-weight: 600;
+}
+.hours-chart-tip {
+  position: absolute;
+  z-index: 2;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--surface-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.hours-chart-tip strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.hours-chart-tip[hidden] {
+  display: none;
+}
+.hours-chart-summary {
+  margin: 0;
+}
+.hours-chart-table summary {
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.hours-chart-table table {
+  margin-top: var(--sp-2);
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.hours-chart-table th,
+.hours-chart-table td {
+  padding: 1px var(--sp-3) 1px 0;
+  text-align: right;
 }
 .discovery-tiles {
   display: grid;

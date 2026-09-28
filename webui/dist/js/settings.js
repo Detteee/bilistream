@@ -5,7 +5,7 @@ import { state, mergeConfigData, updateMonitorToggleStates, updateDanmakuCommand
 import { getJson, postJsonApi } from './api.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
-import { discoveryTiles, formatKeyPoolSummary, keyMeterRows } from './format.js';
+import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
 
 let configBaseline = null;
 let keywordsBaseline = null;
@@ -161,6 +161,7 @@ async function loadYoutubeKeyStatus() {
   if (!data?.configured) {
     block.hidden = true;
     block.replaceChildren();
+    renderHoursChart(null);
     return;
   }
   block.replaceChildren(
@@ -169,6 +170,95 @@ async function loadYoutubeKeyStatus() {
     renderDiscoveryTiles(discoveryTiles(data)),
   );
   block.hidden = false;
+  renderHoursChart(data.playlist);
+}
+// Two small charts on one local-hour axis: the roster's go-live share, and
+// the uploads-playlist polls per channel the budget gives each hour.
+function renderHoursChart(playlist) {
+  const figure = document.getElementById('youtube-hours-chart');
+  if (!figure) return;
+  const rows = goliveHourRows(playlist);
+  if (!rows.length) {
+    figure.hidden = true;
+    return;
+  }
+  const tip = el('div', 'hours-chart-tip');
+  tip.hidden = true;
+  const maxShare = Math.max(...rows.map(row => row.share));
+  const maxPolls = Math.max(...rows.map(row => row.pollsPerHour));
+  const plots = figure.querySelector('.hours-chart-plots');
+  plots.replaceChildren(
+    hoursPlot(rows, '开播占比', maxShare ? `${Math.round(maxShare * 100)}%` : '', row => (maxShare ? row.share / maxShare : 0), tip, figure),
+    hoursPlot(rows, '每频道每小时轮询', maxPolls ? `${Math.round(maxPolls)} 次` : '', row => (maxPolls ? row.pollsPerHour / maxPolls : 0), tip, figure),
+    hoursAxis(rows),
+    tip,
+  );
+  figure.querySelector('.hours-chart-summary').textContent = formatGoliveSummary(playlist, rows);
+  const details = figure.querySelector('.hours-chart-table');
+  details.querySelector('table')?.remove();
+  details.append(hoursTable(rows));
+  figure.hidden = false;
+}
+function hourTipText(row) {
+  const share = `${Math.round(row.share * 100)}%`;
+  const pace = row.intervalSecs ? `每 ${row.intervalSecs}s` : '暂停';
+  return [`${row.hour}:00`, `开播 ${share}`, `轮询 ${pace}`];
+}
+function hoursPlot(rows, title, max, height, tip, figure) {
+  const plot = el('div', 'hours-chart-plot');
+  const head = el('div', 'hours-chart-plot-head');
+  head.append(el('span', null, title), el('span', null, max));
+  const bars = el('div', 'hours-chart-bars');
+  for (const row of rows) {
+    const col = el('div', `hours-chart-col${row.current ? ' is-current' : ''}`);
+    col.tabIndex = 0;
+    col.setAttribute('aria-label', hourTipText(row).join('，'));
+    const bar = el('div', 'hours-chart-bar');
+    bar.style.height = `${Math.max(0, Math.min(1, height(row))) * 100}%`;
+    col.append(bar);
+    const show = () => showHourTip(tip, figure, col, row);
+    col.addEventListener('pointerenter', show);
+    col.addEventListener('focus', show);
+    col.addEventListener('pointerleave', () => { tip.hidden = true; });
+    col.addEventListener('blur', () => { tip.hidden = true; });
+    bars.append(col);
+  }
+  plot.append(head, bars);
+  return plot;
+}
+function showHourTip(tip, figure, col, row) {
+  const [hour, share, pace] = hourTipText(row);
+  const value = el('strong', null, pace);
+  tip.replaceChildren(document.createTextNode(`${hour} · ${share} · `), value);
+  const box = figure.getBoundingClientRect();
+  const at = col.getBoundingClientRect();
+  tip.style.left = `${Math.min(Math.max(at.left - box.left + at.width / 2, 60), box.width - 60)}px`;
+  tip.style.top = `${at.top - box.top - 26}px`;
+  tip.hidden = false;
+}
+function hoursAxis(rows) {
+  const axis = el('div', 'hours-chart-axis');
+  for (const row of rows) {
+    const label = row.current ? '现在' : row.hour % 6 === 0 ? String(row.hour) : '';
+    axis.append(el('span', row.current ? 'is-current' : null, label));
+  }
+  return axis;
+}
+function hoursTable(rows) {
+  const table = el('table');
+  const head = el('tr');
+  for (const name of ['时', '开播占比', '轮询间隔']) head.append(el('th', null, name));
+  table.append(head);
+  for (const row of rows) {
+    const tr = el('tr');
+    tr.append(
+      el('td', null, `${row.hour}:00`),
+      el('td', null, `${Math.round(row.share * 100)}%`),
+      el('td', null, row.intervalSecs ? `${row.intervalSecs}s` : '—'),
+    );
+    table.append(tr);
+  }
+  return table;
 }
 function el(tag, className, text) {
   const node = document.createElement(tag);

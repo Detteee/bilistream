@@ -308,21 +308,55 @@ test('YouTube key pool status reads as one line per fact', async () => {
   assert.equal(formatPlaylistPolling(playlist), '上传列表轮询：每频道 134s');
   assert.equal(
     formatPlaylistPolling({ ...playlist, interval_secs: 268, stretch: 2, rss_down: true }),
-    'RSS 故障，上传列表每频道 268s（配额偏快，间隔 ×2）',
+    'RSS 故障，上传列表每频道 268s（配额留给索引，间隔 ×2）',
   );
   assert.equal(
     formatPlaylistPolling({ ...playlist, on: false, interval_secs: 533 }),
     '上传列表轮询：关闭（RSS 正常；3 个可用 key 起常规轮询）',
   );
   assert.equal(
-    formatPlaylistPolling({ ...playlist, on: false, interval_secs: 268, stretch: 2 }),
-    '上传列表轮询：关闭（配额偏快，间隔 ×2 后慢于 RSS）',
+    formatPlaylistPolling({ ...playlist, interval_secs: 79, by_hour: true }),
+    '上传列表轮询：每频道 79s（按开播时段）',
+  );
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, interval_secs: 104, stretch: 1.4 }),
+    '上传列表轮询：每频道 104s（配额留给索引，间隔 ×1.4）',
+  );
+  assert.equal(
+    formatPlaylistPolling({ ...playlist, interval_secs: null, paused: true }),
+    '上传列表轮询：暂停（今日剩余配额留给索引与转播目标）',
   );
   assert.equal(
     formatPlaylistPolling({ ...playlist, on: false, interval_secs: null }),
     '上传列表轮询：关闭（没有可用 key）',
   );
   assert.equal(formatPlaylistPolling(null), '', 'no line before the worker has run');
+});
+
+test('go-live hours rotate to local time and read without hovering', async () => {
+  const { goliveHourRows, formatGoliveSummary } = await import('../dist/js/format.js');
+  // UTC 11:00 is the busiest hour; 12:00 UTC is "now".
+  const hours = Array.from({ length: 24 }, (_, utc) => ({
+    golive_share: utc === 11 ? 0.2 : 0.8 / 23,
+    interval_secs: utc === 11 ? 79 : 900,
+  }));
+  const playlist = { by_hour: true, hours, golives: 443, golives_needed: 50, interval_secs: 900 };
+  const now = new Date('2026-09-28T12:30:00Z');
+  const rows = goliveHourRows(playlist, 9, now);
+  assert.equal(rows.length, 24);
+  assert.deepEqual([rows[20].hour, rows[20].share, rows[20].intervalSecs], [20, 0.2, 79], 'UTC 11 is 20:00 at UTC+9');
+  assert.equal(rows[21].current, true, 'UTC 12 is 21:00 at UTC+9');
+  assert.equal(rows.filter(row => row.current).length, 1);
+  assert.equal(rows[20].pollsPerHour, 3600 / 79);
+  assert.equal(goliveHourRows(playlist, -5, now)[6].intervalSecs, 79, 'UTC-5 wraps around');
+  assert.equal(formatGoliveSummary(playlist, rows), '开播最多 20 点（20%）· 最快 20 点每 79s · 最慢每 900s');
+
+  const flat = { ...playlist, by_hour: false, golives: 12, interval_secs: 238 };
+  assert.equal(
+    formatGoliveSummary(flat, goliveHourRows(flat, 9, now)),
+    '已记录 12 次开播，还需 38 次后按开播时段轮询，目前均匀每频道 238s',
+  );
+  assert.deepEqual(goliveHourRows({ hours: [] }), [], 'no chart before the worker reports hours');
 });
 
 test('key meters and discovery tiles carry state as label, not color alone', async () => {
@@ -352,6 +386,8 @@ test('key meters and discovery tiles carry state as label, not color alone', asy
   assert.equal(tiles[1].detail, '上传列表轮询：每频道 268s（WebSub 正常，放慢一倍）');
   assert.equal(tiles[2].detail, 'WebSub 订阅：已验证 37 · 等待 0 · 失败 0 · 尚未收到推送');
   assert.equal(discoveryTiles({ playlist }).length, 2, 'no WebSub tile while it is off');
+  const paused = discoveryTiles({ playlist: { ...playlist, interval_secs: null, paused: true } })[1];
+  assert.deepEqual([paused.tone, paused.label], ['warn', '暂停']);
 });
 
 test('an open Holodex panel renews its lease every 4 min, every minute without SSE', () => {

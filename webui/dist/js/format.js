@@ -158,8 +158,8 @@ export function discoveryTiles(data) {
     },
     {
       name: '上传列表',
-      tone: !playlist ? 'off' : playlist.on ? (playlist.stretch > 1 ? 'warn' : 'ok') : 'off',
-      label: !playlist ? '—' : playlist.on ? `每频道 ${playlist.interval_secs}s` : '关闭',
+      tone: !playlist ? 'off' : playlist.on ? (playlist.paused || playlist.stretch > 1 ? 'warn' : 'ok') : 'off',
+      label: !playlist ? '—' : !playlist.on ? '关闭' : playlist.paused ? '暂停' : `每频道 ${playlist.interval_secs}s`,
       detail: formatPlaylistPolling(playlist),
     },
   ];
@@ -203,17 +203,58 @@ export function formatKeyState(key) {
 
 export function formatPlaylistPolling(playlist) {
   if (!playlist) return '';
-  const stretched = playlist.stretch > 1 ? `（配额偏快，间隔 ×${playlist.stretch}）` : '';
+  const byHour = playlist.by_hour ? '（按开播时段）' : '';
+  const stretched = playlist.stretch > 1 ? `（配额留给索引，间隔 ×${playlist.stretch}）` : '';
   const slowed = playlist.websub_slowed ? '（WebSub 正常，放慢一倍）' : '';
+  if (playlist.on && playlist.paused) return '上传列表轮询：暂停（今日剩余配额留给索引与转播目标）';
   if (playlist.on) {
     return playlist.rss_down
-      ? `RSS 故障，上传列表每频道 ${playlist.interval_secs}s${stretched}${slowed}`
-      : `上传列表轮询：每频道 ${playlist.interval_secs}s${stretched}${slowed}`;
+      ? `RSS 故障，上传列表每频道 ${playlist.interval_secs}s${byHour}${stretched}${slowed}`
+      : `上传列表轮询：每频道 ${playlist.interval_secs}s${byHour}${stretched}${slowed}`;
   }
   if (playlist.interval_secs == null) return '上传列表轮询：关闭（没有可用 key）';
-  if (playlist.stretch > 1) return `上传列表轮询：关闭（配额偏快，间隔 ×${playlist.stretch} 后慢于 RSS）`;
   if (playlist.keys_needed) {
     return `上传列表轮询：关闭（RSS 正常；${playlist.keys_needed} 个可用 key 起常规轮询）`;
   }
   return '上传列表轮询：关闭';
+}
+
+// Browser UTC offset in whole hours, e.g. 8 for UTC+8.
+export function localHourOffset(date = new Date()) {
+  return Math.round(-date.getTimezoneOffset() / 60);
+}
+
+// The 24 UTC-ordered hours of `playlist.hours`, rotated to local hours 0-23.
+// Rows: { hour, share, intervalSecs, pollsPerHour, current }.
+export function goliveHourRows(playlist, offset = localHourOffset(), now = new Date()) {
+  const hours = Array.isArray(playlist?.hours) && playlist.hours.length === 24 ? playlist.hours : null;
+  if (!hours) return [];
+  const currentUtc = now.getUTCHours();
+  return Array.from({ length: 24 }, (_, hour) => {
+    const utc = (((hour - offset) % 24) + 24) % 24;
+    const { golive_share: share = 0, interval_secs: intervalSecs = null } = hours[utc] || {};
+    return {
+      hour,
+      share: Number.isFinite(share) ? share : 0,
+      intervalSecs,
+      pollsPerHour: intervalSecs ? 3600 / intervalSecs : 0,
+      current: utc === currentUtc,
+    };
+  });
+}
+
+// One line under the chart, so no value needs a hover to be read.
+export function formatGoliveSummary(playlist, rows) {
+  if (!playlist || !rows.length) return '';
+  if (!playlist.by_hour) {
+    const need = Math.max(0, (playlist.golives_needed || 0) - (playlist.golives || 0));
+    const pace = playlist.interval_secs ? `，目前均匀每频道 ${playlist.interval_secs}s` : '';
+    return `已记录 ${formatCount(playlist.golives || 0)} 次开播，还需 ${formatCount(need)} 次后按开播时段轮询${pace}`;
+  }
+  const timed = rows.filter(row => row.intervalSecs);
+  if (!timed.length) return '上传列表轮询暂停';
+  const fastest = timed.reduce((best, row) => (row.intervalSecs < best.intervalSecs ? row : best));
+  const slowest = Math.max(...timed.map(row => row.intervalSecs));
+  const busiest = rows.reduce((best, row) => (row.share > best.share ? row : best));
+  return `开播最多 ${busiest.hour} 点（${Math.round(busiest.share * 100)}%）· 最快 ${fastest.hour} 点每 ${fastest.intervalSecs}s · 最慢每 ${slowest}s`;
 }

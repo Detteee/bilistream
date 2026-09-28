@@ -12,6 +12,7 @@ pub mod utils;
 pub mod wbi;
 pub mod youtube;
 pub mod youtube_data;
+pub mod youtube_hours;
 pub mod youtube_index;
 pub mod youtube_rss;
 pub mod youtube_websub;

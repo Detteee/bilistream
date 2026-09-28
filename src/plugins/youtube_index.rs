@@ -5,12 +5,13 @@
 //! every minute (end detection), waiting rooms from 5 min before their schedule
 //! until 30 min after it every 30s, the monitored channels' waiting rooms up to
 //! 1.5h late in steps, other streams due within 6h or long overdue every 5 min,
-//! the rest every 30 min. Due IDs share calls, 50 per unit, and the intervals
-//! stretch when the key pool spends faster than the Pacific day passes.
+//! the rest every 30 min. Due IDs share calls, 50 per unit. The intervals
+//! stretch only when the key pool can no longer cover the protected lane's
+//! need (`LaneBook::protected_stretch`); the roster's playlist polling never
+//! slows them. Every answer also feeds the go-live hours (`youtube_hours`).
 
 use super::youtube_data::{
-    budget_remaining_fraction, classify, fetch_videos, pacific_day_left, stretch, YtLiveState,
-    YtVideo, MAX_IDS_PER_CALL,
+    classify, fetch_videos, lane_book, YtLiveState, YtVideo, MAX_IDS_PER_CALL,
 };
 use crate::config::{load_config, Config};
 use chrono::{DateTime, Utc};
@@ -296,6 +297,7 @@ pub(crate) async fn store_videos(
         return Ok(answered);
     }
     let fetched = fetch_videos(keys, proxy, &missing).await?;
+    super::youtube_hours::record(&fetched);
     let woken = with_store(|store| {
         store.units += missing.len().div_ceil(MAX_IDS_PER_CALL) as u32;
         let woken = store.record(&missing, fetched, now);
@@ -314,14 +316,15 @@ pub(crate) async fn store_videos(
 pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
     let now = Instant::now();
     let utc = Utc::now();
-    let stretch = stretch(budget_remaining_fraction(keys), pacific_day_left(utc));
+    // Paced by its own lane: the roster's playlist polling never slows it.
+    let stretch = lane_book(keys).protected_stretch();
     let due = with_store(|store| {
         if stretch != store.stretch() {
             if stretch == 1 {
-                tracing::info!("YouTube 索引: 配额进度恢复，刷新间隔恢复正常");
+                tracing::info!("YouTube 索引: 配额足够索引预留，刷新间隔恢复正常");
             } else {
                 tracing::info!(
-                    "YouTube 索引: 配额消耗快于时间进度，刷新间隔放大 {} 倍",
+                    "YouTube 索引: 配额不足以覆盖索引预留，刷新间隔放大 {} 倍",
                     stretch
                 );
             }
@@ -346,6 +349,7 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
             .map_err(|e| e.to_string())
         {
             Ok(videos) => {
+                super::youtube_hours::record(&videos);
                 let woken = with_store(|store| {
                     store.retry_at = None;
                     store.units += due.len().div_ceil(MAX_IDS_PER_CALL) as u32;

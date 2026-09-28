@@ -222,10 +222,30 @@ struct KeyState {
     benched: Option<Bench>,
 }
 
+/// What a call is for. Both lanes draw on the same keys but are paced apart,
+/// so the roster's uploads-playlist polling never slows the store or the
+/// restream target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// `videos.list` (store, overlays, monitor) and the restream target's poll.
+    Protected,
+    /// The roster's uploads-playlist polling.
+    Playlist,
+}
+
+/// Daily units per pool kept for classification, the overlays and the monitor.
+pub(crate) const RESERVED_UNITS: u64 = 3_000;
+/// Daily units for the restream target's 60s uploads-playlist poll.
+pub(crate) const TARGET_RESERVED_UNITS: u64 = 1_440;
+
 #[derive(Default)]
 struct KeyPool {
     day: i64,
     keys: HashMap<String, KeyState>,
+    /// Units spent today per lane (`Lane as usize`).
+    lane_used: [u64; 2],
+    /// Whether a restream target is polled, so its units are reserved.
+    target_reserved: bool,
 }
 
 impl KeyPool {
@@ -247,6 +267,7 @@ impl KeyPool {
         }
         if self.day != day {
             self.day = day;
+            self.lane_used = [0; 2];
             for state in self.keys.values_mut() {
                 state.used = 0;
                 if matches!(state.benched, Some(Bench::UntilDay(until)) if until <= day) {
@@ -262,9 +283,16 @@ impl KeyPool {
             .is_some_and(|state| state.benched.is_none() && state.used + units <= DAILY_UNIT_BUDGET)
     }
 
-    /// Spend `units` on the usable key with the most budget left, skipping
-    /// `tried`.
-    fn pick(&mut self, keys: &[String], units: u32, day: i64, tried: &[String]) -> Option<String> {
+    /// Spend `units` for `lane` on the usable key with the most budget left,
+    /// skipping `tried`.
+    fn pick(
+        &mut self,
+        keys: &[String],
+        units: u32,
+        day: i64,
+        tried: &[String],
+        lane: Lane,
+    ) -> Option<String> {
         self.sync(keys, day);
         let key = keys
             .iter()
@@ -274,6 +302,7 @@ impl KeyPool {
         if let Some(state) = self.keys.get_mut(&key) {
             state.used += units;
         }
+        self.lane_used[lane as usize] += u64::from(units);
         Some(key)
     }
 
@@ -291,17 +320,20 @@ impl KeyPool {
     /// Unspent units on keys Google has not benched, as a share of every
     /// key's full budget.
     fn remaining_fraction(&mut self, keys: &[String], day: i64) -> f64 {
-        self.sync(keys, day);
         if keys.is_empty() {
             return 0.0;
         }
-        let left: u32 = keys
-            .iter()
+        self.left_units(keys, day) as f64 / (keys.len() as f64 * f64::from(DAILY_UNIT_BUDGET))
+    }
+
+    /// Unspent units on keys Google has not benched.
+    fn left_units(&mut self, keys: &[String], day: i64) -> u64 {
+        self.sync(keys, day);
+        keys.iter()
             .filter_map(|key| self.keys.get(key))
             .filter(|state| state.benched.is_none())
-            .map(|state| DAILY_UNIT_BUDGET.saturating_sub(state.used))
-            .sum();
-        f64::from(left) / (keys.len() as f64 * f64::from(DAILY_UNIT_BUDGET))
+            .map(|state| u64::from(DAILY_UNIT_BUDGET.saturating_sub(state.used)))
+            .sum()
     }
 
     fn status(&mut self, keys: &[String], day: i64) -> Vec<KeyStatus> {
@@ -354,29 +386,82 @@ pub(crate) fn usable_key_count(keys: &[String]) -> usize {
     with_pool(|pool| pool.usable_count(keys, pacific_day(chrono::Utc::now())))
 }
 
-/// How much of the pool's daily budget is left, from 0 to 1.
-pub(crate) fn budget_remaining_fraction(keys: &[String]) -> f64 {
-    with_pool(|pool| pool.remaining_fraction(keys, pacific_day(chrono::Utc::now())))
+pub(crate) const MAX_STRETCH: u32 = 8;
+/// The protected lane's pace is judged over at least this share of the day,
+/// so a burst right after Pacific midnight does not read as a runaway rate.
+const MIN_PACE_WINDOW: f64 = 1.0 / 24.0;
+
+/// Where today's units stand, per lane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LaneBook {
+    /// Unspent units on keys Google has not benched.
+    pub(crate) pool_left: u64,
+    pub(crate) protected_used: u64,
+    /// `RESERVED_UNITS`, plus `TARGET_RESERVED_UNITS` while a target is polled,
+    /// at most the whole pool.
+    pub(crate) protected_budget: u64,
+    pub(crate) playlist_used: u64,
+    /// Share of the Pacific day still ahead.
+    pub(crate) day_left: f64,
 }
 
-pub(crate) const MAX_STRETCH: u32 = 8;
-/// Remaining-budget share the pool may trail the day by before intervals
-/// stretch. The first videos.list after Pacific midnight spends a few units
-/// while `day_left` is still ~1, so without slack `ceil` jumps to 2× and then
-/// flips back as the clock catches up. 1% is about 15 minutes of even pace.
-const STRETCH_SLACK: f64 = 0.01;
-
-/// Interval multiplier: 1 while the pool has at least as large a share of its
-/// daily budget left as of the day (plus a small slack), otherwise enough to
-/// fall back in step.
-pub(crate) fn stretch(remaining: f64, day_left: f64) -> u32 {
-    if remaining <= 0.0 {
-        MAX_STRETCH
-    } else if remaining + STRETCH_SLACK >= day_left {
-        1
-    } else {
-        ((day_left / remaining).ceil() as u32).min(MAX_STRETCH)
+impl LaneBook {
+    /// Units the protected lane still needs today: its reserve's share of the
+    /// day left, or more if it has been spending faster than that.
+    pub(crate) fn protected_need(&self) -> u64 {
+        let elapsed = (1.0 - self.day_left).max(MIN_PACE_WINDOW);
+        let daily = (self.protected_used as f64 / elapsed).max(self.protected_budget as f64);
+        (daily * self.day_left).ceil() as u64
     }
+
+    /// Interval multiplier for the store and the restream target: 1 while the
+    /// pool still covers the protected lane's need, whatever the playlist
+    /// spent. Only a pool too small for that need slows them.
+    pub(crate) fn protected_stretch(&self) -> u32 {
+        let need = self.protected_need();
+        if self.pool_left >= need {
+            1
+        } else if self.pool_left == 0 {
+            MAX_STRETCH
+        } else {
+            ((need as f64 / self.pool_left as f64).ceil() as u32).min(MAX_STRETCH)
+        }
+    }
+
+    /// Units the roster's playlist polling may still spend today without
+    /// touching what the protected lane still needs. Protected spend beyond
+    /// its reserve comes out of this; reserve it leaves unused stays in.
+    pub(crate) fn playlist_room(&self) -> u64 {
+        self.pool_left.saturating_sub(self.protected_need())
+    }
+}
+
+/// Today's per-lane book for these keys.
+pub(crate) fn lane_book(keys: &[String]) -> LaneBook {
+    let now = chrono::Utc::now();
+    let day = pacific_day(now);
+    with_pool(|pool| {
+        let pool_left = pool.left_units(keys, day);
+        let reserve = RESERVED_UNITS
+            + if pool.target_reserved {
+                TARGET_RESERVED_UNITS
+            } else {
+                0
+            };
+        LaneBook {
+            pool_left,
+            protected_used: pool.lane_used[Lane::Protected as usize],
+            protected_budget: reserve.min(keys.len() as u64 * u64::from(DAILY_UNIT_BUDGET)),
+            playlist_used: pool.lane_used[Lane::Playlist as usize],
+            day_left: pacific_day_left(now),
+        }
+    })
+}
+
+/// Whether the restream target's poll runs, so its units are reserved in the
+/// protected lane. Set by the poller each pass.
+pub(crate) fn set_target_reserved(reserved: bool) {
+    with_pool(|pool| pool.target_reserved = reserved);
 }
 
 /// The pool for the settings view: per-key spend and state, the share left
@@ -456,12 +541,13 @@ pub(crate) async fn google_get<T: serde::de::DeserializeOwned>(
     url: &str,
     query: &[(&str, &str)],
     units: u32,
+    lane: Lane,
 ) -> Result<Option<T>, Box<dyn Error>> {
     let client = pooled_client(proxy)?;
     let day = pacific_day(chrono::Utc::now());
     let mut tried: Vec<String> = Vec::new();
     while tried.len() < 2 {
-        let Some(key) = with_pool(|pool| pool.pick(keys, units, day, &tried)) else {
+        let Some(key) = with_pool(|pool| pool.pick(keys, units, day, &tried, lane)) else {
             break;
         };
         tried.push(key.clone());
@@ -521,7 +607,8 @@ pub(crate) async fn fetch_videos(
             ("part", "snippet,liveStreamingDetails"),
             ("id", ids.as_str()),
         ];
-        let body: Option<VideosResponse> = google_get(keys, proxy, VIDEOS_URL, &query, 1).await?;
+        let body: Option<VideosResponse> =
+            google_get(keys, proxy, VIDEOS_URL, &query, 1, Lane::Protected).await?;
         videos.extend(body.map(|body| body.items).unwrap_or_default());
     }
     Ok(videos)
@@ -902,24 +989,34 @@ mod tests {
         let one = keys(&["a"]);
         let mut pool = KeyPool::default();
         assert_eq!(
-            pool.pick(&one, DAILY_UNIT_BUDGET, 1, &[]).as_deref(),
+            pool.pick(&one, DAILY_UNIT_BUDGET, 1, &[], Lane::Protected)
+                .as_deref(),
             Some("a")
         );
-        assert_eq!(pool.pick(&one, 1, 1, &[]), None);
-        assert_eq!(pool.pick(&one, 1, 2, &[]).as_deref(), Some("a"));
+        assert_eq!(pool.pick(&one, 1, 1, &[], Lane::Protected), None);
+        assert_eq!(
+            pool.pick(&one, 1, 2, &[], Lane::Protected).as_deref(),
+            Some("a")
+        );
     }
 
     #[test]
     fn the_pool_spreads_spend_and_skips_tried_and_benched_keys() {
         let two = keys(&["a", "b"]);
         let mut pool = KeyPool::default();
-        let picks: Vec<String> = (0..4).filter_map(|_| pool.pick(&two, 1, 1, &[])).collect();
+        let picks: Vec<String> = (0..4)
+            .filter_map(|_| pool.pick(&two, 1, 1, &[], Lane::Protected))
+            .collect();
         assert_eq!(picks, keys(&["a", "b", "a", "b"]));
-        assert_eq!(pool.pick(&two, 1, 1, &keys(&["a"])).as_deref(), Some("b"));
+        assert_eq!(
+            pool.pick(&two, 1, 1, &keys(&["a"]), Lane::Protected)
+                .as_deref(),
+            Some("b")
+        );
 
         pool.bench("a", Bench::UntilDay(2));
         assert_eq!(pool.usable_count(&two, 1), 1);
-        assert_eq!(pool.pick(&two, 1, 1, &keys(&["b"])), None);
+        assert_eq!(pool.pick(&two, 1, 1, &keys(&["b"]), Lane::Protected), None);
         assert_eq!(pool.usable_count(&two, 2), 2);
     }
 
@@ -930,7 +1027,7 @@ mod tests {
         pool.sync(&two, 1);
         pool.bench("a", Bench::UntilConfigChange);
         assert_eq!(pool.usable_count(&two, 5), 1);
-        pool.pick(&two, 7, 5, &[]);
+        pool.pick(&two, 7, 5, &[], Lane::Protected);
 
         let three = keys(&["a", "b", "c"]);
         assert_eq!(pool.usable_count(&three, 5), 3);
@@ -945,7 +1042,13 @@ mod tests {
         let two = keys(&["a", "b"]);
         let mut pool = KeyPool::default();
         assert_eq!(pool.remaining_fraction(&two, 1), 1.0);
-        pool.pick(&keys(&["a"]), DAILY_UNIT_BUDGET / 2, 1, &[]);
+        pool.pick(
+            &keys(&["a"]),
+            DAILY_UNIT_BUDGET / 2,
+            1,
+            &[],
+            Lane::Protected,
+        );
         assert_eq!(pool.remaining_fraction(&two, 1), 0.75);
         pool.bench("b", Bench::UntilDay(2));
         assert_eq!(pool.remaining_fraction(&two, 1), 0.25);
@@ -957,26 +1060,62 @@ mod tests {
         assert_eq!(pool.remaining_fraction(&[], 2), 0.0);
     }
 
+    fn book(pool_left: u64, protected_used: u64, playlist_used: u64, day_left: f64) -> LaneBook {
+        LaneBook {
+            pool_left,
+            protected_used,
+            protected_budget: RESERVED_UNITS,
+            playlist_used,
+            day_left,
+        }
+    }
+
     #[test]
-    fn intervals_stretch_when_the_budget_runs_ahead_of_the_day() {
-        assert_eq!(stretch(0.5, 0.5), 1);
-        assert_eq!(stretch(0.9, 0.5), 1);
-        assert_eq!(stretch(0.4, 0.5), 2);
-        assert_eq!(stretch(0.1, 0.5), 5);
-        assert_eq!(stretch(0.01, 0.5), MAX_STRETCH);
-        assert_eq!(stretch(0.0, 0.5), MAX_STRETCH);
-        // 47 units across 3 keys, 6s after Pacific midnight: the first
-        // videos.list pass after local counts zero. Slack keeps this at 1×.
-        let remaining = 1.0 - 47.0 / (3.0 * f64::from(DAILY_UNIT_BUDGET));
-        let day_left = 1.0 - 6.0 / 86_400.0;
-        assert_eq!(stretch(remaining, day_left), 1);
-        // 16:00 in China during PDT: Google's day is already an hour in.
-        assert_eq!(stretch(remaining, 1.0 - 3_600.0 / 86_400.0), 1);
+    fn playlist_spend_never_stretches_the_protected_lane() {
+        // 3 keys, 5h into the Pacific day (21:00 JST in PDT), the playlist
+        // having burst through 14k: the store and target stay at 1x.
+        let busy = book(27_000 - 14_000 - 700, 700, 14_000, 19.0 / 24.0);
+        assert_eq!(busy.protected_stretch(), 1);
+        // Only a pool too small for the protected need slows them.
+        assert_eq!(book(1_000, 700, 25_000, 0.5).protected_stretch(), 2);
+        assert_eq!(book(0, 700, 26_000, 0.5).protected_stretch(), MAX_STRETCH);
+    }
+
+    #[test]
+    fn the_protected_need_follows_its_reserve_or_its_faster_pace() {
+        assert_eq!(book(27_000, 0, 0, 1.0).protected_need(), 3_000);
+        assert_eq!(book(20_000, 750, 0, 0.75).protected_need(), 2_250);
+        // Twice the reserve's pace so far: it needs twice as much ahead.
+        assert_eq!(book(20_000, 3_000, 0, 0.5).protected_need(), 3_000);
+        assert_eq!(book(20_000, 1_500, 0, 0.75).protected_need(), 4_500);
+        // A burst in the first minutes is judged over an hour, not a minute.
+        let early = book(26_950, 50, 0, 1.0 - 60.0 / 86_400.0);
         assert_eq!(
-            stretch(0.8, 1.0 - 60.0 / 86_400.0),
-            2,
-            "20% of the pool in the first minute is actually ahead"
+            early.protected_need(),
+            2_998,
+            "the reserve pace, not 50 × 24"
         );
+        assert_eq!(early.protected_stretch(), 1);
+    }
+
+    #[test]
+    fn the_playlist_absorbs_protected_overspend_and_reuses_what_it_leaves() {
+        // A quarter into the day with the protected lane on its reserve pace:
+        // the playlist may spend everything but the 2,250 still needed.
+        let even = book(27_000 - 4_000 - 750, 750, 4_000, 0.75);
+        assert_eq!(even.playlist_room(), 20_000);
+        // 1,000 units over by the same time: the overspend and its projected
+        // pace (need 2,250 → 5,250) come out of the playlist, not the store.
+        let over = book(27_000 - 4_000 - 1_750, 1_750, 4_000, 0.75);
+        assert_eq!(over.protected_need(), 5_250);
+        assert_eq!(over.playlist_room(), 16_000);
+        assert_eq!(over.protected_stretch(), 1, "the store still runs at 1x");
+        let spent = book(4_000, 1_750, 21_250, 0.75);
+        assert_eq!(spent.playlist_room(), 0, "the playlist stops first");
+        // Half the day gone and only 200 of the reserve's 1,500 spent: the
+        // 1,300 left unused stays available to the playlist.
+        let thrifty = book(5_000, 200, 10_000, 0.5);
+        assert_eq!(thrifty.playlist_room(), 5_000 - 1_500);
     }
 
     #[test]

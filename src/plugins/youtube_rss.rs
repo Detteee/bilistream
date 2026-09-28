@@ -20,10 +20,11 @@
 use super::holodex::{HolodexChannel, HolodexStream};
 use super::http::{pooled_client, response_bytes_limited};
 use super::youtube_data::{
-    budget_remaining_fraction, google_get, pacific_day_left, stretch, usable_key_count,
-    DAILY_UNIT_BUDGET,
+    google_get, lane_book, set_target_reserved, usable_key_count, Lane, LaneBook,
+    DAILY_UNIT_BUDGET, RESERVED_UNITS, TARGET_RESERVED_UNITS,
 };
 use crate::config::{load_config, Config};
+use chrono::{DateTime, Timelike, Utc};
 use futures_util::stream::{self, StreamExt};
 use regex::Regex;
 use reqwest::header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, RETRY_AFTER};
@@ -53,11 +54,12 @@ const PAUSE_AFTER_429S: usize = 3;
 const OUTAGE_PROBE_EVERY: Duration = Duration::from_secs(10 * 60);
 /// Fewer attempted feeds than this cannot tell an outage from a few bad channels.
 const OUTAGE_MIN_FEEDS: usize = 4;
-/// Daily units per pool kept for classification, the overlays and the monitor.
-const RESERVED_UNITS: u64 = 3_000;
-/// Daily units for the restream target's 60s uploads-playlist poll.
-const TARGET_RESERVED_UNITS: u64 = 1_440;
 const MIN_PLAYLIST_INTERVAL: Duration = Duration::from_secs(60);
+/// Per channel, the go-live weighting polls between every 15 min in the
+/// roster's quietest hours and every minute (`MIN_PLAYLIST_INTERVAL`) in its
+/// busiest.
+const MIN_POLLS_PER_HOUR: f64 = 4.0;
+const MAX_POLLS_PER_HOUR: f64 = 60.0;
 const TARGET_POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// Pushes are classified this long after the first one, in one batch.
 const PUSH_DEBOUNCE: Duration = Duration::from_secs(2);
@@ -601,23 +603,185 @@ fn should_poll_target(
     target_due.is_none_or(|at| at <= now)
 }
 
-/// The interval stretched while spend runs ahead of the day, and whether it is
-/// used: only while it beats the RSS tick, or while RSS is down.
-fn paced_interval(
-    base: Option<Duration>,
-    stretch: u32,
-    rss_down: bool,
-) -> (Option<Duration>, bool) {
-    let interval = base.map(|interval| interval * stretch);
-    let on = interval.is_some_and(|interval| interval < RSS_TICK || rss_down);
-    (interval, on)
+/// Whether roster polling runs: only while its day-average interval beats the
+/// RSS tick, or while RSS is down. Decided on the average so it does not
+/// switch on and off with the hour.
+fn polling_on(base: Option<Duration>, rss_down: bool) -> bool {
+    base.is_some_and(|interval| interval < RSS_TICK || rss_down)
 }
 
-/// The roster interval, doubled while WebSub pushes are healthy. Applied after
-/// the on/off decision, so it only slows polling and never switches it off.
-/// The restream target's cadence never reads it.
-fn websub_backstop(interval: Option<Duration>, slowed: bool) -> Option<Duration> {
-    interval.map(|interval| if slowed { interval * 2 } else { interval })
+/// The roster lane's units for today: the pool minus the protected reserves,
+/// halved while WebSub pushes are healthy (the restream target is in the
+/// protected lane, so its cadence never changes).
+fn playlist_day_units(usable_keys: usize, target_reserved: bool, websub_slowed: bool) -> u64 {
+    let reserved = RESERVED_UNITS
+        + if target_reserved {
+            TARGET_RESERVED_UNITS
+        } else {
+            0
+        };
+    let units = (usable_keys as u64 * u64::from(DAILY_UNIT_BUDGET)).saturating_sub(reserved);
+    if websub_slowed {
+        units / 2
+    } else {
+        units
+    }
+}
+
+/// Go-live weights spread over neighbouring hours (1-2-1, around the clock),
+/// so a sparse hour between two busy ones is not starved.
+fn smooth(weights: &[f64; 24]) -> [f64; 24] {
+    std::array::from_fn(|h| {
+        (weights[(h + 23) % 24] + 2.0 * weights[h] + weights[(h + 1) % 24]) / 4.0
+    })
+}
+
+/// Every UTC hour, whole: a day's plan.
+const WHOLE_DAY: [f64; 24] = [1.0; 24];
+
+/// Polls per channel for each UTC hour that spend `units` over `span`, how
+/// much of each UTC hour the plan covers. Flat without weights, as before the
+/// roster had a history. With weights, each hour polls in proportion to its
+/// smoothed go-lives, bounded by `MIN_POLLS_PER_HOUR` and
+/// `MAX_POLLS_PER_HOUR`, at the one scale that still spends `units`.
+fn hourly_polls(
+    channels: usize,
+    units: u64,
+    weights: Option<&[f64; 24]>,
+    span: &[f64; 24],
+) -> [f64; 24] {
+    let hours: f64 = span.iter().sum();
+    if channels == 0 || hours <= 0.0 {
+        return [0.0; 24];
+    }
+    let per_channel = units as f64 / channels as f64;
+    let flat = [(per_channel / hours).min(MAX_POLLS_PER_HOUR); 24];
+    let Some(weights) = weights else {
+        return flat;
+    };
+    let smoothed = smooth(weights);
+    // A hair of weight everywhere, so hours without go-lives still take what
+    // is left once every other hour is at the one-minute cap.
+    let hair = smoothed.iter().copied().fold(0.0, f64::max) * 1e-6;
+    if hair <= 0.0
+        || per_channel <= hours * MIN_POLLS_PER_HOUR
+        || per_channel >= hours * MAX_POLLS_PER_HOUR
+    {
+        return flat;
+    }
+    let at = |scale: f64| -> [f64; 24] {
+        std::array::from_fn(|h| {
+            (scale * (smoothed[h] + hair)).clamp(MIN_POLLS_PER_HOUR, MAX_POLLS_PER_HOUR)
+        })
+    };
+    let spend = |polls: [f64; 24]| polls.iter().zip(span).map(|(p, s)| p * s).sum::<f64>();
+    // Spend only grows with the scale: bracket it, then halve the bracket.
+    let (mut low, mut high) = (0.0, 1.0);
+    while spend(at(high)) < per_channel {
+        high *= 2.0;
+    }
+    for _ in 0..64 {
+        let mid = (low + high) / 2.0;
+        if spend(at(mid)) < per_channel {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    at(high)
+}
+
+/// Seconds between polls at this rate, from a minute to a day.
+fn interval_of(polls_per_hour: f64) -> Duration {
+    const DAY: Duration = Duration::from_secs(86_400);
+    if polls_per_hour <= 0.0 {
+        return DAY;
+    }
+    Duration::from_secs_f64((3600.0 / polls_per_hour).ceil().min(DAY.as_secs_f64()))
+        .max(MIN_PLAYLIST_INTERVAL)
+}
+
+/// How much of each UTC hour is still ahead in the Pacific day, from 0 to 1.
+fn remaining_span(now: DateTime<Utc>, day_left: f64) -> [f64; 24] {
+    let mut span = [0.0; 24];
+    let mut at = now.timestamp();
+    let end = at + (day_left * 86_400.0).round() as i64;
+    while at < end {
+        let hour = at.div_euclid(3600);
+        let next = ((hour + 1) * 3600).min(end);
+        span[hour.rem_euclid(24) as usize] += (next - at) as f64 / 3600.0;
+        at = next;
+    }
+    span
+}
+
+/// Shortfalls under this are reported as on plan. Polls land at the start of
+/// each interval, so spend runs up to a poll per channel ahead of the plan;
+/// the refit absorbs that without anyone needing to hear about it.
+const SHORT_REPORTED_AT: f64 = 1.05;
+
+/// How the roster's day plan fits the room the protected lane leaves it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum Fit {
+    /// The plan fits.
+    #[default]
+    Plan,
+    /// Refit into the room left; the plan wanted this many times more.
+    Short(f64),
+    /// Not even one more poll per channel fits: the roster waits so that the
+    /// protected lane does not.
+    Paused,
+}
+
+impl Fit {
+    /// As the settings view and the log report it: shortfalls under
+    /// `SHORT_REPORTED_AT` count as on plan, and the factor rounds up to a
+    /// tenth.
+    fn reported(self) -> Fit {
+        match self {
+            Fit::Short(factor) if factor < SHORT_REPORTED_AT => Fit::Plan,
+            Fit::Short(factor) => Fit::Short((factor * 10.0).ceil() / 10.0),
+            other => other,
+        }
+    }
+}
+
+/// The roster's polls per UTC hour for what is left of the Pacific day
+/// (`span`). It keeps to the day's plan, never faster, while `room` covers
+/// the rest of it; otherwise `room` is spread over the hours left by the same
+/// rule.
+fn fit_plan(
+    channels: usize,
+    day_units: u64,
+    weights: Option<&[f64; 24]>,
+    span: &[f64; 24],
+    room: u64,
+) -> ([f64; 24], Fit) {
+    let plan = hourly_polls(channels, day_units, weights, &WHOLE_DAY);
+    let wanted = plan.iter().zip(span).map(|(p, s)| p * s).sum::<f64>() * channels as f64;
+    if wanted <= room as f64 {
+        (plan, Fit::Plan)
+    } else if room < channels as u64 {
+        (plan, Fit::Paused)
+    } else {
+        (
+            hourly_polls(channels, room, weights, span),
+            Fit::Short(wanted / room as f64),
+        )
+    }
+}
+
+/// A channel stamped under a slower hour is due no later than one current
+/// interval from now, so the busy hours start on time.
+fn pull_in(due: &mut HashMap<String, Instant>, now: Instant, interval: Duration) {
+    let Some(latest) = now.checked_add(interval) else {
+        return;
+    };
+    for at in due.values_mut() {
+        if *at > latest {
+            *at = latest;
+        }
+    }
 }
 
 /// Fewest usable keys whose interval beats the RSS tick for this roster.
@@ -635,12 +799,26 @@ fn keys_needed(channels: usize, target_reserved: bool) -> Option<usize> {
 #[derive(Clone, Copy)]
 struct PlaylistStatus {
     on: bool,
+    /// This hour's interval.
     interval: Option<Duration>,
-    stretch: u32,
+    /// How the roster's plan fits the room the protected lane leaves it, as
+    /// reported.
+    fit: Fit,
+    /// The store's and the restream target's multiplier.
+    target_stretch: u32,
     rss_down: bool,
     roster_len: usize,
     target_reserved: bool,
     websub_slowed: bool,
+    /// Weighted by the roster's go-live hours rather than flat.
+    by_hour: bool,
+    /// Go-lives counted across the roster (decayed).
+    golives: f64,
+    /// Per UTC hour: share of the roster's go-lives, and the poll interval.
+    golive_share: [f64; 24],
+    hour_intervals: [Option<Duration>; 24],
+    book: LaneBook,
+    day_units: u64,
 }
 
 static PLAYLIST_STATUS: Mutex<Option<PlaylistStatus>> = Mutex::new(None);
@@ -652,10 +830,31 @@ pub(crate) fn playlist_status() -> Option<serde_json::Value> {
     Some(serde_json::json!({
         "on": status.on,
         "interval_secs": status.interval.map(|interval| interval.as_secs()),
-        "stretch": status.stretch,
+        "stretch": match status.fit {
+            Fit::Short(factor) => factor,
+            Fit::Plan | Fit::Paused => 1.0,
+        },
+        "paused": status.fit == Fit::Paused,
+        "target_stretch": status.target_stretch,
         "rss_down": status.rss_down,
         "keys_needed": keys_needed(status.roster_len, status.target_reserved),
         "websub_slowed": status.websub_slowed,
+        "by_hour": status.by_hour,
+        "golives": status.golives.round() as u64,
+        "golives_needed": super::youtube_hours::MIN_GOLIVES as u64,
+        "hours": (0..24)
+            .map(|h| serde_json::json!({
+                "golive_share": status.golive_share[h],
+                "interval_secs": status.hour_intervals[h].map(|interval| interval.as_secs()),
+            }))
+            .collect::<Vec<_>>(),
+        "lanes": {
+            "protected_used": status.book.protected_used,
+            "protected_budget": status.book.protected_budget,
+            "playlist_used": status.book.playlist_used,
+            "playlist_budget": status.day_units,
+            "playlist_room": status.book.playlist_room(),
+        },
     }))
 }
 
@@ -669,6 +868,7 @@ async fn fetch_playlist(
     keys: Vec<String>,
     proxy: Option<String>,
     channel_id: String,
+    lane: Lane,
 ) -> (String, PlaylistOutcome) {
     let Some(playlist) = uploads_playlist_id(&channel_id) else {
         return (channel_id, PlaylistOutcome::NotFound);
@@ -678,10 +878,16 @@ async fn fetch_playlist(
         ("playlistId", playlist.as_str()),
         ("maxResults", "5"),
     ];
-    let result =
-        google_get::<PlaylistResponse>(&keys, proxy.as_deref(), PLAYLIST_ITEMS_URL, &query, 1)
-            .await
-            .map_err(|e| e.to_string());
+    let result = google_get::<PlaylistResponse>(
+        &keys,
+        proxy.as_deref(),
+        PLAYLIST_ITEMS_URL,
+        &query,
+        1,
+        lane,
+    )
+    .await
+    .map_err(|e| e.to_string());
     let outcome = match result {
         Ok(Some(response)) => PlaylistOutcome::Entries(playlist_entries(&channel_id, response)),
         Ok(None) => PlaylistOutcome::NotFound,
@@ -724,8 +930,8 @@ struct Worker {
     /// Re-check of known rows and retry after a failed classification.
     next_recheck: Option<Instant>,
     playlist_on: bool,
-    /// Last interval multiplier from the pool's spend.
-    stretch: u32,
+    /// How the roster's plan last fit, as reported.
+    fit: Fit,
     /// Next uploads-playlist poll per channel.
     playlist_due: HashMap<String, Instant>,
     /// What each uploads playlist last listed.
@@ -737,6 +943,8 @@ struct Worker {
     target_due: Option<Instant>,
     /// Roster polling halved because WebSub pushes are healthy.
     websub_slowed: bool,
+    /// Roster polling weighted by go-live hours.
+    by_hour: bool,
 }
 
 impl Worker {
@@ -829,15 +1037,12 @@ impl Worker {
         target: Option<String>,
     ) {
         let target_reserved = target.is_some();
-        let base = playlist_interval(roster.len(), usable_key_count(keys), target_reserved);
-        let stretch = stretch(
-            budget_remaining_fraction(keys),
-            pacific_day_left(chrono::Utc::now()),
-        );
+        set_target_reserved(target_reserved);
+        let usable = usable_key_count(keys);
+        let base = playlist_interval(roster.len(), usable, target_reserved);
         let degraded = self.rss.degraded(now);
-        let (interval, on) = paced_interval(base, stretch, degraded);
+        let on = polling_on(base, degraded);
         let websub_slowed = super::youtube_websub::healthy();
-        let interval = websub_backstop(interval, websub_slowed);
         if websub_slowed != self.websub_slowed {
             self.websub_slowed = websub_slowed;
             if on {
@@ -851,48 +1056,94 @@ impl Worker {
                 );
             }
         }
+
+        // Today's roster units, spread by the hours the roster goes live, and
+        // slowed only as far as the protected lane's remaining need requires.
+        let utc = Utc::now();
+        let book = lane_book(keys);
+        let day_units = playlist_day_units(usable, target_reserved, websub_slowed);
+        let hours = super::youtube_hours::weights(roster);
+        let span = remaining_span(utc, book.day_left);
+        let (polls, fit) = fit_plan(
+            roster.len(),
+            day_units,
+            hours.as_ref(),
+            &span,
+            book.playlist_room(),
+        );
+        let hour_intervals: [Option<Duration>; 24] = std::array::from_fn(|h| {
+            base?;
+            (fit != Fit::Paused).then(|| interval_of(polls[h]))
+        });
+        let interval = hour_intervals[utc.hour() as usize];
+        let fit = fit.reported();
+        let target_stretch = book.protected_stretch();
+
+        let by_hour = hours.is_some();
+        if by_hour != self.by_hour {
+            self.by_hour = by_hour;
+            match interval.filter(|_| on && by_hour) {
+                Some(interval) => tracing::info!(
+                    "YouTube 上传列表按开播时段轮询: 本时段每频道 {}s",
+                    interval.as_secs()
+                ),
+                None if !by_hour => tracing::info!("YouTube 上传列表恢复均匀轮询"),
+                None => {}
+            }
+        }
+        // Shown while it is still learning, too.
+        let counted = super::youtube_hours::roster_hours(roster);
+        let golive_total: f64 = counted.iter().sum();
         *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(PlaylistStatus {
             on,
             interval,
-            stretch,
+            fit,
+            target_stretch,
             rss_down: degraded,
             roster_len: roster.len(),
             target_reserved,
             websub_slowed,
+            by_hour,
+            golives: golive_total,
+            golive_share: std::array::from_fn(|h| {
+                if golive_total > 0.0 {
+                    counted[h] / golive_total
+                } else {
+                    0.0
+                }
+            }),
+            hour_intervals,
+            book,
+            day_units,
         });
-        let stretch_changed = stretch != self.stretch;
-        self.stretch = stretch;
-        let stretched = if stretch > 1 {
-            format!(" (配额消耗快于时间进度，间隔放大 {stretch} 倍)")
-        } else {
-            String::new()
-        };
+        let fit_changed = fit != self.fit;
+        self.fit = fit;
         let active = interval.filter(|_| on);
         if on != self.playlist_on {
             self.playlist_on = on;
             match active {
                 Some(interval) => tracing::info!(
-                    "YouTube 上传列表轮询开启: 每频道 {}s{}{}",
+                    "YouTube 上传列表轮询开启: 本时段每频道 {}s{}",
                     interval.as_secs(),
-                    stretched,
                     if degraded { " (RSS 不可用)" } else { "" }
                 ),
-                None => tracing::info!("YouTube 上传列表轮询关闭{}", stretched),
+                None => tracing::info!("YouTube 上传列表轮询关闭"),
             }
-        } else if let Some(interval) = active.filter(|_| stretch_changed) {
-            if stretch > 1 {
-                tracing::info!(
-                    "YouTube 配额消耗快于时间进度，上传列表轮询间隔放大 {} 倍: 每频道 {}s",
-                    stretch,
+        } else if on && fit_changed {
+            match (fit, active) {
+                (Fit::Short(factor), Some(interval)) => tracing::info!(
+                    "YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}s",
+                    factor,
                     interval.as_secs()
-                );
-            } else {
-                tracing::info!(
-                    "YouTube 配额进度恢复，上传列表轮询间隔恢复正常: 每频道 {}s",
+                ),
+                (_, Some(interval)) => tracing::info!(
+                    "YouTube 上传列表轮询恢复计划: 本时段每频道 {}s",
                     interval.as_secs()
-                );
+                ),
+                (_, None) => tracing::info!("YouTube 配额只够索引与转播目标，上传列表轮询暂停"),
             }
         }
+        let stretch = target_stretch;
 
         let live_channels: HashSet<String> = {
             let guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
@@ -906,6 +1157,7 @@ impl Worker {
 
         let mut due: Vec<String> = Vec::new();
         if let Some(interval) = active {
+            pull_in(&mut self.playlist_due, now, interval);
             // Spread first polls evenly over one interval.
             let count = roster.len().max(1) as u32;
             for (index, id) in roster.iter().enumerate() {
@@ -961,7 +1213,14 @@ impl Worker {
         }
 
         let results: Vec<(String, PlaylistOutcome)> = stream::iter(due)
-            .map(|id| fetch_playlist(keys.to_vec(), proxy.clone(), id))
+            .map(|id| {
+                let lane = if target.as_deref() == Some(id.as_str()) {
+                    Lane::Protected
+                } else {
+                    Lane::Playlist
+                };
+                fetch_playlist(keys.to_vec(), proxy.clone(), id, lane)
+            })
             .buffer_unordered(PLAYLIST_CONCURRENCY)
             .collect()
             .await;
@@ -1381,23 +1640,150 @@ mod tests {
     }
 
     #[test]
-    fn healthy_websub_doubles_the_roster_interval_without_switching_it_off() {
+    fn healthy_websub_halves_the_roster_units_without_switching_it_off() {
         let three_keys = playlist_interval(37, 3, true);
-        let (interval, on) = paced_interval(three_keys, 1, false);
-        assert!(on);
-        let slowed = websub_backstop(interval, true).unwrap();
-        assert_eq!(slowed, interval.unwrap() * 2);
-        assert!(slowed > RSS_TICK, "past the RSS tick, yet still on");
-        assert_eq!(
-            websub_backstop(interval, false),
-            interval,
-            "24h silent or failing"
+        assert!(polling_on(three_keys, false));
+        let full = hourly_polls(37, playlist_day_units(3, true, false), None, &WHOLE_DAY);
+        let slowed = hourly_polls(37, playlist_day_units(3, true, true), None, &WHOLE_DAY);
+        assert_eq!(interval_of(full[0]), three_keys.unwrap());
+        assert!(
+            interval_of(slowed[0]) > RSS_TICK,
+            "past the RSS tick, yet still on"
         );
+        assert!((full[0] / slowed[0] - 2.0).abs() < 0.01);
         assert_eq!(
             target_poll_interval(1),
             TARGET_POLL_INTERVAL,
             "the restream target keeps its 60s cadence"
         );
+    }
+
+    /// Go-lives per JST hour in ny's index on 2026-09-28 (443 streams),
+    /// rotated into UTC buckets.
+    fn measured_weights() -> [f64; 24] {
+        let jst = [
+            12.0, 7.0, 1.0, 2.0, 1.0, 3.0, 4.0, 4.0, 11.0, 4.0, 5.0, 8.0, 20.0, 5.0, 19.0, 21.0,
+            27.0, 27.0, 43.0, 54.0, 63.0, 49.0, 28.0, 25.0,
+        ];
+        std::array::from_fn(|utc| jst[(utc + 9) % 24])
+    }
+
+    #[test]
+    fn polls_follow_the_go_live_hours_within_fifteen_minutes_and_a_minute() {
+        let units = 12_000;
+        let polls = hourly_polls(33, units, Some(&measured_weights()), &WHOLE_DAY);
+        let secs = |jst: usize| interval_of(polls[(jst + 15) % 24]).as_secs();
+        for jst in 2..=6 {
+            assert_eq!(secs(jst), 900, "{jst}:00 JST is quiet");
+        }
+        for jst in 18..=21 {
+            assert!(secs(jst) < 119, "{jst}:00 JST is under half of flat 238s");
+        }
+        assert!(polls
+            .iter()
+            .all(|p| (MIN_POLLS_PER_HOUR - 1e-9..=MAX_POLLS_PER_HOUR + 1e-9).contains(p)));
+        let spent: f64 = polls.iter().sum::<f64>() * 33.0;
+        assert!(
+            (spent - units as f64).abs() / (units as f64) < 0.01,
+            "{spent}"
+        );
+    }
+
+    #[test]
+    fn polling_is_flat_without_a_history_and_capped_at_a_minute() {
+        let flat = hourly_polls(33, 12_000, None, &WHOLE_DAY);
+        assert!(flat.iter().all(|p| *p == flat[0]));
+        assert_eq!(
+            interval_of(flat[0]),
+            Duration::from_secs(238),
+            "today's WebSub-halved 3-key cadence"
+        );
+        let rich = hourly_polls(3, 50_000, Some(&measured_weights()), &WHOLE_DAY);
+        assert!(rich.iter().all(|p| *p == MAX_POLLS_PER_HOUR));
+    }
+
+    #[test]
+    fn a_busy_hour_pulls_in_channels_stamped_under_a_quiet_one() {
+        let now = Instant::now();
+        let mut due: HashMap<String, Instant> = [
+            ("quiet".to_string(), now + Duration::from_secs(890)),
+            ("soon".to_string(), now + Duration::from_secs(10)),
+        ]
+        .into_iter()
+        .collect();
+        pull_in(&mut due, now, Duration::from_secs(79));
+        assert_eq!(due["quiet"], now + Duration::from_secs(79));
+        assert_eq!(due["soon"], now + Duration::from_secs(10));
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn the_plan_covers_only_the_rest_of_the_pacific_day() {
+        // 06:30 UTC in PDT: half an hour left of the Pacific day.
+        let span = remaining_span(at("2026-09-28T06:30:00Z"), 1.0 / 48.0);
+        assert_eq!(span[6], 0.5);
+        assert_eq!(span.iter().sum::<f64>(), 0.5);
+        // Twelve hours from 11:45 UTC: a quarter of 11:00, all of 12-22, and
+        // three quarters of 23:00.
+        let span = remaining_span(at("2026-09-28T11:45:00Z"), 0.5);
+        assert_eq!(span[11], 0.25);
+        assert!((12..23).all(|h| span[h] == 1.0));
+        assert_eq!(span[23], 0.75);
+        assert_eq!(span.iter().sum::<f64>(), 12.0);
+    }
+
+    #[test]
+    fn small_shortfalls_report_as_on_plan() {
+        assert_eq!(Fit::Short(1.04).reported(), Fit::Plan);
+        assert_eq!(Fit::Short(1.31).reported(), Fit::Short(1.4));
+        assert_eq!(Fit::Paused.reported(), Fit::Paused);
+    }
+
+    fn book(pool_left: u64, protected_used: u64, playlist_used: u64, day_left: f64) -> LaneBook {
+        LaneBook {
+            pool_left,
+            protected_used,
+            protected_budget: RESERVED_UNITS,
+            playlist_used,
+            day_left,
+        }
+    }
+
+    #[test]
+    fn the_roster_yields_to_the_protected_lane_and_the_store_never_waits() {
+        // WebSub down, measured hours: the full 24k lane at 21:00 JST
+        // (12:00 UTC, 5h into the PDT day), on plan so far.
+        let day_units = playlist_day_units(3, false, false);
+        let weights = measured_weights();
+        let span = remaining_span(at("2026-09-28T12:00:00Z"), 19.0 / 24.0);
+        let plan = hourly_polls(33, day_units, Some(&weights), &WHOLE_DAY);
+        let wanted = plan.iter().zip(&span).map(|(p, s)| p * s).sum::<f64>() * 33.0;
+        let spent = (day_units as f64 - wanted) as u64;
+        let fit =
+            |book: &LaneBook| fit_plan(33, day_units, Some(&weights), &span, book.playlist_room());
+
+        // The protected lane on its reserve's pace: the roster keeps its plan.
+        let on_plan = book(27_000 - spent - 625 + 50, 625, spent, 19.0 / 24.0);
+        assert_eq!(fit(&on_plan), (plan, Fit::Plan));
+        assert_eq!(on_plan.protected_stretch(), 1);
+
+        // The store 1,000 units over: the roster slows, the store does not.
+        let over = book(27_000 - spent - 1_625, 1_625, spent, 19.0 / 24.0);
+        let (polls, fit_over) = fit(&over);
+        assert!(
+            matches!(fit_over, Fit::Short(factor) if factor > 1.0),
+            "{fit_over:?}"
+        );
+        let refit = polls.iter().zip(&span).map(|(p, s)| p * s).sum::<f64>() * 33.0;
+        assert!(refit <= over.playlist_room() as f64 + 1.0, "{refit}");
+        assert_eq!(over.protected_stretch(), 1);
+
+        // No room for another poll per channel: it waits, the store does not.
+        let dry = book(2_000, 1_625, 25_000, 19.0 / 24.0);
+        assert_eq!(fit(&dry).1, Fit::Paused);
     }
 
     #[tokio::test]
@@ -1454,23 +1840,13 @@ mod tests {
     }
 
     #[test]
-    fn a_stretch_slows_polling_and_turns_it_off_once_rss_is_faster() {
+    fn polling_runs_while_it_beats_rss_or_rss_is_down() {
         let three_keys = playlist_interval(37, 3, false);
-        let secs = |(interval, on): (Option<Duration>, bool)| (interval.map(|d| d.as_secs()), on);
-        assert_eq!(
-            secs(paced_interval(three_keys, 1, false)),
-            (Some(134), true)
-        );
-        assert_eq!(
-            secs(paced_interval(three_keys, 2, false)),
-            (Some(268), false)
-        );
-        assert_eq!(
-            secs(paced_interval(three_keys, 2, true)),
-            (Some(268), true),
-            "RSS down keeps polling at the stretched cadence"
-        );
-        assert_eq!(secs(paced_interval(None, 2, true)), (None, false));
+        assert!(polling_on(three_keys, false));
+        let one_key = playlist_interval(37, 1, false);
+        assert!(!polling_on(one_key, false));
+        assert!(polling_on(one_key, true), "RSS down keeps polling");
+        assert!(!polling_on(None, true));
     }
 
     #[test]
