@@ -123,6 +123,39 @@ struct Pushed {
     fresh: bool,
 }
 
+/// A roster entry a push delivered.
+#[derive(Debug)]
+struct Accepted {
+    entry: FeedEntry,
+    /// The video's first push; later ones are title or description edits.
+    first: bool,
+}
+
+/// The info line for a video's first push: how long after `published` it came,
+/// and whether RSS or the uploads playlist listed it first (`found`).
+fn push_line(
+    entry: &FeedEntry,
+    now: chrono::DateTime<chrono::Utc>,
+    found: Option<(&str, Duration)>,
+) -> String {
+    let delay = entry
+        .published
+        .as_deref()
+        .and_then(|published| chrono::DateTime::parse_from_rfc3339(published).ok())
+        .map_or_else(
+            || "?".to_string(),
+            |published| format!("{}s", (now - published.to_utc()).num_seconds()),
+        );
+    let mut line = format!(
+        "WebSub 推送 {} ({})，发布后 {}",
+        entry.video_id, entry.channel_name, delay
+    );
+    if let Some((source, ago)) = found {
+        line.push_str(&format!("，{} 已于 {}s 前发现", source, ago.as_secs()));
+    }
+    line
+}
+
 struct Bucket {
     tokens: f64,
     at: Instant,
@@ -230,8 +263,8 @@ impl Hub {
         }
     }
 
-    /// Accept a signed push: queue its roster entries for discovery. Returns
-    /// the queued video IDs.
+    /// The queued video IDs of `accept`.
+    #[cfg(test)]
     fn push(
         &mut self,
         secret: &str,
@@ -239,6 +272,23 @@ impl Hub {
         body: &[u8],
         now: Instant,
     ) -> Result<Vec<String>, StatusCode> {
+        Ok(self
+            .accept(secret, signature, body, now)?
+            .into_iter()
+            .map(|accepted| accepted.entry.video_id)
+            .collect())
+    }
+
+    /// Accept a signed push: queue its roster entries for discovery. Returns
+    /// them, each marked with whether it is its video's first push (within
+    /// `PUSH_KEEP`; later ones are edits).
+    fn accept(
+        &mut self,
+        secret: &str,
+        signature: Option<&str>,
+        body: &[u8],
+        now: Instant,
+    ) -> Result<Vec<Accepted>, StatusCode> {
         if !signature_ok(secret, signature, body) {
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -249,7 +299,10 @@ impl Hub {
             if !self.roster.contains(&entry.channel_id) {
                 continue;
             }
-            queued.push(entry.video_id.clone());
+            queued.push(Accepted {
+                entry: entry.clone(),
+                first: !self.pushed.contains_key(&entry.video_id),
+            });
             self.pushed.insert(
                 entry.video_id.clone(),
                 Pushed {
@@ -304,10 +357,18 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
     let signature = headers
         .get("x-hub-signature")
         .and_then(|value| value.to_str().ok());
-    match with_hub(|hub| hub.push(secret(), signature, &body, Instant::now())) {
-        Ok(queued) => {
-            if !queued.is_empty() {
-                tracing::debug!("WebSub 推送: {}", queued.join(", "));
+    match with_hub(|hub| hub.accept(secret(), signature, &body, Instant::now())) {
+        Ok(accepted) => {
+            if !accepted.is_empty() {
+                let now = chrono::Utc::now();
+                for item in &accepted {
+                    if item.first {
+                        let found = super::youtube_rss::found_before(&item.entry.video_id);
+                        tracing::info!("{}", push_line(&item.entry, now, found));
+                    } else {
+                        tracing::debug!("WebSub 更新推送: {}", item.entry.video_id);
+                    }
+                }
                 PUSH_WAKE.notify_one();
             }
             StatusCode::NO_CONTENT.into_response()
@@ -794,6 +855,47 @@ mod tests {
             hub.push("s", Some(&sig), deleted.as_bytes(), now),
             Ok(vec![])
         );
+    }
+
+    #[test]
+    fn only_a_video_s_first_push_counts_as_new() {
+        let now = Instant::now();
+        let mut hub = hub_with_roster(now);
+        let body = PUSH.as_bytes();
+        let sig = sign("s", body);
+        let first = hub.accept("s", Some(&sig), body, now).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].first);
+        let edit = hub.accept("s", Some(&sig), body, now).unwrap();
+        assert!(!edit[0].first, "a title or description edit");
+    }
+
+    #[test]
+    fn a_push_line_says_how_late_it_came_and_who_was_first() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-28T03:10:00Z")
+            .unwrap()
+            .to_utc();
+        let entry = |published: Option<&str>| FeedEntry {
+            video_id: "LsafXKi4N3I".to_string(),
+            channel_id: CHANNEL.to_string(),
+            channel_name: "花芽なずな".to_string(),
+            title: "APEX".to_string(),
+            published: published.map(str::to_string),
+        };
+        assert_eq!(
+            push_line(&entry(Some("2026-09-28T03:08:30+00:00")), now, None),
+            "WebSub 推送 LsafXKi4N3I (花芽なずな)，发布后 90s"
+        );
+        assert_eq!(
+            push_line(
+                &entry(Some("2026-09-28T12:08:30+09:00")),
+                now,
+                Some(("playlist", Duration::from_secs(40)))
+            ),
+            "WebSub 推送 LsafXKi4N3I (花芽なずな)，发布后 90s，playlist 已于 40s 前发现"
+        );
+        assert!(push_line(&entry(None), now, None).ends_with("发布后 ?"));
+        assert!(push_line(&entry(Some("soon")), now, None).ends_with("发布后 ?"));
     }
 
     #[test]

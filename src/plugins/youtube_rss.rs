@@ -916,6 +916,50 @@ impl Source {
     }
 }
 
+/// First listings are kept this long, longer than a push can be late.
+const FIRST_SEEN_KEEP: Duration = Duration::from_secs(48 * 60 * 60);
+
+/// When RSS or an uploads playlist first listed each video, so a WebSub push
+/// can say whether it came first (`found_before`).
+#[derive(Default)]
+struct FirstSeen(HashMap<String, (Source, Instant)>);
+
+impl FirstSeen {
+    /// Notes the IDs not listed before; forgets listings past `FIRST_SEEN_KEEP`.
+    fn note<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>, source: Source, now: Instant) {
+        self.0
+            .retain(|_, (_, at)| now.saturating_duration_since(*at) < FIRST_SEEN_KEEP);
+        for id in ids {
+            self.0.entry(id.to_string()).or_insert((source, now));
+        }
+    }
+
+    fn before(&self, id: &str, now: Instant) -> Option<(Source, Duration)> {
+        self.0
+            .get(id)
+            .map(|(source, at)| (*source, now.saturating_duration_since(*at)))
+    }
+}
+
+static FIRST_SEEN: Mutex<Option<FirstSeen>> = Mutex::new(None);
+
+fn note_first_seen<'a>(ids: impl IntoIterator<Item = &'a str>, source: Source) {
+    let mut guard = FIRST_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(FirstSeen::default)
+        .note(ids, source, Instant::now());
+}
+
+/// Which discovery source (`rss` / `playlist`) listed this video first, and
+/// how long ago; `None` when neither has.
+pub(crate) fn found_before(video_id: &str) -> Option<(&'static str, Duration)> {
+    let guard = FIRST_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_ref()?
+        .before(video_id, Instant::now())
+        .map(|(source, ago)| (source.label(), ago))
+}
+
 /// Seconds since YouTube's `actualStartTime`.
 fn seconds_since(start: &str) -> Option<i64> {
     let start = chrono::DateTime::parse_from_rfc3339(start).ok()?;
@@ -1021,6 +1065,10 @@ impl Worker {
                 for entry in entries {
                     fresh.entry(entry.video_id.clone()).or_insert(Source::Rss);
                 }
+                note_first_seen(
+                    entries.iter().map(|entry| entry.video_id.as_str()),
+                    Source::Rss,
+                );
             }
         }
         self.rss.record(results, Instant::now());
@@ -1232,6 +1280,10 @@ impl Worker {
                             .entry(entry.video_id.clone())
                             .or_insert(Source::Playlist);
                     }
+                    note_first_seen(
+                        entries.iter().map(|entry| entry.video_id.as_str()),
+                        Source::Playlist,
+                    );
                     self.playlist_seen.insert(id, entries);
                 }
                 PlaylistOutcome::NotFound => {
@@ -1920,6 +1972,26 @@ mod tests {
         cfg.holodex_monitor_gate = true;
         cfg.youtube.enable_monitor = false;
         assert_eq!(restream_target(&cfg), None);
+    }
+
+    #[test]
+    fn a_video_keeps_the_source_that_listed_it_first() {
+        let t0 = Instant::now();
+        let mut seen = FirstSeen::default();
+        seen.note(["abc"], Source::Playlist, t0);
+        seen.note(["abc", "def"], Source::Rss, t0 + Duration::from_secs(30));
+        assert_eq!(
+            seen.before("abc", t0 + Duration::from_secs(40)),
+            Some((Source::Playlist, Duration::from_secs(40)))
+        );
+        assert_eq!(
+            seen.before("def", t0 + Duration::from_secs(40)),
+            Some((Source::Rss, Duration::from_secs(10)))
+        );
+        assert_eq!(seen.before("ghi", t0), None);
+        seen.note(std::iter::empty(), Source::Rss, t0 + FIRST_SEEN_KEEP);
+        assert_eq!(seen.before("abc", t0 + FIRST_SEEN_KEEP), None, "forgotten");
+        assert!(seen.before("def", t0 + FIRST_SEEN_KEEP).is_some());
     }
 
     #[test]
