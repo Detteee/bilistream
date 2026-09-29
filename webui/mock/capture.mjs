@@ -60,7 +60,7 @@ try {
   };
   assert.equal(await evaluate("document.querySelector('.card[data-platform=\"cluster\"]').classList.contains('hidden')"), true);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.dashboard')).gridTemplateColumns.split(' ').length"), 3);
-  await capture(join(root, 'screenshot_of_webui.png'));
+  await capture(join(root, 'docs/images/screenshot_of_webui.png'));
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1100 }, devicePixelRatio: 1 });
   await evaluate("document.getElementById('tab-settings').click()");
   await waitFor("document.getElementById('config-websub-callback-url').value.includes('example.com')");

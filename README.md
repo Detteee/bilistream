@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1><img src="icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
+<h1><img src="assets/icons/icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
 
 [English](README.md) | [中文](README.zh_CN.md)
 
@@ -19,7 +19,7 @@ New installations start with an empty channel roster and a minimal area template
 
 ## Control panel
 
-![Mock dashboard with simulated data](screenshot_of_webui.png)
+![Mock dashboard with simulated data](docs/images/screenshot_of_webui.png)
 
 - **Source monitors:** YouTube and Twitch; configure title, area, quality, crop and HLS cache by platform.
 - **Live & upcoming list:** configure a Holodex API key to browse streams, switch targets and see suggested areas. Optional Holodex login adds favourites.

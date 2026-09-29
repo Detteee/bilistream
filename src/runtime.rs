@@ -553,7 +553,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         {
             tracing::error!("❌ YouTube、Twitch 和 Niconico 配置均为空");
             tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
-            tracing::info!("💡 提示: 访问 WebUI 进行配置，或参考 config.json.example");
+            tracing::info!("💡 提示: 打开 Web UI，按设置向导完成配置");
             // Sleep and continue to allow WebUI configuration
             wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
             continue 'outer;

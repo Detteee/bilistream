@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1><img src="icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
+<h1><img src="assets/icons/icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
 
 [English](README.md) | [中文](README.zh_CN.md)
 
@@ -19,7 +19,7 @@
 
 ## 控制面板
 
-![使用模拟数据的仪表盘](screenshot_of_webui.png)
+![使用模拟数据的仪表盘](docs/images/screenshot_of_webui.png)
 
 - **来源监控**：YouTube、Twitch，按平台配置标题、分区、画质、裁剪与 HLS 缓存。
 - **直播与预告**：配置 Holodex API Key 后浏览直播并切换转播目标，自动推荐分区；可选登录以使用收藏夹。
