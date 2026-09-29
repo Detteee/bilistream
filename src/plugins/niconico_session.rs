@@ -112,6 +112,28 @@ fn classify(status: reqwest::StatusCode, body: Option<&serde_json::Value>) -> Se
     }
 }
 
+fn session_request(client: &reqwest::Client, session: &str) -> Result<reqwest::Request, ()> {
+    let mut cookie = reqwest::header::HeaderValue::from_str(&format!("user_session={session}"))
+        .map_err(|_| ())?;
+    cookie.set_sensitive(true);
+    client
+        .get(CHECK_URL)
+        .header(reqwest::header::COOKIE, cookie)
+        // The authenticated nvapi endpoint rejects requests missing web-client metadata.
+        .header(
+            reqwest::header::USER_AGENT,
+            super::niconico::CHANNEL_PAGE_USER_AGENT,
+        )
+        .header(reqwest::header::ORIGIN, "https://www.nicovideo.jp")
+        .header(reqwest::header::REFERER, "https://www.nicovideo.jp/")
+        .header("X-Request-With", "https://www.nicovideo.jp")
+        .header("X-Frontend-Id", "6")
+        .header("X-Frontend-Version", "0")
+        .header("X-Niconico-Language", "en-us")
+        .build()
+        .map_err(|_| ())
+}
+
 async fn probe(session: &str, proxy: Option<&str>) -> SessionStatus {
     let result = async {
         let mut builder = reqwest::Client::builder()
@@ -122,16 +144,8 @@ async fn probe(session: &str, proxy: Option<&str>) -> SessionStatus {
             builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| ())?);
         }
         let client = builder.build().map_err(|_| ())?;
-        let mut cookie = reqwest::header::HeaderValue::from_str(&format!("user_session={session}"))
-            .map_err(|_| ())?;
-        cookie.set_sensitive(true);
         let response = client
-            .get(CHECK_URL)
-            .header(reqwest::header::COOKIE, cookie)
-            .header("X-Frontend-Id", "6")
-            .header("X-Frontend-Version", "0")
-            .header("X-Niconico-Language", "en-us")
-            .send()
+            .execute(session_request(&client, session)?)
             .await
             .map_err(|_| ())?;
         let status = response.status();
@@ -217,6 +231,33 @@ pub fn start_session_worker() -> SessionWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authenticated_probe_has_web_client_headers_and_a_sensitive_cookie() {
+        crate::install_crypto_provider();
+        let client = reqwest::Client::new();
+        let request = session_request(&client, "synthetic-session").unwrap();
+        assert_eq!(request.url().as_str(), CHECK_URL);
+        let headers = request.headers();
+        assert!(headers[reqwest::header::USER_AGENT]
+            .to_str()
+            .unwrap()
+            .starts_with("Mozilla/5.0"));
+        assert_eq!(headers[reqwest::header::ORIGIN], "https://www.nicovideo.jp");
+        assert_eq!(
+            headers[reqwest::header::REFERER],
+            "https://www.nicovideo.jp/"
+        );
+        assert_eq!(headers["X-Request-With"], "https://www.nicovideo.jp");
+        assert_eq!(headers["X-Frontend-Id"], "6");
+        assert_eq!(
+            headers[reqwest::header::COOKIE],
+            "user_session=synthetic-session"
+        );
+        assert!(headers[reqwest::header::COOKIE].is_sensitive());
+        assert!(!format!("{request:?}").contains("synthetic-session"));
+        assert!(session_request(&client, "invalid\nsession").is_err());
+    }
+
     #[test]
     fn daily_checks_do_not_become_keep_alive_and_transient_errors_retry_later() {
         assert_eq!(
