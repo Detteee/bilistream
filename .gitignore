@@ -3,3 +3,20 @@ config.yaml
 /src-tauri/gen/schemas/
 niconico_cookies.txt
 youtube_quota.json
+
+# Publish reader-facing guides; keep development notes and task logs local.
+*.md
+*.MD
+*.markdown
+!/README.md
+!/README.zh_CN.md
+!/docs/index.md
+!/docs/first-run.md
+!/docs/advanced-settings.md
+!/docs/advanced-settings.zh_CN.md
+!/docs/niconico-session.md
+!/docs/public-status.md
+!/docs/websub-tunnel.md
+!/docs/youtube-discovery.md
+/.trellis/
+/docs/research/

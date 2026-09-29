@@ -1,275 +1,89 @@
 <div align="center">
 
-<h1>
-  <img src="icon.png" alt="Bilistream" width="48" height="48" style="vertical-align: middle;">
-  Bilistream
-</h1>
+<h1><img src="icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
 
 [English](README.md) | [中文](README.zh_CN.md)
 
 </div>
 
-## 下载
+将 YouTube 和 Twitch 转播到哔哩哔哩直播，提供浏览器控制面板和可选的 Tauri 桌面应用。
 
-**最新版本：v0.6.2**
+## 快速开始
 
-从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载最新版本
+1. 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载。本 README 描述当前源码，已发布版本的功能可能较早。
+2. Windows 双击 `bilistream.exe`；Linux/macOS 运行 `./bilistream`，打开 `http://localhost:3150`。
+3. 完成浏览器设置向导：Bilibili 扫码登录、直播间设置、添加自己的频道并选择官方分区。YouTube 可粘贴频道主页或 @handle，也可使用 Holodex API Key 和 JWT 勾选导入收藏频道。
+4. 为需要监控的平台选择转播目标；选择**不转播**则关闭该平台监控。也可以先导入频道，稍后再启用。默认按单机方式运行。
 
-**快速开始：**
+新安装使用空频道表和最小分区模板（其他单机）；向导会保存你选择的频道和分区，已有文件不会被覆盖。界面从程序内置资源安装，Windows 的 ffmpeg、yt-dlp 按需下载。
 
-1. **Windows:** 双击 `bilistream.exe` - 后台运行，浏览器自动打开webui！
-2. **Linux/Mac:** 终端运行 `./bilistream`
-3. **桌面应用（可选）：** 使用 `bilistream-tauri` 获得原生窗口和系统托盘 — 浏览器仍可通过 `http://localhost:3150` 访问
-4. **自动下载:** 首次运行时自动下载必需文件：
-   - `webui/dist/index.html` - Web 界面
-   - `areas.json` - B站分区和禁用关键词
-   - `channels.json` - 预设频道列表
-   - **仅 Windows:** `yt-dlp.exe` 和 `ffmpeg.exe`
-4. 在浏览器中打开 `http://localhost:3150`
-5. **首次运行:** 在浏览器中完成设置向导（二维码登录、配置）
-6. **后续运行:** 直接访问控制面板
+## 控制面板
 
-## 功能特点
+![使用模拟数据的仪表盘](screenshot_of_webui.png)
 
-- **自动更新** - 从 Web UI 一键更新
-  - 启动时自动检测更新
-  - 安全安装并备份
-  - 保留所有配置和用户数据
-  - 更新后自动重启
-- **Web UI** - 现代化控制面板，用于监控和管理直播
-  - 明亮与暗色主题
-  - 推流时显示码率、帧率与流量实时曲线
-- **Holodex 集成** - 浏览 VTuber 直播并一键切换转播目标
-  - 可选登录 Holodex 以使用自己的收藏夹
-  - 为每个直播推荐匹配的哔哩哔哩分区
-- **网页版设置向导** - 通过浏览器完成首次配置（无需命令行！）
-  - 浏览器中显示二维码登录
-  - 分步引导式设置
-  - 实时状态更新
-- **自动转播** - Twitch 和 YouTube 直播到哔哩哔哩
-- **预定直播** - 支持 YouTube 预定直播
-- **自动设置** - 自动更新哔哩哔哩直播标题、分区和封面
-- **推流调整** - 按平台配置画面裁剪与 HLS 缓存延迟推流
-- **弹幕命令** - 离线时通过聊天更改监控目标
-- **英雄联盟监控** - 玩家名称发现黑名单词汇时停止直播
-- **防撞车** - 避免转播已被转播的内容
+- **来源监控**：YouTube、Twitch，按平台配置标题、分区、画质、裁剪与 HLS 缓存。
+- **直播与预告**：配置 Holodex API Key 后浏览直播并切换转播目标，自动推荐分区；可选登录以使用收藏夹。
+- **转播控制**：Bilibili 开关播、重启转播、码率与缓存仪表、标题/分区/封面更新、弹幕指令、关键词过滤、英雄联盟玩家名称检查和防撞车。
 
-## Web UI 预览
+向导与配置管理均支持官方分区选择，自动填写 ID 和名称。[首次设置说明](docs/first-run.md)。
 
-![Web UI 截图](screenshot_of_webui.png)
+## 高级设置
 
-## 依赖
+优先频道、RSS、WebSub、YouTube Data API、公开状态页、多服务器和 Niconico 的说明见 [高级设置](docs/advanced-settings.zh_CN.md)。
 
-**Windows:**
+## 依赖与编译
 
-- ✨ **自动下载！** 核心依赖项会在首次运行时自动下载：
-  - ffmpeg.exe
-  - yt-dlp.exe
-- **Twitch 支持**（可选）：
-  - 安装 streamlink: `pip install streamlink`
-  - 安装 ttvlol 插件: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
+- **ffmpeg、yt-dlp**：Windows 自动安装二进制，Linux/macOS 自行安装。
+- **streamlink**：Twitch 和 Niconico 需要；Twitch 还需 [streamlink-ttvlol 插件](https://github.com/2bc4/streamlink-ttvlol)。
+- 部分来源需要 Cookie。YouTube Cookie 与 Niconico user_session 在 Web UI 设置，Bilibili 登录由向导完成。
 
-**Linux/Mac:**
-
-- ffmpeg
-- yt-dlp
-- streamlink (需安装 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 插件)
-
-## 安装步骤
-
-1. 克隆仓库：
-
-   ```bash
-   git clone https://github.com/your-username/bilistream.git
-   cd bilistream
-   ```
-2. 安装所需依赖（以 Debian 系统为例）：
-
-   ```bash
-   sudo apt update
-   sudo apt install ffmpeg python3-pip
-   pip install yt-dlp streamlink
-   ```
-3. 安装 streamlink-ttvlol 插件：
-   按照 [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) 的说明进行操作
-4. 构建项目：
-
-   对于 Debian 12 和其他使用 glibc 2.36 或更新版本的 Linux 发行版：
-
-   ```bash
-   cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
-   ```
-
-   对于 Windows：
-
-   ```bash
-   cargo build --target x86_64-pc-windows-gnu --release
-   ```
-
-5. **配置：**
-
-   **网页版设置:**
-
-   - 直接运行 `./bilistream`（或双击 `bilistream.exe`）
-   - 在浏览器中打开 `http://localhost:3150`
-   - 如果缺少配置文件，网页设置向导会自动显示
-   - 通过浏览器界面完成所有配置：
-     - **步骤 1**: 哔哩哔哩登录（二维码显示在浏览器中）
-     - **步骤 2**: 基础设置（直播间号、检测间隔、功能开关）
-     - **步骤 3**: 平台配置（YouTube、Twitch、API 密钥）
-6. **流质量配置：**
-
-   对于网络带宽受限的用户，可以配置流质量设置：
-
-   **YouTube (yt-dlp) 质量选项：**
-
-   - `best` - 最佳可用质量（推荐）
-   - `best[height<=1080]` - 最佳质量，最高1080p
-   - `best[height<=720]` - 最佳质量，最高720p
-   - `best[height<=480]` - 最佳质量，最高480p
-   - `best[height<=360]` - 最佳质量，最高360p
-   - `worst` - 最低可用质量
-
-   **Twitch (streamlink) 质量选项：**
-
-   - `best` - 原画质量
-   - `high` - 高质量（≤720p30帧，过滤更高分辨率）
-   - `medium` - 中等质量（≤540p30帧，过滤更高分辨率）
-   - `low` - 低质量（≤360p30帧，过滤更高分辨率）
-   - `audio_only` - 仅音频流（无视频）
-   - `worst` - 最低可用质量
-
-   编辑 `config.json`：
-
-   ```json
-   {
-     "youtube": {
-       "quality": "best[height<=720]"
-     },
-     "twitch": {
-       "quality": "high"
-     }
-   }
-   ```
-7. （可选）创建 `invalid_words.txt` 以监控英雄联盟游戏内 ID：
-
-   - 创建名为 `invalid_words.txt` 的文件，每行一个词
-   - 在 config.json 中配置 `RiotApiKey` 和 `LolMonitorInterval`：
-
-     ```json
-     {
-       "riot_api_key": "YOUR-RIOT-API-KEY",
-       "lol_monitor_interval": 1
-     }
-     ```
-   - 程序将监控游戏内玩家，如发现黑名单词汇则停止直播
-
-## 文件结构
-
-```txt
-.
-├── bilistream           # 主程序可执行文件
-├── areas.json           # 分区（游戏类别）和禁用关键词配置
-├── channels.json        # YouTube、Twitch 和 PUUID 的频道配置
-├── config.json          # 主配置文件
-├── cookies.json         # 哔哩哔哩登录 cookies（网页设置向导写入）
-├── invalid_words.txt    # 英雄联盟玩家 ID 过滤词 (可选)
-└── stream_manager.sh    # 管理脚本
-```
-
-## 使用方法
-
-### 快速开始
-
-**最简单的方式 - 直接运行：**
+安装 Rust 工具链后编译：
 
 ```bash
-./bilistream
+git clone https://github.com/Detteee/bilistream.git
+cd bilistream
+cargo build --release --bin bilistream
+./target/release/bilistream
 ```
 
-**运行效果：**
+可选桌面包位于 `src-tauri`（`bilistream-tauri`），共用 Rust 后端，需要 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。安装 cargo-zigbuild 和 Zig 后，可用 `cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release` 进行 Linux 交叉编译。
 
-- **Windows:** 后台运行，浏览器自动打开webui，托盘图标出现
-- **Linux/Mac:** 启动 Web 服务器，在浏览器中打开 `http://localhost:3150`
-
-**高级选项：**
+## 启动与配置
 
 ```bash
-./bilistream --tray             # 强制系统托盘（Windows 默认）
-./bilistream --webui            # 强制控制台 Web UI（Linux/macOS 默认）
-./bilistream-tauri              # 桌面应用模式（原生窗口 + 托盘）
+./bilistream --webui
+./bilistream --tray
+./bilistream --port 3150
+./bilistream --bind 127.0.0.1
+./bilistream --password '<密码>'
+./bilistream --ffmpeg-log-level error
 ```
 
-**首次运行：**
+监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；远程访问应通过已配置认证的入口。
 
-- 设置向导在浏览器中显示
-- 按步骤完成登录和配置
-- 就这么简单！
+运行时文件位于**正在运行的程序旁边**，不一定是源码根目录：
 
-### Web UI 功能
+| 文件 | 内容 |
+| --- | --- |
+| `config.json` | 设置，建议通过 Web UI 修改。[带注释示例](config.json.example) 是参考文件，不是严格 JSON。 |
+| `cookies.json` | Bilibili 登录凭据，请勿公开。 |
+| `channels.json` / `areas.json` | 频道名单与分区、关键词规则。 |
+| `invalid_words.txt` | 可选的英雄联盟玩家名称过滤词，每行一个。 |
+| `youtube_quota.json` / `youtube_golive_hours.json` | 自动生成的 API 用量及发现时段统计。 |
+| `webui/dist/` / `webui/public-dist/` | 安装后的管理端与公开状态页资源。 |
 
-- 🚀 **网页版设置向导**
-  - 在浏览器中完成首次配置
-  - 二维码直接显示在网页中
-  - 无需终端/命令行知识
-  - 分步引导式流程
-- ⚙️ **配置管理**
-  - 通过网页界面编辑所有设置
-  - 实时配置更新
-  - 无需手动编辑 JSON 文件
-  - 管理频道、分区和平台设置
-- 📊 实时状态仪表板（Bilibili、YouTube、Twitch）
-- 📈 实时流量曲线（码率、帧率、累计推送量）
-- 🎬 **Holodex 面板** - VTuber 直播列表，一键切换转播目标
-- ✂️ **推流调整** - 按平台裁剪画面并设置 HLS 缓存延迟
-- 🎮 一键直播控制
-- 💬 发送弹幕消息
-- 📺 频道管理
-- 🎯 分区下拉选择
-- 🌗 明亮与暗色主题
-- 📱 移动端友好界面
+优先监控和多服务器默认关闭；显示设置不改变监控状态。已有配置键保持兼容。
 
-### 启动选项
+弹幕切换使用 `channels.json` 中的频道名，例如：
 
-登录、配置和直播控制都在 Web UI（`http://localhost:3150`）完成。
-
-```bash
-./bilistream                                    # 默认（Windows 托盘，Linux Web UI）
-./bilistream --tray                             # 系统托盘
-./bilistream --webui                            # 控制台 Web UI
-./bilistream --port 3150                        # Web UI 端口（或 BILISTREAM_PORT）
-./bilistream --bind 127.0.0.1                   # 监听地址（或 BILISTREAM_BIND）
-./bilistream --password <密码>                  # Web UI 登录密码（或 BILISTREAM_PASSWORD）
-./bilistream --ffmpeg-log-level error           # error、info 或 debug
-```
-
-### 弹幕命令功能
-
-弹幕命令格式：
-
-```txt
-%转播%YT/TW%频道名称%分区名称
-频道名称必须在 channels.json 中
-```
-
-示例：
-
-```txt
+```text
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
+%查询
 ```
 
-系统会检查直播标题并根据需要调整分区 ID。例如，如果直播标题包含 "Valorant"，无论指定的分区名称是什么，都会将分区 ID 设置为 329（无畏契约）。查看 [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) 获取更多分区名称和 ID。
+分区关键词规则可能调整请求的分区。英雄联盟检查需要 Riot key，`lol_monitor_interval` 的单位是分钟。
 
-## 贡献
+## 许可证与致谢
 
-欢迎贡献！请随时提交 Pull Request。
-
-## 许可证
-
-本项目采用 [unlicense](LICENSE) 许可证。
-
-## 致谢
-
-- [limitcool/bilistream](https://github.com/limitcool/bilistream)
-- [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
+采用 [Unlicense](LICENSE)。基于 [limitcool/bilistream](https://github.com/limitcool/bilistream)，弹幕功能参考 [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)。欢迎通过 Issue 和 Pull Request 贡献。

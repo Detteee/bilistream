@@ -67,6 +67,9 @@ Fight Mode if you're on a plan that has it).
 
 ## 4. Configure bilistream
 
+Standalone: leave multi-server mode off; no public-status node is required.
+In a cluster, configure the callback on the selected YouTube index node.
+
 In Settings → API 密钥:
 
 - **YouTube Data API Key:** must be set, because WebSub is off without a key.

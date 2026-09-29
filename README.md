@@ -1,275 +1,89 @@
 <div align="center">
 
-<h1>
-  <img src="icon.png" alt="Bilistream" width="48" height="48" style="vertical-align: middle;">
-  Bilistream
-</h1>
+<h1><img src="icon.png" alt="Bilistream" width="48" height="48"> Bilistream</h1>
 
 [English](README.md) | [中文](README.zh_CN.md)
 
 </div>
 
-## Download
+Rebroadcast YouTube and Twitch to Bilibili Live, with a browser control panel and an optional Tauri desktop shell.
 
-**Latest Release: v0.6.2**
+## Quick start
 
-Download from [GitHub Releases](https://github.com/Detteee/bilistream/releases)
+1. Download a build from [GitHub Releases](https://github.com/Detteee/bilistream/releases). This README describes the current source; published releases may contain an earlier feature set.
+2. On Windows, run `bilistream.exe`. On Linux/macOS, run `./bilistream` and open `http://localhost:3150`.
+3. Complete the browser setup wizard: Bilibili QR login, room settings, your own channels and official area selection. Paste a YouTube channel URL or @handle, or optionally import selected Holodex favourites using your API key and JWT.
+4. Choose a restream target for each platform you want to monitor; **不转播** leaves that platform off. You can import channels and start monitoring later. The default setup runs on a single server.
 
-**Quick Start:**
+New installations start with an empty channel roster and a minimal area template (其他单机). The wizard saves your selections and preserves existing files. UI assets are bundled; Windows ffmpeg/yt-dlp dependencies download when needed.
 
-1. **Windows:** Double-click `bilistream.exe` - Runs in background, browser opens webui automatically!
-2. **Linux/Mac:** Run `./bilistream` in terminal
-3. **Desktop App (optional):** Use `bilistream-tauri` for a native window with system tray — browser access still works at `http://localhost:3150`
-4. **Auto-download:** Required files download automatically on first run:
-   - `webui/dist/index.html` - Web interface
-   - `areas.json` - Bilibili categories and banned keywords
-   - `channels.json` - Preset channel list
-   - **Windows only:** `yt-dlp.exe` and `ffmpeg.exe`
-4. Open browser to `http://localhost:3150`
-5. **First run:** Complete setup wizard in browser (QR code login, configuration)
-6. **Subsequent runs:** Access control panel directly
+## Control panel
 
-## Features
+![Mock dashboard with simulated data](screenshot_of_webui.png)
 
-- **Auto-Update** - One-click updates from Web UI
-  - Automatic update detection on startup
-  - Safe installation with backup
-  - Preserves all configuration and user data
-  - Auto-restart after update
-- **Web UI** - Modern control panel for monitoring and managing streams
-  - Light and dark themes
-  - Live throughput graph with bitrate, FPS and frame counters while streaming
-- **Holodex Integration** - Browse live VTuber streams and switch the rebroadcast target in one click
-  - Optional Holodex login to use your own favourites
-  - Suggests a matching Bilibili area for each stream
-- **Web-Based Setup Wizard** - Complete first-run configuration through browser (no CLI needed!)
-  - QR code login displayed in browser
-  - Step-by-step guided setup
-  - Real-time status updates
-- **Auto Rebroadcast** - Twitch and YouTube streams to Bilibili Live
-- **Scheduled Streams** - Support for YouTube scheduled streams
-- **Auto Settings** - Update Bilibili live title, area, and thumbnail automatically
-- **Stream Tuning** - Per-platform video crop and an HLS cache for delayed push
-- **Danmaku Commands** - Change monitoring target via chat when offline
-- **LoL Monitor** - Stop streaming if blacklisted words found in player names
-- **Anti-Collision** - Avoid rebroadcasting already-streamed content
+- **Source monitors:** YouTube and Twitch; configure title, area, quality, crop and HLS cache by platform.
+- **Live & upcoming list:** configure a Holodex API key to browse streams, switch targets and see suggested areas. Optional Holodex login adds favourites.
+- **Stream controls:** Bilibili start/stop, rebroadcast restart, live bitrate/cache meters, title/area/cover updates, danmaku commands, keyword filters, LoL player-name checks and collision avoidance.
 
-## Web UI Preview
+Setup and area management offer the official area picker, filling IDs and names automatically. [First-run guide](docs/first-run.md).
 
-![Web UI Screenshot](screenshot_of_webui.png)
+## Advanced settings
 
-## Dependencies
+For priority channels, RSS, WebSub, YouTube Data API, public status, multi-server mode and Niconico, see [Advanced settings](docs/advanced-settings.md).
 
-**Windows:**
+## Dependencies and build
 
-- ✨ **Auto-downloaded!** Core dependencies are automatically downloaded on first run:
-  - ffmpeg.exe
-  - yt-dlp.exe
-- **For Twitch support** (optional):
-  - Install streamlink:  `pip install streamlink`
-  - Install ttvlol plugin: [streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
+- **ffmpeg** and **yt-dlp**: Windows installs the binaries automatically; install them yourself on Linux/macOS.
+- **streamlink**: needed for Twitch and Niconico. For Twitch, install the [streamlink-ttvlol plugin](https://github.com/2bc4/streamlink-ttvlol).
+- Some sources need cookies. Configure YouTube cookies and the Niconico user_session value in the Web UI; Bilibili login is handled by the wizard.
 
-**Linux/Mac:**
-
-- ffmpeg
-- yt-dlp
-- streamlink (with [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol) plugin)
-
-## Setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/your-username/bilistream.git
-   cd bilistream
-   ```
-2. Install the required dependencies (example for Debian-based systems):
-
-   ```bash
-   sudo apt update
-   sudo apt install ffmpeg python3-pip
-   pip install yt-dlp streamlink
-   ```
-3. Install the streamlink-ttvlol plugin:
-   Follow the instructions at [2bc4/streamlink-ttvlol](https://github.com/2bc4/streamlink-ttvlol)
-4. Build the project:
-
-   For Debian 12 and other Linux distributions using glibc 2.36 or newer:
-
-   ```bash
-   cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release
-   ```
-
-   For Windows:
-
-   ```bash
-   cargo build --target x86_64-pc-windows-gnu --release
-   ```
-5. **Configuration:**
-
-   **Web-Based Setup:**
-
-   - Simply run `./bilistream` (or double-click on Windows)
-   - Open your browser to `http://localhost:3150`
-   - If config files are missing, the web setup wizard appears automatically
-   - Complete all configuration through the browser interface:
-     - **Step 1**: Bilibili login with QR code displayed in browser
-     - **Step 2**: Basic settings (room number, intervals, features)
-     - **Step 3**: Platform configuration (YouTube, Twitch, API keys)
-6. **Stream Quality Configuration:**
-
-   For users with limited network bandwidth, you can configure stream quality settings:
-
-   **YouTube (yt-dlp) Quality Options:**
-
-   - `best` - Best available quality (recommended)
-   - `best[height<=1080]` - Best quality up to 1080p
-   - `best[height<=720]` - Best quality up to 720p
-   - `best[height<=480]` - Best quality up to 480p
-   - `best[height<=360]` - Best quality up to 360p
-   - `worst` - Lowest available quality
-
-   **Twitch (streamlink) Quality Options:**
-
-   - `best` - Original broadcaster quality
-   - `high` - High quality (≤720p30fps, filters out higher resolutions)
-   - `medium` - Medium quality (≤540p30fps, filters out higher resolutions)
-   - `low` - Low quality (≤360p30fps, filters out higher resolutions)
-   - `audio_only` - Audio stream only (no video)
-   - `worst` - Lowest available quality
-
-   Edit `config.json`:
-
-   ```json
-   {
-     "youtube": {
-       "quality": "best[height<=720]"
-     },
-     "twitch": {
-       "quality": "high"
-     }
-   }
-   ```
-7. (Optional) Create `invalid_words.txt` to monitor League of Legends in-game IDs:
-
-- Create a file named `invalid_words.txt` with one word per line
-- Configure `RiotApiKey` and `LolMonitorInterval` in config.json:
-
-  ```json
-  {
-    "riot_api_key": "YOUR-RIOT-API-KEY",
-    "lol_monitor_interval": 1
-  }
-  ```
-- The program will monitor in-game players and stop streaming if any blacklisted words are found
-
-## File Structure
-
-```txt
-.
-├── bilistream           # Main executable
-├── areas.json           # Area (game categories) and banned keywords configuration
-├── channels.json        # Channel configuration for YouTube, Twitch, and PUUID
-├── config.json          # Main configuration file
-├── cookies.json         # Bilibili login cookies (from the Web UI setup)
-├── invalid_words.txt    # Filtered words for LOL players ID
-└── stream_manager.sh    # Management script
-```
-
-## Usage
-
-### Quick Start
-
-**Easiest way - just run it:**
+Build the current source with a Rust toolchain:
 
 ```bash
-./bilistream
+git clone https://github.com/Detteee/bilistream.git
+cd bilistream
+cargo build --release --bin bilistream
+./target/release/bilistream
 ```
 
-**What happens:**
+The optional desktop package is `src-tauri` (`bilistream-tauri`); it shares the Rust backend and needs the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/). Linux cross-builds can use `cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release` with cargo-zigbuild and Zig installed.
 
-- **Windows:** Runs in background, browser opens webui automatically, tray icon appears
-- **Linux/Mac:** Starts web server, open `http://localhost:3150` in browser
-
-**Advanced options:**
+## Launch and configuration
 
 ```bash
-./bilistream --tray             # Force system tray (default on Windows)
-./bilistream --webui            # Force console Web UI (default on Linux/macOS)
-./bilistream-tauri              # Desktop app mode (native window + tray)
+./bilistream --webui
+./bilistream --tray
+./bilistream --port 3150
+./bilistream --bind 127.0.0.1
+./bilistream --password '<password>'
+./bilistream --ffmpeg-log-level error
 ```
 
-**First run:**
+Bind, port and password can also come from `BILISTREAM_BIND`, `BILISTREAM_PORT` and `BILISTREAM_PASSWORD`. By default the admin listener binds localhost. Put remote access behind your configured authenticated endpoint.
 
-- Setup wizard appears in your browser
-- Follow the steps to login and configure
-- That's it!
+Runtime files live **beside the running executable**, not necessarily in the repository root:
 
-### Web UI Features
+| File | Contents |
+| --- | --- |
+| `config.json` | Settings; prefer editing through the Web UI. [Commented example](config.json.example) is a reference, not strict JSON. |
+| `cookies.json` | Bilibili login credentials; keep private. |
+| `channels.json` / `areas.json` | Channel roster and area/keyword rules. |
+| `invalid_words.txt` | Optional LoL player-name filter, one word per line. |
+| `youtube_quota.json` / `youtube_golive_hours.json` | Generated API usage and learned discovery timing. |
+| `webui/dist/` / `webui/public-dist/` | Installed admin and public page assets. |
 
-- 🚀 **Web-Based Setup Wizard**
-  - Complete first-run configuration in browser
-  - QR code login displayed directly in web page
-  - No terminal/CLI knowledge required
-  - Step-by-step guided process
-- ⚙️ **Configuration Management**
-  - Edit all settings through web interface
-  - Real-time configuration updates
-  - No need to manually edit JSON files
-  - Manage channels, areas, and platform settings
-- 📊 Real-time status dashboard (Bilibili, YouTube, Twitch)
-- 📈 Live throughput graph (bitrate, FPS, total pushed)
-- 🎬 **Holodex Panel** - Live VTuber streams with one-click target switching
-- ✂️ **Stream Tuning** - Crop the source video and set an HLS cache delay per platform
-- 🎮 One-click stream controls
-- 💬 Send danmaku messages
-- 📺 Channel management
-- 🎯 Area selection dropdown
-- 🌗 Light and dark themes
-- 📱 Mobile-friendly interface
+The default priority monitor and multi-server mode are off. Display preferences do not change monitor state. Existing configuration keys remain compatible.
 
-### Launch options
+Danmaku target changes use channel names from `channels.json`, for example:
 
-Setup, login, and stream control live in the Web UI (`http://localhost:3150`).
-
-```bash
-./bilistream                                    # Default (tray on Windows, Web UI on Linux)
-./bilistream --tray                             # System tray
-./bilistream --webui                            # Console Web UI
-./bilistream --port 3150                        # Web UI port (or BILISTREAM_PORT)
-./bilistream --bind 127.0.0.1                   # Listen address (or BILISTREAM_BIND)
-./bilistream --password <secret>                # Web UI login password (or BILISTREAM_PASSWORD)
-./bilistream --ffmpeg-log-level error           # error, info, or debug
-```
-
-### Danmaku Command Feature
-
-Danmaku command format:
-
-```txt
-%转播%YT/TW%channel_name%area_name
-channel_name must in channels.json
-```
-
-Example:
-
-```txt
+```text
 %转播%YT%kamito%英雄联盟
 %转播%TW%kamito%无畏契约
+%查询
 ```
 
-The system will check the live title and adjust the area ID if necessary. For example, if the live title contains "Valorant", it will set the area ID to 329 (无畏契约) regardless of the specified area name. Check [https://api.live.bilibili.com/room/v1/Area/getList](https://api.live.bilibili.com/room/v1/Area/getList) for more Area name and ID.
+Area keyword rules may adjust the requested area. LoL checking requires a Riot key; `lol_monitor_interval` is in minutes.
 
-## Contributing
+## License and acknowledgements
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the [unlicense](LICENSE).
-
-## Acknowledgements
-
-- [limitcool/bilistream](https://github.com/limitcool/bilistream)
-- [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli)
-- All users of this project
+[Unlicense](LICENSE). Based on [limitcool/bilistream](https://github.com/limitcool/bilistream), with danmaku support informed by [Isoheptane/bilibili-live-danmaku-cli](https://github.com/Isoheptane/bilibili-live-danmaku-cli). Contributions through issues and pull requests are welcome.
