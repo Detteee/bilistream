@@ -16,8 +16,8 @@ export function createMockServer() {
   const config = {
     interval: 30, auto_cover: true, show_priority_channel: false, show_twitch: true, show_niconico: false, youtube_rss_enabled: true,
     holodex_monitor_gate: true, enable_lol_monitor: false, enable_anti_collision: false,
-    anti_collision_list: {}, holodex_api_key: '', holodex_api_key_configured: true, holodex_jwt_configured: false, secret_revision: 1,
-    youtube_api_key: '', youtube_api_key_configured: true, riot_api_key: '', riot_api_key_configured: false,
+    anti_collision_list: {}, holodex_api_key: '', holodex_api_key_configured: true, holodex_api_key_mask: '•'.repeat(24), holodex_jwt_configured: false, secret_revision: 1,
+    youtube_api_key: '', youtube_api_key_configured: true, youtube_api_key_mask: '•'.repeat(39) + '\n' + '•'.repeat(39), riot_api_key: '', riot_api_key_configured: false, riot_api_key_mask: '',
     youtube_websub_callback_url: 'https://yt.example.com/websub/youtube', youtube_websub_port: 3151,
     bilibili: { room: 10000, enable_danmaku_command: true },
     youtube: { enable_monitor: true, channel_name: '示例频道 001', channel_id: 'UC1111111111111111111111', area_v2: 235, quality: 'best', proxy: '', ffmpeg_cache: { enabled: true, latency_secs: 8 } },
@@ -63,17 +63,17 @@ export function createMockServer() {
           return send({ success: true, message: '公开页设置已保存', data: { enabled: false, nodes: [], local_node_id: 'local', public_status: patch.config } });
         }
         if (path === '/api/channels/resolve-youtube') return send(ok({ channel_id: 'UC4444444444444444444444' }));
-        if (path === '/api/niconico/session/check') return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检测不会续期' : '未配置 user_session' }));
+        if (path === '/api/niconico/session/check') { await new Promise(resolve => setTimeout(resolve, 300)); return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检测不会续期' : '未配置 user_session' })); }
         if (path === '/api/setup/save-config') { needsSetup = false; return send({ success: true }); }
         if (path === '/api/config') {
           if (patch.expected_secret_revision != null && patch.expected_secret_revision !== config.secret_revision) return send({ success: false, message: '密钥配置已更新' }, 409);
           for (const key of ['holodex_api_key', 'youtube_api_key', 'riot_api_key']) {
-            if (patch[`clear_${key}`]) config[`${key}_configured`] = false;
-            else if (patch[key]) config[`${key}_configured`] = true;
+            if (patch[`clear_${key}`]) { config[`${key}_configured`] = false; config[`${key}_mask`] = ''; }
+            else if (patch[key]) { config[`${key}_configured`] = true; config[`${key}_mask`] = [...patch[key]].map(c => c === '\n' ? c : '•').join(''); }
           }
           for (const platform of ['youtube', 'twitch', 'niconico']) {
-            if (patch[`clear_${platform}_proxy`]) config[platform].proxy_configured = false;
-            else if (patch[`${platform}_proxy`]) config[platform].proxy_configured = true;
+            if (patch[`clear_${platform}_proxy`]) { config[platform].proxy_configured = false; config[platform].proxy = ''; }
+            else if (patch[`${platform}_proxy`]) { config[platform].proxy_configured = true; config[platform].proxy = patch[`${platform}_proxy`]; }
             delete patch[`${platform}_proxy`];
           }
           config.secret_revision += 1;
@@ -82,10 +82,11 @@ export function createMockServer() {
             if (key in config && JSON.stringify(config[key]) !== JSON.stringify(before)) return send({ success: false, message: '配置冲突' }, 409);
           }
           const { expected, niconico_user_session, clear_niconico_user_session, niconico_session_check_enabled, ...changes } = patch;
-          if (niconico_user_session) sessionSaved = true;
-          if (clear_niconico_user_session) sessionSaved = false;
+          if (niconico_user_session) { sessionSaved = true; config.niconico.user_session_mask = '•'.repeat([...niconico_user_session].length); }
+          if (clear_niconico_user_session) { sessionSaved = false; config.niconico.user_session_mask = ''; }
           config.niconico.user_session_configured = sessionSaved;
           if (niconico_session_check_enabled != null) config.niconico.session_check_enabled = niconico_session_check_enabled;
+          for (const key of Object.keys(changes)) if (key.startsWith('clear_') || key==='expected_secret_revision') delete changes[key];
           Object.assign(config, changes); for (const key of ['holodex_api_key', 'youtube_api_key', 'riot_api_key']) config[key] = '';
           for (const event of events) event.write('event: config\ndata: changed\n\n');
         } else if (path === '/api/priority-channel') Object.assign(config.priority_channel, patch);

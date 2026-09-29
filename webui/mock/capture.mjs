@@ -81,6 +81,16 @@ try {
   assert.equal(await evaluate("[...document.querySelectorAll('.crop-switch-button')].every(button => !button.textContent.trim() && button.getAttribute('aria-label')==='裁剪切换' && button.parentElement.firstElementChild===button)"), true);
   assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-actions')].every(row => Math.abs(row.querySelector('.holodex-stream-secondary').getBoundingClientRect().width - row.querySelector('.switch-button').getBoundingClientRect().width)<1)"), true);
   assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-watch, .holodex-stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return Math.abs((box.left+box.right)/2-(text.left+text.right)/2)<1 && icon.right<=text.left; })"), true);
+  await evaluate("document.getElementById('config-interval').value='88'; document.getElementById('config-nc-user-session').value='synthetic-direct-check'; document.getElementById('config-nc-user-session').dispatchEvent(new Event('input'))");
+  assert.equal(await evaluate("document.getElementById('check-nico-session').textContent"), '保存并检测');
+  await evaluate("document.getElementById('check-nico-session').click()");
+  assert.equal(await evaluate("document.getElementById('niconico-session-status').textContent.includes('正在')"), true);
+  await waitFor("!document.getElementById('check-nico-session').disabled && document.getElementById('niconico-session-status').textContent.includes('仍被接受')");
+  assert.equal(await evaluate("document.getElementById('config-nc-user-session').value"), '');
+  assert.equal(await evaluate("document.getElementById('config-nc-user-session').placeholder"), '•'.repeat('synthetic-direct-check'.length));
+  assert.equal(await evaluate("document.getElementById('config-interval').value"), '88');
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).interval, 30);
+  await evaluate("document.getElementById('config-interval').value='30'");
   // Optional platform cards and write-only session values use real form saves.
   await evaluate("document.getElementById('config-show-twitch-checkbox').checked=false; document.getElementById('config-show-niconico-checkbox').checked=true; document.getElementById('config-nc-user-session').value='mock-session-value'; document.getElementById('save-system-config-btn').click()");
   await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.show_twitch===false && window.configData.niconico.user_session_configured===true");
@@ -91,8 +101,17 @@ try {
   await waitFor("document.querySelectorAll('.notification').length===0");
   await capture(join(root, 'docs/images/niconico-session.png'));
   await evaluate("window.scrollTo(0,0)");
-  await evaluate("document.getElementById('config-show-twitch-checkbox').checked=true; document.getElementById('config-nc-clear-session').checked=true; document.getElementById('save-system-config-btn').click()");
+  assert.equal(await evaluate("document.getElementById('config-nc-user-session').placeholder"), '•'.repeat('mock-session-value'.length));
+  await evaluate("document.getElementById('config-show-twitch-checkbox').checked=true; document.getElementById('config-nc-clear-session').click()");
   await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.niconico.user_session_configured===false");
+  assert.equal(await evaluate("window.configData.show_twitch"), false);
+  assert.equal(await evaluate("document.getElementById('config-show-twitch-checkbox').checked"), true);
+  assert.equal(await evaluate("document.getElementById('config-nc-clear-session').hidden"), true);
+  assert.equal(await evaluate("document.getElementById('config-nc-user-session').placeholder"), '仅填写 user_session 的值');
+  await evaluate("document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.show_twitch===true");
+  assert.equal(await evaluate("document.getElementById('config-youtube-api-key').placeholder"), '•'.repeat(39) + '\n' + '•'.repeat(39));
+  assert.equal(await evaluate("document.getElementById('config-youtube-api-key').value"), '');
 
   await evaluate("document.getElementById('tab-overview').click()");
   await waitFor("!document.getElementById('priority-channel-card').classList.contains('hidden')");
@@ -240,6 +259,49 @@ try {
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `mobile ${view} overflow`);
   }
+  await evaluate("document.getElementById('tab-settings').click()");
+  await waitFor("document.getElementById('config-clear-holodex-key-status').textContent==='已保存'");
+  await evaluate("document.getElementById('config-interval').value='77'; document.getElementById('config-holodex-key').value='unsaved-key-draft'");
+  // A concurrent save makes the clear action stale; neither stored data nor drafts may disappear.
+  await fetch(`${base}/api/config`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ auto_cover: false }) });
+  await evaluate("document.getElementById('config-clear-holodex-key').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled");
+  assert.equal(await evaluate("document.getElementById('config-holodex-key').value"), 'unsaved-key-draft');
+  assert.equal(await evaluate("document.getElementById('config-interval').value"), '77');
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).holodex_api_key_configured, true);
+  await evaluate("document.getElementById('reload-system-config-btn').click()");
+  await waitFor("document.getElementById('config-holodex-key').value===''");
+  await evaluate("document.getElementById('config-clear-holodex-key').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-clear-holodex-key').hidden");
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).holodex_api_key_configured, false);
+  await evaluate("document.getElementById('config-holodex-key').value='synthetic-replacement'; document.getElementById('config-yt-proxy').value='http://127.0.0.1:7890'; document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-holodex-key').value===''");
+  assert.equal(await evaluate("document.getElementById('config-holodex-key').placeholder"), '•'.repeat('synthetic-replacement'.length));
+  assert.equal(await evaluate("document.getElementById('config-yt-proxy').value"), 'http://127.0.0.1:7890');
+  assert.equal(await evaluate("document.getElementById('config-yt-proxy').type"), 'text');
+  await evaluate("document.getElementById('config-yt-proxy').value=''; document.getElementById('reload-system-config-btn').click()");
+  await waitFor("document.getElementById('config-yt-proxy').value==='http://127.0.0.1:7890'");
+  await evaluate("document.getElementById('config-yt-proxy').value='http://127.0.0.1:8080'; document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.youtube.proxy==='http://127.0.0.1:8080'");
+  await evaluate("document.getElementById('config-yt-proxy').value=''; document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-yt-proxy').value==='http://127.0.0.1:8080'");
+  for (const width of [1440, 768, 390, 320]) {
+    await command('browsingContext.setViewport', { context, viewport: { width, height: 900 }, devicePixelRatio: 1 });
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `credential settings overflow at ${width}`);
+    assert.equal(await evaluate("[...document.querySelectorAll('.credential-heading')].every(h => !h.checkVisibility() || h.getBoundingClientRect().height < 48)"), true, `compact credential headings at ${width}`);
+  }
+  await evaluate("document.getElementById('config-clear-yt-proxy').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-clear-yt-proxy').hidden");
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).youtube.proxy_configured, false);
+  // A stale session save reports an error immediately and does not check an older credential.
+  const checksBefore = (await (await fetch(`${base}/mock/writes`)).json()).filter(row => row.path === '/api/niconico/session/check').length;
+  await fetch(`${base}/api/config`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ auto_cover: true }) });
+  await evaluate("document.getElementById('config-nc-user-session').value='synthetic-stale-session'; document.getElementById('config-nc-user-session').dispatchEvent(new Event('input')); document.getElementById('check-nico-session').click()");
+  await waitFor("!document.getElementById('check-nico-session').disabled && document.getElementById('niconico-session-status').dataset.state==='unavailable'");
+  assert.equal(await evaluate("document.getElementById('config-nc-user-session').value"), 'synthetic-stale-session');
+  assert.equal((await (await fetch(`${base}/mock/writes`)).json()).filter(row => row.path === '/api/niconico/session/check').length, checksBefore);
+  writes = await (await fetch(`${base}/mock/writes`)).json();
+  assert.ok(writes.filter(row => row.path === '/api/config').every(row => !JSON.stringify(row.patch).includes('•')));
   console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Screenshots updated.');
   await command('session.end', {});
 } finally {

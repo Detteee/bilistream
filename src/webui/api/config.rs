@@ -7,6 +7,13 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(config_response(&cfg)))
 }
 
+fn credential_mask(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c == '\n' { '\n' } else { '•' })
+        .collect()
+}
+
 fn config_response(cfg: &Config) -> serde_json::Value {
     let (niconico_channel_id, niconico_channel_name) =
         crate::plugins::niconico_channel_identity(&cfg.niconico);
@@ -45,7 +52,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_name": cfg.youtube.channel_name,
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
-            "proxy": "",
+            "proxy": cfg.youtube.proxy.as_deref().unwrap_or_default(),
             "proxy_configured": cfg.youtube.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "cookies_file": cfg.youtube.cookies_file,
             "cookies_from_browser": cfg.youtube.cookies_from_browser,
@@ -61,7 +68,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
-            "proxy": "",
+            "proxy": cfg.twitch.proxy.as_deref().unwrap_or_default(),
             "proxy_configured": cfg.twitch.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.twitch.ffmpeg_cache.enabled,
@@ -77,8 +84,9 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "quality": cfg.niconico.quality,
             "cookies_file": cfg.niconico.cookies_file,
             "user_session_configured": cfg.niconico.user_session.as_ref().is_some_and(|s| !s.is_empty()),
+            "user_session_mask": credential_mask(cfg.niconico.user_session.as_deref().unwrap_or_default()),
             "session_check_enabled": cfg.niconico.session_check_enabled,
-            "proxy": "",
+            "proxy": cfg.niconico.proxy.as_deref().unwrap_or_default(),
             "proxy_configured": cfg.niconico.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.niconico.ffmpeg_cache.enabled,
@@ -99,6 +107,13 @@ fn config_response(cfg: &Config) -> serde_json::Value {
     response["holodex_api_key_configured"] =
         json!(cfg.holodex_api_key.as_ref().is_some_and(|s| !s.is_empty()));
     response["youtube_api_key_configured"] = json!(!cfg.youtube_api_keys().is_empty());
+    response["riot_api_key_mask"] = json!(credential_mask(
+        cfg.riot_api_key.as_deref().unwrap_or_default()
+    ));
+    response["holodex_api_key_mask"] = json!(credential_mask(
+        cfg.holodex_api_key.as_deref().unwrap_or_default()
+    ));
+    response["youtube_api_key_mask"] = json!(credential_mask(&cfg.youtube_api_keys().join("\n")));
     response["secret_revision"] = json!(crate::config::config_data_revision(cfg));
     response
 }
@@ -822,22 +837,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_value_is_write_only_in_config_responses() {
+    fn credentials_are_masked_and_proxy_addresses_are_visible_in_admin_config() {
         let mut cfg = crate::cluster::tests::test_config("local", 0);
         cfg.niconico.user_session = Some("private-session-test-value".into());
         cfg.youtube.proxy = Some("http://user:private-proxy-password@proxy.invalid:8080".into());
         cfg.twitch.proxy = cfg.youtube.proxy.clone();
         cfg.niconico.proxy = cfg.youtube.proxy.clone();
+        cfg.holodex_api_key = Some("private-holodex".into());
+        cfg.riot_api_key = Some("private-riot".into());
+        cfg.youtube_api_key = Some("private-youtube-one\nprivate-youtube-two".into());
         let response = config_response(&cfg);
         assert_eq!(response["niconico"]["user_session_configured"], true);
         assert!(response["niconico"].get("user_session").is_none());
         assert!(!response.to_string().contains("private-session-test-value"));
         assert_eq!(config_form_values(&cfg)["niconico_user_session"], "");
         for platform in ["youtube", "twitch", "niconico"] {
-            assert_eq!(response[platform]["proxy"], "");
+            assert_eq!(
+                response[platform]["proxy"],
+                cfg.youtube.proxy.as_deref().unwrap()
+            );
             assert_eq!(response[platform]["proxy_configured"], true);
         }
-        assert!(!response.to_string().contains("private-proxy-password"));
+        assert_eq!(response["niconico"]["user_session_mask"], "•".repeat(26));
+        for (key, length) in [("holodex_api_key", 15), ("riot_api_key", 12)] {
+            assert_eq!(response[key], "");
+            assert_eq!(response[format!("{key}_mask")], "•".repeat(length));
+        }
+        assert_eq!(
+            response["youtube_api_key_mask"],
+            format!("{}\n{}", "•".repeat(19), "•".repeat(19))
+        );
+        for secret in ["private-holodex", "private-riot", "private-youtube"] {
+            assert!(!response.to_string().contains(secret));
+        }
         assert!(!config_form_values(&cfg)
             .to_string()
             .contains("private-proxy-password"));

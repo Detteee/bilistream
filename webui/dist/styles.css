@@ -5131,3 +5131,28 @@ details.setup-platform-card { display: block; }
 @media (min-width: 700px) {
   .settings-half-width { grid-column: span 2; }
 }
+
+.credential-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.credential-heading > label {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.credential-state {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.credential-clear { font-size: var(--fs-sm); min-height: 0; padding: 0 var(--sp-1); }
+
+.saved-secret::placeholder {
+  color: var(--text-dim);
+  opacity: 1;
+}

@@ -1,6 +1,6 @@
 # Niconico user_session
 
-在系统设置 → 平台设置中填写 `user_session` Cookie 的值，保存后可点击「检测可用性」。输入框不会回显已保存的值；留空保留。清除选项会同时清除直接配置和旧文件路径。
+在系统设置 → 平台设置中填写 `user_session` Cookie 的值，点击「保存并检测」即可验证；已有登录信息可直接「检测可用性」。已保存的内容按字符数显示圆点；输入新值后保存即可替换。点击「清除」立即移除已保存的登录信息，无需再保存配置。
 
 Enter only the `user_session` value; a full cookie export is unnecessary. Previously configured Netscape cookies are imported into encrypted storage. A directly entered value takes precedence.
 
