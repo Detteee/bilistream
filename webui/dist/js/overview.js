@@ -1,7 +1,7 @@
 // overview.js — extracted from app.js
 
 import { isDashboardVisible, isElementHidden, setElementDisplay, reconcileChildren, createStreamThumbnail, createSvgIcon, parseInteger, setElementText, showNotification, setButtonLoading } from './dom.js';
-import { state, mergeConfigData, updateMonitorToggleStates, applyMonitorToggleConfigState, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions, getAreaName } from './state.js';
+import { state, applyDashboardCardVisibility, mergeConfigData, updateMonitorToggleStates, applyMonitorToggleConfigState, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive, createAreaOption, createSelectOption, normalizeAreaData, getAreaList, getSortedAreas, appendAreaOptions, appendPlatformChannelOptions, getAreaName } from './state.js';
 import { managementRequest, managementJsonRequest, getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { loadChannels } from './manage.js';
@@ -2217,7 +2217,7 @@ function renderPriorityChannelStatus(priority) {
     return;
   }
 
-  priorityCard.style.display = '';
+  applyDashboardCardVisibility();
 
   if (!priority) {
     applyMonitorToggleConfigState(priorityToggle, 'priority-toggle', false);

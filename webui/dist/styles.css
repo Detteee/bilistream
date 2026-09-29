@@ -244,52 +244,51 @@ code {
 html.light-theme {
   color-scheme: light;
 
-  /* Dust cards on parchment; inner wells lift to linen white. */
-  --bg: #fdf9f4;
-  --bg-glow-1: color-mix(in srgb, #176ae5 8%, transparent);
-  --bg-glow-2: color-mix(in srgb, #a478c4 6%, transparent);
+  /* Cool gray canvas, blue-gray surfaces and high-contrast navy text. */
+  --bg: #f4f6f9;
+  --bg-glow-1: color-mix(in srgb, #698aaf 5%, transparent);
+  --bg-glow-2: color-mix(in srgb, #85a7b5 4%, transparent);
   --surface-1: #ffffff;
-  --surface-2: #f9efe4;
-  --surface-3: #fffcfa;
+  --surface-2: #eaf0f7;
+  --surface-3: #f9fbfd;
   --surface-4: #ffffff;
-  --line: #e8e2d8;
-  --line-strong: #d5cdc3;
+  --line: #ccd7e5;
+  --line-strong: #a5b7cc;
 
-  --text: #2d2f34;
-  --text-dim: #3f434a;
-  --text-mute: #6a707c;
+  --text: #17294b;
+  --text-dim: #354e70;
+  --text-mute: #536984;
   --text-on-accent: #ffffff;
 
-  --brand: #176ae5;
-  --brand-hi: #0f57db;
-  --brand-2: #4b51c3;
-  --ok: #276932;
-  --warn: #b7791f;
-  --danger: #c4454a;
-  --info: #176ae5;
-  --teal: #2d7a72;
-  --live: #d6455a;
+  --brand: #315e9f;
+  --brand-hi: #244b84;
+  --brand-2: #396c83;
+  --ok: #246b50;
+  --warn: #85601e;
+  --danger: #b83f57;
+  --info: #315e9f;
+  --teal: #246b76;
+  --live: #b93454;
 
-  --bilibili: #c45d78;
-  --youtube: #c44c48;
-  --twitch: #6350a0;
-  --niconico: #5c6570;
+  --bilibili: #ae486f;
+  --youtube: #b63c48;
+  --twitch: #62519a;
+  --niconico: #526581;
 
-  --sh-1: 0 1px 2px rgba(45, 47, 52, 0.06);
-  --sh-2: 0 4px 16px rgba(45, 47, 52, 0.08);
-  --sh-3: 0 18px 48px rgba(45, 47, 52, 0.12);
+  --sh-1: 0 1px 3px rgba(23, 41, 75, 0.06);
+  --sh-2: 0 5px 18px rgba(23, 41, 75, 0.08);
+  --sh-3: 0 18px 48px rgba(23, 41, 75, 0.14);
 
-  /* Cyan RX tip → violet 0 line → rose TX tip. Solid; no mix into linen. */
-  --net-axis: #bb77ed;
-  --net-cache-start: #1cdce8;
+  /* Distinct blue RX and rose TX ramps against cool surfaces. */
+  --net-axis: #747ca9;
+  --net-cache-start: #2d89a8;
   --net-cache-end: var(--net-axis);
   --net-push-start: var(--net-axis);
-  --net-push-end: #f34a62;
+  --net-push-end: #b84a6b;
   --net-bar-axis-mix: 100%;
   --net-bar-tip-mix: 100%;
-  /* Cyan on linen is a wash; Cache RX uses a readable blue instead. */
-  --net-legend-rx: #1665da;
-  --net-legend-tx: var(--net-push-end);
+  --net-legend-rx: #315e9f;
+  --net-legend-tx: #9f3758;
 }
 
 html.light-theme .modal,
@@ -297,7 +296,7 @@ html.light-theme .area-modal,
 html.light-theme .holodex-login-modal,
 html.light-theme .face-auth-modal,
 html.light-theme .crop-modal {
-  background: rgba(45, 47, 52, 0.40);
+  background: rgba(23, 41, 75, 0.34);
 }
 
 html.light-theme .btn-fill:hover:not(:disabled) {
@@ -929,6 +928,7 @@ button:disabled {
 
 input[type="text"],
 input[type="number"],
+input[type="search"],
 input[type="password"],
 select,
 textarea {
@@ -1238,10 +1238,7 @@ input[type="checkbox"] {
    8. Dashboard platform cards
    ========================================================================== */
 
-/* Explicit column counts rather than auto-fit: the card count is known, so
-   each step divides them evenly and never strands a half-empty row.
-   Four platform cards (Bilibili, YouTube, Twitch, Niconico) fit 1, then 2x2,
-   then all four across. A 3-column step would leave Niconico alone. */
+/* Optional source cards set the desktop column count; keep visible cards even. */
 .dashboard {
   display: grid;
   grid-template-columns: 1fr;
@@ -1338,10 +1335,10 @@ input[type="checkbox"] {
 }
 
 /* Shell is 1320px, so this step is for viewports wider than the content:
-   the four platform cards share one row and priority stays below. */
+   the visible platform cards share one row and priority stays below. */
 @media (min-width: 1360px) {
   .dashboard {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--platform-columns, 4), minmax(0, 1fr));
   }
 }
 
@@ -4640,6 +4637,90 @@ a.cluster-node-name-link {
   box-shadow: var(--sh-3);
 }
 
+/* Large catalogs and long channel names must stay within their form column. */
+.setup-card select,
+.management-form-card select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.setup-advanced > summary,
+.setup-favorites-panel > summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.setup-advanced[open] > summary,
+.setup-favorites-panel[open] > summary {
+  margin-bottom: 0;
+}
+
+.setup-card details > :not(summary) { margin-top: var(--sp-4); }
+
+.setup-card [id$="-fields"],
+.setup-card [id$="-identity"] {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.setup-favorites-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-block: var(--sp-3);
+}
+
+.setup-favorites-actions > span {
+  flex: 1 1 100%;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+.setup-favorites-list {
+  max-height: 18rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+}
+
+.setup-favorite-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.setup-favorite-option:hover {
+  background: var(--surface-3);
+}
+
+.setup-favorite-option > input {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.setup-favorite-option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setup-favorite-option small {
+  display: block;
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 480px) {
+  .setup-card { padding: var(--sp-4); }
+  .setup-card .setup-platform-card { padding: var(--sp-3); }
+}
+
 .setup-icon {
   margin-bottom: var(--sp-4);
   font-size: 52px;
@@ -4792,6 +4873,8 @@ a.cluster-node-name-link {
   border-radius: var(--r-md);
   background: var(--surface-3);
 }
+
+details.setup-platform-card { display: block; }
 
 .setup-platform-title {
   font-size: var(--fs-md);
@@ -5003,4 +5086,31 @@ a.cluster-node-name-link {
 
 @media (prefers-reduced-motion: reduce) {
   .t-digit-group .t-digit { animation: none !important; }
+}
+
+/* Inline lookup actions share the form grid and wrap on narrow screens. */
+.input-action-row { display: flex; gap: .5rem; align-items: center; min-width: 0; }
+.input-action-row > input { flex: 1 1 10rem; min-width: 0; }
+.input-action-row > button { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 480px) {
+  .input-action-row { flex-wrap: wrap; }
+  .input-action-row > button { margin-left: auto; }
+}
+
+.platform-session-settings { grid-column: 1 / -1; display: grid; gap: .75rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.session-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 2rem; }
+.session-legacy { font-size: .85rem; }
+.session-legacy summary { cursor: pointer; }
+.session-legacy .control-group { margin-top: .75rem; max-width: 36rem; }
+
+@media (min-width: 700px) and (max-width: 1359px) {
+  .dashboard-wide-last { grid-column: 1 / -1; }
+}
+
+.channel-lookup-field { grid-column: 1 / -1; }
+.session-proxy { max-width: 36rem; }
+#niconico-session-status[data-state="invalid"] { color: var(--danger, #c2394f); }
+#niconico-session-status[data-state="unavailable"] { color: var(--warn, #9b701b); }
+@media (min-width: 700px) {
+  .settings-half-width { grid-column: span 2; }
 }

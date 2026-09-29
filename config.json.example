@@ -48,7 +48,9 @@
     "live_id": "",                       // 仅当未填 channel_id 时固定某一场 lv
     "area_v2": 235,                      // B站分区ID
     "quality": "best",                   // streamlink 画质: best, 1080p60, 720p60, 450p, 288p
-    "cookies_file": "niconico_cookies.txt", // Netscape cookies，需包含 user_session
+    "user_session": null,                  // 只填写登录 Cookie 的 user_session 值
+    "session_check_enabled": true,         // 每日检查，不会延长会话有效期
+    "cookies_file": null,                  // 兼容旧 Netscape 文件；直接会话值优先
     "proxy": "http://127.0.0.1:7890",    // streamlink HTTP 代理；留空则直连
     "ffmpeg_cache": {
       "enabled": true,                   // 启用本地 HLS 缓存延迟推流
@@ -64,10 +66,16 @@
   "holodex_username": null,              // Holodex 用户名 (续期时自动写入)
   "holodex_skip_jwt_verify": false,    // 跳过 JWT 过期校验与自动续期
   "holodex_monitor_gate": true,        // false = yt-dlp 兜底：每次监控都直接用 yt-dlp；true 则按 Holodex / YouTube API 索引判断，每 5 分钟 yt-dlp 安全探测
-  "youtube_api_key": null,               // YouTube Data API 密钥 (可选)，用 videos.list 校正 Holodex 的直播/预定状态；多个 key 用换行或逗号分隔，每个每天用 8,000 单位
+  "youtube_api_key": null,               // YouTube Data API 密钥 (可选)，用 videos.list 校正 Holodex 的直播/预定状态；多个 key 用换行或逗号分隔，每个每天用 9,000 单位
+  "youtube_rss_enabled": true,           // RSS 读取；关闭后仍处理 WebSub 与上传列表兜底
+  "youtube_websub_callback_url": null,   // 单机可用；公网回调 URL，留空关闭
+  "youtube_websub_port": 3151,            // 只接收 WebSub 回调的端口
+  "show_twitch": true,                  // 只控制 Twitch 卡片显示
+  "show_niconico": false,               // 只控制 Niconico 卡片显示
+  "show_priority_channel": false,        // 只控制卡片显示，不改变优先监控
   "riot_api_key": null,                  // Riot API密钥 (https://developer.riotgames.com/)
   "enable_lol_monitor": false,           // 启用LOL监控
-  "lol_monitor_interval": 1,             // LOL监控间隔(秒)
+  "lol_monitor_interval": 1,             // LOL监控间隔(分钟)
   
   // ===== 撞车监控列表 =====
   "anti_collision_list": {
@@ -78,12 +86,12 @@
 
   // ===== 优先频道配置 =====
   "priority_channel": {
-    "enabled": true,                     // 启用优先频道监控
+    "enabled": false,                    // 启用优先频道监控
     "channel_name": "Kamito",            // 优先频道名称 (来自 channels.json)
     "youtube_channel_id": "UCgYCMluaLpERsyNXlPOvBtA",  // YouTube频道ID (自动从channels.json获取)
     "twitch_channel_id": "kamito_jp",    // Twitch频道ID (自动从channels.json获取)
     "default_area": 235,                   // 优先频道的默认分区ID
-    "auto_restart": false                  // 优先频道下播后自动重启主频道监控
+    "auto_restart": false                  // 转播其他频道时，优先频道确认可播放后自动切换
   },
 
   // ===== 多服务器集群配置 =====

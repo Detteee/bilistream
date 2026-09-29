@@ -41,6 +41,7 @@ mod crop;
 mod holodex;
 mod manage;
 mod setup;
+mod setup_data;
 mod status;
 mod stream;
 
@@ -50,6 +51,7 @@ pub use crop::*;
 pub use holodex::*;
 pub use manage::*;
 pub use setup::*;
+pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};
 pub use status::*;
 pub use stream::*;
 
@@ -634,6 +636,10 @@ mod tests {
             holodex_skip_jwt_verify: false,
             holodex_monitor_gate: true,
             youtube_api_key: None,
+            youtube_rss_enabled: true,
+            show_priority_channel: false,
+            show_twitch: true,
+            show_niconico: false,
             youtube_websub_callback_url: None,
             youtube_websub_port: crate::config::default_websub_port(),
             riot_api_key: None,

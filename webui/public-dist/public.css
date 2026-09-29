@@ -7,7 +7,7 @@ html {
 }
 
 html.light-theme {
-  background: #fdf9f4;
+  background: #f4f6f9;
 }
 
 /* Flex rather than grid: a stretched one-column grid grows the last status

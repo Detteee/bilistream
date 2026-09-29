@@ -320,6 +320,10 @@ fn stop_listener(running: Option<RunningListener>) {
 /// What this node should be running, if anything.
 async fn desired_listener() -> Option<DesiredListener> {
     let cfg = crate::config::load_config().await.ok()?;
+    desired_listener_for_config(&cfg)
+}
+
+fn desired_listener_for_config(cfg: &crate::config::Config) -> Option<DesiredListener> {
     let public = &cfg.cluster.public_status;
 
     if !public.runs_on(&cfg.cluster.node_id) {
@@ -360,6 +364,24 @@ async fn spawn_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_public_page_needs_no_cluster_or_peers() {
+        let mut cfg = crate::cluster::tests::test_config("home", 0);
+        cfg.cluster.enabled = false;
+        cfg.cluster.peers.clear();
+        cfg.cluster.public_status.node_id = "home".into();
+        let desired = desired_listener_for_config(&cfg).unwrap();
+        assert_eq!(desired.addr.port(), cfg.cluster.public_status.port);
+        assert!(desired.addr.ip().is_loopback());
+        cfg.cluster.public_status.node_id.clear();
+        assert!(desired_listener_for_config(&cfg).is_none());
+        cfg.cluster.public_status.node_id = "other".into();
+        assert!(desired_listener_for_config(&cfg).is_none());
+        cfg.cluster.public_status.node_id = "home".into();
+        cfg.cluster.public_status.port = 0;
+        assert!(desired_listener_for_config(&cfg).is_none());
+    }
 
     #[test]
     fn conditional_get_accepts_weak_validators_and_lists() {
@@ -592,7 +614,14 @@ mod tests {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
-        for path in ["/", "/public.css", "/js/main.js", "/shared/styles.css", "/icon.png", "/icon-blue.png"] {
+        for path in [
+            "/",
+            "/public.css",
+            "/js/main.js",
+            "/shared/styles.css",
+            "/icon.png",
+            "/icon-blue.png",
+        ] {
             let response = client
                 .get(format!("http://{addr}{path}"))
                 .send()

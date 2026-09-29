@@ -29,7 +29,8 @@ pub use version::*;
 #[cfg(test)]
 pub(crate) use yt_index::with_yt_index_role;
 pub(crate) use yt_index::{
-    cluster_monitored_channels, owner_yt_index, yt_index_role, YtIndexRole, YT_INDEX_ROUTE,
+    cluster_monitored_channels, may_subscribe_websub, owner_yt_index, yt_index_role, YtIndexRole,
+    YT_INDEX_ROUTE,
 };
 
 #[cfg(test)]

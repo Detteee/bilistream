@@ -4,12 +4,20 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(config_response(&cfg)))
+}
+
+fn config_response(cfg: &Config) -> serde_json::Value {
     let (niconico_channel_id, niconico_channel_name) =
         crate::plugins::niconico_channel_identity(&cfg.niconico);
 
-    let config_json = json!({
+    json!({
         "interval": cfg.interval,
         "auto_cover": cfg.auto_cover,
+        "show_priority_channel": cfg.show_priority_channel,
+        "show_twitch": cfg.show_twitch,
+        "show_niconico": cfg.show_niconico,
+        "youtube_rss_enabled": cfg.youtube_rss_enabled,
         "enable_anti_collision": cfg.enable_anti_collision,
         "enable_lol_monitor": cfg.enable_lol_monitor,
         "lol_monitor_interval": cfg.lol_monitor_interval,
@@ -66,6 +74,8 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "area_v2": cfg.niconico.area_v2,
             "quality": cfg.niconico.quality,
             "cookies_file": cfg.niconico.cookies_file,
+            "user_session_configured": cfg.niconico.user_session.as_ref().is_some_and(|s| !s.is_empty()),
+            "session_check_enabled": cfg.niconico.session_check_enabled,
             "proxy": cfg.niconico.proxy,
             "ffmpeg_cache": {
                 "enabled": cfg.niconico.ffmpeg_cache.enabled,
@@ -80,9 +90,7 @@ pub async fn get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "default_area": cfg.priority_channel.default_area,
             "auto_restart": cfg.priority_channel.auto_restart,
         }
-    });
-
-    Ok(Json(config_json))
+    })
 }
 
 #[derive(Deserialize, Serialize, Default)]
@@ -91,6 +99,10 @@ pub struct UpdateConfigRequest {
     expected: Option<HashMap<String, serde_json::Value>>,
     interval: Option<u64>,
     auto_cover: Option<bool>,
+    show_priority_channel: Option<bool>,
+    show_twitch: Option<bool>,
+    show_niconico: Option<bool>,
+    youtube_rss_enabled: Option<bool>,
     enable_anti_collision: Option<bool>,
     enable_lol_monitor: Option<bool>,
     lol_monitor_interval: Option<u64>,
@@ -113,6 +125,9 @@ pub struct UpdateConfigRequest {
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
     niconico_cookies_file: Option<String>,
+    niconico_user_session: Option<String>,
+    clear_niconico_user_session: Option<bool>,
+    niconico_session_check_enabled: Option<bool>,
     niconico_proxy: Option<String>,
     cluster: Option<ClusterConfig>,
 }
@@ -146,6 +161,10 @@ pub(crate) fn validate_edit_preconditions(
 fn config_form_values(cfg: &Config) -> serde_json::Value {
     json!({
         "interval": cfg.interval,
+        "show_priority_channel": cfg.show_priority_channel,
+        "show_twitch": cfg.show_twitch,
+        "show_niconico": cfg.show_niconico,
+        "youtube_rss_enabled": cfg.youtube_rss_enabled,
         "auto_cover": cfg.auto_cover,
         "enable_anti_collision": cfg.enable_anti_collision,
         "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -165,6 +184,9 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
         "youtube_deno_path": cfg.youtube.deno_path.as_deref().unwrap_or_default().trim(),
         "niconico_cookies_file": cfg.niconico.cookies_file.as_deref().unwrap_or_default().trim(),
+        "niconico_user_session": "", // write-only: never echo a stored credential
+        "clear_niconico_user_session": false,
+        "niconico_session_check_enabled": cfg.niconico.session_check_enabled,
         "niconico_proxy": cfg.niconico.proxy.as_deref().unwrap_or_default().trim(),
         "cluster": cfg.cluster,
     })
@@ -319,9 +341,45 @@ pub async fn update_config(
         });
     }
 
+    if let Some(session) = payload
+        .niconico_user_session
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if session
+            .strip_prefix("user_session=")
+            .unwrap_or(session)
+            .is_empty()
+            || session.len() > 8192
+            || !session
+                .bytes()
+                .all(|b| b.is_ascii_graphic() && b != b';' && b != b',')
+        {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(
+                    "user_session 只能填写 Cookie 的值，不能包含空格、换行或其他 Cookie".into(),
+                ),
+            });
+        }
+    }
     let mut holodex_jwt_saved = false;
 
     // Update fields
+    if let Some(visible) = payload.show_priority_channel {
+        cfg.show_priority_channel = visible;
+    }
+    if let Some(visible) = payload.show_twitch {
+        cfg.show_twitch = visible;
+    }
+    if let Some(visible) = payload.show_niconico {
+        cfg.show_niconico = visible;
+    }
+    if let Some(enabled) = payload.youtube_rss_enabled {
+        cfg.youtube_rss_enabled = enabled;
+    }
     if let Some(interval) = payload.interval {
         cfg.interval = interval;
     }
@@ -434,7 +492,29 @@ pub async fn update_config(
             Some(youtube_cookies_file)
         };
     }
-    if let Some(niconico_cookies_file) = payload.niconico_cookies_file {
+    if let Some(enabled) = payload.niconico_session_check_enabled {
+        cfg.niconico.session_check_enabled = enabled;
+    }
+    if payload.clear_niconico_user_session == Some(true) {
+        cfg.niconico.user_session = None;
+        cfg.niconico.cookies_file = None;
+    } else if let Some(session) = payload
+        .niconico_user_session
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        cfg.niconico.user_session = Some(
+            session
+                .strip_prefix("user_session=")
+                .unwrap_or(session)
+                .to_string(),
+        );
+    }
+    if let Some(niconico_cookies_file) = payload
+        .niconico_cookies_file
+        .filter(|_| payload.clear_niconico_user_session != Some(true))
+    {
         cfg.niconico.cookies_file = if niconico_cookies_file.is_empty() {
             None
         } else {
@@ -476,10 +556,6 @@ pub async fn update_config(
 
     if monitor_reload_needed(&previous_cfg, &cfg) {
         set_config_updated();
-    }
-
-    if holodex_monitor_gate_changed {
-        crate::webui::state::request_status_refresh();
     }
 
     // Apply the exact saved config to the cache without re-reading config.json.
@@ -621,6 +697,78 @@ pub async fn update_priority_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_value_is_write_only_in_config_responses() {
+        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        cfg.niconico.user_session = Some("private-session-test-value".into());
+        let response = config_response(&cfg);
+        assert_eq!(response["niconico"]["user_session_configured"], true);
+        assert!(response["niconico"].get("user_session").is_none());
+        assert!(!response.to_string().contains("private-session-test-value"));
+        assert_eq!(config_form_values(&cfg)["niconico_user_session"], "");
+    }
+
+    #[test]
+    fn display_and_rss_settings_are_independent_conflict_checked_edits() {
+        let from_browser: UpdateConfigRequest = serde_json::from_value(json!({
+            "youtube_rss_enabled": false, "show_priority_channel": true
+        }))
+        .unwrap();
+        assert_eq!(from_browser.youtube_rss_enabled, Some(false));
+        assert_eq!(from_browser.show_priority_channel, Some(true));
+        let previous = crate::cluster::tests::test_config("local", 0);
+        let mut cfg = previous.clone();
+        cfg.show_priority_channel = true;
+        cfg.youtube_rss_enabled = false;
+        assert!(!monitor_reload_needed(&previous, &cfg));
+        assert_eq!(
+            monitored_config_version(&previous),
+            monitored_config_version(&cfg)
+        );
+        let payload = UpdateConfigRequest {
+            show_priority_channel: Some(false),
+            youtube_rss_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(!config_payload_enables_a_monitor_toggle(&payload, &cfg));
+        let patch = serde_json::to_value(&payload).unwrap();
+        let expected = HashMap::from([
+            ("show_priority_channel".to_string(), json!(true)),
+            ("youtube_rss_enabled".to_string(), json!(false)),
+        ]);
+        assert!(
+            validate_edit_preconditions(&config_form_values(&cfg), &patch, Some(&expected)).is_ok()
+        );
+        cfg.youtube_rss_enabled = true;
+        assert_eq!(
+            validate_edit_preconditions(&config_form_values(&cfg), &patch, Some(&expected)),
+            Err(EDIT_CONFLICT)
+        );
+    }
+
+    #[test]
+    fn old_configs_default_to_rss_on_and_priority_card_hidden() {
+        let mut raw = serde_json::to_value(crate::cluster::tests::test_config("local", 0)).unwrap();
+        for field in [
+            "youtube_rss_enabled",
+            "show_priority_channel",
+            "show_twitch",
+            "show_niconico",
+            "priority_channel",
+            "cluster",
+            "niconico",
+        ] {
+            raw.as_object_mut().unwrap().remove(field);
+        }
+        let cfg: Config = serde_json::from_value(raw).unwrap();
+        assert!(cfg.youtube_rss_enabled);
+        assert!(!cfg.show_priority_channel);
+        assert!(cfg.show_twitch);
+        assert!(!cfg.show_niconico);
+        assert!(!cfg.priority_channel.enabled);
+        assert!(!cfg.cluster.enabled);
+    }
 
     #[test]
     fn settings_save_does_not_treat_already_enabled_danmaku_as_an_enable_request() {

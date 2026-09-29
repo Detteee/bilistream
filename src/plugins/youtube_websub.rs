@@ -12,7 +12,7 @@
 //! never contacted.
 
 use super::http::pooled_client;
-use super::youtube_rss::{parse_feed, roster_channel_ids, FeedEntry};
+use super::youtube_discovery::{parse_feed, roster_channel_ids, FeedEntry};
 use crate::config::load_config;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Query};
@@ -53,17 +53,10 @@ const HUB_CONCURRENCY: usize = 4;
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 100.0;
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
 static WEBUI_PORT: AtomicU16 = AtomicU16::new(0);
 static HUB: Mutex<Option<Hub>> = Mutex::new(None);
 static PUSH_WAKE: Notify = Notify::const_new();
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
-
-/// Lets a caller (the cluster build) keep this node from subscribing. Checked
-/// once per subscriber cycle.
-pub fn set_enabled(enabled: bool) {
-    ENABLED.store(enabled, Ordering::SeqCst);
-}
 
 pub(crate) fn set_webui_port(port: u16) {
     WEBUI_PORT.store(port, Ordering::SeqCst);
@@ -217,7 +210,9 @@ impl Hub {
 
     fn healthy(&self, now: Instant) -> bool {
         let (verified, _, failed) = self.counts();
-        verified > 0
+        self.listening.is_some()
+            && self.error.is_none()
+            && verified > 0
             && failed == 0
             && self
                 .last_push
@@ -363,7 +358,7 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
                 let now = chrono::Utc::now();
                 for item in &accepted {
                     if item.first {
-                        let found = super::youtube_rss::found_before(&item.entry.video_id);
+                        let found = super::youtube_discovery::found_before(&item.entry.video_id);
                         tracing::info!("{}", push_line(&item.entry, now, found));
                     } else {
                         tracing::debug!("WebSub 更新推送: {}", item.entry.video_id);
@@ -498,6 +493,14 @@ struct Listener {
     task: tokio::task::JoinHandle<()>,
 }
 
+impl Drop for Listener {
+    fn drop(&mut self) {
+        // Dropping a JoinHandle alone detaches the callback server, retaining
+        // its port after the owning Web UI/worker shuts down.
+        self.task.abort();
+    }
+}
+
 #[derive(Default)]
 struct Worker {
     listener: Option<Listener>,
@@ -613,18 +616,23 @@ impl Worker {
     }
 
     async fn stop_listener(&mut self) {
-        if let Some(listener) = self.listener.take() {
+        if let Some(mut listener) = self.listener.take() {
             listener.task.abort();
-            let _ = listener.task.await;
+            let _ = (&mut listener.task).await;
             tracing::info!("WebSub 回调监听已关闭 (端口 {})", listener.port);
         }
     }
 
-    async fn reconcile_listener(&mut self, port: u16) {
-        if self.listener.as_ref().is_some_and(|l| l.port == port) {
-            return;
+    async fn reconcile_listener(&mut self, port: u16) -> bool {
+        if self
+            .listener
+            .as_ref()
+            .is_some_and(|l| l.port == port && !l.task.is_finished())
+        {
+            return true;
         }
         self.stop_listener().await;
+        with_hub(|hub| hub.listening = None);
         let addr = std::net::SocketAddr::new(crate::webui::listen::listen_bind(), port);
         let bound = if webui_port() == Some(port) {
             Err("与 Web UI 端口相同".to_string())
@@ -646,6 +654,7 @@ impl Worker {
                     hub.listening = Some(port);
                     hub.error = None;
                 });
+                true
             }
             Err(e) => {
                 let message = format!("WebSub 回调端口 {} 无法监听: {}", port, e);
@@ -658,6 +667,7 @@ impl Worker {
                 if changed {
                     tracing::warn!("{}", message);
                 }
+                false
             }
         }
     }
@@ -674,13 +684,15 @@ impl Worker {
             .map(str::to_string);
         let active = callback.is_some()
             && !cfg.youtube_api_keys().is_empty()
-            && ENABLED.load(Ordering::SeqCst);
+            && crate::cluster::may_subscribe_websub(&cfg);
         let Some(callback) = callback.filter(|_| active) else {
             self.go_inactive(cfg.youtube.proxy.as_deref()).await;
             return;
         };
         self.retire_until = None;
-        self.reconcile_listener(cfg.youtube_websub_port).await;
+        if !self.reconcile_listener(cfg.youtube_websub_port).await {
+            return;
+        }
 
         let roster = roster_channel_ids(&cfg).await;
         let now = Instant::now();
@@ -958,6 +970,8 @@ mod tests {
             .insert(CHANNEL.to_string(), SubState::Verified { renew_at: now });
         assert!(!hub.healthy(now), "no push yet");
         hub.last_push = Some((now, chrono::Utc::now()));
+        assert!(!hub.healthy(now), "no listener");
+        hub.listening = Some(3151);
         assert!(hub.healthy(now));
         assert!(!hub.healthy(now + HEALTHY_WINDOW), "24h silent");
         hub.subs
@@ -1012,6 +1026,35 @@ mod tests {
         assert!(bucket.take(now));
         assert!(!bucket.take(now));
         assert!(bucket.take(now + Duration::from_millis(100)));
+    }
+
+    #[tokio::test]
+    async fn listener_retries_after_bind_failure_and_finished_task() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let mut worker = Worker::default();
+        assert!(!worker.reconcile_listener(port).await);
+        assert!(worker.listener.is_none());
+        assert!(!healthy());
+        drop(occupied);
+        assert!(worker.reconcile_listener(port).await);
+        let listener = worker.listener.as_mut().unwrap();
+        listener.task.abort();
+        while !listener.task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(worker.reconcile_listener(port).await);
+        assert!(!worker.listener.as_ref().unwrap().task.is_finished());
+        let task = worker.listener.as_ref().unwrap().task.abort_handle();
+        drop(worker);
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::new(127, 0, 0, 1), port))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

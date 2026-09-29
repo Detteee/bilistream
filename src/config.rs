@@ -155,6 +155,9 @@ pub struct Config {
     /// `videos.list` before the monitor and the Holodex panel use them.
     #[serde(default)]
     pub youtube_api_key: Option<String>,
+    /// Read channel RSS feeds. Uploads polling and WebSub remain independent.
+    #[serde(default = "default_true")]
+    pub youtube_rss_enabled: bool,
     /// Public URL YouTube's WebSub hub calls, e.g.
     /// `https://yt.example.com/websub/youtube`. Empty turns WebSub off.
     #[serde(default)]
@@ -166,6 +169,13 @@ pub struct Config {
     pub enable_lol_monitor: bool,
     pub lol_monitor_interval: Option<u64>,
     pub anti_collision_list: HashMap<String, i32>,
+    /// Dashboard visibility only; never changes priority monitoring.
+    #[serde(default)]
+    pub show_priority_channel: bool,
+    #[serde(default = "default_true")]
+    pub show_twitch: bool,
+    #[serde(default)]
+    pub show_niconico: bool,
     #[serde(default)]
     pub priority_channel: PriorityChannel,
     #[serde(default = "default_true")]
@@ -552,6 +562,11 @@ pub struct Niconico {
     pub quality: String,
     #[serde(default)]
     pub cookies_file: Option<String>,
+    /// Niconico login cookie value; write-only through the admin API.
+    #[serde(default)]
+    pub user_session: Option<String>,
+    #[serde(default = "default_true")]
+    pub session_check_enabled: bool,
     #[serde(default)]
     pub proxy: Option<String>,
     #[serde(default)]
@@ -570,6 +585,8 @@ impl Default for Niconico {
             area_v2: 235,
             quality: default_quality(),
             cookies_file: None,
+            user_session: None,
+            session_check_enabled: true,
             proxy: None,
             crop: None,
             ffmpeg_cache: default_niconico_ffmpeg_cache(),
@@ -898,8 +915,26 @@ where
     .map_err(|e| e.to_string())?
 }
 
-/// Replace an authoritative managed JSON snapshot using the same transaction
-/// lock as edits. Unlike mutation, replacement can initialize a missing file.
+/// Initialize a missing JSON file under the edit lock; preserve existing bytes.
+pub(crate) async fn initialize_json_file(
+    path: PathBuf,
+    data: serde_json::Value,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = PERSISTENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(false);
+        }
+        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
+        managed_json_committed();
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Replace an authoritative managed JSON snapshot under the persistence lock.
 pub async fn replace_json_file(path: PathBuf, data: serde_json::Value) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let _guard = PERSISTENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());

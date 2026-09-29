@@ -1,4 +1,5 @@
 use std::error::Error;
+#[cfg(target_os = "windows")]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -6,8 +7,6 @@ use std::sync::LockResult;
 
 #[cfg(target_os = "windows")]
 use std::io::Write;
-
-const GITHUB_RAW_BASE: &str = "https://raw.githubusercontent.com/Detteee/bilistream/main";
 
 // Global download progress tracking
 lazy_static::lazy_static! {
@@ -82,7 +81,7 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    set_download_message(&format!("开始下载 {} 个文件...", total_items));
+    set_download_message(&format!("准备安装 {} 个文件...", total_items));
 
     // First, ensure required data files (cross-platform)
     ensure_required_files().await?;
@@ -94,7 +93,7 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
     #[cfg(not(target_os = "windows"))]
     ensure_linux_dependencies().await?;
 
-    set_download_message("所有依赖下载完成！");
+    set_download_message("所有依赖已就绪！");
     DOWNLOAD_COMPLETE.store(true, Ordering::Relaxed);
     DOWNLOAD_IN_PROGRESS.store(false, Ordering::Relaxed);
 
@@ -109,50 +108,27 @@ async fn ensure_required_files() -> Result<(), Box<dyn Error>> {
     let installed = crate::webui::assets::install_missing_assets(&exe_dir)?;
     DOWNLOAD_PROGRESS.fetch_add(installed, Ordering::Relaxed);
 
-    let mut missing_files = Vec::new();
-
-    // Check for required files
-    let areas_json = exe_dir.join("areas.json");
-    let channels_json = exe_dir.join("channels.json");
-
-    if !areas_json.exists() {
-        missing_files.push(("areas.json", "areas.json"));
-    }
-    if !channels_json.exists() {
-        missing_files.push(("channels.json", "channels.json"));
-    }
-
-    if missing_files.is_empty() {
-        return Ok(());
-    }
-
-    println!("\n📦 检测到缺少必需文件，正在自动下载...");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    for (local_path, remote_path) in missing_files {
-        println!("⬇️  下载: {}", local_path);
-
-        let url = format!("{}/{}", GITHUB_RAW_BASE, remote_path);
-        let content = download_file_bytes(&url).await?;
-
-        let full_path = exe_dir.join(local_path);
-
-        // Create parent directories if needed
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        fs::write(&full_path, content)?;
-        println!("✅ 已保存: {}", local_path);
-    }
-
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("✅ 所有必需文件已下载完成\n");
-
-    // Show file usage information
-    show_file_usage_info();
-
+    let initialized = initialize_user_data(&exe_dir).await?;
+    DOWNLOAD_PROGRESS.fetch_add(initialized, Ordering::Relaxed);
     Ok(())
+}
+
+/// New installations start with user-owned data, never the developer's roster.
+pub(crate) async fn initialize_user_data(directory: &Path) -> Result<usize, String> {
+    let mut count = 0;
+    for (name, template) in [
+        ("areas.json", include_str!("../assets/defaults/areas.json")),
+        (
+            "channels.json",
+            include_str!("../assets/defaults/channels.json"),
+        ),
+    ] {
+        let data =
+            serde_json::from_str(template).map_err(|e| format!("Invalid bundled {name}: {e}"))?;
+        count +=
+            usize::from(crate::config::initialize_json_file(directory.join(name), data).await?);
+    }
+    Ok(count)
 }
 
 /// Ensure Windows-specific dependencies (yt-dlp, ffmpeg)
@@ -346,22 +322,6 @@ fn check_command_installed(command: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn download_file_bytes(url: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    let client = reqwest::Client::builder()
-        .user_agent("bilistream")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        return Err(format!("下载失败: HTTP {}", response.status()).into());
-    }
-
-    let bytes = response.bytes().await?;
-    Ok(bytes.to_vec())
-}
-
 #[cfg(target_os = "windows")]
 async fn download_file_to_path(url: &str, dest: &PathBuf) -> Result<(), Box<dyn Error>> {
     let response = reqwest::get(url).await?;
@@ -408,49 +368,6 @@ async fn download_and_extract_ffmpeg(dest_dir: &PathBuf) -> Result<(), Box<dyn s
     Ok(())
 }
 
-fn show_file_usage_info() {
-    println!("\n📚 文件说明：");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    println!("\n📄 areas.json");
-    println!("   用途: 定义 B 站直播分区、禁用关键词和智能分区匹配");
-    println!("   包含:");
-    println!("   • banned_keywords: 标题中包含这些词的直播将被跳过");
-    println!("   • areas: B 站直播分区配置");
-    println!("     - id: 分区 ID");
-    println!("     - name: 分区名称");
-    println!("     - title_keywords: 标题关键词（自动匹配分区）");
-    println!("     - aliases: 弹幕指令别名");
-    println!("   示例:");
-    println!("   • 添加禁用词: 在 banned_keywords 中添加 'chat'");
-    println!("   • 智能分区: 标题包含 'valorant' 自动选择无畏契约分区");
-    println!("   • 弹幕指令: 发送 '%转播%YT%频道%lol' 使用别名 'lol' 选择英雄联盟");
-
-    println!("\n📄 channels.json");
-    println!("   用途: 预设的 YouTube/Twitch/Niconico 频道列表");
-    println!("   包含:");
-    println!("   • name: 频道名称（YouTube/Twitch 转播标题）");
-    println!("   • niconico_name: Niconico 转播标题（可选，缺省则用 name）");
-    println!("   • platforms: YouTube 频道 ID、Twitch 用户名、Niconico 频道 slug");
-    println!("   • riot_puuid: 英雄联盟玩家 ID（用于 LOL 监控）");
-    println!("   示例: 在 Web UI 中选择频道时会显示这些预设选项");
-
-    println!("\n📄 webui/dist/index.html");
-    println!("   用途: Web 控制面板界面");
-    println!("   功能:");
-    println!("   • 首次运行设置向导");
-    println!("   • 实时监控直播状态");
-    println!("   • 控制开播/停播");
-    println!("   • 管理频道和配置");
-
-    println!("\n💡 提示:");
-    println!("   • 可以编辑 areas.json 添加自定义禁用关键词");
-    println!("   • 可以编辑 channels.json 添加常用频道");
-    println!("   • 这些文件会在程序启动时自动加载");
-
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-}
-
 pub fn check_files_exist() -> bool {
     let Ok(exe_dir) = current_exe_dir() else {
         return false;
@@ -484,6 +401,21 @@ fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn first_run_data_is_neutral_and_existing_files_are_preserved() {
+        let dir = std::env::temp_dir().join(format!("bilistream-first-run-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(super::initialize_user_data(&dir).await.unwrap(), 2);
+        let channels: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("channels.json")).unwrap()).unwrap();
+        assert_eq!(channels["channels"], serde_json::json!([]));
+        let personal =
+            br#"{"channels":[{"name":"mine","platforms":{"twitch":"mine"},"aliases":[]}] }"#;
+        crate::config::write_file_atomic(&dir.join("channels.json"), personal).unwrap();
+        assert_eq!(super::initialize_user_data(&dir).await.unwrap(), 0);
+        assert_eq!(std::fs::read(dir.join("channels.json")).unwrap(), personal);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// The ffmpeg and self-update archives are both plain deflate zips, and the
     /// zip dependency only pulls a deflate backend. A missing backend surfaces

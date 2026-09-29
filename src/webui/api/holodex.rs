@@ -352,7 +352,7 @@ pub async fn api_youtube_key_status() -> Json<serde_json::Value> {
     }
     let mut data = crate::plugins::youtube_data::key_pool_status(&keys);
     data["configured"] = json!(true);
-    data["playlist"] = json!(crate::plugins::youtube_rss::playlist_status());
+    data["playlist"] = json!(crate::plugins::youtube_discovery::playlist_status());
     data["websub"] = json!(crate::plugins::youtube_websub::status());
     Json(json!({ "success": true, "data": data }))
 }

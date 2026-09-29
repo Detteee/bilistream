@@ -4,7 +4,7 @@
 //! channel's UTC-hour bucket, weighted by age (half-life four weeks) and
 //! decayed as time passes, so the shape follows the roster's current habits.
 //! The uploads-playlist poller spreads its budget over the day by these weights
-//! (`youtube_rss::hourly_intervals`). The counts live in
+//! (`youtube_discovery::hourly_intervals`). The counts live in
 //! `youtube_golive_hours.json` next to the binary, so a restart keeps them.
 
 use super::youtube_data::YtVideo;

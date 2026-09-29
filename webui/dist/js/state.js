@@ -16,6 +16,10 @@ window.configData = {
   riot_api_key: '',
   holodex_api_key: '',
   youtube_api_key: '',
+  show_priority_channel: false,
+  show_twitch: true,
+  show_niconico: false,
+  youtube_rss_enabled: true,
   priority_channel: {},
   cluster: {},
   bilibili: {},
@@ -34,7 +38,22 @@ function mergeConfigData(config) {
     youtube: { ...window.configData.youtube, ...config.youtube },
     twitch: { ...window.configData.twitch, ...config.twitch }
   };
+  applyDashboardCardVisibility();
   return window.configData;
+}
+// Presentation is independent of the monitor and automatic-switch toggles.
+function applyDashboardCardVisibility(config = window.configData) {
+  for (const [platform, visible] of [['priority', config.show_priority_channel === true], ['twitch', config.show_twitch !== false], ['niconico', config.show_niconico === true], ['cluster', config.cluster?.enabled === true]]) {
+    const card = document.querySelector(`.card[data-platform="${platform}"]`);
+    if (card) card.classList.toggle('hidden', !visible);
+  }
+  const columns = 2 + Number(config.show_twitch !== false) + Number(config.show_niconico === true);
+  const dashboard = document.querySelector('.dashboard');
+  dashboard?.style.setProperty('--platform-columns', columns);
+  for (const platform of ['twitch', 'niconico']) {
+    const card = document.querySelector(`.card[data-platform="${platform}"]`);
+    card?.classList.toggle('dashboard-wide-last', columns === 3 && (platform === 'niconico' ? config.show_niconico === true : config.show_niconico !== true));
+  }
 }
 function updateMonitorToggleStates(config = window.configData) {
   const youtubeToggle = document.getElementById('youtube-monitor-toggle');
@@ -182,6 +201,7 @@ function getAreaName(areaId) {
 }
 
 export {
+  applyDashboardCardVisibility,
   mergeConfigData,
   updateMonitorToggleStates,
   syncMonitorTogglesWithClusterRole,

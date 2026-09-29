@@ -38,10 +38,11 @@ pub async fn start_webui_on_listener(
     let port = addr.port();
     state.init_log_buffer();
     let _status_worker = api::start_status_refresh_worker();
-    let _rss_worker = crate::plugins::youtube_rss::start_rss_discovery_worker();
+    let _discovery_worker = crate::plugins::youtube_discovery::start_discovery_worker();
     let _store_worker = crate::plugins::youtube_index::start_store_refresh_worker();
     let _list_worker = super::holodex_list::start_holodex_list_worker();
     let _twitch_live_worker = crate::plugins::twitch_live::start_twitch_live_worker();
+    let _niconico_session_worker = crate::plugins::niconico_session::start_session_worker();
     let _niconico_live_worker = crate::plugins::niconico_live::start_niconico_live_worker();
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
@@ -106,11 +107,22 @@ pub async fn start_webui_on_listener(
         .route("/area", post(api::update_area))
         .route("/title", post(api::update_title))
         .route("/channels", get(api::get_channels))
+        .route(
+            "/channels/resolve-youtube",
+            post(api::resolve_youtube_channel),
+        )
+        .route("/niconico/session", get(api::niconico_session_status))
+        .route("/niconico/session/check", post(api::check_niconico_session))
         .route("/areas", get(api::get_areas))
+        .route("/areas/catalog", get(api::get_area_catalog))
         .route("/channel", post(api::update_channel))
         .route("/setup-status", get(api::check_setup))
         .route("/logs", get(api::get_logs_endpoint))
         .route("/setup/save-config", post(api::save_setup_config))
+        .route(
+            "/setup/holodex-favorites",
+            post(api::preview_setup_favorites),
+        )
         .route("/setup/login-status", get(api::check_login_status))
         .route("/setup/login", post(api::trigger_login))
         .route("/setup/qrcode", get(api::get_qr_code))

@@ -225,7 +225,7 @@ fn streamlink_command() -> String {
 }
 
 fn streamlink_auth_args(cfg: &NiconicoConfig) -> Result<Vec<String>, Box<dyn Error>> {
-    let session = user_session_from_cookies_file(&resolve_cookies_path(cfg)?)?;
+    let session = configured_user_session(cfg)?;
     let mut args = Vec::new();
     if let Some(proxy) = cfg.proxy.as_deref().filter(|proxy| !proxy.is_empty()) {
         args.push("--http-proxy".to_string());
@@ -236,9 +236,22 @@ fn streamlink_auth_args(cfg: &NiconicoConfig) -> Result<Vec<String>, Box<dyn Err
     Ok(args)
 }
 
+/// Direct value takes precedence; old installations can keep their Netscape path.
+pub(crate) fn configured_user_session(cfg: &NiconicoConfig) -> Result<String, Box<dyn Error>> {
+    if let Some(session) = cfg
+        .user_session
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(session.to_string());
+    }
+    user_session_from_cookies_file(&resolve_cookies_path(cfg)?)
+}
+
 fn resolve_cookies_path(cfg: &NiconicoConfig) -> Result<PathBuf, Box<dyn Error>> {
     let Some(path) = cfg.cookies_file.as_deref().filter(|path| !path.is_empty()) else {
-        return Err("Niconico cookies file is not configured".into());
+        return Err("Niconico user_session 未配置，请在系统设置填写".into());
     };
 
     let given = PathBuf::from(path);
@@ -989,6 +1002,19 @@ mod tests {
         assert_eq!(jst.day(), 29);
         assert_eq!(jst.hour(), 19);
         assert_eq!(jst.minute(), 50);
+    }
+
+    #[test]
+    fn direct_session_is_the_only_auth_cookie_and_wins_over_legacy_file() {
+        let cfg = NiconicoConfig {
+            user_session: Some("fake-session-for-test".into()),
+            cookies_file: Some("missing-file-for-test".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            streamlink_auth_args(&cfg).unwrap(),
+            vec!["--niconico-user-session", "fake-session-for-test"]
+        );
     }
 
     #[test]

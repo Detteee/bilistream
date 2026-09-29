@@ -174,12 +174,13 @@ export function keyMeterRows(data) {
 export function discoveryTiles(data) {
   const playlist = data?.playlist;
   const websub = data?.websub;
+  const rssEnabled = playlist?.rss_enabled !== false;
   const tiles = [
     {
       name: 'RSS',
-      tone: playlist?.rss_down ? 'bad' : 'ok',
-      label: playlist?.rss_down ? '故障' : '正常',
-      detail: playlist?.rss_down ? '上传列表接替' : '每 3 分钟',
+      tone: !playlist || !rssEnabled ? 'off' : playlist.rss_down ? 'bad' : 'ok',
+      label: !playlist ? '未运行' : !rssEnabled ? '已关闭' : playlist.rss_down ? '故障' : '正常',
+      detail: !playlist ? '等待 YouTube 发现状态' : !rssEnabled || playlist.rss_down ? '上传列表按配额接替' : '每 3 分钟',
     },
     {
       name: '上传列表',
@@ -233,6 +234,7 @@ export function formatPlaylistPolling(playlist) {
   const slowed = playlist.websub_slowed ? '（WebSub 正常，放慢一倍）' : '';
   if (playlist.on && playlist.paused) return '上传列表轮询：暂停（今日剩余配额留给索引与转播目标）';
   if (playlist.on) {
+    if (playlist.rss_enabled === false) return `RSS 已关闭，上传列表每频道 ${playlist.interval_secs}s${byHour}${stretched}${slowed}`;
     return playlist.rss_down
       ? `RSS 故障，上传列表每频道 ${playlist.interval_secs}s${byHour}${stretched}${slowed}`
       : `上传列表轮询：每频道 ${playlist.interval_secs}s${byHour}${stretched}${slowed}`;

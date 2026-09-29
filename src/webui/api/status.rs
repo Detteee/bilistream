@@ -548,3 +548,26 @@ pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
         }),
     }
 }
+
+pub(crate) async fn niconico_session_status(
+) -> Result<Json<ApiResponse<crate::plugins::niconico_session::SessionStatus>>, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(crate::plugins::niconico_session::status(&cfg)),
+        message: None,
+    }))
+}
+pub(crate) async fn check_niconico_session(
+) -> Result<Json<ApiResponse<crate::plugins::niconico_session::SessionStatus>>, StatusCode> {
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(crate::plugins::niconico_session::check(&cfg, true).await),
+        message: None,
+    }))
+}

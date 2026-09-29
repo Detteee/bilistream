@@ -571,7 +571,7 @@ pub async fn get_youtube_channel_status(
 
 /// Holodex rows plus this channel's streams found by RSS discovery.
 fn with_discovered_rows(channel_id: &str, streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
-    super::youtube_rss::merge_discovered(streams)
+    super::youtube_discovery::merge_discovered(streams)
         .into_iter()
         .filter(|s| s.channel.id == channel_id)
         .collect()

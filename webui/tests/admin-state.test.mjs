@@ -74,6 +74,7 @@ globalThis.window = {};
 globalThis.document = {
   addEventListener() {},
   getElementById: id => nodes.get(id) || null,
+  querySelector: selector => ({ '.card[data-platform="priority"]': nodes.get('priority-channel-card'), '.card[data-platform="twitch"]': nodes.get('twitch-card'), '.card[data-platform="niconico"]': nodes.get('niconico-card') })[selector] || null,
   createElement() {
     return createMockElement();
   },
@@ -452,4 +453,35 @@ test('an open Holodex panel renews its lease every 4 min, every minute without S
   assert.equal(holodexKeepAliveDue(4 * minute, true), true);
   assert.equal(holodexKeepAliveDue(minute - 1, false), false);
   assert.equal(holodexKeepAliveDue(minute, false), true);
+});
+
+
+test('priority visibility is independent of monitoring and survives config refreshes', async () => {
+  const { mergeConfigData, applyDashboardCardVisibility } = await import('../dist/js/state.js');
+  const card = node('priority-channel-card');
+  const twitch = node('twitch-card');
+  const niconico = node('niconico-card');
+  mergeConfigData({ show_priority_channel: false, priority_channel: { enabled: true, auto_restart: true, channel_name: 'demo' } });
+  assert.ok(card.classList.contains('hidden'));
+  assert.ok(niconico.classList.contains('hidden'));
+  assert.equal(twitch.classList.contains('hidden'), false);
+  mergeConfigData({ show_twitch: false, show_niconico: true });
+  assert.ok(twitch.classList.contains('hidden'));
+  assert.equal(niconico.classList.contains('hidden'), false);
+  assert.equal(window.configData.priority_channel.enabled, true);
+  mergeConfigData({ priority_channel: { enabled: true } });
+  applyDashboardCardVisibility();
+  assert.ok(card.classList.contains('hidden'));
+  mergeConfigData({ show_priority_channel: true });
+  assert.equal(card.classList.contains('hidden'), false);
+  assert.deepEqual(window.configData.priority_channel, { enabled: true, auto_restart: true, channel_name: 'demo' });
+});
+
+test('RSS disabled, failed and unavailable are distinct discovery states', async () => {
+  const { discoveryTiles, formatPlaylistPolling } = await import('../dist/js/format.js');
+  const playlist = { on: true, interval_secs: 180, rss_enabled: false, rss_down: false };
+  assert.equal(discoveryTiles({ playlist })[0].label, '已关闭');
+  assert.match(formatPlaylistPolling(playlist), /RSS 已关闭/);
+  assert.equal(discoveryTiles({ playlist: { ...playlist, rss_enabled: true, rss_down: true } })[0].label, '故障');
+  assert.equal(discoveryTiles({})[0].label, '未运行');
 });

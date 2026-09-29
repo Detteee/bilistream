@@ -1,10 +1,158 @@
+import { bindYoutubeResolver } from './channel-resolver.js';
 // setup.js — extracted from app.js
 
+import { loadAreaCatalog, fillAreaCatalog } from './area-catalog.js';
 import { readIntegerInput, showNotification } from './dom.js';
 import { getAreaList, appendAreaOptions, createPlatformChannelOption, createSelectOption } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 
+let setupAreaChoices = [];
+let officialAreasLoaded = false;
+let setupChannels = [];
+let favoriteChannels = [];
+const selectedFavorites = new Map();
+let favoritesGeneration = 0;
+const setupPlatforms = { yt: 'youtube', tw: 'twitch', nc: 'niconico' };
+
+function updateSetupTarget(platform) {
+  const value = document.getElementById(`setup-${platform}-channel-select`).value;
+  document.getElementById(`setup-${platform}-fields`).classList.toggle('hidden', !value);
+  document.getElementById(`setup-${platform}-identity`).classList.toggle('hidden', value !== 'manual');
+  if (value && value !== 'manual') {
+    const channel = JSON.parse(value);
+    document.getElementById(`setup-${platform}-name`).value = channel.name;
+    document.getElementById(`setup-${platform}-id`).value = channel.id;
+  }
+}
+
+function renderSetupChannelOptions() {
+  for (const [platform, provider] of Object.entries(setupPlatforms)) {
+    const select = document.getElementById(`setup-${platform}-channel-select`);
+    const previous = select.value;
+    const seen = new Set();
+    const options = [createSelectOption('', '不转播（关闭监控）'), createSelectOption('manual', '手动添加频道...')];
+    const channels = platform === 'yt'
+      ? [...setupChannels, ...[...selectedFavorites.values()].map(channel => ({ name: channel.name, platforms: { youtube: channel.id } }))]
+      : setupChannels;
+    for (const channel of channels) {
+      const id = channel.platforms?.[provider];
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      options.push(createPlatformChannelOption(channel, provider));
+    }
+    select.replaceChildren(...options);
+    select.value = options.some(option => option.value === previous) ? previous : '';
+    updateSetupTarget(platform);
+  }
+}
+
+function filteredFavorites() {
+  const query = document.getElementById('setup-favorites-search').value.trim().toLocaleLowerCase();
+  return favoriteChannels.filter(channel => `${channel.name} ${channel.id}`.toLocaleLowerCase().includes(query));
+}
+
+function renderSetupFavorites() {
+  const list = document.getElementById('setup-favorites-list');
+  const channels = filteredFavorites();
+  list.replaceChildren();
+  for (const channel of channels) {
+    const label = document.createElement('label');
+    label.className = 'setup-favorite-option';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = channel.id;
+    checkbox.checked = selectedFavorites.has(channel.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedFavorites.set(channel.id, channel);
+      else selectedFavorites.delete(channel.id);
+      updateFavoritesCount();
+      renderSetupChannelOptions();
+    });
+    const text = document.createElement('span');
+    const name = document.createElement('span');
+    name.textContent = channel.name || channel.id;
+    const id = document.createElement('small');
+    id.textContent = channel.id;
+    text.append(name, id);
+    label.append(checkbox, text);
+    list.append(label);
+  }
+  if (!channels.length) list.textContent = '没有匹配的频道，试试其他名称。';
+  updateFavoritesCount();
+}
+
+function updateFavoritesCount() {
+  document.getElementById('setup-favorites-count').textContent = `已选 ${selectedFavorites.size} / ${favoriteChannels.length} 个频道`;
+}
+
+function resetSetupFavorites() {
+  favoritesGeneration += 1;
+  favoriteChannels = [];
+  selectedFavorites.clear();
+  document.getElementById('setup-favorites-choices').classList.add('hidden');
+  document.getElementById('setup-favorites-status').textContent = '登录信息已更改，请重新加载收藏。';
+  renderSetupChannelOptions();
+}
+
+async function loadSetupFavorites() {
+  const button = document.getElementById('setup-load-favorites');
+  const status = document.getElementById('setup-favorites-status');
+  const generation = ++favoritesGeneration;
+  const apiKey = document.getElementById('setup-holodex').value.trim();
+  const jwt = document.getElementById('setup-holodex-jwt').value.trim().replace(/^Bearer\s+/i, '');
+  if (!apiKey || !jwt) {
+    status.textContent = '请填写 Holodex API Key 和 JWT，或跳过收藏导入。';
+    return;
+  }
+  button.disabled = true;
+  status.textContent = '正在加载收藏频道...';
+  try {
+    const result = await postJsonApi('/api/setup/holodex-favorites', { api_key: apiKey, jwt }, { timeoutMs: 25000 });
+    if (generation !== favoritesGeneration) return;
+    if (!result.success || !Array.isArray(result.data)) throw new Error(result.message || '收藏加载失败');
+    favoriteChannels = result.data;
+    const ids = new Set(favoriteChannels.map(channel => channel.id));
+    for (const id of selectedFavorites.keys()) if (!ids.has(id)) selectedFavorites.delete(id);
+    document.getElementById('setup-favorites-choices').classList.toggle('hidden', !favoriteChannels.length);
+    status.textContent = favoriteChannels.length
+      ? `已加载 ${favoriteChannels.length} 个频道，请勾选。`
+      : '收藏夹中没有可导入的频道，可以跳过或手动添加。';
+    renderSetupFavorites();
+    renderSetupChannelOptions();
+  } catch (error) {
+    if (generation === favoritesGeneration) status.textContent = `${error.message}；可重试或跳过。`;
+  } finally {
+    button.disabled = false;
+  }
+}
+async function loadOfficialSetupAreas() {
+  const button = document.getElementById('setup-load-areas');
+  button.disabled = true;
+  try {
+    const official = await loadAreaCatalog();
+    const combined = new Map(setupAreaChoices.map(area => [Number(area.id), area]));
+    for (const area of official) if (!combined.has(area.id)) combined.set(area.id, area);
+    setupAreaChoices = [...combined.values()]; officialAreasLoaded = true;
+    for (const platform of ['yt', 'tw', 'nc']) fillAreaCatalog(document.getElementById(`setup-${platform}-area`), setupAreaChoices);
+    document.getElementById('setup-area-hint').textContent = '已加载，完成设置时保存所选分区。';
+  } catch (error) {
+    document.getElementById('setup-area-hint').textContent = `官方分区暂不可用：${error.message}。仍可选择本地分区或稍后重试。`;
+  } finally { button.disabled = false; }
+}
 function initSetupControls() {
+  bindYoutubeResolver('setup-yt-id', 'setup-resolve-youtube');
+  document.getElementById('setup-load-areas')?.addEventListener('click', loadOfficialSetupAreas);
+  document.getElementById('setup-nc-channel-select')?.addEventListener('change', () => updateSetupTarget('nc'));
+  document.getElementById('setup-load-favorites')?.addEventListener('click', loadSetupFavorites);
+  document.getElementById('setup-favorites-search')?.addEventListener('input', renderSetupFavorites);
+  for (const id of ['setup-holodex', 'setup-holodex-jwt']) document.getElementById(id)?.addEventListener('input', resetSetupFavorites);
+  document.getElementById('setup-favorites-select')?.addEventListener('click', () => {
+    for (const channel of filteredFavorites()) selectedFavorites.set(channel.id, channel);
+    renderSetupFavorites(); renderSetupChannelOptions();
+  });
+  document.getElementById('setup-favorites-clear')?.addEventListener('click', () => {
+    selectedFavorites.clear(); renderSetupFavorites(); renderSetupChannelOptions();
+  });
   document
     .getElementById('show-qr-btn')
     ?.addEventListener('click', showQrCode);
@@ -197,7 +345,9 @@ async function triggerBiliLogin() {
     showNotification('登录失败: ' + error.message, 'error');
   }
 }
+let setupSaving = false;
 async function saveSetupConfig() {
+  if (setupSaving) return;
   // Validate required fields
   const room = readIntegerInput('setup-room', 0);
   if (room <= 0) {
@@ -213,6 +363,10 @@ async function saveSetupConfig() {
     auto_cover: document.getElementById('setup-auto-cover').checked,
     enable_danmaku_command: document.getElementById('setup-danmaku-command').checked,
     anti_collision: document.getElementById('setup-anti-collision').checked,
+    youtube_enable_monitor: !!document.getElementById('setup-yt-channel-select').value,
+    twitch_enable_monitor: !!document.getElementById('setup-tw-channel-select').value,
+    niconico_enable_monitor: !!document.getElementById('setup-nc-channel-select').value,
+    selected_youtube_channels: [...selectedFavorites.values()].map(({ id, name }) => ({ id, name })),
 
     // YouTube
     youtube_channel_name: document.getElementById('setup-yt-name').value || null,
@@ -229,6 +383,11 @@ async function saveSetupConfig() {
     twitch_quality: document.getElementById('setup-tw-quality').value || null,
     twitch_proxy: document.getElementById('setup-tw-proxy').value || null,
 
+    niconico_channel_name: document.getElementById('setup-nc-name').value.trim() || null,
+    niconico_channel_id: document.getElementById('setup-nc-id').value.trim() || null,
+    niconico_area_v2: readIntegerInput('setup-nc-area', 235),
+    selected_areas: setupAreaChoices.filter(area => ['yt', 'tw', 'nc'].some(platform => document.getElementById(`setup-${platform}-channel-select`).value && readIntegerInput(`setup-${platform}-area`, 235) === Number(area.id))),
+
     // Advanced
     holodex_api_key: document.getElementById('setup-holodex').value.trim() || null,
     holodex_jwt: (() => {
@@ -239,10 +398,15 @@ async function saveSetupConfig() {
     enable_lol_monitor: document.getElementById('setup-lol-monitor').checked
   };
 
+  setupSaving = true;
+  const saveButton = document.getElementById('setup-save-btn');
+  saveButton.disabled = true;
+  let saved = false;
   try {
     const data = await postJsonApi('/api/setup/save-config', config);
 
     if (data.success) {
+      saved = true;
       showNotification('配置保存成功！正在加载控制面板...', 'success');
       setTimeout(() => {
         location.reload();
@@ -253,6 +417,8 @@ async function saveSetupConfig() {
   } catch (error) {
     console.error('Failed to save config:', error);
     showNotification('保存配置失败: ' + error.message, 'error');
+  } finally {
+    if (!saved) { setupSaving = false; saveButton.disabled = false; }
   }
 }
 // Setup check functions
@@ -291,18 +457,19 @@ async function checkSetupStatus() {
 async function loadAreasForSetup() {
   try {
     const areasList = getAreaList(await getJson('/api/areas'));
+    if (officialAreasLoaded) return;
+    setupAreaChoices = areasList;
 
     if (areasList.length > 0) {
       const ytAreaSelect = document.getElementById('setup-yt-area');
       const twAreaSelect = document.getElementById('setup-tw-area');
 
-      [ytAreaSelect, twAreaSelect].forEach(select => {
+      [ytAreaSelect, twAreaSelect, document.getElementById('setup-nc-area')].forEach(select => {
         if (!select) return;
+        const previous = select.value;
         select.replaceChildren();
         appendAreaOptions(select, areasList, true);
-        if (areasList.some(area => Number(area.id) === 235)) {
-          select.value = '235';
-        }
+        select.value = areasList.some(area => String(area.id) === previous) ? previous : '235';
       });
     }
   } catch (error) {
@@ -311,67 +478,15 @@ async function loadAreasForSetup() {
 }
 async function loadChannelsForSetup() {
   try {
-    const channelsData = await getJson('/api/channels');
-
-    if (channelsData && channelsData.channels) {
-      const ytChannelSelect = document.getElementById('setup-yt-channel-select');
-      const twChannelSelect = document.getElementById('setup-tw-channel-select');
-      if (!ytChannelSelect || !twChannelSelect) return;
-
-      // Populate YouTube channels
-      ytChannelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
-      channelsData.channels.forEach(channel => {
-        if (channel.platforms && channel.platforms.youtube) {
-          ytChannelSelect.appendChild(createPlatformChannelOption(channel, 'youtube'));
-        }
-      });
-
-      // Populate Twitch channels
-      twChannelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
-      channelsData.channels.forEach(channel => {
-        if (channel.platforms && channel.platforms.twitch) {
-          twChannelSelect.appendChild(createPlatformChannelOption(channel, 'twitch'));
-        }
-      });
-    } else {
-      console.warn('No channels data found or invalid format');
-    }
+    const data = await getJson('/api/channels');
+    setupChannels = Array.isArray(data?.channels) ? data.channels : [];
+    renderSetupChannelOptions();
   } catch (error) {
-    console.error('Failed to load channels:', error);
+    showNotification('无法加载已有频道，仍可手动添加', 'error');
   }
 }
-function updateSetupYouTubeChannel() {
-  const select = document.getElementById('setup-yt-channel-select');
-  const selectedValue = select.value;
-
-  if (!selectedValue) {
-    return;
-  }
-
-  try {
-    const channelInfo = JSON.parse(selectedValue);
-    document.getElementById('setup-yt-id').value = channelInfo.id;
-    document.getElementById('setup-yt-name').value = channelInfo.name;
-  } catch (error) {
-    console.error('Failed to parse channel info:', error);
-  }
-}
-function updateSetupTwitchChannel() {
-  const select = document.getElementById('setup-tw-channel-select');
-  const selectedValue = select.value;
-
-  if (!selectedValue) {
-    return;
-  }
-
-  try {
-    const channelInfo = JSON.parse(selectedValue);
-    document.getElementById('setup-tw-id').value = channelInfo.id;
-    document.getElementById('setup-tw-name').value = channelInfo.name;
-  } catch (error) {
-    console.error('Failed to parse channel info:', error);
-  }
-}
+function updateSetupYouTubeChannel() { updateSetupTarget('yt'); }
+function updateSetupTwitchChannel() { updateSetupTarget('tw'); }
 async function checkSetupAndRefresh() {
   const needsSetup = await checkSetupStatus();
   if (!needsSetup) {

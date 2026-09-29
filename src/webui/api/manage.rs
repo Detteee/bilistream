@@ -205,7 +205,20 @@ fn managed_mutation_response(
     }
 }
 
-pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
+pub async fn add_channel(Json(mut payload): Json<AddChannelRequest>) -> Json<ApiResponse<()>> {
+    if let Some(input) = payload
+        .platforms
+        .get("youtube")
+        .filter(|s| !s.trim().is_empty())
+    {
+        let proxy = load_config().await.ok().and_then(|cfg| cfg.youtube.proxy);
+        match crate::plugins::youtube_channel::resolve_channel_id(input, proxy.as_deref()).await {
+            Ok(id) => {
+                payload.platforms.insert("youtube".into(), id);
+            }
+            Err(error) => return managed_json_error(error),
+        }
+    }
     let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
@@ -235,8 +248,21 @@ pub async fn add_channel(Json(payload): Json<AddChannelRequest>) -> Json<ApiResp
 }
 
 pub async fn update_channel_manage(
-    Json(payload): Json<AddChannelRequest>,
+    Json(mut payload): Json<AddChannelRequest>,
 ) -> Json<ApiResponse<()>> {
+    if let Some(input) = payload
+        .platforms
+        .get("youtube")
+        .filter(|s| !s.trim().is_empty())
+    {
+        let proxy = load_config().await.ok().and_then(|cfg| cfg.youtube.proxy);
+        match crate::plugins::youtube_channel::resolve_channel_id(input, proxy.as_deref()).await {
+            Ok(id) => {
+                payload.platforms.insert("youtube".into(), id);
+            }
+            Err(error) => return managed_json_error(error),
+        }
+    }
     let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {

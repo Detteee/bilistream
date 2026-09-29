@@ -1,4 +1,6 @@
+use super::setup_data::{save_setup_lists, setup_channel, SetupArea, SetupChannel};
 use super::*;
+use crate::plugins::holodex::HolodexFavoriteChannel;
 
 #[derive(Serialize)]
 pub struct SetupStatus {
@@ -60,30 +62,227 @@ pub struct SetupConfigRequest {
     enable_danmaku_command: bool,
     interval: u64,
     anti_collision: bool,
+    youtube_enable_monitor: Option<bool>,
     youtube_channel_name: Option<String>,
     youtube_channel_id: Option<String>,
     youtube_area_v2: Option<u64>,
     youtube_quality: Option<String>,
     youtube_proxy: Option<String>,
+    twitch_enable_monitor: Option<bool>,
     twitch_channel_name: Option<String>,
     twitch_channel_id: Option<String>,
     twitch_area_v2: Option<u64>,
     twitch_proxy_region: Option<String>,
     twitch_quality: Option<String>,
     twitch_proxy: Option<String>,
+    niconico_enable_monitor: Option<bool>,
+    niconico_channel_name: Option<String>,
+    niconico_channel_id: Option<String>,
+    niconico_area_v2: Option<u64>,
+    #[serde(default)]
+    selected_areas: Vec<SetupArea>,
+    #[serde(default)]
+    selected_youtube_channels: Vec<HolodexFavoriteChannel>,
     holodex_api_key: Option<String>,
     holodex_jwt: Option<String>,
     riot_api_key: Option<String>,
     enable_lol_monitor: bool,
 }
 
+/// Selected roster additions and monitor targets have deliberately separate paths.
+fn setup_targets(payload: &SetupConfigRequest) -> Result<Vec<SetupChannel>, String> {
+    let mut channels = Vec::new();
+    for (platform, enabled, name, id) in [
+        (
+            "youtube",
+            payload.youtube_enable_monitor,
+            payload.youtube_channel_name.as_deref(),
+            payload.youtube_channel_id.as_deref(),
+        ),
+        (
+            "twitch",
+            payload.twitch_enable_monitor,
+            payload.twitch_channel_name.as_deref(),
+            payload.twitch_channel_id.as_deref(),
+        ),
+        (
+            "niconico",
+            payload.niconico_enable_monitor,
+            payload.niconico_channel_name.as_deref(),
+            payload.niconico_channel_id.as_deref(),
+        ),
+    ] {
+        if enabled == Some(false) {
+            continue;
+        }
+        match setup_channel(platform, name, id)? {
+            Some(channel) => channels.push(channel),
+            None if enabled == Some(true) => {
+                return Err(format!("{platform} 请选择转播频道，或选择不转播"))
+            }
+            None => {}
+        }
+    }
+    Ok(channels)
+}
+
+async fn resolve_setup_targets(
+    payload: &mut SetupConfigRequest,
+) -> Result<Vec<SetupChannel>, String> {
+    if let Some(input) = payload
+        .youtube_channel_id
+        .as_deref()
+        .filter(|s| payload.youtube_enable_monitor != Some(false) && !s.trim().is_empty())
+    {
+        payload.youtube_channel_id = Some(
+            crate::plugins::youtube_channel::resolve_channel_id(
+                input,
+                payload.youtube_proxy.as_deref(),
+            )
+            .await?,
+        );
+    }
+    setup_targets(payload)
+}
+
+fn setup_roster(
+    payload: &SetupConfigRequest,
+    targets: &[SetupChannel],
+) -> Result<Vec<SetupChannel>, String> {
+    let mut channels = targets.to_vec();
+    for selected in &payload.selected_youtube_channels {
+        channels.push(
+            setup_channel("youtube", Some(&selected.name), Some(&selected.id))?
+                .ok_or("导入频道缺少 YouTube ID")?,
+        );
+    }
+    Ok(channels)
+}
+
+fn apply_setup_targets(
+    cfg: &mut Config,
+    payload: &SetupConfigRequest,
+    targets: &[SetupChannel],
+    new_install: bool,
+) {
+    let requested = |platform, enabled: Option<bool>| {
+        enabled.or_else(|| {
+            new_install.then(|| targets.iter().any(|channel| channel.platform == platform))
+        })
+    };
+    if let Some(enabled) = requested("youtube", payload.youtube_enable_monitor) {
+        cfg.youtube.enable_monitor = enabled;
+        cfg.enable_youtube_monitor = enabled;
+    }
+    if let Some(enabled) = requested("twitch", payload.twitch_enable_monitor) {
+        cfg.twitch.enable_monitor = enabled;
+        cfg.enable_twitch_monitor = enabled;
+    }
+    if let Some(enabled) = requested("niconico", payload.niconico_enable_monitor) {
+        cfg.niconico.enable_monitor = enabled;
+    }
+    for channel in targets {
+        match channel.platform {
+            "youtube" => {
+                cfg.youtube.channel_name = channel.name.clone();
+                cfg.youtube.channel_id = channel.id.clone();
+            }
+            "twitch" => {
+                cfg.twitch.channel_name = channel.name.clone();
+                cfg.twitch.channel_id = channel.id.clone();
+            }
+            "niconico" => {
+                cfg.niconico.channel_name = channel.name.clone();
+                cfg.niconico.channel_id = channel.id.clone();
+                cfg.niconico.live_id.clear();
+                if new_install {
+                    cfg.show_niconico = true;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    // A disabled selector can carry stale values from an earlier edit. Ignore
+    // every target preference in that case, including quality/area/proxy.
+    if payload.youtube_enable_monitor != Some(false) {
+        if let Some(area) = payload.youtube_area_v2 {
+            cfg.youtube.area_v2 = area;
+        }
+        if let Some(quality) = &payload.youtube_quality {
+            cfg.youtube.quality = quality.clone();
+        }
+        if let Some(proxy) = &payload.youtube_proxy {
+            cfg.youtube.proxy = (!proxy.is_empty()).then(|| proxy.clone());
+        }
+    }
+    if payload.twitch_enable_monitor != Some(false) {
+        if let Some(area) = payload.twitch_area_v2 {
+            cfg.twitch.area_v2 = area;
+        }
+        if let Some(quality) = &payload.twitch_quality {
+            cfg.twitch.quality = quality.clone();
+        }
+        if let Some(region) = &payload.twitch_proxy_region {
+            cfg.twitch.proxy_region = region.clone();
+        }
+        if let Some(proxy) = &payload.twitch_proxy {
+            cfg.twitch.proxy = (!proxy.is_empty()).then(|| proxy.clone());
+        }
+    }
+    if payload.niconico_enable_monitor != Some(false) {
+        if let Some(area) = payload.niconico_area_v2 {
+            cfg.niconico.area_v2 = area;
+        }
+    }
+}
+
+fn setup_enables_monitor(
+    previous: &Config,
+    current: &Config,
+    payload: &SetupConfigRequest,
+) -> bool {
+    payload.youtube_enable_monitor == Some(true)
+        || payload.twitch_enable_monitor == Some(true)
+        || payload.niconico_enable_monitor == Some(true)
+        || (!previous.youtube.enable_monitor && current.youtube.enable_monitor)
+        || (!previous.twitch.enable_monitor && current.twitch.enable_monitor)
+        || (!previous.niconico.enable_monitor && current.niconico.enable_monitor)
+        || (!previous.bililive.enable_danmaku_command && current.bililive.enable_danmaku_command)
+}
+
 pub async fn save_setup_config(
-    Json(payload): Json<SetupConfigRequest>,
+    Json(mut payload): Json<SetupConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
+    let invalid = |message| ApiResponse {
+        success: false,
+        data: None,
+        message: Some(message),
+    };
+    if payload.room <= 0 || payload.interval == 0 {
+        return Ok(invalid("直播间号和检测间隔必须大于 0".into()));
+    }
+    let targets = match resolve_setup_targets(&mut payload).await {
+        Ok(targets) => targets,
+        Err(error) => return Ok(invalid(error)),
+    };
+    let channels = match setup_roster(&payload, &targets) {
+        Ok(channels) => channels,
+        Err(error) => return Ok(invalid(error)),
+    };
+    let existing_path =
+        managed_json_path("config.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let new_install = !existing_path
+        .try_exists()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // Load existing config or create default
     let mut cfg = if let Ok(existing_cfg) = load_config().await {
         existing_cfg
     } else {
+        if !new_install {
+            return Ok(invalid(
+                "已有 config.json 无法读取，请先修复文件，避免覆盖原配置".into(),
+            ));
+        }
         // Create new config with defaults
         crate::config::Config {
             snapshot: None,
@@ -98,7 +297,7 @@ pub async fn save_setup_config(
                 credentials: crate::config::Credentials::default(),
             },
             twitch: crate::config::Twitch {
-                enable_monitor: true,
+                enable_monitor: false,
                 channel_name: String::new(),
                 area_v2: 235,
                 channel_id: String::new(),
@@ -109,7 +308,7 @@ pub async fn save_setup_config(
                 ffmpeg_cache: crate::config::FfmpegCache::default(),
             },
             youtube: crate::config::Youtube {
-                enable_monitor: true,
+                enable_monitor: false,
                 channel_name: String::new(),
                 channel_id: String::new(),
                 area_v2: 235,
@@ -128,6 +327,10 @@ pub async fn save_setup_config(
             holodex_skip_jwt_verify: false,
             holodex_monitor_gate: true,
             youtube_api_key: None,
+            youtube_rss_enabled: true,
+            show_priority_channel: false,
+            show_twitch: true,
+            show_niconico: false,
             youtube_websub_callback_url: None,
             youtube_websub_port: crate::config::default_websub_port(),
             riot_api_key: None,
@@ -135,8 +338,8 @@ pub async fn save_setup_config(
             lol_monitor_interval: Some(1),
             anti_collision_list: std::collections::HashMap::new(),
             priority_channel: crate::config::PriorityChannel::default(),
-            enable_youtube_monitor: true,
-            enable_twitch_monitor: true,
+            enable_youtube_monitor: false,
+            enable_twitch_monitor: false,
             niconico: crate::config::Niconico::default(),
             cluster: crate::config::ClusterConfig::default(),
         }
@@ -149,14 +352,11 @@ pub async fn save_setup_config(
     cfg.interval = payload.interval;
     cfg.bililive.enable_danmaku_command = payload.enable_danmaku_command;
     cfg.bililive.room = payload.room;
-    cfg.holodex_api_key = payload.holodex_api_key.filter(|key| !key.is_empty());
-    if let Some(jwt) = payload.holodex_jwt {
-        let jwt = jwt.trim();
-        let jwt = jwt
-            .strip_prefix("BEARER ")
-            .or_else(|| jwt.strip_prefix("bearer "))
-            .unwrap_or(jwt)
-            .trim();
+    if let Some(key) = &payload.holodex_api_key {
+        cfg.holodex_api_key = (!key.trim().is_empty()).then(|| key.trim().to_string());
+    }
+    if let Some(jwt) = &payload.holodex_jwt {
+        let jwt = crate::plugins::holodex::normalize_holodex_jwt(jwt);
         if jwt.is_empty() {
             cfg.holodex_jwt = None;
             cfg.holodex_jwt_refreshed_at = None;
@@ -166,52 +366,21 @@ pub async fn save_setup_config(
             cfg.holodex_username = None;
         }
     }
-    cfg.riot_api_key = payload.riot_api_key.filter(|key| !key.is_empty());
+    if let Some(key) = &payload.riot_api_key {
+        cfg.riot_api_key = (!key.is_empty()).then(|| key.clone());
+    }
     cfg.enable_lol_monitor = payload.enable_lol_monitor;
 
-    // Update YouTube config if provided
-    if let Some(yt_name) = payload.youtube_channel_name {
-        cfg.youtube.channel_name = yt_name;
+    apply_setup_targets(&mut cfg, &payload, &targets, new_install);
+    if setup_enables_monitor(&previous_cfg, &cfg, &payload)
+        && !local_node_can_enable_monitor_toggles(&previous_cfg)
+    {
+        return Ok(monitor_toggle_enable_rejected_response());
     }
-    if let Some(yt_id) = payload.youtube_channel_id {
-        cfg.youtube.channel_id = yt_id;
-    }
-    if let Some(yt_area) = payload.youtube_area_v2 {
-        cfg.youtube.area_v2 = yt_area;
-    }
-    if let Some(yt_quality) = payload.youtube_quality {
-        cfg.youtube.quality = yt_quality;
-    }
-    if let Some(yt_proxy) = payload.youtube_proxy {
-        cfg.youtube.proxy = if yt_proxy.is_empty() {
-            None
-        } else {
-            Some(yt_proxy)
-        };
-    }
-
-    // Update Twitch config if provided
-    if let Some(tw_name) = payload.twitch_channel_name {
-        cfg.twitch.channel_name = tw_name;
-    }
-    if let Some(tw_id) = payload.twitch_channel_id {
-        cfg.twitch.channel_id = tw_id;
-    }
-    if let Some(tw_area) = payload.twitch_area_v2 {
-        cfg.twitch.area_v2 = tw_area;
-    }
-    if let Some(tw_region) = payload.twitch_proxy_region {
-        cfg.twitch.proxy_region = tw_region;
-    }
-    if let Some(tw_quality) = payload.twitch_quality {
-        cfg.twitch.quality = tw_quality;
-    }
-    if let Some(tw_proxy) = payload.twitch_proxy {
-        cfg.twitch.proxy = if tw_proxy.is_empty() {
-            None
-        } else {
-            Some(tw_proxy)
-        };
+    if let Err(error) = save_setup_lists(channels, payload.selected_areas).await {
+        return Ok(invalid(format!(
+            "频道/分区保存失败：{error}；已有成功写入的条目会保留，重试不会重复添加"
+        )));
     }
 
     // Save config
@@ -221,16 +390,25 @@ pub async fn save_setup_config(
 
     let youtube_updated = youtube_monitor_reload_needed(&previous_cfg, &cfg);
     let twitch_updated = twitch_monitor_reload_needed(&previous_cfg, &cfg);
+    let niconico_updated = niconico_monitor_reload_needed(&previous_cfg, &cfg);
 
-    if youtube_updated || twitch_updated {
+    if youtube_updated || twitch_updated || niconico_updated {
         set_config_updated();
     }
 
     // Refresh status cache with updated configuration
     refresh_status_cache_config_from(&cfg);
 
+    let toggle_sync_message = schedule_active_monitor_state_sync_after_toggle_change(&cfg);
+    let target_sync_message =
+        if monitored_config_version(&previous_cfg) != monitored_config_version(&cfg) {
+            sync_monitored_config_after_change(&cfg).await
+        } else {
+            String::new()
+        };
+
     // Refresh live status in background only when active monitor targets changed.
-    if youtube_updated || twitch_updated {
+    if youtube_updated || twitch_updated || niconico_updated {
         tokio::spawn(async move {
             if youtube_updated {
                 let _ = refresh_youtube_status().await;
@@ -238,13 +416,18 @@ pub async fn save_setup_config(
             if twitch_updated {
                 let _ = refresh_twitch_status().await;
             }
+            if niconico_updated {
+                let _ = refresh_niconico_status().await;
+            }
         });
     }
 
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("配置已保存".to_string()),
+        message: Some(format!(
+            "配置已保存{target_sync_message}{toggle_sync_message}"
+        )),
     })
 }
 
@@ -540,4 +723,166 @@ pub async fn get_deps_status() -> impl IntoResponse {
         "total": total,
         "message": message
     }))
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+
+    fn payload(changes: serde_json::Value) -> SetupConfigRequest {
+        let mut value = json!({"room":10000,"interval":60,"auto_cover":true,
+            "enable_danmaku_command":false,"anti_collision":false,"enable_lol_monitor":false});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn config() -> Config {
+        let mut cfg = crate::cluster::tests::test_config("setup", 0);
+        cfg.cluster.enabled = false;
+        cfg
+    }
+
+    #[tokio::test]
+    async fn none_skips_stale_validation_and_preserves_all_platform_preferences() {
+        let mut request = payload(json!({
+            "youtube_enable_monitor":false,"twitch_enable_monitor":false,"niconico_enable_monitor":false,
+            "youtube_channel_id":"https://invalid.example/stale","youtube_channel_name":"ignored",
+            "twitch_channel_id":"https://invalid.example/stale","niconico_channel_id":"lv-invalid",
+            "youtube_quality":"worst","twitch_quality":"worst","youtube_proxy":"stale",
+            "twitch_proxy":"stale","twitch_proxy_region":"stale","youtube_area_v2":999,
+            "twitch_area_v2":999,"niconico_area_v2":999
+        }));
+        let targets = resolve_setup_targets(&mut request).await.unwrap();
+        assert!(targets.is_empty());
+        let mut cfg = config();
+        cfg.youtube.enable_monitor = true;
+        cfg.twitch.enable_monitor = true;
+        cfg.niconico.enable_monitor = true;
+        cfg.niconico.live_id = "lv123".into();
+        let mut expected = cfg.clone();
+        expected.youtube.enable_monitor = false;
+        expected.enable_youtube_monitor = false;
+        expected.twitch.enable_monitor = false;
+        expected.enable_twitch_monitor = false;
+        expected.niconico.enable_monitor = false;
+        apply_setup_targets(&mut cfg, &request, &targets, false);
+        assert_eq!(
+            serde_json::to_value(cfg).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn selected_imports_do_not_assign_targets_and_import_only_is_valid() {
+        let request = payload(json!({
+            "youtube_enable_monitor":false,"twitch_enable_monitor":false,"niconico_enable_monitor":false,
+            "selected_youtube_channels":[
+                {"id":"UCabcdefghijklmnopqrstuv","name":"Offline favorite"},
+                {"id":"UC1234567890123456789012","name":"Another favorite"}
+            ]
+        }));
+        let targets = setup_targets(&request).unwrap();
+        let roster = setup_roster(&request, &targets).unwrap();
+        assert!(targets.is_empty());
+        assert_eq!(roster.len(), 2);
+        assert_eq!(roster[0].name, "Offline favorite");
+        let mut cfg = config();
+        let previous_id = cfg.youtube.channel_id.clone();
+        apply_setup_targets(&mut cfg, &request, &targets, true);
+        assert_eq!(cfg.youtube.channel_id, previous_id);
+        assert!(!cfg.youtube.enable_monitor && !cfg.enable_youtube_monitor);
+        assert!(!cfg.twitch.enable_monitor && !cfg.enable_twitch_monitor);
+        assert!(!cfg.niconico.enable_monitor);
+    }
+
+    #[test]
+    fn explicit_targets_enable_mirrored_flags_and_ignore_last_import() {
+        let request = payload(json!({
+            "youtube_enable_monitor":true,"twitch_enable_monitor":true,"niconico_enable_monitor":true,
+            "youtube_channel_id":"UCabcdefghijklmnopqrstuv","youtube_channel_name":"Target",
+            "twitch_channel_id":"DEMO_TW","niconico_channel_id":"https://ch.nicovideo.jp/demo",
+            "selected_youtube_channels":[{"id":"UC1234567890123456789012","name":"Last import"}]
+        }));
+        let targets = setup_targets(&request).unwrap();
+        assert_eq!(setup_roster(&request, &targets).unwrap().len(), 4);
+        let mut cfg = config();
+        cfg.youtube.enable_monitor = false;
+        cfg.twitch.enable_monitor = false;
+        cfg.niconico.enable_monitor = false;
+        cfg.niconico.live_id = "lv123".into();
+        let previous = cfg.clone();
+        apply_setup_targets(&mut cfg, &request, &targets, false);
+        assert!(cfg.youtube.enable_monitor && cfg.enable_youtube_monitor);
+        assert!(cfg.twitch.enable_monitor && cfg.enable_twitch_monitor);
+        assert!(cfg.niconico.enable_monitor);
+        assert_eq!(cfg.youtube.channel_name, "Target");
+        assert_eq!(cfg.youtube.channel_id, "UCabcdefghijklmnopqrstuv");
+        assert_eq!(cfg.twitch.channel_id, "demo_tw");
+        assert_eq!(cfg.niconico.channel_id, "demo");
+        assert!(cfg.niconico.live_id.is_empty());
+        assert!(setup_enables_monitor(&previous, &cfg, &request));
+    }
+
+    #[test]
+    fn enabled_targets_and_selected_imports_require_valid_ids() {
+        for platform in ["youtube", "twitch", "niconico"] {
+            let mut changes = json!({});
+            changes[format!("{platform}_enable_monitor")] = json!(true);
+            assert!(setup_targets(&payload(changes.clone())).is_err());
+            changes[format!("{platform}_channel_id")] = json!("invalid input!");
+            assert!(setup_targets(&payload(changes)).is_err());
+        }
+        let request =
+            payload(json!({"selected_youtube_channels":[{"id":"video-id","name":"Bad"}]}));
+        assert!(setup_roster(&request, &[]).is_err());
+    }
+
+    #[test]
+    fn older_clients_preserve_existing_monitors_and_fresh_empty_targets_stay_off() {
+        let request = payload(json!({"youtube_channel_id":"UCabcdefghijklmnopqrstuv"}));
+        assert_eq!(request.youtube_enable_monitor, None);
+        assert!(request.selected_youtube_channels.is_empty());
+        let targets = setup_targets(&request).unwrap();
+        let mut cfg = config();
+        cfg.youtube.enable_monitor = false;
+        cfg.enable_youtube_monitor = false;
+        cfg.twitch.enable_monitor = true;
+        cfg.enable_twitch_monitor = true;
+        apply_setup_targets(&mut cfg, &request, &targets, false);
+        assert!(!cfg.youtube.enable_monitor && !cfg.enable_youtube_monitor);
+        assert!(cfg.twitch.enable_monitor && cfg.enable_twitch_monitor);
+        apply_setup_targets(&mut cfg, &request, &targets, true);
+        assert!(cfg.youtube.enable_monitor && cfg.enable_youtube_monitor);
+        assert!(!cfg.twitch.enable_monitor && !cfg.enable_twitch_monitor);
+        let empty = payload(json!({}));
+        apply_setup_targets(&mut cfg, &empty, &[], true);
+        assert!(
+            !cfg.youtube.enable_monitor
+                && !cfg.twitch.enable_monitor
+                && !cfg.niconico.enable_monitor
+        );
+    }
+
+    #[test]
+    fn setup_enable_guard_covers_niconico_and_explicit_enable_but_allows_disabling() {
+        let previous = config();
+        for platform in ["youtube", "twitch", "niconico"] {
+            let mut changes = json!({});
+            changes[format!("{platform}_enable_monitor")] = json!(true);
+            assert!(setup_enables_monitor(
+                &previous,
+                &previous,
+                &payload(changes)
+            ));
+        }
+        let request = payload(
+            json!({"youtube_enable_monitor":false,"twitch_enable_monitor":false,"niconico_enable_monitor":false}),
+        );
+        let mut cfg = previous.clone();
+        apply_setup_targets(&mut cfg, &request, &[], false);
+        assert!(!setup_enables_monitor(&previous, &cfg, &request));
+    }
 }

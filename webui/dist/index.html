@@ -27,7 +27,7 @@
     }
 
     html.light-theme {
-      background: #fdf9f4;
+      background: #f4f6f9;
     }
 
     html:not(.app-ready) #setup-page,
@@ -276,24 +276,69 @@
 
         <!-- Step 3: platforms -->
         <div class="setup-step hidden" id="setup-step-3">
-          <h3 class="setup-step-title">步骤 3 · 平台配置 (可选)</h3>
+          <h3 class="setup-step-title">步骤 3 · 添加频道与选择分区</h3>
+          <p class="setup-step-description">选择要转播的频道，其余保持「不转播」。</p>
+          <button id="setup-load-areas" type="button" class="btn-secondary">加载官方分区</button>
+          <p id="setup-area-hint" class="setup-help-text" role="status">按分类选择分区，也可使用本地分区。</p>
 
+          <details class="setup-platform-card setup-favorites-panel" id="setup-favorites-panel">
+            <summary class="setup-platform-title">从 Holodex 收藏导入（可选）</summary>
+            <p class="setup-help-text">勾选想导入的频道，也可跳过。</p>
+            <div class="control-group">
+              <label for="setup-holodex">Holodex API Key (可选)</label>
+              <input type="password" autocomplete="off" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
+              <small class="setup-muted-help">获取：<a href="https://holodex.net/login" target="_blank"
+                  rel="noopener noreferrer">holodex.net</a></small>
+            </div>
+
+            <div class="control-group">
+              <label for="setup-holodex-jwt">Holodex JWT (可选)</label>
+              <input type="password" id="setup-holodex-jwt" placeholder="粘贴 Holodex JWT，留空跳过收藏导入">
+              <small class="setup-muted-help setup-block-help">
+                收藏导入需要 API Key 和 JWT。
+              </small>
+              <details class="setup-jwt-details">
+                <summary class="setup-jwt-summary">如何获取 JWT</summary>
+                <ol class="setup-jwt-steps">
+                  <li>打开 <a href="https://holodex.net/login" target="_blank"
+                      rel="noopener noreferrer">holodex.net/login</a> 并完成登录</li>
+                  <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
+                  <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
+                </ol>
+                <p class="setup-jwt-note">完成设置时保存登录信息。</p>
+              </details>
+            </div>
+
+            <button id="setup-load-favorites" type="button" class="btn-secondary">登录并加载收藏</button>
+            <p id="setup-favorites-status" class="setup-help-text" role="status">导入频道不会自动开启监控。</p>
+            <div id="setup-favorites-choices" class="hidden">
+              <label class="management-field-label" for="setup-favorites-search">搜索收藏频道</label>
+              <input id="setup-favorites-search" type="search" placeholder="频道名称或 UC ID">
+              <div class="setup-favorites-actions">
+                <span id="setup-favorites-count" role="status"></span>
+                <button id="setup-favorites-select" class="btn-secondary compact-btn" type="button">全选搜索结果</button>
+                <button id="setup-favorites-clear" class="btn-secondary compact-btn" type="button">清空选择</button>
+              </div>
+              <div id="setup-favorites-list" class="setup-favorites-list" role="group" aria-label="选择要导入的收藏频道"></div>
+            </div>
+          </details>
           <div class="setup-platform-card">
             <h4 class="setup-platform-title setup-platform-title-youtube">YouTube</h4>
 
             <div class="control-group">
-              <label for="setup-yt-channel-select">从 channels.json 选择 (可选)</label>
-              <select id="setup-yt-channel-select">
-                <option value="">从 channels.json 选择或手动输入...</option>
-              </select>
+              <label for="setup-yt-channel-select">转播目标</label>
+              <select id="setup-yt-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select>
             </div>
+            <div id="setup-yt-fields" class="hidden">
+            <div id="setup-yt-identity">
             <div class="control-group">
               <label for="setup-yt-name">频道名称</label>
-              <input type="text" id="setup-yt-name" placeholder="留空表示不配置">
+              <input type="text" id="setup-yt-name" placeholder="可选，留空使用频道 ID">
             </div>
             <div class="control-group">
-              <label for="setup-yt-id">频道 ID</label>
-              <input type="text" id="setup-yt-id" placeholder="YouTube Channel ID">
+              <label for="setup-yt-id">频道主页 / @handle / UC ID</label>
+              <div class="input-action-row"><input type="text" id="setup-yt-id" placeholder="https://www.youtube.com/@channel"><button id="setup-resolve-youtube" class="btn-secondary" type="button">识别频道</button></div>
+            </div>
             </div>
             <div class="control-group">
               <label for="setup-yt-area">B站分区</label>
@@ -301,6 +346,7 @@
                 <option value="235">其他单机 (235)</option>
               </select>
             </div>
+            <details class="setup-advanced"><summary>画质与代理（可选）</summary>
             <div class="control-group">
               <label for="setup-yt-quality">画质</label>
               <select id="setup-yt-quality">
@@ -316,9 +362,10 @@
               <label for="setup-yt-proxy">YouTube 代理地址 (可选)</label>
               <input type="text" id="setup-yt-proxy" placeholder="http://127.0.0.1:7890">
               <small class="setup-help-text">
-                YouTube 专用代理，留空则不使用代理。常用默认端口：Clash (7890)、V2Ray (10808)。
-                示例：<code class="setup-inline-code">http://127.0.0.1:7890</code>
+                留空不使用代理。
               </small>
+            </div>
+            </details>
             </div>
           </div>
 
@@ -326,18 +373,19 @@
             <h4 class="setup-platform-title setup-platform-title-twitch">Twitch</h4>
 
             <div class="control-group">
-              <label for="setup-tw-channel-select">从 channels.json 选择 (可选)</label>
-              <select id="setup-tw-channel-select">
-                <option value="">从 channels.json 选择或手动输入...</option>
-              </select>
+              <label for="setup-tw-channel-select">转播目标</label>
+              <select id="setup-tw-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select>
             </div>
+            <div id="setup-tw-fields" class="hidden">
+            <div id="setup-tw-identity">
             <div class="control-group">
               <label for="setup-tw-name">频道名称</label>
-              <input type="text" id="setup-tw-name" placeholder="留空表示不配置">
+              <input type="text" id="setup-tw-name" placeholder="可选，留空使用频道 ID">
             </div>
             <div class="control-group">
               <label for="setup-tw-id">频道 ID (用户名)</label>
               <input type="text" id="setup-tw-id" placeholder="Twitch 用户名">
+            </div>
             </div>
             <div class="control-group">
               <label for="setup-tw-area">B站分区</label>
@@ -345,6 +393,7 @@
                 <option value="235">其他单机 (235)</option>
               </select>
             </div>
+            <details class="setup-advanced"><summary>画质与代理（可选）</summary>
             <div class="control-group">
               <label for="setup-tw-region">代理区域</label>
               <select id="setup-tw-region">
@@ -378,39 +427,27 @@
               <label for="setup-tw-proxy">Twitch 代理地址 (可选)</label>
               <input type="text" id="setup-tw-proxy" placeholder="http://127.0.0.1:7890">
               <small class="setup-help-text">
-                Twitch 专用代理，留空则不使用代理。常用默认端口：Clash (7890)、V2Ray (10808)。
+                留空不使用代理。
               </small>
+            </div>
+            </details>
             </div>
           </div>
 
           <div class="setup-platform-card">
-            <h4 class="setup-platform-title">高级选项</h4>
-
-            <div class="control-group">
-              <label for="setup-holodex">Holodex API Key (可选)</label>
-              <input type="text" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
-              <small class="setup-muted-help">获取：<a href="https://holodex.net/login" target="_blank"
-                  rel="noopener noreferrer">holodex.net</a></small>
+            <h4 class="setup-platform-title">Niconico Live (可选)</h4>
+            <div class="control-group"><label for="setup-nc-channel-select">转播目标</label><select id="setup-nc-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select></div>
+            <div id="setup-nc-fields" class="hidden">
+            <div id="setup-nc-identity">
+            <div class="control-group"><label for="setup-nc-name">频道名称</label><input id="setup-nc-name" type="text" placeholder="用于转播标题"></div>
+            <div class="control-group"><label for="setup-nc-id">频道 ID 或频道主页</label><input id="setup-nc-id" type="text" placeholder="vspo / ch2648162 / https://ch.nicovideo.jp/..."></div>
             </div>
-
-            <div class="control-group">
-              <label for="setup-holodex-jwt">Holodex JWT (可选)</label>
-              <input type="password" id="setup-holodex-jwt" placeholder="收藏夹 + Twitch 外部配信，留空跳过">
-              <small class="setup-muted-help setup-block-help">
-                留空则 Holodex 监控使用 channels.json；可稍后在控制面板配置
-              </small>
-              <details class="setup-jwt-details">
-                <summary class="setup-jwt-summary">如何获取 JWT</summary>
-                <ol class="setup-jwt-steps">
-                  <li>打开 <a href="https://holodex.net/login" target="_blank"
-                      rel="noopener noreferrer">holodex.net/login</a> 并完成登录</li>
-                  <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
-                  <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
-                </ol>
-                <p class="setup-jwt-note">JWT 将在到期前 30 天内自动续期并写回 config.json。</p>
-              </details>
+            <div class="control-group"><label for="setup-nc-area">B站分区</label><select id="setup-nc-area"><option value="235">其他单机 (235)</option></select></div>
+            <p class="setup-help-text">需要 streamlink；登录会话可在系统设置中填写。</p>
             </div>
+          </div>
 
+          <details class="setup-platform-card setup-advanced"><summary class="setup-platform-title">其他选项（可选）</summary>
             <label class="toggle-label">
               <span class="toggle-switch">
                 <input type="checkbox" id="setup-lol-monitor">
@@ -425,7 +462,7 @@
               <small class="setup-muted-help">获取：<a href="https://developer.riotgames.com/" target="_blank"
                   rel="noopener noreferrer">developer.riotgames.com</a></small>
             </div>
-          </div>
+          </details>
 
           <div class="setup-step-actions setup-step-actions-spaced">
             <button id="setup-step-3-prev-btn" class="btn-secondary setup-action-btn" type="button">← 上一步</button>
@@ -500,7 +537,7 @@
         <div class="dashboard">
 
           <!-- Multi-server cluster ------------------------------------- -->
-          <article class="card cluster-card" data-platform="cluster" id="cluster-card">
+          <article class="card cluster-card hidden" data-platform="cluster" id="cluster-card">
             <div class="dashboard-card-header cluster-header">
               <h2 class="dashboard-card-title">
                 <svg aria-hidden="true"><use href="#i-servers" /></svg>
@@ -973,7 +1010,7 @@
           </article>
 
           <!-- Niconico ------------------------------------------------- -->
-          <article class="card" data-platform="niconico">
+          <article class="card hidden" data-platform="niconico">
             <div class="dashboard-card-header">
               <h2 class="dashboard-card-title">
                 <svg aria-hidden="true"><use href="#i-niconico" /></svg>
@@ -1129,7 +1166,7 @@
           </article>
 
           <!-- Priority channel ----------------------------------------- -->
-          <article class="card" data-platform="priority" id="priority-channel-card">
+          <article class="card hidden" data-platform="priority" id="priority-channel-card">
             <div class="dashboard-card-header">
               <h2 class="dashboard-card-title">
                 <svg aria-hidden="true"><use href="#i-star" /></svg>
@@ -1330,11 +1367,11 @@
             <div class="management-form-card">
               <h4 id="area-form-title" class="management-form-title">添加新分区</h4>
 
-              <div class="hint">
-                B站分区ID可从
-                <a href="https://api.live.bilibili.com/room/v1/Area/getList" target="_blank"
-                  rel="noopener noreferrer">B站直播分区API</a>
-                获取，输入对应的分区ID和名称。
+              <div class="management-field-group">
+                <button id="area-catalog-load" class="btn-secondary" type="button">加载官方分区</button>
+                <label class="management-field-label" for="area-catalog-select">按分类选择</label>
+                <select id="area-catalog-select" disabled><option value="">加载后选择官方分区...</option></select>
+                <small id="area-catalog-hint" class="management-field-note" role="status">自动填入 ID 和名称。</small>
               </div>
 
               <div class="management-form-grid management-area-grid">
@@ -1414,9 +1451,9 @@
               </div>
 
               <div class="management-form-grid management-channel-grid">
-                <div>
-                  <label class="management-field-label" for="channel-youtube">YouTube 频道ID (可选)</label>
-                  <input type="text" id="channel-youtube" class="management-field-input" placeholder="UC开头的频道ID">
+                <div class="channel-lookup-field">
+                  <label class="management-field-label" for="channel-youtube">YouTube 频道主页 / @handle / UC ID</label>
+                  <div class="input-action-row"><input type="text" id="channel-youtube" class="management-field-input" placeholder="https://www.youtube.com/@channel"><button id="manage-resolve-youtube" class="btn-secondary" type="button">识别</button></div>
                 </div>
                 <div>
                   <label class="management-field-label" for="channel-twitch">Twitch 频道ID (可选)</label>
@@ -1470,6 +1507,42 @@
           </div>
           <div class="panel__body">
             <div class="settings-grid">
+              <div class="control-group">
+                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-twitch-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示 Twitch</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-niconico-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示 Niconico</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="仅显示或隐藏仪表盘卡片，不改变优先频道监控和自动重启流设置">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-priority-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示优先频道</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="读取 YouTube 频道 RSS，需要 YouTube Data API Key 确认直播状态。关闭后仍处理 WebSub 推送，并按可用配额轮询上传列表。多服务器共享索引时在 YouTube 索引节点设置">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-youtube-rss-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>YouTube RSS</span>
+                </label>
+              </div>
               <div class="control-group">
                 <label for="config-interval">检测间隔 (秒)</label>
                 <input type="number" id="config-interval" min="10" max="300" placeholder="30">
@@ -1622,22 +1695,14 @@
                 <input type="text" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
                 <small class="settings-help-text">YouTube 专用代理，留空则不使用代理</small>
               </div>
-              <div class="control-group">
+              <div class="control-group settings-half-width">
                 <label for="config-tw-proxy">Twitch 代理地址 (可选)</label>
                 <input type="text" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
                 <small class="settings-help-text">Twitch 专用代理，留空则不使用代理</small>
               </div>
-              <div class="control-group">
-                <label for="config-nc-cookies-file">Niconico Cookies · 文件路径</label>
-                <input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt">
-                <small class="settings-help-text">Netscape 格式，需包含 user_session；不要提交该文件</small>
-              </div>
-              <div class="control-group">
-                <label for="config-nc-proxy">Niconico 代理地址 (可选)</label>
-                <input type="text" id="config-nc-proxy" placeholder="http://127.0.0.1:7890">
-                <small class="settings-help-text">streamlink 使用 HTTP 代理；本机 Clash 可用 mixed 端口</small>
-              </div>
-              <div class="control-group">
+
+
+              <div class="control-group settings-half-width">
                 <label for="config-tw-region">Twitch 代理区域</label>
                 <select id="config-tw-region">
                   <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
@@ -1655,6 +1720,25 @@
                   <option value="perf">perf - TTV-LOL-PRO 全部</option>
                 </select>
               </div>
+              <section class="platform-session-settings" aria-labelledby="niconico-session-heading">
+                <div class="control-group">
+                  <label id="niconico-session-heading" for="config-nc-user-session">Niconico · user_session</label>
+                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检查已保存会话</button></div>
+                  <small class="settings-help-text">只需 user_session，不需要整份 Cookie。留空保留；修改后先保存再检查。</small>
+                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检查</small>
+                </div>
+                <div class="session-actions">
+                  <label class="toggle-label"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检查会话</span></label>
+                  <label class="toggle-label"><input type="checkbox" id="config-nc-clear-session"><span>清除已保存会话及旧文件路径</span></label>
+                </div>
+                <small class="settings-help-text">有效性预警，不会刷新或延长登录；网络失败不等于会话失效。</small>
+              <div class="control-group session-proxy">
+                <label for="config-nc-proxy">Niconico 代理地址 (可选)</label>
+                <input type="text" id="config-nc-proxy" placeholder="http://127.0.0.1:7890">
+                <small class="settings-help-text">streamlink 使用 HTTP 代理；本机 Clash 可用 mixed 端口</small>
+              </div>
+                <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">未直接配置 user_session 时才读取文件中的同名 Cookie。</small></div></details>
+              </section>
             </div>
           </div>
         </section>
@@ -1772,18 +1856,21 @@
               <div class="cluster-peer-empty">暂无其他节点</div>
             </div>
 
-            <div class="cluster-settings-add cluster-public-status">
-              <div class="cluster-settings-panel-header">
-                <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
-                <span>公开状态页</span>
-              </div>
+
+          </div>
+        </section>
+
+        <section class="panel" id="public-status-settings">
+          <div class="panel__head"><h2 class="panel__title">公开状态页</h2></div>
+          <div class="panel__body cluster-public-status">
+              <p class="settings-help-text">单机可用，默认端口 23234。</p>
               <div class="cluster-public-status-grid">
                 <div class="control-group cluster-public-status-node">
-                  <label for="config-public-status-node">提供节点</label>
+                  <label for="config-public-status-node">运行位置</label>
                   <select id="config-public-status-node">
                     <option value="">不启用</option>
                   </select>
-                  <small class="settings-help-text">所选节点同时为集群提供 YouTube 查询和 WebSub 推送，需要在该节点配置它自己的 YouTube key（key 不在节点间同步）。</small>
+                  <small class="settings-help-text" id="public-status-node-hint">本机即可运行，无需开启多服务器。</small>
                 </div>
                 <div class="cluster-public-status-fields">
                   <div class="control-group">
@@ -1804,12 +1891,11 @@
                   <div class="control-group cluster-public-status-action">
                     <label class="cluster-public-status-action-label" for="public-status-save-btn">操作</label>
                     <button id="public-status-save-btn" type="button"
-                      class="btn-secondary cluster-settings-add-btn">保存并同步</button>
+                      class="btn-secondary cluster-settings-add-btn">保存公开页设置</button>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
         </section>
 
         <section class="panel">

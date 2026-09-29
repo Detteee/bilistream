@@ -184,7 +184,15 @@ fn peer_role(copy: Option<&PeerCopy>, owner: &str, timeout: Duration, now: Insta
 /// back to answering for itself stays quiet (RSS and the playlist backstop
 /// cover the outage); with the cluster off, a node behaves as on `main`.
 fn websub_allowed(cfg: &Config, role: &YtIndexRole) -> bool {
-    !cfg.cluster.enabled || matches!(role, YtIndexRole::Owner)
+    !cfg.cluster.enabled
+        || (cfg.cluster.public_status.runs_on(&cfg.cluster.node_id)
+            && matches!(role, YtIndexRole::Owner))
+}
+
+/// Called at the subscription boundary, including before the role worker's
+/// first cycle. Current config always overrides a role from the previous cycle.
+pub(crate) fn may_subscribe_websub(cfg: &Config) -> bool {
+    websub_allowed(cfg, &yt_index_role())
 }
 
 /// Channels whose monitor acts on a go-live anywhere in the cluster. The
@@ -413,7 +421,6 @@ pub(crate) async fn run_yt_index() {
         let role = worker.cycle(&cfg).await;
         worker.note(&role);
         let peer = matches!(role, YtIndexRole::Peer(_));
-        crate::plugins::youtube_websub::set_enabled(websub_allowed(&cfg, &role));
         *recover_write_lock(&NODE_STATE, "YouTube index node state") = describe_role(
             &cfg,
             &role,
@@ -536,14 +543,27 @@ mod tests {
     #[test]
     fn only_the_index_node_subscribes_to_websub_in_a_cluster() {
         let mut cfg = peer_config("peer");
-        assert!(websub_allowed(&cfg, &YtIndexRole::Owner));
+        assert!(
+            !websub_allowed(&cfg, &YtIndexRole::Owner),
+            "stale role after reassignment"
+        );
         assert!(
             !websub_allowed(&cfg, &YtIndexRole::Standalone),
             "fallback stays quiet"
         );
         assert!(!websub_allowed(&cfg, &index(Vec::new(), Vec::new())));
+        cfg.cluster.public_status.node_id = cfg.cluster.node_id.clone();
+        assert!(websub_allowed(&cfg, &YtIndexRole::Owner));
+        assert!(
+            !websub_allowed(&cfg, &YtIndexRole::Standalone),
+            "startup awaits settled owner"
+        );
         cfg.cluster.enabled = false;
         assert!(websub_allowed(&cfg, &YtIndexRole::Standalone), "as on main");
+        assert!(
+            websub_allowed(&cfg, &index(Vec::new(), Vec::new())),
+            "cluster disable overrides stale peer role"
+        );
     }
 
     #[test]
@@ -788,8 +808,9 @@ mod tests {
         let corrected = |answer: Option<YtVideo>| {
             let role = index(vec![("dropped", answer)], vec![dropped.clone()]);
             with_yt_index_role(role, async {
-                let rows =
-                    crate::plugins::youtube_rss::merge_discovered(vec![row("listed", "upcoming")]);
+                let rows = crate::plugins::youtube_discovery::merge_discovered(vec![row(
+                    "listed", "upcoming",
+                )]);
                 crate::plugins::youtube_data::apply_youtube_overlay(rows).await
             })
         };

@@ -1,5 +1,7 @@
+import { bindYoutubeResolver } from './channel-resolver.js';
 // manage.js — extracted from app.js
 
+import { loadAreaCatalog, fillAreaCatalog } from './area-catalog.js';
 import { appendAntiCollisionRemoveIcon, appendEditIcon, readInputValue, parseCommaSeparatedInput, readIntegerInput, setInputValue, setElementText, showNotification, setButtonLoading } from './dom.js';
 import { managementRequest, managementJsonRequest, deleteManagementResource } from './api.js';
 import { state, invalidateManagedData } from './state.js';
@@ -18,7 +20,28 @@ function submitChannelForm() {
   }
   return addChannel();
 }
+let officialAreaChoices = [];
+async function loadManagedAreaCatalog() {
+  const button = document.getElementById('area-catalog-load'); button.disabled = true;
+  try {
+    officialAreaChoices = await loadAreaCatalog();
+    const select = document.getElementById('area-catalog-select');
+    fillAreaCatalog(select, officialAreaChoices); select.value = ''; select.disabled = false;
+    document.getElementById('area-catalog-hint').textContent = '选择分区后自动填入 ID 和名称。';
+  } catch (error) { document.getElementById('area-catalog-hint').textContent = `加载失败：${error.message}。仍可手动填写。`; }
+  finally { button.disabled = false; }
+}
 function initManagementControls() {
+  bindYoutubeResolver('channel-youtube', 'manage-resolve-youtube');
+  document.getElementById('area-catalog-load')?.addEventListener('click', loadManagedAreaCatalog);
+  document.getElementById('area-catalog-select')?.addEventListener('change', event => {
+    const area = officialAreaChoices.find(area => String(area.id) === event.target.value);
+    if (!area) return;
+    if (editingAreaId !== null && editingAreaId !== area.id) {
+      showNotification('编辑已有分区时不能替换 ID，请先清空表单再添加', 'error'); return;
+    }
+    setInputValue('area-id', area.id); setInputValue('area-name', area.name);
+  });
   document
     .getElementById('area-submit-btn')
     ?.addEventListener('click', submitAreaForm);

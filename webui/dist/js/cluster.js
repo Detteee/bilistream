@@ -1173,7 +1173,7 @@ function renderPublicStatusNodeOptions(cluster = {}, selected = '') {
   if (localId) {
     nodes.push({ id: localId, name: (cluster.node_name || localId).trim() });
   }
-  for (const peer of Array.isArray(cluster.peers) ? cluster.peers : []) {
+  for (const peer of cluster.enabled && Array.isArray(cluster.peers) ? cluster.peers : []) {
     const id = (peer.node_id || '').trim();
     if (id && !nodes.some(node => node.id === id)) {
       nodes.push({ id, name: (peer.name || id).trim() });
@@ -1188,8 +1188,9 @@ function renderPublicStatusNodeOptions(cluster = {}, selected = '') {
   const options = [createSelectOption('', '不启用')];
   for (const node of nodes) {
     const label = node.unknown
-      ? `${node.id} (未知节点)`
-      : node.name === node.id ? node.id : `${node.name} (${node.id})`;
+      ? `${node.id} (未连接节点)`
+      : node.id === localId ? `本机${cluster.enabled ? ` (${node.name})` : ''}`
+        : node.name === node.id ? node.id : `${node.name} (${node.id})`;
     options.push(createSelectOption(node.id, label));
   }
   select.replaceChildren(...options);
@@ -1215,6 +1216,12 @@ function loadPublicStatusSettings(cluster = {}) {
   setInputValue('config-public-status-bind', publicStatus.bind || '127.0.0.1');
   setInputValue('config-public-status-port', publicStatus.port || 23234);
   setInputValue('config-public-status-url', publicStatus.public_url || '');
+  const hint = document.getElementById('public-status-node-hint');
+  if (hint) hint.textContent = cluster.enabled
+    ? '所选节点提供公开页；有 YouTube key 时也提供共享索引。'
+    : '本机即可运行，无需开启多服务器。';
+  const button = document.getElementById('public-status-save-btn');
+  if (button) button.textContent = cluster.enabled ? '保存并同步' : '保存公开页设置';
   updatePublicStatusUrlHint();
 }
 

@@ -423,7 +423,7 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
         crate::cluster::yt_index_role(),
         crate::cluster::YtIndexRole::Owner
     ) {
-        let mut discovered = super::youtube_rss::merge_discovered(Vec::new());
+        let mut discovered = super::youtube_discovery::merge_discovered(Vec::new());
         discovered.sort_by(|a, b| a.id.cmp(&b.id));
         with_store(|store| store.publish(discovered, Instant::now(), Utc::now()));
     }

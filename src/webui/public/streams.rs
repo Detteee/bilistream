@@ -1266,7 +1266,7 @@ mod tests {
             crate::cluster::YtIndexRole::Peer(std::sync::Arc::new(index)),
             // The channels list's steps (`holodex_list::build`).
             async {
-                let rows = crate::plugins::youtube_rss::merge_discovered(holodex);
+                let rows = crate::plugins::youtube_discovery::merge_discovered(holodex);
                 let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
                 let rows = crate::plugins::twitch_live::overlay(rows);
                 let rows = crate::plugins::niconico_live::overlay(rows);

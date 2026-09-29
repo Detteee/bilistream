@@ -190,7 +190,7 @@ async fn holodex_inputs(kind: ListKind, cfg: &Config) -> Option<u64> {
     key.hash(&mut hasher);
     match kind {
         ListKind::Channels => {
-            let mut roster = crate::plugins::youtube_rss::roster_channel_ids(cfg).await;
+            let mut roster = crate::plugins::youtube_discovery::roster_channel_ids(cfg).await;
             roster.sort();
             roster.hash(&mut hasher);
         }
@@ -232,7 +232,7 @@ async fn holodex_rows(
     let now = Instant::now();
     let roster = match kind {
         ListKind::Channels => {
-            let roster = crate::plugins::youtube_rss::roster_channel_ids(cfg).await;
+            let roster = crate::plugins::youtube_discovery::roster_channel_ids(cfg).await;
             if roster.is_empty() {
                 return Err("No YouTube channels configured".to_string());
             }
@@ -324,7 +324,7 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
             return Err(message);
         }
     };
-    let rows = crate::plugins::youtube_rss::merge_discovered(rows);
+    let rows = crate::plugins::youtube_discovery::merge_discovered(rows);
     let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
     let rows = crate::plugins::twitch_live::overlay(rows);
     let rows = crate::plugins::niconico_live::overlay(rows);
