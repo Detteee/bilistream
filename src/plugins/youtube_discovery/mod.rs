@@ -64,28 +64,14 @@ pub(crate) async fn roster_channel_ids(cfg: &Config) -> Vec<String> {
         }
     };
 
-    let path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("channels.json")));
-    if let Some(path) = path {
-        if let Ok(content) = tokio::fs::read_to_string(path).await {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(channels) = json.get("channels").and_then(|v| v.as_array()) {
-                    for channel in channels {
-                        if let Some(id) = channel
-                            .get("platforms")
-                            .and_then(|p| p.get("youtube"))
-                            .and_then(|v| v.as_str())
-                        {
-                            push(id);
-                        }
-                    }
-                } else if let Some(channels) = json.get("YT_channels").and_then(|v| v.as_array()) {
-                    for channel in channels {
-                        if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
-                            push(id);
-                        }
-                    }
+    if let Ok(json) = crate::storage::read_json::<serde_json::Value>("channels.json") {
+        if let Some(channels) = json.get("channels").and_then(|v| v.as_array()) {
+            for channel in channels {
+                if let Some(id) = channel
+                    .pointer("/platforms/youtube")
+                    .and_then(|v| v.as_str())
+                {
+                    push(id);
                 }
             }
         }

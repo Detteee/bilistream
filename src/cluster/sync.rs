@@ -118,7 +118,7 @@ pub(crate) async fn push_active_monitor_state_to_peer(
     );
     let response = client
         .post(url)
-        .json(request)
+        .json(&request)
         .timeout(timeout)
         .send()
         .await
@@ -220,11 +220,20 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
         .await
         .map_err(|e| e.to_string())?;
 
-    write_monitored_json_files(payload.channels_json.clone(), payload.areas_json.clone()).await?;
-
+    let channels = payload.channels_json.clone();
+    let areas = payload.areas_json.clone();
     apply_monitored_config_to_config(&mut cfg, payload);
-
-    save_config(&mut cfg).await.map_err(|e| e.to_string())?;
+    crate::config::save_config_with_transaction(&mut cfg, move |tx| {
+        for (name, value) in [("channels.json", channels), ("areas.json", areas)] {
+            if let Some(value) = value {
+                crate::storage::validate_document(name, &value)?;
+                tx.write(name, value)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     refresh_status_cache_config_from(&cfg);
     crate::webui::state::request_status_refresh();
 
@@ -232,26 +241,8 @@ pub async fn apply_monitored_config(payload: MonitoredConfig) -> Result<(), Stri
     Ok(())
 }
 
-/// Writes the managed JSON files off the async runtime (the atomic writes
-/// fsync).
-pub(crate) async fn write_monitored_json_files(
-    channels_json: Option<serde_json::Value>,
-    areas_json: Option<serde_json::Value>,
-) -> Result<(), String> {
-    for (name, data) in [("channels.json", channels_json), ("areas.json", areas_json)] {
-        if let Some(data) = data {
-            let path = super::state::executable_sibling(name)
-                .ok_or_else(|| "failed to resolve executable path".to_string())?;
-            crate::config::replace_json_file(path, data).await?;
-            if name == "areas.json" {
-                crate::webui::public::remap_after_areas_change();
-            }
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: MonitoredConfig) {
+    let channels = payload.channels_json.clone();
     // Monitor toggles are per-node runtime state, not shared configuration:
     // only the active node runs monitors, so a pushed config must never flip
     // them on a standby. Channel targets below are shared, so a standby can
@@ -267,8 +258,18 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     cfg.auto_cover = payload.auto_cover;
     cfg.enable_anti_collision = payload.enable_anti_collision;
     cfg.anti_collision_list = payload.anti_collision_list;
+    let youtube_cookies_file = cfg.youtube.cookies_file.clone();
+    let youtube_cookies_browser = cfg.youtube.cookies_from_browser.clone();
+    let youtube_proxy = cfg.youtube.proxy.clone();
+    let deno_path = cfg.youtube.deno_path.clone();
+    let twitch_proxy = cfg.twitch.proxy.clone();
     cfg.youtube = payload.youtube;
     cfg.twitch = payload.twitch;
+    cfg.youtube.cookies_file = youtube_cookies_file;
+    cfg.youtube.cookies_from_browser = youtube_cookies_browser;
+    cfg.youtube.proxy = youtube_proxy;
+    cfg.youtube.deno_path = deno_path;
+    cfg.twitch.proxy = twitch_proxy;
     cfg.priority_channel = payload.priority_channel;
 
     cfg.bililive.enable_danmaku_command = local_enable_danmaku_command;
@@ -278,7 +279,11 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     cfg.twitch.enable_monitor = local_twitch_enable_monitor;
     cfg.priority_channel.enabled = local_priority_channel_enabled;
     cfg.priority_channel.auto_restart = local_priority_channel_auto_restart;
-    crate::config::update_priority_channel_from_channels(cfg);
+    if let Some(channels) = channels {
+        crate::config::update_priority_channel_from_value(cfg, &channels);
+    } else {
+        crate::config::update_priority_channel_from_channels(cfg);
+    }
 }
 
 pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, String> {
@@ -306,13 +311,18 @@ pub(crate) async fn push_monitored_config_to_peer(
     request: &ClusterSyncConfigRequest,
     timeout: Duration,
 ) -> Result<(), String> {
+    require_storage_sync_capability(client, peer, timeout).await?;
+    let mut request = request.clone();
+    super::version::sanitize_local_source_settings(&mut request.monitored_config);
+    request.config_version =
+        monitored_config_integrity_version_from_payload(&request.monitored_config);
     let url = format!(
         "{}/api/cluster/sync-config",
         peer.api_url.trim_end_matches('/')
     );
     let response = client
         .post(url)
-        .json(request)
+        .json(&request)
         .timeout(timeout)
         .send()
         .await
@@ -337,6 +347,42 @@ pub(crate) async fn push_monitored_config_to_peer(
     if let Some(status) = envelope.data {
         merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
             .map_err(|e| format!("{} {}", peer.node_id, e))?;
+    }
+    Ok(())
+}
+
+async fn require_storage_sync_capability(
+    client: &reqwest::Client,
+    peer: &crate::config::ClusterPeer,
+    timeout: Duration,
+) -> Result<(), String> {
+    let response = client
+        .get(format!(
+            "{}/api/cluster/capabilities",
+            peer.api_url.trim_end_matches('/')
+        ))
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|_| format!("{} 暂不可达", peer.node_id))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "{} 需要升级后才能同步配置（本机凭据保护）",
+            peer.node_id
+        ));
+    }
+    let bytes = crate::plugins::http::response_bytes_limited(response, 4096)
+        .await
+        .map_err(|_| format!("{} 同步能力响应无效", peer.node_id))?;
+    let body: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| format!("{} 同步能力响应无效", peer.node_id))?;
+    if body
+        .get("config_sync")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        < 2
+    {
+        return Err(format!("{} 需要升级后才能同步配置", peer.node_id));
     }
     Ok(())
 }
@@ -421,6 +467,17 @@ async fn finalize_cluster_node_switch_inner(
     }
     ensure_handoff_target_is_eligible(cfg, target_node_id)?;
     let client = CLUSTER_HTTP_CLIENT.clone();
+    if target_node_id != cfg.cluster.node_id {
+        let target = cfg
+            .cluster
+            .peers
+            .iter()
+            .find(|peer| peer.node_id == target_node_id)
+            .ok_or("未找到目标节点")?;
+        // Check before source demotion: an old target must not leave the
+        // active stream stopped while rejecting the new config protocol.
+        require_storage_sync_capability(&client, target, cluster_control_timeout(cfg)).await?;
+    }
     let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
         Ok(payload) => SourceConfigSnapshot {
             payload,
@@ -842,13 +899,20 @@ async fn apply_node_mode_classified(
         .iter()
         .find(|peer| peer.node_id == node_id)
         .ok_or_else(|| Refused(format!("未找到目标节点 {}", node_id)))?;
+    let mut payload = payload.clone();
+    if let Some(monitored) = payload.monitored_config.as_mut() {
+        require_storage_sync_capability(client, peer, cluster_control_timeout(cfg))
+            .await
+            .map_err(Refused)?;
+        super::version::sanitize_local_source_settings(monitored);
+    }
     let url = format!(
         "{}/api/cluster/apply-node-mode",
         peer.api_url.trim_end_matches('/')
     );
     let response = client
         .post(url)
-        .json(payload)
+        .json(&payload)
         .timeout(cluster_control_timeout(cfg))
         .send()
         .await
@@ -953,12 +1017,16 @@ async fn apply_cluster_node_mode_inner(
         clear_local_stream();
         stop_ffmpeg().await;
     }
+    let mut documents = Vec::new();
     if let Some(monitored_config) = payload.monitored_config {
-        write_monitored_json_files(
-            monitored_config.channels_json.clone(),
-            monitored_config.areas_json.clone(),
-        )
-        .await?;
+        for (name, value) in [
+            ("channels.json", monitored_config.channels_json.clone()),
+            ("areas.json", monitored_config.areas_json.clone()),
+        ] {
+            if let Some(value) = value {
+                documents.push((name, value));
+            }
+        }
         apply_monitored_config_to_config(&mut cfg, monitored_config);
         config_changed = true;
     }
@@ -966,7 +1034,15 @@ async fn apply_cluster_node_mode_inner(
     apply_node_mode_config_state(&mut cfg, channel_targets.as_ref(), monitor_toggles.as_ref());
 
     if config_changed {
-        save_config(&mut cfg).await.map_err(|e| e.to_string())?;
+        crate::config::save_config_with_transaction(&mut cfg, move |tx| {
+            for (name, value) in documents {
+                crate::storage::validate_document(name, &value)?;
+                tx.write(name, value)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
         refresh_status_cache_config_from(&cfg);
         set_config_updated();
         crate::webui::state::request_status_refresh();

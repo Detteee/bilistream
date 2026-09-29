@@ -255,32 +255,31 @@ fn merge_areas(data: &mut serde_json::Value, areas: &[SetupArea]) -> Result<(), 
     Ok(())
 }
 
-pub(super) async fn save_setup_lists(
+pub(super) async fn save_setup_bundle(
+    cfg: &mut crate::config::Config,
     channels: Vec<SetupChannel>,
     areas: Vec<SetupArea>,
-) -> Result<(), String> {
-    let path = managed_json_path("channels.json")?;
-    let directory = path.parent().ok_or("无法定位配置目录")?;
-    crate::deps::initialize_user_data(directory).await?;
-    // Validate both edits before writing either file. Transactions revalidate
-    // their latest contents; retries are additive and idempotent.
-    let mut current_channels: serde_json::Value = read_managed_json("channels.json")?;
-    let mut current_areas: serde_json::Value = read_managed_json("areas.json")?;
-    merge_channels(&mut current_channels, &channels)?;
-    merge_areas(&mut current_areas, &areas)?;
-    if !channels.is_empty() {
-        mutate_managed_json("channels.json", move |data: &mut serde_json::Value| {
-            merge_channels(data, &channels)
-        })
-        .await?;
-    }
-    if !areas.is_empty() {
-        mutate_managed_json("areas.json", move |data: &mut serde_json::Value| {
-            merge_areas(data, &areas)
-        })
-        .await?;
-    }
-    Ok(())
+) -> Result<(), Box<dyn std::error::Error>> {
+    crate::config::save_config_with_transaction(cfg, move |tx| {
+        if !channels.is_empty() {
+            let mut data = tx
+                .read("channels.json")?
+                .ok_or_else(|| std::io::Error::other("频道数据不可用"))?
+                .value;
+            merge_channels(&mut data, &channels).map_err(std::io::Error::other)?;
+            tx.write("channels.json", data)?;
+        }
+        if !areas.is_empty() {
+            let mut data = tx
+                .read("areas.json")?
+                .ok_or_else(|| std::io::Error::other("分区数据不可用"))?
+                .value;
+            merge_areas(&mut data, &areas).map_err(std::io::Error::other)?;
+            tx.write("areas.json", data)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

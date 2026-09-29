@@ -7,7 +7,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
-    MonitoredConfig {
+    let mut payload = MonitoredConfig {
         interval: cfg.interval,
         auto_cover: cfg.auto_cover,
         enable_anti_collision: cfg.enable_anti_collision,
@@ -21,7 +21,17 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
         niconico_enable_monitor: cfg.niconico.enable_monitor,
         channels_json: read_json_file("channels.json"),
         areas_json: read_json_file("areas.json"),
-    }
+    };
+    sanitize_local_source_settings(&mut payload);
+    payload
+}
+
+pub(crate) fn sanitize_local_source_settings(payload: &mut MonitoredConfig) {
+    payload.youtube.cookies_file = None;
+    payload.youtube.cookies_from_browser = None;
+    payload.youtube.proxy = None;
+    payload.youtube.deno_path = None;
+    payload.twitch.proxy = None;
 }
 
 pub fn monitored_config_version(cfg: &Config) -> String {

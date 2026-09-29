@@ -214,20 +214,41 @@ async fn startup_monitor_wait_preserves_owner_agreement_and_handoff_fencing() {
 
 #[tokio::test]
 async fn failed_source_demotion_never_sends_target_promotion() {
-    use axum::{routing::post, Json, Router};
+    use axum::{
+        routing::{get, post},
+        Json, Router,
+    };
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
     let _state_guard = ClusterStateGuard::new();
     crate::install_crypto_provider();
     let promotions = Arc::new(AtomicUsize::new(0));
     let seen = promotions.clone();
+    let capable = Arc::new(AtomicBool::new(false));
+    let capability = capable.clone();
+    let demotions = Arc::new(AtomicUsize::new(0));
+    let demotion_count = demotions.clone();
     let app = Router::new()
         .route(
+            "/target/api/cluster/capabilities",
+            get(move || {
+                let version = if capability.load(Ordering::SeqCst) {
+                    2
+                } else {
+                    1
+                };
+                async move { Json(serde_json::json!({"config_sync":version})) }
+            }),
+        )
+        .route(
             "/source/api/cluster/apply-node-mode",
-            post(|| async {
-                Json(serde_json::json!({"success": false, "message": "source still running"}))
+            post(move || {
+                demotion_count.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Json(serde_json::json!({"success": false, "message": "source still running"}))
+                }
             }),
         )
         .route(
@@ -281,9 +302,15 @@ async fn failed_source_demotion_never_sends_target_promotion() {
         public_status: Default::default(),
         nodes,
     };
+    let old_target = finalize_cluster_node_switch(&cfg, &before, "source", "target", false).await;
+    assert!(old_target.is_err());
+    assert_eq!(demotions.load(Ordering::SeqCst), 0);
+    assert_eq!(promotions.load(Ordering::SeqCst), 0);
+    capable.store(true, Ordering::SeqCst);
     let result = finalize_cluster_node_switch(&cfg, &before, "source", "target", false).await;
     server.abort();
     assert!(result.is_err());
+    assert!(demotions.load(Ordering::SeqCst) > 0);
     assert_eq!(promotions.load(Ordering::SeqCst), 0);
     assert_eq!(current_active_owner().as_deref(), Some("source"));
 
@@ -371,6 +398,12 @@ async fn automatic_handoff_confirms_source_shutdown_after_owner_has_changed() {
                     calls.lock().unwrap().push(("jp".into(), payload));
                     Json(serde_json::json!({"success": true, "data": reply}))
                 }
+            }),
+        )
+        .route(
+            "/us/api/cluster/capabilities",
+            get(|| async {
+                Json(serde_json::json!({"config_sync":2,"node_local_credentials":true}))
             }),
         )
         .route(
@@ -731,6 +764,11 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     local.priority_channel.enabled = true;
     local.priority_channel.auto_restart = false;
     local.niconico.enable_monitor = true;
+    local.youtube.cookies_file = Some("local-cookie-source".into());
+    local.youtube.cookies_from_browser = Some("firefox".into());
+    local.youtube.proxy = Some("http://user:local-secret@proxy.invalid".into());
+    local.youtube.deno_path = Some("local-deno".into());
+    local.twitch.proxy = local.youtube.proxy.clone();
 
     let mut source = test_config("source", 10);
     source.bililive.enable_danmaku_command = true;
@@ -748,8 +786,29 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     source.priority_channel.twitch_channel_id = "remote-priority-tw".to_string();
     source.priority_channel.auto_restart = true;
     source.niconico.enable_monitor = false;
+    source.youtube.cookies_file = Some("remote-cookie-source".into());
+    source.youtube.proxy = Some("http://user:remote-secret@proxy.invalid".into());
+    let wire = serde_json::to_string(&monitored_config_from_config(&source)).unwrap();
+    assert!(!wire.contains("remote-secret"));
+    assert!(!wire.contains("remote-cookie-source"));
 
     apply_monitored_config_to_config(&mut local, monitored_config_from_config(&source));
+    assert_eq!(
+        local.youtube.cookies_file.as_deref(),
+        Some("local-cookie-source")
+    );
+    assert_eq!(
+        local.youtube.cookies_from_browser.as_deref(),
+        Some("firefox")
+    );
+    assert_eq!(local.youtube.deno_path.as_deref(), Some("local-deno"));
+    assert!(local
+        .youtube
+        .proxy
+        .as_ref()
+        .unwrap()
+        .contains("local-secret"));
+    assert_eq!(local.youtube.proxy, local.twitch.proxy);
 
     assert!(!local.bililive.enable_danmaku_command);
     assert!(!local.enable_youtube_monitor);
@@ -987,6 +1046,7 @@ fn two_node_partition_fails_closed_after_ack_expiry() {
 
 #[test]
 fn remote_heartbeat_sender_local_flag_is_not_trusted() {
+    let _guard = ClusterStateGuard::new();
     let cfg = test_config("local", 0);
     let now = now_secs();
     let mut node = empty_node("remote", "remote", "http://remote", 1, true, now);
@@ -1081,6 +1141,7 @@ fn record_heartbeat_uses_locally_configured_membership_metadata() {
 
 #[test]
 fn record_heartbeat_ignores_when_cluster_disabled() {
+    let _guard = ClusterStateGuard::new();
     let mut cfg = test_config("local", 0);
     cfg.cluster.enabled = false;
     let peer_id = "disabled-peer";
@@ -1304,6 +1365,7 @@ fn heartbeat_merge_refreshes_only_direct_peer_liveness() {
 
 #[test]
 fn direct_peer_status_merge_refreshes_peer_liveness() {
+    let _guard = ClusterStateGuard::new();
     let peer_id = "direct-merge-peer";
     let mut cfg = test_config("direct-merge-local", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
@@ -1858,6 +1920,7 @@ fn local_network_isolation_ignores_fresh_inbound_heartbeats() {
 
 #[test]
 fn last_known_active_toggles_preserves_all_off_cache() {
+    let _guard = ClusterStateGuard::new();
     let previous = MonitorToggleState {
         enable_danmaku_command: true,
         enable_youtube_monitor: true,

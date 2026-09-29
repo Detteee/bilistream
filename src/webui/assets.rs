@@ -28,6 +28,7 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/js/manage.js"),
     asset!("webui/dist/js/overview.js"),
     asset!("webui/dist/js/settings.js"),
+    asset!("webui/dist/js/storage.js"),
     asset!("webui/dist/js/setup.js"),
     asset!("webui/dist/js/state.js"),
     asset!("webui/dist/js/status-cards.js"),

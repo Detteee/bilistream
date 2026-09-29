@@ -9,10 +9,10 @@ use crate::plugins::bilibili;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{fs, io};
 use tokio::sync::Notify;
 
 static DANMAKU_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -108,35 +108,20 @@ struct ChannelsConfig {
 
 // Cache channels config to avoid repeated file reads and parsing
 lazy_static! {
-    static ref CHANNELS_CACHE: Mutex<Option<(ChannelsConfig, std::time::SystemTime)>> =
-        Mutex::new(None);
+    static ref CHANNELS_CACHE: Mutex<Option<(ChannelsConfig, u64)>> = Mutex::new(None);
 }
 
 fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
-    let mut cache = CHANNELS_CACHE.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned danmaku channels cache");
-        poisoned.into_inner()
-    });
-
-    // Check if cache is valid (less than 5 minutes old)
-    if let Some((ref config, timestamp)) = *cache {
-        if timestamp
-            .elapsed()
-            .unwrap_or(std::time::Duration::from_secs(301))
-            < std::time::Duration::from_secs(300)
-        {
+    let store = crate::storage::global()?;
+    let mut cache = CHANNELS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let revision = store.revision("channels.json")?.unwrap_or(0);
+    if let Some((config, saved)) = cache.as_ref() {
+        if *saved == revision {
             return Ok(config.clone());
         }
     }
-
-    // Load fresh data
-    let channels_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.join("channels.json")))
-        .ok_or("Failed to get executable path")?;
-    let content = fs::read_to_string(channels_path)?;
-    let config: ChannelsConfig = serde_json::from_str(&content)?;
-    *cache = Some((config.clone(), std::time::SystemTime::now()));
+    let config: ChannelsConfig = crate::storage::read_json("channels.json")?;
+    *cache = Some((config.clone(), revision));
     Ok(config)
 }
 
@@ -294,10 +279,7 @@ fn apply_danmaku_target(
 
 /// Load areas configuration from areas.json
 fn load_areas_config() -> Option<serde_json::Value> {
-    let areas_path = std::env::current_exe().ok()?.parent()?.join("areas.json");
-
-    let content = std::fs::read_to_string(areas_path).ok()?;
-    serde_json::from_str(&content).ok()
+    crate::storage::read_json("areas.json").ok()
 }
 
 /// Bilibili's catch-all 其他单机. The restream loop starts here when nothing
@@ -982,10 +964,7 @@ pub async fn wait_config_update_or_timeout(timeout: Duration) -> bool {
 }
 
 pub fn get_area_name(area_id: u64) -> Option<String> {
-    let areas_path = std::env::current_exe().ok()?.with_file_name("areas.json");
-
-    let content = std::fs::read_to_string(areas_path).ok()?;
-    let areas: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let areas: serde_json::Value = crate::storage::read_json("areas.json").ok()?;
 
     if let Some(areas_array) = areas["areas"].as_array() {
         for area in areas_array {
@@ -1007,15 +986,7 @@ fn area_name_or_unknown(area_id: u64) -> String {
 
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let area_name_trimmed = area_name.trim();
-    let areas_path = std::env::current_exe()
-        .map_err(|e| format!("无法获取可执行文件路径: {}", e))?
-        .with_file_name("areas.json");
-
-    let content =
-        std::fs::read_to_string(&areas_path).map_err(|e| format!("无法读取 areas.json: {}", e))?;
-
-    let areas: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("无法解析 areas.json: {}", e))?;
+    let areas: serde_json::Value = crate::storage::read_json("areas.json")?;
 
     let area_name_lower = area_name_trimmed.to_lowercase();
 

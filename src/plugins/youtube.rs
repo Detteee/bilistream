@@ -4,9 +4,7 @@ pub use super::holodex::{
     get_holodex_favorites_live, get_holodex_streams, holodex_jwt_is_expired, holodex_unix_now,
     refresh_holodex_jwt, sync_holodex_jwt_if_needed, HolodexStream,
 };
-use super::utils::{
-    add_yt_dlp_cookies_args, command_output_with_timeout, configure_no_window, executable_command,
-};
+use super::utils::{configure_no_window, executable_command};
 use crate::config::load_config;
 use chrono::{DateTime, Local};
 use regex::Regex;
@@ -825,7 +823,7 @@ async fn get_status_with_yt_dlp(
     proxy: Option<String>,
     title: Option<String>,
     quality: Option<&str>,
-    cookies_file: &Option<String>,
+    _cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
     deno_path: &Option<String>,
 ) -> Result<
@@ -858,7 +856,7 @@ async fn get_status_with_yt_dlp(
     }
 
     // Add cookies arguments
-    add_yt_dlp_cookies_args(&mut command, cookies_file, cookies_from_browser);
+
     add_youtube_extractor_args(&mut command);
 
     command.arg("-f");
@@ -870,7 +868,8 @@ async fn get_status_with_yt_dlp(
         "https://www.youtube.com/channel/{}/live",
         channel_id
     ));
-    let output = command_output_with_timeout(command, YT_DLP_TIMEOUT, "yt-dlp").await?;
+    let output =
+        super::youtube_cookies::run(command, cookies_from_browser.clone(), YT_DLP_TIMEOUT).await?;
     // println!("{:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -917,7 +916,6 @@ async fn get_status_with_yt_dlp(
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.youtube.proxy.clone();
-    let cookies_file = &cfg.youtube.cookies_file;
     let cookies_from_browser = &cfg.youtube.cookies_from_browser;
     let channel_name =
         optional_channel_name_for_holodex(get_channel_name("YT", channel_id), channel_id);
@@ -929,14 +927,16 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
         if let Some(ref p) = proxy {
             command.arg("--proxy").arg(p);
         }
-        add_yt_dlp_cookies_args(&mut command, cookies_file, cookies_from_browser);
+
         add_youtube_extractor_args(&mut command);
         command.arg("-e").arg(format!(
             "https://www.youtube.com/channel/{}/live",
             channel_id
         ));
 
-        let output = command_output_with_timeout(command, YT_DLP_TIMEOUT, "yt-dlp").await?;
+        let output =
+            super::youtube_cookies::run(command, cookies_from_browser.clone(), YT_DLP_TIMEOUT)
+                .await?;
         let title_str = String::from_utf8_lossy(&output.stdout);
 
         let title = title_str

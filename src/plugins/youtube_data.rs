@@ -440,25 +440,14 @@ static POOL: Mutex<Option<KeyPool>> = Mutex::new(None);
 const POOL_FILE: &str = "youtube_quota.json";
 
 fn load_pool() -> KeyPool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path.with_file_name(POOL_FILE)).ok())
-        .and_then(|data| serde_json::from_str::<SavedPool>(&data).ok())
+    crate::storage::read_json::<SavedPool>(POOL_FILE)
         .map(KeyPool::restore)
         .unwrap_or_default()
 }
 
 fn save_pool(saved: &SavedPool) {
-    let Ok(path) = std::env::current_exe().map(|path| path.with_file_name(POOL_FILE)) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    let result = serde_json::to_vec(saved)
-        .map_err(std::io::Error::other)
-        .and_then(|data| std::fs::write(&tmp, data))
-        .and_then(|()| std::fs::rename(&tmp, &path));
-    if let Err(e) = result {
-        tracing::warn!("保存 YouTube API 配额用量失败: {}", e);
+    if let Err(error) = crate::storage::write_json(POOL_FILE, saved) {
+        tracing::warn!("保存 YouTube API 配额用量失败: {error}");
     }
 }
 
@@ -1109,7 +1098,10 @@ mod tests {
 
         let mut next_day = KeyPool::restore(saved);
         next_day.sync(&list, 101);
-        assert!(next_day.keys.values().all(|state| state.used == 0 && state.benched.is_none()));
+        assert!(next_day
+            .keys
+            .values()
+            .all(|state| state.used == 0 && state.benched.is_none()));
     }
 
     fn keys(list: &[&str]) -> Vec<String> {

@@ -419,8 +419,8 @@ function applyHolodexSectionVisibility(holodexKey, youtubeKey) {
 // Applies the panel's key-driven layout from a loaded config. The auth status
 // may renew the JWT upstream, so it loads only when the Holodex key appears.
 function applyHolodexConfig(config) {
-  const holodexKey = !!config.holodex_api_key?.trim();
-  const youtubeKey = !!config.youtube_api_key?.trim();
+  const holodexKey = !!config.holodex_api_key_configured || !!config.holodex_api_key?.trim();
+  const youtubeKey = !!config.youtube_api_key_configured || !!config.youtube_api_key?.trim();
   const holodexKeyAdded = holodexKey && !holodexKeyConfigured;
   holodexKeyConfigured = holodexKey;
   if (!holodexKey) {

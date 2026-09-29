@@ -216,6 +216,7 @@
 
         <!-- Step 1: Bilibili login -->
         <div class="setup-step" id="setup-step-1">
+          <details class="session-legacy"><summary>已有备份？直接恢复</summary><input type="file" id="setup-restore-file" accept=".backup" aria-label="选择加密备份"><input type="password" id="setup-restore-password" placeholder="备份密码" autocomplete="off" aria-label="备份密码"><button type="button" id="setup-restore" class="btn-secondary">恢复备份</button></details>
           <h3 class="setup-step-title">步骤 1 · 登录 Bilibili</h3>
           <p class="setup-step-description">使用 Bilibili APP 扫描下方二维码登录</p>
 
@@ -1589,7 +1590,8 @@
             <div class="settings-keys">
               <div class="control-group">
                 <label for="config-holodex-key">Holodex API Key (可选)</label>
-                <input type="text" id="config-holodex-key" placeholder="补充 Twitch 等外部配信、游戏分类和其他频道的预定">
+                <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部配信、游戏分类和其他频道的预定">
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-holodex-key"> 清除已保存的密钥</label>
                 <small class="settings-help-text">
                   获取：<a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
                     class="settings-help-link">holodex.net</a>
@@ -1597,8 +1599,9 @@
               </div>
               <div class="control-group">
                 <label for="config-youtube-api-key">YouTube Data API Key (可选)</label>
-                <textarea id="config-youtube-api-key" class="settings-mono-textarea" rows="3"
+                <textarea autocomplete="new-password" id="config-youtube-api-key" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-youtube-key"> 清除已保存的密钥</label>
                 <small class="settings-help-text" title="每个 key 每天最多用 9,000 单位；key 越多，上传列表轮询越快（快于 RSS 每 3 分钟时自动开启，RSS 故障时也会开启）。集群中只有提供状态页的节点消耗 key；其他节点只在它不可用时用自己的 key。">
                   每行一个，多个 Google 项目的额度可叠加 ·
                   <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
@@ -1643,11 +1646,17 @@
               </label>
               <div id="config-riot-api-group" class="settings-dependent-group">
                 <label for="config-riot-key">Riot API Key</label>
-                <input type="text" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
+                <input type="password" autocomplete="new-password" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-riot-key"> 清除已保存的密钥</label>
                 <small class="settings-help-text">
                   获取：<a href="https://developer.riotgames.com/" target="_blank" rel="noopener noreferrer"
                     class="settings-help-link">developer.riotgames.com</a>
                 </small>
+                <details id="config-player-filter-group" class="control-group">
+                  <summary>玩家名称过滤关键词</summary>
+                  <textarea id="config-player-filter" rows="5" aria-label="玩家名称过滤关键词" placeholder="每行一个关键词"></textarea>
+                  <button type="button" id="save-player-filter" class="btn-secondary">保存过滤关键词</button>
+                </details>
               </div>
               <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
                 <label for="config-lol-interval">LoL 监控间隔 (分钟)</label>
@@ -1667,9 +1676,9 @@
           <div class="panel__body">
             <div class="settings-grid">
               <div class="control-group">
-                <label for="config-yt-cookies-browser">YouTube Cookies · 从浏览器导入</label>
+                <label for="config-yt-cookies-browser">服务器浏览器（可选）</label>
                 <select id="config-yt-cookies-browser">
-                  <option value="">不使用</option>
+                  <option value="">使用已保存的 Cookie</option>
                   <option value="chrome">Chrome</option>
                   <option value="firefox">Firefox</option>
                   <option value="edge">Edge</option>
@@ -1678,12 +1687,16 @@
                   <option value="opera">Opera</option>
                   <option value="vivaldi">Vivaldi</option>
                 </select>
-                <small class="settings-help-text">用于访问会员专属或年龄限制内容</small>
+                <small class="settings-help-text">选中后优先使用服务器上的浏览器登录。</small>
               </div>
               <div class="control-group">
-                <label for="config-yt-cookies-file">YouTube Cookies · 文件路径</label>
-                <input type="text" id="config-yt-cookies-file" placeholder="cookies.txt 文件路径 (可选)">
-                <small class="settings-help-text">浏览器导入优先级高于文件路径</small>
+                <label for="yt-cookie-upload">YouTube Cookie</label>
+                <p id="yt-cookie-status" class="settings-help-text" aria-live="polite">正在读取…</p>
+                <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
+                <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
+                <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
+                <small class="settings-help-text">Netscape 格式；自动保存 yt-dlp 更新。</small>
+                <input type="hidden" id="config-yt-cookies-file" value="">
               </div>
               <div class="control-group">
                 <label for="config-yt-deno-path">YouTube Deno 路径 (可选)</label>
@@ -1692,13 +1705,15 @@
               </div>
               <div class="control-group">
                 <label for="config-yt-proxy">YouTube 代理地址 (可选)</label>
-                <input type="text" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
-                <small class="settings-help-text">YouTube 专用代理，留空则不使用代理</small>
+                <input type="password" autocomplete="new-password" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-yt-proxy"> 清除已保存的代理</label>
+                <small class="settings-help-text">留空保留已保存的代理</small>
               </div>
               <div class="control-group settings-half-width">
                 <label for="config-tw-proxy">Twitch 代理地址 (可选)</label>
-                <input type="text" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
-                <small class="settings-help-text">Twitch 专用代理，留空则不使用代理</small>
+                <input type="password" autocomplete="new-password" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-tw-proxy"> 清除已保存的代理</label>
+                <small class="settings-help-text">留空保留已保存的代理</small>
               </div>
 
 
@@ -1723,22 +1738,34 @@
               <section class="platform-session-settings" aria-labelledby="niconico-session-heading">
                 <div class="control-group">
                   <label id="niconico-session-heading" for="config-nc-user-session">Niconico · user_session</label>
-                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检查已保存会话</button></div>
-                  <small class="settings-help-text">只需 user_session，不需要整份 Cookie。留空保留；修改后先保存再检查。</small>
-                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检查</small>
+                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检测可用性</button></div>
+                  <small class="settings-help-text">只需 user_session，不需要整份 Cookie。留空保留；修改后先保存再检测。</small>
+                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检测</small>
                 </div>
                 <div class="session-actions">
-                  <label class="toggle-label"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检查会话</span></label>
+                  <label class="toggle-label"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
                   <label class="toggle-label"><input type="checkbox" id="config-nc-clear-session"><span>清除已保存会话及旧文件路径</span></label>
                 </div>
                 <small class="settings-help-text">有效性预警，不会刷新或延长登录；网络失败不等于会话失效。</small>
               <div class="control-group session-proxy">
                 <label for="config-nc-proxy">Niconico 代理地址 (可选)</label>
-                <input type="text" id="config-nc-proxy" placeholder="http://127.0.0.1:7890">
+                <input type="password" autocomplete="new-password" id="config-nc-proxy" placeholder="http://127.0.0.1:7890">
+                <label class="settings-help-text"><input type="checkbox" id="config-clear-nc-proxy"> 清除已保存的代理</label>
                 <small class="settings-help-text">streamlink 使用 HTTP 代理；本机 Clash 可用 mixed 端口</small>
               </div>
                 <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">未直接配置 user_session 时才读取文件中的同名 Cookie。</small></div></details>
               </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2 class="panel__title">数据与备份</h2></div>
+          <div class="panel__body">
+            <p id="storage-state" class="settings-help-text" aria-live="polite"></p>
+            <div class="settings-grid">
+              <div class="control-group"><label for="storage-backup-password">备份密码</label><input type="password" id="storage-backup-password" autocomplete="new-password" placeholder="至少 12 个字符"><button type="button" id="storage-backup" class="btn-secondary">下载加密备份</button></div>
+              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未配置的新安装。</small></details>
             </div>
           </div>
         </section>

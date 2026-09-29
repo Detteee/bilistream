@@ -46,7 +46,7 @@ RSS 和 WebSub 用于发现视频 ID，本身不证明直播可播放。Data API
 
 ## Niconico Live
 
-配置 Niconico 频道及 streamlink，在系统设置中直接填写 `user_session` 的值。无需整份 Cookie 导出；旧 Netscape 文件路径仍可兼容。每日检查只验证会话是否有效，不会续期；网络异常与明确失效分开显示。[会话检查说明](niconico-session.md)。
+配置 Niconico 频道及 streamlink，在系统设置中直接填写 `user_session` 的值。无需整份 Cookie 导出；旧 Netscape 文件路径仍可兼容。每日检测只验证登录是否可用，不会续期；网络异常与明确失效分开显示。[可用性检测说明](niconico-session.md)。
 
 基础设置的「显示 Twitch」「显示 Niconico」「显示优先频道」只控制卡片显示，隐藏不停止监控。多服务器关闭时隐藏其面板。Niconico 使用管道输入；优先频道目前支持 YouTube/Twitch。
 

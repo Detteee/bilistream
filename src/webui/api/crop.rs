@@ -56,23 +56,24 @@ pub async fn capture_frame(
                 "yt-dlp".to_string()
             };
 
-            let mut cmd = tokio::process::Command::new(yt_dlp_cmd);
-            // Use -f to specify quality format, then -g to get URL
+            let mut cmd = std::process::Command::new(yt_dlp_cmd);
+            crate::plugins::utils::configure_no_window(&mut cmd);
             cmd.arg("-f")
                 .arg(&cfg.youtube.quality)
                 .arg("-g")
                 .arg(&channel_url);
-            crate::plugins::utils::add_yt_dlp_cookies_args(
-                cmd.as_std_mut(),
-                &cfg.youtube.cookies_file,
-                &cfg.youtube.cookies_from_browser,
-            );
 
             if let Some(ref proxy_url) = cfg.youtube.proxy {
                 cmd.arg("--proxy").arg(proxy_url);
             }
 
-            match cmd.output().await {
+            match crate::plugins::youtube_cookies::run(
+                cmd,
+                cfg.youtube.cookies_from_browser.clone(),
+                std::time::Duration::from_secs(45),
+            )
+            .await
+            {
                 Ok(output) if output.status.success() => {
                     m3u8_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if m3u8_url.is_empty() {
@@ -207,8 +208,8 @@ pub async fn capture_frame(
     }
 
     // Capture frame using ffmpeg
-    let output_path = match std::env::current_exe() {
-        Ok(path) => path.with_file_name("pic_for_crop.jpg"),
+    let output_path = match crate::storage::cache_file("pic_for_crop.jpg") {
+        Ok(path) => path,
         Err(_) => {
             return Json(ApiResponse {
                 success: false,

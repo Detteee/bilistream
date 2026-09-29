@@ -43,6 +43,7 @@ mod manage;
 mod setup;
 mod setup_data;
 mod status;
+mod storage;
 mod stream;
 
 pub use cluster::*;
@@ -53,6 +54,7 @@ pub use manage::*;
 pub use setup::*;
 pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};
 pub use status::*;
+pub use storage::*;
 pub use stream::*;
 
 fn config_save_status(error: Box<dyn std::error::Error>) -> StatusCode {

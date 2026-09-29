@@ -503,32 +503,8 @@ pub async fn switch_to_holodex_stream(
     let previous_cfg = cfg.clone();
     let old_monitored_config_version = monitored_config_version(&cfg);
 
-    // Get channel info from channels.json
-    let channels_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("channels.json");
-
-    let channels_content = match tokio::fs::read_to_string(&channels_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to read channels.json: {}", e)),
-            });
-        }
-    };
-
-    let channels_json: serde_json::Value = match serde_json::from_str(&channels_content) {
-        Ok(j) => j,
-        Err(e) => {
-            return Ok(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("Failed to parse channels.json: {}", e)),
-            });
-        }
-    };
+    let channels_json: serde_json::Value = crate::storage::read_json("channels.json")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Find channel name - try both new and old formats
     let mut channel_name = None;

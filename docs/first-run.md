@@ -44,6 +44,26 @@ Click **加载官方分区** to choose a Bilibili area by category. The same pic
 
 ![Area picker example](images/area-picker.png)
 
-If loading fails, use an existing local area or enter one manually in area management. If saving fails, you can retry; entries already saved are kept.
+If loading fails, use an existing local area or enter one manually in area management. A save commits settings, channels and areas together; if it fails, retry after resolving the reported issue.
 
-加载失败时仍可选择本地分区，或在分区管理中手动填写。保存失败可重试，已保存的条目会保留。
+加载失败时仍可选择本地分区，或在分区管理中手动填写。设置、频道与分区会一起保存；失败时修复提示的问题后重试。
+
+## Cookies and backup / Cookie 与备份
+
+In platform settings, upload or paste a Netscape `cookies.txt` for YouTube. It is stored encrypted, and yt-dlp updates are saved automatically. The optional browser source reads a browser on the server, not on the computer viewing the page.
+
+在平台设置上传或粘贴 YouTube Cookie，保存后无需保留常驻明文文件。浏览器来源读取的是服务器上的浏览器。
+
+![YouTube Cookie settings](images/youtube-cookies.png)
+
+Use **数据与备份** to download an encrypted backup with a separate password. Restore it through **已有备份？直接恢复** on a new installation. Old JSON configurations are imported automatically; new settings use their defaults.
+
+在「数据与备份」下载加密备份，另行保管密码。新安装可点击「已有备份？直接恢复」。原有 JSON 配置会自动导入，缺少的新增设置使用默认值。
+
+![Encrypted backup settings](images/data-backup.png)
+
+Stop the old process before an upgrade. Multi-server installations keep separate databases and keys on each node; upgrade peers before configuration sync or handoff.
+
+升级前先停止旧进程。多服务器各自保存数据库和密钥；节点升级后才能同步配置或接管转播。
+
+玩家名称过滤关键词位于 Riot API Key 下方，仅在启用英雄联盟玩家 ID 监控时显示。

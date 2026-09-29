@@ -97,6 +97,24 @@ pub async fn start_webui_on_listener(
         )
         .route("/cluster/push-config", post(api::cluster_push_config))
         .route("/config", get(api::get_config).post(api::update_config))
+        .route("/storage", get(api::storage_status))
+        .route("/storage/backup", post(api::export_storage_backup))
+        .route(
+            "/storage/restore",
+            post(api::restore_storage_backup)
+                .layer(axum::extract::DefaultBodyLimit::max(48 * 1024 * 1024)),
+        )
+        .route("/cluster/capabilities", get(api::storage_sync_capabilities))
+        .route(
+            "/youtube/cookies",
+            get(api::youtube_cookie_status)
+                .post(api::import_youtube_cookies)
+                .delete(api::clear_youtube_cookies),
+        )
+        .route(
+            "/player-filter",
+            get(api::get_player_filter).post(api::save_player_filter),
+        )
         .route("/priority-channel", post(api::update_priority_channel))
         .route("/start", post(api::start_stream))
         .route("/stop", post(api::stop_stream))

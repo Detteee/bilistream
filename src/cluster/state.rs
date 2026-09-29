@@ -4,8 +4,6 @@ use super::types::*;
 use crate::config::Config;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -117,14 +115,6 @@ pub(crate) fn now_secs() -> u64 {
         .as_secs()
 }
 
-pub(crate) fn executable_sibling(name: &str) -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .map(|path| path.with_file_name(name))
-}
-
 pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
-    let path = executable_sibling(name)?;
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    crate::storage::read_json(name).ok()
 }

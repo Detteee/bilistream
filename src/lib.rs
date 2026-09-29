@@ -4,6 +4,7 @@ pub mod config;
 pub mod deps;
 pub mod plugins;
 pub mod runtime;
+pub mod storage;
 pub mod tray;
 pub mod updater;
 pub mod webui;

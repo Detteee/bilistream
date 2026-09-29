@@ -15,7 +15,7 @@
 3. 完成浏览器设置向导：Bilibili 扫码登录、直播间设置、添加自己的频道并选择官方分区。YouTube 可粘贴频道主页或 @handle，也可使用 Holodex API Key 和 JWT 勾选导入收藏频道。
 4. 为需要监控的平台选择转播目标；选择**不转播**则关闭该平台监控。也可以先导入频道，稍后再启用。默认按单机方式运行。
 
-新安装使用空频道表和最小分区模板（其他单机）；向导会保存你选择的频道和分区，已有文件不会被覆盖。界面从程序内置资源安装，Windows 的 ffmpeg、yt-dlp 按需下载。
+新安装使用空频道表和最小分区模板（其他单机）；向导会保存你选择的频道和分区，已有数据不会被覆盖。界面从程序内置资源安装，Windows 的 ffmpeg、yt-dlp 按需下载。
 
 ## 控制面板
 
@@ -34,6 +34,7 @@
 ## 依赖与编译
 
 - **ffmpeg、yt-dlp**：Windows 自动安装二进制，Linux/macOS 自行安装。
+- **Deno**：用于 YouTube 的 JavaScript 验证；`install.sh` 已包含安装，其他系统参考 [官方说明](https://docs.deno.com/runtime/getting_started/installation/)。
 - **streamlink**：Twitch 和 Niconico 需要；Twitch 还需 [streamlink-ttvlol 插件](https://github.com/2bc4/streamlink-ttvlol)。
 - 部分来源需要 Cookie。YouTube Cookie 与 Niconico user_session 在 Web UI 设置，Bilibili 登录由向导完成。
 
@@ -61,20 +62,17 @@ cargo build --release --bin bilistream
 
 监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；远程访问应通过已配置认证的入口。
 
-运行时文件位于**正在运行的程序旁边**，不一定是源码根目录：
+设置、频道、规则及发现统计保存在程序旁的 `data/bilistream.db`。配置与登录信息加密保存，在本机重启时自动解锁；日常修改通过 Web UI 完成。可用 `BILISTREAM_DATA_DIR` 指定数据目录，用 `BILISTREAM_KEY_FILE` 指定目录之外的受限密钥文件。
 
-| 文件 | 内容 |
-| --- | --- |
-| `config.json` | 设置，建议通过 Web UI 修改。[带注释示例](config.json.example) 是参考文件，不是严格 JSON。 |
-| `cookies.json` | Bilibili 登录凭据，请勿公开。 |
-| `channels.json` / `areas.json` | 频道名单与分区、关键词规则。 |
-| `invalid_words.txt` | 可选的英雄联盟玩家名称过滤词，每行一个。 |
-| `youtube_quota.json` / `youtube_golive_hours.json` | 自动生成的 API 用量及发现时段统计。 |
-| `webui/dist/` / `webui/public-dist/` | 安装后的管理端与公开状态页资源。 |
+切换新版前先停止旧进程。升级时自动导入原有 JSON 和 Cookie 文件，缺少新设置项的旧配置也可直接升级。验证加密恢复副本后才移除程序目录内的旧数据；外部 Cookie 文件不会删除。请保留原密钥，单独复制数据库不能用于换机恢复。
+
+在「系统设置 → 数据与备份」下载密码保护的备份，新安装可在设置向导中恢复。请另行保管备份密码，不要删除数据库的 `-wal`、`-shm` 文件。图片继续保存在缓存目录，`webui/` 为页面资源。
+
+需要回退时，先停止服务，再用新版运行 `./bilistream --export-legacy ./downgrade-data`。新目录内是供旧版使用的明文配置和凭据，用完请删除。集群各节点升级后才能恢复配置同步和切换。
 
 优先监控和多服务器默认关闭；显示设置不改变监控状态。已有配置键保持兼容。
 
-弹幕切换使用 `channels.json` 中的频道名，例如：
+弹幕切换使用频道管理中保存的频道名，例如：
 
 ```text
 %转播%YT%示例频道1%英雄联盟

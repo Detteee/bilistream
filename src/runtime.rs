@@ -1911,10 +1911,7 @@ impl LolMonitor {
                 return None;
             }
         };
-        let path = std::env::current_exe()
-            .ok()?
-            .with_file_name("invalid_words.txt");
-        let words = tokio::fs::read_to_string(path).await.ok()?;
+        let words = crate::storage::read_text("invalid_words.txt").ok()?;
         invalid_player_word(&ids, &words)
     }
 
@@ -2085,15 +2082,7 @@ fn is_multi_channel_stream(title: &str) -> bool {
 
 /// Check if multiple channel names from channels.json appear in the title
 fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    // Get channels.json path
-    let channels_path = std::env::current_exe()?.with_file_name("channels.json");
-
-    if !channels_path.exists() {
-        return Ok(false);
-    }
-
-    let channels_content = std::fs::read_to_string(&channels_path)?;
-    let channels_json: serde_json::Value = serde_json::from_str(&channels_content)?;
+    let channels_json: serde_json::Value = crate::storage::read_json("channels.json")?;
 
     let mut found_channels = 0;
     let title_lower = title.to_lowercase();

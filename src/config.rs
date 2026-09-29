@@ -1,4 +1,5 @@
 use crate::plugins::bilibili;
+use crate::storage::Store;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,7 +9,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
 
 lazy_static! {
     static ref BILISTREAM_PATH: PathBuf = executable_path();
@@ -30,7 +30,7 @@ pub(crate) struct ConfigSnapshot {
     source_keys: Vec<FileCacheKey>,
 }
 
-type FileCacheKey = Option<(SystemTime, u64)>;
+type FileCacheKey = Option<u64>;
 
 /// Parsed-config cache keyed on the source files' (mtime, len). load_config()
 /// is called on every WebUI request and worker cycle; re-reading and re-parsing
@@ -41,8 +41,8 @@ struct ConfigCacheEntry {
 }
 
 fn file_cache_key(path: &Path) -> FileCacheKey {
-    let metadata = fs::metadata(path).ok()?;
-    Some((metadata.modified().ok()?, metadata.len()))
+    let name = path.file_name()?.to_str()?;
+    crate::storage::global().ok()?.revision(name).ok()?
 }
 
 /// Keys of every file load_config() derives the Config from, in fixed order.
@@ -705,9 +705,8 @@ impl Credentials {
 }
 
 /// Loads credentials from the specified cookies.json file.
-async fn load_credentials<P: AsRef<Path>>(path: P) -> Result<Credentials, Box<dyn Error>> {
-    let file_content = tokio::fs::read_to_string(path.as_ref()).await?;
-    let cookies_file: CookiesFile = serde_json::from_str(&file_content)?;
+async fn load_credentials<P: AsRef<Path>>(_path: P) -> Result<Credentials, Box<dyn Error>> {
+    let cookies_file: CookiesFile = crate::storage::read_json("cookies.json")?;
     Credentials::from_cookies(&cookies_file.cookie_info.cookies)
 }
 
@@ -736,30 +735,59 @@ pub async fn load_config() -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-async fn read_config(config_path: &Path, cookies_path: &Path) -> Result<Config, Box<dyn Error>> {
-    let content = tokio::fs::read(config_path).await?;
-    let mut config: Config = serde_json::from_slice(&content)?;
-    // Settings reads never trigger login or renewal. Missing/invalid cookies
-    // keep the setup interface available; authentication remains explicit.
-    config.bililive.credentials = load_credentials(cookies_path).await.unwrap_or_default();
+async fn read_config(_config_path: &Path, _cookies_path: &Path) -> Result<Config, Box<dyn Error>> {
+    let snapshot = crate::storage::global()?.read_many(&["config.json", "cookies.json"])?;
+    let config = snapshot
+        .get("config.json")
+        .ok_or("尚未配置，请完成设置向导")?;
+    let cookies = snapshot.get("cookies.json").map(|doc| &doc.value);
+    config_from_documents(&config.value, cookies)
+}
+
+fn config_from_documents(
+    value: &serde_json::Value,
+    cookies: Option<&serde_json::Value>,
+) -> Result<Config, Box<dyn Error>> {
+    let mut config: Config = serde_json::from_value(value.clone())?;
+    config.bililive.credentials = cookies
+        .and_then(|value| serde_json::from_value::<CookiesFile>(value.clone()).ok())
+        .and_then(|file| Credentials::from_cookies(&file.cookie_info.cookies).ok())
+        .unwrap_or_default();
     Ok(config)
 }
 
 /// Saves the configuration to config.json
 pub async fn save_config(config: &mut Config) -> Result<(), Box<dyn Error>> {
-    save_config_inner(config, false).await
+    save_config_inner(config, false, Box::new(|_| Ok(()))).await
 }
 
 /// Commit an automated decision only if every input source is still current.
 /// Unlike user field edits, an automated plan must not be rebased over newer
 /// settings that may have disabled or redirected the operation.
 pub async fn save_config_if_current(config: &mut Config) -> Result<(), Box<dyn Error>> {
-    save_config_inner(config, true).await
+    save_config_inner(config, true, Box::new(|_| Ok(()))).await
+}
+
+type DocumentEdit =
+    Box<dyn FnOnce(&mut crate::storage::Transaction<'_>) -> std::io::Result<()> + Send>;
+
+pub(crate) async fn save_config_with_transaction<F>(
+    config: &mut Config,
+    edit: F,
+) -> Result<(), Box<dyn Error>>
+where
+    F: FnOnce(&mut crate::storage::Transaction<'_>) -> std::io::Result<()> + Send + 'static,
+{
+    save_config_inner(config, false, Box::new(edit)).await?;
+    crate::plugins::set_config_updated();
+    crate::webui::public::remap_after_areas_change();
+    Ok(())
 }
 
 async fn save_config_inner(
     config: &mut Config,
     require_current: bool,
+    documents: DocumentEdit,
 ) -> Result<(), Box<dyn Error>> {
     let edited = serde_json::to_value(&config)?;
     let snapshot = config.snapshot.clone();
@@ -781,8 +809,12 @@ async fn save_config_inner(
                 "configuration changed while planning the operation",
             ));
         }
-        let json =
-            commit_config_snapshot(&CONFIG_PATH, snapshot.as_deref().map(|s| &s.json), &edited)?;
+        let json = commit_config_bundle(
+            crate::storage::global()?,
+            snapshot.as_deref().map(|s| &s.json),
+            &edited,
+            documents,
+        )?;
         let mut saved: Config = serde_json::from_value(json.clone())?;
         let _publication = CONFIG_PUBLICATION_LOCK
             .write()
@@ -809,6 +841,14 @@ async fn save_config_inner(
     Ok(())
 }
 
+pub(crate) fn config_data_revision(config: &Config) -> u64 {
+    config
+        .snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.source_keys.first().copied().flatten())
+        .unwrap_or(0)
+}
+
 pub fn config_is_current(config: &Config) -> bool {
     config
         .snapshot
@@ -830,23 +870,56 @@ pub fn with_current_config<T>(config: &Config, update: impl FnOnce() -> T) -> Op
     config_is_current(config).then(update)
 }
 
+#[cfg(test)]
 fn commit_config_snapshot(
-    path: &Path,
+    store: Arc<Store>,
     base: Option<&serde_json::Value>,
     edited: &serde_json::Value,
 ) -> std::io::Result<serde_json::Value> {
-    let current = match fs::read(path) {
-        Ok(bytes) => {
-            let parsed: Config = serde_json::from_slice(&bytes)?;
-            Some(serde_json::to_value(parsed)?)
+    commit_config_bundle(store, base, edited, Box::new(|_| Ok(())))
+}
+
+fn commit_config_bundle(
+    store: Arc<Store>,
+    base: Option<&serde_json::Value>,
+    edited: &serde_json::Value,
+    documents: DocumentEdit,
+) -> std::io::Result<serde_json::Value> {
+    let base = base.cloned();
+    let edited = edited.clone();
+    store.transaction(move |tx| {
+        let current = tx
+            .read("config.json")?
+            .map(|doc| config_json_with_defaults(doc.value))
+            .transpose()?;
+        let merged =
+            merge_config_changes(base.as_ref(), Some(&edited), current.as_ref(), "config")?
+                .ok_or_else(|| std::io::Error::other("configuration was removed during edit"))?;
+        tx.write("config.json", merged.clone())?;
+        documents(tx)?;
+        Ok(merged)
+    })
+}
+
+fn config_json_with_defaults(mut value: serde_json::Value) -> std::io::Result<serde_json::Value> {
+    let config: Config = serde_json::from_value(value.clone()).map_err(std::io::Error::other)?;
+    let defaults = serde_json::to_value(config).map_err(std::io::Error::other)?;
+    fn fill(target: &mut serde_json::Value, defaults: serde_json::Value) {
+        if let (Some(target), serde_json::Value::Object(defaults)) =
+            (target.as_object_mut(), defaults)
+        {
+            for (key, value) in defaults {
+                match target.get_mut(&key) {
+                    Some(current) => fill(current, value),
+                    None => {
+                        target.insert(key, value);
+                    }
+                }
+            }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let merged = merge_config_changes(base, Some(edited), current.as_ref(), "config")?
-        .ok_or_else(|| std::io::Error::other("configuration was removed during edit"))?;
-    write_file_atomic(path, &serde_json::to_vec_pretty(&merged)?)?;
-    Ok(merged)
+    }
+    fill(&mut value, defaults);
+    Ok(value)
 }
 
 fn merge_config_changes(
@@ -899,52 +972,59 @@ where
     R: Send + 'static,
     F: FnOnce(&mut T) -> Result<R, String> + Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
-        let _guard = PERSISTENCE_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut data: T = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let result = edit(&mut data)?;
-        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
-        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
-        managed_json_committed();
-        Ok(result)
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("数据名称无效")?
+        .to_owned();
+    mutate_document(
+        crate::storage::global().map_err(|e| e.to_string())?,
+        name,
+        edit,
+    )
+    .await
+}
+
+async fn mutate_document<T, R, F>(store: Arc<Store>, name: String, edit: F) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + Serialize + Send + 'static,
+    R: Send + 'static,
+    F: FnOnce(&mut T) -> Result<R, String> + Send + 'static,
+{
+    let result = tokio::task::spawn_blocking(move || {
+        store.transaction(move |tx| {
+            let doc = tx
+                .read(&name)?
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "数据不存在"))?;
+            let mut data: T = serde_json::from_value(doc.value).map_err(std::io::Error::other)?;
+            let result = edit(&mut data).map_err(std::io::Error::other)?;
+            tx.write(
+                &name,
+                serde_json::to_value(data).map_err(std::io::Error::other)?,
+            )?;
+            Ok(result)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    managed_json_committed();
+    Ok(result)
 }
 
-/// Initialize a missing JSON file under the edit lock; preserve existing bytes.
-pub(crate) async fn initialize_json_file(
-    path: PathBuf,
-    data: serde_json::Value,
-) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = PERSISTENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        if path.try_exists().map_err(|e| e.to_string())? {
-            return Ok(false);
-        }
-        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
-        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
-        managed_json_committed();
-        Ok(true)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Replace an authoritative managed JSON snapshot under the persistence lock.
 pub async fn replace_json_file(path: PathBuf, data: serde_json::Value) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = PERSISTENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
-        write_file_atomic(&path, &bytes).map_err(|e| e.to_string())?;
-        managed_json_committed();
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("数据名称无效")?
+        .to_owned();
+    let store = crate::storage::global().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || store.write(&name, data))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    managed_json_committed();
+    Ok(())
 }
 
 fn managed_json_committed() {
@@ -1005,35 +1085,19 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 }
 
 pub async fn refresh_credentials() -> Result<(), Box<dyn std::error::Error>> {
-    // Check for the existence of cookies.json
-    if !COOKIES_PATH.exists() {
-        return Err("cookies.json is missing; complete login in the setup UI".into());
-    } else {
-        // Check if cookies.json is older than 3 days
-        if COOKIES_PATH
-            .metadata()?
-            .modified()?
-            .elapsed()
-            .unwrap_or_default()
-            .as_secs()
-            > COOKIE_REFRESH_AGE_SECS
-        {
-            tracing::info!("cookies.json 已超过3天，正在刷新");
-            bilibili::renew().await?;
-        }
+    let doc = crate::storage::global()?
+        .read("cookies.json")?
+        .ok_or("请在设置向导中登录哔哩哔哩")?;
+    if crate::storage::now().saturating_sub(doc.updated_at) > COOKIE_REFRESH_AGE_SECS {
+        tracing::info!("正在刷新哔哩哔哩登录状态");
+        bilibili::renew().await?;
     }
-
     Ok(())
 }
-/// Loads channels from channels.json
-pub fn load_channels() -> Result<ChannelsData, Box<dyn Error>> {
-    if !CHANNELS_PATH.exists() {
-        return Ok(ChannelsData { channels: vec![] });
-    }
 
-    let content = fs::read_to_string(&*CHANNELS_PATH)?;
-    let channels: ChannelsData = serde_json::from_str(&content)?;
-    Ok(channels)
+/// Loads the installation's managed channel roster.
+pub fn load_channels() -> Result<ChannelsData, Box<dyn Error>> {
+    Ok(crate::storage::read_json("channels.json")?)
 }
 
 /// Finds channel info by name from channels.json
@@ -1051,6 +1115,17 @@ pub fn find_channel_by_name(name: &str) -> Option<Channel> {
 /// Updates priority channel config with channel info from channels.json
 pub fn update_priority_channel_from_channels(config: &mut Config) {
     let channel = find_channel_by_name(&config.priority_channel.channel_name);
+    apply_priority_channel_lookup(&mut config.priority_channel, channel.as_ref());
+}
+
+pub(crate) fn update_priority_channel_from_value(config: &mut Config, value: &serde_json::Value) {
+    let channel = serde_json::from_value::<ChannelsData>(value.clone())
+        .ok()
+        .and_then(|data| {
+            data.channels
+                .into_iter()
+                .find(|channel| channel.name == config.priority_channel.channel_name)
+        });
     apply_priority_channel_lookup(&mut config.priority_channel, channel.as_ref());
 }
 
@@ -1110,58 +1185,91 @@ mod tests {
         );
     }
 
+    fn isolated_store(dir: &Path) -> Arc<Store> {
+        Store::open(dir.join("data"), dir.join("keys/master.key"), None).unwrap()
+    }
+
     #[tokio::test]
     async fn settings_are_readable_without_credentials() {
-        let dir = test_dir();
-        let path = dir.join("config.json");
-        write_file_atomic(&path, &serde_json::to_vec(&fixture_json()).unwrap()).unwrap();
-        let config = read_config(&path, &dir.join("cookies.json")).await.unwrap();
+        let config = config_from_documents(&fixture_json(), None).unwrap();
         assert_eq!(config.interval, 15);
         assert!(config.bililive.credentials.sessdata.is_empty());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn concurrent_config_edits_preserve_unrelated_fields() {
         let dir = test_dir();
-        let path = dir.join("config.json");
-        let base = fixture_json();
-        write_file_atomic(&path, &serde_json::to_vec(&base).unwrap()).unwrap();
+        let store = isolated_store(&dir);
+        let mut base = fixture_json();
+        base["extension"] = serde_json::json!({"preserved":true});
+        store.write("config.json", base.clone()).unwrap();
+        // A typed config snapshot deliberately lacks unrecognized extension keys.
+        let base = serde_json::to_value(serde_json::from_value::<Config>(base).unwrap()).unwrap();
         let mut tasks = Vec::new();
         for id in 0..10 {
-            let (path, base) = (path.clone(), base.clone());
+            let (store, base) = (Arc::clone(&store), base.clone());
             tasks.push(tokio::task::spawn_blocking(move || {
                 let mut edited = base.clone();
                 edited["anti_collision_list"][format!("room-{id}")] = serde_json::json!(id);
-                let _guard = PERSISTENCE_LOCK.lock().unwrap();
-                commit_config_snapshot(&path, Some(&base), &edited).unwrap();
+                commit_config_snapshot(store, Some(&base), &edited).unwrap();
             }));
         }
         for task in tasks {
             task.await.unwrap();
         }
-        let current: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let current = store.read("config.json").unwrap().unwrap().value;
         assert_eq!(
             current["anti_collision_list"].as_object().unwrap().len(),
             10
         );
+        assert_eq!(current["extension"]["preserved"], true);
         let mut first = base.clone();
         first["interval"] = serde_json::json!(20);
         let mut stale = base.clone();
         stale["interval"] = serde_json::json!(30);
-        commit_config_snapshot(&path, Some(&base), &first).unwrap();
+        commit_config_snapshot(Arc::clone(&store), Some(&base), &first).unwrap();
         assert_eq!(
-            commit_config_snapshot(&path, Some(&base), &stale)
+            commit_config_snapshot(Arc::clone(&store), Some(&base), &stale)
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::WouldBlock
         );
-        let current: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(current["interval"], 20);
         assert_eq!(
-            current["anti_collision_list"].as_object().unwrap().len(),
-            10
+            store.read("config.json").unwrap().unwrap().value["interval"],
+            20
         );
+        drop(store);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn yesterday_config_can_enable_new_fields_without_false_conflict() {
+        let dir = test_dir();
+        let store = isolated_store(&dir);
+        let mut old = fixture_json();
+        for name in [
+            "show_priority_channel",
+            "show_twitch",
+            "show_niconico",
+            "youtube_rss_enabled",
+            "niconico",
+        ] {
+            old.as_object_mut().unwrap().remove(name);
+        }
+        old["extension"] = serde_json::json!({"keep":"old-custom-value"});
+        store.write("config.json", old.clone()).unwrap();
+        let loaded = config_from_documents(&old, None).unwrap();
+        assert!(!loaded.show_priority_channel);
+        assert!(loaded.show_twitch);
+        assert!(loaded.youtube_rss_enabled);
+        let base = serde_json::to_value(&loaded).unwrap();
+        let mut edited = base.clone();
+        edited["show_priority_channel"] = serde_json::json!(true);
+        let saved = commit_config_snapshot(Arc::clone(&store), Some(&base), &edited).unwrap();
+        assert_eq!(saved["show_priority_channel"], true);
+        assert_eq!(saved["extension"]["keep"], "old-custom-value");
+        assert_eq!(saved["youtube"]["channel_id"], old["youtube"]["channel_id"]);
+        drop(store);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1181,33 +1289,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_replacement_initializes_a_missing_file_and_supports_edits() {
+    async fn managed_replacement_initializes_and_supports_edits() {
         let dir = test_dir();
-        let path = dir.join("managed.json");
-        replace_json_file(path.clone(), serde_json::json!({"count": 4}))
-            .await
+        let store = isolated_store(&dir);
+        store
+            .write("managed.json", serde_json::json!({"count":4}))
             .unwrap();
-        mutate_json_file(path.clone(), |data: &mut serde_json::Value| {
-            data["count"] = serde_json::json!(data["count"].as_u64().unwrap() + 1);
-            Ok(())
-        })
+        mutate_document(
+            Arc::clone(&store),
+            "managed.json".into(),
+            |data: &mut serde_json::Value| {
+                data["count"] = serde_json::json!(data["count"].as_u64().unwrap() + 1);
+                Ok(())
+            },
+        )
         .await
         .unwrap();
-        let data: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(data["count"], 5);
+        assert_eq!(
+            store.read("managed.json").unwrap().unwrap().value["count"],
+            5
+        );
+        drop(store);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn cancelled_caller_does_not_abandon_a_managed_transaction() {
         let dir = test_dir();
-        let path = dir.join("counter.json");
-        write_file_atomic(&path, b"0").unwrap();
+        let store = isolated_store(&dir);
+        store.write("counter.json", serde_json::json!(0)).unwrap();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let first_path = path.clone();
+        let first = Arc::clone(&store);
         let caller = tokio::spawn(async move {
-            mutate_json_file(first_path, move |count: &mut u64| {
+            mutate_document(first, "counter.json".into(), move |count: &mut u64| {
                 started_tx.send(()).unwrap();
                 release_rx
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -1221,13 +1336,18 @@ mod tests {
         caller.abort();
         assert!(caller.await.unwrap_err().is_cancelled());
         release_tx.send(()).unwrap();
-        mutate_json_file(path.clone(), |count: &mut u64| {
-            *count += 1;
-            Ok(())
-        })
+        mutate_document(
+            Arc::clone(&store),
+            "counter.json".into(),
+            |count: &mut u64| {
+                *count += 1;
+                Ok(())
+            },
+        )
         .await
         .unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "2");
+        assert_eq!(store.read("counter.json").unwrap().unwrap().value, 2);
+        drop(store);
         fs::remove_dir_all(dir).unwrap();
     }
 

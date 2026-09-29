@@ -53,10 +53,10 @@ pub async fn ensure_all_dependencies() -> Result<(), Box<dyn Error>> {
     // Check what needs to be downloaded
     let exe_dir = current_exe_dir()?;
 
-    if !exe_dir.join("areas.json").exists() {
+    if !crate::storage::contains("areas.json").unwrap_or(false) {
         total_items += 1;
     }
-    if !exe_dir.join("channels.json").exists() {
+    if !crate::storage::contains("channels.json").unwrap_or(false) {
         total_items += 1;
     }
     total_items += crate::webui::assets::missing_asset_count(&exe_dir);
@@ -114,21 +114,12 @@ async fn ensure_required_files() -> Result<(), Box<dyn Error>> {
 }
 
 /// New installations start with user-owned data, never the developer's roster.
-pub(crate) async fn initialize_user_data(directory: &Path) -> Result<usize, String> {
-    let mut count = 0;
-    for (name, template) in [
-        ("areas.json", include_str!("../assets/defaults/areas.json")),
-        (
-            "channels.json",
-            include_str!("../assets/defaults/channels.json"),
-        ),
-    ] {
-        let data =
-            serde_json::from_str(template).map_err(|e| format!("Invalid bundled {name}: {e}"))?;
-        count +=
-            usize::from(crate::config::initialize_json_file(directory.join(name), data).await?);
-    }
-    Ok(count)
+pub(crate) async fn initialize_user_data(_directory: &Path) -> Result<usize, String> {
+    tokio::task::spawn_blocking(crate::storage::global)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    Ok(0)
 }
 
 /// Ensure Windows-specific dependencies (yt-dlp, ffmpeg)
@@ -373,11 +364,11 @@ pub fn check_files_exist() -> bool {
         return false;
     };
 
-    let areas_json = exe_dir.join("areas.json");
-    let channels_json = exe_dir.join("channels.json");
     let webui_index = exe_dir.join("webui").join("dist").join("index.html");
 
-    areas_json.exists() && channels_json.exists() && webui_index.exists()
+    crate::storage::contains("areas.json").unwrap_or(false)
+        && crate::storage::contains("channels.json").unwrap_or(false)
+        && webui_index.exists()
 }
 
 fn current_exe_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -401,20 +392,15 @@ fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn first_run_data_is_neutral_and_existing_files_are_preserved() {
-        let dir = std::env::temp_dir().join(format!("bilistream-first-run-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(super::initialize_user_data(&dir).await.unwrap(), 2);
+    #[test]
+    fn first_run_templates_are_neutral() {
         let channels: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(dir.join("channels.json")).unwrap()).unwrap();
+            serde_json::from_str(include_str!("../assets/defaults/channels.json")).unwrap();
+        let areas: serde_json::Value =
+            serde_json::from_str(include_str!("../assets/defaults/areas.json")).unwrap();
         assert_eq!(channels["channels"], serde_json::json!([]));
-        let personal =
-            br#"{"channels":[{"name":"mine","platforms":{"twitch":"mine"},"aliases":[]}] }"#;
-        crate::config::write_file_atomic(&dir.join("channels.json"), personal).unwrap();
-        assert_eq!(super::initialize_user_data(&dir).await.unwrap(), 0);
-        assert_eq!(std::fs::read(dir.join("channels.json")).unwrap(), personal);
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(areas["areas"].as_array().unwrap().len(), 1);
+        assert_eq!(areas["banned_keywords"], serde_json::json!([]));
     }
 
     /// The ffmpeg and self-update archives are both plain deflate zips, and the

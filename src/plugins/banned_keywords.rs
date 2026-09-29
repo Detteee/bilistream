@@ -11,29 +11,9 @@
 use serde_json::Value;
 
 fn read_areas_json() -> Option<Value> {
-    let areas_path = match std::env::current_exe() {
-        Ok(path) => path.with_file_name("areas.json"),
-        Err(e) => {
-            tracing::error!("无法获取可执行文件路径: {}", e);
-            return None;
-        }
-    };
-
-    let content = match std::fs::read_to_string(&areas_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("无法读取 areas.json: {}", e);
-            return None;
-        }
-    };
-
-    match serde_json::from_str(&content) {
-        Ok(data) => Some(data),
-        Err(e) => {
-            tracing::error!("无法解析 areas.json: {}", e);
-            None
-        }
-    }
+    crate::storage::read_json("areas.json")
+        .map_err(|e| tracing::error!("无法读取分区规则: {e}"))
+        .ok()
 }
 
 fn read_keyword_list(data: &Value, key: &str) -> Option<Vec<String>> {

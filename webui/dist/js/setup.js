@@ -431,6 +431,7 @@ async function checkSetupStatus() {
   try {
     const data = await getJson('/api/setup-status');
 
+    if (data.storage_error) { showNotification(data.storage_error, 'error'); }
     if (data.needs_setup) {
       setSetupPageVisible(true);
 

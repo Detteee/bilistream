@@ -4,7 +4,8 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -246,31 +247,25 @@ pub(crate) fn configured_user_session(cfg: &NiconicoConfig) -> Result<String, Bo
     {
         return Ok(session.to_string());
     }
-    user_session_from_cookies_file(&resolve_cookies_path(cfg)?)
-}
-
-fn resolve_cookies_path(cfg: &NiconicoConfig) -> Result<PathBuf, Box<dyn Error>> {
-    let Some(path) = cfg.cookies_file.as_deref().filter(|path| !path.is_empty()) else {
-        return Err("Niconico user_session 未配置，请在系统设置填写".into());
-    };
-
-    let given = PathBuf::from(path);
-    if given.exists() {
-        return Ok(given);
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join(path);
-            if sibling.exists() {
-                return Ok(sibling);
-            }
+    if cfg
+        .cookies_file
+        .as_deref()
+        .is_some_and(|path| !path.is_empty())
+    {
+        if let Ok(text) = crate::storage::read_text("niconico_cookies.txt") {
+            return user_session_from_cookie_text(&text);
         }
     }
-    Err(format!("Niconico cookies file not found: {}", path).into())
+    Err("Niconico user_session 未配置，请在系统设置填写".into())
 }
 
+#[cfg(test)]
 pub(crate) fn user_session_from_cookies_file(path: &Path) -> Result<String, Box<dyn Error>> {
     let content = std::fs::read_to_string(path)?;
+    user_session_from_cookie_text(&content)
+}
+
+fn user_session_from_cookie_text(content: &str) -> Result<String, Box<dyn Error>> {
     for line in content.lines() {
         let Some(record) = netscape_cookie_record(line) else {
             continue;

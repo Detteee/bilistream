@@ -9,14 +9,15 @@ const ok = data => ({ success: true, data });
 export function createMockServer() {
   let needsSetup = false;
   let sessionSaved = false;
+  let cookieRevision = 1, cookieCount = 0, filterRevision = 1, playerFilter = '';
   let favoriteMode = 'ok';
   const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? '示例收藏频道 001' : i === 1 ? '示例收藏频道 002 / Example Channel 002 / サンプルチャンネル 002' : `示例收藏频道 ${String(i + 1).padStart(3, '0')}` }));
   const catalog = [{id:235,name:'其他单机',parent_name:'单机游戏'},{id:329,name:'无畏契约',parent_name:'网游'}, ...Array.from({ length: 300 }, (_, i) => ({ id: 1000 + i, name: i === 0 ? '开放世界探索与多人合作冒险 · Open World and Multiplayer Adventures' : `演示分区 ${i + 1}`, parent_name: `演示分类 ${Math.floor(i / 30) + 1}` }))];
   const config = {
     interval: 30, auto_cover: true, show_priority_channel: false, show_twitch: true, show_niconico: false, youtube_rss_enabled: true,
     holodex_monitor_gate: true, enable_lol_monitor: false, enable_anti_collision: false,
-    anti_collision_list: {}, holodex_api_key: 'demo-holodex-key', holodex_jwt_configured: false,
-    youtube_api_key: 'demo-key-project-a\ndemo-key-project-b',
+    anti_collision_list: {}, holodex_api_key: '', holodex_api_key_configured: true, holodex_jwt_configured: false, secret_revision: 1,
+    youtube_api_key: '', youtube_api_key_configured: true, riot_api_key: '', riot_api_key_configured: false,
     youtube_websub_callback_url: 'https://yt.example.com/websub/youtube', youtube_websub_port: 3151,
     bilibili: { room: 10000, enable_danmaku_command: true },
     youtube: { enable_monitor: true, channel_name: '示例频道 001', channel_id: 'UC1111111111111111111111', area_v2: 235, quality: 'best', proxy: '', ffmpeg_cache: { enabled: true, latency_secs: 8 } },
@@ -39,7 +40,7 @@ export function createMockServer() {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
         res.write(': mock connected\n\n'); events.add(res); req.on('close', () => events.delete(res)); return;
       }
-      if (req.method === 'POST') {
+      if (req.method === 'POST' || req.method === 'DELETE') {
         let text = ''; for await (const chunk of req) text += chunk;
         const patch = JSON.parse(text || '{}');
         if (path === '/api/setup/holodex-favorites') {
@@ -48,15 +49,35 @@ export function createMockServer() {
           return send(ok(favoriteMode === 'empty' ? [] : favorites));
         }
         writes.push({ path, patch });
+        if (path === '/api/youtube/cookies') {
+          if (patch.expected_revision !== cookieRevision) return send({ success: false, message: 'Cookie 已更新' }, 409);
+          cookieCount = req.method === 'DELETE' ? 0 : (patch.content || '').split('\n').filter(line => line && !line.startsWith('#')).length;
+          cookieRevision += 1;
+          return send({ success: true, message: cookieCount ? 'Cookie 已加密保存' : 'Cookie 已清除', data: { configured: cookieCount > 0, count: cookieCount, revision: cookieRevision, updated_at: 1 } });
+        }
+        if (path === '/api/player-filter') { playerFilter = patch.content; filterRevision += 1; return send({ success: true, data: filterRevision, message: '过滤词已保存' }); }
+
         if (path === '/api/cluster/public-status') {
           config.cluster.public_status = patch.config;
           for (const event of events) event.write('event: config\ndata: changed\n\n');
           return send({ success: true, message: '公开页设置已保存', data: { enabled: false, nodes: [], local_node_id: 'local', public_status: patch.config } });
         }
         if (path === '/api/channels/resolve-youtube') return send(ok({ channel_id: 'UC4444444444444444444444' }));
-        if (path === '/api/niconico/session/check') return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检查不会续期' : '未配置 user_session' }));
+        if (path === '/api/niconico/session/check') return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检测不会续期' : '未配置 user_session' }));
         if (path === '/api/setup/save-config') { needsSetup = false; return send({ success: true }); }
         if (path === '/api/config') {
+          if (patch.expected_secret_revision != null && patch.expected_secret_revision !== config.secret_revision) return send({ success: false, message: '密钥配置已更新' }, 409);
+          for (const key of ['holodex_api_key', 'youtube_api_key', 'riot_api_key']) {
+            if (patch[`clear_${key}`]) config[`${key}_configured`] = false;
+            else if (patch[key]) config[`${key}_configured`] = true;
+          }
+          for (const platform of ['youtube', 'twitch', 'niconico']) {
+            if (patch[`clear_${platform}_proxy`]) config[platform].proxy_configured = false;
+            else if (patch[`${platform}_proxy`]) config[platform].proxy_configured = true;
+            delete patch[`${platform}_proxy`];
+          }
+          config.secret_revision += 1;
+
           for (const [key, before] of Object.entries(patch.expected || {})) {
             if (key in config && JSON.stringify(config[key]) !== JSON.stringify(before)) return send({ success: false, message: '配置冲突' }, 409);
           }
@@ -65,7 +86,7 @@ export function createMockServer() {
           if (clear_niconico_user_session) sessionSaved = false;
           config.niconico.user_session_configured = sessionSaved;
           if (niconico_session_check_enabled != null) config.niconico.session_check_enabled = niconico_session_check_enabled;
-          Object.assign(config, changes);
+          Object.assign(config, changes); for (const key of ['holodex_api_key', 'youtube_api_key', 'riot_api_key']) config[key] = '';
           for (const event of events) event.write('event: config\ndata: changed\n\n');
         } else if (path === '/api/priority-channel') Object.assign(config.priority_channel, patch);
         else if (path !== '/api/banned-keywords') return send({ success: false, message: 'Unsupported mock action' }, 404);
@@ -73,9 +94,12 @@ export function createMockServer() {
       }
       if (path === '/mock/writes') return send(writes);
       if (path === '/api/auth') return send({ required: false, authenticated: true });
+      if (path === '/api/storage') return send({ ready: true, configured: true, schema: 1, sqlite_version: '3.53.2' });
+      if (path === '/api/youtube/cookies') return send(ok({ configured: cookieCount > 0, count: cookieCount, revision: cookieRevision, updated_at: 1 }));
+      if (path === '/api/player-filter') return send(ok({ content: playerFilter, revision: filterRevision }));
       if (path === '/api/setup-status') return send({ needs_setup: needsSetup });
       if (path === '/api/setup/login-status') return send({ logged_in: true });
-      if (path === '/api/niconico/session') return send(ok({ state: sessionSaved ? 'unchecked' : 'unconfigured', message: sessionSaved ? '尚未检查；检查不会延长会话有效期' : '未配置 user_session' }));
+      if (path === '/api/niconico/session') return send(ok({ state: sessionSaved ? 'unchecked' : 'unconfigured', message: sessionSaved ? '尚未检测；检测不会延长会话有效期' : '未配置 user_session' }));
       if (path === '/api/areas/catalog') return send(ok(catalog));
       if (path === '/api/manage/areas') return send(ok({areas:[{id:235,name:'其他单机',aliases:[],title_keywords:[]}]}));
       if (path === '/api/manage/channels') return send(ok({channels:[]}));

@@ -109,7 +109,7 @@ fn get_platform_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
 
 // Only update the binary and webui — never overwrite user config/data files.
 // For first-install files (areas.json, channels.json), only extract if not already present.
-fn should_update_file(relative_path: &str, install_dir: &std::path::Path) -> bool {
+fn should_update_file(relative_path: &str, _install_dir: &std::path::Path) -> bool {
     let name = relative_path.replace('\\', "/");
     // Always update: binary and webui frontend
     if name == "bilistream"
@@ -122,9 +122,7 @@ fn should_update_file(relative_path: &str, install_dir: &std::path::Path) -> boo
         return true;
     }
     // First-install only: extract if the file doesn't exist yet on disk
-    if name == "areas.json" || name == "channels.json" {
-        return !install_dir.join(&name).exists();
-    }
+
     false
 }
 

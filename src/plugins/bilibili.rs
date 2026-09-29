@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -135,78 +131,7 @@ async fn bili_live_version() -> Result<(String, i64), Box<dyn Error>> {
         Ok(("7.19.0.9432".to_string(), 9432))
     }
 }
-static JSON_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 pub const BILI_START_TEMP_BAN_PREFIX: &str = "BILI_START_TEMP_BAN:";
-
-fn executable_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("bilistream"))
-}
-
-fn bilistream_path_from_env_or_executable() -> PathBuf {
-    std::env::var_os("BILISTREAM_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(executable_path)
-}
-
-fn cookies_path() -> PathBuf {
-    bilistream_path_from_env_or_executable().with_file_name("cookies.json")
-}
-
-fn write_json_pretty_atomic<T: Serialize + ?Sized>(
-    path: &Path,
-    value: &T,
-) -> Result<(), Box<dyn Error>> {
-    let json = serde_json::to_string_pretty(value)?;
-    write_file_atomic(path, json.as_bytes())?;
-    Ok(())
-}
-
-fn write_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let (tmp_path, mut tmp_file) = create_unique_tmp_file(path)?;
-    let write_result = tmp_file.write_all(bytes).and_then(|_| tmp_file.sync_all());
-    drop(tmp_file);
-
-    let result = write_result.and_then(|_| fs::rename(&tmp_path, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp_path);
-    }
-    result
-}
-
-fn create_unique_tmp_file(path: &Path) -> io::Result<(PathBuf, fs::File)> {
-    const MAX_ATTEMPTS: usize = 16;
-    for _ in 0..MAX_ATTEMPTS {
-        let tmp_path = unique_json_tmp_path(path);
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-        {
-            Ok(file) => return Ok((tmp_path, file)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "failed to reserve unique Bilibili json temporary file",
-    ))
-}
-
-fn unique_json_tmp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("cookies.json");
-    let suffix = JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.with_file_name(format!(
-        "{}.tmp-{}-{}",
-        file_name,
-        std::process::id(),
-        suffix
-    ))
-}
 
 fn unix_time_secs(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -1113,8 +1038,9 @@ async fn save_login_info(credential: &Credential, info: LoginInfo) -> Result<(),
         "platform": "BiliTV"
     });
 
-    let cookies_path = cookies_path();
-    write_json_pretty_atomic(&cookies_path, &final_info)?;
+    let store = crate::storage::global()?;
+    tokio::task::spawn_blocking(move || store.write("cookies.json", final_info)).await??;
+    crate::webui::state::request_status_refresh();
 
     Ok(())
 }
@@ -1186,23 +1112,27 @@ pub async fn login() -> Result<(), Box<dyn Error>> {
         "platform": "BiliTV"
     });
 
-    let cookies_path = cookies_path();
-    write_json_pretty_atomic(&cookies_path, &final_info)?;
-    println!("登录成功! Cookies saved to cookies.json");
+    let store = crate::storage::global()?;
+    tokio::task::spawn_blocking(move || store.write("cookies.json", final_info)).await??;
+    crate::webui::state::request_status_refresh();
+    println!("登录成功，凭据已加密保存");
 
     Ok(())
 }
 
 /// Renews the authentication tokens using the existing login info
 pub async fn renew() -> Result<(), Box<dyn Error>> {
-    let cookies_path = cookies_path();
+    let store = crate::storage::global()?;
+    let snapshot = store.read("cookies.json")?.ok_or("尚未登录哔哩哔哩")?;
     let credential = Credential::new()?;
-    let file = std::fs::File::open(&cookies_path)?;
-
-    let login_info: LoginInfo = serde_json::from_reader(file)?;
+    let login_info: LoginInfo = serde_json::from_value(snapshot.value)?;
     let new_info = credential.renew_tokens(login_info).await?;
-    write_json_pretty_atomic(&cookies_path, &new_info)?;
-    // tracing::info!("{new_info:?}");
+    let value = serde_json::to_value(new_info)?;
+    tokio::task::spawn_blocking(move || {
+        store.compare_exchange("cookies.json", snapshot.revision, value)
+    })
+    .await??;
+    crate::webui::state::request_status_refresh();
 
     Ok(())
 }
@@ -1280,41 +1210,18 @@ pub async fn get_thumbnail(
         }
     };
 
-    if let Err(e) = tokio::fs::write("cover.jpg", &bytes).await {
+    let cover_path = crate::storage::cache_file("cover.jpg")?;
+    if let Err(e) = tokio::fs::write(&cover_path, &bytes).await {
         warn!("保存封面失败: {}", e);
         return Ok(String::new());
     }
 
-    Ok("cover.jpg".to_string())
+    Ok(cover_path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn atomic_json_write_replaces_target_without_leftover_tmp() {
-        let dir = std::env::temp_dir().join(format!(
-            "bilistream-bilibili-json-test-{}-{}",
-            std::process::id(),
-            JSON_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cookies.json");
-
-        write_file_atomic(&path, br#"{"old":true}"#).unwrap();
-        write_file_atomic(&path, br#"{"new":true}"#).unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"new":true}"#);
-        let entries = fs::read_dir(&dir)
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path(), path);
-
-        fs::remove_dir_all(dir).unwrap();
-    }
 
     #[test]
     fn credential_cookie_carries_every_configured_field() {

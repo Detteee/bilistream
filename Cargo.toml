@@ -83,6 +83,9 @@ open = "5.0"
 hmac = "0.13"
 sha1 = "0.11"
 getrandom = "0.3"
+ring = "0.17.14"
+zeroize = "1.8"
+rusqlite = { version = "0.40.1", features = ["bundled", "backup", "fallible_uint"] }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 ksni = "0.3"
@@ -97,6 +100,11 @@ winapi = { version = "0.3", features = [
   "fileapi",
   "winnt",
   "winbase",
+  "dpapi",
+  "wincrypt",
+  "processthreadsapi",
+  "handleapi",
+  "synchapi",
 ] }
 
 [target.'cfg(unix)'.dependencies]

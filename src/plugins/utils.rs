@@ -1,5 +1,6 @@
 use md5::{Digest, Md5};
 use std::fmt::Write as _;
+use std::future::Future;
 use std::io;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -75,23 +76,44 @@ async fn read_limited(reader: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
 }
 
 /// Drain both pipes concurrently with exit, including queueing in the deadline.
-/// Dropping this future also terminates the direct child.
+/// A detached supervisor reaps the child even if the caller drops its future.
 pub async fn command_output_with_timeout(
     command: Command,
     limit: Duration,
     label: &str,
 ) -> io::Result<Output> {
     let deadline = tokio::time::Instant::now() + limit;
-    let timed_out = || {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("{label} timed out after {limit:?}"),
-        )
-    };
-    let _permit = tokio::time::timeout_at(deadline, PROCESS_SLOTS.acquire())
+    let label = label.to_owned();
+    let (mut sender, receiver) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result =
+            command_output_cancellable(command, deadline, &label, sender.closed(), None).await;
+        let _ = sender.send(result);
+    });
+    receiver
         .await
-        .map_err(|_| timed_out())?
-        .map_err(io::Error::other)?;
+        .map_err(|_| io::Error::other("subprocess supervisor stopped"))?
+}
+
+/// Caller owns temporary resources and must await this before removing them.
+/// Cancellation is a signal, not dropping the owning supervisor future.
+pub(crate) async fn command_output_cancellable(
+    command: Command,
+    deadline: tokio::time::Instant,
+    label: &str,
+    cancelled: impl Future<Output = ()>,
+    pid_file: Option<&std::path::Path>,
+) -> io::Result<Output> {
+    let timed_out = || io::Error::new(io::ErrorKind::TimedOut, format!("{label} timed out"));
+    let interrupted = || io::Error::new(io::ErrorKind::Interrupted, "subprocess cancelled");
+    tokio::pin!(cancelled);
+    let _permit = tokio::select! {
+        biased;
+        _ = &mut cancelled => return Err(interrupted()),
+        result = tokio::time::timeout_at(deadline, PROCESS_SLOTS.acquire()) => {
+            result.map_err(|_| timed_out())?.map_err(io::Error::other)?
+        }
+    };
     let mut command = tokio::process::Command::from(command);
     command
         .stdin(Stdio::null())
@@ -99,6 +121,13 @@ pub async fn command_output_with_timeout(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn()?;
+    if let (Some(path), Some(pid)) = (pid_file, child.id()) {
+        if let Err(error) = crate::storage::paths::write_private(path, pid.to_string().as_bytes()) {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+    }
     let stdout = child
         .stdout
         .take()
@@ -107,7 +136,10 @@ pub async fn command_output_with_timeout(
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("stderr pipe missing"))?;
-    let result = tokio::time::timeout_at(deadline, async {
+    let result = tokio::select! {
+        biased;
+        _ = &mut cancelled => Err(interrupted()),
+        result = tokio::time::timeout_at(deadline, async {
         let (status, stdout, stderr) =
             tokio::try_join!(child.wait(), read_limited(stdout), read_limited(stderr))?;
         Ok::<_, io::Error>(Output {
@@ -115,14 +147,13 @@ pub async fn command_output_with_timeout(
             stdout,
             stderr,
         })
-    })
-    .await;
-    let error = match result {
-        Ok(Ok(output)) => return Ok(output),
-        Ok(Err(error)) => error,
-        Err(_) => timed_out(),
+        }) => result.unwrap_or_else(|_| Err(timed_out())),
     };
-    // Reap on normal failure; kill_on_drop covers caller cancellation.
+    let error = match result {
+        Ok(output) => return Ok(output),
+        Err(error) => error,
+    };
+    // The supervisor owns this child until reap, including caller cancellation.
     let _ = child.kill().await;
     let _ = child.wait().await;
     Err(error)
@@ -149,27 +180,6 @@ pub fn stream_thumbnail_url(
             "https://static-cdn.jtvnw.net/previews-ttv/live_user_{channel_id}-640x360.jpg"
         )),
         _ => None,
-    }
-}
-
-pub fn add_yt_dlp_cookies_args(
-    command: &mut Command,
-    cookies_file: &Option<String>,
-    cookies_from_browser: &Option<String>,
-) {
-    if let Some(browser) = cookies_from_browser {
-        if !browser.is_empty() {
-            command.arg("--cookies-from-browser");
-            command.arg(browser);
-            return;
-        }
-    }
-
-    if let Some(file_path) = cookies_file {
-        if !file_path.is_empty() {
-            command.arg("--cookies");
-            command.arg(file_path);
-        }
     }
 }
 

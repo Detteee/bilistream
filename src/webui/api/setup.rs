@@ -1,4 +1,4 @@
-use super::setup_data::{save_setup_lists, setup_channel, SetupArea, SetupChannel};
+use super::setup_data::{save_setup_bundle, setup_channel, SetupArea, SetupChannel};
 use super::*;
 use crate::plugins::holodex::HolodexFavoriteChannel;
 
@@ -7,21 +7,38 @@ pub struct SetupStatus {
     needs_setup: bool,
     missing_files: Vec<String>,
     setup_command: String,
+    storage_error: Option<String>,
 }
 
 pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
-    let exe_path = std::env::current_exe().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let config_path = exe_path.with_file_name("config.json");
-    let cookies_path = exe_path.with_file_name("cookies.json");
-
+    let store = match tokio::task::spawn_blocking(crate::storage::global).await {
+        Ok(Ok(store)) => store,
+        error => {
+            return Ok(Json(SetupStatus {
+                needs_setup: false,
+                missing_files: Vec::new(),
+                setup_command: String::new(),
+                storage_error: Some(match error {
+                    Ok(Err(error)) => error.to_string(),
+                    _ => "数据存储不可用".into(),
+                }),
+            }))
+        }
+    };
     let mut missing_files = Vec::new();
-
-    if !config_path.exists() {
-        missing_files.push("config.json".to_string());
+    if store
+        .revision("config.json")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_none()
+    {
+        missing_files.push("config.json".into());
     }
-
-    if !cookies_path.exists() {
-        missing_files.push("cookies.json".to_string());
+    if store
+        .revision("cookies.json")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_none()
+    {
+        missing_files.push("cookies.json".into());
     }
 
     let needs_setup = !missing_files.is_empty();
@@ -36,6 +53,7 @@ pub async fn check_setup() -> Result<Json<SetupStatus>, StatusCode> {
         needs_setup,
         missing_files,
         setup_command,
+        storage_error: None,
     }))
 }
 
@@ -269,11 +287,8 @@ pub async fn save_setup_config(
         Ok(channels) => channels,
         Err(error) => return Ok(invalid(error)),
     };
-    let existing_path =
-        managed_json_path("config.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let new_install = !existing_path
-        .try_exists()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let new_install =
+        !crate::storage::contains("config.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // Load existing config or create default
     let mut cfg = if let Ok(existing_cfg) = load_config().await {
         existing_cfg
@@ -377,14 +392,7 @@ pub async fn save_setup_config(
     {
         return Ok(monitor_toggle_enable_rejected_response());
     }
-    if let Err(error) = save_setup_lists(channels, payload.selected_areas).await {
-        return Ok(invalid(format!(
-            "频道/分区保存失败：{error}；已有成功写入的条目会保留，重试不会重复添加"
-        )));
-    }
-
-    // Save config
-    crate::config::save_config(&mut cfg)
+    save_setup_bundle(&mut cfg, channels, payload.selected_areas)
         .await
         .map_err(config_save_status)?;
 
@@ -438,11 +446,8 @@ pub struct LoginStatusResponse {
 }
 
 pub async fn check_login_status() -> Result<Json<LoginStatusResponse>, StatusCode> {
-    let cookies_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("cookies.json");
-
-    let logged_in = cookies_path.exists();
+    let logged_in =
+        crate::storage::contains("cookies.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let message = if logged_in {
         "已登录".to_string()
     } else {

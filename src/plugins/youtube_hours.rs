@@ -114,6 +114,7 @@ struct State {
     path: Option<PathBuf>,
     saved_at: i64,
     dirty: bool,
+    saving: bool,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -124,21 +125,17 @@ fn load() -> State {
         .ok()
         .filter(|_| !cfg!(test))
         .map(|exe| exe.with_file_name(FILE_NAME));
-    let hours = path
-        .as_ref()
-        .and_then(|path| std::fs::read(path).ok())
-        .map(|bytes| {
-            serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                tracing::warn!("{} 无法解析，重新学习开播时段: {}", FILE_NAME, e);
-                Hours::default()
-            })
-        })
-        .unwrap_or_default();
+    let hours = if path.is_some() {
+        crate::storage::read_json(FILE_NAME).unwrap_or_default()
+    } else {
+        Hours::default()
+    };
     State {
         hours,
         path,
         saved_at: 0,
         dirty: false,
+        saving: false,
     }
 }
 
@@ -169,18 +166,29 @@ pub(crate) fn record(videos: &[YtVideo]) {
             state.dirty = true;
         }
         let due = now.timestamp() - state.saved_at >= SAVE_EVERY_SECS;
-        if !(state.dirty && due) {
+        if !state.dirty || !due || state.saving {
             return None;
         }
         let path = state.path.clone()?;
         let bytes = serde_json::to_vec(&state.hours).ok()?;
         state.dirty = false;
-        state.saved_at = now.timestamp();
+        state.saving = true;
         Some((path, bytes))
     });
-    if let Some((path, bytes)) = save {
+    if let Some((_path, bytes)) = save {
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = crate::config::write_file_atomic(&path, &bytes) {
+            let result = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(std::io::Error::other)
+                .and_then(|value| crate::storage::write_json(FILE_NAME, &value).map(|_| ()));
+            with_state(|state| {
+                state.saving = false;
+                if result.is_ok() {
+                    state.saved_at = now.timestamp();
+                } else {
+                    state.dirty = true;
+                }
+            });
+            if let Err(e) = result {
                 tracing::debug!("{} 保存失败: {}", FILE_NAME, e);
             }
         });

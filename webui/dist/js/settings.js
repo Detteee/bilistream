@@ -1,3 +1,4 @@
+import { initStorageControls, loadManagedStorage } from './storage.js';
 // settings.js — extracted from app.js
 
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
@@ -12,6 +13,7 @@ let configBaseline = null;
 let keywordsBaseline = null;
 let settingsLoadGeneration = 0;
 let settingsSaving = false;
+let secretRevision = 0;
 
 function initAntiCollisionControls() {
   document
@@ -33,6 +35,7 @@ function startKeyStatusRefresh() {
   }, KEY_STATUS_REFRESH_MS);
 }
 function initSystemSettingsActions() {
+  initStorageControls();
   startKeyStatusRefresh();
   document.getElementById('check-nico-session')?.addEventListener('click', checkNicoSession);
   document
@@ -91,6 +94,7 @@ function toggleAntiCollisionList() {
   section.classList.toggle('hidden', !checkbox.checked);
 }
 async function loadSystemConfig() {
+  void loadManagedStorage();
   if (settingsSaving) return;
   const generation = ++settingsLoadGeneration;
   configBaseline = null;
@@ -112,6 +116,12 @@ async function loadSystemConfig() {
     toggleAntiCollisionList(); // Show/hide anti-collision section based on checkbox
 
     // Load API keys
+    secretRevision = config.secret_revision || 0;
+    for (const [key, id] of [['holodex_api_key', 'holodex'], ['youtube_api_key', 'youtube'], ['riot_api_key', 'riot']]) {
+      const input = document.getElementById(id === 'youtube' ? 'config-youtube-api-key' : `config-${id}-key`);
+      input.placeholder = config[`${key}_configured`] ? '已保存，留空保留' : '填写 API Key';
+      setCheckboxChecked(`config-clear-${id}-key`, false);
+    }
     setInputValue('config-holodex-key', config.holodex_api_key || '');
     setInputValue('config-youtube-api-key', config.youtube_api_key || '');
     setInputValue('config-websub-callback-url', config.youtube_websub_callback_url || '');
@@ -133,15 +143,21 @@ async function loadSystemConfig() {
     setInputValue('config-yt-deno-path', (config.youtube && config.youtube.deno_path) || '');
 
     // Load proxy settings
-    setInputValue('config-yt-proxy', (config.youtube && config.youtube.proxy) || '');
-    setInputValue('config-tw-proxy', (config.twitch && config.twitch.proxy) || '');
+    setInputValue('config-yt-proxy', '');
+    setCheckboxChecked('config-clear-yt-proxy', false);
+    document.getElementById('config-yt-proxy').placeholder = config.youtube?.proxy_configured ? '已保存，留空保留' : 'http://127.0.0.1:7890';
+    setInputValue('config-tw-proxy', '');
+    setCheckboxChecked('config-clear-tw-proxy', false);
+    document.getElementById('config-tw-proxy').placeholder = config.twitch?.proxy_configured ? '已保存，留空保留' : 'http://127.0.0.1:7890';
     setInputValue('config-nc-user-session', '');
     setCheckboxChecked('config-nc-clear-session', false);
     setCheckboxChecked('config-nc-session-check', config.niconico?.session_check_enabled !== false);
     document.getElementById('config-nc-user-session').placeholder = config.niconico?.user_session_configured ? '已保存，留空保留' : '仅填写 user_session 的值';
     loadNicoSessionStatus();
     setInputValue('config-nc-cookies-file', (config.niconico && config.niconico.cookies_file) || '');
-    setInputValue('config-nc-proxy', (config.niconico && config.niconico.proxy) || '');
+    setInputValue('config-nc-proxy', '');
+    setCheckboxChecked('config-clear-nc-proxy', false);
+    document.getElementById('config-nc-proxy').placeholder = config.niconico?.proxy_configured ? '已保存，留空保留' : 'http://127.0.0.1:7890';
 
     loadClusterSettings(config.cluster || {});
 
@@ -168,20 +184,20 @@ function renderNicoSessionStatus(status) {
   const output = document.getElementById('niconico-session-status');
   if (!output) return;
   const time = status?.checked_at ? ` · ${new Date(status.checked_at).toLocaleString()}` : '';
-  output.textContent = (status?.message || '尚未检查') + time;
+  output.textContent = (status?.message || '尚未检测') + time;
   output.dataset.state = status?.state || 'unchecked';
 }
 async function loadNicoSessionStatus() {
   try {
     const result = await getJson('/api/niconico/session');
     if (result.success) renderNicoSessionStatus(result.data);
-  } catch (_) { renderNicoSessionStatus({ state: 'unavailable', message: '暂时无法读取会话检查状态' }); }
+  } catch (_) { renderNicoSessionStatus({ state: 'unavailable', message: '暂时无法读取可用性检测状态' }); }
 }
 async function checkNicoSession() {
   const button = document.getElementById('check-nico-session'); button.disabled = true;
   try {
     const result = await postJsonApi('/api/niconico/session/check', {});
-    if (!result.success) throw new Error(result.message || '无法检查会话');
+    if (!result.success) throw new Error(result.message || '无法检测可用性');
     renderNicoSessionStatus(result.data);
   } catch (error) { renderNicoSessionStatus({state:'unavailable', message:error.message}); }
   finally { button.disabled = false; }
@@ -501,14 +517,19 @@ function getCurrentConfig() {
     holodex_monitor_gate: !document.getElementById('holodex-monitor-gate-toggle')?.checked,
     enable_anti_collision: document.getElementById('config-anti-collision-checkbox').checked,
     holodex_api_key: document.getElementById('config-holodex-key').value.trim(),
+    clear_holodex_api_key: document.getElementById('config-clear-holodex-key').checked,
     youtube_api_key: document.getElementById('config-youtube-api-key').value.trim(),
+    clear_youtube_api_key: document.getElementById('config-clear-youtube-key').checked,
     youtube_websub_callback_url: document.getElementById('config-websub-callback-url').value.trim(),
     youtube_websub_port: readIntegerInput('config-websub-port', 3151),
     riot_api_key: document.getElementById('config-riot-key').value.trim(),
+    clear_riot_api_key: document.getElementById('config-clear-riot-key').checked,
     enable_lol_monitor: document.getElementById('config-lol-monitor-checkbox').checked,
     lol_monitor_interval: readIntegerInput('config-lol-interval', 1),
     youtube_proxy: document.getElementById('config-yt-proxy').value.trim(),
+    clear_youtube_proxy: document.getElementById('config-clear-yt-proxy').checked,
     twitch_proxy: document.getElementById('config-tw-proxy').value.trim(),
+    clear_twitch_proxy: document.getElementById('config-clear-tw-proxy').checked,
     twitch_proxy_region: document.getElementById('config-tw-region').value,
     anti_collision_list: window.currentAntiCollisionList || {},
     youtube_cookies_from_browser: document.getElementById('config-yt-cookies-browser').value.trim(),
@@ -519,6 +540,7 @@ function getCurrentConfig() {
     niconico_session_check_enabled: document.getElementById('config-nc-session-check').checked,
     niconico_cookies_file: document.getElementById('config-nc-cookies-file').value.trim(),
     niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
+    clear_niconico_proxy: document.getElementById('config-clear-nc-proxy').checked,
     cluster: getClusterConfigFromForm()
   };
 }
@@ -535,6 +557,7 @@ async function saveSystemConfig() {
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
       if (patch.cluster) patch.expected.cluster = getClusterConfigBaseline();
+      patch.expected_secret_revision = secretRevision;
       const result = await postJsonApi('/api/config', patch);
       if (!result.success) throw new Error(result.message || '未知错误');
       if (patch.cluster) acceptClusterConfigBaseline(config.cluster);
@@ -550,6 +573,14 @@ async function saveSystemConfig() {
         }
       }
       const saved = await reloadServerConfig();
+      secretRevision = saved?.secret_revision || 0;
+      for (const [key, id, field] of [['holodex_api_key', 'holodex', 'config-holodex-key'], ['youtube_api_key', 'youtube', 'config-youtube-api-key'], ['riot_api_key', 'riot', 'config-riot-key']]) {
+        const input = document.getElementById(field);
+        if (key in patch && input.value.trim() === config[key]) { input.value = ''; configBaseline[key] = ''; }
+        input.placeholder = saved?.[`${key}_configured`] ? '已保存，留空保留' : '填写 API Key';
+        if (patch[`clear_${key}`]) { setCheckboxChecked(`config-clear-${id}-key`, false); configBaseline[`clear_${key}`] = false; }
+      }
+
       document.getElementById('config-nc-user-session').placeholder = saved?.niconico?.user_session_configured ? '已保存，留空保留' : '仅填写 user_session 的值';
       loadNicoSessionStatus();
       if (['youtube_api_key', 'youtube_rss_enabled', 'youtube_websub_callback_url', 'youtube_websub_port'].some(key => key in patch)) {

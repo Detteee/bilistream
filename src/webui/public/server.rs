@@ -94,13 +94,7 @@ fn public_json_response(
 /// Area ids, names and aliases: the page needs the aliases to build the
 /// danmaku command. The banned keyword lists in the same file stay private.
 async fn public_areas() -> Response {
-    let Ok(exe) = std::env::current_exe() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "areas unavailable").into_response();
-    };
-    let Ok(content) = tokio::fs::read_to_string(exe.with_file_name("areas.json")).await else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "areas unavailable").into_response();
-    };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
+    let Ok(parsed) = crate::storage::read_json::<serde_json::Value>("areas.json") else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "areas unavailable").into_response();
     };
 

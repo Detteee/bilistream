@@ -18,6 +18,7 @@ struct LaunchArgs {
 #[derive(Debug)]
 enum ParseOutcome {
     Launch(LaunchArgs),
+    ExportLegacy(std::path::PathBuf),
     Help,
     Version,
 }
@@ -45,6 +46,7 @@ Options:\n\
   --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
+  --export-legacy DIR         Export plaintext for downgrade and exit (stop service first)\n\
   -h, --help                  Print help\n\
   -V, --version               Print version",
         env!("CARGO_PKG_VERSION")
@@ -85,6 +87,12 @@ fn parse_launch_args_with(
     env_ffmpeg: Option<String>,
     mut tray: bool,
 ) -> Result<ParseOutcome, String> {
+    if argv.get(1).is_some_and(|arg| arg == "--export-legacy") {
+        if argv.len() != 3 || argv[2].trim().is_empty() {
+            return Err("usage: bilistream --export-legacy NEW_DIRECTORY".into());
+        }
+        return Ok(ParseOutcome::ExportLegacy(argv[2].clone().into()));
+    }
     let mut bind = env_bind.unwrap_or_else(|| "127.0.0.1".to_string());
     let mut password = env_password;
     let mut port: u16 = match env_port {
@@ -319,41 +327,20 @@ impl Drop for BackendRuntime {
     }
 }
 
-fn config_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
-    let exe = std::env::current_exe()?;
-    Ok((
-        exe.with_file_name("config.json"),
-        exe.with_file_name("cookies.json"),
-    ))
-}
-
 async fn wait_until_config_ready() {
-    let Ok((config_path, cookies_path)) = config_paths() else {
-        return;
-    };
-
-    if !config_path.exists() {
-        tracing::warn!("⚠️ 配置文件不存在，等待用户配置...");
-        tracing::info!("💡 请访问 Web UI 进行配置");
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            if config_path.exists() {
-                tracing::info!("✅ 检测到配置文件，开始监控");
-                break;
-            }
+    loop {
+        let ready = tokio::task::spawn_blocking(|| {
+            let store = crate::storage::global()?;
+            Ok::<_, std::io::Error>(
+                store.revision("config.json")?.is_some()
+                    && store.revision("cookies.json")?.is_some(),
+            )
+        })
+        .await;
+        if matches!(ready, Ok(Ok(true))) {
+            return;
         }
-    }
-
-    if !cookies_path.exists() {
-        tracing::warn!("⚠️ 登录凭证不存在，等待用户登录...");
-        tracing::info!("💡 请访问 Web UI 进行登录");
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            if cookies_path.exists() {
-                tracing::info!("✅ 检测到登录凭证，开始监控");
-                break;
-            }
-        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -484,6 +471,14 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let launch = match parse_launch_args(&args) {
+        Ok(ParseOutcome::ExportLegacy(destination)) => {
+            tokio::task::spawn_blocking(move || {
+                crate::storage::global()?.export_legacy(&destination)
+            })
+            .await??;
+            println!("旧版数据已导出（明文），请妥善保管并在回退完成后删除。未启动监控。");
+            return Ok(());
+        }
         Ok(ParseOutcome::Help) => {
             print_help();
             return Ok(());
@@ -506,8 +501,17 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     init_logger_with_capture();
     apply_webui_listen(&launch.bind, launch.password.clone())?;
 
-    let (config_path, cookies_path) = config_paths()?;
-    let is_first_run = !config_path.exists() || !cookies_path.exists();
+    let readiness = tokio::task::spawn_blocking(|| -> std::io::Result<bool> {
+        Ok(!crate::storage::contains("config.json")? || !crate::storage::contains("cookies.json")?)
+    })
+    .await?;
+    let is_first_run = match readiness {
+        Ok(first) => first,
+        Err(error) => {
+            tracing::error!("数据存储无法解锁: {error}");
+            false
+        }
+    };
 
     if launch.tray {
         run_tray_app(launch.port, &launch.ffmpeg_log_level, is_first_run, state).await

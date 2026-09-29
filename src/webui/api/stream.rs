@@ -446,33 +446,15 @@ pub async fn update_channel(
 }
 
 pub async fn get_channels() -> Result<Json<serde_json::Value>, StatusCode> {
-    let channels_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("channels.json");
-
-    let content = tokio::fs::read_to_string(channels_path)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let channels: serde_json::Value =
-        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(channels))
+    crate::storage::read_json("channels.json")
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub async fn get_areas() -> Result<Json<serde_json::Value>, StatusCode> {
-    let areas_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("areas.json");
-
-    let content = tokio::fs::read_to_string(areas_path)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let areas: serde_json::Value =
-        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(areas))
+    crate::storage::read_json("areas.json")
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[derive(Serialize)]
@@ -482,16 +464,8 @@ pub struct BannedKeywordsResponse {
 }
 
 pub async fn get_banned_keywords() -> Result<Json<BannedKeywordsResponse>, StatusCode> {
-    let areas_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("areas.json");
-
-    let content = tokio::fs::read_to_string(areas_path)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let data: serde_json::Value =
-        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        crate::storage::read_json("areas.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let danmaku_banned = data["banned_keywords"]
         .as_array()

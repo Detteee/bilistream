@@ -82,7 +82,7 @@ pub(crate) fn status(cfg: &Config) -> SessionStatus {
     cached(identity(&session, cfg.niconico.proxy.as_deref()))
         .map(|(status, _)| status)
         .unwrap_or_else(|| {
-            SessionStatus::new(SessionState::Unchecked, "尚未检查；检查不会延长会话有效期")
+            SessionStatus::new(SessionState::Unchecked, "尚未检测；检测不会延长会话有效期")
         })
 }
 
@@ -103,7 +103,7 @@ fn classify(status: reqwest::StatusCode, body: Option<&serde_json::Value>) -> Se
     } else if status.is_success()
         && body.is_some_and(|value| value["meta"]["status"] == 200 && value["data"].is_object())
     {
-        SessionStatus::new(SessionState::Valid, "会话仍被接受；本次检查不会续期")
+        SessionStatus::new(SessionState::Valid, "会话仍被接受；本次检测不会续期")
     } else {
         SessionStatus::new(
             SessionState::Unavailable,

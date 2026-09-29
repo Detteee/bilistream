@@ -1,8 +1,8 @@
 # Niconico user_session
 
-在系统设置 → 平台设置中填写 `user_session` Cookie 的值，保存后可点击「检查已保存会话」。输入框不会回显已保存的值；留空保留。清除选项会同时清除直接配置和旧文件路径。
+在系统设置 → 平台设置中填写 `user_session` Cookie 的值，保存后可点击「检测可用性」。输入框不会回显已保存的值；留空保留。清除选项会同时清除直接配置和旧文件路径。
 
-Enter only the `user_session` value; a full cookie export is unnecessary. If you previously configured a Netscape cookie file, it remains supported. A directly entered value takes precedence.
+Enter only the `user_session` value; a full cookie export is unnecessary. Previously configured Netscape cookies are imported into encrypted storage. A directly entered value takes precedence.
 
 ![Mock Niconico session settings](images/niconico-session.png)
 
@@ -19,4 +19,4 @@ Changing the credential triggers a new check; restarting the application checks 
 
 **Checks do not refresh or extend `user_session`.** They provide early warning for infrequent rebroadcasts; successful validation does not guarantee the next stream is accessible or that the session cannot expire later. Login elsewhere or logout can invalidate it independently.
 
-In multi-server mode, configure the session separately on each computer that restreams Niconico. Keep the saved configuration private, as with other login credentials.
+In multi-server mode, configure the session separately on each computer that restreams Niconico. Login data stays encrypted on that node and is not included in cluster synchronization.

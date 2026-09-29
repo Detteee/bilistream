@@ -73,7 +73,7 @@ try {
   await waitFor("document.getElementById('youtube-key-status').textContent.includes('已关闭')");
   await setControls(false, false);
   await command('browsingContext.reload', { context, wait: 'complete' });
-  await waitFor("window.configData?.youtube_api_key && document.getElementById('config-youtube-rss-checkbox').checked===false");
+  await waitFor("window.configData?.youtube_api_key_configured && document.getElementById('config-youtube-rss-checkbox').checked===false");
   assert.equal(await evaluate("document.getElementById('priority-channel-card').classList.contains('hidden')"), true);
   assert.equal(await evaluate("window.configData.priority_channel.enabled && window.configData.priority_channel.auto_restart"), true);
   await setControls(true, true);
@@ -99,6 +99,34 @@ try {
   await new Promise(resolve => setTimeout(resolve, 300));
   await mkdir(join(root, 'docs/images'), { recursive: true });
   await capture(join(root, 'docs/images/settings.png'));
+  assert.equal(await evaluate("window.configData.youtube_api_key"), '');
+  await waitFor("document.getElementById('yt-cookie-status').textContent.includes('尚未')");
+  const cookieFixture = '# Netscape HTTP Cookie File\n.example.invalid\tTRUE\t/\tTRUE\t0\tsession\tsynthetic-only\n';
+  await evaluate(`document.getElementById('yt-cookie-paste').value=${JSON.stringify(cookieFixture)}; document.getElementById('yt-cookie-save').click()`);
+  await waitFor("document.getElementById('yt-cookie-status').textContent.includes('1 条') && !document.getElementById('yt-cookie-save').disabled");
+  assert.equal(await evaluate("document.getElementById('yt-cookie-paste').value"), '');
+  await evaluate("document.getElementById('yt-cookie-status').scrollIntoView({block:'center'})");
+  await waitFor("document.querySelectorAll('.notification').length===0");
+  await capture(join(root, 'docs/images/youtube-cookies.png'));
+  await evaluate("document.getElementById('yt-cookie-clear').click()");
+  await waitFor("document.getElementById('yt-cookie-status').textContent.includes('尚未') && !document.getElementById('yt-cookie-clear').disabled");
+  assert.equal(await evaluate("document.getElementById('config-player-filter-group').checkVisibility()"), false);
+  await evaluate("document.getElementById('config-lol-monitor-checkbox').click(); document.getElementById('config-player-filter-group').open=true");
+  assert.equal(await evaluate("document.getElementById('config-player-filter').checkVisibility()"), true);
+  assert.equal(await evaluate("document.getElementById('config-player-filter').closest('.settings-lol')!==null"), true);
+  await evaluate("document.getElementById('config-player-filter').value='synthetic filter'; document.getElementById('config-lol-monitor-checkbox').click()");
+  assert.equal(await evaluate("document.getElementById('config-player-filter-group').checkVisibility()"), false);
+  await evaluate("document.getElementById('config-lol-monitor-checkbox').click()");
+  assert.equal(await evaluate("document.getElementById('config-player-filter').value"), 'synthetic filter');
+  await evaluate("document.getElementById('save-player-filter').click()");
+  await waitFor("!document.getElementById('save-player-filter').disabled");
+  assert.equal(await evaluate("fetch('/api/player-filter').then(r=>r.json()).then(r=>r.data.content)"), 'synthetic filter');
+  await evaluate("document.getElementById('config-lol-monitor-checkbox').click(); document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled");
+  await evaluate("document.getElementById('storage-state').scrollIntoView({block:'center'})");
+  await waitFor("document.querySelectorAll('.notification').length===0");
+  await capture(join(root, 'docs/images/data-backup.png'));
+
   await evaluate("document.getElementById('public-status-settings').scrollIntoView({block:'center'})");
   assert.equal(await evaluate("[...document.getElementById('config-public-status-node').options].some(option => option.textContent==='本机')"), true);
   assert.equal(await evaluate("window.configData.cluster.enabled"), false);
@@ -208,7 +236,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `mobile ${view} overflow`);
   }
-  console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only session, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Screenshots updated.');
+  console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Screenshots updated.');
   await command('session.end', {});
 } finally {
   ws?.close(); browser.kill(); server.closeAllConnections(); server.close();

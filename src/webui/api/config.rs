@@ -11,7 +11,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
     let (niconico_channel_id, niconico_channel_name) =
         crate::plugins::niconico_channel_identity(&cfg.niconico);
 
-    json!({
+    let mut response = json!({
         "interval": cfg.interval,
         "auto_cover": cfg.auto_cover,
         "show_priority_channel": cfg.show_priority_channel,
@@ -21,15 +21,15 @@ fn config_response(cfg: &Config) -> serde_json::Value {
         "enable_anti_collision": cfg.enable_anti_collision,
         "enable_lol_monitor": cfg.enable_lol_monitor,
         "lol_monitor_interval": cfg.lol_monitor_interval,
-        "riot_api_key": cfg.riot_api_key.clone().unwrap_or_default(),
-        "holodex_api_key": cfg.holodex_api_key.clone().unwrap_or_default(),
+        "riot_api_key": "",
+        "holodex_api_key": "",
         "holodex_jwt_configured": cfg
             .holodex_jwt
             .as_ref()
             .is_some_and(|j| !j.is_empty()),
         "holodex_skip_jwt_verify": cfg.holodex_skip_jwt_verify,
         "holodex_monitor_gate": cfg.holodex_monitor_gate,
-        "youtube_api_key": cfg.youtube_api_key.clone().unwrap_or_default(),
+        "youtube_api_key": "",
         "youtube_websub_callback_url": cfg.youtube_websub_callback_url.clone().unwrap_or_default(),
         "youtube_websub_port": cfg.youtube_websub_port,
         "anti_collision_list": cfg.anti_collision_list.clone(),
@@ -45,7 +45,8 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_name": cfg.youtube.channel_name,
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
-            "proxy": cfg.youtube.proxy,
+            "proxy": "",
+            "proxy_configured": cfg.youtube.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "cookies_file": cfg.youtube.cookies_file,
             "cookies_from_browser": cfg.youtube.cookies_from_browser,
             "deno_path": cfg.youtube.deno_path,
@@ -60,7 +61,8 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
-            "proxy": cfg.twitch.proxy,
+            "proxy": "",
+            "proxy_configured": cfg.twitch.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.twitch.ffmpeg_cache.enabled,
                 "latency_secs": cfg.twitch.ffmpeg_cache.latency_secs,
@@ -76,7 +78,8 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "cookies_file": cfg.niconico.cookies_file,
             "user_session_configured": cfg.niconico.user_session.as_ref().is_some_and(|s| !s.is_empty()),
             "session_check_enabled": cfg.niconico.session_check_enabled,
-            "proxy": cfg.niconico.proxy,
+            "proxy": "",
+            "proxy_configured": cfg.niconico.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.niconico.ffmpeg_cache.enabled,
                 "latency_secs": cfg.niconico.ffmpeg_cache.latency_secs,
@@ -90,11 +93,23 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "default_area": cfg.priority_channel.default_area,
             "auto_restart": cfg.priority_channel.auto_restart,
         }
-    })
+    });
+    response["riot_api_key_configured"] =
+        json!(cfg.riot_api_key.as_ref().is_some_and(|s| !s.is_empty()));
+    response["holodex_api_key_configured"] =
+        json!(cfg.holodex_api_key.as_ref().is_some_and(|s| !s.is_empty()));
+    response["youtube_api_key_configured"] = json!(!cfg.youtube_api_keys().is_empty());
+    response["secret_revision"] = json!(crate::config::config_data_revision(cfg));
+    response
 }
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct UpdateConfigRequest {
+    #[serde(skip_serializing)]
+    expected_secret_revision: Option<u64>,
+    clear_riot_api_key: Option<bool>,
+    clear_holodex_api_key: Option<bool>,
+    clear_youtube_api_key: Option<bool>,
     #[serde(skip_serializing)]
     expected: Option<HashMap<String, serde_json::Value>>,
     interval: Option<u64>,
@@ -116,7 +131,9 @@ pub struct UpdateConfigRequest {
     youtube_websub_port: Option<u16>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
+    clear_twitch_proxy: Option<bool>,
     youtube_proxy: Option<String>,
+    clear_youtube_proxy: Option<bool>,
     youtube_deno_path: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
     enable_danmaku_command: Option<bool>,
@@ -129,6 +146,7 @@ pub struct UpdateConfigRequest {
     clear_niconico_user_session: Option<bool>,
     niconico_session_check_enabled: Option<bool>,
     niconico_proxy: Option<String>,
+    clear_niconico_proxy: Option<bool>,
     cluster: Option<ClusterConfig>,
 }
 
@@ -171,14 +189,19 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "holodex_monitor_gate": cfg.holodex_monitor_gate,
         "enable_lol_monitor": cfg.enable_lol_monitor,
         "lol_monitor_interval": cfg.lol_monitor_interval.unwrap_or(1),
-        "riot_api_key": cfg.riot_api_key.as_deref().unwrap_or_default().trim(),
-        "holodex_api_key": cfg.holodex_api_key.as_deref().unwrap_or_default().trim(),
-        "youtube_api_key": cfg.youtube_api_key.as_deref().unwrap_or_default().trim(),
+        "riot_api_key": "",
+        "clear_riot_api_key": false,
+        "holodex_api_key": "",
+        "clear_holodex_api_key": false,
+        "youtube_api_key": "",
+        "clear_youtube_api_key": false,
         "youtube_websub_callback_url": cfg.youtube_websub_callback_url.as_deref().unwrap_or_default().trim(),
         "youtube_websub_port": cfg.youtube_websub_port,
         "anti_collision_list": cfg.anti_collision_list,
-        "youtube_proxy": cfg.youtube.proxy.as_deref().unwrap_or_default().trim(),
-        "twitch_proxy": cfg.twitch.proxy.as_deref().unwrap_or_default().trim(),
+        "youtube_proxy": "",
+        "clear_youtube_proxy": false,
+        "twitch_proxy": "",
+        "clear_twitch_proxy": false,
         "twitch_proxy_region": cfg.twitch.proxy_region,
         "youtube_cookies_from_browser": cfg.youtube.cookies_from_browser.as_deref().unwrap_or_default().trim(),
         "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
@@ -187,7 +210,8 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "niconico_user_session": "", // write-only: never echo a stored credential
         "clear_niconico_user_session": false,
         "niconico_session_check_enabled": cfg.niconico.session_check_enabled,
-        "niconico_proxy": cfg.niconico.proxy.as_deref().unwrap_or_default().trim(),
+        "niconico_proxy": "",
+        "clear_niconico_proxy": false,
         "cluster": cfg.cluster,
     })
 }
@@ -218,7 +242,7 @@ fn cluster_and_niconico_edits_validate_against_the_loaded_configuration() {
     let mut cfg = crate::cluster::tests::test_config("local", 0);
     cfg.niconico.proxy = Some(" http://proxy ".into());
     let current = config_form_values(&cfg);
-    assert_eq!(current["niconico_proxy"], "http://proxy");
+    assert_eq!(current["niconico_proxy"], "");
     assert_eq!(current["niconico_cookies_file"], "");
     let expected = HashMap::from([("cluster".into(), current["cluster"].clone())]);
     let patch = json!({"cluster": {"priority": 20}});
@@ -296,6 +320,33 @@ pub(crate) fn monitor_reload_needed(previous: &Config, current: &Config) -> bool
         || niconico_monitor_reload_needed(previous, current)
 }
 
+static SETTINGS_PEER_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn schedule_settings_sync(old_cluster: ClusterConfig, monitored: bool, membership: bool) -> String {
+    if !monitored && !membership {
+        return String::new();
+    }
+    tokio::spawn(async move {
+        let _guard = SETTINGS_PEER_SYNC.lock().await;
+        // Read after queueing so a delayed job never republishes an obsolete
+        // local snapshot over a more recent edit from another browser tab.
+        let Ok(cfg) = load_config().await else {
+            return;
+        };
+        if monitored && cfg.cluster.enabled && cfg.cluster.sync_monitored_channels {
+            if let Err(error) = push_monitored_config_to_peers(&cfg).await {
+                tracing::warn!("节点配置同步失败: {error}");
+            }
+        }
+        if membership {
+            if let Err(error) = propagate_cluster_membership(&old_cluster, &cfg.cluster).await {
+                tracing::warn!("节点列表同步失败: {error}");
+            }
+        }
+    });
+    "；节点同步在后台进行".into()
+}
+
 pub async fn update_config(
     Json(payload): Json<UpdateConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
@@ -303,6 +354,74 @@ pub async fn update_config(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let secrets_changed = payload.riot_api_key.is_some()
+        || payload.holodex_api_key.is_some()
+        || payload.youtube_api_key.is_some()
+        || payload.clear_riot_api_key == Some(true)
+        || payload.clear_holodex_api_key == Some(true)
+        || payload.clear_youtube_api_key == Some(true)
+        || payload.niconico_user_session.is_some()
+        || payload.clear_niconico_user_session == Some(true)
+        || payload.youtube_proxy.is_some()
+        || payload.clear_youtube_proxy == Some(true)
+        || payload.twitch_proxy.is_some()
+        || payload.clear_twitch_proxy == Some(true)
+        || payload.niconico_proxy.is_some()
+        || payload.clear_niconico_proxy == Some(true);
+    if secrets_changed
+        && payload
+            .expected_secret_revision
+            .is_some_and(|revision| revision != crate::config::config_data_revision(&cfg))
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    let legacy_imports = [
+        ("cookies.txt", payload.youtube_cookies_file.clone()),
+        (
+            "niconico_cookies.txt",
+            payload
+                .niconico_cookies_file
+                .clone()
+                .filter(|_| payload.clear_niconico_user_session != Some(true)),
+        ),
+    ];
+    let clear_nico = payload.clear_niconico_user_session == Some(true);
+    let document_edits = tokio::task::spawn_blocking(
+        move || -> std::io::Result<Vec<(&'static str, serde_json::Value)>> {
+            let mut edits = Vec::new();
+            for (name, path) in legacy_imports {
+                if let Some(path) = path.filter(|s| !s.trim().is_empty()) {
+                    let path = std::path::PathBuf::from(path);
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        crate::storage::paths::executable_dir()?.join(path)
+                    };
+                    if std::fs::metadata(&path)?.len()
+                        > crate::plugins::youtube_cookies::MAX_COOKIE_BYTES as u64
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "Cookie 文件过大",
+                        ));
+                    }
+                    let text = std::fs::read_to_string(path)?;
+                    crate::plugins::youtube_cookies::validate_netscape(&text)?;
+                    edits.push((name, serde_json::Value::String(text)));
+                }
+            }
+            if clear_nico {
+                edits.push((
+                    "niconico_cookies.txt",
+                    serde_json::Value::String(String::new()),
+                ));
+            }
+            Ok(edits)
+        },
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
     let previous_cfg = cfg.clone();
     let old_cluster = cfg.cluster.clone();
     let old_monitored_config_version = monitored_config_version(&cfg);
@@ -395,23 +514,43 @@ pub async fn update_config(
     if let Some(lol_monitor_interval) = payload.lol_monitor_interval {
         cfg.lol_monitor_interval = Some(lol_monitor_interval);
     }
-    if let Some(riot_api_key) = payload.riot_api_key {
-        if !riot_api_key.is_empty() {
-            cfg.riot_api_key = Some(riot_api_key);
-        } else {
-            cfg.riot_api_key = None;
+    for (slot, input, clear) in [
+        (
+            &mut cfg.youtube.proxy,
+            payload.youtube_proxy,
+            payload.clear_youtube_proxy,
+        ),
+        (
+            &mut cfg.twitch.proxy,
+            payload.twitch_proxy,
+            payload.clear_twitch_proxy,
+        ),
+        (
+            &mut cfg.niconico.proxy,
+            payload.niconico_proxy,
+            payload.clear_niconico_proxy,
+        ),
+        (
+            &mut cfg.riot_api_key,
+            payload.riot_api_key,
+            payload.clear_riot_api_key,
+        ),
+        (
+            &mut cfg.holodex_api_key,
+            payload.holodex_api_key,
+            payload.clear_holodex_api_key,
+        ),
+        (
+            &mut cfg.youtube_api_key,
+            payload.youtube_api_key,
+            payload.clear_youtube_api_key,
+        ),
+    ] {
+        if clear == Some(true) {
+            *slot = None;
+        } else if let Some(value) = input.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
+            *slot = Some(value);
         }
-    }
-    if let Some(holodex_api_key) = payload.holodex_api_key {
-        if !holodex_api_key.is_empty() {
-            cfg.holodex_api_key = Some(holodex_api_key);
-        } else {
-            cfg.holodex_api_key = None;
-        }
-    }
-    if let Some(youtube_api_key) = payload.youtube_api_key {
-        let key = youtube_api_key.trim();
-        cfg.youtube_api_key = (!key.is_empty()).then(|| key.to_string());
     }
     if let Some(url) = payload.youtube_websub_callback_url {
         let url = url.trim();
@@ -453,20 +592,7 @@ pub async fn update_config(
     if let Some(twitch_proxy_region) = payload.twitch_proxy_region {
         cfg.twitch.proxy_region = twitch_proxy_region;
     }
-    if let Some(twitch_proxy) = payload.twitch_proxy {
-        cfg.twitch.proxy = if twitch_proxy.is_empty() {
-            None
-        } else {
-            Some(twitch_proxy)
-        };
-    }
-    if let Some(youtube_proxy) = payload.youtube_proxy {
-        cfg.youtube.proxy = if youtube_proxy.is_empty() {
-            None
-        } else {
-            Some(youtube_proxy)
-        };
-    }
+
     if let Some(enable_danmaku_command) = payload.enable_danmaku_command {
         cfg.bililive.enable_danmaku_command = enable_danmaku_command;
     }
@@ -521,13 +647,7 @@ pub async fn update_config(
             Some(niconico_cookies_file)
         };
     }
-    if let Some(niconico_proxy) = payload.niconico_proxy {
-        cfg.niconico.proxy = if niconico_proxy.is_empty() {
-            None
-        } else {
-            Some(niconico_proxy)
-        };
-    }
+
     if let Some(youtube_deno_path) = payload.youtube_deno_path {
         cfg.youtube.deno_path = if youtube_deno_path.is_empty() {
             None
@@ -539,10 +659,21 @@ pub async fn update_config(
         cfg.cluster = cluster;
     }
 
-    // Save config
-    crate::config::save_config(&mut cfg)
+    // Commit imported credentials and settings together.
+    if document_edits.is_empty() {
+        crate::config::save_config(&mut cfg)
+            .await
+            .map_err(config_save_status)?;
+    } else {
+        crate::config::save_config_with_transaction(&mut cfg, move |tx| {
+            for (name, value) in document_edits {
+                tx.write(name, value)?;
+            }
+            Ok(())
+        })
         .await
         .map_err(config_save_status)?;
+    }
 
     if let Some(enabled) = danmaku_command_changed {
         crate::cluster::apply_danmaku_command_runtime_state(enabled).await;
@@ -572,30 +703,18 @@ pub async fn update_config(
     } else {
         String::new()
     };
-    let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
-        sync_monitored_config_after_change(&cfg).await
-    } else {
-        String::new()
-    };
-    let membership_message = if cluster_changed {
-        match propagate_cluster_membership(&old_cluster, &cfg.cluster).await {
-            Ok(count) => format!("；节点配置已同步到 {} 个节点", count),
-            Err(e) => {
-                tracing::warn!("Cluster membership sync failed: {}", e);
-                format!("；节点配置同步失败: {}", e)
-            }
-        }
-    } else {
-        String::new()
-    };
+    let sync_message = schedule_settings_sync(
+        old_cluster,
+        cfg.cluster.enabled
+            && cfg.cluster.sync_monitored_channels
+            && old_monitored_config_version != monitored_config_version(&cfg),
+        cluster_changed,
+    );
 
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some(format!(
-            "配置已更新{}{}{}",
-            sync_message, toggle_sync_message, membership_message
-        )),
+        message: Some(format!("配置已更新{}{}", sync_message, toggle_sync_message)),
     })
 }
 
@@ -674,7 +793,11 @@ pub async fn update_priority_channel(
 
     let priority_toggle_changed = payload.enabled.is_some() || payload.auto_restart.is_some();
     let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
-        sync_monitored_config_after_change(&cfg).await
+        schedule_settings_sync(
+            cfg.cluster.clone(),
+            cfg.cluster.enabled && cfg.cluster.sync_monitored_channels,
+            false,
+        )
     } else {
         String::new()
     };
@@ -702,11 +825,22 @@ mod tests {
     fn session_value_is_write_only_in_config_responses() {
         let mut cfg = crate::cluster::tests::test_config("local", 0);
         cfg.niconico.user_session = Some("private-session-test-value".into());
+        cfg.youtube.proxy = Some("http://user:private-proxy-password@proxy.invalid:8080".into());
+        cfg.twitch.proxy = cfg.youtube.proxy.clone();
+        cfg.niconico.proxy = cfg.youtube.proxy.clone();
         let response = config_response(&cfg);
         assert_eq!(response["niconico"]["user_session_configured"], true);
         assert!(response["niconico"].get("user_session").is_none());
         assert!(!response.to_string().contains("private-session-test-value"));
         assert_eq!(config_form_values(&cfg)["niconico_user_session"], "");
+        for platform in ["youtube", "twitch", "niconico"] {
+            assert_eq!(response[platform]["proxy"], "");
+            assert_eq!(response[platform]["proxy_configured"], true);
+        }
+        assert!(!response.to_string().contains("private-proxy-password"));
+        assert!(!config_form_values(&cfg)
+            .to_string()
+            .contains("private-proxy-password"));
     }
 
     #[test]

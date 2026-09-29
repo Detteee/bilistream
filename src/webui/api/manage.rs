@@ -3,6 +3,8 @@ use super::*;
 // Data structures for area and channel management
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Area {
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
     pub id: u32,
     pub name: String,
     pub title_keywords: Vec<String>,
@@ -11,6 +13,8 @@ pub struct Area {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AreasData {
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub banned_keywords: Vec<String>,
     #[serde(default)]
@@ -20,6 +24,8 @@ pub struct AreasData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub niconico_name: Option<String>,
@@ -31,6 +37,8 @@ pub struct Channel {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelsData {
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
     pub channels: Vec<Channel>,
 }
 
@@ -59,10 +67,7 @@ pub(crate) fn managed_json_path(file_name: &str) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn read_managed_json<T: DeserializeOwned>(file_name: &str) -> Result<T, String> {
-    let path = managed_json_path(file_name)?;
-    let data = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
-    serde_json::from_str::<T>(&data).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
+    crate::storage::read_json(file_name).map_err(|e| e.to_string())
 }
 
 pub(crate) async fn mutate_managed_json<T, F>(file_name: &str, edit: F) -> Result<(), String>
@@ -167,6 +172,7 @@ pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<(
             return Err(format!("Area with ID {} already exists", payload.id));
         }
         data.areas.push(Area {
+            extra: HashMap::new(),
             id: payload.id,
             name: payload.name,
             title_keywords: payload.title_keywords,
@@ -235,6 +241,7 @@ pub async fn add_channel(Json(mut payload): Json<AddChannelRequest>) -> Json<Api
             return Err(format!("Channel '{}' already exists", payload.name));
         }
         data.channels.push(Channel {
+            extra: HashMap::new(),
             name: payload.name,
             aliases: payload.aliases,
             niconico_name: nonempty_optional(payload.niconico_name),

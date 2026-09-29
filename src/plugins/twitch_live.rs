@@ -166,22 +166,21 @@ pub(crate) fn wake() {
 
 /// The roster's Twitch logins that also name a YouTube channel.
 async fn roster_logins() -> Vec<RosterLogin> {
-    let Some(path) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("channels.json")))
-    else {
-        return Vec::new();
-    };
-    match tokio::fs::read_to_string(path).await {
-        Ok(content) => parse_roster(&content),
+    match crate::storage::read_json::<serde_json::Value>("channels.json") {
+        Ok(json) => roster_from_value(&json),
         Err(_) => Vec::new(),
     }
 }
 
+#[cfg(test)]
 fn parse_roster(content: &str) -> Vec<RosterLogin> {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
         return Vec::new();
     };
+    roster_from_value(&json)
+}
+
+fn roster_from_value(json: &serde_json::Value) -> Vec<RosterLogin> {
     let mut seen = HashSet::new();
     json.get("channels")
         .and_then(|v| v.as_array())

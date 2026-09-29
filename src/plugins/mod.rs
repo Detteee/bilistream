@@ -16,6 +16,7 @@ pub mod utils;
 pub mod wbi;
 pub mod youtube;
 pub(crate) mod youtube_channel;
+pub mod youtube_cookies;
 pub mod youtube_data;
 pub mod youtube_discovery;
 pub mod youtube_hours;
