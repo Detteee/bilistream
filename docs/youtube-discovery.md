@@ -17,7 +17,7 @@ Keep multi-server mode off. Configure a YouTube Data API key for confirmed live/
 | No usable quota | API calls obey the exhausted/rejected key state and reserved budget. Direct source checks and configured Holodex remain separate paths. |
 | yt-dlp 兜底 on | Direct YouTube checks each monitor cycle. Off uses the index when available, with a periodic safety probe. |
 
-RSS and pushes carry video IDs, not authoritative live status. `videos.list` classifies them; yt-dlp/streamlink still verifies a playable source before an automatic priority switch. Uploads polling reserves the actual target deterministically when a priority channel is monitored too.
+RSS and WebSub find potential streams; the YouTube Data API checks their live status. Automatic priority switching waits until the stream is playable.
 
 Each usable key has a 9,000-unit application budget per Pacific day. Protected work and target checks reserve quota before roster polling. Polling cadence also adapts to learned go-live hours and remaining quota. RSS has no API request quota cost, but confirming discovered IDs does.
 
@@ -25,8 +25,8 @@ Each usable key has a 9,000-unit application budget per Pacific day. Protected w
 
 When the cluster has a selected public-status node with usable keys, that node supplies the YouTube index. Other nodes fetch its answers instead of making duplicate discovery calls. Configure RSS, keys and WebSub on the index node; these settings are node-local.
 
-Only the selected index node subscribes to WebSub. Startup checks both the current configuration and the settled role; a stale previous role cannot grant permission after reassignment. The subscriber verifies its callback listener is ready before contacting the hub and retries a failed/exited listener.
+Only the selected index node subscribes to WebSub. Check its callback address and listener port if subscriptions fail.
 
 When the index is stale, unavailable or cannot spend keys, nodes fall back to local answers using their own configuration. Clustered fallback nodes remain unsubscribed to WebSub to avoid duplicate push confirmation costs; RSS/uploads/Holodex cover the gap. With the cluster disabled, WebSub works locally again. With no selected public-status node, each node answers locally and clustered WebSub remains off under this policy.
 
-Turning WebSub off retires subscriptions and keeps the callback available for unsubscribe verification for up to 10 minutes. See [tunnel setup](websub-tunnel.md). Local automated tests cover these decisions; actual public callback reachability must be verified in the deployed network.
+Turning WebSub off retires subscriptions and keeps the callback available for unsubscribe verification for up to 10 minutes. See [tunnel setup](websub-tunnel.md). Use the tunnel guide to check that the public callback is reachable.
