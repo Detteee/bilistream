@@ -93,6 +93,7 @@ pub(crate) fn managed_json_error(message: String) -> Json<ApiResponse<()>> {
 pub(crate) fn schedule_managed_json_sync_after_change(file_name: &str) -> String {
     let file_name = file_name.to_string();
     tokio::spawn(async move {
+        let _guard = super::config::SETTINGS_PEER_SYNC.lock().await;
         let cfg = match load_config().await {
             Ok(cfg) => cfg,
             Err(e) => {

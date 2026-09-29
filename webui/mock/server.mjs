@@ -104,9 +104,9 @@ export function createMockServer() {
       if (path === '/api/manage/areas') return send(ok({areas:[{id:235,name:'其他单机',aliases:[],title_keywords:[]}]}));
       if (path === '/api/manage/channels') return send(ok({channels:[]}));
       if (path === '/api/config') return send(config);
-      if (path === '/api/version') return send(ok({ version: '0.6.2', is_tauri: false }));
-      if (path === '/api/update/check') return send(ok({ has_update: false, current_version: '0.6.2', latest_version: '0.6.2' }));
-      if (path === '/api/status') return send(ok({ bilibili: { ...network, is_live: true, title: '示例频道 001 | 示例直播', area_id: 235, area_name: '其他单机', stream_quality: '1080p60', enable_danmaku_command: true, live_start_ts: Math.floor(Date.now() / 1000) - 2470 }, youtube: channel('youtube', true), twitch: channel('twitch', false), niconico: null, priority_channel: { ...config.priority_channel, is_live: false, platform: null, title: null } }));
+      if (path === '/api/version') return send(ok({ version: '0.7.0', is_tauri: false }));
+      if (path === '/api/update/check') return send(ok({ has_update: false, current_version: '0.7.0', latest_version: '0.7.0' }));
+      if (path === '/api/status') return send(ok({ bilibili: { ...network, is_live: true, title: '示例频道 001 | 示例直播', area_id: 235, area_name: '其他单机', stream_quality: '1080p60', enable_danmaku_command: true, live_start_ts: Math.floor(Date.now() / 1000) - 2470 }, youtube: channel('youtube', true), twitch: channel('twitch', false), niconico: null, priority_channel: { ...config.priority_channel, default_area_name: "其他单机", is_live: false, platform: null, title: null } }));
       if (path.startsWith('/api/refresh/')) return send(ok(null));
       if (path === '/api/network-status') return send(ok(network));
       if (path === '/api/logs') return send({ success: true, logs: '12:00:00 INFO 模拟数据 · Web UI preview\n12:00:01 INFO 转播运行中' });

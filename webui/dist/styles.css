@@ -3251,10 +3251,17 @@ a.cluster-node-name-link {
 /* Stream actions --------------------------------------------------------- */
 
 .holodex-stream-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   flex-shrink: 0;
   gap: var(--sp-2);
   margin-top: var(--sp-3);
+}
+
+.holodex-stream-secondary {
+  display: flex;
+  min-width: 0;
+  gap: var(--sp-2);
 }
 
 .holodex-stream-watch,
@@ -3282,6 +3289,8 @@ a.cluster-node-name-link {
 }
 
 .holodex-stream-watch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   border-color: var(--line);
   background: var(--surface-4);
   color: var(--text);
@@ -3301,20 +3310,28 @@ a.cluster-node-name-link {
 }
 
 .holodex-stream-btn-crop {
-  flex-grow: 1.4;
+  flex: 0 0 34px;
+  padding: var(--sp-1);
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
-  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--warn);
 }
 
 .holodex-stream-btn-crop:hover {
-  background: color-mix(in srgb, var(--warn) 26%, transparent);
+  background: color-mix(in srgb, var(--warn) 24%, transparent);
 }
 
 .holodex-stream-btn-switch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);
   background: color-mix(in srgb, var(--ok) 16%, transparent);
   color: var(--ok);
+}
+
+.holodex-stream-watch > svg,
+.holodex-stream-btn-switch > svg {
+  justify-self: end;
 }
 
 .holodex-stream-btn-switch:hover {

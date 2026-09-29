@@ -77,6 +77,10 @@ try {
   assert.equal(await evaluate("document.getElementById('priority-channel-card').classList.contains('hidden')"), true);
   assert.equal(await evaluate("window.configData.priority_channel.enabled && window.configData.priority_channel.auto_restart"), true);
   await setControls(true, true);
+  assert.equal(await evaluate("document.getElementById('priority-channel-card').textContent.includes('其他单机 (235)')"), true);
+  assert.equal(await evaluate("[...document.querySelectorAll('.crop-switch-button')].every(button => !button.textContent.trim() && button.getAttribute('aria-label')==='裁剪切换' && button.parentElement.firstElementChild===button)"), true);
+  assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-actions')].every(row => Math.abs(row.querySelector('.holodex-stream-secondary').getBoundingClientRect().width - row.querySelector('.switch-button').getBoundingClientRect().width)<1)"), true);
+  assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-watch, .holodex-stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return Math.abs((box.left+box.right)/2-(text.left+text.right)/2)<1 && icon.right<=text.left; })"), true);
   // Optional platform cards and write-only session values use real form saves.
   await evaluate("document.getElementById('config-show-twitch-checkbox').checked=false; document.getElementById('config-show-niconico-checkbox').checked=true; document.getElementById('config-nc-user-session').value='mock-session-value'; document.getElementById('save-system-config-btn').click()");
   await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.show_twitch===false && window.configData.niconico.user_session_configured===true");

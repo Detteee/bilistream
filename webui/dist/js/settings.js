@@ -765,13 +765,28 @@ async function autoInstallUpdate() {
     const data = await postJsonApi('/api/update/download', { download_url: latestUpdateInfo.download_url });
 
     if (data.success) {
-      updateProgress.textContent = '✅ 更新下载完成！程序将自动重启...';
-      showNotification('更新安装中，程序即将重启...', 'success');
-
-      // Wait a bit then reload the page (program will restart)
-      setTimeout(() => {
-        location.reload();
-      }, 5000);
+      updateProgress.textContent = '更新任务已开始，正在等待完成…';
+      const deadline = Date.now() + 360000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        let status, version;
+        try {
+          [status, version] = await Promise.all([
+            getJson('/api/update/status').catch(() => null),
+            getJson('/api/version')
+          ]);
+        } catch (_) {
+          updateProgress.textContent = '正在等待程序重启…';
+          continue;
+        }
+        if (status?.phase === 'failed') throw new Error(status.message);
+        if (status?.message) updateProgress.textContent = status.message;
+        if (version?.data?.version === latestUpdateInfo.latest_version) {
+          location.reload();
+          return;
+        }
+      }
+      throw new Error('未确认升级完成，请查看日志后重试');
     } else {
       throw new Error(data.message || '下载失败');
     }

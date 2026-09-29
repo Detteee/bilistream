@@ -50,6 +50,21 @@ pub fn windows_restart_bat() -> Result<String, String> {
 }
 
 pub fn resolve_restart_executable_word(cwd: &Path, current_exe: &Path) -> String {
+    if let Some(name) = current_exe.file_name().and_then(|name| name.to_str()) {
+        let installed = match name.trim_end_matches(" (deleted)") {
+            "bilistream.old" => Some("bilistream"),
+            "bilistream.exe.old" => Some("bilistream.exe"),
+            "bilistream-tauri.old" => Some("bilistream-tauri"),
+            "bilistream-tauri.exe.old" => Some("bilistream-tauri.exe"),
+            _ => None,
+        };
+        if let Some(installed) = installed {
+            return current_exe
+                .with_file_name(installed)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
     let local_bin = cwd.join("bilistream");
     let local_bin_exists = local_bin.exists();
     let current_exe_display = current_exe.to_string_lossy();
@@ -106,6 +121,22 @@ fn ensure_password_arg(args: &mut Vec<String>, password: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::{args_have_password_flag, ensure_password_arg};
+
+    #[test]
+    fn update_backup_paths_restart_the_installed_binary() {
+        use std::path::Path;
+        for (old, new) in [
+            ("bilistream.old", "bilistream"),
+            ("bilistream.old (deleted)", "bilistream"),
+            ("bilistream-tauri.exe.old", "bilistream-tauri.exe"),
+        ] {
+            let path = Path::new("/app").join(old);
+            assert_eq!(
+                super::resolve_restart_executable_word(Path::new("/elsewhere"), &path),
+                Path::new("/app").join(new).to_string_lossy()
+            );
+        }
+    }
 
     #[test]
     fn adds_password_when_missing() {

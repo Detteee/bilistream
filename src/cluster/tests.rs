@@ -644,6 +644,31 @@ fn monitored_config_version_ignores_runtime_monitor_toggles() {
 }
 
 #[test]
+fn shared_setting_edits_trigger_sync_without_replicating_local_toggles_or_credentials() {
+    let base = test_config("a", 0);
+    let mut changed = base.clone();
+    changed.interval += 1;
+    assert_ne!(
+        shared_settings_version(&base),
+        shared_settings_version(&changed)
+    );
+    changed = base.clone();
+    changed.youtube.area_v2 += 1;
+    assert_ne!(
+        shared_settings_version(&base),
+        shared_settings_version(&changed)
+    );
+    changed = base.clone();
+    changed.youtube.proxy = Some("local-proxy".into());
+    changed.youtube.enable_monitor = !base.youtube.enable_monitor;
+    changed.priority_channel.enabled = !base.priority_channel.enabled;
+    assert_eq!(
+        shared_settings_version(&base),
+        shared_settings_version(&changed)
+    );
+}
+
+#[test]
 fn monitored_config_version_ignores_priority_channel_switches() {
     // enabled/auto_restart are per-node monitor toggles, so two nodes that
     // differ only by them are still in sync and must not trigger a push.

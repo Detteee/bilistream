@@ -320,7 +320,7 @@ pub(crate) fn monitor_reload_needed(previous: &Config, current: &Config) -> bool
         || niconico_monitor_reload_needed(previous, current)
 }
 
-static SETTINGS_PEER_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static SETTINGS_PEER_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn schedule_settings_sync(old_cluster: ClusterConfig, monitored: bool, membership: bool) -> String {
     if !monitored && !membership {
@@ -424,7 +424,7 @@ pub async fn update_config(
     .map_err(|_| StatusCode::BAD_REQUEST)?;
     let previous_cfg = cfg.clone();
     let old_cluster = cfg.cluster.clone();
-    let old_monitored_config_version = monitored_config_version(&cfg);
+    let old_monitored_config_version = crate::cluster::shared_settings_version(&cfg);
     let cluster_changed = payload.cluster.is_some();
     let danmaku_command_changed = payload.enable_danmaku_command;
     // The settings form always posts the current checkbox states. Only reject
@@ -707,7 +707,7 @@ pub async fn update_config(
         old_cluster,
         cfg.cluster.enabled
             && cfg.cluster.sync_monitored_channels
-            && old_monitored_config_version != monitored_config_version(&cfg),
+            && old_monitored_config_version != crate::cluster::shared_settings_version(&cfg),
         cluster_changed,
     );
 

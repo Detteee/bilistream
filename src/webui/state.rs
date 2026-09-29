@@ -23,6 +23,8 @@ pub struct PriorityChannelStatus {
     pub platform: Option<String>,
     pub title: Option<String>,
     pub default_area: u64,
+    #[serde(default)]
+    pub default_area_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -306,6 +308,8 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
         }
         priority_status.channel_name = cfg.priority_channel.channel_name.clone();
         priority_status.default_area = cfg.priority_channel.default_area;
+        priority_status.default_area_name =
+            crate::plugins::get_area_name(cfg.priority_channel.default_area);
     } else {
         cached_status.priority_channel = Some(PriorityChannelStatus {
             enabled: cfg.priority_channel.enabled,
@@ -315,6 +319,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             platform: None,
             title: None,
             default_area: cfg.priority_channel.default_area,
+            default_area_name: crate::plugins::get_area_name(cfg.priority_channel.default_area),
         });
     }
     let nico_configured = crate::plugins::niconico_configured(&cfg.niconico);

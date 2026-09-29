@@ -38,6 +38,20 @@ pub fn monitored_config_version(cfg: &Config) -> String {
     canonical_value_hash(&monitored_sync_value_from_config(cfg))
 }
 
+/// Save notifications cover every shared setting, beyond the channel-status hash.
+pub(crate) fn shared_settings_version(cfg: &Config) -> String {
+    let mut payload = monitored_config_from_config(cfg);
+    payload.enable_danmaku_command = false;
+    payload.enable_youtube_monitor = false;
+    payload.enable_twitch_monitor = false;
+    payload.youtube.enable_monitor = false;
+    payload.twitch.enable_monitor = false;
+    payload.priority_channel.enabled = false;
+    payload.priority_channel.auto_restart = false;
+    payload.niconico_enable_monitor = false;
+    monitored_config_integrity_version_from_payload(&payload)
+}
+
 pub fn monitored_config_version_from_payload(payload: &MonitoredConfig) -> String {
     let value = monitored_sync_value(payload);
     canonical_value_hash(&value)

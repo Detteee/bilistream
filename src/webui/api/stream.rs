@@ -535,11 +535,12 @@ pub async fn update_banned_keywords(
     set_config_updated();
 
     crate::webui::public::remap_after_areas_change();
+    let sync_message = schedule_managed_json_sync_after_change("areas.json");
 
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("禁用关键词已更新".to_string()),
+        message: Some(format!("禁用关键词已更新{sync_message}")),
     })
 }
 

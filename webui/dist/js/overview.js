@@ -979,9 +979,11 @@ function createHolodexStreamActionButton(extraClasses, streamActionData, icon) {
 
   const label = document.createElement('span');
   const crop = button.classList.contains('crop-switch-button');
-  label.textContent = crop ? '裁剪切换' : '切换';
-  button.title = crop ? '裁剪后切换转播' : '切换转播';
-  button.append(icon, label);
+  label.textContent = '切换';
+  button.title = crop ? '裁剪切换' : '切换转播';
+  button.setAttribute('aria-label', button.title);
+  button.append(icon);
+  if (!crop) button.append(label);
   return button;
 }
 function readHolodexStreamActionData(button) {
@@ -1128,6 +1130,8 @@ function createStreamCard(stream, isLive) {
 
   const actions = document.createElement('div');
   actions.className = 'holodex-stream-actions';
+  const secondaryActions = document.createElement('div');
+  secondaryActions.className = 'holodex-stream-secondary';
   const watchLink = document.createElement('a');
   watchLink.className = 'holodex-stream-watch';
   watchLink.href = watchUrl;
@@ -1136,10 +1140,10 @@ function createStreamCard(stream, isLive) {
   const watchLabel = document.createElement('span');
   watchLabel.textContent = '观看';
   watchLink.append(createHolodexWatchIcon(), watchLabel);
-  actions.appendChild(watchLink);
+  secondaryActions.appendChild(watchLink);
 
   if (isLive && placeholderKind !== 'niconico') {
-    actions.appendChild(createHolodexStreamActionButton(
+    secondaryActions.prepend(createHolodexStreamActionButton(
       'holodex-stream-btn-crop crop-switch-button',
       streamActionData,
       createHolodexStreamSvg([
@@ -1148,6 +1152,7 @@ function createStreamCard(stream, isLive) {
       ])
     ));
   }
+  actions.appendChild(secondaryActions);
   actions.appendChild(createHolodexStreamActionButton(
     'holodex-stream-btn-switch switch-button',
     streamActionData,
@@ -2240,8 +2245,9 @@ function renderPriorityChannelStatus(priority) {
     default_area: priority.default_area || 235
   };
 
+  const areaName = priority.default_area_name || getAreaName(priority.default_area || 235);
   const defaultArea = priority.default_area
-    ? `${getAreaName(priority.default_area)} (${priority.default_area})`
+    ? (String(areaName) === String(priority.default_area) ? `分区 ${priority.default_area}` : `${areaName} (${priority.default_area})`)
     : '-';
   if (priority.enabled) {
     setPriorityStatusFields(

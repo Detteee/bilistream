@@ -585,6 +585,13 @@ pub async fn download_update(
     Json(payload): Json<DownloadUpdateRequest>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let download_url = payload.download_url;
+    if !updater::begin_update() {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some("更新正在进行中".into()),
+        }));
+    }
 
     tracing::info!("开始下载更新: {}", download_url);
 
@@ -592,6 +599,7 @@ pub async fn download_update(
     tokio::spawn(async move {
         match updater::download_and_install_update(&download_url, None).await {
             Ok(_) => {
+                updater::set_update_status("restarting", "安装完成，正在重启");
                 tracing::info!("✅ 更新安装成功！程序将在 3 秒后重启...");
 
                 // Perform graceful shutdown before restarting
@@ -603,10 +611,17 @@ pub async fn download_update(
 
                 match schedule_update_restart() {
                     Ok(()) => std::process::exit(0),
-                    Err(e) => tracing::error!("❌ 更新后重启调度失败: {}", e),
+                    Err(e) => {
+                        updater::set_update_status(
+                            "failed",
+                            "安装完成，但自动重启失败，请手动重启",
+                        );
+                        tracing::error!("❌ 更新后重启调度失败: {}", e);
+                    }
                 }
             }
             Err(e) => {
+                updater::set_update_status("failed", format!("更新失败: {e}"));
                 tracing::error!("❌ 更新安装失败: {}", e);
             }
         }
@@ -617,6 +632,10 @@ pub async fn download_update(
         data: Some("更新下载已开始，请查看日志了解进度".to_string()),
         message: Some("更新将在后台下载并自动安装".to_string()),
     }))
+}
+
+pub async fn update_status() -> Json<updater::UpdateStatus> {
+    Json(updater::update_status())
 }
 
 pub(crate) fn current_exe_dir() -> Result<PathBuf, String> {
@@ -653,43 +672,13 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let exe_dir = current_exe_dir()?;
     let restart_script = exe_dir.join("restart_after_update.sh");
-    let old_exe = exe_dir.join("bilistream.old");
     let restart_command = crate::webui::restart::restart_command_line()?;
 
-    let script_content = format!(
-        r#"#!/bin/bash
-# Wait for current process to exit
-sleep 2
-
-# Kill any remaining old process (but keep the file as backup)
-if [ -f "{}" ]; then
-    pkill -f "{}" 2>/dev/null || true
-fi
-
-# Wait for port to be released
-sleep 1
-
-# Start new version with the same bind/password args
-{} &
-
-# Clean up this script
-rm "$0"
-"#,
-        old_exe.display(),
-        old_exe.display(),
-        restart_command
-    );
-
-    std::fs::write(&restart_script, script_content)
-        .map_err(|e| format!("写入重启脚本失败: {}", e))?;
-    let chmod_status = std::process::Command::new("chmod")
-        .arg("+x")
-        .arg(&restart_script)
-        .status()
-        .map_err(|e| format!("设置重启脚本权限失败: {}", e))?;
-    if !chmod_status.success() {
-        return Err(format!("设置重启脚本权限失败: {}", chmod_status));
-    }
+    let script_content = format!("#!/bin/sh\nsleep 3\n{} &\nrm -- \"$0\"\n", restart_command);
+    // This script contains the existing login arguments, so create it privately.
+    let _ = std::fs::remove_file(&restart_script);
+    crate::storage::paths::write_private(&restart_script, script_content.as_bytes())
+        .map_err(|e| format!("写入重启脚本失败: {e}"))?;
     std::process::Command::new("sh")
         .arg(&restart_script)
         .spawn()

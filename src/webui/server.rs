@@ -146,6 +146,7 @@ pub async fn start_webui_on_listener(
         .route("/setup/qrcode", get(api::get_qr_code))
         .route("/setup/poll-login", post(api::poll_login))
         .route("/update/check", get(api::check_updates))
+        .route("/update/status", get(api::update_status))
         .route("/update/download", post(api::download_update))
         .route("/deps/status", get(api::get_deps_status))
         .route("/holodex/streams", get(api::api_get_holodex_streams))

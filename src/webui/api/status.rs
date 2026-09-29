@@ -250,6 +250,7 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
                 platform,
                 title,
                 default_area: cfg.priority_channel.default_area,
+                default_area_name: crate::plugins::get_area_name(cfg.priority_channel.default_area),
             });
         })
     });

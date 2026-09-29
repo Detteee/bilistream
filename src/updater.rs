@@ -107,23 +107,59 @@ fn get_platform_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
         .find(|asset| asset.name.to_lowercase().contains(platform_keyword))
 }
 
-// Only update the binary and webui — never overwrite user config/data files.
-// For first-install files (areas.json, channels.json), only extract if not already present.
-fn should_update_file(relative_path: &str, _install_dir: &std::path::Path) -> bool {
-    let name = relative_path.replace('\\', "/");
-    // Always update: binary and webui frontend
-    if name == "bilistream"
-        || name == "bilistream.exe"
-        || name == "bilistream-tauri"
-        || name == "bilistream-tauri.exe"
-        || name.starts_with("webui/dist/")
-        || name.starts_with("webui/public-dist/")
-    {
-        return true;
+#[derive(Clone, Serialize)]
+pub struct UpdateStatus {
+    pub phase: &'static str,
+    pub message: String,
+}
+static UPDATE_STATUS: std::sync::LazyLock<std::sync::Mutex<UpdateStatus>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(UpdateStatus {
+            phase: "idle",
+            message: String::new(),
+        })
+    });
+pub fn update_status() -> UpdateStatus {
+    UPDATE_STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+pub fn begin_update() -> bool {
+    let mut status = UPDATE_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(status.phase, "downloading" | "installing" | "restarting") {
+        return false;
     }
-    // First-install only: extract if the file doesn't exist yet on disk
+    *status = UpdateStatus {
+        phase: "downloading",
+        message: "正在下载更新".into(),
+    };
+    true
+}
+pub fn set_update_status(phase: &'static str, message: impl Into<String>) {
+    *UPDATE_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = UpdateStatus {
+        phase,
+        message: message.into(),
+    };
+}
 
-    false
+// Only program assets and reader-facing guides; never runtime data or keys.
+fn should_update_file(relative_path: &str, _install_dir: &Path) -> bool {
+    let name = relative_path.replace('\\', "/");
+    if name.split('/').any(|part| part == ".." || part.is_empty()) {
+        return false;
+    }
+    matches!(
+        name.as_str(),
+        "bilistream"
+            | "bilistream.exe"
+            | "bilistream-tauri"
+            | "bilistream-tauri.exe"
+            | "README.md"
+            | "README.zh_CN.md"
+    ) || name.starts_with("webui/dist/")
+        || name.starts_with("webui/public-dist/")
+        || name.starts_with("docs/")
 }
 
 /// Download and install an update
@@ -170,7 +206,7 @@ pub async fn download_and_install_update(
     use std::io::Write;
 
     tracing::info!("📥 下载中... (大小: {} MB)", total_size / 1024 / 1024);
-    let bytes = response.bytes().await?;
+    let bytes = crate::plugins::http::response_bytes_limited(response, 256 * 1024 * 1024).await?;
     file.write_all(&bytes)?;
     let downloaded = bytes.len() as u64;
 
@@ -181,8 +217,8 @@ pub async fn download_and_install_update(
 
     tracing::info!("✅ 下载完成，开始更新...");
 
-    // Extract and install
-    install_update(&temp_file, &exe_dir)?;
+    set_update_status("installing", "正在安装更新");
+    tokio::task::spawn_blocking(move || install_update(&temp_file, &exe_dir)).await??;
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -193,191 +229,148 @@ pub async fn download_and_install_update(
     Ok(())
 }
 
-/// Install the downloaded update
+/// Stage a complete package before replacing any installed file.
 fn install_update(
     archive_path: &PathBuf,
     install_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let extract = install_dir.join(".update_extract");
+    if extract.exists() {
+        fs::remove_dir_all(&extract)?;
+    }
+    fs::create_dir(&extract)?;
     #[cfg(target_os = "windows")]
     {
-        install_windows_update(archive_path, install_dir)?;
+        let mut archive = zip::ZipArchive::new(fs::File::open(archive_path)?)?;
+        archive.extract(&extract)?;
     }
-
     #[cfg(not(target_os = "windows"))]
     {
-        install_unix_update(archive_path, install_dir)?;
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn install_windows_update(
-    archive_path: &PathBuf,
-    install_dir: &Path,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Extract zip file
-    let file = fs::File::open(archive_path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-
-    // Backup current executable
-    let current_exe = std::env::current_exe()?;
-    let backup_exe = current_exe.with_extension("exe.old");
-    let _ = fs::rename(&current_exe, &backup_exe);
-
-    // Extract files from archive
-    // Release structure: bilistream_for_windows/
-    //   ├── bilistream.exe
-    //   ├── README.md
-    //   ├── README.zh_CN.md
-    //   └── webui/dist/
-
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let file_path = file.name().to_string(); // Convert to owned String
-
-        // Skip directories
-        if file_path.ends_with('/') {
-            continue;
+        let output = std::process::Command::new("tar")
+            .args(["-xzf"])
+            .arg(archive_path)
+            .arg("-C")
+            .arg(&extract)
+            .args(["--no-same-owner", "--no-same-permissions"])
+            .output()?;
+        if !output.status.success() {
+            return Err("解压更新包失败".into());
         }
-
-        // Get the relative path (remove the archive root folder)
-        let relative_path = if let Some(pos) = file_path.find('/') {
-            file_path[pos + 1..].to_string()
+    }
+    let root = extract.join(if cfg!(windows) {
+        "bilistream_windows"
+    } else {
+        "bilistream_linux"
+    });
+    let binary = if cfg!(feature = "tauri-build") {
+        if cfg!(windows) {
+            "bilistream-tauri.exe"
         } else {
-            file_path.clone()
-        };
-
-        // Skip if empty (root folder itself)
-        if relative_path.is_empty() {
-            continue;
+            "bilistream-tauri"
         }
-
-        // Skip config/data files — only update binary and webui
-        if !should_update_file(&relative_path, install_dir) {
-            continue;
-        }
-
-        let dest_path = install_dir.join(&relative_path);
-
-        // Create parent directories if needed
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Extract file
-        let mut outfile = fs::File::create(&dest_path)?;
-        std::io::copy(&mut file, &mut outfile)?;
-
-        tracing::info!("✅ 已更新: {}", relative_path);
-    }
-
-    // Create a batch script to restart the program
-    let restart_script = install_dir.join("restart_after_update.bat");
-    let script_content = format!(
-        r#"@echo off
-timeout /t 2 /nobreak >nul
-start "" "{}"
-del "%~f0"
-"#,
-        current_exe.display()
-    );
-    fs::write(&restart_script, script_content)?;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn install_unix_update(
-    archive_path: &PathBuf,
-    install_dir: &Path,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    use std::process::Command;
-
-    // Create temp extraction directory
-    let temp_extract = install_dir.join(".update_extract");
-    fs::create_dir_all(&temp_extract)?;
-
-    // Extract tar.gz to temp directory
-    let output = Command::new("tar")
-        .arg("-xzf")
-        .arg(archive_path)
-        .arg("-C")
-        .arg(&temp_extract)
-        .output()?;
-
-    if !output.status.success() {
-        let _ = fs::remove_dir_all(&temp_extract);
-        return Err("解压失败".into());
-    }
-
-    // Find the extracted directory (should be bilistream_for_linux/)
-    let extracted_dir = fs::read_dir(&temp_extract)?
-        .filter_map(|e| e.ok())
-        .find(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .ok_or("找不到解压的目录")?
-        .path();
-
-    // Backup current executable
-    let current_exe = std::env::current_exe()?;
-    let backup_exe = current_exe.with_extension("old");
-    let _ = fs::rename(&current_exe, &backup_exe);
-
-    // Copy files from extracted directory to install directory
-    // Release structure: bilistream_for_linux/
-    //   ├── bilistream
-    //   ├── README.md
-    //   ├── README.zh_CN.md
-    //   └── webui/dist/
-
-    copy_dir_recursive(&extracted_dir, install_dir, "", install_dir)?;
-
-    // Make executable
-    let new_exe = install_dir.join(if cfg!(feature = "tauri-build") {
-        "bilistream-tauri"
+    } else if cfg!(windows) {
+        "bilistream.exe"
     } else {
         "bilistream"
-    });
-    Command::new("chmod").arg("+x").arg(&new_exe).output()?;
-
-    // Clean up temp directory
-    let _ = fs::remove_dir_all(&temp_extract);
-
-    tracing::info!("✅ 已更新: bilistream");
-
+    };
+    install_staged_update(&root, install_dir, binary)?;
+    fs::remove_dir_all(&extract)?;
     Ok(())
 }
 
-// Helper function to recursively copy directory contents (only whitelisted files)
-#[cfg(not(target_os = "windows"))]
-fn copy_dir_recursive(
-    src: &std::path::Path,
-    dst: &std::path::Path,
-    prefix: &str,
-    install_dir: &std::path::Path,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    for entry in fs::read_dir(src)? {
+fn validate_update_tree(path: &Path) -> Result<(), Box<dyn Error + Send + Sync>> {
+    for entry in fs::read_dir(path)? {
         let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        let relative = if prefix.is_empty() {
-            entry.file_name().to_string_lossy().to_string()
-        } else {
-            format!("{}/{}", prefix, entry.file_name().to_string_lossy())
-        };
-
-        if file_type.is_dir() {
-            fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path, &relative, install_dir)?;
-        } else if should_update_file(&relative, install_dir) {
-            fs::copy(&src_path, &dst_path)?;
-            tracing::info!("✅ 已更新: {}", relative);
-        } else {
-            tracing::debug!("⏭️  跳过: {}", relative);
+        let kind = entry.file_type()?;
+        if kind.is_symlink() || !(kind.is_dir() || kind.is_file()) {
+            return Err("更新包包含无效文件".into());
+        }
+        if kind.is_dir() {
+            validate_update_tree(&entry.path())?;
         }
     }
     Ok(())
+}
+
+fn install_staged_update(
+    root: &Path,
+    install_dir: &Path,
+    binary: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    validate_update_tree(root)?;
+    for required in [
+        binary,
+        "webui/dist/index.html",
+        "webui/dist/js/main.js",
+        "webui/public-dist/index.html",
+    ] {
+        if !root.join(required).is_file() || fs::metadata(root.join(required))?.len() == 0 {
+            return Err(format!("更新包不完整，缺少 {required}").into());
+        }
+    }
+    #[cfg(unix)]
+    for name in ["bilistream", "bilistream-tauri"] {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join(name);
+        if path.is_file() {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    let mut installed: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    let result = (|| -> Result<(), Box<dyn Error + Send + Sync>> {
+        // Replace whole UI trees; removed modules cannot linger after upgrades.
+        for name in [
+            "webui/dist",
+            "webui/public-dist",
+            "README.md",
+            "README.zh_CN.md",
+            "docs",
+            "bilistream",
+            "bilistream.exe",
+            "bilistream-tauri",
+            "bilistream-tauri.exe",
+        ] {
+            let source = root.join(name);
+            if !source.exists() {
+                continue;
+            }
+            if source.is_file() && !should_update_file(name, install_dir) {
+                continue;
+            }
+            let destination = install_dir.join(name);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let backup = PathBuf::from(format!("{}.old", destination.display()));
+            if backup.is_dir() {
+                fs::remove_dir_all(&backup)?;
+            } else if backup.exists() {
+                fs::remove_file(&backup)?;
+            }
+            let previous = if destination.exists() {
+                fs::rename(&destination, &backup)?;
+                Some(backup)
+            } else {
+                None
+            };
+            installed.push((destination.clone(), previous));
+            fs::rename(source, destination)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for (destination, backup) in installed.into_iter().rev() {
+            if destination.is_dir() {
+                let _ = fs::remove_dir_all(&destination);
+            } else if destination.exists() {
+                let _ = fs::remove_file(&destination);
+            }
+            if let Some(backup) = backup {
+                fs::rename(backup, destination)?;
+            }
+        }
+    }
+    result
 }
 
 fn compare_versions(v1: &str, v2: &str) -> i32 {
@@ -404,6 +397,90 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let mut bytes = [0u8; 12];
+            getrandom::fill(&mut bytes).unwrap();
+            let root = std::env::temp_dir().join(format!(
+                "bilistream-update-test-{:x}",
+                u128::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                    bytes[8], bytes[9], bytes[10], bytes[11], 0, 0, 0, 0
+                ])
+            ));
+            fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+        fn package(&self) -> PathBuf {
+            let root = self.0.join("stage");
+            for name in [
+                "bilistream",
+                "webui/dist/index.html",
+                "webui/dist/js/main.js",
+                "webui/public-dist/index.html",
+            ] {
+                let path = root.join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"new").unwrap();
+            }
+            root
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn staged_update_replaces_assets_and_preserves_all_runtime_data() {
+        let fixture = Fixture::new();
+        let package = fixture.package();
+        let target = fixture.0.join("installed");
+        fs::create_dir_all(target.join("webui/dist")).unwrap();
+        fs::create_dir_all(target.join("data")).unwrap();
+        fs::write(target.join("bilistream"), b"old binary").unwrap();
+        fs::write(target.join("webui/dist/obsolete.js"), b"old module").unwrap();
+        for name in [
+            "config.json",
+            "cookies.txt",
+            "data/bilistream.db",
+            "data/bilistream.db-wal",
+        ] {
+            fs::write(target.join(name), b"preserved").unwrap();
+        }
+        fs::write(package.join("config.json"), b"must not install").unwrap();
+        install_staged_update(&package, &target, "bilistream").unwrap();
+        assert_eq!(fs::read(target.join("bilistream")).unwrap(), b"new");
+        assert_eq!(
+            fs::read(target.join("bilistream.old")).unwrap(),
+            b"old binary"
+        );
+        assert!(!target.join("webui/dist/obsolete.js").exists());
+        for name in [
+            "config.json",
+            "cookies.txt",
+            "data/bilistream.db",
+            "data/bilistream.db-wal",
+        ] {
+            assert_eq!(fs::read(target.join(name)).unwrap(), b"preserved");
+        }
+    }
+
+    #[test]
+    fn incomplete_package_never_moves_the_running_binary() {
+        let fixture = Fixture::new();
+        let package = fixture.package();
+        let target = fixture.0.join("installed");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("bilistream"), b"old binary").unwrap();
+        fs::remove_file(package.join("webui/dist/js/main.js")).unwrap();
+        assert!(install_staged_update(&package, &target, "bilistream").is_err());
+        assert_eq!(fs::read(target.join("bilistream")).unwrap(), b"old binary");
+        assert!(!target.join("bilistream.old").exists());
+    }
+
     #[test]
     fn always_updates_webui_dist_tree() {
         let dir = Path::new(".");
@@ -415,7 +492,9 @@ mod tests {
         assert!(should_update_file("webui/public-dist/js/main.js", dir));
         assert!(should_update_file(r"webui\public-dist\public.css", dir));
         assert!(should_update_file(r"webui\dist\js\cluster.js", dir));
-        assert!(!should_update_file("README.md", dir));
+        assert!(should_update_file("README.md", dir));
+        assert!(!should_update_file("webui/dist/../../config.json", dir));
+        assert!(!should_update_file("data/bilistream.db", dir));
         assert!(!should_update_file("config.json", dir));
     }
 }

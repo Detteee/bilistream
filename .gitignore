@@ -50,3 +50,5 @@ youtube_quota.json
 *.backup
 *.json.tmp
 *.tmp-*
+
+/release/

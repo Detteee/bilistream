@@ -271,6 +271,7 @@ mod tests {
                 ffmpeg_cache_latency_secs: 0,
             }),
             priority_channel: Some(PriorityChannelStatus {
+                default_area_name: Some("测试分区".into()),
                 enabled: true,
                 auto_restart: true,
                 channel_name: "priority".to_string(),
