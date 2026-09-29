@@ -1816,8 +1816,10 @@
                     <input type="number" id="config-cluster-failover-timeout" min="1" placeholder="15">
                   </div>
                   <div class="control-group">
-                    <label for="config-cluster-lease-ttl">租约 TTL (秒)</label>
-                    <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20">
+                    <label for="config-cluster-lease-ttl">活跃状态有效期 (秒)</label>
+                    <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20"
+                      aria-describedby="cluster-lease-ttl-hint">
+                    <small class="settings-help-text" id="cluster-lease-ttl-hint">仅作状态标记，不影响故障切换。</small>
                   </div>
                 </div>
               </div>

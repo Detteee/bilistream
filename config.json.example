@@ -103,7 +103,7 @@
     "priority": 0,                         // 数值越高越优先成为活跃节点
     "heartbeat_interval_secs": 5,
     "failover_timeout_secs": 15,
-    "lease_ttl_secs": 20,
+    "lease_ttl_secs": 20,                  // 活跃状态标记的有效期，不影响故障切换
     "sync_monitored_channels": true,        // 同步监控频道/优先频道/channels.json/areas.json
     "auto_failover": true,                 // 按优先级自动故障转移；false 时仅手动切换
     "peers": [
