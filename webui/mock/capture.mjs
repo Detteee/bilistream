@@ -78,9 +78,13 @@ try {
   assert.equal(await evaluate("window.configData.priority_channel.enabled && window.configData.priority_channel.auto_restart"), true);
   await setControls(true, true);
   assert.equal(await evaluate("document.getElementById('priority-channel-card').textContent.includes('其他单机 (235)')"), true);
+  await evaluate("document.getElementById('tab-overview').click()");
+  await waitFor("document.querySelector('.holodex-stream-watch')?.checkVisibility()");
   assert.equal(await evaluate("[...document.querySelectorAll('.crop-switch-button')].every(button => !button.textContent.trim() && button.getAttribute('aria-label')==='裁剪切换' && button.parentElement.firstElementChild===button)"), true);
   assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-actions')].every(row => Math.abs(row.querySelector('.holodex-stream-secondary').getBoundingClientRect().width - row.querySelector('.switch-button').getBoundingClientRect().width)<1)"), true);
-  assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-watch, .holodex-stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return Math.abs((box.left+box.right)/2-(text.left+text.right)/2)<1 && icon.right<=text.left; })"), true);
+  const actionContentsCentered = "[...document.querySelectorAll('.holodex-stream-watch, .holodex-stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return box.width>0 && Math.abs((box.left+box.right)/2-(icon.left+text.right)/2)<1 && icon.right<=text.left; })";
+  assert.equal(await evaluate(actionContentsCentered), true, 'desktop action content midpoint');
+  await evaluate("document.getElementById('tab-settings').click()");
   await evaluate("document.getElementById('config-interval').value='88'; document.getElementById('config-nc-user-session').value='synthetic-direct-check'; document.getElementById('config-nc-user-session').dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.getElementById('check-nico-session').textContent"), '保存并检测');
   await evaluate("document.getElementById('check-nico-session').click()");
@@ -254,6 +258,7 @@ try {
   await evaluate("document.getElementById('tab-overview').click()");
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'mobile overview overflow');
+  assert.equal(await evaluate(actionContentsCentered), true, 'mobile action content midpoint');
   for (const view of ['settings', 'manage']) {
     await evaluate(`document.getElementById('tab-${view}').click()`);
     await new Promise(resolve => setTimeout(resolve, 200));

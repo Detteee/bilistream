@@ -3289,8 +3289,6 @@ a.cluster-node-name-link {
 }
 
 .holodex-stream-watch {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   border-color: var(--line);
   background: var(--surface-4);
   color: var(--text);
@@ -3322,16 +3320,9 @@ a.cluster-node-name-link {
 }
 
 .holodex-stream-btn-switch {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);
   background: color-mix(in srgb, var(--ok) 16%, transparent);
   color: var(--ok);
-}
-
-.holodex-stream-watch > svg,
-.holodex-stream-btn-switch > svg {
-  justify-self: end;
 }
 
 .holodex-stream-btn-switch:hover {
@@ -5126,6 +5117,20 @@ details.setup-platform-card { display: block; }
 
 .channel-lookup-field { grid-column: 1 / -1; }
 .session-proxy { max-width: 36rem; }
+#niconico-session-status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--sp-2);
+  border-radius: 50%;
+  background: var(--text-mute);
+  vertical-align: 1px;
+}
+#niconico-session-status[data-state="valid"]::before { background: var(--ok); }
+#niconico-session-status[data-state="invalid"]::before { background: var(--danger); }
+#niconico-session-status[data-state="unavailable"]::before,
+#niconico-session-status[data-state="checking"]::before { background: var(--warn); }
 #niconico-session-status[data-state="invalid"] { color: var(--danger, #c2394f); }
 #niconico-session-status[data-state="unavailable"] { color: var(--warn, #9b701b); }
 @media (min-width: 700px) {
