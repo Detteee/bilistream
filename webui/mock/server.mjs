@@ -10,7 +10,7 @@ export function createMockServer() {
   let needsSetup = false;
   let sessionSaved = false;
   let favoriteMode = 'ok';
-  const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? 'Demo Favourite' : i === 1 ? '星海放送局 · International Gaming, Music and Weekend Collaboration' : `Demo Channel ${i + 1}` }));
+  const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? '示例收藏频道 001' : i === 1 ? '示例收藏频道 002 / Example Channel 002 / サンプルチャンネル 002' : `示例收藏频道 ${String(i + 1).padStart(3, '0')}` }));
   const catalog = [{id:235,name:'其他单机',parent_name:'单机游戏'},{id:329,name:'无畏契约',parent_name:'网游'}, ...Array.from({ length: 300 }, (_, i) => ({ id: 1000 + i, name: i === 0 ? '开放世界探索与多人合作冒险 · Open World and Multiplayer Adventures' : `演示分区 ${i + 1}`, parent_name: `演示分类 ${Math.floor(i / 30) + 1}` }))];
   const config = {
     interval: 30, auto_cover: true, show_priority_channel: false, show_twitch: true, show_niconico: false, youtube_rss_enabled: true,
@@ -19,14 +19,14 @@ export function createMockServer() {
     youtube_api_key: 'demo-key-project-a\ndemo-key-project-b',
     youtube_websub_callback_url: 'https://yt.example.com/websub/youtube', youtube_websub_port: 3151,
     bilibili: { room: 10000, enable_danmaku_command: true },
-    youtube: { enable_monitor: true, channel_name: 'Demo Studio', channel_id: 'UCdemo', area_v2: 235, quality: 'best', proxy: '', ffmpeg_cache: { enabled: true, latency_secs: 8 } },
-    twitch: { enable_monitor: true, channel_name: 'Demo Games', channel_id: 'demo_games', area_v2: 235, quality: 'best', proxy_region: 'asl', proxy: '', ffmpeg_cache: { enabled: false, latency_secs: 8 } },
+    youtube: { enable_monitor: true, channel_name: '示例频道 001', channel_id: 'UC1111111111111111111111', area_v2: 235, quality: 'best', proxy: '', ffmpeg_cache: { enabled: true, latency_secs: 8 } },
+    twitch: { enable_monitor: true, channel_name: '示例频道 002', channel_id: 'demo_games', area_v2: 235, quality: 'best', proxy_region: 'asl', proxy: '', ffmpeg_cache: { enabled: false, latency_secs: 8 } },
     niconico: { user_session_configured: false, session_check_enabled: true, enable_monitor: false, channel_name: '', channel_id: '', cookies_file: '', proxy: '' },
-    priority_channel: { enabled: true, auto_restart: true, channel_name: 'Demo Music', default_area: 235 },
+    priority_channel: { enabled: true, auto_restart: true, channel_name: '示例频道 003', default_area: 235 },
     cluster: { enabled: false, node_id: 'local', node_name: 'Demo Computer', public_api_url: '', peers: [], priority: 0, heartbeat_interval_secs: 5, failover_timeout_secs: 20, lease_ttl_secs: 30, auto_failover: true, sync_monitored_channels: true, thresholds: { max_failed_restarts: 3, max_external_api_failures: 3, window_secs: 300 }, public_status: { node_id: '', base_url: '', bind: '127.0.0.1', port: 23234, holodex_refresh_secs: 60 } },
   };
   const network = { ffmpeg_running: true, stream_speed: 1, stream_cache_speed: 1.04, stream_bitrate_kbps: 6040, stream_cache_bitrate_kbps: 6230, stream_fps: 60, stream_frame: 148200, stream_time_secs: 2470, stream_cache_time_secs: 2478, hls_cache_active: true, stream_bitrate_history: [5900,6050,6000,6250,6100,6080,6040], stream_cache_bitrate_history: [6100,6240,6300,6150,6400,6230,6230] };
-  const channel = (platform, live) => ({ ...config[platform], is_live: live, title: live ? '一起探索新的世界 · Demo live' : '-', topic: 'Gaming', game: 'Just Chatting', area_id: 235, area_name: '其他单机', crop_enabled: false, ffmpeg_cache_enabled: platform === 'youtube', ffmpeg_cache_latency_secs: 8 });
+  const channel = (platform, live) => ({ ...config[platform], is_live: live, title: live ? '示例直播 · Live preview' : '-', topic: 'Gaming', game: 'Just Chatting', area_id: 235, area_name: '其他单机', crop_enabled: false, ffmpeg_cache_enabled: platform === 'youtube', ffmpeg_cache_latency_secs: 8 });
   const events = new Set();
   const writes = [];
   const server = createServer(async (req, res) => {
@@ -53,7 +53,7 @@ export function createMockServer() {
           for (const event of events) event.write('event: config\ndata: changed\n\n');
           return send({ success: true, message: '公开页设置已保存', data: { enabled: false, nodes: [], local_node_id: 'local', public_status: patch.config } });
         }
-        if (path === '/api/channels/resolve-youtube') return send(ok({ channel_id: 'UCvUc0m317LWTTPZoBQV479A' }));
+        if (path === '/api/channels/resolve-youtube') return send(ok({ channel_id: 'UC4444444444444444444444' }));
         if (path === '/api/niconico/session/check') return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检查不会续期' : '未配置 user_session' }));
         if (path === '/api/setup/save-config') { needsSetup = false; return send({ success: true }); }
         if (path === '/api/config') {
@@ -82,22 +82,22 @@ export function createMockServer() {
       if (path === '/api/config') return send(config);
       if (path === '/api/version') return send(ok({ version: '0.6.2', is_tauri: false }));
       if (path === '/api/update/check') return send(ok({ has_update: false, current_version: '0.6.2', latest_version: '0.6.2' }));
-      if (path === '/api/status') return send(ok({ bilibili: { ...network, is_live: true, title: 'Demo Studio | 一起探索新的世界', area_id: 235, area_name: '其他单机', stream_quality: '1080p60', enable_danmaku_command: true, live_start_ts: Math.floor(Date.now() / 1000) - 2470 }, youtube: channel('youtube', true), twitch: channel('twitch', false), niconico: null, priority_channel: { ...config.priority_channel, is_live: false, platform: null, title: null } }));
+      if (path === '/api/status') return send(ok({ bilibili: { ...network, is_live: true, title: '示例频道 001 | 示例直播', area_id: 235, area_name: '其他单机', stream_quality: '1080p60', enable_danmaku_command: true, live_start_ts: Math.floor(Date.now() / 1000) - 2470 }, youtube: channel('youtube', true), twitch: channel('twitch', false), niconico: null, priority_channel: { ...config.priority_channel, is_live: false, platform: null, title: null } }));
       if (path.startsWith('/api/refresh/')) return send(ok(null));
       if (path === '/api/network-status') return send(ok(network));
       if (path === '/api/logs') return send({ success: true, logs: '12:00:00 INFO 模拟数据 · Web UI preview\n12:00:01 INFO 转播运行中' });
       if (path === '/api/cluster/status') return send(ok({ enabled: false, nodes: [], local_can_enable_monitor_toggles: true }));
       if (path === '/api/banned-keywords') return send({ streaming_banned_keywords: [], danmaku_banned_keywords: [] });
       if (path === '/api/areas') return send({ areas: [{ id: 235, name: '其他单机' }, { id: 329, name: '无畏契约' }] });
-      if (path === '/api/channels') return send({ channels: [{ name: 'Demo Studio', platforms: { youtube: 'UCdemo' } }, { name: 'Demo Games', platforms: { twitch: 'demo_games' } }, { name: 'Demo Music', platforms: { youtube: 'UCmusic' } }] });
+      if (path === '/api/channels') return send({ channels: [{ name: '示例频道 001', platforms: { youtube: 'UC1111111111111111111111' } }, { name: '示例频道 002', platforms: { twitch: 'demo_games' } }, { name: '示例频道 003', platforms: { youtube: 'UC3333333333333333333333' } }] });
       if (path === '/api/youtube/keys') return send(ok({ configured: true, budget_per_key: 9000, remaining_fraction: .78, resets_at: '2026-09-30T07:00:00Z', keys: [{ fingerprint: 'demo…a', used: 2480, state: 'usable' }, { fingerprint: 'demo…b', used: 1480, state: 'usable' }], playlist: { on: true, interval_secs: 180, rss_enabled: config.youtube_rss_enabled, rss_down: false, stretch: 1, websub_slowed: true }, websub: { verified: 24, pending: 0, failed: 0, healthy: true, listening: 3151, last_push: '2026-09-29T04:00:00Z' } }));
       if (path === '/api/holodex/streams') return send({ success: true, source: 'channels', data: [
-        { id: 'demoLive', title: '一起探索新的世界', channel_name: 'Demo Studio', channel_id: 'UCdemo', status: 'live', start_actual: new Date(Date.now()-2470000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png', live_viewers: 1280 },
-        { id: 'demoNext', title: '晚间音乐时光', channel_name: 'Demo Music', channel_id: 'UCmusic', status: 'upcoming', start_scheduled: new Date(Date.now()+3600000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png' },
+        { id: 'demoLive', title: '示例直播', channel_name: '示例频道 001', channel_id: 'UC1111111111111111111111', status: 'live', start_actual: new Date(Date.now()-2470000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png', live_viewers: 1280 },
+        { id: 'demoNext', title: '示例直播预告', channel_name: '示例频道 003', channel_id: 'UC3333333333333333333333', status: 'upcoming', start_scheduled: new Date(Date.now()+3600000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png' },
       ] });
       if (path === '/mock-thumbnail.svg') {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
-        return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><defs><linearGradient id="g"><stop stop-color="#82afa5"/><stop offset="1" stop-color="#d9c7ad"/></linearGradient></defs><rect width="640" height="360" fill="url(#g)"/><circle cx="480" cy="60" r="140" fill="#ffffff" opacity=".16"/><text x="50" y="170" font-size="48" font-family="sans-serif" fill="#fff">DEMO STUDIO</text><text x="52" y="216" font-size="20" font-family="sans-serif" fill="#fff">BILISTREAM · LIVE PREVIEW</text></svg>');
+        return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><defs><linearGradient id="g"><stop stop-color="#82afa5"/><stop offset="1" stop-color="#d9c7ad"/></linearGradient></defs><rect width="640" height="360" fill="url(#g)"/><circle cx="480" cy="60" r="140" fill="#ffffff" opacity=".16"/><text x="50" y="170" font-size="48" font-family="sans-serif" fill="#fff">EXAMPLE CHANNEL</text><text x="52" y="216" font-size="20" font-family="sans-serif" fill="#fff">BILISTREAM · LIVE PREVIEW</text></svg>');
       }
       if (path.startsWith('/api/')) return send({ success: false, message: `Unknown mock route: ${path}` }, 404);
       const file = resolve(root, path === '/' ? 'index.html' : `.${path}`);

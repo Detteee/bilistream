@@ -48,7 +48,7 @@ try {
   };
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
   await command('browsingContext.navigate', { context, url: base, wait: 'complete' });
-  await waitFor("document.documentElement.classList.contains('app-ready') && document.getElementById('yt-title').textContent.includes('Demo')");
+  await waitFor("document.documentElement.classList.contains('app-ready') && document.getElementById('yt-title').textContent.includes('示例')");
   await evaluate("document.getElementById('theme-toggle').click(); document.fonts.ready");
   await new Promise(resolve => setTimeout(resolve, 900));
   await waitFor("document.querySelectorAll('.holodex-stream-card').length > 0");
@@ -151,11 +151,11 @@ try {
   await evaluate("document.getElementById('setup-load-favorites').click()");
   await waitFor("document.querySelectorAll('.setup-favorite-option').length===160");
   await evaluate("document.querySelectorAll('.setup-favorite-option input')[0].click(); document.querySelectorAll('.setup-favorite-option input')[1].click()");
-  await evaluate("document.getElementById('setup-favorites-search').value='Demo Channel 100'; document.getElementById('setup-favorites-search').dispatchEvent(new Event('input')); document.getElementById('setup-favorites-select').click()");
+  await evaluate("document.getElementById('setup-favorites-search').value='示例收藏频道 100'; document.getElementById('setup-favorites-search').dispatchEvent(new Event('input')); document.getElementById('setup-favorites-select').click()");
   assert.equal(await evaluate("document.querySelectorAll('.setup-favorite-option').length"), 1);
   assert.equal(await evaluate("document.getElementById('setup-favorites-count').textContent.includes('已选 3')"), true);
   await evaluate("document.getElementById('setup-favorites-search').value=''; document.getElementById('setup-favorites-search').dispatchEvent(new Event('input'))");
-  await evaluate("{ const select=document.getElementById('setup-yt-channel-select'); select.value=[...select.options].find(o=>o.textContent.includes('Demo Favourite')).value; select.dispatchEvent(new Event('change')); }");
+  await evaluate("{ const select=document.getElementById('setup-yt-channel-select'); select.value=[...select.options].find(o=>o.textContent.includes('示例收藏频道 001')).value; select.dispatchEvent(new Event('change')); }");
   assert.equal(await evaluate("document.getElementById('setup-yt-id').value"), 'UC0000000000000000000000');
   await evaluate("document.querySelectorAll('.setup-favorite-option input')[0].click()");
   assert.equal(await evaluate("document.getElementById('setup-yt-channel-select').value"), '');
@@ -167,17 +167,17 @@ try {
   }
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1100 }, devicePixelRatio: 1 });
   await evaluate("document.getElementById('setup-favorites-panel').scrollIntoView({block:'start'}); window.scrollBy(0,-24)");
-  await evaluate("{ const select=document.getElementById('setup-yt-channel-select'); select.value=[...select.options].find(o=>o.textContent.includes('Demo Favourite')).value; select.dispatchEvent(new Event('change')); }");
+  await evaluate("{ const select=document.getElementById('setup-yt-channel-select'); select.value=[...select.options].find(o=>o.textContent.includes('示例收藏频道 001')).value; select.dispatchEvent(new Event('change')); }");
   await evaluate("document.getElementById('setup-yt-area').value='329'");
   await capture(join(root, 'docs/images/holodex-favorites.png'));
   await evaluate("document.getElementById('setup-yt-channel-select').value='manual'; document.getElementById('setup-yt-channel-select').dispatchEvent(new Event('change'))");
-  await evaluate("document.getElementById('setup-favorites-panel').open=false; document.getElementById('setup-yt-name').value='Demo Studio'; document.getElementById('setup-yt-id').value='https://www.youtube.com/@example'; document.getElementById('setup-resolve-youtube').click()");
+  await evaluate("document.getElementById('setup-favorites-panel').open=false; document.getElementById('setup-yt-name').value='示例频道 001'; document.getElementById('setup-yt-id').value='https://www.youtube.com/@example'; document.getElementById('setup-resolve-youtube').click()");
   await waitFor("document.getElementById('setup-yt-id').value.startsWith('UC')");
-  await evaluate("document.getElementById('setup-yt-area').value='329'; document.getElementById('setup-nc-channel-select').value='manual'; document.getElementById('setup-nc-channel-select').dispatchEvent(new Event('change')); document.getElementById('setup-nc-name').value='Demo Niconico'; document.getElementById('setup-nc-id').value='demo-channel'; document.getElementById('setup-save-btn').click()");
+  await evaluate("document.getElementById('setup-yt-area').value='329'; document.getElementById('setup-nc-channel-select').value='manual'; document.getElementById('setup-nc-channel-select').dispatchEvent(new Event('change')); document.getElementById('setup-nc-name').value='示例频道 004'; document.getElementById('setup-nc-id').value='demo-channel'; document.getElementById('setup-save-btn').click()");
   await waitFor("!document.getElementById('setup-page').classList.contains('active')");
   let writes = await (await fetch(`${base}/mock/writes`)).json();
   const setup = writes.find(row => row.path === '/api/setup/save-config').patch;
-  assert.equal(setup.youtube_channel_id, 'UCvUc0m317LWTTPZoBQV479A');
+  assert.equal(setup.youtube_channel_id, 'UC4444444444444444444444');
   assert.equal(setup.niconico_channel_id, 'demo-channel');
   assert.equal(setup.youtube_enable_monitor, true);
   assert.equal(setup.twitch_enable_monitor, false);

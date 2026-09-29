@@ -77,8 +77,8 @@ The default priority monitor and multi-server mode are off. Display preferences 
 Danmaku target changes use channel names from `channels.json`, for example:
 
 ```text
-%转播%YT%kamito%英雄联盟
-%转播%TW%kamito%无畏契约
+%转播%YT%示例频道1%英雄联盟
+%转播%TW%示例频道1%无畏契约
 %查询
 ```
 

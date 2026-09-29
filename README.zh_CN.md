@@ -77,8 +77,8 @@ cargo build --release --bin bilistream
 弹幕切换使用 `channels.json` 中的频道名，例如：
 
 ```text
-%转播%YT%kamito%英雄联盟
-%转播%TW%kamito%无畏契约
+%转播%YT%示例频道1%英雄联盟
+%转播%TW%示例频道1%无畏契约
 %查询
 ```
 
