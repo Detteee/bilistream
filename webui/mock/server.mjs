@@ -10,6 +10,8 @@ export function createMockServer() {
   let needsSetup = false;
   let sessionSaved = false;
   let cookieRevision = 1, cookieCount = 0, filterRevision = 1, playerFilter = '';
+  const proxyValues = {};
+  const proxyMask = value => value.replace(/:([^/@]*)@/, (_, password) => ':' + '•'.repeat([...decodeURIComponent(password)].length) + '@');
   let favoriteMode = 'ok';
   const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? '示例收藏频道 001' : i === 1 ? '示例收藏频道 002 / Example Channel 002 / サンプルチャンネル 002' : `示例收藏频道 ${String(i + 1).padStart(3, '0')}` }));
   const catalog = [{id:235,name:'其他单机',parent_name:'单机游戏'},{id:329,name:'无畏契约',parent_name:'网游'}, ...Array.from({ length: 300 }, (_, i) => ({ id: 1000 + i, name: i === 0 ? '开放世界探索与多人合作冒险 · Open World and Multiplayer Adventures' : `演示分区 ${i + 1}`, parent_name: `演示分类 ${Math.floor(i / 30) + 1}` }))];
@@ -48,7 +50,7 @@ export function createMockServer() {
           if (favoriteMode === 'slow') await new Promise(resolve => setTimeout(resolve, 400));
           return send(ok(favoriteMode === 'empty' ? [] : favorites));
         }
-        writes.push({ path, patch });
+        writes.push({ path, patch: structuredClone(patch) });
         if (path === '/api/youtube/cookies') {
           if (patch.expected_revision !== cookieRevision) return send({ success: false, message: 'Cookie 已更新' }, 409);
           cookieCount = req.method === 'DELETE' ? 0 : (patch.content || '').split('\n').filter(line => line && !line.startsWith('#')).length;
@@ -72,9 +74,19 @@ export function createMockServer() {
             else if (patch[key]) { config[`${key}_configured`] = true; config[`${key}_mask`] = [...patch[key]].map(c => c === '\n' ? c : '•').join(''); }
           }
           for (const platform of ['youtube', 'twitch', 'niconico']) {
-            if (patch[`clear_${platform}_proxy`]) { config[platform].proxy_configured = false; config[platform].proxy = ''; }
-            else if (patch[`${platform}_proxy`]) { config[platform].proxy_configured = true; config[platform].proxy = patch[`${platform}_proxy`]; }
+            if (patch[`clear_${platform}_proxy`]) { config[platform].proxy_configured = false; config[platform].proxy = ''; proxyValues[platform] = ''; }
+            else if (patch[`${platform}_proxy`]) {
+              let value = patch[`${platform}_proxy`];
+              if (patch[`${platform}_proxy_keep_password`]) {
+                const password = proxyValues[platform]?.match(/:([^/@]*)@/)?.[1];
+                if (!password || !value.includes(':@')) return send({success:false,message:'代理密码无法保留'},400);
+                value = value.replace(':@', ':' + password + '@');
+              }
+              proxyValues[platform] = value;
+              config[platform].proxy_configured = true; config[platform].proxy = proxyMask(value);
+            }
             delete patch[`${platform}_proxy`];
+            delete patch[`${platform}_proxy_keep_password`];
           }
           config.secret_revision += 1;
 

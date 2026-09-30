@@ -14,6 +14,62 @@ fn credential_mask(value: &str) -> String {
         .collect()
 }
 
+fn proxy_password_range(value: &str) -> Option<std::ops::Range<usize>> {
+    let start = value.find("://").map_or(0, |offset| offset + 3);
+    let authority = value[start..].split(['/', '?', '#']).next()?;
+    let at = authority.rfind('@')?;
+    let colon = authority[..at].find(':')?;
+    Some(start + colon + 1..start + at)
+}
+
+fn proxy_display(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default();
+    let Some(range) = proxy_password_range(value) else {
+        return value.to_owned();
+    };
+    let length = percent_encoding::percent_decode_str(&value[range.clone()])
+        .decode_utf8_lossy()
+        .chars()
+        .count();
+    let mut display = value.to_owned();
+    display.replace_range(range, &"•".repeat(length));
+    display
+}
+
+fn resolve_proxy_input(
+    input: Option<String>,
+    saved: Option<&str>,
+    keep_password: bool,
+    revision: Option<u64>,
+) -> Result<Option<String>, StatusCode> {
+    let Some(mut input) = input else {
+        return if keep_password {
+            Err(StatusCode::BAD_REQUEST)
+        } else {
+            Ok(None)
+        };
+    };
+    let range = proxy_password_range(&input);
+    if keep_password {
+        // The frontend sends an empty password slot and an explicit intent;
+        // the revision check in update_config protects the retained password.
+        let range = range.ok_or(StatusCode::BAD_REQUEST)?;
+        let saved = saved.ok_or(StatusCode::BAD_REQUEST)?;
+        let saved_range = proxy_password_range(saved).ok_or(StatusCode::BAD_REQUEST)?;
+        if revision.is_none() || !range.is_empty() || saved_range.is_empty() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        input.replace_range(range, &saved[saved_range]);
+    } else if range.is_some_and(|range| {
+        percent_encoding::percent_decode_str(&input[range])
+            .decode_utf8_lossy()
+            .contains('•')
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(Some(input))
+}
+
 fn config_response(cfg: &Config) -> serde_json::Value {
     let (niconico_channel_id, niconico_channel_name) =
         crate::plugins::niconico_channel_identity(&cfg.niconico);
@@ -52,7 +108,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_name": cfg.youtube.channel_name,
             "channel_id": cfg.youtube.channel_id,
             "area_v2": cfg.youtube.area_v2,
-            "proxy": cfg.youtube.proxy.as_deref().unwrap_or_default(),
+            "proxy": proxy_display(cfg.youtube.proxy.as_deref()),
             "proxy_configured": cfg.youtube.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "cookies_file": cfg.youtube.cookies_file,
             "cookies_from_browser": cfg.youtube.cookies_from_browser,
@@ -68,7 +124,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "channel_id": cfg.twitch.channel_id,
             "area_v2": cfg.twitch.area_v2,
             "proxy_region": cfg.twitch.proxy_region,
-            "proxy": cfg.twitch.proxy.as_deref().unwrap_or_default(),
+            "proxy": proxy_display(cfg.twitch.proxy.as_deref()),
             "proxy_configured": cfg.twitch.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.twitch.ffmpeg_cache.enabled,
@@ -86,7 +142,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "user_session_configured": cfg.niconico.user_session.as_ref().is_some_and(|s| !s.is_empty()),
             "user_session_mask": credential_mask(cfg.niconico.user_session.as_deref().unwrap_or_default()),
             "session_check_enabled": cfg.niconico.session_check_enabled,
-            "proxy": cfg.niconico.proxy.as_deref().unwrap_or_default(),
+            "proxy": proxy_display(cfg.niconico.proxy.as_deref()),
             "proxy_configured": cfg.niconico.proxy.as_ref().is_some_and(|s| !s.is_empty()),
             "ffmpeg_cache": {
                 "enabled": cfg.niconico.ffmpeg_cache.enabled,
@@ -146,8 +202,12 @@ pub struct UpdateConfigRequest {
     youtube_websub_port: Option<u16>,
     twitch_proxy_region: Option<String>,
     twitch_proxy: Option<String>,
+    #[serde(skip_serializing)]
+    twitch_proxy_keep_password: Option<bool>,
     clear_twitch_proxy: Option<bool>,
     youtube_proxy: Option<String>,
+    #[serde(skip_serializing)]
+    youtube_proxy_keep_password: Option<bool>,
     clear_youtube_proxy: Option<bool>,
     youtube_deno_path: Option<String>,
     anti_collision_list: Option<HashMap<String, i32>>,
@@ -161,6 +221,8 @@ pub struct UpdateConfigRequest {
     clear_niconico_user_session: Option<bool>,
     niconico_session_check_enabled: Option<bool>,
     niconico_proxy: Option<String>,
+    #[serde(skip_serializing)]
+    niconico_proxy_keep_password: Option<bool>,
     clear_niconico_proxy: Option<bool>,
     cluster: Option<ClusterConfig>,
 }
@@ -363,7 +425,7 @@ fn schedule_settings_sync(old_cluster: ClusterConfig, monitored: bool, membershi
 }
 
 pub async fn update_config(
-    Json(payload): Json<UpdateConfigRequest>,
+    Json(mut payload): Json<UpdateConfigRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
     // Load current config
     let mut cfg = load_config()
@@ -390,6 +452,24 @@ pub async fn update_config(
     {
         return Err(StatusCode::CONFLICT);
     }
+    payload.youtube_proxy = resolve_proxy_input(
+        payload.youtube_proxy,
+        cfg.youtube.proxy.as_deref(),
+        payload.youtube_proxy_keep_password == Some(true),
+        payload.expected_secret_revision,
+    )?;
+    payload.twitch_proxy = resolve_proxy_input(
+        payload.twitch_proxy,
+        cfg.twitch.proxy.as_deref(),
+        payload.twitch_proxy_keep_password == Some(true),
+        payload.expected_secret_revision,
+    )?;
+    payload.niconico_proxy = resolve_proxy_input(
+        payload.niconico_proxy,
+        cfg.niconico.proxy.as_deref(),
+        payload.niconico_proxy_keep_password == Some(true),
+        payload.expected_secret_revision,
+    )?;
     let legacy_imports = [
         ("cookies.txt", payload.youtube_cookies_file.clone()),
         (
@@ -854,7 +934,7 @@ mod tests {
         for platform in ["youtube", "twitch", "niconico"] {
             assert_eq!(
                 response[platform]["proxy"],
-                cfg.youtube.proxy.as_deref().unwrap()
+                format!("http://user:{}@proxy.invalid:8080", "•".repeat(22))
             );
             assert_eq!(response[platform]["proxy_configured"], true);
         }
@@ -870,9 +950,74 @@ mod tests {
         for secret in ["private-holodex", "private-riot", "private-youtube"] {
             assert!(!response.to_string().contains(secret));
         }
+        assert!(!response.to_string().contains("private-proxy-password"));
         assert!(!config_form_values(&cfg)
             .to_string()
             .contains("private-proxy-password"));
+    }
+
+    #[test]
+    fn proxy_password_mask_preserves_the_address_and_password_edits_are_explicit() {
+        let saved = "socks5h://user:p%40ss%3Aword@[::1]:1080";
+        assert_eq!(
+            proxy_display(Some(saved)),
+            "socks5h://user:•••••••••@[::1]:1080"
+        );
+        assert_eq!(
+            proxy_display(Some("http://127.0.0.1:7890")),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            proxy_display(Some("user:secret@host:8080")),
+            "user:••••••@host:8080"
+        );
+        assert_eq!(
+            proxy_display(Some("http://user:密码@host")),
+            "http://user:••@host"
+        );
+        let edited = resolve_proxy_input(
+            Some("socks5h://user:@proxy.invalid:1081".into()),
+            Some(saved),
+            true,
+            Some(1),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(edited, "socks5h://user:p%40ss%3Aword@proxy.invalid:1081");
+        assert_eq!(
+            resolve_proxy_input(
+                Some("http://user:new@host".into()),
+                Some(saved),
+                false,
+                Some(1)
+            )
+            .unwrap()
+            .as_deref(),
+            Some("http://user:new@host")
+        );
+        assert_eq!(
+            resolve_proxy_input(
+                Some("http://user:@host".into()),
+                Some(saved),
+                false,
+                Some(1)
+            )
+            .unwrap()
+            .as_deref(),
+            Some("http://user:@host")
+        );
+        for input in ["http://user:•••@host", "http://user:%E2%80%A2@host"] {
+            assert_eq!(
+                resolve_proxy_input(Some(input.into()), Some(saved), false, Some(1)).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert!(
+            resolve_proxy_input(Some("http://user:@host".into()), Some(saved), true, None).is_err()
+        );
+        assert!(
+            resolve_proxy_input(Some("http://user:@host".into()), None, true, Some(1)).is_err()
+        );
     }
 
     #[test]

@@ -653,9 +653,20 @@ async function saveSystemConfig() {
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
       if (secretRevision === null && secretControls.some(control => control.field in patch)) throw new Error('请重新加载凭据状态后再保存');
-      // Proxy values are visible, but the API's legacy expected bag remains redacted.
+      // Proxy addresses are visible; an unchanged masked password is retained
+      // explicitly rather than submitted as a credential.
       // expected_secret_revision protects these edits against concurrent changes.
-      for (const control of secretControls) if (control.field.endsWith('_proxy') && control.field in patch) patch.expected[control.field] = '';
+      for (const control of secretControls) {
+        if (!control.field.endsWith('_proxy') || !(control.field in patch)) continue;
+        const mask = patch[control.field].match(/:([•]+)@/);
+        const saved = savedSecretConfig?.[control.field.slice(0, -6)]?.proxy || '';
+        if (mask) {
+          if (mask[0] !== saved.match(/:([•]+)@/)?.[0]) throw new Error('请完整填写新的代理密码，或保留原来的圆点');
+          patch[control.field] = patch[control.field].replace(/:([•]+)@/, ':@');
+          patch[`${control.field}_keep_password`] = true;
+        }
+        patch.expected[control.field] = '';
+      }
       if (patch.cluster) patch.expected.cluster = getClusterConfigBaseline();
       patch.expected_secret_revision = secretRevision;
       const result = await postJsonApi('/api/config', patch);

@@ -298,6 +298,14 @@ try {
   await evaluate("document.getElementById('config-clear-yt-proxy').click()");
   await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-clear-yt-proxy').hidden");
   assert.equal((await (await fetch(`${base}/api/config`)).json()).youtube.proxy_configured, false);
+  await evaluate("document.getElementById('config-yt-proxy').value='http://test-user:synthetic-password@proxy.invalid:8080'; document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-yt-proxy').value.includes('•')");
+  assert.equal(await evaluate("document.getElementById('config-yt-proxy').value"), 'http://test-user:' + '•'.repeat(18) + '@proxy.invalid:8080');
+  await evaluate("document.getElementById('config-yt-proxy').value=document.getElementById('config-yt-proxy').value.replace(':8080',':8081'); document.getElementById('save-system-config-btn').click()");
+  await waitFor("!document.getElementById('save-system-config-btn').disabled && window.configData.youtube.proxy.endsWith(':8081')");
+  const keptProxy = (await (await fetch(`${base}/mock/writes`)).json()).findLast(row => row.path === '/api/config' && row.patch.youtube_proxy_keep_password);
+  assert.equal(keptProxy.patch.youtube_proxy, 'http://test-user:@proxy.invalid:8081');
+  assert.equal(await evaluate("document.getElementById('config-yt-proxy').value"), 'http://test-user:' + '•'.repeat(18) + '@proxy.invalid:8081');
   // A stale session save reports an error immediately and does not check an older credential.
   const checksBefore = (await (await fetch(`${base}/mock/writes`)).json()).filter(row => row.path === '/api/niconico/session/check').length;
   await fetch(`${base}/api/config`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ auto_cover: true }) });
