@@ -36,13 +36,29 @@ RSS 和 WebSub 用于发现视频 ID，本身不证明直播可播放。Data API
 
 **可选多服务器**：活跃/备用节点管理、健康检查、配置同步、自动转移。公开状态页由指定节点通过独立端口提供。
 
-- 默认关闭。启用时填写每个节点唯一的 ID、可达的管理 API 地址和同一组成员；跨节点请求使用 Web UI 认证。
+- 默认关闭。启用时填写每个节点唯一的 ID、可达的管理 API 地址和同一组成员；节点共用一份通信密钥，Web UI 密码可以各自设置。
 - 转播活跃节点负责推流，备用节点等待交接；自动转移依赖心跳、多数节点确认和来源停止检查，无法确认安全接管时保持限制。
 - 指定公开状态页节点、独立端口和公网 URL。状态页不提供管理接口；请将其与管理端区分。
 - 公开状态页节点有可用 YouTube key 时，也是 YouTube 索引节点；可以与转播活跃节点不同。
 - key、RSS、WebSub 回调和卡片显示设置属于各节点本地配置。共享索引模式请在索引节点配置发现来源。
 
 详见 [发现回退](youtube-discovery.md) 和 [WebSub 隧道](websub-tunnel.md)。
+
+通信密钥**只生成一次**，通过 SSH 将同一文件复制到各节点：
+
+```bash
+umask 077
+mkdir -p ~/.config/bilistream
+openssl rand -hex 32 > ~/.config/bilistream/cluster-token
+chmod 600 ~/.config/bilistream/cluster-token
+./bilistream --bind 0.0.0.0 \
+  --password-file ~/.config/bilistream/webui-password \
+  --cluster-token-file ~/.config/bilistream/cluster-token
+```
+
+也可用 `BILISTREAM_CLUSTER_TOKEN_FILE` 指定文件。通信密钥不能与 Web UI 密码相同，以明文保存并由文件权限保护。节点 API 地址使用 HTTPS 或私有网络；缺少密钥或密钥不一致时，节点认证失败。
+
+从共用 Web UI 密码的旧版升级时，先停止集群，为**所有节点**配置密钥并升级，再恢复运行。首次升级后需重新登录网页；后续正常重启保留登录状态。注销、30 天到期或换密码后重启会使会话失效，备份不包含网页登录会话。更换通信密钥时，各节点一起更换并重启。
 
 ## Niconico Live
 

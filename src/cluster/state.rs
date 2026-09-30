@@ -12,17 +12,23 @@ lazy_static! {
 }
 
 pub(crate) fn build_cluster_http_client() -> reqwest::Client {
-    let mut builder = reqwest::Client::builder();
-    if let Some(session) = crate::webui::session_cookie() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        if let Ok(value) =
-            reqwest::header::HeaderValue::from_str(&format!("bilistream_session={session}"))
-        {
-            headers.insert(reqwest::header::COOKIE, value);
-            builder = builder.default_headers(headers);
-        }
-    }
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    cluster_client_with_token(crate::webui::listen::cluster_token())
+}
+
+fn cluster_client_with_token(token: Option<&str>) -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    // Even an unconfigured sender identifies this as a peer request. It must
+    // never fall through to a passwordless browser's local-admin privileges.
+    let mut value =
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token.unwrap_or_default()))
+            .expect("validated cluster token");
+    value.set_sensitive(true);
+    headers.insert(reqwest::header::AUTHORIZATION, value);
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("cluster HTTP client")
 }
 
 pub(crate) fn cluster_http_client() -> reqwest::Client {
@@ -117,4 +123,43 @@ pub(crate) fn now_secs() -> u64 {
 
 pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
     crate::storage::read_json(name).ok()
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn peer_client_sends_only_its_token_and_does_not_follow_redirects() {
+        use axum::{
+            http::{header, HeaderMap, StatusCode},
+            routing::get,
+            Router,
+        };
+        crate::install_crypto_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/peer",
+                get(|headers: HeaderMap| async move {
+                    assert_eq!(
+                        headers[header::AUTHORIZATION],
+                        "Bearer synthetic-cluster-token-0123456789"
+                    );
+                    assert!(!headers.contains_key(header::COOKIE));
+                    (StatusCode::FOUND, [(header::LOCATION, "/redirect-target")])
+                }),
+            )
+            .route("/redirect-target", get(|| async { StatusCode::OK }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = cluster_client_with_token(Some("synthetic-cluster-token-0123456789"));
+        let response = client
+            .get(format!("http://{address}/peer"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        server.abort();
+    }
 }

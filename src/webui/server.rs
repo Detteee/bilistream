@@ -3,7 +3,7 @@ use axum::{
     middleware,
     response::IntoResponse,
     routing::{delete, get, post, put},
-    Router,
+    Extension, Router,
 };
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
@@ -35,6 +35,14 @@ pub async fn start_webui_on_listener(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     let port = addr.port();
+    let auth = tokio::task::spawn_blocking(|| {
+        super::listen::AuthState::open(
+            crate::storage::global()?,
+            super::listen::listen_password().map(str::to_owned),
+            super::listen::cluster_token().map(str::to_owned),
+        )
+    })
+    .await??;
     state.init_log_buffer();
     let _status_worker = api::start_status_refresh_worker();
     let _discovery_worker = crate::plugins::youtube_discovery::start_discovery_worker();
@@ -200,7 +208,8 @@ pub async fn start_webui_on_listener(
                 },
             ),
         )
-        .layer(middleware::from_fn(require_webui_auth));
+        .layer(middleware::from_fn(require_webui_auth))
+        .layer(Extension(auth));
 
     let assets = static_asset_dir("webui/dist");
     let static_files =

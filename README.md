@@ -75,7 +75,7 @@ chmod 600 ~/.config/bilistream/webui-password
 ./bilistream --bind 0.0.0.0 --password-file ~/.config/bilistream/webui-password
 ```
 
-This file holds the password in plaintext, protected by account permissions. Keep it for future starts; the command line contains only its path. Automatic restarts use a separate temporary credential that is deleted after reading. `--password` remains supported.
+This file holds the password in plaintext, protected by account permissions. Keep it for future starts; the command line contains only its path. Automatic restarts use a separate temporary credential that is deleted after reading. `--password` remains supported. Multi-server mode also requires a [shared node key](docs/advanced-settings.md#multi-server-mode).
 
 Settings, channels, rules and discovery statistics live in `data/bilistream.db` beside the executable. Configuration and login credentials are encrypted; the application unlocks them automatically on this computer. Change settings through the Web UI. `BILISTREAM_DATA_DIR` selects another data directory; `BILISTREAM_KEY_FILE` can select a protected key file **outside** it.
 

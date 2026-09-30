@@ -10,6 +10,7 @@ use tracing_subscriber::fmt;
 struct LaunchArgs {
     bind: String,
     password: Option<String>,
+    cluster_token_file: Option<std::path::PathBuf>,
     port: u16,
     ffmpeg_log_level: String,
     tray: bool,
@@ -44,6 +45,7 @@ Options:\n\
   -p, --port PORT             Web UI port (default 3150, or BILISTREAM_PORT)\n\
   --password PASSWORD         Web UI login password (or BILISTREAM_PASSWORD)\n\
   --password-file PATH        Read password from a private file\n\
+  --cluster-token-file PATH   Shared node credential (or BILISTREAM_CLUSTER_TOKEN_FILE)\n\
   --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
@@ -98,6 +100,7 @@ fn parse_launch_args_with(
     let mut password = env_password;
     let mut restart_password_file = None;
     let mut password_file = None;
+    let mut cluster_token_file = None;
     let mut port: u16 = match env_port {
         Some(value) => value
             .parse()
@@ -143,6 +146,14 @@ fn parse_launch_args_with(
                     &mut i,
                     inline,
                     "--restart-password-file",
+                )?));
+            }
+            "--cluster-token-file" => {
+                cluster_token_file = Some(std::path::PathBuf::from(take_value(
+                    argv,
+                    &mut i,
+                    inline,
+                    "--cluster-token-file",
                 )?));
             }
             "-p" | "--port" => {
@@ -191,6 +202,7 @@ fn parse_launch_args_with(
     Ok(ParseOutcome::Launch(LaunchArgs {
         bind,
         password,
+        cluster_token_file,
         port,
         ffmpeg_log_level,
         tray,
@@ -209,6 +221,7 @@ fn windows_needs_console(argv: &[String]) -> bool {
             "--bind"
             | "--password"
             | "--password-file"
+            | "--cluster-token-file"
             | "--restart-password-file"
             | "--port"
             | "-p"
@@ -309,6 +322,11 @@ impl BackendRuntime {
     ) -> Result<Self, String> {
         bilistream::install_crypto_provider();
         init_logger_with_capture();
+        if crate::webui::listen::cluster_token().is_none() {
+            if let Some(path) = std::env::var_os("BILISTREAM_CLUSTER_TOKEN_FILE") {
+                crate::webui::listen::install_cluster_token_file(std::path::Path::new(&path))?;
+            }
+        }
         // Binding is the readiness signal; no arbitrary sleep or credential
         // operation stands between startup and the recovery interface.
         let listener = bilistream::webui::server::bind_webui(port)
@@ -531,6 +549,9 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     let state = bilistream::AppState::new().install();
     init_logger_with_capture();
     apply_webui_listen(&launch.bind, launch.password.clone())?;
+    if let Some(path) = &launch.cluster_token_file {
+        crate::webui::listen::install_cluster_token_file(path)?;
+    }
 
     let readiness = tokio::task::spawn_blocking(|| -> std::io::Result<bool> {
         Ok(!crate::storage::contains("config.json")? || !crate::storage::contains("cookies.json")?)

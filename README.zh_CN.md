@@ -75,7 +75,7 @@ chmod 600 ~/.config/bilistream/webui-password
 ./bilistream --bind 0.0.0.0 --password-file ~/.config/bilistream/webui-password
 ```
 
-该文件以明文保存密码，由账号权限保护。请保留供后续启动使用；命令行只显示路径。自动重启使用单独的临时凭据，读取后删除。原有 `--password` 仍兼容。
+该文件以明文保存密码，由账号权限保护。请保留供后续启动使用；命令行只显示路径。自动重启使用单独的临时凭据，读取后删除。原有 `--password` 仍兼容。多服务器还需配置[节点共享密钥](docs/advanced-settings.zh_CN.md#多服务器)。
 
 设置、频道、规则及发现统计保存在程序旁的 `data/bilistream.db`。配置与登录信息加密保存，在本机重启时自动解锁；日常修改通过 Web UI 完成。可用 `BILISTREAM_DATA_DIR` 指定数据目录，用 `BILISTREAM_KEY_FILE` 指定目录之外的受限密钥文件。
 

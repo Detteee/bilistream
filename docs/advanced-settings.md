@@ -36,13 +36,29 @@ One computer or server is enough. In **System Settings → 公开状态页**, se
 
 **Optional multi-server mode:** active/standby control, health checks, configuration sync and automatic failover. The public status page runs on a selected node, with a separate listener.
 
-- Off by default. Each node needs a unique ID, reachable admin API address and consistent membership. Peer requests use Web UI authentication.
+- Off by default. Each node needs a unique ID, reachable admin API address and consistent membership. Nodes use a shared communication key; their Web UI passwords can differ.
 - The active restream node publishes; standby nodes wait for handoff. Automatic failover relies on heartbeats, quorum agreement and source-shutdown checks, and remains fenced when safe takeover cannot be confirmed.
 - Select the public-status node, separate listener port and public URL. The viewer listener does not expose admin routes.
 - A public-status node with usable YouTube keys also acts as the YouTube index node; it may differ from the active restream node.
 - Keys, RSS, WebSub callback and card visibility are node-local settings. In shared-index mode configure discovery on the index node.
 
 See [discovery fallbacks](youtube-discovery.md) and [WebSub tunnel setup](websub-tunnel.md).
+
+Create the communication key **once**, then copy the same file to each node over SSH:
+
+```bash
+umask 077
+mkdir -p ~/.config/bilistream
+openssl rand -hex 32 > ~/.config/bilistream/cluster-token
+chmod 600 ~/.config/bilistream/cluster-token
+./bilistream --bind 0.0.0.0 \
+  --password-file ~/.config/bilistream/webui-password \
+  --cluster-token-file ~/.config/bilistream/cluster-token
+```
+
+`BILISTREAM_CLUSTER_TOKEN_FILE` can also specify the file. Keep this key separate from the Web UI password; it is plaintext protected by file permissions. Use HTTPS or a private network for node API addresses. A missing or mismatched key prevents peer authentication.
+
+When upgrading from shared Web UI password authentication, stop the cluster, configure this key and upgrade **all** nodes before resuming. Sign in to the Web UI again after the first upgrade. Later restarts preserve browser sessions; logout, expiry (30 days), or restarting with a changed password invalidates them. Backups exclude browser sessions. Rotate the communication key on all nodes together and restart them.
 
 ## Niconico Live
 

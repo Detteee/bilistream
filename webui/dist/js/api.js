@@ -1,5 +1,6 @@
 // api.js — authenticated JSON client for every /api call.
 import { bindDialog } from './dialog.js';
+import { showNotification } from './dom.js';
 
 let webUiAccessReady = false;
 let webUiLoginPromise = null;
@@ -197,6 +198,21 @@ function promptWebUiLogin() {
 async function ensureWebUiAccess() {
   try {
     const auth = await fetchWithDeadline('/api/auth', {}, response => response.json());
+    const logout = document.getElementById('webui-logout');
+    if (logout) {
+      logout.classList.toggle('hidden', !auth.required);
+      logout.onclick = async () => {
+        logout.disabled = true;
+        try {
+          const response = await fetchWithDeadline('/api/logout', { method: 'POST' });
+          if (!response.ok) throw new Error('退出登录失败，请重试');
+          window.location.reload();
+        } catch (error) {
+          showNotification(error.message, 'error');
+          logout.disabled = false;
+        }
+      };
+    }
     if (auth.required && !auth.authenticated) {
       await promptWebUiLogin();
     }

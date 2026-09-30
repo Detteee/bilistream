@@ -394,7 +394,9 @@ impl Store {
     }
 
     pub fn export_backup(&self, password: &str) -> io::Result<Vec<u8>> {
-        let snapshot = self.snapshot()?;
+        let mut snapshot = self.snapshot()?;
+        // Login sessions are installation-local and must not be restored elsewhere.
+        snapshot.retain(|name, _| NAMES.contains(&name.as_str()));
         let bytes = serde_json::to_vec(&snapshot).map_err(|_| invalid("无法生成备份"))?;
         crypto::export(password, &bytes)
     }

@@ -1,18 +1,18 @@
+use super::sessions::Sessions;
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const COOKIE_NAME: &str = "bilistream_session";
-const SESSION_PEPPER: &[u8] = b"bilistream-webui-session-v1";
+static CLUSTER_TOKEN: OnceLock<String> = OnceLock::new();
 
 static LISTEN: OnceLock<ListenConfig> = OnceLock::new();
 
@@ -20,7 +20,6 @@ static LISTEN: OnceLock<ListenConfig> = OnceLock::new();
 struct ListenConfig {
     bind: IpAddr,
     password: Option<String>,
-    session: Option<String>,
 }
 
 /// Parses `--bind` / `BILISTREAM_BIND`. `localhost` is `127.0.0.1`.
@@ -55,12 +54,7 @@ fn make_listen_config(bind: &str, password: Option<String>) -> Result<ListenConf
     if !bind.is_loopback() && password.is_none() {
         return Err("监听非本机地址时必须设置 Web UI 访问密码".into());
     }
-    let session = password.as_deref().map(session_id_for_password);
-    Ok(ListenConfig {
-        bind,
-        password,
-        session,
-    })
+    Ok(ListenConfig { bind, password })
 }
 
 pub fn listen_bind() -> IpAddr {
@@ -80,18 +74,108 @@ pub fn listen_password() -> Option<&'static str> {
     LISTEN.get().and_then(|config| config.password.as_deref())
 }
 
-/// Session cookie value derived from the password, if one is configured.
-pub fn session_cookie() -> Option<&'static str> {
-    LISTEN.get().and_then(|config| config.session.as_deref())
+/// Shared cluster credential, independent of the browser password.
+pub(crate) fn cluster_token() -> Option<&'static str> {
+    CLUSTER_TOKEN.get().map(String::as_str)
 }
 
-/// Attach the session cookie when a password is configured.
-pub fn authorize_http(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match session_cookie() {
-        Some(session) => {
-            builder.header(reqwest::header::COOKIE, format!("{COOKIE_NAME}={session}"))
+pub(crate) fn install_cluster_token_file(path: &std::path::Path) -> Result<(), String> {
+    let token = super::restart::read_password_file(path)
+        .map_err(|e| format!("无法加载节点通信密钥: {e}"))?;
+    validate_cluster_token(&token, listen_password())?;
+    CLUSTER_TOKEN
+        .set(token)
+        .map_err(|_| "节点通信密钥已配置".into())
+}
+
+fn validate_cluster_token(token: &str, password: Option<&str>) -> Result<(), String> {
+    if !(32..=256).contains(&token.len())
+        || !token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err("节点通信密钥需要 32–256 位字母、数字、下划线或连字符".into());
+    }
+    if password.is_some_and(|p| secret_eq(token, p)) {
+        return Err("节点通信密钥不能与 Web UI 密码相同".into());
+    }
+    Ok(())
+}
+
+pub(super) struct AuthState {
+    password: Option<String>,
+    cluster_token: Option<String>,
+    sessions: Sessions,
+    throttle: Mutex<LoginThrottle>,
+}
+
+impl AuthState {
+    pub(super) fn open(
+        store: Arc<crate::storage::Store>,
+        password: Option<String>,
+        cluster_token: Option<String>,
+    ) -> std::io::Result<Arc<Self>> {
+        let sessions = Sessions::open(store, password.as_deref())?;
+        Ok(Arc::new(Self {
+            password,
+            cluster_token,
+            sessions,
+            throttle: Mutex::default(),
+        }))
+    }
+
+    fn has_session(&self, headers: &HeaderMap) -> bool {
+        session_from_headers(headers)
+            .is_some_and(|token| self.sessions.contains(&token, crate::storage::now()))
+    }
+
+    fn allows(&self, method: &Method, path: &str, headers: &HeaderMap) -> bool {
+        let path = path.strip_prefix("/api/").unwrap_or(path);
+        let path = path.trim_start_matches('/');
+        let peer_only = matches!(
+            path,
+            "cluster/export-config"
+                | "cluster/yt-index"
+                | "cluster/capabilities"
+                | "cluster/heartbeat"
+                | "cluster/self-check"
+                | "cluster/apply-node-mode"
+                | "cluster/sync-membership"
+                | "cluster/sync-config"
+                | "cluster/cache-active-monitor-state"
+                | "cluster/apply-public-status"
+        );
+        let peer_method = matches!(
+            (method.as_str(), path),
+            (
+                "GET" | "HEAD",
+                "cluster/export-config" | "cluster/yt-index" | "cluster/capabilities"
+            ) | (
+                "POST",
+                "cluster/heartbeat"
+                    | "cluster/self-check"
+                    | "cluster/apply-node-mode"
+                    | "cluster/sync-membership"
+                    | "cluster/sync-config"
+                    | "cluster/cache-active-monitor-state"
+                    | "cluster/apply-public-status"
+            )
+        );
+        let peer_control = method == Method::POST
+            && matches!(
+                path,
+                "cluster/drain" | "cluster/auto-failover" | "cluster/failover" | "server/restart"
+            );
+        if let Some(header) = headers.get(header::AUTHORIZATION) {
+            return (peer_method || peer_control)
+                && header
+                    .to_str()
+                    .ok()
+                    .and_then(|h| h.strip_prefix("Bearer "))
+                    .zip(self.cluster_token.as_deref())
+                    .is_some_and(|(got, expected)| secret_eq(got, expected));
         }
-        None => builder,
+        !peer_only && (self.password.is_none() || self.has_session(headers))
     }
 }
 
@@ -101,11 +185,14 @@ pub struct AuthStatus {
     pub authenticated: bool,
 }
 
-pub async fn auth_status(request: Request) -> Json<AuthStatus> {
-    let required = password_required();
+pub(super) async fn auth_status(
+    Extension(auth): Extension<Arc<AuthState>>,
+    request: Request,
+) -> Json<AuthStatus> {
+    let required = auth.password.is_some();
     Json(AuthStatus {
         required,
-        authenticated: !required || request_has_session(&request),
+        authenticated: !required || auth.has_session(request.headers()),
     })
 }
 
@@ -151,19 +238,20 @@ impl LoginThrottle {
     }
 }
 
-pub async fn login(
+pub(super) async fn login(
+    Extension(auth): Extension<Arc<AuthState>>,
+    headers: HeaderMap,
     connection: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<LoginBody>,
 ) -> Response {
-    let Some(expected) = listen_password() else {
+    let Some(expected) = auth.password.as_deref() else {
         return Json(serde_json::json!({ "success": true, "required": false })).into_response();
     };
 
     // Use the socket peer; untrusted X-Forwarded-For must not bypass the limit.
     let source = connection.map_or(DEFAULT_BIND, |Extension(ConnectInfo(addr))| addr.ip());
-    static THROTTLE: OnceLock<Mutex<LoginThrottle>> = OnceLock::new();
-    let accepted = THROTTLE
-        .get_or_init(Mutex::default)
+    let accepted = auth
+        .throttle
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .attempt(
@@ -183,10 +271,26 @@ pub async fn login(
         }
     };
     if correct {
+        let previous = session_from_headers(&headers);
+        let session = tokio::task::spawn_blocking(move || {
+            auth.sessions
+                .issue(previous.as_deref(), crate::storage::now())
+        })
+        .await;
+        let token = match session {
+            Ok(Ok(token)) => token,
+            _ => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"success":false,"message":"无法保存登录会话"})),
+                )
+                    .into_response()
+            }
+        };
         let mut response = Json(serde_json::json!({ "success": true })).into_response();
-        if let Some(cookie) = session_set_cookie_header() {
-            response.headers_mut().insert(header::SET_COOKIE, cookie);
-        }
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, session_set_cookie_header(&token));
         response
     } else {
         (
@@ -197,7 +301,20 @@ pub async fn login(
     }
 }
 
-pub async fn logout() -> Response {
+pub(super) async fn logout(
+    Extension(auth): Extension<Arc<AuthState>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(token) = session_from_headers(&headers) {
+        let result = tokio::task::spawn_blocking(move || auth.sessions.revoke(&token)).await;
+        if !matches!(result, Ok(Ok(()))) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"success":false,"message":"无法注销登录会话，请重试"})),
+            )
+                .into_response();
+        }
+    }
     let mut response = StatusCode::NO_CONTENT.into_response();
     if let Ok(cookie) = HeaderValue::from_str(&format!(
         "{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
@@ -207,12 +324,16 @@ pub async fn logout() -> Response {
     response
 }
 
-pub async fn require_webui_auth(request: Request, next: Next) -> Result<Response, StatusCode> {
+pub(super) async fn require_webui_auth(
+    Extension(auth): Extension<Arc<AuthState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     if is_public_api_path(request.uri().path()) {
         return Ok(next.run(request).await);
     }
 
-    if !password_required() || request_has_session(&request) {
+    if auth.allows(request.method(), request.uri().path(), request.headers()) {
         Ok(next.run(request).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
@@ -233,39 +354,20 @@ pub(crate) fn is_public_api_path(path: &str) -> bool {
     )
 }
 
-fn session_id_for_password(password: &str) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(SESSION_PEPPER);
-    hasher.update([0u8]);
-    hasher.update(password.as_bytes());
-    hasher
-        .finalize()
-        .iter()
-        .fold(String::with_capacity(32), |mut out, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
-}
-
-fn session_set_cookie_header() -> Option<HeaderValue> {
-    let session = session_cookie()?;
+fn session_set_cookie_header(token: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "{COOKIE_NAME}={session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+        "{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        super::sessions::LIFETIME_SECS
     ))
-    .ok()
+    .expect("generated hex session cookie")
 }
 
-fn request_has_session(request: &Request) -> bool {
-    let Some(expected) = session_cookie() else {
-        return true;
-    };
-    request
-        .headers()
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|header| cookie_value(header, COOKIE_NAME))
-        .is_some_and(|got| secret_eq(&got, expected))
+fn session_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .find_map(|header| cookie_value(header, COOKIE_NAME))
 }
 
 fn cookie_value(header: &str, name: &str) -> Option<String> {
@@ -298,6 +400,205 @@ fn secret_eq(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn browser_sessions_and_peer_credentials_have_separate_authority() {
+        use axum::{body::Body, routing::post, Router};
+        use tower::ServiceExt;
+        let root =
+            std::env::temp_dir().join(format!("bilistream-auth-routes-{}", std::process::id()));
+        let store =
+            crate::storage::Store::open(root.join("data"), root.join("key/master"), None).unwrap();
+        let token = "synthetic-cluster-key-0123456789abcdef";
+        let auth = AuthState::open(
+            Arc::clone(&store),
+            Some("password".into()),
+            Some(token.into()),
+        )
+        .unwrap();
+        let router = |auth| {
+            Router::new()
+                .route("/api/login", post(login))
+                .route("/api/logout", post(logout))
+                .fallback(|| async { StatusCode::OK })
+                .layer(axum::middleware::from_fn(require_webui_auth))
+                .layer(Extension(auth))
+        };
+        let app = router(Arc::clone(&auth));
+        let request = |path: &str, cookie: Option<&str>, bearer: Option<&str>| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            if let Some(token) = bearer {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            request
+                .body(Body::from(r#"{"password":"password"}"#))
+                .unwrap()
+        };
+        let first = app
+            .clone()
+            .oneshot(request("/api/login", None, None))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_cookie = first.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(first_cookie.contains("HttpOnly; SameSite=Lax; Max-Age="));
+        let second = app
+            .clone()
+            .oneshot(request("/api/login", Some(&first_cookie), None))
+            .await
+            .unwrap();
+        let second_cookie = second.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(first_cookie, second_cookie);
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/config", Some(&first_cookie), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/config", Some(&second_cookie), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "/api/cluster/heartbeat",
+                    Some(&second_cookie),
+                    None
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/cluster/heartbeat", None, Some(token)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        for path in [
+            "/api/config",
+            "/api/storage/backup",
+            "/api/cluster/unknown",
+            "/api/update/download",
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(request(path, None, Some(token)))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/cluster/heartbeat", None, Some("wrong")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/logout", Some(&second_cookie), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/config", Some(&second_cookie), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // The old deterministic cookie is never accepted, even for the same password.
+        use md5::{Digest, Md5};
+        let old = format!(
+            "bilistream_session={}",
+            Md5::digest(b"bilistream-webui-session-v1\0password")
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/config", Some(&old), None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let local = router(AuthState::open(Arc::clone(&store), None, None).unwrap());
+        assert_eq!(
+            local
+                .clone()
+                .oneshot(request("/api/config", None, None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            local
+                .clone()
+                .oneshot(request("/api/cluster/heartbeat", None, None))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            local
+                .clone()
+                .oneshot(request("/api/cluster/drain", None, Some("")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        drop((app, auth, local, store));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn node_tokens_are_distinct_valid_header_credentials() {
+        let token = "synthetic-cluster-key-0123456789abcdef";
+        assert!(validate_cluster_token(token, Some("different-password")).is_ok());
+        assert!(validate_cluster_token(token, Some(token)).is_err());
+        for bad in [
+            "",
+            "too-short",
+            "synthetic-cluster-key-0123456789abcdef\r\n",
+            "synthetic cluster-key-0123456789abcdef",
+        ] {
+            assert!(validate_cluster_token(bad, None).is_err());
+        }
+    }
 
     #[test]
     fn non_loopback_listeners_require_a_password() {
@@ -372,18 +673,6 @@ mod tests {
         assert!(!is_public_api_path("/status"));
         assert!(!is_public_api_path("/api/status"));
         assert!(!is_public_api_path("/events"));
-    }
-
-    #[test]
-    fn session_id_is_stable_for_the_same_password() {
-        assert_eq!(
-            session_id_for_password("hunter2"),
-            session_id_for_password("hunter2")
-        );
-        assert_ne!(
-            session_id_for_password("hunter2"),
-            session_id_for_password("hunter3")
-        );
     }
 
     #[test]
