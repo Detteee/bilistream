@@ -1,0 +1,22 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo fmt --all --check
+      - run: cargo test --locked -p bilistream
+      - run: cargo build --locked -p bilistream --bin bilistream
+      - run: node --test webui/tests/*.test.mjs

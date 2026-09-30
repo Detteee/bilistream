@@ -43,11 +43,11 @@
 ```bash
 git clone https://github.com/Detteee/bilistream.git
 cd bilistream
-cargo build --release --bin bilistream
+cargo build --locked --release --bin bilistream
 ./target/release/bilistream
 ```
 
-可选桌面包位于 `src-tauri`（`bilistream-tauri`），共用 Rust 后端，需要 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。安装 cargo-zigbuild 和 Zig 后，可用 `cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release` 进行 Linux 交叉编译。
+可选桌面包位于 `src-tauri`（`bilistream-tauri`），共用 Rust 后端，需要 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。安装 cargo-zigbuild 和 Zig 后，可用 `cargo zigbuild --locked --target x86_64-unknown-linux-gnu.2.36 --release` 进行 Linux 交叉编译。
 
 ## 启动与配置
 

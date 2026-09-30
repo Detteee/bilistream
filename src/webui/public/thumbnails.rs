@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -99,17 +99,10 @@ pub(super) fn host_is_allowed(url: &str) -> bool {
 }
 
 fn host_of(url: &str) -> Option<String> {
-    // Only https is proxied: the node would otherwise fetch cleartext on a
-    // viewer's behalf.
-    let rest = url.strip_prefix("https://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit('@').next()?;
-    let host = match host.strip_prefix('[') {
-        // IPv6 literal.
-        Some(v6) => v6.split(']').next()?.to_string(),
-        None => host.split(':').next()?.to_string(),
-    };
-    (!host.is_empty()).then(|| host.to_lowercase())
+    // Use the same URL parser as reqwest, including its backslash handling.
+    let url = reqwest::Url::parse(url).ok()?;
+    (url.scheme() == "https").then_some(())?;
+    url.host_str().map(str::to_owned)
 }
 
 /// The path a stream's thumbnail should point at, once cached.
@@ -255,7 +248,7 @@ async fn delete_unreferenced(dir: &Path, index: &mut CacheIndex, wanted: &[(Stri
 }
 
 async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry> {
-    let client = crate::plugins::http::pooled_client(None).ok()?;
+    let client = thumbnail_client().ok()?;
     let response = client.get(url).timeout(FETCH_TIMEOUT).send().await.ok()?;
     if !response.status().is_success() {
         return None;
@@ -286,9 +279,64 @@ async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry>
     })
 }
 
+fn thumbnail_client() -> Result<reqwest::Client, &'static str> {
+    static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(FETCH_TIMEOUT)
+                .timeout(FETCH_TIMEOUT)
+                .build()
+        })
+        .as_ref()
+        .cloned()
+        .map_err(|_| "无法初始化缩略图客户端")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn thumbnail_redirects_never_contact_the_destination() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        crate::install_crypto_provider();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new()
+            .route(
+                "/redirect",
+                axum::routing::get(|| async {
+                    axum::response::Redirect::temporary("/private-image")
+                }),
+            )
+            .route(
+                "/private-image",
+                axum::routing::get(move || async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+                        "private-bytes",
+                    )
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let result = fetch_thumbnail(
+            &std::env::temp_dir(),
+            "unused-redirect-test",
+            &format!("http://{address}/redirect"),
+        )
+        .await;
+        assert!(result.is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
 
     #[test]
     fn only_known_cdns_are_fetched() {
@@ -321,6 +369,8 @@ mod tests {
         assert!(!host_is_allowed("https://i.ytimg.com.evil.example/x.jpg"));
         assert!(!host_is_allowed("https://noti.ytimg.com/x.jpg"));
         assert!(!host_is_allowed("https://evil.example/?h=i.ytimg.com"));
+        assert!(!host_is_allowed(r"https://evil.example\@i.ytimg.com/x.jpg"));
+        assert!(!host_is_allowed("https://i.ytimg.com:invalid/x.jpg"));
     }
 
     /// A subdomain of an allowed host is still that CDN.

@@ -591,11 +591,18 @@ pub async fn send_danmaku(
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_change_cover(cfg: &Config, image_path: &str) -> Result<(), Box<dyn Error>> {
+    let file_content = tokio::fs::read(image_path).await?;
+    bili_change_cover_bytes(cfg, file_content).await
+}
+
+pub(crate) async fn bili_change_cover_bytes(
+    cfg: &Config,
+    file_content: Vec<u8>,
+) -> Result<(), Box<dyn Error>> {
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let (client, _) = bili_room_clients()?;
 
     // Step 1: Upload image
-    let file_content = tokio::fs::read(image_path).await?;
     let form = reqwest::multipart::Form::new()
         .text("csrf", cfg.bililive.credentials.bili_jct.clone())
         .text("bucket", "live")
@@ -603,7 +610,7 @@ pub async fn bili_change_cover(cfg: &Config, image_path: &str) -> Result<(), Box
         .part(
             "file",
             reqwest::multipart::Part::bytes(file_content)
-                .file_name(image_path.to_string())
+                .file_name("cover.jpg")
                 .mime_str("image/jpeg")?,
         );
 

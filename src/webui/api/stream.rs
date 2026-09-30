@@ -226,17 +226,64 @@ pub async fn send_danmaku(
 
 #[derive(Deserialize)]
 pub struct UpdateCoverRequest {
+    // Historical field name; only application cache names are accepted.
     image_path: String,
+}
+
+async fn read_cached_cover(path: &Path) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    let file = options.open(path).await?;
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other("封面必须是普通图片文件"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            // FILE_ATTRIBUTE_REPARSE_POINT
+            return Err(std::io::Error::other("封面不能是链接"));
+        }
+    }
+    const MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).await?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+        return Err(std::io::Error::other("封面为空或过大"));
+    }
+    Ok(bytes)
 }
 
 pub async fn update_cover(
     Json(payload): Json<UpdateCoverRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
+    // Resolve the name before loading credentials or contacting Bilibili.
+    if !matches!(
+        payload.image_path.as_str(),
+        "cover.jpg" | "pic_for_crop.jpg"
+    ) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let path = crate::storage::cache_file(&payload.image_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let bytes = read_cached_cover(&path).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
+        }
+    })?;
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    bilibili::bili_change_cover(&cfg, &payload.image_path)
+    bilibili::bili_change_cover_bytes(&cfg, bytes)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -696,4 +743,48 @@ pub async fn toggle_niconico_monitor(
             toggle_sync_message
         )),
     })
+}
+
+#[cfg(test)]
+mod cover_access_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cover_api_rejects_paths_before_loading_configuration() {
+        for image_path in [
+            "/etc/passwd",
+            "../../etc/passwd",
+            "data/bilistream.db",
+            "data/cache/cover.jpg",
+            "C:\\Users\\user\\secret.txt",
+            "cover.jpg/../cookies.json",
+        ] {
+            let result = update_cover(Json(UpdateCoverRequest {
+                image_path: image_path.into(),
+            }))
+            .await;
+            assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST), "{image_path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_cover_reads_a_regular_file_and_refuses_a_link() {
+        let root =
+            std::env::temp_dir().join(format!("bilistream-cover-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let image = root.join("cover.jpg");
+        std::fs::write(&image, b"synthetic-cover-bytes").unwrap();
+        assert_eq!(
+            read_cached_cover(&image).await.unwrap(),
+            b"synthetic-cover-bytes"
+        );
+        assert!(read_cached_cover(&root).await.is_err());
+        #[cfg(unix)]
+        {
+            let link = root.join("pic_for_crop.jpg");
+            std::os::unix::fs::symlink(&image, &link).unwrap();
+            assert!(read_cached_cover(&link).await.is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
