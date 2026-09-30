@@ -8,7 +8,6 @@ use axum::{
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::listen::{
@@ -211,10 +210,6 @@ pub async fn start_webui_on_listener(
         .layer(middleware::from_fn(require_webui_auth))
         .layer(Extension(auth));
 
-    let assets = static_asset_dir("webui/dist");
-    let static_files =
-        ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html")));
-
     let response_layers = ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
@@ -225,7 +220,7 @@ pub async fn start_webui_on_listener(
     // Main app with API routes and static files
     let app = Router::new()
         .nest("/api", api_router)
-        .fallback_service(static_files)
+        .fallback_service(super::static_assets::router(false))
         .layer(response_layers)
         .with_state(state);
 

@@ -4,10 +4,10 @@
 // paced for a page that may be open in many tabs for hours, and pauses while
 // the tab is hidden.
 
-import { renderStatusCards, renderNiconicoCard, setStatusCardsMessage } from '/shared/js/status-cards.js';
+import { renderStatusCards, renderNiconicoCard, setStatusCardsMessage } from '../shared/js/status-cards.js';
 import { clusterIsRestreaming, renderNodes } from './nodes.js';
 import { createJsonPoller } from './request.js';
-import { bindDialog, bindListboxKeyboard } from '/shared/js/dialog.js';
+import { bindDialog, bindListboxKeyboard } from '../shared/js/dialog.js';
 import {
   closeAreaModal,
   closeCommandModal,

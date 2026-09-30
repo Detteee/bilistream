@@ -17,13 +17,12 @@ use serde::Serialize;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
 use super::streams::{current_public_streams, start_streams_watch};
 use super::thumbnails::read_thumbnail;
-use crate::webui::server::static_asset_dir;
+use crate::webui::static_assets::not_modified;
 
 /// Nothing here accepts a body; anything larger is refused before it is read.
 const MAX_BODY_BYTES: usize = 4 * 1024;
@@ -127,19 +126,6 @@ async fn public_thumbnail(axum::extract::Path(key): axum::extract::Path<String>)
         .into_response()
 }
 
-fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
-    let expected = etag.strip_prefix("W/").unwrap_or(etag);
-    headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|requested| {
-            requested.split(',').any(|tag| {
-                let tag = tag.trim();
-                tag == "*" || tag.strip_prefix("W/").unwrap_or(tag) == expected
-            })
-        })
-}
-
 fn cache_control(max_age: u64) -> String {
     // stale-while-revalidate keeps the edge answering during the refresh, so a
     // slow rebuild never turns into a burst of origin traffic.
@@ -177,30 +163,6 @@ fn public_areas_from_json(parsed: &serde_json::Value) -> Vec<PublicArea> {
     areas
 }
 
-/// Assets shared with the dashboard, mounted file by file rather than as a
-/// directory: the public port must not be able to serve the dashboard's own
-/// markup or its admin-only modules.
-fn shared_assets() -> Router {
-    let assets = static_asset_dir("webui/dist");
-    Router::new()
-        .route_service("/styles.css", ServeFile::new(assets.join("styles.css")))
-        .route_service("/js/dom.js", ServeFile::new(assets.join("js/dom.js")))
-        .route_service("/js/format.js", ServeFile::new(assets.join("js/format.js")))
-        .route_service("/js/dialog.js", ServeFile::new(assets.join("js/dialog.js")))
-        .route_service(
-            "/js/cluster-health.js",
-            ServeFile::new(assets.join("js/cluster-health.js")),
-        )
-        .route_service(
-            "/js/cluster-network.js",
-            ServeFile::new(assets.join("js/cluster-network.js")),
-        )
-        .route_service(
-            "/js/status-cards.js",
-            ServeFile::new(assets.join("js/status-cards.js")),
-        )
-}
-
 pub fn public_router() -> Router {
     let api = Router::new()
         .route("/status", get(public_status))
@@ -228,17 +190,11 @@ pub fn public_router() -> Router {
             HeaderValue::from_static("no-store"),
         ));
 
-    // No not_found_service: the page is a single document with no client-side
-    // routing, and falling back to it would answer an admin path with 200
-    // instead of the 404 that says the route does not exist here.
-    let page = ServeDir::new(static_asset_dir("webui/public-dist"));
-
     Router::new()
         .route("/health", get(health))
         .route("/t/{key}", get(public_thumbnail))
         .nest("/api/public", api)
-        .nest("/shared", shared_assets())
-        .fallback_service(page)
+        .fallback_service(crate::webui::static_assets::router(true))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
         .layer(security_headers)
@@ -601,10 +557,9 @@ mod tests {
         let _ = stop.send(());
     }
 
-    /// HTML/CSS/JS are iterated often; without this, a tunnel in front keeps
-    /// serving the previous streams.js after index.html already changed.
+    /// Unversioned URLs revalidate; content-versioned assets can stay cached.
     #[tokio::test]
-    async fn static_page_assets_are_not_cached() {
+    async fn static_page_revalidates_and_uses_immutable_versioned_assets() {
         let (addr, stop) = serve_for_test().await;
         let client = reqwest::Client::new();
 
@@ -624,10 +579,46 @@ mod tests {
             assert_eq!(response.status(), reqwest::StatusCode::OK, "{path}");
             assert_eq!(
                 response.headers().get("cache-control").unwrap(),
-                "no-store",
+                "no-cache",
                 "{path} must revalidate"
             );
         }
+
+        let response = client.get(format!("http://{addr}/")).send().await.unwrap();
+        let etag = response.headers()[header::ETAG].clone();
+        let html = response.text().await.unwrap();
+        let path = html
+            .split("\"/_assets/")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        let response = client
+            .get(format!("http://{addr}/_assets/{path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        let response = client
+            .get(format!("http://{addr}/"))
+            .header(header::IF_NONE_MATCH, etag)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+        let version = path.split('/').next().unwrap();
+        let response = client
+            .get(format!("http://{addr}/_assets/{version}/shared/js/api.js"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let _ = stop.send(());
     }

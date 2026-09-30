@@ -4,8 +4,8 @@
 // actually pushing, compact tiles for the rest. No heartbeat ages, no action
 // buttons, and no links into a node's WebUI.
 
-import { createClusterNetwork, updateClusterNetwork } from '/shared/js/cluster-network.js';
-import { formatClusterNodeStatus } from '/shared/js/cluster-health.js';
+import { createClusterNetwork, updateClusterNetwork } from '../shared/js/cluster-network.js';
+import { formatClusterNodeStatus } from '../shared/js/cluster-health.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
