@@ -27,6 +27,12 @@ html.light-theme {
   flex: 0 0 auto;
 }
 
+/* Outside .dashboard the card loses grid-column: 1 / -1; keep full width. */
+.public-shell > .cluster-card {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
 #public-streams {
   scroll-margin-top: calc(var(--appbar-h) + var(--sp-4));
 }
