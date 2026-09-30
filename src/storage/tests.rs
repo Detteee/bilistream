@@ -119,6 +119,54 @@ fn legacy_export_preserves_latest_state_times_and_local_cookie_paths() {
 }
 
 #[test]
+fn learned_hour_weights_keep_f64_precision_through_migration_and_reopen() {
+    let dir = Directory::new();
+    let decimals = [
+        "1.4602988135614665",
+        "1.7576220721073945",
+        "0.9095704406102849",
+    ]
+    .repeat(8);
+    let expected: Vec<u64> = decimals
+        .iter()
+        .map(|text| text.parse::<f64>().unwrap().to_bits())
+        .collect();
+    let raw = format!(
+        r#"{{"channels":{{"fixture":[{}]}},"counted":{{"fixture-video":123}},"decayed_at":100}}"#,
+        decimals.join(",")
+    );
+    fs::write(dir.0.join("legacy/youtube_golive_hours.json"), raw).unwrap();
+    fs::write(
+        dir.0.join("legacy/config.json"),
+        serde_json::to_vec(&config_fixture()).unwrap(),
+    )
+    .unwrap();
+    for pass in 0..2 {
+        let store = dir.open().unwrap();
+        let value = store
+            .read("youtube_golive_hours.json")
+            .unwrap()
+            .unwrap()
+            .value;
+        let bits: Vec<u64> = value["channels"]["fixture"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|number| number.as_f64().unwrap().to_bits())
+            .collect();
+        assert_eq!(bits, expected, "migration/reopen pass {pass}");
+        if pass == 1 {
+            let export = dir.0.join("export");
+            store.export_legacy(&export).unwrap();
+            let text = fs::read_to_string(export.join("youtube_golive_hours.json")).unwrap();
+            for decimal in &decimals {
+                assert!(text.contains(decimal), "export changed a stored weight");
+            }
+        }
+    }
+}
+
+#[test]
 fn missing_or_wrong_key_never_reinitializes_existing_database() {
     let dir = Directory::new();
     let store = dir.open().unwrap();
