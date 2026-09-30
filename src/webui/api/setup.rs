@@ -653,19 +653,19 @@ pub(crate) fn executable_parent_dir(exe: &Path) -> Result<PathBuf, String> {
 #[cfg(target_os = "windows")]
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let restart_script = current_exe_dir()?.join("restart_after_update.bat");
-    std::fs::write(
-        &restart_script,
-        crate::webui::restart::windows_restart_bat()?,
-    )
-    .map_err(|e| format!("写入重启脚本失败: {}", e))?;
+    let command = crate::webui::restart::windows_restart_bat()?;
+    std::fs::write(&restart_script, command.as_str())
+        .map_err(|e| format!("写入重启脚本失败: {}", e))?;
     let restart_script = restart_script
         .to_str()
         .ok_or_else(|| format!("重启脚本路径不是有效 UTF-8: {}", restart_script.display()))?;
     std::process::Command::new("cmd")
+        .env_remove("BILISTREAM_PASSWORD")
         .args(["/C", "start", "", restart_script])
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("启动重启脚本失败: {}", e))
+        .map_err(|e| format!("启动重启脚本失败: {}", e))?;
+    command.handed_off();
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -674,16 +674,21 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let restart_script = exe_dir.join("restart_after_update.sh");
     let restart_command = crate::webui::restart::restart_command_line()?;
 
-    let script_content = format!("#!/bin/sh\nsleep 3\n{} &\nrm -- \"$0\"\n", restart_command);
-    // This script contains the existing login arguments, so create it privately.
+    let script_content = format!(
+        "#!/bin/sh\nsleep 3\n{} &\nrm -- \"$0\"\n",
+        restart_command.as_str()
+    );
+    // The credential file is private; the script contains only its path.
     let _ = std::fs::remove_file(&restart_script);
     crate::storage::paths::write_private(&restart_script, script_content.as_bytes())
         .map_err(|e| format!("写入重启脚本失败: {e}"))?;
     std::process::Command::new("sh")
+        .env_remove("BILISTREAM_PASSWORD")
         .arg(&restart_script)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("启动重启脚本失败: {}", e))
+        .map_err(|e| format!("启动重启脚本失败: {}", e))?;
+    restart_command.handed_off();
+    Ok(())
 }
 
 // Version endpoint

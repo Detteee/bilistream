@@ -4,49 +4,180 @@ pub struct RestartSpec {
     pub cwd: PathBuf,
     pub exe: String,
     pub args: Vec<String>,
+    credential: Option<RestartCredential>,
+}
+
+struct RestartCredential {
+    path: PathBuf,
+    keep: bool,
+}
+impl Drop for RestartCredential {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub struct RestartCommand {
+    text: String,
+    credential: Option<RestartCredential>,
+}
+impl RestartCommand {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+    pub fn handed_off(mut self) {
+        if let Some(credential) = &mut self.credential {
+            credential.keep = true;
+        }
+    }
+}
+
+const RESTART_PASSWORD_LIMIT: usize = 64 * 1024;
+
+fn write_restart_password(directory: &Path, password: &str) -> Result<RestartCredential, String> {
+    if password.is_empty() || password.len() > RESTART_PASSWORD_LIMIT {
+        return Err("访问密码为空或过长，无法准备重启".into());
+    }
+    crate::storage::paths::private_dir(directory).map_err(|_| "无法创建重启凭据目录")?;
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|_| "无法生成重启凭据标识")?;
+    let name: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    let credential = RestartCredential {
+        path: directory.join(format!("auth-{name}.tmp")),
+        keep: false,
+    };
+    crate::storage::paths::write_private(&credential.path, password.as_bytes())
+        .map_err(|_| "无法写入重启凭据")?;
+    Ok(credential)
+}
+
+pub fn consume_restart_password(path: &Path) -> Result<String, String> {
+    read_password_file_inner(path, true)
+}
+
+pub fn read_password_file(path: &Path) -> Result<String, String> {
+    read_password_file_inner(path, false)
+}
+
+fn read_password_file_inner(path: &Path, consume: bool) -> Result<String, String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = options.open(path).map_err(|_| "无法读取密码文件")?;
+    let metadata = file.metadata().map_err(|_| "无法检查密码文件")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("密码文件必须是普通文件".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.mode() & 0o077 != 0 || metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("密码文件必须属于运行账号，且仅该账号可读写（chmod 600）".into());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("密码文件不能是链接".into());
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(RESTART_PASSWORD_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "无法读取密码文件")?;
+    if consume {
+        std::fs::remove_file(path).map_err(|_| "无法清除重启凭据")?;
+    }
+    if bytes.is_empty() || bytes.len() > RESTART_PASSWORD_LIMIT {
+        return Err("密码文件为空或过长".into());
+    }
+    let mut password = String::from_utf8(bytes).map_err(|_| "密码文件必须使用 UTF-8 编码")?;
+    // Text editors commonly append one newline; internal handoffs preserve every byte.
+    if !consume && password.ends_with('\n') {
+        password.pop();
+        if password.ends_with('\r') {
+            password.pop();
+        }
+    }
+    if password.trim().is_empty() {
+        return Err("密码文件不能只含空白字符".into());
+    }
+    Ok(password)
 }
 
 pub fn restart_spec() -> Result<RestartSpec, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_word = resolve_restart_executable_word(&cwd, &exe);
-    let mut args: Vec<String> = std::env::args_os()
+    let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    ensure_password_arg(&mut args, crate::webui::listen_password());
+    let credential = match crate::webui::listen_password() {
+        Some(password) => {
+            let store = crate::storage::global().map_err(|_| "无法打开凭据存储")?;
+            Some(write_restart_password(
+                &store.data_dir().join("restart-auth"),
+                password,
+            )?)
+        }
+        None => None,
+    };
+    let args = restart_args(
+        &args,
+        credential
+            .as_ref()
+            .map(|credential| credential.path.as_path()),
+    );
     Ok(RestartSpec {
         cwd,
         exe: exe_word,
         args,
+        credential,
     })
 }
 
-/// Shell command used to relaunch this process, including `--password` when set.
-pub fn restart_command_line() -> Result<String, String> {
+/// Relaunch without a password in argv, script text, or the child environment.
+pub fn restart_command_line() -> Result<RestartCommand, String> {
     let spec = restart_spec()?;
     let mut parts = vec![
         "cd".to_string(),
         shell_word(&spec.cwd.to_string_lossy()),
         "&&".to_string(),
+        "env -u BILISTREAM_PASSWORD".to_string(),
         shell_word(&spec.exe),
     ];
     parts.extend(spec.args.iter().map(|arg| shell_word(arg)));
-    Ok(parts.join(" "))
+    Ok(RestartCommand {
+        text: parts.join(" "),
+        credential: spec.credential,
+    })
 }
 
-pub fn windows_restart_bat() -> Result<String, String> {
+pub fn windows_restart_bat() -> Result<RestartCommand, String> {
     let spec = restart_spec()?;
     let mut start = format!("start \"\" {}", cmd_word(&spec.exe));
     for arg in &spec.args {
         start.push(' ');
         start.push_str(&cmd_word(arg));
     }
-    Ok(format!(
-        "@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncd /d {}\r\n{}\r\ndel \"%~f0\"\r\n",
-        cmd_word(&spec.cwd.to_string_lossy()),
-        start
-    ))
+    Ok(RestartCommand {
+        text: format!("@echo off\r\nset BILISTREAM_PASSWORD=\r\ntimeout /t 2 /nobreak >nul\r\ncd /d {}\r\n{}\r\ndel \"%~f0\"\r\n", cmd_word(&spec.cwd.to_string_lossy()), start),
+        credential: spec.credential,
+    })
 }
 
 pub fn resolve_restart_executable_word(cwd: &Path, current_exe: &Path) -> String {
@@ -102,25 +233,41 @@ fn cmd_word(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn args_have_password_flag(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| arg == "--password" || arg.starts_with("--password="))
-}
-
-fn ensure_password_arg(args: &mut Vec<String>, password: Option<&str>) {
-    let Some(password) = password.filter(|value| !value.is_empty()) else {
-        return;
-    };
-    if args_have_password_flag(args) {
-        return;
+fn restart_args(original: &[String], credential: Option<&Path>) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut skip_value = false;
+    for arg in original {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "--password" | "--password-file" | "--restart-password-file"
+        ) {
+            skip_value = true;
+            continue;
+        }
+        if arg.starts_with("--password=")
+            || arg.starts_with("--password-file=")
+            || arg.starts_with("--restart-password-file=")
+        {
+            continue;
+        }
+        args.push(arg.clone());
     }
-    args.push("--password".to_string());
-    args.push(password.to_string());
+    if let Some(path) = credential {
+        args.extend([
+            "--restart-password-file".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
+    args
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{args_have_password_flag, ensure_password_arg};
+    use super::*;
 
     #[test]
     fn update_backup_paths_restart_the_installed_binary() {
@@ -139,31 +286,82 @@ mod tests {
     }
 
     #[test]
-    fn adds_password_when_missing() {
-        let mut args = vec!["webui".to_string()];
-        ensure_password_arg(&mut args, Some("secret"));
-        assert_eq!(args, ["webui", "--password", "secret"]);
+    fn restart_arguments_strip_passwords_and_old_credential_paths() {
+        let original = [
+            "--webui",
+            "--password",
+            "secret",
+            "--port",
+            "3150",
+            "--password=other",
+            "--password-file",
+            "/persistent/file",
+            "--password-file=/other/persistent/file",
+            "--restart-password-file",
+            "/old/file",
+            "--restart-password-file=/other/old/file",
+        ];
+        let original = original.map(String::from);
+        let args = restart_args(&original, Some(Path::new("/private/auth-file.tmp")));
+        assert_eq!(
+            args,
+            [
+                "--webui",
+                "--port",
+                "3150",
+                "--restart-password-file",
+                "/private/auth-file.tmp"
+            ]
+        );
+        assert_eq!(restart_args(&original, None), ["--webui", "--port", "3150"]);
     }
 
     #[test]
-    fn keeps_existing_password_flag() {
-        let mut args = vec!["--password".to_string(), "already".to_string()];
-        ensure_password_arg(&mut args, Some("secret"));
-        assert_eq!(args, ["--password", "already"]);
-    }
-
-    #[test]
-    fn keeps_equals_password_flag() {
-        let mut args = vec!["--password=already".to_string()];
-        ensure_password_arg(&mut args, Some("secret"));
-        assert_eq!(args, ["--password=already"]);
-        assert!(args_have_password_flag(&args));
-    }
-
-    #[test]
-    fn skips_when_no_password_configured() {
-        let mut args = vec!["webui".to_string()];
-        ensure_password_arg(&mut args, None);
-        assert_eq!(args, ["webui"]);
+    fn credentials_are_private_consumed_once_and_cleaned_on_failed_handoff() {
+        let directory = std::env::temp_dir().join(format!(
+            "bilistream-restart-auth-test-{}",
+            std::process::id()
+        ));
+        let credential = write_restart_password(&directory, "synthetic-secret").unwrap();
+        let path = credential.path.clone();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(consume_restart_password(&path).is_err());
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let link = directory.join("symlink");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(consume_restart_password(&link).is_err());
+            std::fs::remove_file(link).unwrap();
+        }
+        assert_eq!(read_password_file(&path).unwrap(), "synthetic-secret");
+        assert!(path.exists());
+        assert_eq!(consume_restart_password(&path).unwrap(), "synthetic-secret");
+        assert!(!path.exists());
+        assert!(consume_restart_password(&path).is_err());
+        let credential = write_restart_password(&directory, " secret with spaces \r\n").unwrap();
+        assert_eq!(
+            read_password_file(&credential.path).unwrap(),
+            " secret with spaces "
+        );
+        assert_eq!(
+            consume_restart_password(&credential.path).unwrap(),
+            " secret with spaces \r\n"
+        );
+        let credential = write_restart_password(&directory, " \n").unwrap();
+        assert!(read_password_file(&credential.path).is_err());
+        assert!(credential.path.exists());
+        assert!(consume_restart_password(&credential.path).is_err());
+        assert!(!credential.path.exists());
+        let credential = write_restart_password(&directory, "synthetic-other-secret").unwrap();
+        let path = credential.path.clone();
+        drop(credential);
+        assert!(!path.exists());
+        std::fs::remove_dir(directory).unwrap();
     }
 }

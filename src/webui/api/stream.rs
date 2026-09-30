@@ -108,7 +108,11 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
         }
     };
 
-    if let Err(e) = schedule_screen_restart(&screen_session, &restart_command, std::process::id()) {
+    if let Err(e) = schedule_screen_restart(
+        &screen_session,
+        restart_command.as_str(),
+        std::process::id(),
+    ) {
         tracing::error!("Failed to schedule screen restart: {}", e);
         return Ok(ApiResponse {
             success: false,
@@ -116,6 +120,7 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
             message: Some(format!("发送 screen 重启命令失败: {}", e)),
         });
     }
+    restart_command.handed_off();
 
     Ok(ApiResponse {
         success: true,
@@ -177,6 +182,7 @@ pub(crate) fn schedule_screen_restart(
     );
 
     Command::new("setsid")
+        .env_remove("BILISTREAM_PASSWORD")
         .arg("sh")
         .arg("-c")
         .arg(script)

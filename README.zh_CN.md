@@ -56,11 +56,26 @@ cargo build --locked --release --bin bilistream
 ./bilistream --tray
 ./bilistream --port 3150
 ./bilistream --bind 127.0.0.1
-./bilistream --password '<密码>'
+./bilistream --password-file ~/.config/bilistream/webui-password
 ./bilistream --ffmpeg-log-level error
 ```
 
-监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；远程访问应通过已配置认证的入口。 非本机监听必须设置访问密码；远程访问建议使用 HTTPS 反向代理。同一连接 IP 登录失败 5 次后，最多限制 1 分钟。
+监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；非本机监听必须设置访问密码，远程访问建议使用 HTTPS 反向代理。同一连接 IP 登录失败 5 次后，最多限制 1 分钟。
+
+首次设置密码（Linux/bash），输入不回显，也不记入 shell 历史：
+
+```bash
+umask 077
+mkdir -p ~/.config/bilistream
+read -rsp 'Web UI 密码: ' bilistream_password
+printf '\n'
+printf '%s' "$bilistream_password" > ~/.config/bilistream/webui-password
+unset bilistream_password
+chmod 600 ~/.config/bilistream/webui-password
+./bilistream --bind 0.0.0.0 --password-file ~/.config/bilistream/webui-password
+```
+
+该文件以明文保存密码，由账号权限保护。请保留供后续启动使用；命令行只显示路径。自动重启使用单独的临时凭据，读取后删除。原有 `--password` 仍兼容。
 
 设置、频道、规则及发现统计保存在程序旁的 `data/bilistream.db`。配置与登录信息加密保存，在本机重启时自动解锁；日常修改通过 Web UI 完成。可用 `BILISTREAM_DATA_DIR` 指定数据目录，用 `BILISTREAM_KEY_FILE` 指定目录之外的受限密钥文件。
 

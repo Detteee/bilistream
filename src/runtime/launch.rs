@@ -43,6 +43,7 @@ Options:\n\
   --bind ADDR                 Listen address (default 127.0.0.1, or BILISTREAM_BIND)\n\
   -p, --port PORT             Web UI port (default 3150, or BILISTREAM_PORT)\n\
   --password PASSWORD         Web UI login password (or BILISTREAM_PASSWORD)\n\
+  --password-file PATH        Read password from a private file\n\
   --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
@@ -95,6 +96,8 @@ fn parse_launch_args_with(
     }
     let mut bind = env_bind.unwrap_or_else(|| "127.0.0.1".to_string());
     let mut password = env_password;
+    let mut restart_password_file = None;
+    let mut password_file = None;
     let mut port: u16 = match env_port {
         Some(value) => value
             .parse()
@@ -125,6 +128,22 @@ fn parse_launch_args_with(
             "--bind" => bind = take_value(argv, &mut i, inline, "--bind")?,
             "--password" => {
                 password = Some(take_value(argv, &mut i, inline, "--password")?);
+            }
+            "--password-file" => {
+                password_file = Some(std::path::PathBuf::from(take_value(
+                    argv,
+                    &mut i,
+                    inline,
+                    "--password-file",
+                )?));
+            }
+            "--restart-password-file" => {
+                restart_password_file = Some(std::path::PathBuf::from(take_value(
+                    argv,
+                    &mut i,
+                    inline,
+                    "--restart-password-file",
+                )?));
             }
             "-p" | "--port" => {
                 let value = take_value(argv, &mut i, inline, "--port")?;
@@ -161,6 +180,12 @@ fn parse_launch_args_with(
     if bind.trim().is_empty() {
         bind = "127.0.0.1".to_string();
     }
+    if let Some(path) = password_file {
+        password = Some(crate::webui::restart::read_password_file(&path)?);
+    }
+    if let Some(path) = restart_password_file {
+        password = Some(crate::webui::restart::consume_restart_password(&path)?);
+    }
     let password = password.filter(|value| !value.trim().is_empty());
 
     Ok(ParseOutcome::Launch(LaunchArgs {
@@ -181,7 +206,13 @@ fn windows_needs_console(argv: &[String]) -> bool {
         match key {
             "-h" | "--help" | "-V" | "--version" | "--webui" => return true,
             "--tray" => i += 1,
-            "--bind" | "--password" | "--port" | "-p" | "--ffmpeg-log-level" => {
+            "--bind"
+            | "--password"
+            | "--password-file"
+            | "--restart-password-file"
+            | "--port"
+            | "-p"
+            | "--ffmpeg-log-level" => {
                 if !raw.contains('=') {
                     i += 1;
                 }
@@ -694,6 +725,50 @@ mod tests {
         assert_eq!(launch.ffmpeg_log_level, "error");
         assert!(!launch.tray);
         assert!(launch.password.is_none());
+    }
+
+    #[test]
+    fn launch_consumes_private_restart_credentials() {
+        let directory = std::env::temp_dir().join(format!(
+            "bilistream-launch-credential-test-{}",
+            std::process::id()
+        ));
+        crate::storage::paths::private_dir(&directory).unwrap();
+        let file = directory.join("auth.tmp");
+        crate::storage::paths::write_private(&file, b"synthetic-restart-password").unwrap();
+        let public_args = [
+            "bilistream".into(),
+            "--password-file".into(),
+            file.to_string_lossy().into_owned(),
+        ];
+        let ParseOutcome::Launch(launch) =
+            parse_launch_args_with(&public_args, None, None, None, None, false).unwrap()
+        else {
+            panic!("expected launch")
+        };
+        assert_eq!(
+            launch.password.as_deref(),
+            Some("synthetic-restart-password")
+        );
+        assert!(file.exists());
+        let args = [
+            "bilistream".into(),
+            "--webui".into(),
+            "--restart-password-file".into(),
+            file.to_string_lossy().into_owned(),
+        ];
+        let ParseOutcome::Launch(launch) =
+            parse_launch_args_with(&args, None, None, None, None, false).unwrap()
+        else {
+            panic!("expected launch")
+        };
+        assert_eq!(
+            launch.password.as_deref(),
+            Some("synthetic-restart-password")
+        );
+        assert!(!file.exists());
+        assert!(parse_launch_args_with(&args, None, None, None, None, false).is_err());
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
