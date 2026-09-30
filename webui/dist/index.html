@@ -7,31 +7,7 @@
   <meta name="color-scheme" content="dark light">
   <title>Bilistream</title>
   <link rel="icon" type="image/png" href="icon.png">
-  <script>
-    // Apply the saved theme before first paint so reloads never flash the
-    // wrong background.
-    (function () {
-      try {
-        if (localStorage.getItem('theme') === 'light') {
-          document.documentElement.classList.add('light-theme');
-        }
-      } catch (e) { /* storage unavailable */ }
-    })();
-  </script>
-  <style>
-    html {
-      background: #0e0e16;
-    }
-
-    html.light-theme {
-      background: #f4f6f9;
-    }
-
-    html:not(.app-ready) #setup-page,
-    html:not(.app-ready) #main-page {
-      display: none !important;
-    }
-  </style>
+  <script src="js/theme.js"></script>
   <link rel="stylesheet" href="shared.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="responsive.css">
@@ -1064,7 +1040,7 @@
                 <span class="info-label">标题</span>
                 <span class="info-value info-value-right" id="nc-title">-</span>
               </div>
-              <div class="info-row" id="nc-scheduled-row" style="display: none">
+              <div class="info-row" id="nc-scheduled-row">
                 <span class="info-label">预定</span>
                 <span class="info-value info-value-right" id="nc-scheduled">-</span>
               </div>

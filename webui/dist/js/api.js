@@ -35,72 +35,7 @@ function eventStreamUrl() {
 function unauthorizedApiError() {
   return '需要访问密码才能打开控制面板';
 }
-function ensureWebUiLoginStyles() {
-  if (document.getElementById('webui-login-style')) {
-    return;
-  }
-  const style = document.createElement('style');
-  style.id = 'webui-login-style';
-  style.textContent = `
-    #webui-login-gate {
-      position: fixed;
-      inset: 0;
-      z-index: 400;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background: rgba(4, 4, 10, 0.72);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-    }
-    #webui-login-gate.hidden { display: none !important; }
-    #webui-login-gate .webui-login-dialog {
-      width: min(420px, 100%);
-      padding: 28px;
-      border: 1px solid var(--line, #2a2a38);
-      border-radius: 16px;
-      background: var(--surface-1, #16161f);
-      color: var(--text, #f3f3f7);
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-    }
-    #webui-login-gate h2 {
-      margin: 0 0 8px;
-      font-size: 1.25rem;
-    }
-    #webui-login-gate p {
-      margin: 0 0 16px;
-      color: var(--text-mute, #9a9aab);
-      font-size: 0.95rem;
-    }
-    #webui-login-gate label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 0.9rem;
-    }
-    #webui-login-password {
-      width: 100%;
-      margin-bottom: 12px;
-      padding: 10px 12px;
-      border: 1px solid var(--line, #2a2a38);
-      border-radius: 10px;
-      background: var(--surface-2, #1e1e2a);
-      color: inherit;
-    }
-    #webui-login-error {
-      min-height: 1.2em;
-      margin: 0 0 12px;
-      color: #f07178;
-      font-size: 0.9rem;
-    }
-    #webui-login-submit {
-      width: 100%;
-    }
-  `;
-  document.head.appendChild(style);
-}
 function showWebUiLoginGate(onSuccess) {
-  ensureWebUiLoginStyles();
   let gate = document.getElementById('webui-login-gate');
   if (!gate) {
     gate = document.createElement('div');
@@ -347,7 +282,6 @@ function deleteJson(path, payload) {
 export {
   eventStreamUrl,
   unauthorizedApiError,
-  ensureWebUiLoginStyles,
   showWebUiLoginGate,
   promptWebUiLogin,
   ensureWebUiAccess,

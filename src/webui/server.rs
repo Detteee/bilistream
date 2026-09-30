@@ -212,6 +212,22 @@ pub async fn start_webui_on_listener(
 
     let response_layers = ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self'; \
+                 connect-src 'self' https://holodex.net; img-src 'self' https: http: data: blob:; \
+                 object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache, no-store, must-revalidate"),
         ))

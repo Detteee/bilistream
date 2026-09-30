@@ -14,6 +14,7 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/shared.css"),
     asset!("webui/dist/responsive.css"),
     asset!("webui/dist/js/main.js"),
+    asset!("webui/dist/js/theme.js"),
     asset!("webui/dist/js/api.js"),
     asset!("webui/dist/js/area-catalog.js"),
     asset!("webui/dist/js/channel-resolver.js"),
@@ -45,7 +46,6 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/public-dist/js/nodes.js"),
     asset!("webui/public-dist/js/request.js"),
     asset!("webui/public-dist/js/streams.js"),
-    asset!("webui/public-dist/js/theme.js"),
 ];
 
 pub(crate) fn missing_asset_count(directory: &Path) -> usize {

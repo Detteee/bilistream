@@ -18,6 +18,7 @@ const PUBLIC_SHARED: &[&str] = &[
     "js/cluster-health.js",
     "js/cluster-network.js",
     "js/status-cards.js",
+    "js/theme.js",
 ];
 
 struct Asset {
