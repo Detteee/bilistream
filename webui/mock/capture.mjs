@@ -13,6 +13,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const profile = await mkdtemp(join(tmpdir(), 'bilistream-mock-'));
 const browser = spawn(process.env.FIREFOX || 'firefox', ['--headless', '--no-remote', '--profile', profile, '--remote-debugging-port', '0']);
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const captureDir = process.argv[2] || join(root, 'docs/images');
+await mkdir(captureDir, { recursive: true });
 let ws;
 try {
   const address = await new Promise((resolve, reject) => {
@@ -60,7 +62,7 @@ try {
   };
   assert.equal(await evaluate("document.querySelector('.card[data-platform=\"cluster\"]').classList.contains('hidden')"), true);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.dashboard')).gridTemplateColumns.split(' ').length"), 3);
-  await capture(join(root, 'docs/images/screenshot_of_webui.png'));
+  await capture(join(captureDir, 'screenshot_of_webui.png'));
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1100 }, devicePixelRatio: 1 });
   await evaluate("document.getElementById('tab-settings').click()");
   await waitFor("document.getElementById('config-websub-callback-url').value.includes('example.com')");
@@ -103,7 +105,7 @@ try {
   await waitFor("document.getElementById('niconico-session-status').textContent.includes('仍被接受')");
   await evaluate("document.querySelector('.platform-session-settings').scrollIntoView({block:'center'})");
   await waitFor("document.querySelectorAll('.notification').length===0");
-  await capture(join(root, 'docs/images/niconico-session.png'));
+  await capture(join(captureDir, 'niconico-session.png'));
   await evaluate("window.scrollTo(0,0)");
   assert.equal(await evaluate("document.getElementById('config-nc-user-session').placeholder"), '•'.repeat('mock-session-value'.length));
   await evaluate("document.getElementById('config-show-twitch-checkbox').checked=true; document.getElementById('config-nc-clear-session').click()");
@@ -124,8 +126,8 @@ try {
   await waitFor("!document.getElementById('save-system-config-btn').disabled");
   await waitFor("document.querySelectorAll('.notification').length === 0");
   await new Promise(resolve => setTimeout(resolve, 300));
-  await mkdir(join(root, 'docs/images'), { recursive: true });
-  await capture(join(root, 'docs/images/settings.png'));
+
+  await capture(join(captureDir, 'settings.png'));
   assert.equal(await evaluate("window.configData.youtube_api_key"), '');
   await waitFor("document.getElementById('yt-cookie-status').textContent.includes('尚未')");
   const cookieFixture = '# Netscape HTTP Cookie File\n.example.invalid\tTRUE\t/\tTRUE\t0\tsession\tsynthetic-only\n';
@@ -134,7 +136,7 @@ try {
   assert.equal(await evaluate("document.getElementById('yt-cookie-paste').value"), '');
   await evaluate("document.getElementById('yt-cookie-status').scrollIntoView({block:'center'})");
   await waitFor("document.querySelectorAll('.notification').length===0");
-  await capture(join(root, 'docs/images/youtube-cookies.png'));
+  await capture(join(captureDir, 'youtube-cookies.png'));
   await evaluate("document.getElementById('yt-cookie-clear').click()");
   await waitFor("document.getElementById('yt-cookie-status').textContent.includes('尚未') && !document.getElementById('yt-cookie-clear').disabled");
   assert.equal(await evaluate("document.getElementById('config-player-filter-group').checkVisibility()"), false);
@@ -152,7 +154,7 @@ try {
   await waitFor("!document.getElementById('save-system-config-btn').disabled");
   await evaluate("document.getElementById('storage-state').scrollIntoView({block:'center'})");
   await waitFor("document.querySelectorAll('.notification').length===0");
-  await capture(join(root, 'docs/images/data-backup.png'));
+  await capture(join(captureDir, 'data-backup.png'));
 
   await evaluate("document.getElementById('public-status-settings').scrollIntoView({block:'center'})");
   assert.equal(await evaluate("[...document.getElementById('config-public-status-node').options].some(option => option.textContent==='本机')"), true);
@@ -161,7 +163,7 @@ try {
   await waitFor("!document.getElementById('public-status-save-btn').disabled && window.configData.cluster.public_status.node_id==='local'");
   assert.equal(await evaluate("window.configData.cluster.enabled"), false);
   await waitFor("document.querySelectorAll('.notification').length===0");
-  await capture(join(root, 'docs/images/public-status.png'));
+  await capture(join(captureDir, 'public-status.png'));
   await evaluate("document.getElementById('config-public-status-node').value=''; document.getElementById('public-status-save-btn').click()");
   await waitFor("!document.getElementById('public-status-save-btn').disabled && window.configData.cluster.public_status.node_id===''");
   await evaluate("document.getElementById('tab-manage').click(); document.getElementById('area-catalog-load').click()");
@@ -176,7 +178,7 @@ try {
   }
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1100 }, devicePixelRatio: 1 });
   await evaluate("document.getElementById('area-catalog-select').value='329'; window.scrollTo(0,0)");
-  await capture(join(root, 'docs/images/area-picker.png'));
+  await capture(join(captureDir, 'area-picker.png'));
   await evaluate("document.getElementById('channel-youtube').value='https://www.youtube.com/@example'; document.getElementById('manage-resolve-youtube').click()");
   await waitFor("document.getElementById('channel-youtube').value.startsWith('UC')");
   await fetch(`${base}/mock/setup-mode`);
@@ -187,7 +189,7 @@ try {
   assert.equal(await evaluate("['yt','tw','nc'].every(p => document.getElementById('setup-'+p+'-channel-select').value==='')"), true);
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1280 }, devicePixelRatio: 1 });
   await evaluate("window.scrollTo(0,0)");
-  await capture(join(root, 'docs/images/setup.png'));
+  await capture(join(captureDir, 'setup.png'));
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1100 }, devicePixelRatio: 1 });
   await evaluate("document.getElementById('setup-favorites-panel').open=true; document.getElementById('setup-load-favorites').click()");
   assert.equal(await evaluate("document.getElementById('setup-favorites-status').textContent.includes('请填写')"), true);
@@ -224,7 +226,7 @@ try {
   await evaluate("document.getElementById('setup-favorites-panel').scrollIntoView({block:'start'}); window.scrollBy(0,-24)");
   await evaluate("{ const select=document.getElementById('setup-yt-channel-select'); select.value=[...select.options].find(o=>o.textContent.includes('示例收藏频道 001')).value; select.dispatchEvent(new Event('change')); }");
   await evaluate("document.getElementById('setup-yt-area').value='329'");
-  await capture(join(root, 'docs/images/holodex-favorites.png'));
+  await capture(join(captureDir, 'holodex-favorites.png'));
   await evaluate("document.getElementById('setup-yt-channel-select').value='manual'; document.getElementById('setup-yt-channel-select').dispatchEvent(new Event('change'))");
   await evaluate("document.getElementById('setup-favorites-panel').open=false; document.getElementById('setup-yt-name').value='示例频道 001'; document.getElementById('setup-yt-id').value='https://www.youtube.com/@example'; document.getElementById('setup-resolve-youtube').click()");
   await waitFor("document.getElementById('setup-yt-id').value.startsWith('UC')");
@@ -315,7 +317,46 @@ try {
   assert.equal((await (await fetch(`${base}/mock/writes`)).json()).filter(row => row.path === '/api/niconico/session/check').length, checksBefore);
   writes = await (await fetch(`${base}/mock/writes`)).json();
   assert.ok(writes.filter(row => row.path === '/api/config').every(row => !JSON.stringify(row.patch).includes('•')));
-  console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Screenshots updated.');
+  const performanceChecks = JSON.parse(await evaluate(`(async () => {
+    const logs = await import('/js/logs.js');
+    const overview = await import('/js/overview.js');
+    const { renderBiliNetworkPanel } = await import('/js/status-cards.js');
+    const { state } = await import('/js/state.js');
+    const fetchOriginal = window.fetch;
+    let lines = Array.from({length: 600}, (_, i) => 'INFO synthetic log ' + i);
+    let networkRequests = 0;
+    window.fetch = (path, options) => {
+      if (path === '/api/logs') return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}}));
+      if (path === '/api/network-status') { networkRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,data:{ffmpeg_running:true}}), {headers:{'Content-Type':'application/json'}})); }
+      return fetchOriginal(path, options);
+    };
+    try {
+      logs.clearLogs();
+      await logs.refreshLogs();
+      const output = document.getElementById('log-output');
+      const first = output.firstElementChild;
+      const next = first.nextElementSibling;
+      const bounded = output.children.length === 500 && first.textContent.includes('log 100');
+      await logs.refreshLogs();
+      const retained = first === output.firstElementChild;
+      lines.push('ERROR synthetic log 600');
+      await logs.refreshLogs();
+      const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
+      logs.clearLogs();
+      const cleared = output.textContent === '日志已清空';
+      document.getElementById('setup-page').classList.add('hidden');
+      document.getElementById('main-page').classList.remove('hidden');
+      state.activeView = 'settings';
+      renderBiliNetworkPanel({ffmpeg_running:true});
+      await overview.refreshNetworkStatus();
+      const hiddenSkipped = networkRequests === 0;
+      state.activeView = 'overview';
+      await overview.refreshNetworkStatus();
+      return JSON.stringify({bounded,retained,appended,cleared,hiddenSkipped,visibleFetched:networkRequests>0});
+    } finally { window.fetch = fetchOriginal; }
+  })()`));
+  assert.deepEqual(performanceChecks, {bounded:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,visibleFetched:true});
+  console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Log-node retention and hidden-view polling passed. Screenshots saved.');
   await command('session.end', {});
 } finally {
   ws?.close(); browser.kill(); server.closeAllConnections(); server.close();

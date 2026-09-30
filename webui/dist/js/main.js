@@ -33,6 +33,7 @@ import {
   stopHolodexDurationTicker,
   loadChannelData,
   refreshStatus,
+  refreshNetworkStatus,
   switchToHolodexStream,
   updatePriorityToggleAvailability,
 } from './overview.js';
@@ -44,6 +45,7 @@ function loadViewData(name) {
   switch (name) {
     case 'overview':
       maybeLoadHolodexStreams();
+      refreshNetworkStatus();
       break;
     case 'manage':
       loadManagementListsOnce();

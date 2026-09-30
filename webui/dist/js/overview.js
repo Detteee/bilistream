@@ -2294,7 +2294,8 @@ function schedulePlatformTitleRowCenters() {
   });
 }
 async function refreshNetworkStatus() {
-  if (networkRefreshInFlight || statusRefreshInFlight || !isBiliNetworkLive()) {
+  if (!isDashboardVisible() || !isViewActive('overview')
+    || networkRefreshInFlight || statusRefreshInFlight || !isBiliNetworkLive()) {
     return;
   }
 
@@ -2302,7 +2303,8 @@ async function refreshNetworkStatus() {
   const generation = networkStatusGeneration;
   try {
     const result = await getJson('/api/network-status');
-    if (result.success && result.data && generation === networkStatusGeneration) {
+    if (result.success && result.data && generation === networkStatusGeneration
+      && isDashboardVisible() && isViewActive('overview')) {
       renderBiliNetworkPanel(result.data);
     }
   } catch (error) {

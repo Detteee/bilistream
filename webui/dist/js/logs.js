@@ -1,11 +1,13 @@
 // logs.js — extracted from app.js
 
-import { isDashboardVisible } from './dom.js';
+import { isDashboardVisible, reconcileChildren } from './dom.js';
 import { isViewActive } from './state.js';
 import { getJson } from './api.js';
 
 // Global data
 let logLines = [];
+let logLineSet = new Set();
+const renderedLines = new Map();
 let maxLogLines = 500;
 let logRefreshIntervalId = null;
 let logRefreshInFlight = false;
@@ -32,6 +34,8 @@ function startLogRefresh() {
 function clearLogs() {
   logGeneration += 1;
   logLines = [];
+  logLineSet.clear();
+  renderedLines.clear();
   const logOutput = document.getElementById('log-output');
   if (logOutput) {
     logOutput.replaceChildren(document.createTextNode('日志已清空'));
@@ -44,19 +48,12 @@ async function refreshLogs() {
   try {
     const data = await getJson('/api/logs');
     if (generation !== logGeneration) return;
-    if (data.success && data.logs) {
-      // Add new logs
-      const newLogs = data.logs.split('\n').filter(line => line.trim());
-      newLogs.forEach(line => {
-        if (!logLines.includes(line)) {
-          logLines.push(line);
-        }
-      });
-
-      // Keep only last maxLogLines
-      if (logLines.length > maxLogLines) {
-        logLines = logLines.slice(-maxLogLines);
-      }
+    if (data.success && typeof data.logs === 'string') {
+      // The API returns the complete rolling snapshot, not a delta. Re-appending
+      // lines trimmed on the previous refresh would rotate old entries to the end.
+      logLines = [...new Set(data.logs.split('\n').filter(line => line.trim()))]
+        .slice(-maxLogLines);
+      logLineSet = new Set(logLines);
 
       renderLogs();
 
@@ -77,18 +74,23 @@ function renderLogs() {
   const logOutput = document.getElementById('log-output');
   if (!logOutput) return;
 
-  const fragment = document.createDocumentFragment();
+  if (!renderedLines.size) logOutput.replaceChildren();
+  for (const line of renderedLines.keys()) {
+    if (!logLineSet.has(line)) renderedLines.delete(line);
+  }
+  const nodes = [];
   logLines.forEach((line, index) => {
-    if (index > 0) {
-      fragment.appendChild(document.createTextNode('\n'));
+    let lineElement = renderedLines.get(line);
+    if (!lineElement) {
+      lineElement = document.createElement('span');
+      lineElement.className = `log-line ${logLineLevel(line)}`.trim();
+      renderedLines.set(line, lineElement);
     }
-
-    const lineElement = document.createElement('span');
-    lineElement.className = `log-line ${logLineLevel(line)}`.trim();
-    lineElement.textContent = line;
-    fragment.appendChild(lineElement);
+    const text = line + (index + 1 < logLines.length ? '\n' : '');
+    if (lineElement.textContent !== text) lineElement.textContent = text;
+    nodes.push(lineElement);
   });
-  logOutput.replaceChildren(fragment);
+  reconcileChildren(logOutput, nodes);
 }
 function logLineLevel(line) {
   if (line.includes('ERROR') || line.includes('❌')) {
