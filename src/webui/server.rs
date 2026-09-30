@@ -8,7 +8,6 @@ use axum::{
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -212,8 +211,7 @@ pub async fn start_webui_on_listener(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache, no-store, must-revalidate"),
         ))
-        .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive());
+        .layer(CompressionLayer::new());
 
     // Main app with API routes and static files
     let app = Router::new()
@@ -233,7 +231,11 @@ pub async fn start_webui_on_listener(
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("💡 提示: 在浏览器中打开上述地址访问\n");
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

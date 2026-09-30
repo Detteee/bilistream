@@ -60,7 +60,7 @@ The optional desktop package is `src-tauri` (`bilistream-tauri`); it shares the 
 ./bilistream --ffmpeg-log-level error
 ```
 
-Bind, port and password can also come from `BILISTREAM_BIND`, `BILISTREAM_PORT` and `BILISTREAM_PASSWORD`. By default the admin listener binds localhost. Put remote access behind your configured authenticated endpoint.
+Bind, port and password can also come from `BILISTREAM_BIND`, `BILISTREAM_PORT` and `BILISTREAM_PASSWORD`. The admin listener defaults to localhost. Binding another address requires a password; use HTTPS through a reverse proxy for remote access. Five failed logins from one connection IP temporarily block further attempts for up to one minute.
 
 Settings, channels, rules and discovery statistics live in `data/bilistream.db` beside the executable. Configuration and login credentials are encrypted; the application unlocks them automatically on this computer. Change settings through the Web UI. `BILISTREAM_DATA_DIR` selects another data directory; `BILISTREAM_KEY_FILE` can select a protected key file **outside** it.
 

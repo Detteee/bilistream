@@ -60,7 +60,7 @@ cargo build --locked --release --bin bilistream
 ./bilistream --ffmpeg-log-level error
 ```
 
-监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；远程访问应通过已配置认证的入口。
+监听地址、端口和密码也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT`、`BILISTREAM_PASSWORD` 设置。管理端默认只监听本机；远程访问应通过已配置认证的入口。 非本机监听必须设置访问密码；远程访问建议使用 HTTPS 反向代理。同一连接 IP 登录失败 5 次后，最多限制 1 分钟。
 
 设置、频道、规则及发现统计保存在程序旁的 `data/bilistream.db`。配置与登录信息加密保存，在本机重启时自动解锁；日常修改通过 Web UI 完成。可用 `BILISTREAM_DATA_DIR` 指定数据目录，用 `BILISTREAM_KEY_FILE` 指定目录之外的受限密钥文件。
 

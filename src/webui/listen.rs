@@ -1,12 +1,14 @@
-use axum::extract::Request;
+use axum::extract::{ConnectInfo, Request};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const DEFAULT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const COOKIE_NAME: &str = "bilistream_session";
@@ -39,19 +41,26 @@ pub fn parse_bind(input: &str) -> Result<IpAddr, String> {
 ///
 /// Safe default when never called: `127.0.0.1` and no password.
 pub fn install_listen(bind: &str, password: Option<String>) -> Result<(), String> {
+    LISTEN
+        .set(make_listen_config(bind, password)?)
+        .map_err(|_| "Web UI listen address already configured".to_string())
+}
+
+fn make_listen_config(bind: &str, password: Option<String>) -> Result<ListenConfig, String> {
     let bind = parse_bind(bind)?;
     let password = password.and_then(|value| {
         let value = value.trim().to_string();
         (!value.is_empty()).then_some(value)
     });
+    if !bind.is_loopback() && password.is_none() {
+        return Err("监听非本机地址时必须设置 Web UI 访问密码".into());
+    }
     let session = password.as_deref().map(session_id_for_password);
-    LISTEN
-        .set(ListenConfig {
-            bind,
-            password,
-            session,
-        })
-        .map_err(|_| "Web UI listen address already configured".to_string())
+    Ok(ListenConfig {
+        bind,
+        password,
+        session,
+    })
 }
 
 pub fn listen_bind() -> IpAddr {
@@ -106,12 +115,74 @@ pub struct LoginBody {
     password: String,
 }
 
-pub async fn login(Json(body): Json<LoginBody>) -> Response {
+const LOGIN_WINDOW: Duration = Duration::from_secs(60);
+const LOGIN_FAILURE_LIMIT: u8 = 5;
+const LOGIN_SOURCE_LIMIT: usize = 1024;
+
+#[derive(Default)]
+struct LoginThrottle {
+    failures: HashMap<IpAddr, (u8, Instant)>,
+}
+
+impl LoginThrottle {
+    fn attempt(&mut self, source: IpAddr, correct: bool, now: Instant) -> Result<bool, Duration> {
+        self.failures.retain(|_, (_, until)| *until > now);
+        if let Some((count, until)) = self.failures.get(&source) {
+            if *count >= LOGIN_FAILURE_LIMIT {
+                return Err(until.saturating_duration_since(now));
+            }
+        }
+        if correct {
+            self.failures.remove(&source);
+            return Ok(true);
+        }
+        if !self.failures.contains_key(&source) && self.failures.len() >= LOGIN_SOURCE_LIMIT {
+            return Err(LOGIN_WINDOW);
+        }
+        let (count, _) = self
+            .failures
+            .entry(source)
+            .or_insert((0, now + LOGIN_WINDOW));
+        *count += 1;
+        if *count == LOGIN_FAILURE_LIMIT {
+            tracing::warn!(%source, "Web UI 登录失败过多，暂时限制该来源");
+        }
+        Ok(false)
+    }
+}
+
+pub async fn login(
+    connection: Option<Extension<ConnectInfo<SocketAddr>>>,
+    Json(body): Json<LoginBody>,
+) -> Response {
     let Some(expected) = listen_password() else {
         return Json(serde_json::json!({ "success": true, "required": false })).into_response();
     };
 
-    if secret_eq(body.password.trim(), expected) {
+    // Use the socket peer; untrusted X-Forwarded-For must not bypass the limit.
+    let source = connection.map_or(DEFAULT_BIND, |Extension(ConnectInfo(addr))| addr.ip());
+    static THROTTLE: OnceLock<Mutex<LoginThrottle>> = OnceLock::new();
+    let accepted = THROTTLE
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .attempt(
+            source,
+            secret_eq(body.password.trim(), expected),
+            Instant::now(),
+        );
+    let correct = match accepted {
+        Ok(correct) => correct,
+        Err(retry) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry.as_secs().max(1).to_string())],
+                Json(serde_json::json!({"success":false,"message":"登录尝试过多，请稍后重试"})),
+            )
+                .into_response()
+        }
+    };
+    if correct {
         let mut response = Json(serde_json::json!({ "success": true })).into_response();
         if let Some(cookie) = session_set_cookie_header() {
             response.headers_mut().insert(header::SET_COOKIE, cookie);
@@ -227,6 +298,51 @@ fn secret_eq(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_loopback_listeners_require_a_password() {
+        for bind in ["0.0.0.0", "::", "192.0.2.1"] {
+            assert!(make_listen_config(bind, None).is_err());
+            assert!(make_listen_config(bind, Some("  ".into())).is_err());
+            assert!(make_listen_config(bind, Some("test-password".into())).is_ok());
+        }
+        for bind in ["127.0.0.1", "::1", "localhost"] {
+            assert!(make_listen_config(bind, None).is_ok());
+        }
+    }
+
+    #[test]
+    fn failed_login_limits_are_per_source_expire_and_reset_after_success() {
+        let now = Instant::now();
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let second: IpAddr = "192.0.2.2".parse().unwrap();
+        let mut limiter = LoginThrottle::default();
+        for _ in 0..LOGIN_FAILURE_LIMIT {
+            assert_eq!(limiter.attempt(first, false, now), Ok(false));
+        }
+        assert!(limiter.attempt(first, true, now).is_err());
+        assert_eq!(limiter.attempt(second, true, now), Ok(true));
+        assert_eq!(limiter.attempt(first, false, now + LOGIN_WINDOW), Ok(false));
+        assert_eq!(limiter.attempt(first, true, now + LOGIN_WINDOW), Ok(true));
+        assert!(limiter.failures.is_empty());
+    }
+
+    #[test]
+    fn login_source_tracking_is_bounded() {
+        let now = Instant::now();
+        let mut limiter = LoginThrottle::default();
+        for i in 0..LOGIN_SOURCE_LIMIT {
+            let source = IpAddr::V4(Ipv4Addr::from((i + 1) as u32));
+            assert_eq!(limiter.attempt(source, false, now), Ok(false));
+        }
+        assert!(limiter.attempt(DEFAULT_BIND, false, now).is_err());
+        assert_eq!(limiter.failures.len(), LOGIN_SOURCE_LIMIT);
+        assert_eq!(
+            limiter.attempt(DEFAULT_BIND, false, now + LOGIN_WINDOW),
+            Ok(false)
+        );
+        assert_eq!(limiter.failures.len(), 1);
+    }
 
     #[test]
     fn parse_bind_accepts_localhost_alias() {
