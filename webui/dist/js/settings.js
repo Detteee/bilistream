@@ -893,7 +893,10 @@ async function autoInstallUpdate() {
         }
         if (status?.phase === 'failed') throw new Error(status.message);
         if (status?.message) updateProgress.textContent = status.message;
-        if (version?.data?.version === latestUpdateInfo.latest_version) {
+        // A release can be refreshed without a version bump. The old process
+        // still reports that version while downloading/installing/restarting.
+        if (status?.phase === 'idle'
+          && version?.data?.version === latestUpdateInfo.latest_version) {
           location.reload();
           return;
         }

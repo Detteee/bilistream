@@ -356,6 +356,28 @@ try {
     } finally { window.fetch = fetchOriginal; }
   })()`));
   assert.deepEqual(performanceChecks, {bounded:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,visibleFetched:true});
+  // A same-version package must not reload the old page during installation.
+  const updateChecks = JSON.parse(await evaluate(`(async () => {
+    const settings = await import('/js/settings.js');
+    const fetchOriginal = window.fetch;
+    const phases = ['downloading', 'restarting', 'failed'];
+    let polls = 0;
+    window.fetch = (path, options) => {
+      let body;
+      if (path === '/api/update/check') body = {success:true,data:{has_update:true,current_version:'0.7.0',latest_version:'0.7.0',download_url:'https://example.invalid/update.tar.gz'}};
+      else if (path === '/api/update/download') body = {success:true};
+      else if (path === '/api/update/status') body = {phase:phases[Math.min(polls++,2)],message:'synthetic update stop'};
+      else if (path === '/api/version') body = {success:true,data:{version:'0.7.0'}};
+      else return fetchOriginal(path,options);
+      return Promise.resolve(new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}}));
+    };
+    try {
+      await settings.checkForUpdates();
+      await settings.autoInstallUpdate();
+      return JSON.stringify({polls,failedVisible:document.getElementById('update-progress').textContent.includes('更新失败') && [...document.querySelectorAll('.notification.error')].some(node => node.textContent.includes('synthetic update stop')),retryEnabled:!document.getElementById('auto-update-btn').disabled});
+    } finally { window.fetch = fetchOriginal; }
+  })()`));
+  assert.deepEqual(updateChecks, {polls:3,failedVisible:true,retryEnabled:true});
   console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Log-node retention and hidden-view polling passed. Screenshots saved.');
   await command('session.end', {});
 } finally {
