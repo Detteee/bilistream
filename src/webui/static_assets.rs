@@ -9,17 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Keep public shared assets explicit: never expose the whole admin directory.
-const PUBLIC_SHARED: &[&str] = &[
-    "shared.css",
-    "responsive.css",
-    "js/dom.js",
-    "js/format.js",
-    "js/dialog.js",
-    "js/cluster-health.js",
-    "js/cluster-network.js",
-    "js/status-cards.js",
-    "js/theme.js",
-];
+const PUBLIC_SHARED: &[&str] = &["shared.css", "responsive.css", "js/theme.js"];
 
 struct Asset {
     bytes: Bytes,
@@ -257,7 +247,8 @@ mod tests {
         ] {
             assert!(!assets.files.contains_key(path));
         }
-        assert!(assets.files.contains_key("shared/js/dom.js"));
+        assert!(!assets.files.contains_key("shared/js/dom.js"));
+        assert!(assets.files.contains_key("shared/js/theme.js"));
         assert!(assets.files.contains_key("js/main.js"));
     }
 }

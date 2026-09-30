@@ -49,6 +49,13 @@ cargo build --locked --release --bin bilistream
 
 The optional desktop package is `src-tauri` (`bilistream-tauri`); it shares the Rust backend and needs the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/). Linux cross-builds can use `cargo zigbuild --locked --target x86_64-unknown-linux-gnu.2.36 --release` with cargo-zigbuild and Zig installed.
 
+Compiled Web UI assets are included. After editing `webui/src` or `webui/public-src`, rebuild them with Node.js 22+ before compiling Rust:
+
+```bash
+npm ci --prefix webui --ignore-scripts
+npm --prefix webui run build
+```
+
 ## Launch and configuration
 
 ```bash

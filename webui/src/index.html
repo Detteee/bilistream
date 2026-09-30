@@ -1,0 +1,2190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>Bilistream</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <script src="js/theme.js"></script>
+  <link rel="stylesheet" href="shared.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="responsive.css">
+</head>
+
+<body>
+  <!-- ====================================================================
+       Icon sprite — every icon below is referenced with <use href="#id">
+       so repeated glyphs cost one definition instead of one copy per use.
+       ==================================================================== -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path
+        d="M19.146 4.854l-1.489 1.489A8 8 0 1 0 12 20a8.094 8.094 0 0 0 7.371-4.886 1 1 0 1 0-1.842-.779A6.071 6.071 0 0 1 12 18a6 6 0 1 1 4.243-10.243l-1.39 1.39a.5.5 0 0 0 .354.854H19.5A.5.5 0 0 0 20 9.5V5.207a.5.5 0 0 0-.854-.353z" />
+    </symbol>
+
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+    </symbol>
+
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </symbol>
+
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M7 4.5a1 1 0 0 1 1.53-.85l11 7.5a1 1 0 0 1 0 1.7l-11 7.5A1 1 0 0 1 7 19.5v-15Z" />
+    </symbol>
+
+    <symbol id="i-stop" viewBox="0 0 24 24">
+      <rect x="6" y="5" width="4" height="14" rx="1.2" />
+      <rect x="14" y="5" width="4" height="14" rx="1.2" />
+    </symbol>
+
+    <symbol id="i-restart" viewBox="0 0 24 24">
+      <path
+        d="M1 12A11 11 0 0 1 17.882 2.7l1.411-1.41A1 1 0 0 1 21 2v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-.707-1.707l1.128-1.128A8.994 8.994 0 0 0 3 12a1 1 0 0 1-2 0Zm21-1a1 1 0 0 0-1 1 9.01 9.01 0 0 1-9 9 8.9 8.9 0 0 1-4.42-1.166l1.127-1.127A1 1 0 0 0 8 17H4a1 1 0 0 0-1 1v4a1 1 0 0 0 .617.924A.987.987 0 0 0 4 23a1 1 0 0 0 .707-.293L6.118 21.3A10.891 10.891 0 0 0 12 23 11.013 11.013 0 0 0 23 12a1 1 0 0 0-1-1Z" />
+    </symbol>
+
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </symbol>
+
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </symbol>
+
+    <symbol id="i-heart" viewBox="0 0 24 24">
+      <path
+        d="M12 21.35 10.55 20.03C5.4 15.36 2 12.27 2 8.5 2 5.41 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.08C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.41 22 8.5c0 3.77-3.4 6.86-8.55 11.53L12 21.35Z" />
+    </symbol>
+
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </symbol>
+
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+    </symbol>
+
+    <symbol id="i-gauge" viewBox="0 0 24 24">
+      <path
+        d="M12 3a9 9 0 0 0-7.65 13.74 1 1 0 0 0 1.7-1.05A7 7 0 1 1 18 15.7a1 1 0 1 0 1.7 1.05A9 9 0 0 0 12 3Zm3.3 5.3-3.02 3.02a2 2 0 1 0 1.41 1.41L16.7 9.7a1 1 0 0 0-1.41-1.41Z" />
+    </symbol>
+
+    <symbol id="i-library" viewBox="0 0 24 24">
+      <path
+        d="M4 4h6a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm10 0h6a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM4 13h6a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Zm10-2h6a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" />
+    </symbol>
+
+    <symbol id="i-sliders" viewBox="0 0 24 24">
+      <path
+        d="M5 3a1 1 0 0 1 1 1v5.17a3.001 3.001 0 0 1 0 5.66V20a1 1 0 1 1-2 0v-5.17a3.001 3.001 0 0 1 0-5.66V4a1 1 0 0 1 1-1Zm7 0a1 1 0 0 1 1 1v.17a3.001 3.001 0 0 1 0 5.66V20a1 1 0 1 1-2 0V9.83a3.001 3.001 0 0 1 0-5.66V4a1 1 0 0 1 1-1Zm7 0a1 1 0 0 1 1 1v9.17a3.001 3.001 0 0 1 0 5.66V20a1 1 0 1 1-2 0v-1.17a3.001 3.001 0 0 1 0-5.66V4a1 1 0 0 1 1-1Z" />
+    </symbol>
+
+    <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </symbol>
+
+    <symbol id="i-terminal" viewBox="0 0 24 24">
+      <path
+        d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2.7 4.3a1 1 0 0 0 0 1.4L8.6 11.6 6.7 13.5a1 1 0 1 0 1.4 1.4l2.6-2.6a1 1 0 0 0 0-1.4L8.1 8.3a1 1 0 0 0-1.4 0ZM13 14a1 1 0 1 0 0 2h4a1 1 0 1 0 0-2h-4Z" />
+    </symbol>
+
+    <symbol id="i-area" viewBox="0 0 24 24">
+      <path d="M3 13h8V3H3v10Zm0 8h8v-6H3v6Zm10 0h8V11h-8v10Zm0-18v6h8V3h-8Z" />
+    </symbol>
+
+    <symbol id="i-channel" viewBox="0 0 24 24">
+      <path
+        d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1Zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h11c.55 0 1-.45 1-1Z" />
+    </symbol>
+
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path
+        d="M12 2a1 1 0 0 1 .38.08l7 3A1 1 0 0 1 20 6v5c0 5-3.4 9.4-7.68 10.94a1 1 0 0 1-.64 0C7.4 20.4 4 16 4 11V6a1 1 0 0 1 .62-.92l7-3A1 1 0 0 1 12 2Z" />
+    </symbol>
+
+    <symbol id="i-key" viewBox="0 0 24 24">
+      <path
+        d="M14.5 2a7.5 7.5 0 1 0 2.32 14.63l.68.68V19h2v2h2v2h3.5v-3.5l-7.32-7.32A7.5 7.5 0 0 0 14.5 2Zm-3 5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" />
+    </symbol>
+
+    <symbol id="i-plug" viewBox="0 0 24 24">
+      <path
+        d="M9 2a1 1 0 0 1 1 1v5h4V3a1 1 0 1 1 2 0v5h1a1 1 0 1 1 0 2h-.5v2a5.5 5.5 0 0 1-4.5 5.41V22a1 1 0 1 1-2 0v-4.59A5.5 5.5 0 0 1 6.5 12v-2H6a1 1 0 1 1 0-2h1V3a1 1 0 0 1 1-1Z" />
+    </symbol>
+
+    <symbol id="i-ban" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="m5.6 5.6 12.8 12.8" />
+    </symbol>
+
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+    </symbol>
+
+    <symbol id="i-servers" viewBox="0 0 24 24">
+      <path
+        d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-5 7h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" />
+    </symbol>
+
+    <symbol id="i-sync" viewBox="0 0 24 24">
+      <path
+        d="M12 4a8 8 0 0 1 7.42 5.02 1 1 0 1 1-1.86.72A6 6 0 0 0 7.1 9H9a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1V6a1 1 0 0 1 2 0v1.13A7.98 7.98 0 0 1 12 4Zm-7.42 9.26a1 1 0 0 1 1.3.56A6 6 0 0 0 16.9 15H15a1 1 0 1 1 0-2h4a1 1 0 0 1 1 1v4a1 1 0 1 1-2 0v-1.13A8 8 0 0 1 4.02 14.56a1 1 0 0 1 .56-1.3Z" />
+    </symbol>
+
+    <symbol id="i-star" viewBox="0 0 24 24">
+      <path
+        d="M12 2.5a1 1 0 0 1 .9.56l2.42 4.9 5.41.79a1 1 0 0 1 .56 1.7l-3.92 3.82.93 5.39a1 1 0 0 1-1.46 1.06L12 18.17l-4.84 2.55a1 1 0 0 1-1.45-1.06l.92-5.39-3.91-3.82a1 1 0 0 1 .55-1.7l5.41-.79 2.42-4.9A1 1 0 0 1 12 2.5Z" />
+    </symbol>
+
+    <symbol id="i-bilibili" viewBox="0 0 24 24">
+      <path
+        d="M18.223 3.086a1.25 1.25 0 0 1 0 1.768L17.08 5.996h1.17A3.75 3.75 0 0 1 22 9.747v7.5A3.75 3.75 0 0 1 18.25 21H5.75A3.75 3.75 0 0 1 2 17.247v-7.5a3.75 3.75 0 0 1 3.75-3.751h1.166L5.775 4.855a1.25 1.25 0 1 1 1.767-1.768l2.652 2.652c.079.079.144.166.196.257h3.222c.052-.09.117-.178.196-.257l2.651-2.652a1.25 1.25 0 0 1 1.768 0Zm.027 5.42H5.75a1.25 1.25 0 0 0-1.247 1.184l-.003.066v7.5c0 .659.51 1.199 1.157 1.246l.093.004h12.5a1.25 1.25 0 0 0 1.247-1.157l.003-.093v-7.5c0-.69-.56-1.25-1.25-1.25Zm-10 2.5c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Zm7.5 0c.69 0 1.25.56 1.25 1.25v1.25a1.25 1.25 0 1 1-2.5 0v-1.25c0-.69.56-1.25 1.25-1.25Z" />
+    </symbol>
+
+    <symbol id="i-youtube" viewBox="0 0 24 24">
+      <path
+        d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814ZM9.545 15.568V8.432L15.818 12l-6.273 3.568Z" />
+    </symbol>
+
+    <symbol id="i-twitch" viewBox="0 0 24 24">
+      <path
+        d="M11.571 4.714h1.715v5.143H11.57Zm4.715 0H18v5.143h-1.714ZM6 0 1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0Zm14.571 11.143-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" />
+    </symbol>
+
+    <symbol id="i-niconico" viewBox="0 0 24 24">
+      <path
+        d="M.4787 7.534v12.1279A2.0213 2.0213 0 0 0 2.5 21.6832h2.3888l1.323 2.0948a.4778.4778 0 0 0 .4043.2205.4778.4778 0 0 0 .441-.2205l1.323-2.0948h6.9828l1.323 2.0948a.4778.4778 0 0 0 .441.2205c.1838 0 .3308-.0735.4043-.2205l1.323-2.0948h2.6462a2.0213 2.0213 0 0 0 2.0213-2.0213V7.5339a2.0213 2.0213 0 0 0-2.0213-1.9845h-7.681l4.4468-4.4469L17.1637 0l-5.1452 5.1452L6.8 0 5.6973 1.1025l4.4102 4.4102H2.5367a2.0213 2.0213 0 0 0-2.058 2.058z" />
+    </symbol>
+  </svg>
+
+  <!-- Toast stack — showNotification() appends here so simultaneous
+       messages stack instead of overlapping. -->
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+
+  <!-- ====================================================================
+       Setup wizard
+       ==================================================================== -->
+  <div class="setup-page" id="setup-page">
+    <div class="container">
+      <div class="setup-card">
+        <div class="setup-icon" aria-hidden="true">🚀</div>
+        <h1 class="setup-title">欢迎使用 Bilistream</h1>
+        <p class="setup-description">通过 Web 界面完成初始配置，无需使用命令行</p>
+
+        <div class="setup-step-indicator">
+          <div class="step-dot active" id="step-dot-1">1</div>
+          <div class="step-dot" id="step-dot-2">2</div>
+          <div class="step-dot" id="step-dot-3">3</div>
+        </div>
+
+        <!-- Step 1: Bilibili login -->
+        <div class="setup-step" id="setup-step-1">
+          <details class="session-legacy"><summary>已有备份？直接恢复</summary><input type="file" id="setup-restore-file" accept=".backup" aria-label="选择加密备份"><input type="password" id="setup-restore-password" placeholder="备份密码" autocomplete="off" aria-label="备份密码"><button type="button" id="setup-restore" class="btn-secondary">恢复备份</button></details>
+          <h3 class="setup-step-title">步骤 1 · 登录 Bilibili</h3>
+          <p class="setup-step-description">使用 Bilibili APP 扫描下方二维码登录</p>
+
+          <div id="login-status" class="setup-login-status">
+            <span id="login-status-text">检查登录状态...</span>
+          </div>
+
+          <div id="qr-code-container" class="setup-qr-container hidden">
+            <div class="setup-qr-card">
+              <div id="qr-code-display"></div>
+              <p class="setup-qr-instruction">请使用 Bilibili APP 扫码登录</p>
+              <p id="qr-status" class="setup-qr-status">等待扫码...</p>
+            </div>
+          </div>
+
+          <div class="setup-step-actions">
+            <button class="btn-fill setup-action-btn" id="show-qr-btn" type="button">显示登录二维码</button>
+            <button class="btn-secondary setup-action-btn" id="check-login-status-btn" type="button">
+              <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              <span>刷新状态</span>
+            </button>
+          </div>
+          <button id="setup-step-1-next-btn" class="btn-success setup-next-btn" type="button">下一步 →</button>
+        </div>
+
+        <!-- Step 2: basics -->
+        <div class="setup-step hidden" id="setup-step-2">
+          <h3 class="setup-step-title">步骤 2 · 基础配置</h3>
+
+          <div class="control-group">
+            <label for="setup-room">B站直播间号 *</label>
+            <input type="number" id="setup-room" placeholder="输入你的直播间号" required>
+          </div>
+
+          <div class="control-group">
+            <label for="setup-interval">检测间隔 (秒)</label>
+            <input type="number" id="setup-interval" value="60" min="10">
+          </div>
+
+          <label class="setup-checkbox-label">
+            <input type="checkbox" id="setup-auto-cover" checked>
+            <span>自动更换封面</span>
+          </label>
+          <label class="setup-checkbox-label">
+            <input type="checkbox" id="setup-danmaku-command" checked>
+            <span>启用弹幕指令</span>
+          </label>
+          <label class="setup-checkbox-label">
+            <input type="checkbox" id="setup-anti-collision">
+            <span>启用撞车监控</span>
+          </label>
+
+          <div class="setup-step-actions setup-step-actions-spaced">
+            <button id="setup-step-2-prev-btn" class="btn-secondary setup-action-btn" type="button">← 上一步</button>
+            <button id="setup-step-2-next-btn" class="btn-success setup-action-btn" type="button">下一步 →</button>
+          </div>
+        </div>
+
+        <!-- Step 3: platforms -->
+        <div class="setup-step hidden" id="setup-step-3">
+          <h3 class="setup-step-title">步骤 3 · 添加频道与选择分区</h3>
+          <p class="setup-step-description">选择要转播的频道，其余保持「不转播」。</p>
+          <button id="setup-load-areas" type="button" class="btn-secondary">加载官方分区</button>
+          <p id="setup-area-hint" class="setup-help-text" role="status">按分类选择分区，也可使用本地分区。</p>
+
+          <details class="setup-platform-card setup-favorites-panel" id="setup-favorites-panel">
+            <summary class="setup-platform-title">从 Holodex 收藏导入（可选）</summary>
+            <p class="setup-help-text">勾选想导入的频道，也可跳过。</p>
+            <div class="control-group">
+              <label for="setup-holodex">Holodex API Key (可选)</label>
+              <input type="password" autocomplete="off" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
+              <small class="setup-muted-help">获取：<a href="https://holodex.net/login" target="_blank"
+                  rel="noopener noreferrer">holodex.net</a></small>
+            </div>
+
+            <div class="control-group">
+              <label for="setup-holodex-jwt">Holodex JWT (可选)</label>
+              <input type="password" id="setup-holodex-jwt" placeholder="粘贴 Holodex JWT，留空跳过收藏导入">
+              <small class="setup-muted-help setup-block-help">
+                收藏导入需要 API Key 和 JWT。
+              </small>
+              <details class="setup-jwt-details">
+                <summary class="setup-jwt-summary">如何获取 JWT</summary>
+                <ol class="setup-jwt-steps">
+                  <li>打开 <a href="https://holodex.net/login" target="_blank"
+                      rel="noopener noreferrer">holodex.net/login</a> 并完成登录</li>
+                  <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
+                  <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
+                </ol>
+                <p class="setup-jwt-note">完成设置时保存登录信息。</p>
+              </details>
+            </div>
+
+            <button id="setup-load-favorites" type="button" class="btn-secondary">登录并加载收藏</button>
+            <p id="setup-favorites-status" class="setup-help-text" role="status">导入频道不会自动开启监控。</p>
+            <div id="setup-favorites-choices" class="hidden">
+              <label class="management-field-label" for="setup-favorites-search">搜索收藏频道</label>
+              <input id="setup-favorites-search" type="search" placeholder="频道名称或 UC ID">
+              <div class="setup-favorites-actions">
+                <span id="setup-favorites-count" role="status"></span>
+                <button id="setup-favorites-select" class="btn-secondary compact-btn" type="button">全选搜索结果</button>
+                <button id="setup-favorites-clear" class="btn-secondary compact-btn" type="button">清空选择</button>
+              </div>
+              <div id="setup-favorites-list" class="setup-favorites-list" role="group" aria-label="选择要导入的收藏频道"></div>
+            </div>
+          </details>
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title setup-platform-title-youtube">YouTube</h4>
+
+            <div class="control-group">
+              <label for="setup-yt-channel-select">转播目标</label>
+              <select id="setup-yt-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select>
+            </div>
+            <div id="setup-yt-fields" class="hidden">
+            <div id="setup-yt-identity">
+            <div class="control-group">
+              <label for="setup-yt-name">频道名称</label>
+              <input type="text" id="setup-yt-name" placeholder="可选，留空使用频道 ID">
+            </div>
+            <div class="control-group">
+              <label for="setup-yt-id">频道主页 / @handle / UC ID</label>
+              <div class="input-action-row"><input type="text" id="setup-yt-id" placeholder="https://www.youtube.com/@channel"><button id="setup-resolve-youtube" class="btn-secondary" type="button">识别频道</button></div>
+            </div>
+            </div>
+            <div class="control-group">
+              <label for="setup-yt-area">B站分区</label>
+              <select id="setup-yt-area">
+                <option value="235">其他单机 (235)</option>
+              </select>
+            </div>
+            <details class="setup-advanced"><summary>画质与代理（可选）</summary>
+            <div class="control-group">
+              <label for="setup-yt-quality">画质</label>
+              <select id="setup-yt-quality">
+                <option value="best">最佳质量 (推荐)</option>
+                <option value="best[height&lt;=1080]">超清 (1080p)</option>
+                <option value="best[height&lt;=720]">高清 (720p)</option>
+                <option value="best[height&lt;=480]">标清 (480p)</option>
+                <option value="best[height&lt;=360]">流畅 (360p)</option>
+                <option value="worst">最低质量</option>
+              </select>
+            </div>
+            <div class="control-group">
+              <label for="setup-yt-proxy">YouTube 代理地址 (可选)</label>
+              <input type="text" id="setup-yt-proxy" placeholder="http://127.0.0.1:7890">
+              <small class="setup-help-text">
+                留空不使用代理。
+              </small>
+            </div>
+            </details>
+            </div>
+          </div>
+
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title setup-platform-title-twitch">Twitch</h4>
+
+            <div class="control-group">
+              <label for="setup-tw-channel-select">转播目标</label>
+              <select id="setup-tw-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select>
+            </div>
+            <div id="setup-tw-fields" class="hidden">
+            <div id="setup-tw-identity">
+            <div class="control-group">
+              <label for="setup-tw-name">频道名称</label>
+              <input type="text" id="setup-tw-name" placeholder="可选，留空使用频道 ID">
+            </div>
+            <div class="control-group">
+              <label for="setup-tw-id">频道 ID (用户名)</label>
+              <input type="text" id="setup-tw-id" placeholder="Twitch 用户名">
+            </div>
+            </div>
+            <div class="control-group">
+              <label for="setup-tw-area">B站分区</label>
+              <select id="setup-tw-area">
+                <option value="235">其他单机 (235)</option>
+              </select>
+            </div>
+            <details class="setup-advanced"><summary>画质与代理（可选）</summary>
+            <div class="control-group">
+              <label for="setup-tw-region">代理区域</label>
+              <select id="setup-tw-region">
+                <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
+                <option value="eul">eul - 欧洲 (luminous, 推荐)</option>
+                <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
+                <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
+                <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
+                <option value="eu2">eu2 - 欧洲 2 (TTV-LOL-PRO)</option>
+                <option value="eu3">eu3 - 欧洲 3 (TTV-LOL-PRO)</option>
+                <option value="eu4">eu4 - 欧洲 4 (TTV-LOL-PRO)</option>
+                <option value="eu5">eu5 - 欧洲 5 (TTV-LOL-PRO)</option>
+                <option value="na">na - 北美 (TTV-LOL-PRO)</option>
+                <option value="sa">sa - 南美 (TTV-LOL-PRO)</option>
+                <option value="all">all - 全部代理</option>
+                <option value="perf">perf - TTV-LOL-PRO 全部</option>
+              </select>
+            </div>
+            <div class="control-group">
+              <label for="setup-tw-quality">画质</label>
+              <select id="setup-tw-quality">
+                <option value="best">best - 原画质量 (推荐)</option>
+                <option value="high">high - 高质量 (≤720p30)</option>
+                <option value="medium">medium - 中等质量 (≤540p30)</option>
+                <option value="low">low - 低质量 (≤360p30)</option>
+                <option value="audio_only">audio_only - 仅音频</option>
+                <option value="worst">worst - 最低质量</option>
+              </select>
+            </div>
+            <div class="control-group">
+              <label for="setup-tw-proxy">Twitch 代理地址 (可选)</label>
+              <input type="text" id="setup-tw-proxy" placeholder="http://127.0.0.1:7890">
+              <small class="setup-help-text">
+                留空不使用代理。
+              </small>
+            </div>
+            </details>
+            </div>
+          </div>
+
+          <div class="setup-platform-card">
+            <h4 class="setup-platform-title">Niconico Live (可选)</h4>
+            <div class="control-group"><label for="setup-nc-channel-select">转播目标</label><select id="setup-nc-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道...</option></select></div>
+            <div id="setup-nc-fields" class="hidden">
+            <div id="setup-nc-identity">
+            <div class="control-group"><label for="setup-nc-name">频道名称</label><input id="setup-nc-name" type="text" placeholder="用于转播标题"></div>
+            <div class="control-group"><label for="setup-nc-id">频道 ID 或频道主页</label><input id="setup-nc-id" type="text" placeholder="vspo / ch2648162 / https://ch.nicovideo.jp/..."></div>
+            </div>
+            <div class="control-group"><label for="setup-nc-area">B站分区</label><select id="setup-nc-area"><option value="235">其他单机 (235)</option></select></div>
+            <p class="setup-help-text">需要 streamlink；登录会话可在系统设置中填写。</p>
+            </div>
+          </div>
+
+          <details class="setup-platform-card setup-advanced"><summary class="setup-platform-title">其他选项（可选）</summary>
+            <label class="toggle-label">
+              <span class="toggle-switch">
+                <input type="checkbox" id="setup-lol-monitor">
+                <span class="toggle-slider"></span>
+              </span>
+              <span>启用英雄联盟玩家ID监控</span>
+            </label>
+
+            <div class="control-group setup-dependent-group hidden" id="riot-api-group">
+              <label for="setup-riot">Riot API Key</label>
+              <input type="text" id="setup-riot" placeholder="用于监控游戏内违禁词汇">
+              <small class="setup-muted-help">获取：<a href="https://developer.riotgames.com/" target="_blank"
+                  rel="noopener noreferrer">developer.riotgames.com</a></small>
+            </div>
+          </details>
+
+          <div class="setup-step-actions setup-step-actions-spaced">
+            <button id="setup-step-3-prev-btn" class="btn-secondary setup-action-btn" type="button">← 上一步</button>
+            <button id="setup-save-btn" class="btn-success setup-action-btn" type="button">完成设置</button>
+          </div>
+        </div>
+
+        <p class="setup-footer-help">
+          需要帮助？查看 <a href="https://github.com/Detteee/bilistream" target="_blank" rel="noopener noreferrer">文档</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       Main application
+       ==================================================================== -->
+  <div class="main-page" id="main-page">
+
+    <header class="appbar">
+      <div class="container appbar__inner">
+        <div class="brand">
+          <img class="brand__logo" src="icon.png" alt="" width="30" height="30">
+          <span class="brand__name">Bilistream</span>
+        </div>
+
+        <span class="live-badge" id="app-live-badge" title="Bilibili 直播间状态">
+          <span class="live-badge__dot"></span>
+          <span id="app-live-badge-text">未开播</span>
+        </span>
+
+        <div class="appbar__spacer"></div>
+
+        <div class="appbar__actions">
+          <button id="webui-logout" class="btn-ghost icon-btn hidden" type="button" title="退出登录" aria-label="退出登录">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H4v16h5M13 8l4 4-4 4M8 12h12" /></svg>
+          </button>
+          <button id="theme-toggle" class="btn-ghost icon-btn" type="button" title="切换主题" aria-label="切换主题">
+            <svg class="btn-icon" id="theme-toggle-icon" aria-hidden="true"><use href="#i-moon" /></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabbar" aria-label="主导航">
+      <div class="container tabbar__inner" role="tablist">
+        <button class="tab is-active" id="tab-overview" data-view="overview" type="button" role="tab"
+          aria-selected="true" aria-controls="view-overview">
+          <svg aria-hidden="true"><use href="#i-gauge" /></svg>
+          <span>总览</span>
+        </button>
+        <button class="tab" id="tab-manage" data-view="manage" type="button" role="tab" aria-selected="false"
+          aria-controls="view-manage">
+          <svg aria-hidden="true"><use href="#i-library" /></svg>
+          <span>配置管理</span>
+        </button>
+        <button class="tab" id="tab-settings" data-view="settings" type="button" role="tab" aria-selected="false"
+          aria-controls="view-settings">
+          <svg aria-hidden="true"><use href="#i-sliders" /></svg>
+          <span>系统设置</span>
+        </button>
+        <button class="tab" id="tab-logs" data-view="logs" type="button" role="tab" aria-selected="false"
+          aria-controls="view-logs">
+          <svg aria-hidden="true"><use href="#i-terminal" /></svg>
+          <span>日志</span>
+        </button>
+      </div>
+    </nav>
+
+    <main class="container views">
+
+      <!-- ============================ 总览 ============================ -->
+      <section class="view is-active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
+
+        <div class="dashboard">
+
+          <!-- Multi-server cluster ------------------------------------- -->
+          <article class="card cluster-card hidden" data-platform="cluster" id="cluster-card">
+            <div class="dashboard-card-header cluster-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-servers" /></svg>
+                多服务器
+                <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="cluster-auto-failover-toggle" title="启用后故障时按优先级自动切换；关闭后仅手动切换">
+                  <input type="checkbox" id="clusterAutoFailoverToggle">
+                  <span>自动转移</span>
+                </label>
+                <button id="clusterFoldBtn" class="action-btn action-btn--accent icon-btn compact-btn cluster-fold-btn"
+                  type="button" title="折叠" aria-label="折叠">
+                  <svg class="btn-icon" id="clusterFoldIcon" aria-hidden="true"><use href="#i-chevron" /></svg>
+                </button>
+                <button id="clusterRefreshBtn" class="action-btn action-btn--refresh icon-btn compact-btn"
+                  type="button" title="刷新" aria-label="刷新">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+                <button id="clusterSyncBtn" class="action-btn action-btn--sync icon-btn compact-btn" type="button"
+                  title="同步频道配置" aria-label="同步频道配置">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-sync" /></svg>
+                </button>
+              </div>
+            </div>
+            <div id="cluster-node-list" class="cluster-node-list">
+              <div class="cluster-empty">集群未启用或暂无节点心跳</div>
+            </div>
+          </article>
+
+          <!-- Bilibili ------------------------------------------------- -->
+          <article class="card" data-platform="bilibili">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-bilibili" /></svg>
+                Bilibili
+                <span class="status-indicator" id="bili-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <button id="startLiveBtn" class="action-btn action-btn--start icon-btn compact-btn" type="button"
+                  title="开始直播" aria-label="开始直播">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-play" /></svg>
+                </button>
+                <button id="stopLiveBtn" class="action-btn action-btn--stop icon-btn compact-btn" type="button"
+                  title="停止直播" aria-label="停止直播">
+                  <svg class="btn-icon" aria-hidden="true"><use href="#i-stop" /></svg>
+                </button>
+                <button id="restartStreamBtn" class="action-btn action-btn--restart icon-btn compact-btn" type="button"
+                  title="重启流" aria-label="重启流">
+                  <svg class="btn-icon" id="restartStreamIcon" aria-hidden="true"><use href="#i-restart" /></svg>
+                </button>
+                <button id="refreshBilibiliBtn" class="action-btn action-btn--refresh icon-btn compact-btn"
+                  type="button" title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshBilibiliIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">标题</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="bili-title">-</span>
+                  <button id="bili-title-edit-btn" class="info-row-edit-btn" type="button" title="编辑标题"
+                    aria-label="编辑标题">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="title-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <input type="text" id="title-edit-input" aria-label="直播标题">
+                    <button id="bili-title-save-btn" class="info-edit-save-btn" type="button" aria-label="保存标题">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="bili-title-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消标题编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="bili-area">-</span>
+                  <button id="bili-area-edit-btn" class="info-row-edit-btn" type="button" title="更改分区"
+                    aria-label="更改分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="area-edit-select" aria-label="直播分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="bili-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="bili-area-cancel-btn" class="info-edit-cancel-btn" type="button" aria-label="取消分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">弹幕指令</span>
+                <div class="info-row-view info-row-view-end">
+                  <label class="toggle-label info-row-toggle-label">
+                    <span class="toggle-switch">
+                      <input type="checkbox" id="bili-danmaku-command-toggle" aria-label="弹幕指令">
+                      <span class="toggle-slider"></span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="bili-network-panel hidden" id="bili-network-panel">
+                <div class="bili-network-header">
+                  <span class="bili-network-title">Network</span>
+                  <div class="bili-live-stats" id="bili-live-stats" aria-label="开播时长">
+                    <span class="bili-live-stat">
+                      <span class="bili-live-stat-value" id="bili-live-time">-</span>
+                      <span class="bili-live-stat-label" id="bili-live-time-label">开播</span>
+                    </span>
+                  </div>
+                </div>
+                <div class="bili-network-graph" id="bili-network-graph"></div>
+                <div class="bili-network-graph-axis" aria-hidden="true">
+                  <span id="bili-network-window">−60s</span>
+                  <span class="bili-network-scale" id="bili-network-scale">-</span>
+                  <span>now</span>
+                </div>
+                <div class="bili-network-meters">
+                  <div class="bili-network-meter" id="bili-network-cache-meter" data-leg="rx">
+                    <div class="bili-network-meter-label">
+                      <span>Cache RX</span>
+                      <span class="bili-network-meter-speed" id="bili-network-cache-speed-ratio">-</span>
+                    </div>
+                    <div class="bili-network-meter-value">
+                      <span id="bili-network-cache-rate">-</span>
+                    </div>
+                    <div class="bili-network-total" id="bili-network-cache-time">-</div>
+                  </div>
+                  <div class="bili-network-meter" data-leg="tx">
+                    <div class="bili-network-meter-label">
+                      <span>RTMP TX</span>
+                      <span class="bili-network-meter-speed" id="bili-network-push-speed-ratio">-</span>
+                    </div>
+                    <div class="bili-network-meter-value">
+                      <span id="bili-network-push-rate">-</span>
+                    </div>
+                    <div class="bili-network-total" id="bili-network-push-time">-</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- YouTube -------------------------------------------------- -->
+          <article class="card" data-platform="youtube">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-youtube" /></svg>
+                YouTube
+                <span class="status-indicator" id="yt-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用 YouTube 监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="youtube-monitor-toggle" aria-label="启用 YouTube 监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshYouTubeBtn" class="action-btn action-btn--refresh icon-btn compact-btn" type="button"
+                  title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshYouTubeIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="yt-channel-name">-</span>
+                  <button id="yt-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改 YouTube 频道">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="yt-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="yt-channel-edit-select" aria-label="YouTube 频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="yt-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 频道">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="yt-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 YouTube 频道编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row" id="yt-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="yt-title">-</span>
+              </div>
+              <div class="info-row" id="yt-topic-row">
+                <span class="info-label">分区</span>
+                <span class="info-value info-value-right" id="yt-topic">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">配置分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="yt-area">-</span>
+                  <button id="yt-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区"
+                    aria-label="更改 YouTube 配置分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="yt-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="yt-area-edit-select" aria-label="YouTube 配置分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="yt-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 配置分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="yt-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 YouTube 配置分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">画质</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="yt-quality">-</span>
+                  <button id="yt-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质"
+                    aria-label="更改 YouTube 画质">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="yt-quality-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="yt-quality-edit-select" aria-label="YouTube 画质"></select>
+                    <button id="yt-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 YouTube 画质">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="yt-quality-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 YouTube 画质编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">裁剪</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="yt-crop-status">关闭</span>
+                  <button id="yt-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪"
+                    aria-label="配置 YouTube 裁剪">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                  <button id="yt-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button"
+                    title="清除裁剪设置" aria-label="清除 YouTube 裁剪设置">
+                    <svg aria-hidden="true"><use href="#i-trash" /></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">HLS缓存</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="yt-hls-cache-status">关闭</span>
+                  <button id="yt-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存"
+                    aria-label="配置 YouTube HLS 缓存">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="yt-hls-cache-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                      <span class="toggle-switch hls-cache-toggle-switch">
+                        <input type="checkbox" id="yt-hls-cache-enabled" aria-label="启用 YouTube HLS 缓存">
+                        <span class="toggle-slider"></span>
+                      </span>
+                    </label>
+                    <span id="yt-hls-cache-latency-group" class="hls-cache-latency-group">
+                      <input type="number" id="yt-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60"
+                        placeholder="8" aria-label="YouTube HLS 缓存秒数">
+                      <span class="hls-cache-latency-unit">秒</span>
+                    </span>
+                    <button id="yt-hls-cache-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存 YouTube HLS 缓存">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="yt-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 YouTube HLS 缓存编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Twitch --------------------------------------------------- -->
+          <article class="card" data-platform="twitch">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-twitch" /></svg>
+                Twitch
+                <span class="status-indicator" id="tw-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用 Twitch 监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="twitch-monitor-toggle" aria-label="启用 Twitch 监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshTwitchBtn" class="action-btn action-btn--refresh icon-btn compact-btn" type="button"
+                  title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshTwitchIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="tw-channel-name">-</span>
+                  <button id="tw-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改 Twitch 频道">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="tw-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="tw-channel-edit-select" aria-label="Twitch 频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="tw-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 频道">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="tw-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Twitch 频道编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row" id="tw-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="tw-title">-</span>
+              </div>
+              <div class="info-row" id="tw-game-row">
+                <span class="info-label">游戏</span>
+                <span class="info-value info-value-right" id="tw-game">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">配置分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="tw-area">-</span>
+                  <button id="tw-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区"
+                    aria-label="更改 Twitch 配置分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="tw-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="tw-area-edit-select" aria-label="Twitch 配置分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="tw-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 配置分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="tw-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Twitch 配置分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">画质</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="tw-quality">-</span>
+                  <button id="tw-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质"
+                    aria-label="更改 Twitch 画质">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="tw-quality-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="tw-quality-edit-select" aria-label="Twitch 画质"></select>
+                    <button id="tw-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Twitch 画质">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="tw-quality-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Twitch 画质编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">裁剪</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="tw-crop-status">关闭</span>
+                  <button id="tw-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪"
+                    aria-label="配置 Twitch 裁剪">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                  <button id="tw-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button"
+                    title="清除裁剪设置" aria-label="清除 Twitch 裁剪设置">
+                    <svg aria-hidden="true"><use href="#i-trash" /></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">HLS缓存</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="tw-hls-cache-status">关闭</span>
+                  <button id="tw-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存"
+                    aria-label="配置 Twitch HLS 缓存">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="tw-hls-cache-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                      <span class="toggle-switch hls-cache-toggle-switch">
+                        <input type="checkbox" id="tw-hls-cache-enabled" aria-label="启用 Twitch HLS 缓存">
+                        <span class="toggle-slider"></span>
+                      </span>
+                    </label>
+                    <span id="tw-hls-cache-latency-group" class="hls-cache-latency-group">
+                      <input type="number" id="tw-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60"
+                        placeholder="8" aria-label="Twitch HLS 缓存秒数">
+                      <span class="hls-cache-latency-unit">秒</span>
+                    </span>
+                    <button id="tw-hls-cache-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存 Twitch HLS 缓存">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="tw-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Twitch HLS 缓存编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Niconico ------------------------------------------------- -->
+          <article class="card hidden" data-platform="niconico">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-niconico" /></svg>
+                Niconico
+                <span class="status-indicator" id="nc-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用 Niconico 监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="niconico-monitor-toggle" aria-label="启用 Niconico 监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshNiconicoBtn" class="action-btn action-btn--refresh icon-btn compact-btn" type="button"
+                  title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshNiconicoIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-channel-name">-</span>
+                  <button id="nc-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改 Niconico 频道">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="nc-channel-edit-select" aria-label="Niconico 频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="nc-channel-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 频道">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 频道编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row" id="nc-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="nc-title">-</span>
+              </div>
+              <div class="info-row" id="nc-scheduled-row">
+                <span class="info-label">预定</span>
+                <span class="info-value info-value-right" id="nc-scheduled">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">配置分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-area">-</span>
+                  <button id="nc-area-edit-btn" class="info-row-edit-btn" type="button" title="更改配置分区"
+                    aria-label="更改 Niconico 配置分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="nc-area-edit-select" aria-label="Niconico 配置分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="nc-area-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 配置分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 配置分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">画质</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-quality">-</span>
+                  <button id="nc-quality-edit-btn" class="info-row-edit-btn" type="button" title="更改画质"
+                    aria-label="更改 Niconico 画质">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-quality-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="nc-quality-edit-select" aria-label="Niconico 画质"></select>
+                    <button id="nc-quality-save-btn" class="info-edit-save-btn" type="button" aria-label="保存 Niconico 画质">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-quality-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico 画质编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">裁剪</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-crop-status">关闭</span>
+                  <button id="nc-crop-edit-btn" class="info-row-edit-btn" type="button" title="配置裁剪"
+                    aria-label="配置 Niconico 裁剪">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                  <button id="nc-crop-clear-btn" class="info-row-edit-btn info-row-danger-btn" type="button"
+                    title="清除裁剪设置" aria-label="清除 Niconico 裁剪设置">
+                    <svg aria-hidden="true"><use href="#i-trash" /></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">HLS缓存</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="nc-hls-cache-status">关闭</span>
+                  <button id="nc-hls-cache-edit-btn" class="info-row-edit-btn" type="button" title="配置 HLS 缓存"
+                    aria-label="配置 Niconico HLS 缓存">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="nc-hls-cache-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <label class="toggle-label info-row-toggle-label hls-cache-toggle-label">
+                      <span class="toggle-switch hls-cache-toggle-switch">
+                        <input type="checkbox" id="nc-hls-cache-enabled" aria-label="启用 Niconico HLS 缓存">
+                        <span class="toggle-slider"></span>
+                      </span>
+                    </label>
+                    <span id="nc-hls-cache-latency-group" class="hls-cache-latency-group">
+                      <input type="number" id="nc-hls-cache-latency" class="hls-cache-latency-input" min="1" max="60"
+                        placeholder="12" aria-label="Niconico HLS 缓存秒数">
+                      <span class="hls-cache-latency-unit">秒</span>
+                    </span>
+                    <button id="nc-hls-cache-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存 Niconico HLS 缓存">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="nc-hls-cache-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消 Niconico HLS 缓存编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Priority channel ----------------------------------------- -->
+          <article class="card hidden" data-platform="priority" id="priority-channel-card">
+            <div class="dashboard-card-header">
+              <h2 class="dashboard-card-title">
+                <svg aria-hidden="true"><use href="#i-star" /></svg>
+                优先频道
+                <span class="status-indicator" id="priority-status"></span>
+              </h2>
+              <div class="card-header-actions">
+                <label class="toggle-label" title="启用优先频道监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="priority-toggle" aria-label="启用优先频道监控">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="refreshPriorityBtn" class="action-btn action-btn--refresh icon-btn compact-btn"
+                  type="button" title="刷新状态" aria-label="刷新状态">
+                  <svg class="btn-icon" id="refreshPriorityIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-row">
+                <span class="info-label">频道</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="priority-channel-name">未配置</span>
+                  <button id="priority-channel-edit-btn" class="info-row-edit-btn" type="button" title="更改频道"
+                    aria-label="更改优先频道">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="priority-channel-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="priority-channel-edit-select" aria-label="优先频道">
+                      <option value="">选择频道...</option>
+                    </select>
+                    <button id="priority-channel-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存优先频道">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="priority-channel-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消优先频道编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">状态</span>
+                <span class="info-value info-value-right" id="priority-live-status">未启用</span>
+              </div>
+
+              <div class="info-row" id="priority-title-row">
+                <span class="info-label">标题</span>
+                <span class="info-value info-value-right" id="priority-title">-</span>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">默认分区</span>
+                <div class="info-row-view">
+                  <span class="info-value info-value-right" id="priority-default-area">-</span>
+                  <button id="priority-area-edit-btn" class="info-row-edit-btn" type="button" title="更改默认分区"
+                    aria-label="更改优先频道默认分区">
+                    <svg aria-hidden="true"><use href="#i-edit" /></svg>
+                  </button>
+                </div>
+                <div id="priority-area-edit-container" class="info-edit-container hidden">
+                  <div>
+                    <select id="priority-area-edit-select" aria-label="优先频道默认分区">
+                      <option value="">选择分区...</option>
+                    </select>
+                    <button id="priority-area-save-btn" class="info-edit-save-btn" type="button"
+                      aria-label="保存优先频道默认分区">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+                    </button>
+                    <button id="priority-area-cancel-btn" class="info-edit-cancel-btn" type="button"
+                      aria-label="取消优先频道默认分区编辑">
+                      <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="info-row">
+                <span class="info-label">自动重启流</span>
+                <div class="info-row-view info-row-view-end">
+                  <label class="toggle-label info-row-toggle-label">
+                    <span class="toggle-switch">
+                      <input type="checkbox" id="priority-auto-restart-toggle" aria-label="自动重启流">
+                      <span class="toggle-slider"></span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Holodex ---------------------------------------------------- -->
+        <section class="panel is-foldable" id="holodex-section">
+          <div class="panel__head">
+            <h2 class="panel__title" id="holodex-heading">
+              <img class="panel__title-mark" src="icon-blue.png" alt="" width="20" height="20">
+              直播与预告
+            </h2>
+            <div class="panel__actions">
+              <button id="refreshHolodexBtn" class="btn-ghost icon-btn compact-btn" type="button" title="刷新"
+                aria-label="刷新">
+                <svg class="btn-icon" id="refreshHolodexIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+              <button id="holodexFoldBtn" class="btn-ghost icon-btn compact-btn panel__fold-btn" type="button"
+                title="折叠" aria-label="折叠" aria-expanded="true" aria-controls="holodex-container">
+                <svg class="btn-icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel__body" id="holodex-container">
+
+            <div id="holodex-init-hint" class="empty-state">正在读取 Holodex 配置...</div>
+
+            <div id="holodex-api-config" class="holodex-api-config">
+              <h3 class="holodex-api-title">配置 Holodex API Key</h3>
+              <p class="holodex-api-description">填写 Holodex API Key，或在设置中填写 YouTube Data API Key，即可显示直播列表</p>
+
+              <div class="control-group holodex-api-field">
+                <label for="holodex-api-input">API Key</label>
+                <input type="text" id="holodex-api-input" class="holodex-api-input" placeholder="输入你的 Holodex API Key">
+              </div>
+
+              <div class="holodex-api-help">
+                <h4>如何获取 API Key</h4>
+                <ol>
+                  <li>访问 <a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer"
+                      class="holodex-api-link">holodex.net/login</a></li>
+                  <li>登录后复制 API Key 至上方输入框</li>
+                </ol>
+              </div>
+
+              <div class="holodex-api-actions">
+                <button id="holodex-save-api-key-btn" class="btn-success holodex-api-action" type="button">保存配置</button>
+                <button id="holodex-test-api-key-btn" class="btn-secondary holodex-api-action" type="button">测试连接</button>
+              </div>
+            </div>
+
+            <div id="holodex-streams-section">
+              <div id="holodex-toolbar" class="holodex-toolbar">
+                <div id="holodex-auth-bar" class="holodex-auth-bar">
+                  <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn" title="使用 Holodex 收藏夹">
+                    <span class="holodex-heart-icon" aria-hidden="true">
+                      <svg><use href="#i-heart" /></svg>
+                    </span>
+                    <span id="holodex-favorites-label">使用 Holodex 收藏夹</span>
+                  </button>
+                  <label class="holodex-favorites-mode" title="开启：使用 Holodex JWT 收藏夹；关闭：使用 channels.json">
+                    <span class="toggle-switch">
+                      <input type="checkbox" id="holodex-use-favorites-toggle" aria-label="使用 Holodex 收藏夹">
+                      <span class="toggle-slider"></span>
+                    </span>
+                  </label>
+                  <label class="holodex-jwt-skip" title="跳过 JWT 过期校验与自动续期">
+                    <span class="toggle-switch">
+                      <input type="checkbox" id="holodex-skip-jwt-verify" aria-label="跳过 JWT 校验">
+                      <span class="toggle-slider"></span>
+                    </span>
+                  </label>
+                </div>
+                <button type="button" id="holodex-login-btn" class="btn-secondary compact-btn holodex-login-btn">
+                  收藏夹登录
+                </button>
+              </div>
+
+              <div id="holodex-status" class="holodex-status">加载中...</div>
+              <div id="holodex-streams" class="holodex-streams-grid"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ========================== 配置管理 ========================== -->
+      <section class="view" id="view-manage" role="tabpanel" aria-labelledby="tab-manage" tabindex="-1">
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-area" /></svg>
+              分区管理
+            </h2>
+            <div class="panel__actions">
+              <button id="refreshAreasBtn" class="btn-ghost icon-btn compact-btn" type="button" title="刷新分区列表"
+                aria-label="刷新分区列表">
+                <svg class="btn-icon" id="refreshAreasIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel__body manage-split">
+            <div class="management-form-card">
+              <h4 id="area-form-title" class="management-form-title">添加新分区</h4>
+
+              <div class="management-field-group">
+                <button id="area-catalog-load" class="btn-secondary" type="button">加载官方分区</button>
+                <label class="management-field-label" for="area-catalog-select">按分类选择</label>
+                <select id="area-catalog-select" disabled><option value="">加载后选择官方分区...</option></select>
+                <small id="area-catalog-hint" class="management-field-note" role="status">自动填入 ID 和名称。</small>
+              </div>
+
+              <div class="management-form-grid management-area-grid">
+                <div>
+                  <label class="management-field-label" for="area-id">分区ID</label>
+                  <input type="number" id="area-id" class="management-field-input">
+                </div>
+                <div>
+                  <label class="management-field-label" for="area-name">分区名称</label>
+                  <input type="text" id="area-name" class="management-field-input">
+                </div>
+              </div>
+
+              <div class="management-field-group">
+                <label class="management-field-label" for="area-keywords">
+                  标题关键词 (用", "分隔)
+                  <small class="management-field-note">用于自动检测直播分区，匹配 YouTube 分区 / Twitch 游戏或直播标题中的关键词</small>
+                </label>
+                <input type="text" id="area-keywords" class="management-field-input"
+                  placeholder="例: league of legends, lol, ろる">
+              </div>
+
+              <div class="management-field-group">
+                <label class="management-field-label" for="area-aliases">
+                  别名 (用", "分隔)
+                  <small class="management-field-note">用于弹幕指令识别，观众可以通过这些别名切换到此分区</small>
+                </label>
+                <input type="text" id="area-aliases" class="management-field-input" placeholder="例: lol, 瓦">
+              </div>
+
+              <div class="management-form-actions">
+                <button id="area-submit-btn" class="btn-primary" type="button">添加分区</button>
+                <button id="area-clear-btn" class="btn-secondary" type="button">清空表单</button>
+              </div>
+            </div>
+
+            <div id="areas-list" class="management-list-panel">
+              <h4 class="subsection-title">现有分区</h4>
+              <div id="areas-content" class="management-list-content">加载中...</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-channel" /></svg>
+              频道配置管理
+            </h2>
+            <div class="panel__actions">
+              <button id="refreshChannelsBtn" class="btn-ghost icon-btn compact-btn" type="button" title="刷新频道列表"
+                aria-label="刷新频道列表">
+                <svg class="btn-icon" id="refreshChannelsIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel__body manage-split">
+            <div class="management-form-card">
+              <h4 id="channel-form-title" class="management-form-title">添加频道</h4>
+
+              <div class="management-form-grid management-channel-grid">
+                <div>
+                  <label class="management-field-label" for="channel-name">
+                    频道名称
+                    <small class="management-field-note">YouTube / Twitch 转播标题</small>
+                  </label>
+                  <input type="text" id="channel-name" class="management-field-input">
+                </div>
+                <div>
+                  <label class="management-field-label" for="channel-aliases">
+                    别名 (用", "分隔)
+                    <small class="management-field-note">用于弹幕指令识别</small>
+                  </label>
+                  <input type="text" id="channel-aliases" class="management-field-input" placeholder="例: 昵称1, 昵称2">
+                </div>
+              </div>
+
+              <div class="management-form-grid management-channel-grid">
+                <div class="channel-lookup-field">
+                  <label class="management-field-label" for="channel-youtube">YouTube 频道主页 / @handle / UC ID</label>
+                  <div class="input-action-row"><input type="text" id="channel-youtube" class="management-field-input" placeholder="https://www.youtube.com/@channel"><button id="manage-resolve-youtube" class="btn-secondary" type="button">识别</button></div>
+                </div>
+                <div>
+                  <label class="management-field-label" for="channel-twitch">Twitch 频道ID (可选)</label>
+                  <input type="text" id="channel-twitch" class="management-field-input" placeholder="ID in Twitch url">
+                </div>
+              </div>
+
+              <div class="management-form-grid management-channel-grid">
+                <div>
+                  <label class="management-field-label" for="channel-niconico">Niconico 频道ID (可选)</label>
+                  <input type="text" id="channel-niconico" class="management-field-input" placeholder="vspo 或 ch.nicovideo.jp/vspo">
+                </div>
+                <div>
+                  <label class="management-field-label" for="channel-niconico-name">
+                    Niconico 转播标题 (可选)
+                    <small class="management-field-note">不填则使用上方频道名称</small>
+                  </label>
+                  <input type="text" id="channel-niconico-name" class="management-field-input" placeholder="ぶいすぽ激ロー">
+                </div>
+              </div>
+
+              <div class="management-field-group">
+                <div class="hint">至少填写一个平台的频道ID（YouTube、Twitch 或 Niconico）。</div>
+                <label class="management-field-label" for="channel-riot">Riot PUUID (可选)</label>
+                <input type="text" id="channel-riot" class="management-field-input" placeholder="英雄联盟PUUID">
+              </div>
+
+              <div class="management-form-actions">
+                <button id="channel-submit-btn" class="btn-primary" type="button">添加频道</button>
+                <button id="channel-clear-btn" class="btn-secondary" type="button">清空表单</button>
+              </div>
+            </div>
+
+            <div id="channels-list" class="management-list-panel">
+              <h4 class="subsection-title">现有频道</h4>
+              <div id="channels-content" class="management-list-content">加载中...</div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ========================== 系统设置 ========================== -->
+      <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-sliders" /></svg>
+              基础设置
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="settings-grid">
+              <div class="control-group">
+                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-twitch-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示 Twitch</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-niconico-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示 Niconico</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="仅显示或隐藏仪表盘卡片，不改变优先频道监控和自动重启流设置">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-show-priority-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>显示优先频道</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="读取 YouTube 频道 RSS，需要 YouTube Data API Key 确认直播状态。关闭后仍处理 WebSub 推送，并按可用配额轮询上传列表。多服务器共享索引时在 YouTube 索引节点设置">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-youtube-rss-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>YouTube RSS</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label for="config-interval">检测间隔 (秒)</label>
+                <input type="number" id="config-interval" min="10" max="300" placeholder="30">
+              </div>
+              <div class="control-group">
+                <label class="toggle-label">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-auto-cover-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>自动更换封面</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="config-danmaku-command-checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>启用弹幕指令</span>
+                </label>
+              </div>
+              <div class="control-group">
+                <label class="toggle-label" title="yt-dlp 兜底：开启后监控每次都直接用 yt-dlp 查询 YouTube（最终兜底，忽略 Holodex / YouTube API 的结果）。关闭时按 Holodex 与 YouTube API 索引判断，每 5 分钟 yt-dlp 安全探测一次">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="holodex-monitor-gate-toggle" aria-label="yt-dlp 兜底">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>yt-dlp 兜底</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-key" /></svg>
+              API 密钥
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="settings-keys">
+              <div class="control-group">
+                <div class="credential-heading"><label for="config-holodex-key">Holodex API Key (可选)</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
+                <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部配信、游戏分类和其他频道的预定">
+              </div>
+              <div class="control-group">
+                <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key (可选)</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
+                <textarea autocomplete="new-password" id="config-youtube-api-key" title="每行一个 Key，可使用多个项目的额度" class="settings-mono-textarea" rows="3"
+                  placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
+              </div>
+            </div>
+            <div id="youtube-key-status" class="settings-help-text" hidden></div>
+            <div class="settings-websub-row">
+              <div class="control-group settings-websub">
+                <div class="settings-inline-pair">
+                  <div>
+                    <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
+                    <input type="text" id="config-websub-callback-url"
+                      placeholder="https://yt.example.com/websub/youtube">
+                  </div>
+                  <div>
+                    <label for="config-websub-port">端口</label>
+                    <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
+                  </div>
+                </div>
+                <small class="settings-help-text" title="YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 /websub/youtube，不会暴露 Web UI。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。">
+                  用隧道把公网地址转发到此端口，只响应 <code>/websub/youtube</code>；留空关闭
+                </small>
+              </div>
+              <figure id="youtube-hours-chart" class="hours-chart" hidden>
+                <figcaption class="hours-chart-title">上传列表按开播时段分配</figcaption>
+                <div class="hours-chart-plots"></div>
+                <p class="hours-chart-summary settings-help-text"></p>
+                <details class="hours-chart-table">
+                  <summary>逐小时数据</summary>
+                </details>
+              </figure>
+            </div>
+            <div class="control-group settings-lol">
+              <label class="toggle-label settings-toggle-row">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-lol-monitor-checkbox">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>启用英雄联盟玩家ID监控</span>
+              </label>
+              <div id="config-riot-api-group" class="settings-dependent-group">
+                <div class="credential-heading"><label for="config-riot-key">Riot API Key</label><div class="credential-state"><a href="https://developer.riotgames.com/" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 riot API Key">获取</a><span id="config-clear-riot-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-riot-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Riot API Key" disabled>清除</button></div></div>
+                <input type="password" autocomplete="new-password" id="config-riot-key" placeholder="用于监控游戏内违禁词汇">
+                <details id="config-player-filter-group" class="control-group">
+                  <summary>玩家名称过滤关键词</summary>
+                  <textarea id="config-player-filter" rows="5" aria-label="玩家名称过滤关键词" placeholder="每行一个关键词"></textarea>
+                  <button type="button" id="save-player-filter" class="btn-secondary">保存过滤关键词</button>
+                </details>
+              </div>
+              <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
+                <label for="config-lol-interval">LoL 监控间隔 (分钟)</label>
+                <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-plug" /></svg>
+              平台设置
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="settings-grid">
+              <div class="control-group">
+                <label for="config-yt-cookies-browser">服务器浏览器（可选）</label>
+                <select id="config-yt-cookies-browser">
+                  <option value="">使用已保存的 Cookie</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="edge">Edge</option>
+                  <option value="safari">Safari</option>
+                  <option value="brave">Brave</option>
+                  <option value="opera">Opera</option>
+                  <option value="vivaldi">Vivaldi</option>
+                </select>
+                <small class="settings-help-text">选中后优先使用服务器上的浏览器登录。</small>
+              </div>
+              <div class="control-group">
+                <label for="yt-cookie-upload">YouTube Cookie</label>
+                <p id="yt-cookie-status" class="settings-help-text" aria-live="polite">正在读取…</p>
+                <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
+                <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
+                <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
+                <small class="settings-help-text">Netscape 格式；自动保存 yt-dlp 更新。</small>
+                <input type="hidden" id="config-yt-cookies-file" value="">
+              </div>
+              <div class="control-group">
+                <label for="config-yt-deno-path">YouTube Deno 路径 (可选)</label>
+                <input type="text" id="config-yt-deno-path" placeholder="Windows 默认路径可留空">
+                <small class="settings-help-text">用于解决 YouTube n challenge 的 Deno 路径</small>
+              </div>
+              <div class="control-group">
+                <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
+              </div>
+              <div class="control-group settings-half-width">
+                <div class="credential-heading"><label for="config-tw-proxy">Twitch 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-tw-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-tw-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Twitch 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
+              </div>
+
+
+              <div class="control-group settings-half-width">
+                <label for="config-tw-region">Twitch 代理区域</label>
+                <select id="config-tw-region">
+                  <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
+                  <option value="eul">eul - 欧洲 (luminous, 推荐)</option>
+                  <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
+                  <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
+                  <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
+                  <option value="eu2">eu2 - 欧洲 2 (TTV-LOL-PRO)</option>
+                  <option value="eu3">eu3 - 欧洲 3 (TTV-LOL-PRO)</option>
+                  <option value="eu4">eu4 - 欧洲 4 (TTV-LOL-PRO)</option>
+                  <option value="eu5">eu5 - 欧洲 5 (TTV-LOL-PRO)</option>
+                  <option value="na">na - 北美 (TTV-LOL-PRO)</option>
+                  <option value="sa">sa - 南美 (TTV-LOL-PRO)</option>
+                  <option value="all">all - 全部代理</option>
+                  <option value="perf">perf - TTV-LOL-PRO 全部</option>
+                </select>
+              </div>
+              <section class="platform-session-settings" aria-labelledby="niconico-session-heading">
+                <div class="control-group">
+                  <div class="credential-heading"><label id="niconico-session-heading" for="config-nc-user-session">Niconico · user_session</label><div class="credential-state"><span id="config-nc-clear-session-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-nc-clear-session" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 登录信息" disabled>清除</button></div></div>
+                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检测可用性</button></div>
+                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检测</small>
+                </div>
+                <div class="session-actions">
+                  <label class="toggle-label" title="仅检测有效性，不会延长登录；网络失败不等于失效"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
+                </div>
+              <div class="control-group session-proxy">
+                <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-nc-proxy" title="使用 HTTP 代理；Clash 可用 mixed 端口" placeholder="http://127.0.0.1:7890">
+              </div>
+                <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">未直接配置 user_session 时才读取文件中的同名 Cookie。</small></div></details>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2 class="panel__title">数据与备份</h2></div>
+          <div class="panel__body">
+            <p id="storage-state" class="settings-help-text" aria-live="polite"></p>
+            <div class="settings-grid">
+              <div class="control-group"><label for="storage-backup-password">备份密码</label><input type="password" id="storage-backup-password" autocomplete="new-password" placeholder="至少 12 个字符"><button type="button" id="storage-backup" class="btn-secondary">下载加密备份</button></div>
+              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未配置的新安装。</small></details>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel cluster-settings-section">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-servers" /></svg>
+              多服务器节点
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="cluster-settings-switches">
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-enabled">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>启用多服务器</span>
+              </label>
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-sync-channels">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>同步频道配置</span>
+              </label>
+              <label class="toggle-label cluster-settings-toggle">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="config-cluster-auto-failover" checked>
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>自动故障转移</span>
+              </label>
+            </div>
+
+            <div class="cluster-settings-grid">
+              <div class="cluster-settings-panel cluster-settings-panel-local">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-peer-node-dot" aria-hidden="true"></span>
+                  <span>本节点</span>
+                </div>
+                <div class="cluster-settings-fields">
+                  <div class="control-group">
+                    <label for="config-cluster-node-id">本节点 ID</label>
+                    <input type="text" id="config-cluster-node-id" placeholder="ca">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-node-name">本节点名称</label>
+                    <input type="text" id="config-cluster-node-name" placeholder="Canada">
+                  </div>
+                  <div class="control-group cluster-settings-field-wide">
+                    <label for="config-cluster-api-url">本节点 API 地址</label>
+                    <input type="text" id="config-cluster-api-url" placeholder="http://ca.example.com:3150">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-priority">本节点优先级</label>
+                    <input type="number" id="config-cluster-priority" placeholder="0">
+                  </div>
+                </div>
+              </div>
+
+              <div class="cluster-settings-panel">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                  <span>故障检测</span>
+                </div>
+                <div class="cluster-settings-fields cluster-settings-fields-compact">
+                  <div class="control-group">
+                    <label for="config-cluster-heartbeat">心跳间隔 (秒)</label>
+                    <input type="number" id="config-cluster-heartbeat" min="1" placeholder="5">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-failover-timeout">故障超时 (秒)</label>
+                    <input type="number" id="config-cluster-failover-timeout" min="1" placeholder="15">
+                  </div>
+                  <div class="control-group">
+                    <label for="config-cluster-lease-ttl">活跃状态有效期 (秒)</label>
+                    <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20"
+                      aria-describedby="cluster-lease-ttl-hint">
+                    <small class="settings-help-text" id="cluster-lease-ttl-hint">仅作状态标记，不影响故障切换。</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="cluster-settings-add">
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark cluster-settings-panel-mark-add" aria-hidden="true"></span>
+                <span>添加节点</span>
+              </div>
+              <div class="cluster-settings-add-grid">
+                <div class="control-group">
+                  <label for="cluster-peer-node-id">节点 ID</label>
+                  <input type="text" id="cluster-peer-node-id" placeholder="us">
+                </div>
+                <div class="control-group">
+                  <label for="cluster-peer-name">节点名称</label>
+                  <input type="text" id="cluster-peer-name" placeholder="United States">
+                </div>
+                <div class="control-group cluster-settings-add-url">
+                  <label for="cluster-peer-api-url">API 地址</label>
+                  <input type="text" id="cluster-peer-api-url" placeholder="http://us.example.com:3150">
+                </div>
+                <div class="control-group">
+                  <label for="cluster-peer-priority">优先级</label>
+                  <input type="number" id="cluster-peer-priority" placeholder="0">
+                </div>
+                <div class="control-group cluster-settings-add-action">
+                  <button id="cluster-peer-add-btn" type="button"
+                    class="btn-secondary cluster-settings-add-btn">添加节点</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="cluster-peer-list" class="cluster-peer-list">
+              <div class="cluster-peer-empty">暂无其他节点</div>
+            </div>
+
+
+          </div>
+        </section>
+
+        <section class="panel" id="public-status-settings">
+          <div class="panel__head"><h2 class="panel__title">公开状态页</h2></div>
+          <div class="panel__body cluster-public-status">
+              <p class="settings-help-text">单机可用，默认端口 23234。</p>
+              <div class="cluster-public-status-grid">
+                <div class="control-group cluster-public-status-node">
+                  <label for="config-public-status-node">运行位置</label>
+                  <select id="config-public-status-node">
+                    <option value="">不启用</option>
+                  </select>
+                  <small class="settings-help-text" id="public-status-node-hint">本机即可运行，无需开启多服务器。</small>
+                </div>
+                <div class="cluster-public-status-fields">
+                  <div class="control-group">
+                    <label for="config-public-status-bind">监听地址</label>
+                    <input type="text" id="config-public-status-bind" placeholder="127.0.0.1">
+                  </div>
+                  <div class="control-group cluster-public-status-port">
+                    <label for="config-public-status-port">端口</label>
+                    <input type="number" id="config-public-status-port" min="1" max="65535" placeholder="23234">
+                  </div>
+                  <div class="control-group cluster-public-status-url">
+                    <label for="config-public-status-url">公开地址</label>
+                    <input type="text" id="config-public-status-url" placeholder="s.example.com">
+                    <small class="settings-help-text" id="public-status-url-hint">
+                      收到 %查询 弹幕时播报「详情：地址」，留空则不播报。
+                    </small>
+                  </div>
+                  <div class="control-group cluster-public-status-action">
+                    <label class="cluster-public-status-action-label" for="public-status-save-btn">操作</label>
+                    <button id="public-status-save-btn" type="button"
+                      class="btn-secondary cluster-settings-add-btn">保存公开页设置</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-shield" /></svg>
+              防撞车设置
+            </h2>
+          </div>
+          <div class="panel__body">
+            <label class="toggle-label">
+              <span class="toggle-switch">
+                <input type="checkbox" id="config-anti-collision-checkbox">
+                <span class="toggle-slider"></span>
+              </span>
+              <span>启用防撞车</span>
+            </label>
+
+            <div id="anti-collision-section" class="anti-collision-section hidden">
+              <h3 class="subsection-title">防撞车名单</h3>
+              <div class="anti-collision-add">
+                <div class="control-group">
+                  <label for="anti-collision-username">用户名</label>
+                  <input type="text" id="anti-collision-username" placeholder="输入用户名">
+                </div>
+                <div class="control-group">
+                  <label for="anti-collision-roomid">房间号</label>
+                  <input type="number" id="anti-collision-roomid" placeholder="输入房间号">
+                </div>
+                <div class="control-group anti-collision-add-action">
+                  <button id="anti-collision-add-btn" class="btn-secondary anti-collision-add-btn"
+                    type="button">添加到名单</button>
+                </div>
+              </div>
+
+              <div id="anti-collision-list" class="anti-collision-list">
+                <div class="anti-collision-empty">加载中...</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-ban" /></svg>
+              禁用关键词
+            </h2>
+          </div>
+          <div class="panel__body">
+            <div class="control-group banned-keyword-field">
+              <label class="settings-field-label" for="streaming-banned-keywords">
+                转播禁用关键词
+                <small class="settings-field-help">包含这些关键词的直播将不会被转播（每行一个关键词）</small>
+              </label>
+              <textarea id="streaming-banned-keywords" class="settings-mono-textarea" rows="6"
+                placeholder="watchalong&#10;watchparty&#10;asmr"></textarea>
+            </div>
+
+            <div class="control-group">
+              <label class="settings-field-label" for="danmaku-banned-keywords">
+                弹幕命令禁用关键词
+                <small class="settings-field-help">包含这些关键词的直播将禁用弹幕命令（每行一个关键词）</small>
+              </label>
+              <textarea id="danmaku-banned-keywords" class="settings-mono-textarea" rows="8"
+                placeholder="watchalong&#10;talk&#10;freechat"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <div class="settings-actions">
+          <button id="save-system-config-btn" class="btn-fill" type="button">保存配置</button>
+          <button id="reload-system-config-btn" class="btn-secondary" type="button">重新加载</button>
+        </div>
+      </section>
+
+      <!-- ============================ 日志 ============================ -->
+      <section class="view" id="view-logs" role="tabpanel" aria-labelledby="tab-logs" tabindex="-1">
+        <section class="panel log-panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-terminal" /></svg>
+              系统日志
+            </h2>
+          </div>
+          <div class="panel__body" id="log-container">
+            <div id="log-scroll" class="log-scroll">
+              <div id="log-output">等待日志...</div>
+            </div>
+            <div class="log-actions">
+              <button id="refresh-logs-btn" class="btn-primary compact-btn icon-text-btn" type="button">
+                <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                <span>刷新日志</span>
+              </button>
+              <button id="clear-logs-btn" class="btn-secondary compact-btn" type="button">清空日志</button>
+              <label class="log-auto-scroll">
+                <input type="checkbox" id="auto-scroll-checkbox" checked>
+                <span>自动滚动</span>
+              </label>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="container appfoot">
+      <div class="appfoot__row">
+        <span id="version-display">Bilistream</span>
+        <button id="check-updates-btn" class="btn-ghost compact-btn icon-text-btn" type="button">
+          <svg class="btn-icon" aria-hidden="true"><use href="#i-download" /></svg>
+          <span>检查更新</span>
+        </button>
+      </div>
+
+      <div id="update-notification" class="update-notification hidden">
+        <p class="update-notification-title">发现新版本</p>
+        <p id="update-message" class="update-message"></p>
+        <div class="update-actions">
+          <button id="auto-update-btn" class="update-auto-btn" type="button">自动更新</button>
+          <a id="update-link" class="update-download-link" href="#" target="_blank" rel="noopener noreferrer">手动下载</a>
+        </div>
+        <p id="update-progress" class="update-progress hidden"></p>
+      </div>
+
+      <div class="appfoot__row footer-links">
+        <a href="https://github.com/Detteee/bilistream" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <span class="footer-link-separator">·</span>
+        <a href="https://github.com/Detteee/bilistream/issues" target="_blank" rel="noopener noreferrer">报告问题</a>
+      </div>
+    </footer>
+
+    <!-- ==================================================================
+         Modals
+         ================================================================== -->
+
+    <div id="area-modal" class="area-modal hidden" role="dialog" aria-modal="true" aria-labelledby="area-modal-title">
+      <div class="area-modal-content">
+        <div class="area-dialog-handle" aria-hidden="true"></div>
+        <h3 class="area-modal-title" id="area-modal-title">选择分区</h3>
+        <p class="area-modal-message">未能自动检测分区，请手动选择：</p>
+        <div class="area-option-list" id="modal-area-list" role="listbox" aria-label="分区"></div>
+        <div class="area-modal-actions">
+          <button id="cancel-area-selection-btn" class="area-modal-cancel-btn" type="button">取消</button>
+          <button id="confirm-area-selection-btn" class="area-modal-confirm-btn" type="button" disabled>确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="holodex-login-modal" class="holodex-login-modal" role="dialog" aria-modal="true"
+      aria-labelledby="holodex-login-modal-title">
+      <div class="holodex-login-dialog">
+        <div class="holodex-login-header">
+          <h3 id="holodex-login-modal-title">Holodex 收藏夹登录</h3>
+          <button id="holodex-login-close-btn" class="holodex-login-close-btn" type="button" aria-label="关闭">
+            <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+          </button>
+        </div>
+        <p class="holodex-login-description">
+          登录后显示 Holodex 收藏夹直播（含 Twitch 外部配信）。未登录时使用 <code>channels.json</code> 频道列表，可在「配置管理」中编辑。
+        </p>
+        <div id="holodex-modal-auth-hint" class="holodex-login-hint"></div>
+        <div class="control-group holodex-login-field">
+          <label for="holodex-jwt-input">JWT Token</label>
+          <input type="password" id="holodex-jwt-input" placeholder="粘贴 Holodex JWT">
+        </div>
+        <details class="holodex-login-help">
+          <summary>如何获取 JWT</summary>
+          <ol>
+            <li>点击下方「打开 Holodex」并完成登录</li>
+            <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
+            <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
+          </ol>
+          <p>JWT 将在到期前 30 天内自动续期并写回 config.json。</p>
+        </details>
+        <div class="holodex-login-actions">
+          <button id="holodex-open-login-btn" type="button" class="btn-secondary">打开 Holodex</button>
+          <button id="holodex-save-jwt-btn" type="button" class="btn-success">保存</button>
+          <button id="holodex-logout-btn" type="button" class="btn-secondary holodex-login-logout-btn hidden">退出</button>
+          <button id="holodex-cancel-login-btn" type="button" class="btn-secondary">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="face-auth-modal" class="face-auth-modal" role="dialog" aria-modal="true"
+      aria-labelledby="face-auth-modal-title">
+      <div class="face-auth-dialog">
+        <div class="face-auth-icon" aria-hidden="true">🔐</div>
+        <h3 id="face-auth-modal-title">需要人脸验证</h3>
+        <p class="face-auth-description">
+          本次开播需要身份验证<br>
+          请使用 Bilibili APP 扫描下方二维码完成人脸认证
+        </p>
+        <div id="face-auth-qr-container" class="face-auth-qr-container"></div>
+        <div class="face-auth-actions">
+          <button id="face-auth-retry-btn" type="button" class="face-auth-retry-btn">完成验证，重新开播</button>
+          <button id="face-auth-close-btn" type="button" class="face-auth-close-btn">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="cropModal" class="crop-modal" role="dialog" aria-modal="true" aria-labelledby="crop-modal-title">
+      <div class="crop-modal-content">
+        <h2 class="crop-modal-title" id="crop-modal-title">视频裁剪配置</h2>
+
+        <div class="crop-section">
+          <label class="crop-platform-label">
+            <span>平台</span>
+            <select id="cropPlatform" class="crop-select">
+              <option value="youtube">YouTube</option>
+              <option value="twitch">Twitch</option>
+              <option value="niconico">Niconico</option>
+            </select>
+          </label>
+
+          <div class="crop-capture-panel">
+            <p class="crop-capture-title">自动捕获直播帧中...</p>
+            <p class="crop-capture-help">系统将自动捕获当前直播画面。如果自动捕获失败，可以手动上传图片：</p>
+            <input type="file" id="cropImageUpload" class="crop-file-input" accept="image/*">
+          </div>
+        </div>
+
+        <div id="cropCanvasContainer" class="crop-canvas-section hidden">
+          <p class="crop-canvas-help">选择裁剪区域（拖动角点或边调整大小，点击内部拖动）：</p>
+
+          <div class="crop-ratio-toolbar">
+            <button id="ratio-free" class="ratio-button active" type="button" title="自由比例" data-crop-ratio="free">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                <path d="M9 3v18M15 3v18M3 9h18M3 15h18"></path>
+              </svg>
+            </button>
+            <button id="ratio-1-1" class="ratio-button" type="button" title="1:1" data-crop-ratio="1:1">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+              </svg>
+            </button>
+            <button id="ratio-16-9" class="ratio-button" type="button" title="16:9" data-crop-ratio="16:9">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="10" rx="2"></rect>
+              </svg>
+            </button>
+            <button id="ratio-16-10" class="ratio-button" type="button" title="16:10" data-crop-ratio="16:10">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+              </svg>
+            </button>
+            <button id="ratio-9-16" class="ratio-button" type="button" title="9:16" data-crop-ratio="9:16">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="7" y="2" width="10" height="20" rx="2"></rect>
+              </svg>
+            </button>
+            <button id="ratio-10-16" class="ratio-button" type="button" title="10:16" data-crop-ratio="10:16">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="6" y="2" width="12" height="20" rx="2"></rect>
+              </svg>
+            </button>
+          </div>
+
+          <div class="crop-canvas-frame">
+            <canvas id="cropCanvas" class="crop-canvas"></canvas>
+            <div id="cropBox" class="crop-box"></div>
+          </div>
+        </div>
+
+        <div class="crop-section">
+          <div class="crop-field-grid">
+            <div>
+              <label class="crop-field-label" for="cropX">X 坐标</label>
+              <input type="number" id="cropX" class="crop-number-input" value="0" min="0">
+            </div>
+            <div>
+              <label class="crop-field-label" for="cropY">Y 坐标</label>
+              <input type="number" id="cropY" class="crop-number-input" value="0" min="0">
+            </div>
+            <div>
+              <label class="crop-field-label" for="cropWidth">宽度</label>
+              <input type="number" id="cropWidth" class="crop-number-input" value="0" min="0">
+            </div>
+            <div>
+              <label class="crop-field-label" for="cropHeight">高度</label>
+              <input type="number" id="cropHeight" class="crop-number-input" value="0" min="0">
+            </div>
+          </div>
+
+          <div class="crop-action-row">
+            <button id="crop-disable-btn" class="btn-danger crop-action-btn" type="button">
+              <svg class="btn-icon" aria-hidden="true"><use href="#i-close" /></svg>
+              禁用裁剪
+            </button>
+            <button id="crop-apply-restart-btn" class="btn-primary crop-action-btn" type="button">
+              <svg class="btn-icon" aria-hidden="true"><use href="#i-restart" /></svg>
+              应用并重启流
+            </button>
+            <button id="crop-apply-btn" class="btn-success crop-action-btn" type="button">
+              <svg class="btn-icon" aria-hidden="true"><use href="#i-check" /></svg>
+              应用裁剪
+            </button>
+          </div>
+        </div>
+
+        <button id="crop-close-btn" class="btn-secondary crop-close-btn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Native ES modules are deferred, so this still runs after the DOM. -->
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

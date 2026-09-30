@@ -49,6 +49,13 @@ cargo build --locked --release --bin bilistream
 
 可选桌面包位于 `src-tauri`（`bilistream-tauri`），共用 Rust 后端，需要 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。安装 cargo-zigbuild 和 Zig 后，可用 `cargo zigbuild --locked --target x86_64-unknown-linux-gnu.2.36 --release` 进行 Linux 交叉编译。
 
+仓库已包含编译后的 Web UI。修改 `webui/src` 或 `webui/public-src` 后，先用 Node.js 22+ 重新生成，再编译 Rust：
+
+```bash
+npm ci --prefix webui --ignore-scripts
+npm --prefix webui run build
+```
+
 ## 启动与配置
 
 ```bash

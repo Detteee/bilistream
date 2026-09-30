@@ -16,7 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: npm ci --prefix webui --ignore-scripts
+      - run: npm --prefix webui run check
+      - run: npm --prefix webui test
       - run: cargo fmt --all --check
       - run: cargo test --locked -p bilistream
       - run: cargo build --locked -p bilistream --bin bilistream
-      - run: node --test webui/tests/*.test.mjs

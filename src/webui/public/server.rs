@@ -504,10 +504,7 @@ mod tests {
         for path in [
             "/shared/shared.css",
             "/shared/responsive.css",
-            "/shared/js/status-cards.js",
-            "/shared/js/dialog.js",
-            "/shared/js/cluster-network.js",
-            "/shared/js/cluster-health.js",
+            "/shared/js/theme.js",
         ] {
             let response = client
                 .get(format!("http://{addr}{path}"))
@@ -521,6 +518,7 @@ mod tests {
             "/shared/styles.css",
             "/shared/index.html",
             "/shared/js/overview.js",
+            "/shared/js/status-cards.js",
             "/shared/js/cluster.js",
             "/shared/js/settings.js",
             "/shared/js/api.js",

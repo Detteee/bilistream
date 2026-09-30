@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConfigPatch } from '../dist/js/config-draft.js';
-import { biliRoomStats, formatLiveClock, formatLiveDuration } from '../dist/js/format.js';
+import { createConfigPatch } from '../src/js/config-draft.js';
+import { biliRoomStats, formatLiveClock, formatLiveDuration } from '../src/js/format.js';
 
 // The renderer's null-safe public contract needs only the named output nodes.
 const nodes = new Map();
@@ -99,12 +99,12 @@ function glyphText(element, animating) {
     .map(child => child.textContent)
     .join('');
 }
-const cards = await import('../dist/js/status-cards.js');
-const { setAnimatedDigits } = await import('../dist/js/dom.js');
-const api = await import('../dist/js/api.js');
-const { saveBooleanToggle } = await import('../dist/js/toggle-save.js');
-const { applyMonitorToggleConfigState } = await import('../dist/js/state.js');
-const { holodexKeepAliveDue } = await import('../dist/js/overview.js');
+const cards = await import('../src/js/status-cards.js');
+const { setAnimatedDigits } = await import('../src/js/dom.js');
+const api = await import('../src/js/api.js');
+const { saveBooleanToggle } = await import('../src/js/toggle-save.js');
+const { applyMonitorToggleConfigState } = await import('../src/js/state.js');
+const { holodexKeepAliveDue } = await import('../src/js/overview.js');
 
 test('settings edits submit only changed fields and their loaded values', () => {
   const baseline = { interval: 30, enable_danmaku_command: true, api_key: 'old', keywords: ['a'] };
@@ -336,7 +336,7 @@ test('concurrent clicks serialize and polling cannot overwrite pending intent', 
 });
 
 test('YouTube key pool status reads as one line per fact', async () => {
-  const { formatKeyPoolSummary, formatKeyState, formatPlaylistPolling } = await import('../dist/js/format.js');
+  const { formatKeyPoolSummary, formatKeyState, formatPlaylistPolling } = await import('../src/js/format.js');
   const resetsAt = '2026-09-26T08:00:00Z';
   const at = new Date(resetsAt);
   const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
@@ -391,7 +391,7 @@ test('YouTube key pool status reads as one line per fact', async () => {
 });
 
 test('go-live hours rotate to local time and read without hovering', async () => {
-  const { goliveHourRows, formatGoliveSummary } = await import('../dist/js/format.js');
+  const { goliveHourRows, formatGoliveSummary } = await import('../src/js/format.js');
   // UTC 11:00 is the busiest hour; 12:00 UTC is "now".
   const hours = Array.from({ length: 24 }, (_, utc) => ({
     golive_share: utc === 11 ? 0.2 : 0.8 / 23,
@@ -417,7 +417,7 @@ test('go-live hours rotate to local time and read without hovering', async () =>
 });
 
 test('key meters and discovery tiles carry state as label, not color alone', async () => {
-  const { keyMeterRows, discoveryTiles } = await import('../dist/js/format.js');
+  const { keyMeterRows, discoveryTiles } = await import('../src/js/format.js');
   const rows = keyMeterRows({
     keys: [
       { fingerprint: 'a1b2c3', used: 4500, state: 'usable' },
@@ -457,7 +457,7 @@ test('an open Holodex panel renews its lease every 4 min, every minute without S
 
 
 test('priority visibility is independent of monitoring and survives config refreshes', async () => {
-  const { mergeConfigData, applyDashboardCardVisibility } = await import('../dist/js/state.js');
+  const { mergeConfigData, applyDashboardCardVisibility } = await import('../src/js/state.js');
   const card = node('priority-channel-card');
   const twitch = node('twitch-card');
   const niconico = node('niconico-card');
@@ -478,7 +478,7 @@ test('priority visibility is independent of monitoring and survives config refre
 });
 
 test('RSS disabled, failed and unavailable are distinct discovery states', async () => {
-  const { discoveryTiles, formatPlaylistPolling } = await import('../dist/js/format.js');
+  const { discoveryTiles, formatPlaylistPolling } = await import('../src/js/format.js');
   const playlist = { on: true, interval_secs: 180, rss_enabled: false, rss_down: false };
   assert.equal(discoveryTiles({ playlist })[0].label, '已关闭');
   assert.match(formatPlaylistPolling(playlist), /RSS 已关闭/);

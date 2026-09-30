@@ -52,3 +52,4 @@ youtube_quota.json
 *.tmp-*
 
 /release/
+/webui/node_modules/

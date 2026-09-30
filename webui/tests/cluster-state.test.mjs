@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, selfCheckDisplay, ytIndexChip, ytIndexFollowChip, ytIndexPeerLine } from '../dist/js/cluster-health.js';
+import { clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, selfCheckDisplay, ytIndexChip, ytIndexFollowChip, ytIndexPeerLine } from '../src/js/cluster-health.js';
 
 test('maintenance intent takes precedence while automatic faults remain faults on both surfaces', () => {
   for (const node of [

@@ -45,7 +45,7 @@ try {
     return result.result?.value;
   };
   const waitFor = async expression => {
-    for (let i = 0; i < 100; i++) { if (await evaluate(expression)) return; await new Promise(resolve => setTimeout(resolve, 100)); }
+    for (let i = 0; i < 100; i++) { if (await evaluate(`document.readyState === 'complete' && (${expression})`)) return; await new Promise(resolve => setTimeout(resolve, 100)); }
     throw new Error(`UI condition timed out: ${expression}`);
   };
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
@@ -318,47 +318,53 @@ try {
   writes = await (await fetch(`${base}/mock/writes`)).json();
   assert.ok(writes.filter(row => row.path === '/api/config').every(row => !JSON.stringify(row.patch).includes('•')));
   const performanceChecks = JSON.parse(await evaluate(`(async () => {
-    const logs = await import('/js/logs.js');
-    const overview = await import('/js/overview.js');
-    const { renderBiliNetworkPanel } = await import('/js/status-cards.js');
-    const { state } = await import('/js/state.js');
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const until = async check => { for (let n=0;n<100;n++) { if (check()) return; await pause(20); } throw new Error('Log UI did not settle'); };
+    let logRequests = 0;
     const fetchOriginal = window.fetch;
     let lines = Array.from({length: 600}, (_, i) => 'INFO synthetic log ' + i);
     let networkRequests = 0;
     window.fetch = (path, options) => {
-      if (path === '/api/logs') return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}}));
+      if (path === '/api/logs') { logRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}})); }
       if (path === '/api/network-status') { networkRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,data:{ffmpeg_running:true}}), {headers:{'Content-Type':'application/json'}})); }
       return fetchOriginal(path, options);
     };
     try {
-      logs.clearLogs();
-      await logs.refreshLogs();
+      document.getElementById('tab-logs').click();
+      const refresh = async () => {
+        const before = logRequests;
+        document.getElementById('refresh-logs-btn').click();
+        await until(() => logRequests > before);
+        await pause(40);
+      };
+      await until(() => document.getElementById('log-output').children.length === 500);
       const output = document.getElementById('log-output');
       const first = output.firstElementChild;
       const next = first.nextElementSibling;
       const bounded = output.children.length === 500 && first.textContent.includes('log 100');
-      await logs.refreshLogs();
+      await refresh();
       const retained = first === output.firstElementChild;
       lines.push('ERROR synthetic log 600');
-      await logs.refreshLogs();
+      await refresh();
       const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
-      logs.clearLogs();
+      document.getElementById('clear-logs-btn').click();
       const cleared = output.textContent === '日志已清空';
       document.getElementById('setup-page').classList.add('hidden');
       document.getElementById('main-page').classList.remove('hidden');
-      state.activeView = 'settings';
-      renderBiliNetworkPanel({ffmpeg_running:true});
-      await overview.refreshNetworkStatus();
+      document.getElementById('tab-settings').click();
+      networkRequests = 0;
+      await pause(2100);
       const hiddenSkipped = networkRequests === 0;
-      state.activeView = 'overview';
-      await overview.refreshNetworkStatus();
+      document.getElementById('tab-overview').click();
+      await until(() => networkRequests > 0);
       return JSON.stringify({bounded,retained,appended,cleared,hiddenSkipped,visibleFetched:networkRequests>0});
     } finally { window.fetch = fetchOriginal; }
   })()`));
   assert.deepEqual(performanceChecks, {bounded:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,visibleFetched:true});
   // A same-version package must not reload the old page during installation.
   const updateChecks = JSON.parse(await evaluate(`(async () => {
-    const settings = await import('/js/settings.js');
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const until = async check => { for(let n=0;n<180;n++) { if(check()) return; await pause(50); } throw new Error('Update UI did not settle'); };
     const fetchOriginal = window.fetch;
     const phases = ['downloading', 'restarting', 'failed'];
     let polls = 0;
@@ -372,8 +378,10 @@ try {
       return Promise.resolve(new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}}));
     };
     try {
-      await settings.checkForUpdates();
-      await settings.autoInstallUpdate();
+      document.getElementById('check-updates-btn').click();
+      await until(() => !document.getElementById('update-notification').classList.contains('hidden'));
+      document.getElementById('auto-update-btn').click();
+      await until(() => polls === 3 && !document.getElementById('auto-update-btn').disabled);
       return JSON.stringify({polls,failedVisible:document.getElementById('update-progress').textContent.includes('更新失败') && [...document.querySelectorAll('.notification.error')].some(node => node.textContent.includes('synthetic update stop')),retryEnabled:!document.getElementById('auto-update-btn').disabled});
     } finally { window.fetch = fetchOriginal; }
   })()`));

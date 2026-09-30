@@ -1,0 +1,6 @@
+# Keep generated Web UI checks reproducible on Windows and Unix checkouts.
+webui/**/*.js text eol=lf
+webui/**/*.mjs text eol=lf
+webui/**/*.css text eol=lf
+webui/**/*.html text eol=lf
+webui/**/*.json text eol=lf

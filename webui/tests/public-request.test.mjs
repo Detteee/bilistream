@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createJsonPoller } from '../public-dist/js/request.js';
+import { createJsonPoller } from '../public-src/js/request.js';
 
 const json = (value, etag) => new Response(JSON.stringify(value), {
   headers: etag ? { etag } : {},

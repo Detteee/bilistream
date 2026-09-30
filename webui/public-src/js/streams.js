@@ -4,13 +4,13 @@
 // command; sending it is the viewer's own action in the live chat, which is
 // where their identity and your moderation already are.
 
-import { createSvgIcon, createStreamThumbnail, reconcileChildren } from '../shared/js/dom.js';
+import { createSvgIcon, createStreamThumbnail, reconcileChildren } from '../../src/js/dom.js';
 import {
   formatClock,
   formatDuration,
   formatScheduledStart,
   timestampMs,
-} from '../shared/js/format.js';
+} from '../../src/js/format.js';
 
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
