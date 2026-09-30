@@ -158,13 +158,33 @@ pub fn restart_command_line() -> Result<RestartCommand, String> {
         shell_word(&spec.cwd.to_string_lossy()),
         "&&".to_string(),
         "env -u BILISTREAM_PASSWORD".to_string(),
-        shell_word(&spec.exe),
     ];
+    parts.extend(restart_environment_words(|name| std::env::var(name).ok()));
+    parts.push(shell_word(&spec.exe));
     parts.extend(spec.args.iter().map(|arg| shell_word(arg)));
     Ok(RestartCommand {
         text: parts.join(" "),
         credential: spec.credential,
     })
+}
+
+fn restart_environment_words(read: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    // A screen command runs in its original shell, whose environment can differ
+    // from the process being replaced. Preserve supported startup overrides;
+    // the password itself travels only through the private one-use file.
+    [
+        "BILISTREAM_DATA_DIR",
+        "BILISTREAM_KEY_FILE",
+        "BILISTREAM_BIND",
+        "BILISTREAM_PORT",
+        "BILISTREAM_FFMPEG_LOG_LEVEL",
+        "BILISTREAM_CLUSTER_TOKEN_FILE",
+        "BILISTREAM_SCREEN_SESSION",
+        "XDG_CONFIG_HOME",
+    ]
+    .into_iter()
+    .filter_map(|name| read(name).map(|value| shell_word(&format!("{name}={value}"))))
+    .collect()
 }
 
 pub fn windows_restart_bat() -> Result<RestartCommand, String> {
@@ -268,6 +288,25 @@ fn restart_args(original: &[String], credential: Option<&Path>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_preserves_startup_paths_without_copying_passwords() {
+        let words = restart_environment_words(|name| match name {
+            "BILISTREAM_KEY_FILE" => Some("/private/key's file".into()),
+            "BILISTREAM_DATA_DIR" => Some("/private/data".into()),
+            "BILISTREAM_PORT" => Some("3151".into()),
+            "BILISTREAM_PASSWORD" => panic!("password must not enter the restart command"),
+            _ => None,
+        });
+        assert_eq!(
+            words,
+            [
+                "'BILISTREAM_DATA_DIR=/private/data'",
+                "'BILISTREAM_KEY_FILE=/private/key'\\''s file'",
+                "'BILISTREAM_PORT=3151'",
+            ]
+        );
+    }
 
     #[test]
     fn update_backup_paths_restart_the_installed_binary() {

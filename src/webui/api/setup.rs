@@ -670,6 +670,18 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
+    // An unrelated screen session must never receive an automatic restart.
+    // Only reuse the session explicitly inherited by this installation.
+    if let Some(screen_session) = super::stream::inherited_screen_session() {
+        let restart_command = crate::webui::restart::restart_command_line()?;
+        super::stream::schedule_screen_restart(
+            &screen_session,
+            restart_command.as_str(),
+            std::process::id(),
+        )?;
+        restart_command.handed_off();
+        return Ok(());
+    }
     let exe_dir = current_exe_dir()?;
     let restart_script = exe_dir.join("restart_after_update.sh");
     let restart_command = crate::webui::restart::restart_command_line()?;

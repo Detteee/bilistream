@@ -130,9 +130,11 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
 }
 
 pub(crate) fn current_screen_session() -> Option<String> {
-    non_empty_env("BILISTREAM_SCREEN_SESSION")
-        .or_else(|| non_empty_env("STY"))
-        .or_else(find_named_screen_session)
+    inherited_screen_session().or_else(find_named_screen_session)
+}
+
+pub(crate) fn inherited_screen_session() -> Option<String> {
+    non_empty_env("BILISTREAM_SCREEN_SESSION").or_else(|| non_empty_env("STY"))
 }
 
 pub(crate) fn non_empty_env(name: &str) -> Option<String> {
