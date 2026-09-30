@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 // Keep public shared assets explicit: never expose the whole admin directory.
 const PUBLIC_SHARED: &[&str] = &[
-    "styles.css",
+    "shared.css",
+    "responsive.css",
     "js/dom.js",
     "js/format.js",
     "js/dialog.js",

@@ -502,7 +502,8 @@ mod tests {
         let client = reqwest::Client::new();
 
         for path in [
-            "/shared/styles.css",
+            "/shared/shared.css",
+            "/shared/responsive.css",
             "/shared/js/status-cards.js",
             "/shared/js/dialog.js",
             "/shared/js/cluster-network.js",
@@ -517,6 +518,7 @@ mod tests {
         }
 
         for path in [
+            "/shared/styles.css",
             "/shared/index.html",
             "/shared/js/overview.js",
             "/shared/js/cluster.js",
@@ -567,7 +569,7 @@ mod tests {
             "/",
             "/public.css",
             "/js/main.js",
-            "/shared/styles.css",
+            "/shared/shared.css",
             "/icon.png",
             "/icon-blue.png",
         ] {

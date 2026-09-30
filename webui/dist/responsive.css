@@ -1,0 +1,154 @@
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 900px) {
+  :root {
+    --appbar-h: 54px;
+  }
+
+  .container {
+    padding-inline: var(--sp-4);
+  }
+
+  .management-area-grid,
+  .management-channel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-actions {
+    bottom: 0;
+    border-radius: var(--r-md) var(--r-md) 0 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .container {
+    padding-inline: var(--sp-3);
+  }
+
+  .appbar__inner,
+  .brand {
+    gap: var(--sp-2);
+  }
+
+  .brand__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: var(--fs-base);
+  }
+
+  .panel__head,
+  .panel__body {
+    padding: var(--sp-4) var(--sp-3);
+  }
+
+  .bili-network-meters {
+    grid-template-columns: 1fr;
+  }
+
+  .management-form-actions,
+  .setup-step-actions {
+    flex-direction: column;
+  }
+
+  .toast-region {
+    top: auto;
+    bottom: var(--sp-3);
+    right: var(--sp-3);
+    left: var(--sp-3);
+    width: auto;
+  }
+}
+
+/* ==========================================================================
+   17. Reduced motion
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   18. Digit pop-in
+   ========================================================================== */
+
+/* Transitions.dev — Number pop-in */
+
+/*
+  Usage:
+    <span class="t-digit-group is-animating">
+      <span class="t-digit">1</span>
+      <span class="t-digit">2</span>
+      <span class="t-digit" data-stagger="1">.</span>
+      <span class="t-digit" data-stagger="2">3</span>
+    </span>
+
+  Replay:
+    - Remove `.is-animating`, re-render digits (or swap text),
+      force a reflow, then re-add `.is-animating`.
+    - Use data-stagger="1", "2", … to delay individual
+      digits by `n * var(--digit-stagger)`.
+
+  Direction:
+    --digit-dir-x / --digit-dir-y are unit-less multipliers
+    (e.g. 1, -1, 0) applied to --digit-distance.
+*/
+
+:root {
+  --digit-dur: 220ms;
+  --digit-distance: 8px;
+  --digit-stagger: 30ms;
+  --digit-blur: 2px;
+  --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --digit-dir-x: 0;
+  --digit-dir-y: 1;
+}
+
+@keyframes t-digit-pop-in {
+  0%   {
+    transform: translate(
+      calc(var(--digit-distance) * var(--digit-dir-x)),
+      calc(var(--digit-distance) * var(--digit-dir-y))
+    );
+    opacity: 0;
+    filter: blur(var(--digit-blur));
+  }
+  100% { transform: translate(0, 0); opacity: 1; filter: blur(0); }
+}
+
+.t-digit-group {
+  display: inline-flex;
+  align-items: baseline;
+}
+.t-digit {
+  display: inline-block;
+  white-space: pre;
+  will-change: transform, opacity, filter;
+}
+.t-digit-suffix {
+  display: inline-block;
+  white-space: pre;
+}
+.t-digit.is-animating {
+  animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
+  animation-delay: calc(var(--digit-stagger) * var(--digit-i, 0));
+}
+.t-digit.is-animating[data-stagger="1"] {
+  animation-delay: var(--digit-stagger);
+}
+.t-digit.is-animating[data-stagger="2"] {
+  animation-delay: calc(var(--digit-stagger) * 2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-digit-group .t-digit { animation: none !important; }
+}
+

@@ -1,0 +1,3042 @@
+/* Shared page foundations, controls and status components. */
+
+/* ==========================================================================
+   1. Reset & base
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-gutter: stable;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--brand);
+  text-decoration: none;
+  transition: color var(--dur) var(--ease);
+}
+
+a:hover {
+  color: var(--brand-hi);
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+small {
+  color: var(--text-mute);
+}
+
+code {
+  padding: 0.1em 0.4em;
+  border-radius: var(--r-xs);
+  background: var(--surface-3);
+  color: var(--brand-2);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+
+/* Scrollbars ------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-mute);
+  background-clip: content-box;
+}
+
+/* ==========================================================================
+   2. Design tokens
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: 0 is the page, higher numbers sit closer to the viewer. */
+  --bg: #0e0e16;
+  --bg-glow-1: color-mix(in srgb, #89b4fa 12%, transparent);
+  --bg-glow-2: color-mix(in srgb, #cba6f7 10%, transparent);
+  --surface-1: #14141f;
+  --surface-2: #1a1a27;
+  --surface-3: #21212f;
+  --surface-4: #2a2a3b;
+  --line: #2b2b3c;
+  --line-strong: #3c3c52;
+
+  /* Text */
+  --text: #d9e0f5;
+  --text-dim: #a9b1cd;
+  --text-mute: #8b95b1;
+  --text-on-accent: #0e0e16;
+
+  /* Brand + semantic accents */
+  --brand: #89b4fa;
+  --brand-hi: #a9c8ff;
+  --brand-2: #cba6f7;
+  --ok: #a6e3a1;
+  --warn: #f9e2af;
+  --danger: #f38ba8;
+  --info: #74c7ec;
+  --teal: #94e2d5;
+  --live: #ff5c7a;
+
+  /* Network graph: dark mode meets on Lollipop Crush at the 0 line
+     (cream RX tip, lilac TX tip) and punches a hole through the fill
+     so the plot sits on the card. Light mode uses a solid cyan–violet–
+     rose ramp instead; see html.light-theme. */
+  --net-axis: #f962a0;
+  --net-cache-start: #fcf3c4;
+  --net-cache-end: var(--net-axis);
+  --net-push-start: var(--net-axis);
+  --net-push-end: #aa96f9;
+  --net-bar-axis-mix: 71%;
+  --net-bar-tip-mix: 63%;
+  --net-legend-rx: var(--net-cache-start);
+  --net-legend-tx: var(--net-push-end);
+
+  /* Platform hues */
+  --bilibili: #fb7299;
+  --youtube: #ff4757;
+  --twitch: #b18cff;
+  --niconico: #8a93a3;
+
+  /* Shape */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  /* Type scale */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Consolas,
+    'Liberation Mono', Menlo, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 21px;
+  --fs-2xl: 27px;
+
+  /* Elevation */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --sh-2: 0 4px 16px rgba(0, 0, 0, 0.34);
+  --sh-3: 0 18px 48px rgba(0, 0, 0, 0.46);
+
+  /* Motion */
+  --dur: 0.16s;
+  --dur-slow: 0.3s;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* Layout */
+  --appbar-h: 60px;
+  --tabbar-h: 48px;
+  --shell-w: 1320px;
+}
+
+html.light-theme {
+  color-scheme: light;
+
+  /* Cool gray canvas, blue-gray surfaces and high-contrast navy text. */
+  --bg: #f4f6f9;
+  --bg-glow-1: color-mix(in srgb, #698aaf 5%, transparent);
+  --bg-glow-2: color-mix(in srgb, #85a7b5 4%, transparent);
+  --surface-1: #ffffff;
+  --surface-2: #eaf0f7;
+  --surface-3: #f9fbfd;
+  --surface-4: #ffffff;
+  --line: #ccd7e5;
+  --line-strong: #a5b7cc;
+
+  --text: #17294b;
+  --text-dim: #354e70;
+  --text-mute: #536984;
+  --text-on-accent: #ffffff;
+
+  --brand: #315e9f;
+  --brand-hi: #244b84;
+  --brand-2: #396c83;
+  --ok: #246b50;
+  --warn: #85601e;
+  --danger: #b83f57;
+  --info: #315e9f;
+  --teal: #246b76;
+  --live: #b93454;
+
+  --bilibili: #ae486f;
+  --youtube: #b63c48;
+  --twitch: #62519a;
+  --niconico: #526581;
+
+  --sh-1: 0 1px 3px rgba(23, 41, 75, 0.06);
+  --sh-2: 0 5px 18px rgba(23, 41, 75, 0.08);
+  --sh-3: 0 18px 48px rgba(23, 41, 75, 0.14);
+
+  /* Distinct blue RX and rose TX ramps against cool surfaces. */
+  --net-axis: #747ca9;
+  --net-cache-start: #2d89a8;
+  --net-cache-end: var(--net-axis);
+  --net-push-start: var(--net-axis);
+  --net-push-end: #b84a6b;
+  --net-bar-axis-mix: 100%;
+  --net-bar-tip-mix: 100%;
+  --net-legend-rx: #315e9f;
+  --net-legend-tx: #9f3758;
+}
+
+html.light-theme .modal,
+html.light-theme .area-modal,
+html.light-theme .holodex-login-modal,
+html.light-theme .face-auth-modal,
+html.light-theme .crop-modal {
+  background: rgba(23, 41, 75, 0.34);
+}
+
+html.light-theme .btn-fill:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+/* Ambient background wash — cheap, fixed, non-repainting. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 12% -10%, var(--bg-glow-1), transparent 60%),
+    radial-gradient(50rem 36rem at 92% 4%, var(--bg-glow-2), transparent 62%);
+}
+
+/* ==========================================================================
+   3. Utilities
+   ========================================================================== */
+
+.hidden,
+[hidden] {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The sprite must stay in the render tree — `display: none` here stops
+   gradients defined in its <defs> from resolving inside <use> shadow trees,
+   which silently blanks the gradient-filled logos. */
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Sprite symbols carry no fill of their own, so without this they paint
+   black in both themes. Setting it on <use> lets the colour inherit into the
+   shadow tree while symbols that declare their own fill/stroke (the gradient
+   logos, the outline glyphs) still win. */
+use {
+  fill: currentColor;
+}
+
+.stack {
+  display: grid;
+  gap: var(--sp-5);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   4. App shell
+   ========================================================================== */
+
+.main-page {
+  display: block;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--shell-w);
+  margin: 0 auto;
+  padding-inline: var(--sp-6);
+}
+
+/* -- Top bar ------------------------------------------------------------- */
+
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  height: var(--appbar-h);
+  border-bottom: 1px solid var(--line);
+  /* Opaque chrome keeps scrolled text out of the navigation and needs no blur. */
+  background: var(--surface-1);
+}
+
+.appbar__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 100%;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.brand__logo {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.brand__name {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.appbar__spacer {
+  flex: 1 1 auto;
+}
+
+.appbar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Live pill in the top bar mirrors the Bilibili room state. */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 30px;
+  padding-inline: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.live-badge__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--text-mute);
+}
+
+.live-badge.is-live {
+  border-color: color-mix(in srgb, var(--live) 42%, transparent);
+  background: color-mix(in srgb, var(--live) 14%, transparent);
+  color: var(--live);
+}
+
+.live-badge.is-live .live-badge__dot {
+  background: var(--live);
+  animation: pulse-dot 2s var(--ease) infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent);
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* -- Footer -------------------------------------------------------------- */
+
+.appfoot {
+  padding-block: var(--sp-6) var(--sp-7);
+  border-top: 1px solid var(--line);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.appfoot__row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.appfoot__row + .appfoot__row {
+  margin-top: var(--sp-3);
+}
+
+.footer-links a {
+  color: var(--text-dim);
+}
+
+.footer-link-separator {
+  color: var(--line-strong);
+}
+
+/* ==========================================================================
+   5. Buttons
+   ========================================================================== */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 38px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  display: block;
+  fill: currentColor;
+}
+
+/* Icons built in app.js carry their own fill/stroke attributes — size them
+   only, so a blanket fill does not flatten the outline glyphs. */
+.cluster-btn-icon,
+.cluster-inline-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+/* Variants --------------------------------------------------------------- */
+
+.btn-primary {
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand-hi);
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--brand) 66%, transparent);
+  background: color-mix(in srgb, var(--brand) 26%, transparent);
+}
+
+.btn-secondary {
+  border-color: var(--line);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-4);
+}
+
+.btn-success {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+
+.btn-success:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ok) 66%, transparent);
+  background: color-mix(in srgb, var(--ok) 26%, transparent);
+}
+
+.btn-danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 66%, transparent);
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.btn-fill {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: var(--text-on-accent);
+}
+
+.btn-fill:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* Sizes ------------------------------------------------------------------ */
+
+.compact-btn {
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+.icon-btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.icon-btn.compact-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+}
+
+/* Tonal action buttons used across dashboard/panel headers. Each modifier
+   only swaps the hue so the shape stays identical everywhere. */
+.action-btn {
+  --tone: var(--brand);
+  border-color: color-mix(in srgb, var(--tone) 34%, transparent);
+  background: color-mix(in srgb, var(--tone) 13%, transparent);
+  color: var(--tone);
+}
+
+.action-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tone) 60%, transparent);
+  background: color-mix(in srgb, var(--tone) 22%, transparent);
+}
+
+.action-btn--start {
+  --tone: var(--ok);
+}
+
+.action-btn--stop {
+  --tone: var(--danger);
+}
+
+.action-btn--restart {
+  --tone: var(--warn);
+}
+
+.action-btn--refresh {
+  --tone: var(--brand);
+}
+
+.action-btn--accent {
+  --tone: var(--brand-2);
+}
+
+/* Compatibility aliases for markup generated in app.js. */
+.cluster-action-btn.cluster-refresh-btn {
+  --tone: var(--brand);
+}
+
+.cluster-action-btn.cluster-enable-btn,
+.cluster-action-btn.cluster-sync-btn {
+  --tone: var(--teal);
+}
+
+.cluster-action-btn.cluster-disable-btn {
+  --tone: var(--danger);
+}
+
+.cluster-action-btn.cluster-restart-btn,
+.cluster-action-btn.cluster-stream-restart-btn {
+  --tone: var(--warn);
+}
+
+.cluster-action-btn.cluster-switch-btn,
+.cluster-action-btn.cluster-fold-btn {
+  --tone: var(--brand-2);
+}
+
+.cluster-action-btn {
+  --tone: var(--brand);
+  border-color: color-mix(in srgb, var(--tone) 34%, transparent);
+  background: color-mix(in srgb, var(--tone) 13%, transparent);
+  color: var(--tone);
+}
+
+.cluster-action-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tone) 60%, transparent);
+  background: color-mix(in srgb, var(--tone) 22%, transparent);
+}
+
+/* Loading state ---------------------------------------------------------- */
+
+.is-loading {
+  cursor: progress !important;
+  opacity: 0.7;
+}
+
+.is-spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.icon-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* ==========================================================================
+   6. Form controls
+   ========================================================================== */
+
+.control-group {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+}
+
+.control-group > label {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: var(--fs-base);
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+textarea {
+  padding: var(--sp-3);
+  line-height: 1.55;
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-mute);
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+select {
+  appearance: none;
+  padding-right: var(--sp-7);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% + 1px),
+    calc(100% - 13px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
+}
+
+input[type="file"] {
+  padding: var(--sp-2);
+  cursor: pointer;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
+.field-help {
+  display: block;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.field-help a {
+  color: var(--brand);
+}
+
+/* Toggle switch ---------------------------------------------------------- */
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex: 0 0 40px;
+}
+
+.toggle-switch input {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-4);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: background var(--dur) var(--ease);
+  pointer-events: none;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-mute);
+  box-shadow: var(--sh-1);
+  transition:
+    transform var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  box-shadow: none;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  background: #fff;
+  transform: translateX(18px);
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* A toggle the current node is not allowed to flip reads as unavailable
+   rather than simply unresponsive. */
+.toggle-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toggle-label:has(input:disabled) {
+  cursor: not-allowed;
+  color: var(--text-mute);
+}
+
+/* Read-only pages (public status view) still show every switch, but greyed:
+   the on-state must read as "on, and not yours to change" rather than as the
+   usual accent-coloured live control. */
+.toggle-switch.is-locked .toggle-slider,
+.toggle-switch.is-locked input:checked + .toggle-slider {
+  filter: grayscale(1);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+
+/* ==========================================================================
+   7. Panels & cards
+   ========================================================================== */
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: var(--sh-1);
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  word-break: keep-all;
+}
+
+.panel__title svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  fill: currentColor;
+}
+
+.panel__title-mark {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.panel__sub {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.panel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.panel__body {
+  padding: var(--sp-5);
+}
+
+.panel__body--flush {
+  padding: 0;
+}
+
+/* Foldable panels ------------------------------------------------------- */
+
+.panel.is-foldable .panel__title {
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel__fold-btn svg {
+  transition: transform var(--dur-slow) var(--ease);
+}
+
+.panel.is-collapsed .panel__body {
+  display: none;
+}
+
+.panel.is-collapsed .panel__head {
+  border-bottom: 0;
+}
+
+.panel.is-collapsed .panel__fold-btn svg {
+  transform: rotate(-90deg);
+}
+
+.section-title {
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.subsection-title {
+  margin-bottom: var(--sp-3);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.hint {
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.hint a {
+  font-weight: 600;
+}
+
+.empty-state {
+  padding: var(--sp-6);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-mute);
+  text-align: center;
+}
+
+/* ==========================================================================
+   8. Dashboard platform cards
+   ========================================================================== */
+
+/* Optional source cards set the desktop column count; keep visible cards even. */
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--sp-4);
+}
+
+@media (min-width: 700px) {
+  .dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Same leftover problem as the old 3-column step: five cards in two
+     columns would park priority in a half-empty row. */
+  #priority-channel-card {
+    grid-column: 1 / -1;
+  }
+}
+
+.card {
+  --platform: var(--brand);
+  --card-accent: color-mix(in srgb, var(--platform) 70%, var(--brand-2));
+  --card-accent-edge: color-mix(in srgb, var(--card-accent) 28%, var(--surface-2));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: var(--sh-1);
+  transition: border-color var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease);
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--card-accent-edge),
+    color-mix(in srgb, var(--card-accent) 78%, var(--surface-1)) 35%,
+    var(--card-accent) 70%,
+    var(--card-accent-edge)
+  );
+  opacity: 0;
+  transform: translateY(-100%);
+  transition: transform var(--dur-slow) var(--ease), opacity var(--dur-slow) var(--ease);
+  pointer-events: none;
+}
+
+.card:has(:focus-visible) {
+  border-color: color-mix(in srgb, var(--card-accent) 40%, var(--line));
+  box-shadow: var(--sh-2);
+}
+
+.card:has(:focus-visible)::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Keep hover styling on devices with a precise, hover-capable pointer. */
+@media (hover: hover) and (pointer: fine) {
+  .card:hover {
+    border-color: color-mix(in srgb, var(--card-accent) 40%, var(--line));
+    box-shadow: var(--sh-2);
+  }
+
+  .card:hover::before {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card[data-platform="bilibili"] {
+  --platform: var(--bilibili);
+}
+
+.card[data-platform="youtube"] {
+  --platform: var(--youtube);
+}
+
+.card[data-platform="twitch"] {
+  --platform: var(--twitch);
+}
+
+.card[data-platform="niconico"] {
+  --platform: var(--niconico);
+}
+
+.card[data-platform="priority"] {
+  --platform: var(--warn);
+}
+
+/* Shell is 1320px, so this step is for viewports wider than the content:
+   the visible platform cards share one row and priority stays below. */
+@media (min-width: 1360px) {
+  .dashboard {
+    grid-template-columns: repeat(var(--platform-columns, 4), minmax(0, 1fr));
+  }
+}
+
+/* Horizontal priority fields need more than the 2-column card width. */
+@media (min-width: 1000px) {
+  #priority-channel-card {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--sp-3);
+    padding: var(--sp-3);
+  }
+
+  #priority-channel-card .dashboard-card-header {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: 0;
+  }
+
+  #priority-channel-card .card-body {
+    flex: 1 1 auto;
+    flex-direction: row;
+    gap: var(--sp-2);
+    padding: 0;
+  }
+
+  #priority-channel-card .info-row {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: var(--sp-1);
+    min-width: 0;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-3);
+  }
+
+  #priority-channel-card .info-value,
+  #priority-channel-card .info-value-right {
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #priority-channel-card .info-row-view-end {
+    justify-content: flex-start;
+  }
+}
+
+.dashboard-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+}
+
+.dashboard-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.dashboard-card-title svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--platform);
+  fill: currentColor;
+}
+
+.card-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* Status dot ------------------------------------------------------------- */
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--text-mute);
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.status-live {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+}
+
+.status-scheduled {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.status-offline {
+  background: var(--text-mute);
+  box-shadow: none;
+}
+
+/* Info rows -------------------------------------------------------------- */
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  min-height: 40px;
+  padding-block: var(--sp-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  min-width: 0;
+}
+
+.info-row:last-child {
+  border-bottom: 0;
+}
+
+/* Keeps the label centred against a value that wrapped to two lines. */
+.info-row-label-center {
+  align-items: center;
+}
+
+.info-label {
+  grid-column: 1;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.info-value,
+.info-row-view,
+.info-edit-container {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.info-value {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.info-row-view {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.info-row-view-end {
+  justify-content: flex-end;
+}
+
+.info-value-right {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
+
+.info-row-toggle-label {
+  margin: 0;
+}
+
+/* Inline edit affordance: dimmed until the row is hovered or focused so the
+   card reads as data first, controls second. */
+.info-row-edit-btn {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-mute);
+  opacity: 0.75;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+.info-row-edit-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.info-row:hover .info-row-edit-btn,
+.info-row:focus-within .info-row-edit-btn {
+  opacity: 1;
+}
+
+.info-row-edit-btn:hover,
+.info-row-edit-btn:focus-visible {
+  background: var(--surface-3);
+  color: var(--brand);
+}
+
+.info-row-danger-btn:hover,
+.info-row-danger-btn:focus-visible {
+  color: var(--danger);
+}
+
+/* Inline editors --------------------------------------------------------- */
+
+.info-edit-container > div {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+}
+
+.info-edit-container input[type="text"],
+.info-edit-container select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-3);
+  font-size: var(--fs-sm);
+}
+
+.info-edit-container select {
+  padding-right: var(--sp-6);
+  background-position: calc(100% - 14px) calc(50% + 1px),
+    calc(100% - 9px) calc(50% + 1px);
+}
+
+.info-edit-save-btn,
+.info-edit-cancel-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: var(--r-xs);
+  font-size: var(--fs-sm);
+  line-height: 1;
+}
+
+.info-edit-save-btn {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
+}
+
+.info-edit-save-btn:hover {
+  background: color-mix(in srgb, var(--ok) 30%, transparent);
+}
+
+.info-edit-cancel-btn {
+  border-color: color-mix(in srgb, var(--danger) 36%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.info-edit-cancel-btn:hover {
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+}
+
+/* HLS cache editor ------------------------------------------------------- */
+
+#yt-hls-cache-edit-container > div,
+#tw-hls-cache-edit-container > div {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.hls-cache-toggle-label {
+  flex-shrink: 0;
+}
+
+.hls-cache-toggle-switch {
+  transform: scale(0.9);
+}
+
+.hls-cache-latency-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.hls-cache-latency-input {
+  width: 52px;
+  min-height: 28px;
+  padding: var(--sp-1);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.hls-cache-latency-unit {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+/* ==========================================================================
+   9. Bilibili network monitor
+   ========================================================================== */
+
+.bili-network-panel {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+}
+
+.bili-network-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bili-network-title {
+  flex: 0 0 auto;
+}
+
+.bili-live-stats {
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: var(--sp-4);
+  min-width: 0;
+  flex: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+}
+
+.bili-live-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.bili-live-stat-value {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.bili-live-stat-label {
+  color: var(--text-mute);
+  font-weight: 500;
+}
+
+.bili-network-graph {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 72px;
+  padding-block: var(--sp-2);
+  border-block: 1px solid var(--line);
+}
+
+.bili-network-graph::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--line);
+}
+
+.bili-network-graph.single-sided::before {
+  display: none;
+}
+
+.bili-network-column {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 2px;
+}
+
+.bili-network-bar {
+  position: absolute;
+  inset-inline: 0;
+  min-height: 0;
+  border-radius: 2px;
+  /* Mix % is the colour that remains, not the hole. */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--net-push-start) var(--net-bar-axis-mix), transparent),
+    color-mix(in srgb, var(--net-push-end) var(--net-bar-tip-mix), transparent)
+  );
+  opacity: 0;
+  transition: height var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.bili-network-bar.cache {
+  bottom: 50%;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--net-cache-start) var(--net-bar-tip-mix), transparent),
+    color-mix(in srgb, var(--net-cache-end) var(--net-bar-axis-mix), transparent)
+  );
+}
+
+.bili-network-bar.push {
+  top: 50%;
+  border-radius: 0 0 2px 2px;
+}
+
+/* HLS cache off: grow push bars from the floor across the full plot. */
+.bili-network-graph.single-sided .bili-network-bar.push {
+  top: auto;
+  bottom: 0;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--net-push-end) var(--net-bar-tip-mix), transparent),
+    color-mix(in srgb, var(--net-push-start) var(--net-bar-axis-mix), transparent)
+  );
+}
+
+.bili-network-bar.active {
+  opacity: 1;
+}
+
+/* Light mode: solid stops, not mixed into the card. Dual-sided splits them
+   at the 0 line. Cache-off TX grows from that violet like HLS, with a red tip. */
+html.light-theme .bili-network-bar {
+  background: linear-gradient(180deg, var(--net-push-start), var(--net-push-end));
+}
+
+html.light-theme .bili-network-bar.cache {
+  background: linear-gradient(180deg, var(--net-cache-start), var(--net-cache-end));
+}
+
+html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
+  background: linear-gradient(180deg, var(--net-push-end), var(--net-axis));
+}
+
+.bili-network-graph-axis {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: 4px;
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.bili-network-graph-axis .bili-network-scale {
+  color: var(--text-dim);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.bili-network-meters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.bili-network-panel.single-sided .bili-network-meters {
+  grid-template-columns: 1fr;
+}
+
+.bili-network-meter {
+  min-width: 0;
+}
+
+.bili-network-meter-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+.bili-network-meter-label .bili-network-meter-speed {
+  margin-left: auto;
+}
+
+/* Meter names double as the plot legend: TX tip and RX tip of the ramp. */
+.bili-network-meter[data-leg="tx"] .bili-network-meter-label {
+  color: var(--net-legend-tx);
+  font-weight: 700;
+}
+
+.bili-network-meter[data-leg="rx"] .bili-network-meter-label {
+  color: var(--net-legend-rx);
+  font-weight: 700;
+}
+
+.bili-network-meter-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bili-network-meter-speed {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bili-network-meter-speed[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.bili-network-meter-speed[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.bili-network-meter-speed[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.bili-network-meter-speed[data-tone="stopped"] {
+  color: var(--text-mute);
+}
+
+.bili-network-total {
+  margin-top: 1px;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   9b. Multi-server cluster
+   ========================================================================== */
+
+/* The cluster panel summarises every node, so it takes a full row above the
+   per-platform cards at every breakpoint. */
+.cluster-card {
+  grid-column: 1 / -1;
+  --platform: var(--teal);
+}
+
+.cluster-header {
+  flex-wrap: wrap;
+}
+
+/* Two stacked regions, not one uniform grid: a full-width card for each node
+   with stream detail, then a tile grid for the rest. A uniform grid forced
+   every card to the tallest one's height, leaving a band of dead space beside
+   the only node that had anything to show. */
+.cluster-node-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
+.cluster-node-others {
+  /* Flex rather than grid: a wrapped last row stretches its tiles to fill,
+     where grid would hold the empty tracks open and reopen the dead space. */
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  gap: var(--sp-2);
+}
+
+.cluster-node-tile {
+  flex: 1 1 252px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.cluster-node-tile:hover {
+  border-color: var(--line-strong);
+}
+
+.cluster-node-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cluster-node-tile-seen {
+  flex: 0 0 auto;
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.cluster-node-tile .cluster-node-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+  margin-left: auto;
+}
+
+/* Given the full width, the featured card lays its parts out across the row
+   rather than stacking them into a tall column that nothing sits beside. */
+@media (min-width: 900px) {
+  .cluster-node-card-featured {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title actions"
+      "meta meta";
+    column-gap: var(--sp-3);
+  }
+
+  .cluster-node-card-featured > .cluster-node-title {
+    grid-area: title;
+    justify-content: flex-start;
+  }
+
+  .cluster-node-card-featured > .cluster-node-actions {
+    grid-area: actions;
+    margin-top: 0;
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta {
+    grid-area: meta;
+    align-items: stretch;
+    gap: var(--sp-4);
+  }
+
+  /* Two columns are stream | network. :only-child used to collapse the
+     grid, but any extra sibling stole the plot's track. */
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) {
+    grid-template-columns: minmax(200px, 0.85fr) minmax(320px, 2.2fr);
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) > .cluster-node-stream {
+    grid-column: 1;
+  }
+
+  .cluster-node-card-featured > .cluster-node-meta:has(> .cluster-node-stream):has(> .cluster-node-network) > .cluster-node-network {
+    grid-column: 2;
+  }
+
+  .cluster-node-card-featured .cluster-node-network {
+    margin-top: 0;
+    padding-top: 0;
+    padding-left: var(--sp-4);
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+}
+
+.cluster-card.cluster-collapsed .cluster-node-list {
+  display: none;
+}
+
+.cluster-card.cluster-collapsed .dashboard-card-header {
+  padding-bottom: var(--sp-4);
+}
+
+.cluster-card.cluster-collapsed #clusterFoldIcon {
+  transform: rotate(-90deg);
+}
+
+#clusterFoldIcon {
+  transition: transform var(--dur-slow) var(--ease);
+}
+
+.action-btn--sync {
+  --tone: var(--teal);
+}
+
+.cluster-auto-failover-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 32px;
+  padding-inline: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.cluster-auto-failover-toggle input {
+  margin: 0;
+  accent-color: var(--brand-2);
+}
+
+.cluster-auto-failover-toggle:has(input:checked) {
+  border-color: color-mix(in srgb, var(--brand-2) 46%, transparent);
+  background: color-mix(in srgb, var(--brand-2) 12%, transparent);
+  color: var(--brand-2);
+}
+
+/* Node cards ------------------------------------------------------------- */
+
+.cluster-node-card {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.cluster-node-card:hover {
+  border-color: var(--line-strong);
+}
+
+.cluster-node-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-node-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cluster-heartbeat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cluster-heartbeat .cluster-seen-value {
+  color: var(--text-dim);
+}
+
+.cluster-self-check {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-self-check[data-state="healthy"] {
+  color: var(--teal);
+}
+
+.cluster-self-check[data-state="unreachable"] {
+  color: var(--danger);
+}
+
+.cluster-node-name {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.cluster-node-name-link {
+  color: var(--brand);
+}
+
+.cluster-node-meta {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.cluster-node-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.cluster-node-meta-label {
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+
+.cluster-node-meta-value {
+  min-width: 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.cluster-node-network {
+  container-type: inline-size;
+  container-name: cluster-net;
+  min-width: 0;
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+
+.cluster-node-network > .cluster-live-stats {
+  justify-content: flex-start;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-2);
+}
+
+.cluster-network-row {
+  display: contents;
+}
+
+.cluster-network-spark {
+  display: none;
+}
+
+/* RX sparkline grows from the floor in cache colours, not from the 0 line. */
+.bili-network-graph.spark-rx::before {
+  display: none;
+}
+
+.bili-network-graph.spark-rx .bili-network-bar.cache {
+  bottom: 0;
+  top: auto;
+  border-radius: 2px 2px 0 0;
+}
+
+.cluster-network-mirror .bili-network-graph {
+  height: 72px;
+  gap: 1px;
+}
+
+.cluster-network-mirror .bili-network-graph-axis {
+  margin-bottom: var(--sp-2);
+}
+
+/* Pair compact meters under the mirrored plot. auto-fit at 120px is only
+   safe without sparklines — two spark rows need ~760px or they overflow. */
+.cluster-node-network .bili-network-meters {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: 0;
+}
+
+/* Phone-narrow: keep the mirrored RX/TX plot. From 520px, stack a spark
+   beside each meter until both chart+text rows fit on one line. */
+@container cluster-net (min-width: 520px) {
+  .cluster-network-mirror {
+    display: none;
+  }
+
+  .cluster-network-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: stretch;
+    gap: var(--sp-3);
+    min-width: 0;
+  }
+
+  .cluster-network-spark {
+    display: flex;
+    height: auto;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    padding-block: 0;
+    border-block: 0;
+    gap: 1px;
+    justify-content: flex-end;
+  }
+
+  .cluster-network-spark .bili-network-column {
+    flex: 1 1 0;
+    width: auto;
+    max-width: 4px;
+    min-width: 1px;
+  }
+
+  .cluster-node-network .bili-network-meters {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+  }
+}
+
+@container cluster-net (min-width: 760px) {
+  .cluster-node-network .bili-network-meters {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-3);
+  }
+}
+
+.cluster-node-network .bili-network-meter-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  font-size: var(--fs-base);
+}
+
+.bili-network-total-sep {
+  margin: 0 var(--sp-1);
+  color: color-mix(in srgb, var(--text-mute) 55%, transparent);
+}
+
+/* What the remote active node is streaming. */
+.cluster-node-stream {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+}
+
+.cluster-node-stream-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The platform's own mark, tinted with the same --platform token the dashboard
+   cards use. An icon is a graphical object, so the brand hue clears the 3:1
+   non-text bar at full strength; only the text fallback below needs more. */
+.cluster-stream-platform {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  background: var(--surface-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.cluster-stream-platform svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.cluster-stream-platform[data-platform="youtube"],
+.cluster-stream-platform[data-platform="twitch"],
+.cluster-stream-platform[data-platform="niconico"] {
+  background: color-mix(in srgb, var(--platform) 22%, transparent);
+  color: var(--platform);
+}
+
+.cluster-stream-platform[data-platform="youtube"] {
+  --platform: var(--youtube);
+}
+
+.cluster-stream-platform[data-platform="twitch"] {
+  --platform: var(--twitch);
+}
+
+.cluster-stream-platform[data-platform="niconico"] {
+  --platform: var(--niconico);
+}
+
+.cluster-stream-channel {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cluster-stream-title {
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cluster-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.cluster-empty,
+.cluster-peer-empty {
+  padding: var(--sp-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-mute);
+  text-align: center;
+}
+
+.cluster-peer-empty {
+  grid-column: 1 / -1;
+}
+
+/* Status badges ---------------------------------------------------------- */
+
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cluster-badge .cluster-inline-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.cluster-badge.active {
+  border-color: color-mix(in srgb, var(--teal) 44%, transparent);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+  color: var(--teal);
+}
+
+.cluster-badge.unhealthy,
+.cluster-badge.fault,
+.cluster-badge.disabled {
+  border-color: color-mix(in srgb, var(--danger) 44%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.cluster-badge.sync-warning {
+  border-color: color-mix(in srgb, var(--warn) 44%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.cluster-badge.draining {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+
+/* The public status page is pinned to a node rather than following the active
+   one, so its marker uses its own hue instead of the role colours. */
+.cluster-badge-public-status {
+  border-color: color-mix(in srgb, var(--brand-2) 44%, transparent);
+  background: color-mix(in srgb, var(--brand-2) 14%, transparent);
+  color: var(--brand-2);
+}
+
+.cluster-badge-yt-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-color: color-mix(in srgb, var(--brand) 44%, transparent);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  color: var(--brand);
+}
+
+.cluster-badge-yt-index.is-warn {
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.cluster-yt-index-websub {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.cluster-yt-index-websub.is-ok { background: var(--ok); }
+.cluster-yt-index-websub.is-warn { background: var(--warn); }
+
+.cluster-node-yt-index {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+}
+
+.cluster-label-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* ==========================================================================
+   10. Holodex
+   ========================================================================== */
+
+.holodex-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.holodex-auth-bar {
+  display: none;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.holodex-favorites-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 34px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.holodex-favorites-btn:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-4);
+}
+
+.holodex-heart-icon {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--danger);
+}
+
+.holodex-heart-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.holodex-favorites-mode,
+.holodex-jwt-skip {
+  display: none;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  user-select: none;
+}
+
+.holodex-login-btn {
+  display: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.holodex-status {
+  display: none;
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.holodex-status-loading {
+  border-color: color-mix(in srgb, var(--brand) 34%, transparent);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: var(--brand);
+}
+
+.holodex-status-warning {
+  border-color: color-mix(in srgb, var(--warn) 34%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.holodex-status-success {
+  border-color: color-mix(in srgb, var(--ok) 34%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.holodex-status-error {
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+/* Stream grid ------------------------------------------------------------ */
+
+.holodex-streams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  align-items: stretch;
+  column-gap: var(--sp-6);
+  row-gap: var(--sp-7);
+  margin-bottom: var(--sp-4);
+}
+
+.holodex-schedule-divider {
+  position: relative;
+  grid-column: 1 / -1;
+  height: 1px;
+  margin-block: var(--sp-5);
+  background: linear-gradient(90deg, transparent, var(--line-strong), transparent);
+}
+
+.holodex-schedule-divider-label {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  padding-inline: var(--sp-3);
+  transform: translateX(-50%);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.holodex-stream-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.holodex-stream-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+  transform: translateY(-2px);
+}
+
+.holodex-stream-thumb {
+  position: relative;
+  line-height: 0;
+  background: #0b0b12;
+}
+
+.holodex-stream-thumb-link {
+  display: block;
+}
+
+.holodex-stream-thumb img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.holodex-stream-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, var(--surface-3), var(--surface-4));
+  color: var(--text-mute);
+}
+
+.holodex-stream-thumb-top {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  padding: var(--sp-2);
+  pointer-events: none;
+}
+
+.holodex-stream-topic {
+  max-width: calc(100% - 12px);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-xs);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.holodex-stream-thumb-bottom {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: var(--sp-2);
+  pointer-events: none;
+}
+
+.holodex-stream-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-xs);
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.holodex-stream-duration-live {
+  background: color-mix(in srgb, var(--live) 80%, #000);
+}
+
+.holodex-stream-duration-twitch .holodex-duration-hover,
+.holodex-stream-duration-niconico .holodex-duration-hover,
+.holodex-stream-duration-radio .holodex-duration-hover {
+  display: none;
+}
+
+.holodex-stream-duration-twitch:hover .holodex-duration-text,
+.holodex-stream-duration-niconico:hover .holodex-duration-text,
+.holodex-stream-duration-radio:hover .holodex-duration-text {
+  display: none;
+}
+
+.holodex-stream-duration-twitch:hover .holodex-duration-hover,
+.holodex-stream-duration-niconico:hover .holodex-duration-hover,
+.holodex-stream-duration-radio:hover .holodex-duration-hover {
+  display: inline;
+}
+
+.holodex-duration-twitch-icon,
+.holodex-duration-niconico-icon,
+.holodex-duration-radio-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.holodex-duration-twitch-icon svg,
+.holodex-duration-niconico-icon svg,
+.holodex-duration-radio-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.holodex-stream-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 122px;
+  padding: var(--sp-3);
+}
+
+.holodex-stream-content-row {
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+  gap: var(--sp-3);
+  min-height: 0;
+}
+
+.holodex-stream-avatar {
+  flex-shrink: 0;
+  align-self: center;
+  display: block;
+  overflow: hidden;
+  border-radius: 50%;
+  line-height: 0;
+}
+
+.holodex-stream-avatar img {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-4);
+}
+
+.holodex-stream-lines,
+.holodex-stream-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.holodex-stream-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+
+.holodex-stream-channel-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.holodex-stream-channel {
+  min-width: 0;
+  color: var(--brand);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.holodex-stream-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+.holodex-stream-live-label {
+  color: var(--live);
+  font-weight: 600;
+}
+
+.holodex-stream-scheduled {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+.holodex-stream-area-hint {
+  color: var(--ok);
+  font-size: var(--fs-sm);
+}
+
+.holodex-stream-status {
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.holodex-stream-status-live {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.holodex-stream-status-upcoming {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--brand);
+}
+
+/* Stream actions --------------------------------------------------------- */
+
+.holodex-stream-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex-shrink: 0;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.holodex-stream-secondary {
+  display: flex;
+  min-width: 0;
+  gap: var(--sp-2);
+}
+
+.holodex-stream-watch,
+.holodex-stream-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.holodex-stream-watch svg,
+.holodex-stream-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.holodex-stream-watch {
+  border-color: var(--line);
+  background: var(--surface-4);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.holodex-stream-watch:hover {
+  border-color: var(--line-strong);
+  text-decoration: none;
+}
+
+.holodex-stream-watch svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+
+.holodex-stream-btn-crop {
+  flex: 0 0 34px;
+  padding: var(--sp-1);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.holodex-stream-btn-crop:hover {
+  background: color-mix(in srgb, var(--warn) 24%, transparent);
+}
+
+.holodex-stream-btn-switch {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+
+.holodex-stream-btn-switch:hover {
+  background: color-mix(in srgb, var(--ok) 26%, transparent);
+}
+
+.holodex-refresh-btn {
+  width: 100%;
+}
+
+/* ==========================================================================
+   14. Modals
+   ========================================================================== */
+
+.modal,
+.area-modal,
+.holodex-login-modal,
+.face-auth-modal,
+.crop-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  overflow: auto;
+  background: rgba(4, 4, 10, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.area-modal {
+  display: flex;
+}
+
+.area-modal.hidden {
+  display: none !important;
+}
+
+.holodex-login-modal.active,
+.face-auth-modal.active,
+.crop-modal.active {
+  display: flex;
+}
+
+.face-auth-modal {
+  z-index: 210;
+}
+
+.crop-modal {
+  z-index: 220;
+}
+
+.modal-dialog,
+.area-modal-content,
+.holodex-login-dialog,
+.face-auth-dialog,
+.crop-modal-content {
+  width: min(520px, 100%);
+  max-height: calc(100vh - var(--sp-7));
+  overflow: auto;
+  padding: var(--sp-6);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  box-shadow: var(--sh-3);
+  animation: dialog-in var(--dur-slow) var(--ease);
+}
+
+/* Column layout so the area list scrolls and the actions stay below it.
+   A native <select> sat flush on the buttons; on a phone the OS picker
+   then covered 取消 / 确认. */
+.area-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  overflow: hidden;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.modal-title {
+  font-size: var(--fs-lg);
+}
+
+.modal-close-btn,
+.holodex-login-close-btn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.modal-close-btn:hover,
+.holodex-login-close-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Area picker ------------------------------------------------------------ */
+
+.area-modal-title {
+  margin-bottom: 0;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+.area-modal-message {
+  margin-bottom: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.area-dialog-handle {
+  display: none;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+}
+
+.area-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(50vh, 22rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.area-option-empty {
+  margin: auto;
+  padding: var(--sp-4);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.area-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+  text-align: left;
+}
+
+.area-option:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-4);
+}
+
+.area-option.is-selected {
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand-hi);
+}
+
+.area-option.is-selected::after {
+  content: '✓';
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.area-modal-select {
+  margin-bottom: var(--sp-5);
+}
+
+.area-modal-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-2);
+  width: 100%;
+  padding-top: var(--sp-1);
+}
+
+.area-modal-actions > button,
+.area-modal-confirm-btn,
+.area-modal-cancel-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.area-modal-confirm-btn {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: var(--text-on-accent);
+}
+
+.area-modal-cancel-btn {
+  border-color: var(--line);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* ==========================================================================
+   15. Toasts
+   ========================================================================== */
+
+.toast-region {
+  position: fixed;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(380px, calc(100vw - var(--sp-7)));
+  pointer-events: none;
+}
+
+.notification {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  box-shadow: var(--sh-3);
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  animation: toast-in var(--dur-slow) var(--ease);
+}
+
+.notification.success {
+  border-left-color: var(--ok);
+}
+
+.notification.error {
+  border-left-color: var(--danger);
+}
+
+.notification.warning {
+  border-left-color: var(--warn);
+}
+
+.notification.info {
+  border-left-color: var(--brand);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+

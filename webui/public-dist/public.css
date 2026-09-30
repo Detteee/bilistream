@@ -1,6 +1,4 @@
-/* public.css — additions for the public status page. The shared look comes
-   from the dashboard's styles.css, served alongside this file, so the two
-   cannot drift apart. Only what the public page adds lives here. */
+/* Public status additions to the shared foundations and status components. */
 
 html {
   background: #0e0e16;

@@ -11,6 +11,8 @@ macro_rules! asset {
 pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/index.html"),
     asset!("webui/dist/styles.css"),
+    asset!("webui/dist/shared.css"),
+    asset!("webui/dist/responsive.css"),
     asset!("webui/dist/js/main.js"),
     asset!("webui/dist/js/api.js"),
     asset!("webui/dist/js/area-catalog.js"),
