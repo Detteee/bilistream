@@ -5,10 +5,7 @@ use super::fencing::{
     clear_local_stream, collect_local_snapshot, local_has_fresh_quorum,
     local_monitoring_block_reason, HEARTBEAT_FAILURE_THRESHOLD,
 };
-use super::state::{
-    cluster_heartbeat_timeout, cluster_state_read, cluster_state_write, now_secs,
-    CLUSTER_HTTP_CLIENT,
-};
+use super::state::{cluster_heartbeat_timeout, cluster_state_read, cluster_state_write, now_secs};
 use super::status::{
     canonicalize_node_membership, compute_cluster_status_with_version, current_active_owner,
     empty_node, heartbeat_response_is_valid, merge_direct_peer_status, update_node,
@@ -49,8 +46,6 @@ impl Drop for ClusterWorker {
 pub fn start_cluster_worker() -> ClusterWorker {
     super::sync::mark_process_started();
     let heartbeat = tokio::spawn(async {
-        let client = CLUSTER_HTTP_CLIENT.clone();
-
         loop {
             let cycle_started = Instant::now();
             let cfg = match crate::config::load_config()
@@ -74,7 +69,7 @@ pub fn start_cluster_worker() -> ClusterWorker {
             let local = collect_local_snapshot(&cfg, config_version.clone()).await;
             let previous_owner = current_active_owner();
             update_node(local.clone(), &cfg.cluster.node_id);
-            send_heartbeats(&client, &cfg, local).await;
+            send_heartbeats(&cfg, local).await;
             let status = compute_cluster_status_with_version(&cfg, config_version);
             schedule_auto_owner_transition(&cfg, previous_owner, &status);
             schedule_unconfirmed_demotion(&cfg);
@@ -248,11 +243,7 @@ pub(crate) fn record_heartbeat(cfg: &Config, mut node: ClusterNodeSnapshot) -> b
     true
 }
 
-pub(crate) async fn send_heartbeats(
-    client: &reqwest::Client,
-    cfg: &Config,
-    local: ClusterNodeSnapshot,
-) {
+pub(crate) async fn send_heartbeats(cfg: &Config, local: ClusterNodeSnapshot) {
     let request = ClusterHeartbeatRequest { node: local };
     let body = match encode_heartbeat(&request) {
         Ok(bytes) => bytes,
@@ -268,7 +259,7 @@ pub(crate) async fn send_heartbeats(
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| send_heartbeat_to_peer(client, cfg, peer, body.clone()));
+        .map(|peer| send_heartbeat_to_peer(cfg, peer, body.clone()));
     join_all(tasks).await;
 }
 
@@ -279,78 +270,72 @@ fn encode_heartbeat(request: &ClusterHeartbeatRequest) -> Result<Bytes, serde_js
 }
 
 pub(crate) async fn send_heartbeat_to_peer(
-    client: &reqwest::Client,
     cfg: &Config,
     peer: &crate::config::ClusterPeer,
     body: Bytes,
 ) {
-    let url = format!(
-        "{}/api/cluster/heartbeat",
-        peer.api_url.trim_end_matches('/')
-    );
-    let result = client
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .timeout(cluster_heartbeat_timeout(cfg))
-        .send()
-        .await;
+    let result = super::peer_call::send_ordinary(
+        cfg,
+        &peer.node_id,
+        super::peer_call::routes::HEARTBEAT,
+        body.to_vec(),
+        cluster_heartbeat_timeout(cfg),
+    )
+    .await;
 
     match result {
-        Ok(response) if !response.status().is_success() => {
+        Ok(response) if !(200..300).contains(&response.status) => {
             tracing::debug!(
                 "Cluster heartbeat failed for {}: HTTP {}",
                 peer.node_id,
-                response.status()
+                response.status
             );
             mark_peer_unreachable(&peer.node_id, cfg);
         }
-        Ok(response) => match crate::plugins::http::response_json_limited::<
-            PeerApiResponse<ClusterStatus>,
-        >(response)
-        .await
-        {
-            Ok(envelope) if envelope.success => {
-                if let Some(status) = envelope.data {
-                    if heartbeat_response_is_valid(&status, &peer.node_id) {
-                        let peer_auto_failover = status.auto_failover;
-                        let peer_is_active_owner =
-                            merge_direct_peer_status(status, &peer.node_id, cfg, true);
-                        adopt_auto_failover_from_peer_view(
-                            peer_auto_failover,
-                            peer_is_active_owner,
-                            &peer.node_id,
-                            cfg,
-                        )
-                        .await;
+        Ok(response) => {
+            match serde_json::from_slice::<PeerApiResponse<ClusterStatus>>(&response.body) {
+                Ok(envelope) if envelope.success => {
+                    if let Some(status) = envelope.data {
+                        if heartbeat_response_is_valid(&status, &peer.node_id) {
+                            let peer_auto_failover = status.auto_failover;
+                            let peer_is_active_owner =
+                                merge_direct_peer_status(status, &peer.node_id, cfg, true);
+                            adopt_auto_failover_from_peer_view(
+                                peer_auto_failover,
+                                peer_is_active_owner,
+                                &peer.node_id,
+                                cfg,
+                            )
+                            .await;
+                        } else {
+                            tracing::debug!(
+                            "Cluster heartbeat response from {} failed identity/freshness validation",
+                            peer.node_id
+                        );
+                            mark_peer_unreachable(&peer.node_id, cfg);
+                        }
                     } else {
                         tracing::debug!(
-                            "Cluster heartbeat response from {} failed identity/freshness validation",
+                            "Cluster heartbeat response from {} had no status",
                             peer.node_id
                         );
                         mark_peer_unreachable(&peer.node_id, cfg);
                     }
-                } else {
+                }
+                Ok(envelope) => {
                     tracing::debug!(
-                        "Cluster heartbeat response from {} had no status",
-                        peer.node_id
+                        "Cluster heartbeat rejected by {}: {:?}",
+                        peer.node_id,
+                        envelope.message
                     );
                     mark_peer_unreachable(&peer.node_id, cfg);
                 }
+                Err(e) => {
+                    tracing::debug!("Cluster heartbeat parse failed for {}: {}", peer.node_id, e);
+                    mark_peer_unreachable(&peer.node_id, cfg);
+                }
             }
-            Ok(envelope) => {
-                tracing::debug!(
-                    "Cluster heartbeat rejected by {}: {:?}",
-                    peer.node_id,
-                    envelope.message
-                );
-                mark_peer_unreachable(&peer.node_id, cfg);
-            }
-            Err(e) => {
-                tracing::debug!("Cluster heartbeat parse failed for {}: {}", peer.node_id, e);
-                mark_peer_unreachable(&peer.node_id, cfg);
-            }
-        },
+        }
         Err(e) => {
             tracing::debug!("Cluster heartbeat failed for {}: {}", peer.node_id, e);
             mark_peer_unreachable(&peer.node_id, cfg);

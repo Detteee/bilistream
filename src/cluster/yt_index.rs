@@ -11,7 +11,6 @@
 use super::election::last_seen_is_stale;
 use super::state::{
     cluster_control_timeout, cluster_state_read, now_secs, recover_read_lock, recover_write_lock,
-    CLUSTER_HTTP_CLIENT,
 };
 use super::types::{ClusterNodeSnapshot, PeerApiResponse, YtIndexPayload};
 use crate::config::Config;
@@ -20,8 +19,6 @@ use std::time::{Duration, Instant};
 
 /// Serves `YtIndexPayload` to peers, under `/api`.
 pub(crate) const YT_INDEX_ROUTE: &str = "/cluster/yt-index";
-/// The owner caps its index at 2,000 answers of roughly 250 bytes each.
-const MAX_INDEX_BYTES: usize = 2 * 1024 * 1024;
 
 /// How this node answers YouTube questions.
 #[derive(Clone, Debug, Default)]
@@ -259,27 +256,15 @@ fn went_live_channels(
 }
 
 async fn fetch_index(cfg: &Config, owner: &str) -> Result<YtIndexPayload, String> {
-    let peer = cfg
-        .cluster
-        .peers
-        .iter()
-        .find(|peer| peer.node_id == owner)
-        .ok_or_else(|| format!("未找到节点 {owner}"))?;
-    let url = format!("{}/api{YT_INDEX_ROUTE}", peer.api_url.trim_end_matches('/'));
-    let response = CLUSTER_HTTP_CLIENT
-        .get(url)
-        .timeout(cluster_control_timeout(cfg))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
-    }
-    let bytes = crate::plugins::http::response_bytes_limited(response, MAX_INDEX_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    let envelope: PeerApiResponse<YtIndexPayload> =
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let envelope: PeerApiResponse<YtIndexPayload> = super::peer_call::call::<(), _>(
+        cfg,
+        owner,
+        super::peer_call::routes::YT_INDEX,
+        None,
+        cluster_control_timeout(cfg),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     if !envelope.success {
         return Err(envelope
             .message

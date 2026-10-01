@@ -331,16 +331,16 @@ fn listing_if_fresh(
     (!due).then_some(listing).flatten()
 }
 
-fn status_from_listing(
-    listing: &ChannelLiveListing,
-) -> (
+type ListingStatus = (
     bool,
     Option<String>,
     Option<String>,
     Option<String>,
     Option<DateTime<Local>>,
     Option<String>,
-) {
+);
+
+fn status_from_listing(listing: &ChannelLiveListing) -> ListingStatus {
     match listing {
         ChannelLiveListing::OnAir(program) => (
             true,

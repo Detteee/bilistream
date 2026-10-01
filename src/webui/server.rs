@@ -54,9 +54,32 @@ pub(crate) async fn serve_prepared(
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
     let _cluster_worker = crate::cluster::start_cluster_worker();
+    let _membership_worker = crate::cluster::membership::start_recovery_worker();
     let _public_supervisor = crate::webui::public::start_public_status_supervisor();
+    let app = build_app(state, auth);
 
-    // API router
+    println!("\n🌐 Web UI 服务已启动");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📍 监听地址:     {}", addr);
+    println!("📍 本地访问:     http://127.0.0.1:{}", port);
+    if required {
+        println!("📍 网页需密码登录");
+    }
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("💡 提示: 在浏览器中打开上述地址访问\n");
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Exact production router and response layers; tests serve this too.
+pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::AuthState>) -> Router {
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route("/auth", get(auth_status))
@@ -94,16 +117,53 @@ pub(crate) async fn serve_prepared(
             "/cluster/apply-node-mode",
             post(api::cluster_apply_node_mode),
         )
-        .route(
-            "/cluster/sync-membership",
-            post(api::cluster_sync_membership),
-        )
         .route("/cluster/sync-config", post(api::cluster_sync_config))
         .route(
             "/cluster/cache-active-monitor-state",
             post(api::cluster_cache_active_monitor_state),
         )
         .route("/cluster/push-config", post(api::cluster_push_config))
+        .route("/cluster/membership", get(api::get_membership))
+        .route("/cluster/create", post(api::create_cluster))
+        .route("/cluster/prepare-join", post(api::prepare_join))
+        .route(
+            "/cluster/membership/operations",
+            post(api::submit_operation),
+        )
+        .route(
+            "/cluster/membership/operations/{id}",
+            get(api::get_operation),
+        )
+        .route(
+            "/cluster/membership/operations/{id}/retry",
+            post(api::retry_operation),
+        )
+        .route("/cluster/membership/leave", post(api::leave_cluster))
+        .route(
+            "/cluster/v1/hello",
+            post(api::peer_hello).layer(axum::extract::DefaultBodyLimit::max(
+                crate::cluster::peer_auth::HELLO_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/cluster/v1/pairing/reserve",
+            post(api::peer_reserve).layer(axum::extract::DefaultBodyLimit::max(
+                crate::cluster::peer_auth::PAIRING_BODY_BYTES,
+            )),
+        )
+        .route("/cluster/v1/settings", post(api::cluster_apply_settings))
+        .route("/cluster/v1/membership/forward", post(api::peer_forward))
+        .route("/cluster/v1/operation/prepare", post(api::peer_prepare))
+        .route("/cluster/v1/operation/decision", post(api::peer_decision))
+        .route("/cluster/v1/operation/abort", post(api::peer_abort))
+        .route("/cluster/v1/operation/finish", post(api::peer_finish))
+        .route("/cluster/v1/operation/status", post(api::peer_status))
+        .route(
+            "/cluster/v1/membership/recognition",
+            post(api::peer_recognition).layer(axum::extract::DefaultBodyLimit::max(
+                crate::cluster::peer_auth::OPERATION_BODY_BYTES,
+            )),
+        )
         .route("/config", get(api::get_config).post(api::update_config))
         .route("/storage", get(api::storage_status))
         .route("/storage/backup", post(api::export_storage_backup))
@@ -233,33 +293,13 @@ pub(crate) async fn serve_prepared(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache, no-store, must-revalidate"),
         ))
-        .layer(CompressionLayer::new());
+        .layer(CompressionLayer::new().compress_when(crate::cluster::peer_auth::PeerCompression));
 
-    // Main app with API routes and static files
-    let app = Router::new()
+    Router::new()
         .nest("/api", api_router)
         .fallback_service(super::static_assets::router(false))
         .layer(response_layers)
-        .with_state(state);
-
-    println!("\n🌐 Web UI 服务已启动");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📍 监听地址:     {}", addr);
-    println!("📍 本地访问:     http://127.0.0.1:{}", port);
-    if required {
-        println!("📍 网页需密码登录");
-    }
-
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("💡 提示: 在浏览器中打开上述地址访问\n");
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
-
-    Ok(())
+        .with_state(state)
 }
 
 /// Installed assets live beside the executable. The manifest directory is a

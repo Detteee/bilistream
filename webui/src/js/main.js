@@ -20,6 +20,7 @@ import {
 import { checkSetupStatus, initSetupControls } from './setup.js';
 import { initCropModalControls } from './crop.js';
 import { initClusterControls, startClusterRefresh, refreshClusterStatus } from './cluster.js';
+import { initClusterMembership, refreshMembership } from './cluster-membership.js';
 import {
   applyHolodexConfig,
   initDashboardControls,
@@ -141,6 +142,7 @@ function bindEventStream() {
     onHolodex: maybeLoadHolodexStreams,
     onCluster: () => {
       refreshClusterStatus();
+      if (isViewActive('settings')) refreshMembership();
     },
     onRefresh: () => {
       invalidateManagedData();
@@ -175,6 +177,7 @@ function boot() {
   initHolodexLoginModalControls();
   initFaceAuthModalControls();
   initClusterControls();
+  initClusterMembership();
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {

@@ -12,7 +12,6 @@ struct LaunchArgs {
     password: Option<String>,
     password_file: Option<std::path::PathBuf>,
     restart_password_file: Option<std::path::PathBuf>,
-    cluster_token_file: Option<std::path::PathBuf>,
     port: u16,
     ffmpeg_log_level: String,
     tray: bool,
@@ -48,7 +47,6 @@ Options:\n\
   -p, --port PORT             Web UI port (default 3150, or BILISTREAM_PORT)\n\
   --password PASSWORD         Bootstrap panel password (or BILISTREAM_PASSWORD)\n\
   --password-file PATH        Read password from a private file\n\
-  --cluster-token-file PATH   Shared node credential (or BILISTREAM_CLUSTER_TOKEN_FILE)\n\
   --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
@@ -114,7 +112,6 @@ fn parse_launch_args_with(
     let mut password = env_password;
     let mut restart_password_file = None;
     let mut password_file = None;
-    let mut cluster_token_file = None;
     let mut port: u16 = match env_port {
         Some(value) => value
             .parse()
@@ -163,12 +160,7 @@ fn parse_launch_args_with(
                 )?));
             }
             "--cluster-token-file" => {
-                cluster_token_file = Some(std::path::PathBuf::from(take_value(
-                    argv,
-                    &mut i,
-                    inline,
-                    "--cluster-token-file",
-                )?));
+                return Err(crate::webui::listen::OBSOLETE_CLUSTER_TOKEN.into());
             }
             "-p" | "--port" => {
                 let value = take_value(argv, &mut i, inline, "--port")?;
@@ -212,7 +204,6 @@ fn parse_launch_args_with(
         password,
         password_file,
         restart_password_file,
-        cluster_token_file,
         port,
         ffmpeg_log_level,
         tray,
@@ -237,7 +228,6 @@ fn windows_needs_console(argv: &[String]) -> bool {
             "--bind"
             | "--password"
             | "--password-file"
-            | "--cluster-token-file"
             | "--restart-password-file"
             | "--port"
             | "-p"
@@ -563,9 +553,6 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
             restart_file: launch.restart_password_file.clone(),
         },
     )?;
-    if let Some(path) = &launch.cluster_token_file {
-        crate::webui::listen::install_cluster_token_file(path)?;
-    }
 
     let readiness = tokio::task::spawn_blocking(|| -> std::io::Result<bool> {
         Ok(!crate::storage::contains("config.json")? || !crate::storage::contains("cookies.json")?)
@@ -748,6 +735,23 @@ mod tests {
             .chain(args.iter().map(|s| (*s).to_string()))
             .collect();
         parse_launch_args_with(&argv, None, None, None, None, false)
+    }
+
+    #[test]
+    fn obsolete_cluster_token_file_is_an_actionable_error_not_a_credential() {
+        for args in [
+            &[
+                "--cluster-token-file",
+                "/root/.config/bilistream/cluster-token",
+            ][..],
+            &["--cluster-token-file=/root/.config/bilistream/cluster-token"][..],
+        ] {
+            let error = parse_test_args(args).err().unwrap();
+            assert!(
+                error.contains("已废弃") && error.contains("多服务器设置"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

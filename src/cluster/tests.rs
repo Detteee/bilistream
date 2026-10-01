@@ -776,6 +776,22 @@ fn monitored_config_version_changes_for_channel_targets() {
         monitored_config_version(&cfg_a),
         monitored_config_version(&cfg_d)
     );
+
+    let mut cfg_e = test_config("a", 0);
+    cfg_e.niconico.channel_id = "ch2648162".to_string();
+    cfg_e.niconico.live_id = "lv351182284".to_string();
+    cfg_e.niconico.area_v2 = 235;
+    assert_ne!(
+        monitored_config_version(&cfg_a),
+        monitored_config_version(&cfg_e)
+    );
+    let mut cfg_toggle_only = cfg_a.clone();
+    cfg_toggle_only.niconico.enable_monitor = !cfg_a.niconico.enable_monitor;
+    cfg_toggle_only.niconico.user_session = Some("local-only-session".into());
+    assert_eq!(
+        monitored_config_version(&cfg_a),
+        monitored_config_version(&cfg_toggle_only)
+    );
 }
 
 #[test]
@@ -789,6 +805,9 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     local.priority_channel.enabled = true;
     local.priority_channel.auto_restart = false;
     local.niconico.enable_monitor = true;
+    local.niconico.user_session = Some("local-session".into());
+    local.niconico.cookies_file = Some("local-nico-cookie".into());
+    local.niconico.proxy = Some("http://user:local-nico@proxy.invalid".into());
     local.youtube.cookies_file = Some("local-cookie-source".into());
     local.youtube.cookies_from_browser = Some("firefox".into());
     local.youtube.proxy = Some("http://user:local-secret@proxy.invalid".into());
@@ -811,6 +830,13 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     source.priority_channel.twitch_channel_id = "remote-priority-tw".to_string();
     source.priority_channel.auto_restart = true;
     source.niconico.enable_monitor = false;
+    source.niconico.channel_name = "remote nico".to_string();
+    source.niconico.channel_id = "ch2648162".to_string();
+    source.niconico.live_id = "lv351182284".to_string();
+    source.niconico.area_v2 = 235;
+    source.niconico.user_session = Some("remote-session".into());
+    source.niconico.cookies_file = Some("remote-nico-cookie".into());
+    source.niconico.proxy = Some("http://user:remote-nico@proxy.invalid".into());
     source.youtube.cookies_file = Some("remote-cookie-source".into());
     source.youtube.proxy = Some("http://user:remote-secret@proxy.invalid".into());
     let wire = serde_json::to_string(&monitored_config_from_config(&source)).unwrap();
@@ -845,6 +871,26 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     assert!(local.priority_channel.enabled);
     assert!(!local.priority_channel.auto_restart);
     assert!(local.niconico.enable_monitor);
+    assert_eq!(
+        local.niconico.user_session.as_deref(),
+        Some("local-session")
+    );
+    assert_eq!(
+        local.niconico.cookies_file.as_deref(),
+        Some("local-nico-cookie")
+    );
+    assert!(local
+        .niconico
+        .proxy
+        .as_ref()
+        .unwrap()
+        .contains("local-nico"));
+    assert_eq!(local.niconico.channel_name, "remote nico");
+    assert_eq!(local.niconico.channel_id, "ch2648162");
+    assert_eq!(local.niconico.live_id, "lv351182284");
+    assert_eq!(local.niconico.area_v2, 235);
+    assert!(!wire.contains("remote-session"));
+    assert!(!wire.contains("remote-nico"));
 
     assert_eq!(local.youtube.channel_name, "remote yt");
     assert_eq!(local.youtube.channel_id, "remote-yt-id");
@@ -2202,11 +2248,18 @@ fn an_isolated_active_node_fences_itself_once_its_quorum_is_stale() {
 
 #[test]
 fn only_a_down_origin_counts_as_unreachable() {
+    use super::peer_call::{classify, PeerCallError};
+    let unreachable = |status| {
+        matches!(
+            classify(super::peer_auth::unsigned_error(status)),
+            PeerCallError::Unreachable(_)
+        )
+    };
     for status in [502, 503, 504, 520, 522, 530] {
-        assert!(super::sync::origin_down_status(status), "{status}");
+        assert!(unreachable(status), "{status}");
     }
     for status in [400, 401, 403, 404, 409, 500, 501, 505, 531] {
-        assert!(!super::sync::origin_down_status(status), "{status}");
+        assert!(!unreachable(status), "{status}");
     }
 }
 

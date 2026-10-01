@@ -1,6 +1,6 @@
 use super::sessions::{normalize_password, PasswordMutation, PasswordSnapshot, Sessions};
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const COOKIE_NAME: &str = "bilistream_session";
-static CLUSTER_TOKEN: OnceLock<String> = OnceLock::new();
 
 static LISTEN: OnceLock<ListenConfig> = OnceLock::new();
 
@@ -46,11 +45,7 @@ impl PasswordBootstrap {
             } else {
                 self.password
             };
-            let value = value.map(|p| normalize_password(&p)).transpose()?;
-            if let Some(token) = cluster_token() {
-                validate_cluster_token(token, value.as_deref()).map_err(std::io::Error::other)?;
-            }
-            Ok(value)
+            value.map(|p| normalize_password(&p)).transpose()
         })
     }
 }
@@ -120,14 +115,16 @@ pub fn password_required() -> bool {
         .map_or(true, |snapshot| snapshot.password.is_some())
 }
 
+pub(crate) const OBSOLETE_CLUSTER_TOKEN: &str = "BILISTREAM_CLUSTER_TOKEN_FILE / --cluster-token-file 已废弃且不再作为节点凭据。请移除该启动参数，然后在 Web UI 的多服务器设置中创建集群或准备加入集群";
+
 pub(crate) async fn prepare_auth(bind: IpAddr) -> std::io::Result<Arc<AuthState>> {
     tokio::task::spawn_blocking(move || {
-        if cluster_token().is_none() {
-            if let Some(path) = std::env::var_os("BILISTREAM_CLUSTER_TOKEN_FILE") {
-                install_cluster_token_file(std::path::Path::new(&path))
-                    .map_err(std::io::Error::other)?;
-            }
+        if std::env::var_os("BILISTREAM_CLUSTER_TOKEN_FILE").is_some() {
+            return Err(std::io::Error::other(OBSOLETE_CLUSTER_TOKEN));
         }
+        // Holds, identity bindings and recovery state load before any monitor.
+        let store = crate::storage::global()?;
+        crate::cluster::membership::Membership::new(store.clone()).initialize()?;
         let bootstrap = LISTEN
             .get()
             .map(|config| config.bootstrap.clone())
@@ -137,63 +134,45 @@ pub(crate) async fn prepare_auth(bind: IpAddr) -> std::io::Result<Arc<AuthState>
                     .filter(|p| !p.trim().is_empty()),
                 ..Default::default()
             });
-        let sessions = bootstrap.resolve(crate::storage::global()?)?;
-        AuthState::from_sessions(sessions, cluster_token().map(str::to_owned), bind)
+        let sessions = bootstrap.resolve(store)?;
+        AuthState::from_sessions(
+            sessions,
+            crate::cluster::membership::Runtime::process()?,
+            bind,
+        )
     })
     .await
     .map_err(std::io::Error::other)?
 }
 
-/// Shared cluster credential, independent of the browser password.
-pub(crate) fn cluster_token() -> Option<&'static str> {
-    CLUSTER_TOKEN.get().map(String::as_str)
-}
-
-pub(crate) fn install_cluster_token_file(path: &std::path::Path) -> Result<(), String> {
-    let token = super::restart::read_password_file(path)
-        .map_err(|e| format!("无法加载节点通信密钥: {e}"))?;
-    validate_cluster_token(&token, None)?;
-    CLUSTER_TOKEN
-        .set(token)
-        .map_err(|_| "节点通信密钥已配置".into())
-}
-
-fn validate_cluster_token(token: &str, password: Option<&str>) -> Result<(), String> {
-    if !(32..=256).contains(&token.len())
-        || !token
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-    {
-        return Err("节点通信密钥需要 32–256 位字母、数字、下划线或连字符".into());
-    }
-    if password.is_some_and(|p| secret_eq(token, p)) {
-        return Err("节点通信密钥不能与 Web UI 密码相同".into());
-    }
-    Ok(())
-}
-
 pub(crate) struct AuthState {
     bind: IpAddr,
-    cluster_token: Option<String>,
     pub(super) sessions: Sessions,
+    /// Boot nonce and replay window for signed peer requests on this listener.
+    peer: crate::cluster::peer_auth::PeerReceiver,
+    runtime: crate::cluster::membership::Runtime,
     pub(super) changed: tokio::sync::watch::Sender<()>,
     throttle: Mutex<LoginThrottle>,
 }
 
 impl AuthState {
     #[cfg(test)]
-    pub(super) fn open(
+    pub(crate) fn open(
         store: Arc<crate::storage::Store>,
         password: Option<String>,
-        cluster_token: Option<String>,
     ) -> std::io::Result<Arc<Self>> {
+        let runtime = crate::cluster::membership::Runtime::new(
+            crate::cluster::membership::Membership::new(store.clone()),
+            crate::cluster::peer_call::peer_client()?,
+            Arc::new(|| Box::pin(async { Ok(()) })),
+        );
         let sessions = Sessions::open(store, || Ok(password))?;
-        Self::from_sessions(sessions, cluster_token, DEFAULT_BIND)
+        Self::from_sessions(sessions, runtime, DEFAULT_BIND)
     }
 
     fn from_sessions(
         sessions: Sessions,
-        cluster_token: Option<String>,
+        runtime: crate::cluster::membership::Runtime,
         bind: IpAddr,
     ) -> std::io::Result<Arc<Self>> {
         let snapshot = sessions.snapshot()?;
@@ -202,14 +181,11 @@ impl AuthState {
                 "监听非本机地址时必须先设置 Web UI 访问密码",
             ));
         }
-        if let Some(token) = &cluster_token {
-            validate_cluster_token(token, snapshot.password.as_deref())
-                .map_err(std::io::Error::other)?;
-        }
         Ok(Arc::new(Self {
             bind,
-            cluster_token,
             sessions,
+            peer: crate::cluster::peer_auth::PeerReceiver::new()?,
+            runtime,
             throttle: Mutex::default(),
             changed: tokio::sync::watch::channel(()).0,
         }))
@@ -252,68 +228,234 @@ impl AuthState {
     }
 
     fn validate_new(&self, value: &str) -> Result<String, AuthError> {
-        let password = normalize_password(value)
-            .map_err(|_| AuthError(StatusCode::BAD_REQUEST, "密码不能为空或超过 64 KiB"))?;
-        if self
-            .cluster_token
-            .as_ref()
-            .is_some_and(|token| secret_eq(token, &password))
-        {
-            return Err(AuthError(
-                StatusCode::BAD_REQUEST,
-                "节点通信密钥不能与 Web UI 密码相同",
-            ));
-        }
-        Ok(password)
+        normalize_password(value)
+            .map_err(|_| AuthError(StatusCode::BAD_REQUEST, "密码不能为空或超过 64 KiB"))
     }
 
-    fn allows(&self, method: &Method, path: &str, headers: &HeaderMap) -> bool {
-        let path = path.strip_prefix("/api/").unwrap_or(path);
-        let path = path.trim_start_matches('/');
-        let peer_only = matches!(
-            path,
-            "cluster/export-config"
-                | "cluster/yt-index"
-                | "cluster/capabilities"
-                | "cluster/heartbeat"
-                | "cluster/self-check"
-                | "cluster/apply-node-mode"
-                | "cluster/sync-membership"
-                | "cluster/sync-config"
-                | "cluster/cache-active-monitor-state"
-                | "cluster/apply-public-status"
-        );
-        let peer_method = matches!(
-            (method.as_str(), path),
-            (
-                "GET" | "HEAD",
-                "cluster/export-config" | "cluster/yt-index" | "cluster/capabilities"
-            ) | (
-                "POST",
-                "cluster/heartbeat"
-                    | "cluster/self-check"
-                    | "cluster/apply-node-mode"
-                    | "cluster/sync-membership"
-                    | "cluster/sync-config"
-                    | "cluster/cache-active-monitor-state"
-                    | "cluster/apply-public-status"
-            )
-        );
-        let peer_control = method == Method::POST
-            && matches!(
-                path,
-                "cluster/drain" | "cluster/auto-failover" | "cluster/failover" | "server/restart"
-            );
-        if let Some(header) = headers.get(header::AUTHORIZATION) {
-            return (peer_method || peer_control)
-                && header
-                    .to_str()
-                    .ok()
-                    .and_then(|h| h.strip_prefix("Bearer "))
-                    .zip(self.cluster_token.as_deref())
-                    .is_some_and(|(got, expected)| secret_eq(got, expected));
+    pub(crate) fn peer_hello(
+        &self,
+        identity: &crate::cluster::peer_auth::NodeIdentity,
+        request: &crate::cluster::peer_auth::HelloRequest,
+    ) -> std::io::Result<crate::cluster::peer_auth::HelloResponse> {
+        self.peer.hello(identity, request)
+    }
+
+    pub(crate) fn runtime(&self) -> &crate::cluster::membership::Runtime {
+        &self.runtime
+    }
+
+    /// Bootstrap pairing reuses the panel password check and login throttle,
+    /// keyed by the socket peer. It never issues a browser session.
+    pub(crate) fn check_peer_password(
+        &self,
+        source: IpAddr,
+        password: &str,
+    ) -> Result<Option<u64>, (StatusCode, Option<Duration>)> {
+        let snapshot = self
+            .sessions
+            .snapshot()
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, None))?;
+        let Some(expected) = snapshot.password.as_deref() else {
+            return Err((StatusCode::FORBIDDEN, None));
+        };
+        let correct = password.len() <= super::sessions::PASSWORD_LIMIT
+            && secret_eq(password.trim(), expected);
+        match self
+            .throttle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .attempt(source, correct, Instant::now())
+        {
+            Ok(true) => Ok(snapshot.revision),
+            Ok(false) => Err((StatusCode::FORBIDDEN, None)),
+            Err(retry) => Err((StatusCode::TOO_MANY_REQUESTS, Some(retry))),
         }
-        !peer_only && self.access(headers).is_ok_and(|(_, valid)| valid)
+    }
+
+    /// Browser membership mutations: same origin and still the credential
+    /// generation that admitted this request.
+    pub(crate) fn browser_mutation_allowed(
+        &self,
+        headers: &HeaderMap,
+        generation: Option<AuthGeneration>,
+    ) -> bool {
+        same_origin(headers)
+            && self
+                .sessions
+                .snapshot()
+                .is_ok_and(|snapshot| generation.is_some_and(|g| g.0 == snapshot.revision))
+    }
+
+    pub(crate) fn password_configured(&self) -> bool {
+        self.sessions
+            .snapshot()
+            .is_ok_and(|snapshot| snapshot.password.is_some())
+    }
+
+    /// Browser authority only. Peer-only and operation paths are never
+    /// reachable with a cookie or on passwordless loopback.
+    fn browser_allows(&self, logical: &str, headers: &HeaderMap) -> bool {
+        !crate::cluster::peer_call::browser_forbidden(logical)
+            && self.access(headers).is_ok_and(|(_, valid)| valid)
+    }
+
+    async fn peer_request(
+        &self,
+        request: Request,
+        next: Next,
+        route: crate::cluster::peer_auth::RoutePolicy,
+        class: crate::cluster::peer_call::RouteClass,
+        path_and_query: String,
+    ) -> Response {
+        use crate::cluster::membership::{operation_intent, operation_trust, trust_snapshot};
+        let (parts, body) = request.into_parts();
+        // Byte cap before any parsing; bodies are hashed exactly as received.
+        let Ok(bytes) = axum::body::to_bytes(body, route.max_request_bytes).await else {
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        };
+        let operation = class == crate::cluster::peer_call::RouteClass::Operation;
+        let _gate = if operation {
+            None
+        } else {
+            Some(crate::cluster::membership::MEMBERSHIP_GATE.read().await)
+        };
+        let store = self.runtime.membership.store();
+        let Ok(identity) = self.runtime.membership.identity() else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let trust = if operation {
+            operation_intent(route.path, &bytes).and_then(|intent| operation_trust(store, &intent))
+        } else {
+            trust_snapshot(store)
+        };
+        let Ok(trust) = trust else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Ok(peer) = self.peer.authenticate(
+            &crate::cluster::peer_auth::AdmittedRequest {
+                headers: &parts.headers,
+                method: parts.method.as_str(),
+                path_and_query: &path_and_query,
+                route,
+                body: &bytes,
+            },
+            identity.public(),
+            &trust,
+        ) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let mut request = Request::from_parts(parts, axum::body::Body::from(bytes));
+        request
+            .extensions_mut()
+            .insert(crate::cluster::peer_call::AuthenticatedNode {
+                member_id: peer.member_id().to_owned(),
+                node_id: crate::cluster::peer_call::member_node_id(store, peer.member_id())
+                    .unwrap_or_default(),
+            });
+        let (mut parts, body) = next.run(request).await.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, route.max_response_bytes).await else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        if !parts.headers.contains_key(header::CONTENT_TYPE) {
+            parts.headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
+        parts.headers.remove(header::CONTENT_LENGTH);
+        let content_type = parts
+            .headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        match peer.sign_response(
+            &identity,
+            parts.status.as_u16(),
+            &content_type,
+            &bytes,
+            route,
+        ) {
+            Ok(signature) => {
+                parts.headers.insert(header::AUTHORIZATION, signature);
+                Response::from_parts(parts, axum::body::Body::from(bytes))
+            }
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+
+    /// Verify the probe signature with the key it carries. Do not insert
+    /// [`AuthenticatedNode`](crate::cluster::peer_call::AuthenticatedNode): a
+    /// recognition admission is not permission to call any other peer route.
+    async fn recognition_request(
+        &self,
+        request: Request,
+        next: Next,
+        route: crate::cluster::peer_auth::RoutePolicy,
+        path_and_query: String,
+    ) -> Response {
+        let (parts, body) = request.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, route.max_request_bytes).await else {
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        };
+        let Ok(identity) = self.runtime.membership.identity() else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Ok((peer, probe)) = self.peer.authenticate_recognition(
+            &crate::cluster::peer_auth::AdmittedRequest {
+                headers: &parts.headers,
+                method: parts.method.as_str(),
+                path_and_query: &path_and_query,
+                route,
+                body: &bytes,
+            },
+            identity.public(),
+        ) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let mut request = Request::from_parts(parts, axum::body::Body::from(bytes));
+        request
+            .extensions_mut()
+            .insert(crate::cluster::peer_auth::VerifiedRecognition(probe));
+        let (mut parts, body) = next.run(request).await.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, route.max_response_bytes).await else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        if !parts.headers.contains_key(header::CONTENT_TYPE) {
+            parts.headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
+        parts.headers.remove(header::CONTENT_LENGTH);
+        let content_type = parts
+            .headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        match peer.sign_response(
+            &identity,
+            parts.status.as_u16(),
+            &content_type,
+            &bytes,
+            route,
+        ) {
+            Ok(signature) => {
+                parts.headers.insert(header::AUTHORIZATION, signature);
+                Response::from_parts(parts, axum::body::Body::from(bytes))
+            }
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+}
+
+/// Router-relative and nested paths map to one logical `/api/...` route.
+fn logical_path(path: &str) -> String {
+    if path.starts_with("/api/") {
+        path.to_owned()
+    } else {
+        format!("/api{path}")
     }
 }
 
@@ -552,7 +694,7 @@ fn expired_cookie() -> HeaderValue {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct AuthGeneration(pub Option<u64>);
+pub(crate) struct AuthGeneration(pub Option<u64>);
 
 #[derive(Deserialize)]
 pub struct LoginBody {
@@ -705,8 +847,46 @@ pub(super) async fn require_webui_auth(
     if is_public_api_path(request.uri().path()) {
         return Ok(next.run(request).await);
     }
+    use crate::cluster::peer_call::{peer_route, RouteClass};
+    let logical = logical_path(request.uri().path());
+    let route = peer_route(request.method().as_str(), &logical);
+    if let Some((_, RouteClass::Bootstrap)) = route {
+        if request.headers().contains_key(header::AUTHORIZATION) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        return Ok(next.run(request).await);
+    }
+    if let Some((route, RouteClass::Recognition)) = route {
+        // Ordinary membership authentication would reject a removed node's stale
+        // revision before looking at the key. This probe verifies the key in the
+        // body and grants no peer authority.
+        if !request.headers().contains_key(header::AUTHORIZATION) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let path_and_query = match request.uri().query() {
+            Some(query) => format!("{logical}?{query}"),
+            None => logical,
+        };
+        return Ok(auth
+            .recognition_request(request, next, route, path_and_query)
+            .await);
+    }
+    // A supplied Authorization is always peer authority and never falls back
+    // to a browser session or passwordless local access.
+    if request.headers().contains_key(header::AUTHORIZATION) {
+        let Some((route, class)) = route else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
+        let path_and_query = match request.uri().query() {
+            Some(query) => format!("{logical}?{query}"),
+            None => logical,
+        };
+        return Ok(auth
+            .peer_request(request, next, route, class, path_and_query)
+            .await);
+    }
 
-    if auth.allows(request.method(), request.uri().path(), request.headers()) {
+    if auth.browser_allows(&logical, request.headers()) {
         // Capture the authority that admitted the stream before its handler subscribes.
         let (snapshot, valid) = auth
             .access(request.headers())
@@ -795,6 +975,14 @@ mod tests {
         let store =
             crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
         (root, store)
+    }
+
+    fn test_runtime(store: &Arc<crate::storage::Store>) -> crate::cluster::membership::Runtime {
+        crate::cluster::membership::Runtime::new(
+            crate::cluster::membership::Membership::new(store.clone()),
+            crate::cluster::peer_call::peer_client().unwrap(),
+            Arc::new(|| Box::pin(async { Ok(()) })),
+        )
     }
 
     fn app(auth: Arc<AuthState>) -> axum::Router {
@@ -920,7 +1108,7 @@ mod tests {
         .enumerate()
         {
             let (root, store) = store(&format!("password-guard-{index}"));
-            let auth = AuthState::open(store.clone(), None, None).unwrap();
+            let auth = AuthState::open(store.clone(), None).unwrap();
             let app = app(auth.clone());
             // Invalid setup room exercises the same creation guard without global config or network.
             for path in ["/api/setup/save-config", "/api/auth/password"] {
@@ -970,11 +1158,11 @@ mod tests {
         use tower::ServiceExt;
         let (root, store) = store("password-mutations");
         let cluster_key = "synthetic-cluster-key-0123456789abcdef";
-        let auth = AuthState::open(store.clone(), None, Some(cluster_key.into())).unwrap();
+        let auth = AuthState::open(store.clone(), None).unwrap();
         let app = app(auth.clone());
         // Capability GET does not need Origin; it still requires the actual local peer and Host.
         let mut req = request("/api/auth", serde_json::json!({}), None);
-        *req.method_mut() = Method::GET;
+        *req.method_mut() = axum::http::Method::GET;
         req.headers_mut().remove(header::ORIGIN);
         let response = app.clone().oneshot(req).await.unwrap();
         let bytes = axum::body::to_bytes(response.into_body(), 1024)
@@ -982,10 +1170,7 @@ mod tests {
             .unwrap();
         let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(status["can_create_password"], true);
-        for body in [
-            serde_json::json!({"action":"create","new_password":cluster_key}),
-            serde_json::json!({"action":"create","new_password":" "}),
-        ] {
+        for body in [serde_json::json!({"action":"create","new_password":" "})] {
             assert_eq!(
                 app.clone()
                     .oneshot(request("/api/auth/password", body, None))
@@ -1078,7 +1263,7 @@ mod tests {
         let clear = serde_json::json!({"action":"clear","current_password":"first"});
         let remote_auth = AuthState::from_sessions(
             Sessions::open(store.clone(), || panic!()).unwrap(),
-            None,
+            test_runtime(&store),
             "0.0.0.0".parse().unwrap(),
         )
         .unwrap();
@@ -1104,7 +1289,7 @@ mod tests {
         assert!(auth.sessions.snapshot().unwrap().revision.is_some());
         assert!(AuthState::from_sessions(
             Sessions::open(store.clone(), || panic!()).unwrap(),
-            None,
+            test_runtime(&store),
             "0.0.0.0".parse().unwrap()
         )
         .is_err());
@@ -1140,7 +1325,12 @@ mod tests {
             imported.snapshot().unwrap().password.as_deref(),
             Some("saved")
         );
-        assert!(AuthState::from_sessions(imported, None, "0.0.0.0".parse().unwrap()).is_ok());
+        assert!(AuthState::from_sessions(
+            imported,
+            test_runtime(&store),
+            "0.0.0.0".parse().unwrap()
+        )
+        .is_ok());
         super::super::sessions::reset_password(store.clone()).unwrap();
         let handoff = root.join("old-handoff");
         crate::storage::paths::write_private(&handoff, b"stale-secret").unwrap();
@@ -1170,7 +1360,7 @@ mod tests {
     async fn password_body_is_unambiguous_and_current_password_failures_are_throttled() {
         use tower::ServiceExt;
         let (root, store) = store("password-throttle");
-        let auth = AuthState::open(store.clone(), Some("synthetic".into()), None).unwrap();
+        let auth = AuthState::open(store.clone(), Some("synthetic".into())).unwrap();
         let app = app(auth.clone());
         let login = app
             .clone()
@@ -1258,12 +1448,7 @@ mod tests {
         let store =
             crate::storage::Store::open(root.join("data"), root.join("key/master"), None).unwrap();
         let token = "synthetic-cluster-key-0123456789abcdef";
-        let auth = AuthState::open(
-            Arc::clone(&store),
-            Some("password".into()),
-            Some(token.into()),
-        )
-        .unwrap();
+        let auth = AuthState::open(Arc::clone(&store), Some("password".into())).unwrap();
         let router = |auth| {
             Router::new()
                 .route("/api/login", post(login))
@@ -1337,15 +1522,10 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
-        assert_eq!(
-            app.clone()
-                .oneshot(request("/api/cluster/heartbeat", None, Some(token)))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::OK
-        );
+        // Legacy shared bearer credentials never authenticate any route.
         for path in [
+            "/api/cluster/heartbeat",
+            "/api/cluster/drain",
             "/api/config",
             "/api/storage/backup",
             "/api/cluster/unknown",
@@ -1402,7 +1582,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         super::super::sessions::reset_password(Arc::clone(&store)).unwrap();
-        let local = router(AuthState::open(Arc::clone(&store), None, None).unwrap());
+        let local = router(AuthState::open(Arc::clone(&store), None).unwrap());
         assert_eq!(
             local
                 .clone()
@@ -1432,21 +1612,6 @@ mod tests {
         );
         drop((app, auth, local, store));
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn node_tokens_are_distinct_valid_header_credentials() {
-        let token = "synthetic-cluster-key-0123456789abcdef";
-        assert!(validate_cluster_token(token, Some("different-password")).is_ok());
-        assert!(validate_cluster_token(token, Some(token)).is_err());
-        for bad in [
-            "",
-            "too-short",
-            "synthetic-cluster-key-0123456789abcdef\r\n",
-            "synthetic cluster-key-0123456789abcdef",
-        ] {
-            assert!(validate_cluster_token(bad, None).is_err());
-        }
     }
 
     #[test]

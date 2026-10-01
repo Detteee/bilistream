@@ -393,21 +393,6 @@ fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn first_run_templates_are_neutral() {
-        let channels: serde_json::Value =
-            serde_json::from_str(include_str!("../assets/defaults/channels.json")).unwrap();
-        let areas: serde_json::Value =
-            serde_json::from_str(include_str!("../assets/defaults/areas.json")).unwrap();
-        assert_eq!(channels["channels"], serde_json::json!([]));
-        assert_eq!(areas["areas"].as_array().unwrap().len(), 1);
-        assert_eq!(areas["banned_keywords"], serde_json::json!([]));
-    }
-
-    /// The ffmpeg and self-update archives are both plain deflate zips, and the
-    /// zip dependency only pulls a deflate backend. A missing backend surfaces
-    /// as an "unsupported compression method" at extraction time on Windows,
-    /// so pin the codepath here instead.
-    #[test]
     fn zip_archives_round_trip_deflate() {
         use std::io::{Cursor, Read, Write};
         use zip::write::SimpleFileOptions;

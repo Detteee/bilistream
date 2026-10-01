@@ -281,20 +281,30 @@ fn apply_setup_documents(
     areas: Vec<SetupArea>,
     password: Option<crate::webui::sessions::PasswordMutation>,
 ) -> std::io::Result<()> {
-    if !channels.is_empty() {
+    if !channels.is_empty() || tx.read("channels.json")?.is_none() {
         let mut data = tx
             .read("channels.json")?
-            .ok_or_else(|| std::io::Error::other("频道数据不可用"))?
-            .value;
-        merge_channels(&mut data, &channels).map_err(std::io::Error::other)?;
+            .map(|doc| doc.value)
+            .unwrap_or_else(|| serde_json::json!({"channels": []}));
+        if !channels.is_empty() {
+            merge_channels(&mut data, &channels).map_err(std::io::Error::other)?;
+        }
         tx.write("channels.json", data)?;
     }
-    if !areas.is_empty() {
+    if !areas.is_empty() || tx.read("areas.json")?.is_none() {
         let mut data = tx
             .read("areas.json")?
-            .ok_or_else(|| std::io::Error::other("分区数据不可用"))?
-            .value;
-        merge_areas(&mut data, &areas).map_err(std::io::Error::other)?;
+            .map(|doc| doc.value)
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "areas": [],
+                    "banned_keywords": [],
+                    "streaming_banned_keywords": []
+                })
+            });
+        if !areas.is_empty() {
+            merge_areas(&mut data, &areas).map_err(std::io::Error::other)?;
+        }
         tx.write("areas.json", data)?;
     }
     if let Some(password) = password {
@@ -374,6 +384,10 @@ mod tests {
             .unwrap();
         assert!(snapshot.password.is_some() && valid);
         assert!(store.read("config.json").unwrap().is_some());
+        let channels = store.read("channels.json").unwrap().unwrap().value;
+        let areas = store.read("areas.json").unwrap().unwrap().value;
+        assert_eq!(channels["channels"], serde_json::json!([]));
+        assert!(areas["areas"].as_array().unwrap().is_empty());
         let exported = root.join("export");
         store.export_legacy(&exported).unwrap();
         assert!(!exported.join("webui-password").exists());

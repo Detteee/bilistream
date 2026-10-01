@@ -1,4 +1,6 @@
 use super::*;
+use crate::cluster::peer_call::AuthenticatedNode;
+use axum::Extension;
 
 pub(crate) static ACTIVE_MONITOR_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -93,13 +95,15 @@ pub async fn get_cluster_status() -> Json<ApiResponse<ClusterStatus>> {
     }
 }
 
-pub async fn cluster_heartbeat(
+pub(crate) async fn cluster_heartbeat(
+    Extension(peer): Extension<AuthenticatedNode>,
     Json(payload): Json<ClusterHeartbeatRequest>,
 ) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !crate::cluster::record_heartbeat(&cfg, payload.node) {
+    if payload.node.node_id != peer.node_id || !crate::cluster::record_heartbeat(&cfg, payload.node)
+    {
         return Ok(Json(ApiResponse {
             success: false,
             data: None,
@@ -237,7 +241,6 @@ pub async fn cluster_set_auto_failover(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let should_propagate = payload.propagate.unwrap_or(true);
-    let old_cluster = cfg.cluster.clone();
     cfg.cluster.auto_failover = payload.enabled;
     crate::config::save_config(&mut cfg)
         .await
@@ -245,7 +248,7 @@ pub async fn cluster_set_auto_failover(
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
 
     if should_propagate && cfg.cluster.enabled {
-        if let Err(e) = propagate_cluster_membership(&old_cluster, &cfg.cluster).await {
+        if let Err(e) = crate::cluster::push_cluster_settings_to_peers(&cfg).await {
             tracing::warn!("Cluster auto-failover sync failed: {}", e);
         }
     }
@@ -266,14 +269,6 @@ pub async fn cluster_set_auto_failover(
 /// hand-written path silently produced a malformed url and the sync never ran.
 pub const APPLY_PUBLIC_STATUS_ROUTE: &str = "/cluster/apply-public-status";
 
-fn apply_public_status_url(api_url: &str) -> String {
-    format!(
-        "{}/api{}",
-        api_url.trim_end_matches('/'),
-        APPLY_PUBLIC_STATUS_ROUTE
-    )
-}
-
 /// Pushes the settings to every peer, reporting how many took them.
 ///
 /// This endpoint acknowledges settings without the node snapshot required by
@@ -282,7 +277,6 @@ async fn push_public_status_to_peers(
     cfg: &Config,
     public_status: &crate::config::PublicStatusConfig,
 ) -> Result<usize, String> {
-    let client = crate::cluster::cluster_http_client();
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
 
     let tasks = cfg
@@ -290,23 +284,20 @@ async fn push_public_status_to_peers(
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| {
-            let client = client.clone();
-            let url = apply_public_status_url(&peer.api_url);
-            async move {
-                let response = client
-                    .post(url)
-                    .json(public_status)
-                    .timeout(timeout)
-                    .send()
-                    .await
-                    .map_err(|e| format!("{}: {}", peer.node_id, e))?;
-
-                if !response.status().is_success() {
-                    return Err(format!("{}: HTTP {}", peer.node_id, response.status()));
-                }
-                Ok(())
+        .map(|peer| async move {
+            let response = crate::cluster::peer_call::send_ordinary(
+                cfg,
+                &peer.node_id,
+                crate::cluster::peer_call::routes::APPLY_PUBLIC_STATUS,
+                serde_json::to_vec(public_status).map_err(|e| e.to_string())?,
+                timeout,
+            )
+            .await
+            .map_err(|e| format!("{}: {}", peer.node_id, e))?;
+            if !(200..300).contains(&response.status) {
+                return Err(format!("{}: HTTP {}", peer.node_id, response.status));
             }
+            Ok(())
         });
 
     let mut synced = 0usize;
@@ -340,6 +331,14 @@ pub async fn cluster_apply_public_status(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // The public node is a committed membership role, never a peer edit.
+    if cfg.cluster.public_status.node_id != payload.node_id {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(crate::cluster::TOPOLOGY_EDIT_REJECTED.to_string()),
+        }));
+    }
     cfg.cluster.public_status = payload;
     crate::config::save_config(&mut cfg)
         .await
@@ -368,6 +367,16 @@ pub async fn cluster_set_public_status(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if cfg.cluster.public_status.node_id != payload.config.node_id
+        && crate::cluster::membership::current_lifecycle()
+            != crate::cluster::membership::Lifecycle::Standalone
+    {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(crate::cluster::TOPOLOGY_EDIT_REJECTED.to_string()),
+        }));
+    }
     let unchanged = cfg.cluster.public_status == payload.config;
     cfg.cluster.public_status = payload.config.clone();
     crate::config::save_config(&mut cfg)
@@ -402,6 +411,30 @@ pub async fn cluster_set_public_status(
         success: true,
         data: Some(status),
         message: Some(message),
+    }))
+}
+
+/// Ordinary non-topology settings from a current member.
+pub async fn cluster_apply_settings(
+    Json(payload): Json<crate::cluster::ClusterSettings>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    let mut cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Err(message) = payload.apply(&mut cfg.cluster) {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(message),
+        }));
+    }
+    crate::config::save_config(&mut cfg)
+        .await
+        .map_err(config_save_status)?;
+    Ok(Json(ApiResponse {
+        success: true,
+        data: None,
+        message: Some("集群设置已同步".to_string()),
     }))
 }
 
@@ -442,23 +475,6 @@ pub async fn cluster_apply_node_mode(
             success: true,
             data: Some(status),
             message: Some("集群节点模式已更新".to_string()),
-        })),
-        Err(e) => Ok(Json(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(e),
-        })),
-    }
-}
-
-pub async fn cluster_sync_membership(
-    Json(payload): Json<ClusterMembershipRequest>,
-) -> Result<Json<ApiResponse<()>>, StatusCode> {
-    match apply_cluster_membership_locally(&payload).await {
-        Ok(()) => Ok(Json(ApiResponse {
-            success: true,
-            data: None,
-            message: Some("集群节点配置已同步".to_string()),
         })),
         Err(e) => Ok(Json(ApiResponse {
             success: false,
@@ -614,7 +630,7 @@ pub async fn cluster_restart_node(
         }));
     };
 
-    match restart_peer_server(peer).await {
+    match restart_peer_server(&cfg, peer).await {
         Ok(message) => Ok(Json(ApiResponse {
             success: true,
             data: None,
@@ -628,23 +644,19 @@ pub async fn cluster_restart_node(
     }
 }
 
-pub(crate) async fn restart_peer_server(peer: &ClusterPeer) -> Result<String, String> {
-    let url = format!("{}/api/server/restart", peer.api_url.trim_end_matches('/'));
-    let response = crate::cluster::cluster_http_client()
-        .post(url)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-        .map_err(|e| format!("节点 {} 重启请求失败: {}", peer.node_id, e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("节点 {} HTTP {}", peer.node_id, response.status()));
-    }
-
-    let envelope = response
-        .json::<ClusterPeerApiResponse<()>>()
-        .await
-        .map_err(|e| format!("节点 {} 响应解析失败: {}", peer.node_id, e))?;
+pub(crate) async fn restart_peer_server(
+    cfg: &Config,
+    peer: &ClusterPeer,
+) -> Result<String, String> {
+    let envelope: crate::cluster::PeerApiResponse<()> = crate::cluster::peer_call::call::<(), _>(
+        cfg,
+        &peer.node_id,
+        crate::cluster::peer_call::routes::RESTART,
+        None,
+        Duration::from_secs(5),
+    )
+    .await
+    .map_err(|e| format!("节点 {} 重启请求失败: {}", peer.node_id, e))?;
     if envelope.success {
         Ok(envelope
             .message
@@ -654,65 +666,6 @@ pub(crate) async fn restart_peer_server(peer: &ClusterPeer) -> Result<String, St
             .message
             .unwrap_or_else(|| format!("节点 {} 重启失败", peer.node_id)))
     }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct ClusterPeerApiResponse<T> {
-    success: bool,
-    data: Option<T>,
-    message: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClusterMembershipNode {
-    pub node_id: String,
-    #[serde(default)]
-    pub name: String,
-    pub api_url: String,
-    #[serde(default)]
-    pub priority: i32,
-}
-
-pub(crate) fn default_membership_auto_failover() -> bool {
-    true
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClusterMembershipRequest {
-    #[serde(default)]
-    pub target_node_id: Option<String>,
-    pub enabled: bool,
-    pub sync_monitored_channels: bool,
-    #[serde(default = "default_membership_auto_failover")]
-    pub auto_failover: bool,
-    pub heartbeat_interval_secs: u64,
-    pub failover_timeout_secs: u64,
-    pub lease_ttl_secs: u64,
-    pub thresholds: ClusterHealthThresholds,
-    pub nodes: Vec<ClusterMembershipNode>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct NormalizedMembershipNode<'a> {
-    node_id: &'a str,
-    name: &'a str,
-    api_url: &'a str,
-    priority: i32,
-}
-
-#[derive(Serialize)]
-pub(crate) struct ClusterMembershipTargetRequest<'a> {
-    #[serde(default)]
-    target_node_id: Option<&'a str>,
-    enabled: bool,
-    sync_monitored_channels: bool,
-    #[serde(default = "default_membership_auto_failover")]
-    auto_failover: bool,
-    heartbeat_interval_secs: u64,
-    failover_timeout_secs: u64,
-    lease_ttl_secs: u64,
-    thresholds: &'a ClusterHealthThresholds,
-    nodes: &'a [ClusterMembershipNode],
 }
 
 pub async fn cluster_sync_config(
@@ -746,14 +699,17 @@ pub async fn cluster_sync_config(
     }))
 }
 
-pub async fn cluster_cache_active_monitor_state(
+pub(crate) async fn cluster_cache_active_monitor_state(
+    Extension(peer): Extension<AuthenticatedNode>,
     Json(payload): Json<ClusterActiveMonitorStateRequest>,
 ) -> Result<Json<ApiResponse<ClusterStatus>>, StatusCode> {
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
-    if status.active_owner.as_deref() != Some(payload.sender_node_id.as_str()) {
+    if payload.sender_node_id != peer.node_id
+        || status.active_owner.as_deref() != Some(payload.sender_node_id.as_str())
+    {
         return Ok(Json(ApiResponse {
             success: false,
             data: Some(status),
@@ -810,7 +766,11 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
     payload: &T,
     target_node_id: Option<&str>,
 ) -> Result<usize, String> {
-    let client = crate::cluster::cluster_http_client();
+    let route = match path {
+        "/api/cluster/drain" => crate::cluster::peer_call::routes::DRAIN,
+        "/api/cluster/failover" => crate::cluster::peer_call::routes::FAILOVER,
+        _ => return Err("不支持的节点控制请求".to_string()),
+    };
     let timeout = Duration::from_secs(cfg.cluster.heartbeat_interval_secs.max(5));
     let tasks = cfg
         .cluster
@@ -822,7 +782,7 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
                 .map(|target| peer.node_id == target)
                 .unwrap_or(true)
         })
-        .map(|peer| post_cluster_control_to_peer(&client, cfg, peer, path, payload, timeout));
+        .map(|peer| post_cluster_control_to_peer(cfg, peer, route, payload, timeout));
     let results = join_all(tasks).await;
     if target_node_id.is_some() && results.is_empty() {
         return Err("目标节点不在成员配置中".to_string());
@@ -837,27 +797,16 @@ pub(crate) async fn post_cluster_control<T: Serialize>(
 }
 
 pub(crate) async fn post_cluster_control_to_peer<T: Serialize>(
-    client: &reqwest::Client,
     cfg: &Config,
     peer: &ClusterPeer,
-    path: &str,
+    route: crate::cluster::peer_auth::RoutePolicy,
     payload: &T,
     timeout: Duration,
 ) -> Result<(), String> {
-    let url = format!("{}{}", peer.api_url.trim_end_matches('/'), path);
-    let response = client
-        .post(url)
-        .json(payload)
-        .timeout(timeout)
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| format!("{}: {error}", peer.node_id))?;
-    let envelope = crate::plugins::http::response_json_limited::<
-        ClusterPeerApiResponse<ClusterStatus>,
-    >(response)
-    .await
-    .map_err(|error| format!("{}: {error}", peer.node_id))?;
+    let envelope: crate::cluster::PeerApiResponse<ClusterStatus> =
+        crate::cluster::peer_call::call(cfg, &peer.node_id, route, Some(payload), timeout)
+            .await
+            .map_err(|error| format!("{}: {error}", peer.node_id))?;
     if !envelope.success {
         return Err(format!(
             "{}: {}",
@@ -869,294 +818,6 @@ pub(crate) async fn post_cluster_control_to_peer<T: Serialize>(
         .data
         .ok_or_else(|| format!("{}: 缺少确认状态", peer.node_id))?;
     crate::cluster::merge_cluster_status_from_direct_peer(status, &peer.node_id, cfg)
-}
-
-pub(crate) fn cluster_membership_from_config(cluster: &ClusterConfig) -> ClusterMembershipRequest {
-    let mut nodes = vec![ClusterMembershipNode {
-        node_id: cluster.node_id.clone(),
-        name: cluster.node_name.clone(),
-        api_url: cluster.public_api_url.clone(),
-        priority: cluster.priority,
-    }];
-
-    nodes.extend(cluster.peers.iter().map(|peer| ClusterMembershipNode {
-        node_id: peer.node_id.clone(),
-        name: peer.name.clone(),
-        api_url: peer.api_url.clone(),
-        priority: peer.priority,
-    }));
-    normalize_cluster_membership_nodes(&mut nodes);
-
-    ClusterMembershipRequest {
-        enabled: cluster.enabled,
-        sync_monitored_channels: cluster.sync_monitored_channels,
-        auto_failover: cluster.auto_failover,
-        heartbeat_interval_secs: cluster.heartbeat_interval_secs,
-        failover_timeout_secs: cluster.failover_timeout_secs,
-        lease_ttl_secs: cluster.lease_ttl_secs,
-        thresholds: cluster.thresholds.clone(),
-        nodes,
-        target_node_id: None,
-    }
-}
-
-pub(crate) fn normalize_cluster_membership_nodes(nodes: &mut Vec<ClusterMembershipNode>) {
-    let mut seen = HashSet::new();
-    nodes.retain(|node| {
-        let node_id = node.node_id.trim();
-        let api_url = normalized_cluster_api_url(&node.api_url);
-        if node_id.is_empty() || api_url.is_empty() || seen.contains(node_id) {
-            return false;
-        }
-        seen.insert(node_id.to_string());
-        true
-    });
-
-    for node in nodes {
-        node.node_id = node.node_id.trim().to_string();
-        node.name = node.name.trim().to_string();
-        node.api_url = normalized_cluster_api_url(&node.api_url).to_string();
-    }
-}
-
-pub(crate) async fn apply_cluster_membership_locally(
-    payload: &ClusterMembershipRequest,
-) -> Result<(), String> {
-    let mut cfg = load_config().await.map_err(|e| e.to_string())?;
-    apply_cluster_membership_to_config(&mut cfg.cluster, payload);
-
-    crate::config::save_config(&mut cfg)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !cfg.cluster.enabled {
-        crate::plugins::set_manual_restart();
-        crate::cluster::clear_local_stream();
-        crate::plugins::stop_ffmpeg().await;
-    }
-
-    Ok(())
-}
-
-pub(crate) fn apply_cluster_membership_to_config(
-    cluster: &mut ClusterConfig,
-    payload: &ClusterMembershipRequest,
-) {
-    let nodes = normalized_membership_nodes(&payload.nodes);
-    let local_node_id = payload
-        .target_node_id
-        .as_deref()
-        .filter(|node_id| !node_id.trim().is_empty())
-        .unwrap_or(cluster.node_id.as_str())
-        .trim()
-        .to_string();
-    let local_node = nodes.iter().find(|node| node.node_id == local_node_id);
-
-    if let Some(local_node) = local_node {
-        cluster.enabled = payload.enabled;
-        cluster.node_id = local_node.node_id.to_string();
-        cluster.node_name = if local_node.name.is_empty() {
-            local_node.node_id.to_string()
-        } else {
-            local_node.name.to_string()
-        };
-        cluster.public_api_url = local_node.api_url.to_string();
-        cluster.priority = local_node.priority;
-        cluster.peers = nodes
-            .iter()
-            .filter(|node| node.node_id != local_node_id)
-            .map(|node| ClusterPeer {
-                node_id: node.node_id.to_string(),
-                name: node.name.to_string(),
-                api_url: node.api_url.to_string(),
-                priority: node.priority,
-            })
-            .collect();
-    } else {
-        cluster.enabled = false;
-        cluster.peers.clear();
-    }
-
-    cluster.sync_monitored_channels = payload.sync_monitored_channels;
-    cluster.auto_failover = payload.auto_failover;
-    cluster.heartbeat_interval_secs = payload.heartbeat_interval_secs.max(1);
-    cluster.failover_timeout_secs = payload.failover_timeout_secs.max(1);
-    cluster.lease_ttl_secs = payload.lease_ttl_secs.max(1);
-    cluster.thresholds = payload.thresholds.clone();
-}
-
-pub(crate) fn normalized_membership_nodes(
-    nodes: &[ClusterMembershipNode],
-) -> Vec<NormalizedMembershipNode<'_>> {
-    let mut seen = HashSet::new();
-    let mut normalized = Vec::with_capacity(nodes.len());
-
-    for node in nodes {
-        let node_id = node.node_id.trim();
-        let api_url = normalized_cluster_api_url(&node.api_url);
-        if node_id.is_empty() || api_url.is_empty() || !seen.insert(node_id) {
-            continue;
-        }
-
-        normalized.push(NormalizedMembershipNode {
-            node_id,
-            name: node.name.trim(),
-            api_url,
-            priority: node.priority,
-        });
-    }
-
-    normalized
-}
-
-pub(crate) async fn propagate_cluster_membership(
-    old_cluster: &ClusterConfig,
-    new_cluster: &ClusterConfig,
-) -> Result<usize, String> {
-    let request = cluster_membership_from_config(new_cluster);
-    let targets = cluster_membership_propagation_targets(old_cluster, new_cluster, &request);
-    let client = crate::cluster::cluster_http_client();
-    let timeout = Duration::from_secs(new_cluster.heartbeat_interval_secs.max(5));
-
-    let tasks = targets.into_iter().map(|(node_id, api_url)| {
-        push_cluster_membership_to_target(&client, &request, node_id, api_url, timeout)
-    });
-    let results = join_all(tasks).await;
-    let mut synced = 0usize;
-    let mut errors = Vec::new();
-
-    for result in results {
-        match result {
-            Ok(()) => synced += 1,
-            Err(error) => errors.push(error),
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(synced)
-    } else {
-        Err(errors.join("; "))
-    }
-}
-
-pub(crate) fn cluster_membership_propagation_targets(
-    old_cluster: &ClusterConfig,
-    new_cluster: &ClusterConfig,
-    request: &ClusterMembershipRequest,
-) -> HashMap<String, String> {
-    let mut targets = HashMap::new();
-
-    for node in &request.nodes {
-        insert_membership_target(
-            &mut targets,
-            &new_cluster.node_id,
-            &node.node_id,
-            &node.api_url,
-        );
-    }
-
-    for peer in &old_cluster.peers {
-        insert_membership_target(
-            &mut targets,
-            &new_cluster.node_id,
-            &peer.node_id,
-            &peer.api_url,
-        );
-    }
-
-    targets
-}
-
-pub(crate) fn insert_membership_target(
-    targets: &mut HashMap<String, String>,
-    local_node_id: &str,
-    node_id: &str,
-    api_url: &str,
-) {
-    let api_url = normalized_cluster_api_url(api_url);
-    if node_id != local_node_id && !api_url.is_empty() {
-        targets.insert(node_id.to_string(), api_url.to_string());
-    }
-}
-
-pub(crate) fn normalized_cluster_api_url(api_url: &str) -> &str {
-    api_url.trim().trim_end_matches('/')
-}
-
-pub(crate) async fn push_cluster_membership_to_target(
-    client: &reqwest::Client,
-    request: &ClusterMembershipRequest,
-    node_id: String,
-    api_url: String,
-    timeout: Duration,
-) -> Result<(), String> {
-    let url = format!("{}/api/cluster/sync-membership", api_url);
-    let targeted_request = cluster_membership_target_request(request, &node_id);
-    let response = client
-        .post(url)
-        .json(&targeted_request)
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| format!("{} {}", node_id, e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("{} HTTP {}", node_id, status));
-    }
-
-    match response.json::<ClusterPeerApiResponse<()>>().await {
-        Ok(envelope) if envelope.success => Ok(()),
-        Ok(envelope) => Err(format!(
-            "{} {}",
-            node_id,
-            envelope.message.unwrap_or_else(|| "同步被拒绝".to_string())
-        )),
-        Err(e) => Err(format!("{} 响应解析失败: {}", node_id, e)),
-    }
-}
-
-pub(crate) fn cluster_membership_target_request<'a>(
-    request: &'a ClusterMembershipRequest,
-    target_node_id: &'a str,
-) -> ClusterMembershipTargetRequest<'a> {
-    ClusterMembershipTargetRequest {
-        target_node_id: Some(target_node_id),
-        enabled: request.enabled,
-        sync_monitored_channels: request.sync_monitored_channels,
-        auto_failover: request.auto_failover,
-        heartbeat_interval_secs: request.heartbeat_interval_secs,
-        failover_timeout_secs: request.failover_timeout_secs,
-        lease_ttl_secs: request.lease_ttl_secs,
-        thresholds: &request.thresholds,
-        nodes: &request.nodes,
-    }
-}
-
-#[cfg(test)]
-mod public_status_tests {
-    use super::*;
-
-    /// The url the panel posts to must match the route the peer registers.
-    /// A hand-written path without the /api prefix produced
-    /// "http://ny:3150cluster/apply-public-status", which failed silently and
-    /// left every peer on stale settings.
-    #[test]
-    fn the_peer_url_matches_the_registered_route() {
-        assert_eq!(
-            apply_public_status_url("http://ny.example.com:3150"),
-            format!("http://ny.example.com:3150/api{APPLY_PUBLIC_STATUS_ROUTE}")
-        );
-        assert!(APPLY_PUBLIC_STATUS_ROUTE.starts_with('/'));
-    }
-
-    #[test]
-    fn a_trailing_slash_on_the_peer_url_does_not_double_up() {
-        assert_eq!(
-            apply_public_status_url("http://ny.example.com:3150/"),
-            "http://ny.example.com:3150/api/cluster/apply-public-status"
-        );
-    }
 }
 
 #[cfg(test)]

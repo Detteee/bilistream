@@ -4,7 +4,7 @@ use super::election::{configured_node_ids, node_is_eligible};
 use super::fencing::{clear_local_stream, local_monitoring_allowed};
 use super::state::{
     cluster_control_timeout, cluster_state_read, cluster_state_write, cluster_switch_lock,
-    node_mode_apply_lock, now_secs, ClusterState, CLUSTER_HTTP_CLIENT,
+    node_mode_apply_lock, now_secs, ClusterState,
 };
 use super::status::{
     current_active_owner, force_failover, get_cluster_status,
@@ -93,7 +93,6 @@ pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, S
         monitor_toggles: toggles,
         channel_targets: Some(channel_targets),
     };
-    let client = CLUSTER_HTTP_CLIENT.clone();
     let timeout = cluster_control_timeout(cfg);
 
     let tasks = cfg
@@ -101,41 +100,25 @@ pub async fn push_active_monitor_state_to_peers(cfg: &Config) -> Result<usize, S
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| push_active_monitor_state_to_peer(&client, cfg, peer, &request, timeout));
+        .map(|peer| push_active_monitor_state_to_peer(cfg, peer, &request, timeout));
     summarize_peer_push_results(join_all(tasks).await, "部分节点监控开关缓存失败")
 }
 
 pub(crate) async fn push_active_monitor_state_to_peer(
-    client: &reqwest::Client,
     cfg: &Config,
     peer: &crate::config::ClusterPeer,
     request: &ClusterActiveMonitorStateRequest,
     timeout: Duration,
 ) -> Result<(), String> {
-    let url = format!(
-        "{}/api/cluster/cache-active-monitor-state",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .post(url)
-        .json(&request)
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| format!("节点 {} 缓存监控开关失败: {}", peer.node_id, e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "节点 {} 缓存监控开关失败: HTTP {}",
-            peer.node_id, status
-        ));
-    }
-
-    let envelope = response
-        .json::<PeerApiResponse<ClusterStatus>>()
-        .await
-        .map_err(|e| format!("节点 {} 缓存监控开关响应解析失败: {}", peer.node_id, e))?;
+    let envelope: PeerApiResponse<ClusterStatus> = super::peer_call::call(
+        cfg,
+        &peer.node_id,
+        super::peer_call::routes::CACHE_MONITOR_STATE,
+        Some(request),
+        timeout,
+    )
+    .await
+    .map_err(|e| format!("节点 {} 缓存监控开关失败: {}", peer.node_id, e))?;
     if !envelope.success {
         return Err(format!(
             "节点 {} 缓存监控开关失败: {}",
@@ -271,6 +254,10 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     cfg.youtube.deno_path = deno_path;
     cfg.twitch.proxy = twitch_proxy;
     cfg.priority_channel = payload.priority_channel;
+    cfg.niconico.channel_name = payload.niconico_channel_name;
+    cfg.niconico.channel_id = payload.niconico_channel_id;
+    cfg.niconico.live_id = payload.niconico_live_id;
+    cfg.niconico.area_v2 = payload.niconico_area_v2;
 
     cfg.bililive.enable_danmaku_command = local_enable_danmaku_command;
     cfg.enable_youtube_monitor = local_enable_youtube_monitor;
@@ -292,7 +279,6 @@ pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, Strin
     }
 
     let request = cluster_sync_config_from_config(cfg);
-    let client = CLUSTER_HTTP_CLIENT.clone();
     let timeout = cluster_control_timeout(cfg);
 
     let tasks = cfg
@@ -300,43 +286,30 @@ pub async fn push_monitored_config_to_peers(cfg: &Config) -> Result<usize, Strin
         .peers
         .iter()
         .filter(|peer| peer.node_id != cfg.cluster.node_id)
-        .map(|peer| push_monitored_config_to_peer(&client, cfg, peer, &request, timeout));
+        .map(|peer| push_monitored_config_to_peer(cfg, peer, &request, timeout));
     summarize_peer_push_results(join_all(tasks).await, "部分节点监控频道配置同步失败")
 }
 
 pub(crate) async fn push_monitored_config_to_peer(
-    client: &reqwest::Client,
     cfg: &Config,
     peer: &crate::config::ClusterPeer,
     request: &ClusterSyncConfigRequest,
     timeout: Duration,
 ) -> Result<(), String> {
-    require_storage_sync_capability(client, peer, timeout).await?;
+    require_storage_sync_capability(cfg, peer, timeout).await?;
     let mut request = request.clone();
     super::version::sanitize_local_source_settings(&mut request.monitored_config);
     request.config_version =
         monitored_config_integrity_version_from_payload(&request.monitored_config);
-    let url = format!(
-        "{}/api/cluster/sync-config",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .post(url)
-        .json(&request)
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| format!("{} {}", peer.node_id, e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("{} HTTP {}", peer.node_id, status));
-    }
-
-    let envelope = response
-        .json::<PeerApiResponse<ClusterStatus>>()
-        .await
-        .map_err(|e| format!("{} 响应解析失败: {}", peer.node_id, e))?;
+    let envelope: PeerApiResponse<ClusterStatus> = super::peer_call::call(
+        cfg,
+        &peer.node_id,
+        super::peer_call::routes::SYNC_CONFIG,
+        Some(&request),
+        timeout,
+    )
+    .await
+    .map_err(|e| format!("{} {}", peer.node_id, e))?;
     if !envelope.success {
         return Err(format!(
             "{} {}",
@@ -352,30 +325,27 @@ pub(crate) async fn push_monitored_config_to_peer(
 }
 
 async fn require_storage_sync_capability(
-    client: &reqwest::Client,
+    cfg: &Config,
     peer: &crate::config::ClusterPeer,
     timeout: Duration,
 ) -> Result<(), String> {
-    let response = client
-        .get(format!(
-            "{}/api/cluster/capabilities",
-            peer.api_url.trim_end_matches('/')
-        ))
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|_| format!("{} 暂不可达", peer.node_id))?;
-    if !response.status().is_success() {
+    let response = super::peer_call::send_ordinary(
+        cfg,
+        &peer.node_id,
+        super::peer_call::routes::CAPABILITIES,
+        Vec::new(),
+        timeout,
+    )
+    .await
+    .map_err(|_| format!("{} 暂不可达", peer.node_id))?;
+    if !(200..300).contains(&response.status) {
         return Err(format!(
             "{} 需要升级后才能同步配置（本机凭据保护）",
             peer.node_id
         ));
     }
-    let bytes = crate::plugins::http::response_bytes_limited(response, 4096)
-        .await
+    let body: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|_| format!("{} 同步能力响应无效", peer.node_id))?;
-    let body: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| format!("{} 同步能力响应无效", peer.node_id))?;
     if body
         .get("config_sync")
         .and_then(|v| v.as_u64())
@@ -466,7 +436,6 @@ async fn finalize_cluster_node_switch_inner(
         ));
     }
     ensure_handoff_target_is_eligible(cfg, target_node_id)?;
-    let client = CLUSTER_HTTP_CLIENT.clone();
     if target_node_id != cfg.cluster.node_id {
         let target = cfg
             .cluster
@@ -476,9 +445,9 @@ async fn finalize_cluster_node_switch_inner(
             .ok_or("未找到目标节点")?;
         // Check before source demotion: an old target must not leave the
         // active stream stopped while rejecting the new config protocol.
-        require_storage_sync_capability(&client, target, cluster_control_timeout(cfg)).await?;
+        require_storage_sync_capability(cfg, target, cluster_control_timeout(cfg)).await?;
     }
-    let source_config = match export_cluster_config_from_node(&client, cfg, source_node_id).await {
+    let source_config = match export_cluster_config_from_node(cfg, source_node_id).await {
         Ok(payload) => SourceConfigSnapshot {
             payload,
             toggle_state_authoritative: true,
@@ -515,7 +484,6 @@ async fn finalize_cluster_node_switch_inner(
     // (`may_take_over_unconfirmed`); anything else leaves the handoff pending.
     if source_node_id != target_node_id {
         let disabled = apply_node_mode_with_retry_classified(
-            &client,
             cfg,
             source_node_id,
             ClusterApplyNodeModeRequest {
@@ -564,7 +532,6 @@ async fn finalize_cluster_node_switch_inner(
 
     ensure_handoff_target_is_eligible(cfg, target_node_id)?;
     apply_cluster_node_mode_to_node_with_retry(
-        &client,
         cfg,
         target_node_id,
         ClusterApplyNodeModeRequest {
@@ -694,7 +661,6 @@ pub(crate) fn resolve_source_channel_targets(
 }
 
 pub(crate) async fn export_cluster_config_from_node(
-    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
 ) -> Result<ClusterSyncConfigRequest, String> {
@@ -702,31 +668,15 @@ pub(crate) async fn export_cluster_config_from_node(
         return Ok(cluster_sync_config_from_config(cfg));
     }
 
-    let peer = cfg
-        .cluster
-        .peers
-        .iter()
-        .find(|peer| peer.node_id == node_id)
-        .ok_or_else(|| format!("未找到源节点 {}", node_id))?;
-    let url = format!(
-        "{}/api/cluster/export-config",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .get(url)
-        .timeout(cluster_control_timeout(cfg))
-        .send()
-        .await
-        .map_err(|e| format!("读取源节点配置失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("读取源节点配置失败: HTTP {}", response.status()));
-    }
-
-    let envelope = response
-        .json::<PeerApiResponse<ClusterSyncConfigRequest>>()
-        .await
-        .map_err(|e| format!("解析源节点配置失败: {}", e))?;
+    let envelope: PeerApiResponse<ClusterSyncConfigRequest> = super::peer_call::call::<(), _>(
+        cfg,
+        node_id,
+        super::peer_call::routes::EXPORT_CONFIG,
+        None,
+        cluster_control_timeout(cfg),
+    )
+    .await
+    .map_err(|e| format!("读取源节点配置失败: {}", e))?;
 
     if envelope.success {
         envelope.data.ok_or_else(|| "源节点未返回配置".to_string())
@@ -795,7 +745,7 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
         expected_active_owner: Some(cfg.cluster.node_id.clone()),
         handoff_target_node_id: Some(cfg.cluster.node_id.clone()),
     };
-    match apply_node_mode_classified(&CLUSTER_HTTP_CLIENT, cfg, &source, &payload).await {
+    match apply_node_mode_classified(cfg, &source, &payload).await {
         Ok(()) => {
             let mut state = cluster_state_write();
             if state.unconfirmed_demotion.as_deref() == Some(source.as_str()) {
@@ -810,7 +760,6 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
 /// Three attempts; a refusal on any attempt wins over later timeouts, since
 /// the node was alive to answer.
 async fn apply_node_mode_with_retry_classified(
-    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: ClusterApplyNodeModeRequest,
@@ -820,7 +769,7 @@ async fn apply_node_mode_with_retry_classified(
     let mut refused: Option<NodeModeError> = None;
     let mut last_error = NodeModeError::Unreachable(String::new());
     for attempt in 1..=max_attempts {
-        match apply_node_mode_classified(client, cfg, node_id, &payload).await {
+        match apply_node_mode_classified(cfg, node_id, &payload).await {
             Ok(()) => return Ok(()),
             Err(e) => {
                 tracing::warn!(
@@ -845,13 +794,12 @@ async fn apply_node_mode_with_retry_classified(
 }
 
 pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
-    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: ClusterApplyNodeModeRequest,
     phase: &str,
 ) -> Result<(), String> {
-    apply_node_mode_with_retry_classified(client, cfg, node_id, payload, phase)
+    apply_node_mode_with_retry_classified(cfg, node_id, payload, phase)
         .await
         .map_err(|e| e.to_string())
 }
@@ -874,13 +822,7 @@ impl std::fmt::Display for NodeModeError {
     }
 }
 
-/// 502–504 and Cloudflare's 520–530 mean the origin behind the URL is down.
-pub(crate) fn origin_down_status(status: u16) -> bool {
-    matches!(status, 502..=504 | 520..=530)
-}
-
 async fn apply_node_mode_classified(
-    client: &reqwest::Client,
     cfg: &Config,
     node_id: &str,
     payload: &ClusterApplyNodeModeRequest,
@@ -901,43 +843,27 @@ async fn apply_node_mode_classified(
         .ok_or_else(|| Refused(format!("未找到目标节点 {}", node_id)))?;
     let mut payload = payload.clone();
     if let Some(monitored) = payload.monitored_config.as_mut() {
-        require_storage_sync_capability(client, peer, cluster_control_timeout(cfg))
+        require_storage_sync_capability(cfg, peer, cluster_control_timeout(cfg))
             .await
             .map_err(Refused)?;
         super::version::sanitize_local_source_settings(monitored);
     }
-    let url = format!(
-        "{}/api/cluster/apply-node-mode",
-        peer.api_url.trim_end_matches('/')
-    );
-    let response = client
-        .post(url)
-        .json(&payload)
-        .timeout(cluster_control_timeout(cfg))
-        .send()
-        .await
-        .map_err(|e| {
-            let message = format!("更新节点 {} 模式失败: {}", node_id, e);
-            if e.is_connect() || e.is_timeout() || e.is_request() {
-                Unreachable(message)
-            } else {
-                Refused(message)
-            }
-        })?;
-
-    if !response.status().is_success() {
-        let message = format!("更新节点 {} 模式失败: HTTP {}", node_id, response.status());
-        return Err(if origin_down_status(response.status().as_u16()) {
-            Unreachable(message)
-        } else {
-            Refused(message)
-        });
-    }
-
-    let envelope = response
-        .json::<PeerApiResponse<ClusterStatus>>()
-        .await
-        .map_err(|e| Refused(format!("解析节点 {} 模式响应失败: {}", node_id, e)))?;
+    let envelope: PeerApiResponse<ClusterStatus> = super::peer_call::call(
+        cfg,
+        node_id,
+        super::peer_call::routes::APPLY_NODE_MODE,
+        Some(&payload),
+        cluster_control_timeout(cfg),
+    )
+    .await
+    .map_err(|e| match e {
+        super::peer_call::PeerCallError::Unreachable(m) => {
+            Unreachable(format!("更新节点 {} 模式失败: {}", node_id, m))
+        }
+        super::peer_call::PeerCallError::Refused(m) => {
+            Refused(format!("更新节点 {} 模式失败: {}", node_id, m))
+        }
+    })?;
 
     if envelope.success {
         let status = envelope

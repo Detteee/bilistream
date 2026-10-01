@@ -53,4 +53,4 @@ Windows 在终端运行 `bilistream.exe --reset-panel-password`。该命令清�
 
 监听地址和端口也可通过 `BILISTREAM_BIND`、`BILISTREAM_PORT` 设置。其他启动参数见[命令行选项](advanced-settings.zh_CN.md#命令行选项)。
 
-多服务器还需配置[节点共享密钥](advanced-settings.zh_CN.md#多服务器)。该密钥用于节点间通信，各面板的登录密码独立设置，不能与节点密钥相同。
+多服务器不使用共享节点密钥。添加服务器时只验证一次该服务器的面板密码，之后各服务器用各自的签名身份互相认证。每台服务器的管理地址必须是证书有效的 HTTPS，或自行建立的认证隧道上的本机回环地址。见[多服务器](advanced-settings.zh_CN.md#准备工作)。

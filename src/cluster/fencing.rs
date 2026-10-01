@@ -43,6 +43,9 @@ pub(crate) async fn wait_for_local_monitoring(cfg: &Config) {
 /// `None` means this node may keep monitoring/pushing; `Some(reason)` is a
 /// human-readable Chinese reason suitable for logging.
 pub(crate) fn local_monitoring_block_reason(cfg: &Config) -> Option<String> {
+    if let Some(reason) = super::membership::membership_block_reason() {
+        return Some(reason);
+    }
     if !cfg.cluster.enabled {
         return None;
     }

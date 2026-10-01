@@ -313,11 +313,10 @@ mod tests {
     #[test]
     fn validates_http_only_session_and_rejects_bad_rows_without_echo() {
         assert_eq!(validate_netscape(JAR).unwrap().count, 1);
-        assert!(validate_netscape("bad\tsecret-value")
+        assert!(!validate_netscape("bad\tsecret-value")
             .unwrap_err()
             .to_string()
-            .find("secret-value")
-            .is_none());
+            .contains("secret-value"));
         assert!(validate_netscape(&format!("{JAR}{}", JAR.lines().last().unwrap())).is_err());
         assert_eq!(
             validate_netscape("# Netscape HTTP Cookie File\n")

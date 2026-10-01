@@ -171,7 +171,6 @@ fn restart_environment_words(read: impl Fn(&str) -> Option<String>) -> Vec<Strin
         "BILISTREAM_BIND",
         "BILISTREAM_PORT",
         "BILISTREAM_FFMPEG_LOG_LEVEL",
-        "BILISTREAM_CLUSTER_TOKEN_FILE",
         "BILISTREAM_SCREEN_SESSION",
         "XDG_CONFIG_HOME",
     ]

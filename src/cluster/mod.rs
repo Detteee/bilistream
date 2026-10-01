@@ -6,7 +6,11 @@ mod election;
 mod external_api;
 mod fencing;
 mod heartbeat;
+pub mod membership;
+pub mod peer_auth;
+pub(crate) mod peer_call;
 mod self_check;
+mod settings_sync;
 mod state;
 mod status;
 mod sync;
@@ -20,6 +24,10 @@ pub use heartbeat::*;
 pub(crate) use self_check::{self_check_reply, SELF_CHECK_API_PATH};
 pub use self_check::{
     SelfCheckFailure, SelfCheckReply, SelfCheckRequest, SelfCheckState, SelfCheckStatus,
+};
+pub(crate) use settings_sync::{fence_cluster_edit, TOPOLOGY_EDIT_REJECTED};
+pub use settings_sync::{
+    push_cluster_settings_to_peers, ClusterSettings, PublicStatusPresentation,
 };
 pub(crate) use state::*;
 pub use status::*;

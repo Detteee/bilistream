@@ -2,9 +2,9 @@
 
 [Quick start](../README.md) · [中文入门](../README.zh_CN.md) · [Install dependencies](dependencies.md) · [安装依赖](dependencies.zh_CN.md)
 
-New installations start with an empty channel list and the 其他单机 area. Existing channels, areas and custom rules are kept.
+New installations start with an empty channel list and no preset area. The setup wizard writes those records from the choices made there. Existing channels, areas and custom rules are kept.
 
-新安装从空频道表开始，默认分区为「其他单机」。已有频道、分区和自定义规则会保留。
+新安装从空频道表开始，没有预置分区。安装向导按当时的选择写入这些记录。已有频道、分区和自定义规则会保留。
 
 ## Login / 登录
 

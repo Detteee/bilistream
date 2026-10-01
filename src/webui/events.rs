@@ -87,7 +87,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("bilistream-auth-sse-{}", std::process::id()));
         let store =
             crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
-        let auth = AuthState::open(store.clone(), Some("synthetic".into()), None).unwrap();
+        let auth = AuthState::open(store.clone(), Some("synthetic".into())).unwrap();
         let revision = auth.sessions.snapshot().unwrap().revision;
         let token = auth
             .sessions

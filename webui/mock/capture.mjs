@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createMockServer } from './server.mjs';
 import { checkPanelPasswords } from './password-checks.mjs';
+import { checkClusterMembership } from './membership-checks.mjs';
 
 const server = createMockServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -389,6 +390,12 @@ try {
   assert.deepEqual(updateChecks, {polls:3,failedVisible:true,retryEnabled:true});
   console.log('Mock browser checks passed: show/hide/save/reload, monitoring preserved, RSS state, platform visibility, write-only keys/session, managed Cookie import/clear, player filters, backup layout, official areas, channel URLs, favorites preview/search/import-only, no-target monitors, standalone public page, 302 areas/160 favorites at 1440/768/390/320px. Log-node retention and hidden-view polling passed. Screenshots saved.');
   await checkPanelPasswords({ base, context, command, evaluate, waitFor, capture, captureDir });
+  // Validation screenshots only; never written into the packaged docs/images.
+  await checkClusterMembership({
+    base, context, command, evaluate, waitFor, captureDir,
+    capture: process.argv[2] ? capture : async () => {},
+    documentCapture: async () => { await capture(join(root, 'docs/images/cluster-membership.png')); },
+  });
   await command('session.end', {});
 } finally {
   ws?.close(); browser.kill(); server.closeAllConnections(); server.close();

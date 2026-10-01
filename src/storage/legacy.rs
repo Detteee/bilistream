@@ -260,23 +260,6 @@ pub(super) fn initialize(
         for (name, (value, at)) in &docs {
             tx.write_at(name, value.clone(), *at)?;
         }
-        for (name, default) in [
-            (
-                "channels.json",
-                include_str!("../../assets/defaults/channels.json"),
-            ),
-            (
-                "areas.json",
-                include_str!("../../assets/defaults/areas.json"),
-            ),
-        ] {
-            if tx.read(name)?.is_none() {
-                tx.write(
-                    name,
-                    serde_json::from_str(default).map_err(|_| invalid("内置默认数据无效"))?,
-                )?;
-            }
-        }
         if tx.read("invalid_words.txt")?.is_none() {
             tx.write("invalid_words.txt", Value::String(String::new()))?;
         }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Stage neutral first-run data, matching UI and reader-facing guides.
+# Stage icons, the Web UI and reader-facing guides. First-run channel and area
+# records are written by the setup wizard, not copied from a defaults directory.
 set -euo pipefail
 stage=${1:?Usage: scripts/package-assets.sh STAGING_DIRECTORY}
-mkdir -p "$stage/assets/icons" "$stage/assets/defaults" "$stage/webui" "$stage/webui/mock"
-cp assets/defaults/*.json "$stage/assets/defaults/"
+mkdir -p "$stage/assets/icons" "$stage/webui" "$stage/webui/mock"
 cp README.md README.zh_CN.md LICENSE "$stage/"
 cp assets/icons/icon.png assets/icons/icon.svg "$stage/assets/icons/"
 cp -R webui/dist webui/public-dist "$stage/webui/"

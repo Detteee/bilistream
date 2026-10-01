@@ -1,6 +1,159 @@
 use super::*;
 use serde_json::json;
 
+fn schema_version(store: &Store) -> u32 {
+    Connection::open(store.data_dir().join("bilistream.db"))
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn first_protected_write_upgrades_atomically_and_reopen_never_downgrades() {
+    for name in MANAGED_RECORDS {
+        let dir = Directory::new();
+        let store = dir.open().unwrap();
+        assert_eq!(schema_version(&store), 1);
+        let name = name.to_string();
+        let aborted = name.clone();
+        let result: io::Result<()> = store.transaction(move |tx| {
+            tx.write(&aborted, json!({"lifecycle":"join_ready"}))?;
+            Err(io::Error::other("synthetic transaction failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(schema_version(&store), 1);
+        assert!(store.read(&name).unwrap().is_none());
+        store
+            .write(&name, json!({"lifecycle":"join_ready"}))
+            .unwrap();
+        assert_eq!(schema_version(&store), 2);
+        drop(store);
+        let reopened = dir.open().unwrap();
+        assert_eq!(schema_version(&reopened), 2);
+        assert!(reopened.read(&name).unwrap().is_some());
+    }
+}
+
+#[test]
+fn newer_schema_is_rejected_without_lowering_it() {
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    let database = store.data_dir().join("bilistream.db");
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    connection.execute_batch("PRAGMA user_version=3").unwrap();
+    assert!(dir.open().is_err());
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
+fn every_protected_lifecycle_exports_unjoined_and_off_without_changing_source() {
+    for lifecycle in [
+        "join_ready",
+        "pairing",
+        "managed",
+        "left",
+        "incompatible_held",
+    ] {
+        let dir = Directory::new();
+        let store = dir.open().unwrap();
+        let mut config = config_fixture();
+        config["cluster"] = json!({"enabled":true,"node_id":"node","peers":[{"node_id":"peer","api_url":"https://example.invalid"}],"public_status":{"node_id":"node"}});
+        for platform in ["youtube", "twitch", "niconico"] {
+            config[platform] = json!({"enable_monitor":true});
+        }
+        config["priority_channel"] = json!({"enabled":true,"auto_restart":true});
+        store.write("config.json", config.clone()).unwrap();
+        store
+            .write(
+                "cluster-local",
+                json!({"lifecycle":lifecycle,"hold":"operation"}),
+            )
+            .unwrap();
+        store
+            .write(
+                "cluster-identity",
+                json!({"private_key":"synthetic-private-identity"}),
+            )
+            .unwrap();
+        store
+            .write("cluster-operations", json!({"private":"synthetic-journal"}))
+            .unwrap();
+        let backup = store.export_backup("synthetic-backup-password").unwrap();
+        let decoded = crypto::restore("synthetic-backup-password", &backup).unwrap();
+        let docs: HashMap<String, Document> = serde_json::from_slice(&decoded).unwrap();
+        assert!(MANAGED_RECORDS.iter().all(|name| !docs.contains_key(*name)));
+        let exported = &docs["config.json"].value;
+        assert_eq!(exported["cluster"]["enabled"], false);
+        assert_eq!(exported["cluster"]["peers"], json!([]));
+        assert_eq!(exported["cluster"]["public_status"]["node_id"], "");
+        for platform in ["youtube", "twitch", "niconico"] {
+            assert_eq!(exported[platform]["enable_monitor"], false);
+        }
+        assert_eq!(exported["priority_channel"]["enabled"], false);
+        assert_eq!(exported["priority_channel"]["auto_restart"], false);
+        assert_eq!(store.read("config.json").unwrap().unwrap().value, config);
+        let legacy = dir.0.join("export");
+        store.export_legacy(&legacy).unwrap();
+        let legacy_config: Value =
+            serde_json::from_slice(&fs::read(legacy.join("config.json")).unwrap()).unwrap();
+        assert_eq!(legacy_config["cluster"], exported["cluster"]);
+        for name in MANAGED_RECORDS {
+            assert!(!legacy.join(name).exists());
+        }
+    }
+}
+
+#[test]
+fn restore_refuses_pending_state_and_preserves_allowed_destination_identity_and_hold() {
+    let source = Directory::new();
+    let source_store = source.open().unwrap();
+    let mut config = config_fixture();
+    config["youtube"]["enable_monitor"] = json!(true);
+    source_store.write("config.json", config).unwrap();
+    let backup = source_store.export_backup("synthetic-password").unwrap();
+    for lifecycle in ["pairing", "managed", "unknown"] {
+        let dir = Directory::new();
+        let store = dir.open().unwrap();
+        store
+            .write(
+                "cluster-local",
+                json!({"lifecycle":lifecycle,"hold":"pending"}),
+            )
+            .unwrap();
+        assert!(store.restore_backup("synthetic-password", &backup).is_err());
+        assert!(store.read("config.json").unwrap().is_none());
+    }
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    let identity = json!({"private_key":"destination-identity"});
+    let local = json!({"lifecycle":"join_ready","hold":"join"});
+    let password = json!({"version":1,"password":"destination-password"});
+    store.write("cluster-identity", identity.clone()).unwrap();
+    store.write("cluster-local", local.clone()).unwrap();
+    store.write("webui-password", password.clone()).unwrap();
+    store.restore_backup("synthetic-password", &backup).unwrap();
+    assert_eq!(
+        store.read("cluster-identity").unwrap().unwrap().value,
+        identity
+    );
+    assert_eq!(store.read("cluster-local").unwrap().unwrap().value, local);
+    assert_eq!(
+        store.read("webui-password").unwrap().unwrap().value,
+        password
+    );
+    assert_eq!(
+        store.read("config.json").unwrap().unwrap().value["youtube"]["enable_monitor"],
+        false
+    );
+    assert_eq!(schema_version(&store), 2);
+}
+
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {

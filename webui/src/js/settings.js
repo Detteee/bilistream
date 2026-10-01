@@ -5,7 +5,8 @@ import { initPanelSecurity } from './security.js';
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
 import { state, mergeConfigData, updateMonitorToggleStates, applyPriorityAutoRestartToggle, updateDanmakuCommandToggle, applyHolodexMonitorGateToggle, isViewActive } from './state.js';
 import { getJson, postJsonApi } from './api.js';
-import { loadClusterSettings, getClusterConfigFromForm, getClusterConfigBaseline, acceptClusterConfigBaseline } from './cluster.js';
+import { loadClusterSettings, getClusterConfigFromForm, getClusterConfigBaseline, acceptClusterConfigBaseline, rebaseClusterDraft } from './cluster.js';
+import { refreshMembership } from './cluster-membership.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
@@ -223,6 +224,7 @@ async function loadSystemConfig() {
     updateNicoCheckButton();
 
     loadClusterSettings(config.cluster || {});
+    void refreshMembership();
 
     // Load anti-collision list
     window.currentAntiCollisionList = config.anti_collision_list || {};
@@ -652,6 +654,8 @@ async function saveSystemConfig() {
     if (config.cluster.enabled && (!config.cluster.node_id || !config.cluster.public_api_url)) {
       throw new Error('启用多服务器时必须填写本节点 ID 和 API 地址');
     }
+    // Membership operations commit topology outside this form.
+    configBaseline.cluster = rebaseClusterDraft(configBaseline.cluster);
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
       if (secretRevision === null && secretControls.some(control => control.field in patch)) throw new Error('请重新加载凭据状态后再保存');

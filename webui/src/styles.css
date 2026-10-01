@@ -303,6 +303,149 @@
   }
 }
 
+/* Managed membership ------------------------------------------------------ */
+
+.cluster-membership {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+}
+
+.cluster-membership-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.cluster-membership-head p {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+.cluster-membership-badge {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cluster-membership-badge[data-lifecycle="managed"] {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+
+.cluster-membership-badge[data-lifecycle="incompatible_held"],
+.cluster-membership-badge[data-lifecycle="join_ready"],
+.cluster-membership-badge[data-lifecycle="pairing"],
+.cluster-membership-badge[data-lifecycle="left"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  color: var(--warn);
+}
+
+.cluster-membership-warning,
+.cluster-membership-error:not(:empty) {
+  color: var(--warn);
+}
+
+.cluster-membership-setup,
+.cluster-membership-leave {
+  gap: var(--sp-3);
+}
+
+.cluster-operation-list {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.cluster-operation-list:empty {
+  display: none;
+}
+
+.cluster-operation {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--line));
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.cluster-operation[data-phase="completed"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+
+.cluster-operation[data-phase="aborted"],
+.cluster-operation[data-phase="needs_attention"],
+.cluster-operation[data-phase="unknown"] {
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+}
+
+.cluster-operation p {
+  margin: 0;
+}
+
+.cluster-operation-phase {
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+}
+
+.cluster-operation-actions {
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.cluster-member-address {
+  margin-bottom: var(--sp-3);
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.cluster-member-tags {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cluster-member-tags .is-active {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  color: var(--ok);
+}
+
+.cluster-member-actions {
+  gap: var(--sp-2);
+}
+
+.cluster-member-editor,
+.cluster-member-remove-confirm {
+  display: grid;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.cluster-member-remove-confirm ul {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.input-action-row > select {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
 /* Peer cards ------------------------------------------------------------- */
 
 .cluster-peer-list {

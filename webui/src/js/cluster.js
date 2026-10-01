@@ -1,6 +1,6 @@
 // cluster.js — multi-server panel, using the shared authenticated API client.
 
-import { isDashboardVisible, parseInteger, readIntegerInput, setInputValue, setCheckboxChecked, setButtonLoading, showNotification, SVG_NS } from './dom.js';
+import { isDashboardVisible, readIntegerInput, setInputValue, setCheckboxChecked, setButtonLoading, showNotification, SVG_NS } from './dom.js';
 import { createSelectOption, state, syncMonitorTogglesWithClusterRole } from './state.js';
 import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
@@ -31,7 +31,7 @@ let clusterSeenTickerId = null;
 
 let lastClusterLocalStateSignature = null;
 
-let currentClusterPeers = [];
+let lastClusterStatus = null;
 let loadedClusterConfig = {};
 
 function acceptClusterConfigBaseline(cluster) {
@@ -205,229 +205,101 @@ function createClusterIcon(iconType) {
   }
 }
 
-function loadClusterSettings(cluster = {}) {
-  acceptClusterConfigBaseline(cluster);
-  setCheckboxChecked('config-cluster-enabled', !!cluster.enabled);
-  setCheckboxChecked('config-cluster-sync-channels', !!cluster.sync_monitored_channels);
-  setCheckboxChecked('config-cluster-auto-failover', cluster.auto_failover !== false);
-  updateClusterAutoFailoverToggle(cluster.auto_failover !== false);
+// Membership topology changes only through membership operations. The form
+// re-sends the committed topology unchanged; only a never-clustered server
+// may edit its local label through an ordinary save.
+const TOPOLOGY_FIELDS = ['enabled', 'node_id', 'node_name', 'public_api_url', 'priority', 'peers'];
+const LOCAL_INPUTS = ['config-cluster-node-id', 'config-cluster-node-name', 'config-cluster-api-url', 'config-cluster-priority'];
+let membershipLifecycle = null;
+
+function localLabelEditable() {
+  return membershipLifecycle === 'standalone' && !loadedClusterConfig.enabled;
+}
+
+function setLocalNodeInputs(cluster) {
   setInputValue('config-cluster-node-id', cluster.node_id || '');
   setInputValue('config-cluster-node-name', cluster.node_name || cluster.node_id || '');
   setInputValue('config-cluster-api-url', cluster.public_api_url || '');
   setInputValue('config-cluster-priority', Number.isFinite(cluster.priority) ? cluster.priority : 0);
+}
+
+function loadClusterSettings(cluster = {}) {
+  acceptClusterConfigBaseline(cluster);
+  setCheckboxChecked('config-cluster-sync-channels', !!cluster.sync_monitored_channels);
+  setCheckboxChecked('config-cluster-auto-failover', cluster.auto_failover !== false);
+  updateClusterAutoFailoverToggle(cluster.auto_failover !== false);
+  setLocalNodeInputs(cluster);
   setInputValue('config-cluster-heartbeat', cluster.heartbeat_interval_secs || 5);
   setInputValue('config-cluster-failover-timeout', cluster.failover_timeout_secs || 15);
   setInputValue('config-cluster-lease-ttl', cluster.lease_ttl_secs || 20);
-  currentClusterPeers = Array.isArray(cluster.peers)
-    ? cluster.peers.map(peer => ({
-      node_id: peer.node_id || '',
-      name: peer.name || '',
-      api_url: peer.api_url || '',
-      priority: Number.isFinite(peer.priority) ? peer.priority : 0
-    }))
-    : [];
-  renderClusterPeerList();
   loadPublicStatusSettings(cluster);
+  syncLocalNodeInputs();
 }
 
-function renderClusterPeerList() {
-  const container = document.getElementById('cluster-peer-list');
-  if (!container) return;
-
-  container.replaceChildren();
-
-  if (!currentClusterPeers.length) {
-    const empty = document.createElement('div');
-    empty.className = 'cluster-peer-empty';
-    empty.textContent = '暂无其他节点';
-    container.appendChild(empty);
-    return;
+// Called after a membership change committed elsewhere. Ordinary drafts stay.
+function rebaseClusterTopology(cluster = {}) {
+  for (const field of TOPOLOGY_FIELDS) {
+    loadedClusterConfig[field] = structuredClone(cluster[field]);
   }
-
-  const fragment = document.createDocumentFragment();
-  currentClusterPeers.forEach((peer, index) => {
-    fragment.appendChild(createClusterPeerCard(peer, index));
-  });
-  container.appendChild(fragment);
-}
-
-function createClusterPeerCard(peer, index) {
-  const card = document.createElement('div');
-  card.className = 'cluster-peer-card';
-  card.dataset.index = String(index);
-
-  const header = document.createElement('div');
-  header.className = 'cluster-peer-card-header';
-
-  const identity = document.createElement('div');
-  identity.className = 'cluster-peer-identity';
-
-  const dot = document.createElement('span');
-  dot.className = 'cluster-peer-node-dot';
-  dot.setAttribute('aria-hidden', 'true');
-
-  const titleBlock = document.createElement('div');
-  titleBlock.className = 'cluster-peer-title-block';
-
-  const name = document.createElement('div');
-  name.className = 'cluster-peer-name';
-  name.textContent = peer.name || peer.node_id || '未命名节点';
-
-  const nodeId = document.createElement('div');
-  nodeId.className = 'cluster-peer-id';
-  nodeId.textContent = peer.node_id || '-';
-
-  titleBlock.append(name, nodeId);
-  identity.append(dot, titleBlock);
-
-  const actions = document.createElement('div');
-  actions.className = 'cluster-peer-header-actions';
-
-  const priority = document.createElement('span');
-  priority.className = 'cluster-peer-priority';
-  priority.textContent = `优先级 ${clusterPeerPriorityValue(peer)}`;
-
-  const refreshSummary = () => {
-    const updatedPeer = currentClusterPeers[index];
-    if (!updatedPeer) return;
-    name.textContent = updatedPeer.name || updatedPeer.node_id || '未命名节点';
-    nodeId.textContent = updatedPeer.node_id || '-';
-    priority.textContent = `优先级 ${clusterPeerPriorityValue(updatedPeer)}`;
+  loadedClusterConfig.public_status = {
+    ...(loadedClusterConfig.public_status || {}),
+    node_id: cluster.public_status?.node_id || '',
   };
-
-  const removeButton = document.createElement('button');
-  removeButton.className = 'btn-secondary compact-btn icon-btn cluster-action-btn cluster-disable-btn cluster-peer-remove-btn';
-  removeButton.type = 'button';
-  removeButton.title = '删除节点';
-  removeButton.setAttribute('aria-label', '删除节点');
-  removeButton.addEventListener('click', () => removeClusterPeer(index));
-  appendClusterPeerRemoveIcon(removeButton);
-
-  actions.append(priority, removeButton);
-  header.append(identity, actions);
-
-  const fields = document.createElement('div');
-  fields.className = 'cluster-peer-fields';
-  fields.append(
-    createClusterPeerField(index, 'node_id', '节点 ID', peer.node_id, 'text', '节点 ID', '', refreshSummary),
-    createClusterPeerField(index, 'name', '节点名称', peer.name, 'text', '名称', '', refreshSummary),
-    createClusterPeerField(index, 'api_url', 'API 地址', peer.api_url, 'text', 'API 地址', 'cluster-peer-field-url'),
-    createClusterPeerField(index, 'priority', '优先级', clusterPeerPriorityValue(peer), 'number', '优先级', 'cluster-peer-field-priority', refreshSummary)
-  );
-
-  card.append(header, fields);
-  return card;
+  setLocalNodeInputs(cluster);
+  renderPublicStatusNodeOptions(loadedClusterConfig, loadedClusterConfig.public_status.node_id);
+  syncPublicStatusRoleControls();
+  syncLocalNodeInputs();
 }
 
-function createClusterPeerField(index, field, labelText, value, type, placeholder, extraClass = '', afterChange = null) {
-  const label = document.createElement('label');
-  label.className = `cluster-peer-field${extraClass ? ` ${extraClass}` : ''}`;
-
-  const labelSpan = document.createElement('span');
-  labelSpan.textContent = labelText;
-
-  const input = document.createElement('input');
-  input.type = type;
-  input.value = value ?? '';
-  input.placeholder = placeholder;
-  input.addEventListener('input', () => {
-    updateClusterPeer(index, field, input.value);
-    if (afterChange) {
-      afterChange();
-    }
-  });
-
-  label.append(labelSpan, input);
-  return label;
+function rebaseClusterDraft(draft) {
+  const rebased = structuredClone(draft || {});
+  for (const field of TOPOLOGY_FIELDS) rebased[field] = structuredClone(loadedClusterConfig[field]);
+  if (rebased.public_status) rebased.public_status.node_id = loadedClusterConfig.public_status?.node_id || '';
+  return rebased;
 }
 
-function clusterPeerPriorityValue(peer) {
-  return Number.isFinite(peer.priority) ? peer.priority : 0;
+function setClusterMembershipContext(view) {
+  membershipLifecycle = view?.lifecycle || null;
+  syncLocalNodeInputs();
+  loadPublicStatusHint();
+  syncPublicStatusRoleControls();
 }
 
-function appendClusterPeerRemoveIcon(button) {
-  const svgNamespace = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(svgNamespace, 'svg');
-  svg.classList.add('cluster-btn-icon');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-
-  const polyline = document.createElementNS(svgNamespace, 'polyline');
-  polyline.setAttribute('points', '3,6 5,6 21,6');
-
-  const path = document.createElementNS(svgNamespace, 'path');
-  path.setAttribute('d', 'M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2');
-
-  svg.append(polyline, path);
-  button.appendChild(svg);
-}
-
-function updateClusterPeer(index, field, value) {
-  if (!currentClusterPeers[index]) return;
-  currentClusterPeers[index][field] = field === 'priority' ? parseInteger(value, 0) : value.trim();
-}
-
-function addClusterPeer() {
-  const nodeIdInput = document.getElementById('cluster-peer-node-id');
-  const nameInput = document.getElementById('cluster-peer-name');
-  const apiUrlInput = document.getElementById('cluster-peer-api-url');
-  const priorityInput = document.getElementById('cluster-peer-priority');
-  const nodeId = nodeIdInput.value.trim();
-  const apiUrl = apiUrlInput.value.trim();
-
-  if (!nodeId || !apiUrl) {
-    showNotification('请填写节点 ID 和 API 地址', 'error');
-    return;
+function syncLocalNodeInputs() {
+  const locked = !membershipLifecycle || ['managed', 'pairing'].includes(membershipLifecycle);
+  for (const id of LOCAL_INPUTS) {
+    const input = document.getElementById(id);
+    if (input) input.disabled = locked;
   }
-
-  const localNodeId = document.getElementById('config-cluster-node-id').value.trim();
-  if (nodeId === localNodeId || currentClusterPeers.some(peer => peer.node_id === nodeId)) {
-    showNotification('节点 ID 已存在', 'error');
-    return;
-  }
-
-  currentClusterPeers.push({
-    node_id: nodeId,
-    name: nameInput.value.trim() || nodeId,
-    api_url: apiUrl.replace(/\/+$/, ''),
-    priority: parseInteger(priorityInput.value, 0)
-  });
-  nodeIdInput.value = '';
-  nameInput.value = '';
-  apiUrlInput.value = '';
-  priorityInput.value = '';
-  renderClusterPeerList();
+  const hint = document.getElementById('cluster-local-hint');
+  if (!hint) return;
+  hint.textContent = !membershipLifecycle ? ''
+    : locked ? '已加入集群：在下方服务器列表中编辑本服务器的名称、地址和优先级。节点 ID 不能更改。'
+    : localLabelEditable() ? '新建或加入集群时使用这些信息；单机时名称也用于公开状态页。'
+    : '新建或加入集群时使用这些信息；它们不会随「保存设置」保存。';
 }
 
-function removeClusterPeer(index) {
-  currentClusterPeers.splice(index, 1);
-  renderClusterPeerList();
+function readLocalNodeDescriptor() {
+  return {
+    node_id: document.getElementById('config-cluster-node-id')?.value.trim() || '',
+    name: document.getElementById('config-cluster-node-name')?.value.trim() || '',
+    api_url: (document.getElementById('config-cluster-api-url')?.value.trim() || '').replace(/\/+$/, ''),
+    priority: readIntegerInput('config-cluster-priority', 0),
+  };
 }
 
 function getClusterConfigFromForm() {
   const existing = loadedClusterConfig;
-  const nodeId = document.getElementById('config-cluster-node-id').value.trim();
-  const peers = currentClusterPeers
-    .map(peer => ({
-      node_id: (peer.node_id || '').trim(),
-      name: (peer.name || '').trim(),
-      api_url: (peer.api_url || '').trim().replace(/\/+$/, ''),
-      priority: parseInteger(peer.priority, 0)
-    }))
-    .filter(peer => peer.node_id && peer.api_url && peer.node_id !== nodeId);
-
+  const local = readLocalNodeDescriptor();
+  const editable = localLabelEditable();
   return {
     ...existing,
-    enabled: document.getElementById('config-cluster-enabled').checked,
-    node_id: nodeId,
-    node_name: document.getElementById('config-cluster-node-name').value.trim() || nodeId,
-    public_api_url: document.getElementById('config-cluster-api-url').value.trim().replace(/\/+$/, ''),
-    priority: readIntegerInput('config-cluster-priority', 0),
+    enabled: !!existing.enabled,
+    node_id: editable ? local.node_id : existing.node_id,
+    node_name: editable ? (local.name || local.node_id) : existing.node_name,
+    public_api_url: editable ? local.api_url : existing.public_api_url,
+    priority: editable ? local.priority : existing.priority,
+    peers: structuredClone(existing.peers || []),
     heartbeat_interval_secs: readIntegerInput('config-cluster-heartbeat', 5),
     failover_timeout_secs: readIntegerInput('config-cluster-failover-timeout', 15),
     lease_ttl_secs: readIntegerInput('config-cluster-lease-ttl', 20),
@@ -436,7 +308,6 @@ function getClusterConfigFromForm() {
     thresholds: existing.thresholds || {
       max_failed_restarts: 3
     },
-    peers
   };
 }
 
@@ -564,6 +435,7 @@ function renderClusterStatus(cluster, errorMessage) {
   // Recorded before the no-op early return below, so the gate still
   // tracks ownership changes on renders that draw nothing new.
   clusterConnected = !!cluster;
+  if (cluster) lastClusterStatus = cluster;
   const canEnable = !!cluster && (!cluster.enabled
     || (!!cluster.active_owner && cluster.active_owner === cluster.local_node_id));
   const roleChanged = state.localNodeCanEnableMonitorToggles !== canEnable;
@@ -579,7 +451,7 @@ function renderClusterStatus(cluster, errorMessage) {
 
   if (!cluster || !cluster.enabled) {
     indicator.className = 'status-indicator status-offline';
-    nodeList.replaceChildren(createClusterEmptyState(errorMessage || '在配置中启用 cluster 后显示所有节点'));
+    nodeList.replaceChildren(createClusterEmptyState(errorMessage || '在 系统设置 → 多服务器节点 中新建或加入集群后显示所有节点'));
     updateClusterAutoFailoverToggle(window.configData?.cluster?.auto_failover !== false);
     renderedClusterNodes.clear();
     syncClusterActionAvailability();
@@ -1216,22 +1088,63 @@ function loadPublicStatusSettings(cluster = {}) {
   setInputValue('config-public-status-bind', publicStatus.bind || '127.0.0.1');
   setInputValue('config-public-status-port', publicStatus.port || 23234);
   setInputValue('config-public-status-url', publicStatus.public_url || '');
+  loadPublicStatusHint(cluster);
+  updatePublicStatusUrlHint();
+  syncPublicStatusRoleControls();
+}
+
+function committedPublicNodeId() {
+  return (loadedClusterConfig.public_status?.node_id || '').trim();
+}
+
+// Standalone keeps the old single-save flow. A managed cluster changes the
+// serving node through a membership operation; port and URL stay ordinary.
+function loadPublicStatusHint(cluster = loadedClusterConfig) {
+  const managed = membershipLifecycle === 'managed';
+  const held = !!membershipLifecycle && !['managed', 'standalone'].includes(membershipLifecycle);
   const hint = document.getElementById('public-status-node-hint');
-  if (hint) hint.textContent = cluster.enabled
-    ? '所选节点提供公开页；有 YouTube key 时也提供共享索引。'
+  if (hint) hint.textContent = managed
+    ? '所选服务器提供公开页；有 YouTube key 时也提供共享索引。更改运行位置是一次成员操作，期间会暂停转播。'
+    : held ? '本服务器未加入集群，暂不能更改运行位置。'
+    : cluster.enabled ? '所选节点提供公开页；有 YouTube key 时也提供共享索引。'
     : '本机即可运行，无需开启多服务器。';
   const button = document.getElementById('public-status-save-btn');
-  if (button) button.textContent = cluster.enabled ? '保存并同步' : '保存公开页设置';
-  updatePublicStatusUrlHint();
+  if (button) button.textContent = managed ? '保存并同步' : '保存公开页设置';
+}
+
+function syncPublicStatusRoleControls() {
+  const managed = membershipLifecycle === 'managed';
+  const held = !!membershipLifecycle && !['managed', 'standalone'].includes(membershipLifecycle);
+  const select = document.getElementById('config-public-status-node');
+  const roleButton = document.getElementById('public-status-role-btn');
+  if (select) select.disabled = held;
+  if (roleButton) {
+    roleButton.classList.toggle('hidden', !managed);
+    roleButton.dataset.unchanged = String(!select || select.value === committedPublicNodeId());
+  }
+}
+
+function publicStatusSelection() {
+  return document.getElementById('config-public-status-node')?.value.trim() || '';
 }
 
 async function savePublicStatusSettings() {
   if (clusterMutationInFlight) return;
   const button = document.getElementById('public-status-save-btn');
+  const config = publicStatusFromForm();
+  if (membershipLifecycle && membershipLifecycle !== 'standalone') {
+    if (config.node_id !== committedPublicNodeId()) {
+      showNotification('运行位置需通过「更改运行位置」提交；本次只保存端口、地址等设置', 'error');
+    }
+    config.node_id = committedPublicNodeId();
+  }
   setButtonLoading(button, null, true);
   try {
-    const config = publicStatusFromForm();
-    await runClusterMutation(() => postJsonApi('/api/cluster/public-status', { config }), '保存公开状态页配置');
+    const saved = await runClusterMutation(() => postJsonApi('/api/cluster/public-status', { config }), '保存公开状态页配置');
+    if (saved) {
+      const server = await state.hooks.reloadServerConfig?.();
+      if (server?.cluster?.public_status) loadedClusterConfig.public_status = structuredClone(server.cluster.public_status);
+    }
   } finally {
     setButtonLoading(button, null, false);
     syncClusterActionAvailability();
@@ -1252,8 +1165,8 @@ function initClusterControls() {
     .getElementById('clusterSyncBtn')
     ?.addEventListener('click', pushClusterConfig);
   document
-    .getElementById('cluster-peer-add-btn')
-    ?.addEventListener('click', addClusterPeer);
+    .getElementById('config-public-status-node')
+    ?.addEventListener('change', syncPublicStatusRoleControls);
   document
     .getElementById('public-status-save-btn')
     ?.addEventListener('click', savePublicStatusSettings);
@@ -1280,8 +1193,20 @@ function startClusterRefresh() {
   refreshClusterStatus();
 }
 
+function getLastClusterStatus() {
+  return lastClusterStatus;
+}
+
 export {
   loadClusterSettings,
+  rebaseClusterTopology,
+  rebaseClusterDraft,
+  setClusterMembershipContext,
+  readLocalNodeDescriptor,
+  publicStatusSelection,
+  committedPublicNodeId,
+  syncPublicStatusRoleControls,
+  getLastClusterStatus,
   loadPublicStatusSettings,
   savePublicStatusSettings,
   updatePublicStatusUrlHint,

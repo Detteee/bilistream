@@ -1,10 +1,9 @@
 //! Reach the local control endpoint through its advertised URL (including a
 //! Cloudflare tunnel). This observation never contributes a quorum vote.
 
-use super::state::{cluster_heartbeat_timeout, cluster_state_write, now_secs, CLUSTER_HTTP_CLIENT};
+use super::state::{cluster_heartbeat_timeout, cluster_state_write, now_secs};
 use super::types::PeerApiResponse;
-use crate::config::ClusterConfig;
-use crate::plugins::http::response_bytes_limited;
+use crate::config::{ClusterConfig, Config};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -169,37 +168,40 @@ pub(crate) fn self_check_reply(
 }
 
 async fn probe(
-    client: &reqwest::Client,
-    cluster: &ClusterConfig,
+    cfg: &Config,
     timeout: Duration,
     challenge: String,
 ) -> Result<u64, SelfCheckFailure> {
-    let url = endpoint_url(configured_url(cluster))?;
+    let cluster = &cfg.cluster;
+    endpoint_url(configured_url(cluster))?;
+    let body = serde_json::to_vec(&SelfCheckRequest {
+        challenge: challenge.clone(),
+    })
+    .map_err(|_| SelfCheckFailure::InvalidResponse)?;
     let started = Instant::now();
     let result = tokio::time::timeout(timeout, async {
-        let response = client
-            .post(url)
-            .header(reqwest::header::CACHE_CONTROL, "no-store")
-            .json(&SelfCheckRequest {
-                challenge: challenge.clone(),
-            })
-            .send()
-            .await
-            .map_err(|_| SelfCheckFailure::RequestFailed)?;
-        if !response.status().is_success() {
-            return Err(SelfCheckFailure::HttpStatus(response.status().as_u16()));
+        let response = super::peer_call::send_ordinary(
+            cfg,
+            &cluster.node_id,
+            super::peer_call::routes::SELF_CHECK,
+            body,
+            timeout,
+        )
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::TimedOut => SelfCheckFailure::TimedOut,
+            std::io::ErrorKind::InvalidData => SelfCheckFailure::InvalidResponse,
+            std::io::ErrorKind::PermissionDenied => SelfCheckFailure::Rejected,
+            _ => SelfCheckFailure::RequestFailed,
+        })?;
+        if !(200..300).contains(&response.status) {
+            return Err(SelfCheckFailure::HttpStatus(response.status));
         }
-        let bytes = response_bytes_limited(response, MAX_RESPONSE_BYTES)
-            .await
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::InvalidData {
-                    SelfCheckFailure::BodyTooLarge
-                } else {
-                    SelfCheckFailure::RequestFailed
-                }
-            })?;
-        let envelope: PeerApiResponse<SelfCheckReply> =
-            serde_json::from_slice(&bytes).map_err(|_| SelfCheckFailure::InvalidResponse)?;
+        if response.body.len() > MAX_RESPONSE_BYTES {
+            return Err(SelfCheckFailure::BodyTooLarge);
+        }
+        let envelope: PeerApiResponse<SelfCheckReply> = serde_json::from_slice(&response.body)
+            .map_err(|_| SelfCheckFailure::InvalidResponse)?;
         let reply = envelope
             .data
             .filter(|_| envelope.success)
@@ -217,7 +219,6 @@ async fn probe(
 }
 
 pub(crate) async fn run_self_checks() {
-    let client = CLUSTER_HTTP_CLIENT.clone();
     loop {
         let started = Instant::now();
         let cfg = match crate::config::load_config()
@@ -240,13 +241,7 @@ pub(crate) async fn run_self_checks() {
                     .as_nanos(),
                 NEXT_CHALLENGE.fetch_add(1, Ordering::Relaxed)
             );
-            let result = probe(
-                &client,
-                &cfg.cluster,
-                cluster_heartbeat_timeout(&cfg),
-                challenge,
-            )
-            .await;
+            let result = probe(&cfg, cluster_heartbeat_timeout(&cfg), challenge).await;
             // A response to the previous URL/configuration cannot overwrite a
             // newly configured endpoint's status.
             crate::config::with_current_config(&cfg, || {
@@ -485,15 +480,12 @@ mod tests {
         }
     }
 
-    async fn server() -> (ClusterConfig, reqwest::Client, Server) {
+    async fn server() -> (Config, Server) {
         crate::install_crypto_provider();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = axum::Router::new().route("/prefix/api/cluster/self-check", axum::routing::post(
-            |headers: axum::http::HeaderMap, Json(request): Json<SelfCheckRequest>| async move {
-                if headers.get("cookie").and_then(|v| v.to_str().ok()) != Some("bilistream_session=test") {
-                    return StatusCode::UNAUTHORIZED.into_response();
-                }
+            |Json(request): Json<SelfCheckRequest>| async move {
                 match request.challenge.as_str() {
                     "slow" => tokio::time::sleep(Duration::from_secs(1)).await,
                     "oversized" => return axum::body::Body::from_stream(futures_util::stream::iter(
@@ -512,59 +504,45 @@ mod tests {
         let server = Server(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::COOKIE,
-            "bilistream_session=test".parse().unwrap(),
-        );
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .default_headers(headers)
-            .build()
-            .unwrap();
-        let mut cfg = cluster();
-        cfg.public_api_url = format!("http://{address}/prefix/");
-        (cfg, client, server)
+        let mut cfg = super::super::tests::test_config("local", 0);
+        cfg.cluster = cluster();
+        cfg.cluster.public_api_url = format!("http://{address}/prefix/");
+        (cfg, server)
     }
 
     #[tokio::test]
-    async fn probe_requires_authenticated_identity_and_current_challenge() {
-        let (cfg, client, _server) = server().await;
+    async fn probe_requires_matching_identity_and_current_challenge() {
+        let (cfg, _server) = server().await;
         let deadline = Duration::from_secs(2);
-        assert!(probe(&client, &cfg, deadline, "fresh".into()).await.is_ok());
+        assert!(probe(&cfg, deadline, "fresh".into()).await.is_ok());
         assert_eq!(
-            probe(&client, &cfg, deadline, "wrong-node".into()).await,
+            probe(&cfg, deadline, "wrong-node".into()).await,
             Err(SelfCheckFailure::IdentityMismatch)
         );
         assert_eq!(
-            probe(&client, &cfg, deadline, "cached".into()).await,
+            probe(&cfg, deadline, "cached".into()).await,
             Err(SelfCheckFailure::ChallengeMismatch)
-        );
-        let anonymous = reqwest::Client::builder().no_proxy().build().unwrap();
-        assert_eq!(
-            probe(&anonymous, &cfg, deadline, "fresh".into()).await,
-            Err(SelfCheckFailure::HttpStatus(401))
         );
     }
 
     #[tokio::test]
     async fn probe_bounds_latency_and_chunked_bodies_and_rejects_proxy_pages() {
-        let (cfg, client, _server) = server().await;
+        let (cfg, _server) = server().await;
         let deadline = Duration::from_secs(2);
         assert_eq!(
-            probe(&client, &cfg, deadline, "oversized".into()).await,
-            Err(SelfCheckFailure::BodyTooLarge)
-        );
-        assert_eq!(
-            probe(&client, &cfg, deadline, "proxy-error".into()).await,
-            Err(SelfCheckFailure::HttpStatus(502))
-        );
-        assert_eq!(
-            probe(&client, &cfg, deadline, "login-page".into()).await,
+            probe(&cfg, deadline, "oversized".into()).await,
             Err(SelfCheckFailure::InvalidResponse)
         );
         assert_eq!(
-            probe(&client, &cfg, Duration::from_millis(20), "slow".into()).await,
+            probe(&cfg, deadline, "proxy-error".into()).await,
+            Err(SelfCheckFailure::RequestFailed)
+        );
+        assert_eq!(
+            probe(&cfg, deadline, "login-page".into()).await,
+            Err(SelfCheckFailure::InvalidResponse)
+        );
+        assert_eq!(
+            probe(&cfg, Duration::from_millis(20), "slow".into()).await,
             Err(SelfCheckFailure::TimedOut)
         );
     }

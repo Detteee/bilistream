@@ -246,6 +246,14 @@ pub struct MonitoredConfig {
     pub priority_channel: PriorityChannel,
     #[serde(default)]
     pub niconico_enable_monitor: bool,
+    #[serde(default)]
+    pub niconico_channel_name: String,
+    #[serde(default)]
+    pub niconico_channel_id: String,
+    #[serde(default)]
+    pub niconico_live_id: String,
+    #[serde(default)]
+    pub niconico_area_v2: u64,
     pub channels_json: Option<serde_json::Value>,
     pub areas_json: Option<serde_json::Value>,
 }

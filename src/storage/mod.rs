@@ -18,6 +18,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BACKUP_BYTES: usize = 128 * 1024 * 1024;
+// Every first protocol write must exclude binaries which do not enforce its hold.
+const MANAGED_RECORDS: &[&str] = &[
+    "cluster-identity",
+    "cluster-membership",
+    "cluster-local",
+    "cluster-operations",
+];
 pub const NAMES: &[&str] = &[
     "config.json",
     "cookies.json",
@@ -151,6 +158,14 @@ pub struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
+    /// Upgrade in the same FULL-sync transaction as the first identity or hold.
+    /// SQLite rolls the PRAGMA back together with the documents on failure.
+    pub fn require_managed_schema(&mut self) -> io::Result<()> {
+        self.sql
+            .execute_batch("PRAGMA user_version=2")
+            .map_err(sql_error)
+    }
+
     pub fn read(&self, name: &str) -> io::Result<Option<Document>> {
         read_row(&self.sql, self.key, self.id, name)
     }
@@ -166,6 +181,9 @@ impl Transaction<'_> {
         let bytes = serde_json::to_vec(&value).map_err(|_| invalid("数据记录格式无效"))?;
         if bytes.len() > MAX_DOCUMENT_BYTES {
             return Err(invalid("数据记录过大"));
+        }
+        if MANAGED_RECORDS.contains(&name) {
+            self.require_managed_schema()?;
         }
         let revision: u64 = self.sql.query_row("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE name='revision' RETURNING CAST(value AS INTEGER)", [], |r| r.get(0)).map_err(sql_error)?;
         let encrypted = sensitive(name);
@@ -235,10 +253,15 @@ impl Store {
         let version: u32 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(sql_error)?;
-        if version > 1 {
+        if version > 2 {
             return Err(invalid("数据库由更新版本创建，请升级程序"));
         }
-        connection.execute_batch("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS documents(name TEXT PRIMARY KEY,payload BLOB NOT NULL,encrypted INTEGER NOT NULL,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL); INSERT OR IGNORE INTO meta VALUES('revision','0'); PRAGMA user_version=1;").map_err(sql_error)?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS documents(name TEXT PRIMARY KEY,payload BLOB NOT NULL,encrypted INTEGER NOT NULL,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL); INSERT OR IGNORE INTO meta VALUES('revision','0');").map_err(sql_error)?;
+        if version == 0 {
+            connection
+                .execute_batch("PRAGMA user_version=1")
+                .map_err(sql_error)?;
+        }
         let stored_id: Option<String> = connection
             .query_row("SELECT value FROM meta WHERE name='id'", [], |r| r.get(0))
             .optional()
@@ -394,16 +417,14 @@ impl Store {
     }
 
     pub fn export_backup(&self, password: &str) -> io::Result<Vec<u8>> {
-        let mut snapshot = self.snapshot()?;
-        // Login sessions are installation-local and must not be restored elsewhere.
-        snapshot.retain(|name, _| NAMES.contains(&name.as_str()));
+        let snapshot = self.portable_snapshot()?;
         let bytes = serde_json::to_vec(&snapshot).map_err(|_| invalid("无法生成备份"))?;
         crypto::export(password, &bytes)
     }
 
     /// Explicit offline downgrade only. Never overwrite an existing directory.
     pub fn export_legacy(&self, destination: &Path) -> io::Result<()> {
-        let mut docs = self.snapshot()?;
+        let mut docs = self.portable_snapshot()?;
         if !docs.contains_key("config.json") {
             return Err(invalid("尚未配置，无法导出旧版数据"));
         }
@@ -479,12 +500,33 @@ impl Store {
             return Err(invalid("备份文件过大"));
         }
         let plain = crypto::restore(password, bytes)?;
-        let docs: HashMap<String, Document> =
+        let mut docs: HashMap<String, Document> =
             serde_json::from_slice(&plain).map_err(|_| invalid("备份内容无效"))?;
         for (name, doc) in &docs {
             legacy::validate(name, &doc.value)?;
         }
         self.transaction(move |tx| {
+            let protected = MANAGED_RECORDS.iter().try_fold(false, |found, name| {
+                Ok::<_, io::Error>(tx.read(name)?.is_some() || found)
+            })?;
+            if protected {
+                let local = tx.read("cluster-local")?;
+                let lifecycle = local.as_ref().and_then(|d| d.value["lifecycle"].as_str());
+                // Unknown or incomplete state fails closed. Pairing/managed may
+                // have a prepared reservation even before config exists.
+                if !matches!(lifecycle, Some("join_ready" | "left" | "incompatible_held"))
+                    || tx.read("cluster-operations")?.is_some()
+                    || tx.read("cluster-membership")?.is_some()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "集群正在运行或等待恢复，不能覆盖恢复备份",
+                    ));
+                }
+                if let Some(config) = docs.get_mut("config.json") {
+                    sanitize_unjoined_config(&mut config.value)?;
+                }
+            }
             // Restore only into an unused installation. Live replacement would
             // race active refreshes/streams and is deliberately not exposed.
             if tx.read("config.json")?.is_some() || tx.read("cookies.json")?.is_some() {
@@ -499,6 +541,64 @@ impl Store {
             Ok(())
         })
     }
+
+    fn portable_snapshot(&self) -> io::Result<HashMap<String, Document>> {
+        let mut snapshot = self.snapshot()?;
+        if MANAGED_RECORDS
+            .iter()
+            .any(|name| snapshot.contains_key(*name))
+        {
+            if let Some(config) = snapshot.get_mut("config.json") {
+                sanitize_unjoined_config(&mut config.value)?;
+            }
+        }
+        // Identity, password, sessions, reservations and recovery journals stay local.
+        snapshot.retain(|name, _| NAMES.contains(&name.as_str()));
+        Ok(snapshot)
+    }
+}
+
+/// Sanitize a copy only: never change the source installation's streaming choices.
+fn sanitize_unjoined_config(config: &mut Value) -> io::Result<()> {
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| invalid("配置格式无效"))?;
+    for platform in ["youtube", "twitch", "niconico"] {
+        let settings = object
+            .entry(platform)
+            .or_insert_with(|| serde_json::json!({}));
+        settings
+            .as_object_mut()
+            .ok_or_else(|| invalid("配置格式无效"))?
+            .insert("enable_monitor".into(), Value::Bool(false));
+    }
+    let priority = object
+        .entry("priority_channel")
+        .or_insert_with(|| serde_json::json!({}));
+    let priority = priority
+        .as_object_mut()
+        .ok_or_else(|| invalid("配置格式无效"))?;
+    priority.insert("enabled".into(), Value::Bool(false));
+    priority.insert("auto_restart".into(), Value::Bool(false));
+    let cluster = object
+        .entry("cluster")
+        .or_insert_with(|| serde_json::json!({}));
+    let cluster = cluster
+        .as_object_mut()
+        .ok_or_else(|| invalid("配置格式无效"))?;
+    cluster.insert("enabled".into(), Value::Bool(false));
+    cluster.insert("peers".into(), serde_json::json!([]));
+    for field in ["node_id", "node_name", "public_api_url"] {
+        cluster.insert(field.into(), Value::String(String::new()));
+    }
+    let public = cluster
+        .entry("public_status")
+        .or_insert_with(|| serde_json::json!({}));
+    public
+        .as_object_mut()
+        .ok_or_else(|| invalid("配置格式无效"))?
+        .insert("node_id".into(), Value::String(String::new()));
+    Ok(())
 }
 
 impl Drop for Store {

@@ -27,7 +27,7 @@ use crate::cluster::{
     ClusterApplyNodeModeRequest, ClusterDrainRequest, ClusterFailoverRequest,
     ClusterHeartbeatRequest, ClusterStatus, ClusterSyncConfigRequest,
 };
-use crate::config::{load_config, ClusterConfig, ClusterHealthThresholds, ClusterPeer, Config};
+use crate::config::{load_config, ClusterConfig, ClusterPeer, Config};
 use crate::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
     get_bili_live_status, get_ffmpeg_cache_speed, get_ffmpeg_network_stats, get_ffmpeg_speed,
@@ -36,6 +36,7 @@ use crate::plugins::{
 use crate::updater;
 
 mod cluster;
+mod cluster_membership;
 mod config;
 mod crop;
 mod holodex;
@@ -47,6 +48,7 @@ mod storage;
 mod stream;
 
 pub use cluster::*;
+pub use cluster_membership::*;
 pub use config::*;
 pub use crop::*;
 pub use holodex::*;
@@ -358,241 +360,6 @@ mod tests {
         assert_eq!(crop.height, 720);
         assert_eq!(crop.x, 10);
         assert_eq!(crop.y, 20);
-    }
-
-    fn membership_payload(target_node_id: Option<&str>) -> ClusterMembershipRequest {
-        ClusterMembershipRequest {
-            target_node_id: target_node_id.map(str::to_string),
-            enabled: true,
-            sync_monitored_channels: true,
-            auto_failover: true,
-            heartbeat_interval_secs: 5,
-            failover_timeout_secs: 15,
-            lease_ttl_secs: 20,
-            thresholds: ClusterHealthThresholds::default(),
-            nodes: vec![
-                ClusterMembershipNode {
-                    node_id: "la".to_string(),
-                    name: "Los Angeles".to_string(),
-                    api_url: "http://la:3150".to_string(),
-                    priority: 20,
-                },
-                ClusterMembershipNode {
-                    node_id: "ca".to_string(),
-                    name: "Canada".to_string(),
-                    api_url: "http://ca:3150".to_string(),
-                    priority: 10,
-                },
-            ],
-        }
-    }
-
-    #[test]
-    fn membership_target_bootstraps_node_identity() {
-        let mut cluster = ClusterConfig {
-            node_id: "local".to_string(),
-            ..ClusterConfig::default()
-        };
-
-        apply_cluster_membership_to_config(&mut cluster, &membership_payload(Some("ca")));
-
-        assert!(cluster.enabled);
-        assert_eq!(cluster.node_id, "ca");
-        assert_eq!(cluster.node_name, "Canada");
-        assert_eq!(cluster.public_api_url, "http://ca:3150");
-        assert_eq!(cluster.priority, 10);
-        assert_eq!(cluster.peers.len(), 1);
-        assert_eq!(cluster.peers[0].node_id, "la");
-    }
-
-    #[test]
-    fn membership_without_matching_node_disables_cluster() {
-        let mut cluster = ClusterConfig {
-            node_id: "removed".to_string(),
-            enabled: true,
-            peers: vec![ClusterPeer {
-                node_id: "la".to_string(),
-                name: "Los Angeles".to_string(),
-                api_url: "http://la:3150".to_string(),
-                priority: 20,
-            }],
-            ..ClusterConfig::default()
-        };
-
-        apply_cluster_membership_to_config(&mut cluster, &membership_payload(None));
-
-        assert!(!cluster.enabled);
-        assert!(cluster.peers.is_empty());
-    }
-
-    #[test]
-    fn membership_syncs_auto_failover_setting() {
-        let mut cluster = ClusterConfig {
-            node_id: "ca".to_string(),
-            auto_failover: true,
-            ..ClusterConfig::default()
-        };
-
-        let mut payload = membership_payload(Some("ca"));
-        payload.auto_failover = false;
-        apply_cluster_membership_to_config(&mut cluster, &payload);
-
-        assert!(!cluster.auto_failover);
-    }
-
-    #[test]
-    fn membership_apply_normalizes_inbound_nodes() {
-        let mut cluster = ClusterConfig {
-            node_id: "ca".to_string(),
-            enabled: false,
-            ..ClusterConfig::default()
-        };
-        let mut payload = membership_payload(Some(" ca "));
-        payload.nodes[0].node_id = " la ".to_string();
-        payload.nodes[0].name = " Los Angeles ".to_string();
-        payload.nodes[0].api_url = " http://la:3150/ ".to_string();
-        payload.nodes[1].node_id = " ca ".to_string();
-        payload.nodes[1].name = " Canada ".to_string();
-        payload.nodes[1].api_url = " http://ca:3150/ ".to_string();
-
-        apply_cluster_membership_to_config(&mut cluster, &payload);
-
-        assert!(cluster.enabled);
-        assert_eq!(cluster.node_id, "ca");
-        assert_eq!(cluster.node_name, "Canada");
-        assert_eq!(cluster.public_api_url, "http://ca:3150");
-        assert_eq!(cluster.peers.len(), 1);
-        assert_eq!(cluster.peers[0].node_id, "la");
-        assert_eq!(cluster.peers[0].name, "Los Angeles");
-        assert_eq!(cluster.peers[0].api_url, "http://la:3150");
-    }
-
-    #[test]
-    fn membership_export_skips_urls_that_normalize_empty() {
-        let cluster = ClusterConfig {
-            node_id: "local".to_string(),
-            node_name: "Local".to_string(),
-            public_api_url: "http://local:3150/".to_string(),
-            peers: vec![
-                ClusterPeer {
-                    node_id: "slash".to_string(),
-                    name: "Slash".to_string(),
-                    api_url: " / ".to_string(),
-                    priority: 1,
-                },
-                ClusterPeer {
-                    node_id: "valid".to_string(),
-                    name: " Valid ".to_string(),
-                    api_url: " http://valid:3150/ ".to_string(),
-                    priority: 2,
-                },
-            ],
-            ..ClusterConfig::default()
-        };
-
-        let request = cluster_membership_from_config(&cluster);
-
-        assert_eq!(request.nodes.len(), 2);
-        assert!(request
-            .nodes
-            .iter()
-            .any(|node| { node.node_id == "local" && node.api_url == "http://local:3150" }));
-        assert!(request.nodes.iter().any(|node| {
-            node.node_id == "valid" && node.name == "Valid" && node.api_url == "http://valid:3150"
-        }));
-        assert!(!request.nodes.iter().any(|node| node.node_id == "slash"));
-    }
-
-    #[test]
-    fn membership_propagation_targets_include_new_and_removed_peers() {
-        let old_cluster = ClusterConfig {
-            node_id: "local".to_string(),
-            peers: vec![
-                ClusterPeer {
-                    node_id: "removed".to_string(),
-                    name: "Removed".to_string(),
-                    api_url: " http://removed:3150/ ".to_string(),
-                    priority: 1,
-                },
-                ClusterPeer {
-                    node_id: "empty".to_string(),
-                    name: "Empty".to_string(),
-                    api_url: " ".to_string(),
-                    priority: 1,
-                },
-                ClusterPeer {
-                    node_id: "slash".to_string(),
-                    name: "Slash".to_string(),
-                    api_url: " / ".to_string(),
-                    priority: 1,
-                },
-            ],
-            ..ClusterConfig::default()
-        };
-        let new_cluster = ClusterConfig {
-            node_id: "local".to_string(),
-            peers: Vec::new(),
-            ..ClusterConfig::default()
-        };
-        let request = ClusterMembershipRequest {
-            target_node_id: None,
-            enabled: true,
-            sync_monitored_channels: true,
-            auto_failover: true,
-            heartbeat_interval_secs: 5,
-            failover_timeout_secs: 15,
-            lease_ttl_secs: 20,
-            thresholds: ClusterHealthThresholds::default(),
-            nodes: vec![
-                ClusterMembershipNode {
-                    node_id: "local".to_string(),
-                    name: "Local".to_string(),
-                    api_url: "http://local:3150".to_string(),
-                    priority: 10,
-                },
-                ClusterMembershipNode {
-                    node_id: "new".to_string(),
-                    name: "New".to_string(),
-                    api_url: "http://new:3150/".to_string(),
-                    priority: 20,
-                },
-                ClusterMembershipNode {
-                    node_id: "slash-new".to_string(),
-                    name: "Slash New".to_string(),
-                    api_url: "/".to_string(),
-                    priority: 1,
-                },
-            ],
-        };
-
-        let targets = cluster_membership_propagation_targets(&old_cluster, &new_cluster, &request);
-
-        assert_eq!(targets.len(), 2);
-        assert_eq!(
-            targets.get("new").map(String::as_str),
-            Some("http://new:3150")
-        );
-        assert_eq!(
-            targets.get("removed").map(String::as_str),
-            Some("http://removed:3150")
-        );
-        assert!(!targets.contains_key("local"));
-        assert!(!targets.contains_key("empty"));
-        assert!(!targets.contains_key("slash"));
-        assert!(!targets.contains_key("slash-new"));
-    }
-
-    #[test]
-    fn membership_target_request_matches_owned_payload_shape() {
-        let request = membership_payload(None);
-        let borrowed = cluster_membership_target_request(&request, "ca");
-        let mut owned = request.clone();
-        owned.target_node_id = Some("ca".to_string());
-
-        assert_eq!(
-            serde_json::to_value(&borrowed).unwrap(),
-            serde_json::to_value(&owned).unwrap()
-        );
     }
 
     fn status_cache_test_config() -> Config {

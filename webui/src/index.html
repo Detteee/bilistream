@@ -1755,22 +1755,36 @@
           </div>
         </section>
 
-        <section class="panel cluster-settings-section">
+        <section class="panel cluster-settings-section" id="cluster-settings" aria-labelledby="cluster-settings-title">
           <div class="panel__head">
-            <h2 class="panel__title">
+            <h2 class="panel__title" id="cluster-settings-title">
               <svg aria-hidden="true"><use href="#i-servers" /></svg>
               多服务器节点
             </h2>
           </div>
           <div class="panel__body">
+            <div class="cluster-membership" id="cluster-membership">
+              <div class="cluster-membership-head">
+                <span class="cluster-membership-badge" id="cluster-membership-badge" data-lifecycle="">读取中</span>
+                <p id="cluster-membership-summary" class="settings-help-text" role="status">正在读取多服务器状态…</p>
+              </div>
+              <p id="cluster-membership-password-hint" class="settings-help-text cluster-membership-warning hidden">
+                请先在<a href="#panel-security-title" id="cluster-membership-security-link">安全</a>中设置面板密码，其他服务器添加本服务器时需要验证它。
+              </p>
+              <div class="session-actions cluster-membership-setup hidden" id="cluster-membership-setup">
+                <button id="cluster-create-btn" class="btn-primary" type="button">新建集群</button>
+                <button id="cluster-prepare-join-btn" class="btn-secondary" type="button">准备加入</button>
+              </div>
+              <small class="settings-help-text hidden" id="cluster-membership-setup-hint">使用下方「本节点」的 ID、名称、地址和优先级。地址必须是证书有效的 HTTPS，或本机回环的认证隧道。准备加入会停止本服务器的转播，直到加入完成。</small>
+              <div class="session-actions cluster-membership-leave hidden" id="cluster-membership-leave">
+                <button id="cluster-leave-btn" class="btn-secondary" type="button">退出集群</button>
+              </div>
+              <p id="cluster-leave-hint" class="settings-help-text hidden">其他服务器已移除本节点时，可在此退出；仍被承认时请使用「移除」。</p>
+              <p id="cluster-leave-error" class="settings-help-text cluster-membership-error" role="status" aria-live="polite"></p>
+              <div id="cluster-operation-list" class="cluster-operation-list" aria-live="polite"></div>
+            </div>
+
             <div class="cluster-settings-switches">
-              <label class="toggle-label cluster-settings-toggle">
-                <span class="toggle-switch">
-                  <input type="checkbox" id="config-cluster-enabled">
-                  <span class="toggle-slider"></span>
-                </span>
-                <span>启用多服务器</span>
-              </label>
               <label class="toggle-label cluster-settings-toggle">
                 <span class="toggle-switch">
                   <input type="checkbox" id="config-cluster-sync-channels">
@@ -1796,21 +1810,22 @@
                 <div class="cluster-settings-fields">
                   <div class="control-group">
                     <label for="config-cluster-node-id">本节点 ID</label>
-                    <input type="text" id="config-cluster-node-id" placeholder="ca">
+                    <input type="text" id="config-cluster-node-id" placeholder="node-001" disabled>
                   </div>
                   <div class="control-group">
                     <label for="config-cluster-node-name">本节点名称</label>
-                    <input type="text" id="config-cluster-node-name" placeholder="Canada">
+                    <input type="text" id="config-cluster-node-name" placeholder="Example Node 001" disabled>
                   </div>
                   <div class="control-group cluster-settings-field-wide">
                     <label for="config-cluster-api-url">本节点 API 地址</label>
-                    <input type="text" id="config-cluster-api-url" placeholder="http://ca.example.com:3150">
+                    <input type="text" id="config-cluster-api-url" placeholder="https://node-001.example.com" disabled>
                   </div>
                   <div class="control-group">
                     <label for="config-cluster-priority">本节点优先级</label>
-                    <input type="number" id="config-cluster-priority" placeholder="0">
+                    <input type="number" id="config-cluster-priority" placeholder="0" disabled>
                   </div>
                 </div>
+                <small class="settings-help-text" id="cluster-local-hint"></small>
               </div>
 
               <div class="cluster-settings-panel">
@@ -1837,40 +1852,29 @@
               </div>
             </div>
 
-            <div class="cluster-settings-add">
+            <div class="cluster-settings-add hidden" id="cluster-member-add">
               <div class="cluster-settings-panel-header">
                 <span class="cluster-settings-panel-mark cluster-settings-panel-mark-add" aria-hidden="true"></span>
-                <span>添加节点</span>
+                <span>添加服务器</span>
               </div>
               <div class="cluster-settings-add-grid">
-                <div class="control-group">
-                  <label for="cluster-peer-node-id">节点 ID</label>
-                  <input type="text" id="cluster-peer-node-id" placeholder="us">
-                </div>
-                <div class="control-group">
-                  <label for="cluster-peer-name">节点名称</label>
-                  <input type="text" id="cluster-peer-name" placeholder="United States">
-                </div>
                 <div class="control-group cluster-settings-add-url">
-                  <label for="cluster-peer-api-url">API 地址</label>
-                  <input type="text" id="cluster-peer-api-url" placeholder="http://us.example.com:3150">
+                  <label for="cluster-add-url">目标服务器地址</label>
+                  <input type="text" inputmode="url" id="cluster-add-url" autocomplete="off" spellcheck="false" placeholder="https://node-002.example.com">
                 </div>
                 <div class="control-group">
-                  <label for="cluster-peer-priority">优先级</label>
-                  <input type="number" id="cluster-peer-priority" placeholder="0">
+                  <label for="cluster-add-password">目标服务器面板密码</label>
+                  <input type="password" id="cluster-add-password" autocomplete="new-password">
                 </div>
                 <div class="control-group cluster-settings-add-action">
-                  <button id="cluster-peer-add-btn" type="button"
-                    class="btn-secondary cluster-settings-add-btn">添加节点</button>
+                  <button id="cluster-add-btn" type="button" class="btn-secondary cluster-settings-add-btn">添加服务器</button>
                 </div>
               </div>
+              <small class="settings-help-text">目标服务器需先在它的面板点击「准备加入」。密码只用于这一次验证，不会保存。添加期间所有服务器暂停转播，所有现有服务器必须在线。</small>
+              <p id="cluster-add-error" class="settings-help-text cluster-membership-error" role="status" aria-live="polite"></p>
             </div>
 
-            <div id="cluster-peer-list" class="cluster-peer-list">
-              <div class="cluster-peer-empty">暂无其他节点</div>
-            </div>
-
-
+            <div id="cluster-member-list" class="cluster-peer-list"></div>
           </div>
         </section>
 
@@ -1881,9 +1885,12 @@
               <div class="cluster-public-status-grid">
                 <div class="control-group cluster-public-status-node">
                   <label for="config-public-status-node">运行位置</label>
-                  <select id="config-public-status-node">
-                    <option value="">不启用</option>
-                  </select>
+                  <div class="input-action-row">
+                    <select id="config-public-status-node">
+                      <option value="">不启用</option>
+                    </select>
+                    <button id="public-status-role-btn" type="button" class="btn-secondary hidden">更改运行位置</button>
+                  </div>
                   <small class="settings-help-text" id="public-status-node-hint">本机即可运行，无需开启多服务器。</small>
                 </div>
                 <div class="cluster-public-status-fields">

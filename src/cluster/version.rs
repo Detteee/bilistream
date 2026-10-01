@@ -19,6 +19,10 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
         twitch: cfg.twitch.clone(),
         priority_channel: cfg.priority_channel.clone(),
         niconico_enable_monitor: cfg.niconico.enable_monitor,
+        niconico_channel_name: cfg.niconico.channel_name.clone(),
+        niconico_channel_id: cfg.niconico.channel_id.clone(),
+        niconico_live_id: cfg.niconico.live_id.clone(),
+        niconico_area_v2: cfg.niconico.area_v2,
         channels_json: read_json_file("channels.json"),
         areas_json: read_json_file("areas.json"),
     };
@@ -84,6 +88,12 @@ pub(crate) fn monitored_sync_value(payload: &MonitoredConfig) -> serde_json::Val
             "twitch_channel_id": payload.priority_channel.twitch_channel_id,
             "default_area": payload.priority_channel.default_area,
         },
+        "niconico": {
+            "channel_name": payload.niconico_channel_name,
+            "channel_id": payload.niconico_channel_id,
+            "live_id": payload.niconico_live_id,
+            "area_v2": payload.niconico_area_v2,
+        },
         "channels_json": payload.channels_json,
         "areas_json": payload.areas_json,
     })
@@ -108,6 +118,12 @@ pub(crate) fn monitored_sync_value_from_config(cfg: &Config) -> serde_json::Valu
             "youtube_channel_id": cfg.priority_channel.youtube_channel_id,
             "twitch_channel_id": cfg.priority_channel.twitch_channel_id,
             "default_area": cfg.priority_channel.default_area,
+        },
+        "niconico": {
+            "channel_name": cfg.niconico.channel_name,
+            "channel_id": cfg.niconico.channel_id,
+            "live_id": cfg.niconico.live_id,
+            "area_v2": cfg.niconico.area_v2,
         },
         "channels_json": read_json_file("channels.json"),
         "areas_json": read_json_file("areas.json"),

@@ -20,4 +20,4 @@ The viewer page is read-only and uses a separate port from the admin panel. It d
 
 ## Multiple servers / 多服务器
 
-With multi-server mode enabled, select the node that should serve the page. Public settings synchronize to the other nodes; viewers see the active restream node's status. The serving node also supplies the shared YouTube index when it has usable YouTube keys. See [advanced settings](advanced-settings.md) / [高级设置](advanced-settings.zh_CN.md).
+In a cluster, select the server that should serve the page and click **更改运行位置**. This is a membership change, so restreaming pauses on every server until it completes. Port and public URL save normally and synchronize to the other servers; viewers see the active restream server's status. The serving node also supplies the shared YouTube index when it has usable YouTube keys. See [advanced settings](advanced-settings.md) / [高级设置](advanced-settings.zh_CN.md).

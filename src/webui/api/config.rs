@@ -399,8 +399,8 @@ pub(crate) fn monitor_reload_needed(previous: &Config, current: &Config) -> bool
 
 pub(crate) static SETTINGS_PEER_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn schedule_settings_sync(old_cluster: ClusterConfig, monitored: bool, membership: bool) -> String {
-    if !monitored && !membership {
+fn schedule_settings_sync(monitored: bool, settings: bool) -> String {
+    if !monitored && !settings {
         return String::new();
     }
     tokio::spawn(async move {
@@ -415,9 +415,9 @@ fn schedule_settings_sync(old_cluster: ClusterConfig, monitored: bool, membershi
                 tracing::warn!("节点配置同步失败: {error}");
             }
         }
-        if membership {
-            if let Err(error) = propagate_cluster_membership(&old_cluster, &cfg.cluster).await {
-                tracing::warn!("节点列表同步失败: {error}");
+        if settings && cfg.cluster.enabled {
+            if let Err(error) = crate::cluster::push_cluster_settings_to_peers(&cfg).await {
+                tracing::warn!("集群设置同步失败: {error}");
             }
         }
     });
@@ -431,6 +431,22 @@ pub async fn update_config(
     let mut cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(cluster) = payload.cluster.take() {
+        match crate::cluster::fence_cluster_edit(
+            &cfg.cluster,
+            cluster,
+            crate::cluster::membership::current_lifecycle(),
+        ) {
+            Ok(cluster) => payload.cluster = Some(cluster),
+            Err(message) => {
+                return Ok(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(message.to_string()),
+                })
+            }
+        }
+    }
     let secrets_changed = payload.riot_api_key.is_some()
         || payload.holodex_api_key.is_some()
         || payload.youtube_api_key.is_some()
@@ -518,7 +534,6 @@ pub async fn update_config(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .map_err(|_| StatusCode::BAD_REQUEST)?;
     let previous_cfg = cfg.clone();
-    let old_cluster = cfg.cluster.clone();
     let old_monitored_config_version = crate::cluster::shared_settings_version(&cfg);
     let cluster_changed = payload.cluster.is_some();
     let danmaku_command_changed = payload.enable_danmaku_command;
@@ -799,7 +814,6 @@ pub async fn update_config(
         String::new()
     };
     let sync_message = schedule_settings_sync(
-        old_cluster,
         cfg.cluster.enabled
             && cfg.cluster.sync_monitored_channels
             && old_monitored_config_version != crate::cluster::shared_settings_version(&cfg),
@@ -889,7 +903,6 @@ pub async fn update_priority_channel(
     let priority_toggle_changed = payload.enabled.is_some() || payload.auto_restart.is_some();
     let sync_message = if old_monitored_config_version != monitored_config_version(&cfg) {
         schedule_settings_sync(
-            cfg.cluster.clone(),
             cfg.cluster.enabled && cfg.cluster.sync_monitored_channels,
             false,
         )
