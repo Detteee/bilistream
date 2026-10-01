@@ -4,6 +4,38 @@
 
 The main guide covers ordinary YouTube/Twitch rebroadcasting. Enable these features as needed.
 
+## Control panel
+
+The YouTube and Twitch cards let you configure title, area, quality, crop and HLS cache by platform. Stream controls include Bilibili start/stop, rebroadcast restart, live bitrate/cache meters, title/area/cover updates and collision avoidance. A Holodex API key adds live and upcoming streams, target switching and suggested areas; optional Holodex login adds favourites.
+
+The priority monitor and multi-server mode are off by default. Display preferences do not change monitor state. Existing configuration keys remain compatible.
+
+## Command-line options
+
+Launch the console Web UI or system tray, or change an individual setting:
+
+```bash
+./bilistream --webui
+./bilistream --tray
+./bilistream --port 3150
+./bilistream --bind 127.0.0.1
+./bilistream --ffmpeg-log-level error
+```
+
+The tray is the default on Windows; the console Web UI is the default on Linux/macOS. These commands use `./bilistream`; on Windows use `bilistream.exe` instead.
+
+| Option | Environment variable | Purpose |
+| --- | --- | --- |
+| `--bind ADDR` | `BILISTREAM_BIND` | Admin listen address; default `127.0.0.1`. |
+| `-p`, `--port PORT` | `BILISTREAM_PORT` | Admin port; default `3150`. |
+| `--password PASSWORD`, `--password-file PATH` | `BILISTREAM_PASSWORD` | Initial password import only; saved or explicitly cleared state takes precedence. See [remote access and password](remote-access.md). |
+| `--cluster-token-file PATH` | `BILISTREAM_CLUSTER_TOKEN_FILE` | Shared node key; see [multi-server mode](#multi-server-mode). |
+| `--ffmpeg-log-level LEVEL` | `BILISTREAM_FFMPEG_LOG_LEVEL` | `error`, `info` or `debug`; default `error`. |
+| `--reset-panel-password` | — | Clear the panel password offline with the service stopped, then exit; see [recovery](remote-access.md#forgotten-password). |
+| `--export-legacy DIR` | — | Export plaintext for an older binary and exit; see [downgrade](data-and-upgrades.md#downgrade). |
+| `-h`, `--help` / `-V`, `--version` | — | Print help or version and exit. |
+| — | `BILISTREAM_DATA_DIR`, `BILISTREAM_KEY_FILE` | Data directory and protected key location; see [data and backups](data-and-upgrades.md). |
+
 ## Priority channel
 
 **Priority channel:** an optional card for preferred YouTube/Twitch channels. Basic Settings → **显示优先频道** only shows/hides the card. Its monitor switch enables priority selection; **自动重启流** allows an active rebroadcast to switch when the priority channel becomes playable. Hiding the card does not stop its monitor.
@@ -44,6 +76,8 @@ One computer or server is enough. In **System Settings → 公开状态页**, se
 
 See [discovery fallbacks](youtube-discovery.md) and [WebSub tunnel setup](websub-tunnel.md).
 
+First set each node’s password locally in **System Settings → 安全**; headless servers can use initial bootstrap from the [remote-access guide](remote-access.md).
+
 Create the communication key **once**, then copy the same file to each node over SSH:
 
 ```bash
@@ -52,19 +86,30 @@ mkdir -p ~/.config/bilistream
 openssl rand -hex 32 > ~/.config/bilistream/cluster-token
 chmod 600 ~/.config/bilistream/cluster-token
 ./bilistream --bind 0.0.0.0 \
-  --password-file ~/.config/bilistream/webui-password \
   --cluster-token-file ~/.config/bilistream/cluster-token
 ```
 
 `BILISTREAM_CLUSTER_TOKEN_FILE` can also specify the file. Keep this key separate from the Web UI password; it is plaintext protected by file permissions. Use HTTPS or a private network for node API addresses. A missing or mismatched key prevents peer authentication.
 
-When upgrading from shared Web UI password authentication, stop the cluster, configure this key and upgrade **all** nodes before resuming. Sign in to the Web UI again after the first upgrade. Later restarts preserve browser sessions; logout, expiry (30 days), or restarting with a changed password invalidates them. Backups exclude browser sessions. Rotate the communication key on all nodes together and restart them.
+When upgrading from shared Web UI password authentication, stop the cluster, configure this key and upgrade **all** nodes before resuming. Sign in to the Web UI again after the first upgrade. Later restarts preserve browser sessions; logout and expiry (30 days) invalidate them. Changing or clearing a password immediately revokes all sessions. Backups exclude panel passwords and browser sessions. Rotate the communication key on all nodes together and restart them.
 
 ## Niconico Live
 
 Configure the Niconico channel and install streamlink, then enter its `user_session` value in System Settings. A full cookie export is unnecessary; legacy Netscape paths remain supported. Daily checks report validity without renewing the session, and distinguish network uncertainty from invalid credentials. [Session checks](niconico-session.md).
 
 Basic Settings has independent Twitch, Niconico and priority-card visibility switches. Hiding a card leaves monitoring unchanged. The multi-server panel is hidden while multi-server mode is off. Niconico uses piped ingest; priority channels currently support YouTube/Twitch.
+
+## Danmaku, area rules and LoL checks
+
+Danmaku target changes use channel names saved in channel management, for example:
+
+```text
+%转播%YT%示例频道1%英雄联盟
+%转播%TW%示例频道1%无畏契约
+%查询
+```
+
+Area keyword rules may adjust the requested area. LoL player-name checking requires a Riot key; `lol_monitor_interval` is in minutes. Player-name filter keywords appear below the Riot API Key when LoL player ID monitoring is enabled.
 
 ## Settings preview
 

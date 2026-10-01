@@ -1,5 +1,7 @@
 # First setup / 首次配置
 
+[Quick start](../README.md) · [中文入门](../README.zh_CN.md) · [Install dependencies](dependencies.md) · [安装依赖](dependencies.zh_CN.md)
+
 New installations start with an empty channel list and the 其他单机 area. Existing channels, areas and custom rules are kept.
 
 新安装从空频道表开始，默认分区为「其他单机」。已有频道、分区和自定义规则会保留。
@@ -48,7 +50,17 @@ If loading fails, use an existing local area or enter one manually in area manag
 
 加载失败时仍可选择本地分区，或在分区管理中手动填写。设置、频道与分区会一起保存；失败时修复提示的问题后重试。
 
-## Cookies and backup / Cookie 与备份
+## Panel password / 面板密码
+
+At the end of step 3, **设置面板密码** is optional for localhost use. Enable it and enter a password before allowing remote access. If a password was already set at startup, the wizard keeps it and shows it as configured. **完成设置** saves the new password together with the settings and keeps you signed in.
+
+第 3 步最后的「设置面板密码」默认关闭，本机使用可跳过，远程访问前请先设置。启动时已有密码会显示为已配置并保留；点击「完成设置」时，新密码与设置一起保存，并保持登录。
+
+If the save response is lost, the page checks login and setup status before letting you submit again; sign in if prompted. After setup, **System Settings → 安全** lets you set, change or clear the password without affecting other unsaved settings. Change and clear require the current password; remote listeners cannot clear it. See [remote access and recovery](remote-access.md).
+
+保存响应丢失时，页面先检查登录与配置状态，必要时请登录，再确认是否重试。完成后可在「系统设置 → 安全」设置、更改或清除密码，不影响其他未保存设置；更改和清除均需当前密码，远程监听不能清除。详见[远程访问与密码恢复](remote-access.zh_CN.md)。
+
+## Cookies / Cookie
 
 In platform settings, upload or paste a Netscape `cookies.txt` for YouTube. It is stored encrypted, and yt-dlp updates are saved automatically. The optional browser source reads a browser on the server, not on the computer viewing the page.
 
@@ -56,14 +68,8 @@ In platform settings, upload or paste a Netscape `cookies.txt` for YouTube. It i
 
 ![YouTube Cookie settings](images/youtube-cookies.png)
 
-Use **数据与备份** to download an encrypted backup with a separate password. Restore it through **已有备份？直接恢复** on a new installation. Old JSON configurations are imported automatically; new settings use their defaults.
+## Next steps / 后续设置
 
-在「数据与备份」下载加密备份，另行保管密码。新安装可点击「已有备份？直接恢复」。原有 JSON 配置会自动导入，缺少的新增设置使用默认值。
-
-![Encrypted backup settings](images/data-backup.png)
-
-Stop the old process before an upgrade. Multi-server installations keep separate databases and keys on each node; upgrade peers before configuration sync or handoff.
-
-升级前先停止旧进程。多服务器各自保存数据库和密钥；节点升级后才能同步配置或接管转播。
-
-玩家名称过滤关键词位于 Riot API Key 下方，仅在启用英雄联盟玩家 ID 监控时显示。
+- [Back up, restore or upgrade](data-and-upgrades.md) · [备份、恢复与升级](data-and-upgrades.zh_CN.md)
+- [Remote access and password](remote-access.md) · [远程访问与密码](remote-access.zh_CN.md)
+- [Advanced settings, danmaku and LoL checks](advanced-settings.md) · [高级设置、弹幕与英雄联盟检查](advanced-settings.zh_CN.md)

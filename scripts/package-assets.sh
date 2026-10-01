@@ -9,5 +9,12 @@ cp assets/icons/icon.png assets/icons/icon.svg "$stage/assets/icons/"
 cp -R webui/dist webui/public-dist "$stage/webui/"
 cp webui/mock/*.mjs "$stage/webui/mock/"
 mkdir -p "$stage/docs/images"
-cp docs/index.md docs/first-run.md docs/advanced-settings.md docs/advanced-settings.zh_CN.md docs/niconico-session.md docs/public-status.md docs/websub-tunnel.md docs/youtube-discovery.md "$stage/docs/"
+cp docs/index.md docs/first-run.md \
+  docs/dependencies.md docs/dependencies.zh_CN.md \
+  docs/remote-access.md docs/remote-access.zh_CN.md \
+  docs/data-and-upgrades.md docs/data-and-upgrades.zh_CN.md \
+  docs/build.md docs/build.zh_CN.md \
+  docs/advanced-settings.md docs/advanced-settings.zh_CN.md \
+  docs/niconico-session.md docs/public-status.md docs/websub-tunnel.md docs/youtube-discovery.md \
+  "$stage/docs/"
 cp docs/images/*.png "$stage/docs/images/"

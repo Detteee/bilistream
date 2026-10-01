@@ -12,6 +12,14 @@ youtube_quota.json
 !/README.zh_CN.md
 !/docs/index.md
 !/docs/first-run.md
+!/docs/dependencies.md
+!/docs/dependencies.zh_CN.md
+!/docs/remote-access.md
+!/docs/remote-access.zh_CN.md
+!/docs/data-and-upgrades.md
+!/docs/data-and-upgrades.zh_CN.md
+!/docs/build.md
+!/docs/build.zh_CN.md
 !/docs/advanced-settings.md
 !/docs/advanced-settings.zh_CN.md
 !/docs/niconico-session.md
