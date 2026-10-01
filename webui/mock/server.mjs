@@ -8,6 +8,8 @@ const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const ok = data => ({ success: true, data });
 export function createMockServer() {
   let needsSetup = false;
+  let panelPassword = null, panelGeneration = 1, remoteListener = false, setupResponseLoss = false;
+  let passwordAttempts = 0, setupAttempts = 0;
   let sessionSaved = false;
   let cookieRevision = 1, cookieCount = 0, filterRevision = 1, playerFilter = '';
   const proxyValues = {};
@@ -38,6 +40,22 @@ export function createMockServer() {
     try {
       if (path === '/mock/favorites-mode') { favoriteMode = new URL(req.url, 'http://localhost').searchParams.get('mode') || 'ok'; return send(ok(null)); }
       if (path === '/mock/setup-mode') { needsSetup = true; return send(ok(null)); }
+      if (path === '/mock/password-mode') {
+        const mode = new URL(req.url, 'http://localhost').searchParams.get('mode');
+        if (mode === 'missing') { panelPassword = null; remoteListener = false; panelGeneration++; }
+        if (mode === 'configured') { panelPassword = 'synthetic-panel-password'; panelGeneration++; }
+        if (mode === 'remote') remoteListener = true;
+        if (mode === 'local') remoteListener = false;
+        if (mode === 'expire') panelGeneration++;
+        if (mode === 'lose-setup-response') setupResponseLoss = true;
+        return send(ok(null));
+      }
+      if (path === '/mock/auth-stats') return send({ passwordAttempts, setupAttempts });
+      const authenticated = !panelPassword || req.headers.cookie?.split('; ').includes(`mock_panel=${panelGeneration}`);
+      if (path === '/api/auth') return send({ required: !!panelPassword, authenticated: !!authenticated, can_create_password: !panelPassword && !remoteListener, can_clear_password: !!panelPassword && !remoteListener });
+      if (path === '/api/auth/password') passwordAttempts++;
+      if (path === '/api/setup/save-config') setupAttempts++;
+      if (path.startsWith('/api/') && !['/api/login', '/api/logout'].includes(path) && !authenticated) return send({ success: false, message: '需要登录' }, 401);
       if (path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
         res.write(': mock connected\n\n'); events.add(res); req.on('close', () => events.delete(res)); return;
@@ -45,12 +63,26 @@ export function createMockServer() {
       if (req.method === 'POST' || req.method === 'DELETE') {
         let text = ''; for await (const chunk of req) text += chunk;
         const patch = JSON.parse(text || '{}');
+        if (path === '/api/login') {
+          if (panelPassword && patch.password !== panelPassword) return send({ success: false, message: '密码错误' }, 403);
+          res.setHeader('Set-Cookie', `mock_panel=${panelGeneration}; HttpOnly; SameSite=Strict; Path=/`);
+          return send({ success: true });
+        }
+        if (path === '/api/logout') { panelGeneration++; return send({ success: true }); }
         if (path === '/api/setup/holodex-favorites') {
           if (favoriteMode === 'error') return send({ success: false, message: 'Holodex 凭据无效，请重新登录' });
           if (favoriteMode === 'slow') await new Promise(resolve => setTimeout(resolve, 400));
           return send(ok(favoriteMode === 'empty' ? [] : favorites));
         }
         writes.push({ path, patch: structuredClone(patch) });
+        if (path === '/api/auth/password') {
+          if (panelPassword && patch.current_password !== panelPassword) return send({ success: false, message: '当前密码错误' }, 403);
+          if (patch.action === 'clear' && remoteListener) return send({ success: false, message: '远程监听不能清除密码' }, 403);
+          panelPassword = patch.action === 'clear' ? null : patch.new_password;
+          panelGeneration++;
+          for (const event of events) event.end();
+          return send({ success: true });
+        }
         if (path === '/api/youtube/cookies') {
           if (patch.expected_revision !== cookieRevision) return send({ success: false, message: 'Cookie 已更新' }, 409);
           cookieCount = req.method === 'DELETE' ? 0 : (patch.content || '').split('\n').filter(line => line && !line.startsWith('#')).length;
@@ -66,7 +98,25 @@ export function createMockServer() {
         }
         if (path === '/api/channels/resolve-youtube') return send(ok({ channel_id: 'UC4444444444444444444444' }));
         if (path === '/api/niconico/session/check') { await new Promise(resolve => setTimeout(resolve, 300)); return send(ok({ state: sessionSaved ? 'valid' : 'unconfigured', message: sessionSaved ? '会话仍被接受；本次检测不会续期' : '未配置 user_session' })); }
-        if (path === '/api/setup/save-config') { needsSetup = false; return send({ success: true }); }
+        if (path === '/api/setup/save-config') {
+          if (patch.panel_password) {
+            if (panelPassword) return send({ success: false, message: '密码已经配置' }, 409);
+            panelPassword = patch.panel_password; panelGeneration++;
+            res.setHeader('Set-Cookie', `mock_panel=${panelGeneration}; HttpOnly; SameSite=Strict; Path=/`);
+            for (const event of events) event.end();
+          }
+          needsSetup = false;
+          if (setupResponseLoss) {
+            setupResponseLoss = false;
+            // Deterministic incomplete response, without a cookie. Closing a
+            // pooled socket can make Firefox retry below the application layer.
+            res.removeHeader('Set-Cookie');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{"success":');
+            return;
+          }
+          return send({ success: true });
+        }
         if (path === '/api/config') {
           if (patch.expected_secret_revision != null && patch.expected_secret_revision !== config.secret_revision) return send({ success: false, message: '密钥配置已更新' }, 409);
           for (const key of ['holodex_api_key', 'youtube_api_key', 'riot_api_key']) {
@@ -106,7 +156,6 @@ export function createMockServer() {
         return send({ success: true, message: '配置已保存' });
       }
       if (path === '/mock/writes') return send(writes);
-      if (path === '/api/auth') return send({ required: false, authenticated: true });
       if (path === '/api/storage') return send({ ready: true, configured: true, schema: 1, sqlite_version: '3.53.2' });
       if (path === '/api/youtube/cookies') return send(ok({ configured: cookieCount > 0, count: cookieCount, revision: cookieRevision, updated_at: 1 }));
       if (path === '/api/player-filter') return send(ok({ content: playerFilter, revision: filterRevision }));

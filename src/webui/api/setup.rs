@@ -1,6 +1,14 @@
 use super::setup_data::{save_setup_bundle, setup_channel, SetupArea, SetupChannel};
 use super::*;
 use crate::plugins::holodex::HolodexFavoriteChannel;
+use crate::webui::listen::{session_set_cookie_header, AuthState};
+use axum::{
+    extract::ConnectInfo,
+    http::{header, HeaderMap},
+    response::{IntoResponse, Response},
+    Extension,
+};
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Serialize)]
 pub struct SetupStatus {
@@ -75,6 +83,7 @@ pub async fn get_logs_endpoint() -> Result<Json<LogsResponse>, StatusCode> {
 
 #[derive(Deserialize)]
 pub struct SetupConfigRequest {
+    panel_password: Option<String>,
     room: i32,
     auto_cover: bool,
     enable_danmaku_command: bool,
@@ -268,13 +277,36 @@ fn setup_enables_monitor(
         || (!previous.bililive.enable_danmaku_command && current.bililive.enable_danmaku_command)
 }
 
-pub async fn save_setup_config(
+pub(crate) async fn save_setup_config(
+    Extension(auth): Extension<Arc<AuthState>>,
+    headers: HeaderMap,
+    connection: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(mut payload): Json<SetupConfigRequest>,
-) -> Result<ApiResponse<()>, StatusCode> {
-    let invalid = |message| ApiResponse {
-        success: false,
-        data: None,
-        message: Some(message),
+) -> Result<Response, StatusCode> {
+    let mutation = if let Some(password) = payload.panel_password.take() {
+        match auth.prepare_create(
+            &headers,
+            connection.map(|Extension(ConnectInfo(peer))| peer),
+            &password,
+            true,
+        ) {
+            Ok(mutation) => Some(mutation),
+            Err(error) => return Ok(error.into_response()),
+        }
+    } else {
+        None
+    };
+    let token = mutation
+        .as_ref()
+        .and_then(|mutation| mutation.token())
+        .map(str::to_owned);
+    let invalid = |message| {
+        ApiResponse::<()> {
+            success: false,
+            data: None,
+            message: Some(message),
+        }
+        .into_response()
     };
     if payload.room <= 0 || payload.interval == 0 {
         return Ok(invalid("直播间号和检测间隔必须大于 0".into()));
@@ -390,11 +422,17 @@ pub async fn save_setup_config(
     if setup_enables_monitor(&previous_cfg, &cfg, &payload)
         && !local_node_can_enable_monitor_toggles(&previous_cfg)
     {
-        return Ok(monitor_toggle_enable_rejected_response());
+        return Ok(monitor_toggle_enable_rejected_response().into_response());
     }
-    save_setup_bundle(&mut cfg, channels, payload.selected_areas)
-        .await
-        .map_err(config_save_status)?;
+    save_setup_bundle(
+        &mut cfg,
+        channels,
+        payload.selected_areas,
+        mutation,
+        Some(auth.clone()),
+    )
+    .await
+    .map_err(config_save_status)?;
 
     let youtube_updated = youtube_monitor_reload_needed(&previous_cfg, &cfg);
     let twitch_updated = twitch_monitor_reload_needed(&previous_cfg, &cfg);
@@ -430,13 +468,20 @@ pub async fn save_setup_config(
         });
     }
 
-    Ok(ApiResponse {
+    let mut response = ApiResponse::<()> {
         success: true,
         data: None,
         message: Some(format!(
             "配置已保存{target_sync_message}{toggle_sync_message}"
         )),
-    })
+    }
+    .into_response();
+    if let Some(token) = token {
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, session_set_cookie_header(&token));
+    }
+    Ok(response)
 }
 
 #[derive(Serialize)]

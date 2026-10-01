@@ -1,4 +1,5 @@
 import { initStorageControls, loadManagedStorage } from './storage.js';
+import { initPanelSecurity } from './security.js';
 // settings.js — extracted from app.js
 
 import { setElementDisplay, appendAntiCollisionRemoveIcon, readIntegerInput, setInputValue, setCheckboxChecked, showNotification } from './dom.js';
@@ -106,6 +107,7 @@ function startKeyStatusRefresh() {
 }
 function initSystemSettingsActions() {
   initStorageControls();
+  initPanelSecurity();
   for (const control of secretControls) document.getElementById(control.button)?.addEventListener('click', () => clearSavedSecret(control));
   startKeyStatusRefresh();
   document.getElementById('check-nico-session')?.addEventListener('click', checkNicoSession);

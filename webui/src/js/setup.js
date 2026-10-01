@@ -4,7 +4,7 @@ import { bindYoutubeResolver } from './channel-resolver.js';
 import { loadAreaCatalog, fillAreaCatalog } from './area-catalog.js';
 import { readIntegerInput, showNotification } from './dom.js';
 import { getAreaList, appendAreaOptions, createPlatformChannelOption, createSelectOption } from './state.js';
-import { getJson, postJsonApi } from './api.js';
+import { ensureWebUiAccess, getWebUiAuth, getJson, postJsonApi } from './api.js';
 
 let setupAreaChoices = [];
 let officialAreasLoaded = false;
@@ -13,6 +13,20 @@ let favoriteChannels = [];
 const selectedFavorites = new Map();
 let favoritesGeneration = 0;
 const setupPlatforms = { yt: 'youtube', tw: 'twitch', nc: 'niconico' };
+
+function renderSetupPassword(auth = getWebUiAuth()) {
+  const checkbox = document.getElementById('setup-panel-password-enabled');
+  const input = document.getElementById('setup-panel-password');
+  const canCreate = !!auth?.can_create_password && !auth.required;
+  document.getElementById('setup-security-title').textContent = auth?.required ? '面板密码' : '面板密码（可选）';
+  document.getElementById('setup-panel-password-status').textContent = !auth ? '正在读取密码状态…'
+    : auth.required ? '面板密码已设置，完成后可在系统设置 → 安全中更改。'
+    : canCreate ? '仅在本机使用可跳过；开放远程访问前请先设置密码。'
+    : '当前连接不能设置密码，请在服务器本机直接打开面板。';
+  document.getElementById('setup-panel-password-choice').classList.toggle('hidden', !canCreate);
+  if (!canCreate) { checkbox.checked = false; input.value = ''; }
+  document.getElementById('setup-panel-password-group').classList.toggle('hidden', !canCreate || !checkbox.checked);
+}
 
 function updateSetupTarget(platform) {
   const value = document.getElementById(`setup-${platform}-channel-select`).value;
@@ -140,6 +154,16 @@ async function loadOfficialSetupAreas() {
   } finally { button.disabled = false; }
 }
 function initSetupControls() {
+  document.addEventListener('webui-auth-changed', event => renderSetupPassword(event.detail));
+  document.getElementById('setup-panel-password')?.addEventListener('input', () => {
+    document.getElementById('setup-panel-password-error').textContent = '';
+  });
+  document.getElementById('setup-panel-password-enabled')?.addEventListener('change', () => {
+    if (!document.getElementById('setup-panel-password-enabled').checked) document.getElementById('setup-panel-password').value = '';
+    document.getElementById('setup-panel-password-error').textContent = '';
+    renderSetupPassword();
+  });
+  renderSetupPassword();
   bindYoutubeResolver('setup-yt-id', 'setup-resolve-youtube');
   document.getElementById('setup-load-areas')?.addEventListener('click', loadOfficialSetupAreas);
   document.getElementById('setup-nc-channel-select')?.addEventListener('change', () => updateSetupTarget('nc'));
@@ -346,8 +370,45 @@ async function triggerBiliLogin() {
   }
 }
 let setupSaving = false;
+let setupNeedsRecheck = false;
+async function reconcileSetupSave() {
+  await ensureWebUiAccess({ strict: true });
+  const status = await getJson('/api/setup-status');
+  if (status.storage_error) throw new Error(status.storage_error);
+  if (typeof status.needs_setup !== 'boolean') throw new Error('无法确认保存结果');
+  setupNeedsRecheck = false;
+  if (!status.needs_setup) {
+    location.reload();
+    return true;
+  }
+  renderSetupPassword();
+  document.getElementById('setup-panel-password-error').textContent = '尚未完成设置，请确认填写内容后再次点击完成设置。';
+  return false;
+}
 async function saveSetupConfig() {
   if (setupSaving) return;
+  const passwordError = document.getElementById('setup-panel-password-error');
+  passwordError.textContent = '';
+  // A failed connection may hide a successful commit. Reconcile before another write.
+  if (setupNeedsRecheck) {
+    setupSaving = true;
+    document.getElementById('setup-save-btn').disabled = true;
+    try { await reconcileSetupSave(); }
+    catch { passwordError.textContent = '无法确认保存结果，请恢复连接后重新检查。'; }
+    finally {
+      setupSaving = false;
+      document.getElementById('setup-save-btn').disabled = false;
+      document.getElementById('setup-save-btn').textContent = setupNeedsRecheck ? '重新检查保存结果' : '完成设置';
+    }
+    return;
+  }
+  const password = document.getElementById('setup-panel-password');
+  const createPassword = document.getElementById('setup-panel-password-enabled').checked;
+  if (createPassword && !password.value.trim()) {
+    passwordError.textContent = '请填写面板密码，或关闭「设置面板密码」以跳过。';
+    password.focus();
+    return;
+  }
   // Validate required fields
   const room = readIntegerInput('setup-room', 0);
   if (room <= 0) {
@@ -397,16 +458,18 @@ async function saveSetupConfig() {
     riot_api_key: document.getElementById('setup-riot').value || null,
     enable_lol_monitor: document.getElementById('setup-lol-monitor').checked
   };
+  if (createPassword) config.panel_password = password.value;
 
   setupSaving = true;
   const saveButton = document.getElementById('setup-save-btn');
   saveButton.disabled = true;
   let saved = false;
   try {
-    const data = await postJsonApi('/api/setup/save-config', config);
+    const data = await postJsonApi('/api/setup/save-config', config, { replayAfterLogin: false });
 
     if (data.success) {
       saved = true;
+      password.value = '';
       showNotification('配置保存成功！正在加载控制面板...', 'success');
       setTimeout(() => {
         location.reload();
@@ -415,10 +478,16 @@ async function saveSetupConfig() {
       showNotification(data.message || '保存配置失败', 'error');
     }
   } catch (error) {
-    console.error('Failed to save config:', error);
     showNotification('保存配置失败: ' + error.message, 'error');
+    if (!error.status || error.status === 401 || error.status === 409 || error.status >= 500) {
+      password.value = '';
+      setupNeedsRecheck = true;
+      try { saved = await reconcileSetupSave(); }
+      catch { passwordError.textContent = '无法确认保存结果，请恢复连接后重新检查。'; }
+    }
   } finally {
     if (!saved) { setupSaving = false; saveButton.disabled = false; }
+    saveButton.textContent = setupNeedsRecheck ? '重新检查保存结果' : '完成设置';
   }
 }
 // Setup check functions

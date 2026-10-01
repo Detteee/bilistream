@@ -36,6 +36,7 @@ impl RestartCommand {
 
 const RESTART_PASSWORD_LIMIT: usize = 64 * 1024;
 
+#[cfg(test)]
 fn write_restart_password(directory: &Path, password: &str) -> Result<RestartCredential, String> {
     if password.is_empty() || password.len() > RESTART_PASSWORD_LIMIT {
         return Err("访问密码为空或过长，无法准备重启".into());
@@ -126,16 +127,8 @@ pub fn restart_spec() -> Result<RestartSpec, String> {
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    let credential = match crate::webui::listen_password() {
-        Some(password) => {
-            let store = crate::storage::global().map_err(|_| "无法打开凭据存储")?;
-            Some(write_restart_password(
-                &store.data_dir().join("restart-auth"),
-                password,
-            )?)
-        }
-        None => None,
-    };
+    // Authentication is installation-local durable state. Never resurrect startup credentials.
+    let credential: Option<RestartCredential> = None;
     let args = restart_args(
         &args,
         credential
@@ -171,7 +164,7 @@ pub fn restart_command_line() -> Result<RestartCommand, String> {
 fn restart_environment_words(read: impl Fn(&str) -> Option<String>) -> Vec<String> {
     // A screen command runs in its original shell, whose environment can differ
     // from the process being replaced. Preserve supported startup overrides;
-    // the password itself travels only through the private one-use file.
+    // the password itself is resolved from the installation store.
     [
         "BILISTREAM_DATA_DIR",
         "BILISTREAM_KEY_FILE",

@@ -10,9 +10,7 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use super::listen::{
-    auth_status, listen_bind, login, logout, password_required, require_webui_auth,
-};
+use super::listen::{auth_status, change_password, listen_bind, login, logout, require_webui_auth};
 use super::{api, events};
 use crate::AppState;
 
@@ -25,23 +23,26 @@ pub async fn bind_webui(port: u16) -> std::io::Result<tokio::net::TcpListener> {
 }
 
 pub async fn start_webui(port: u16, state: AppState) -> Result<(), Box<dyn std::error::Error>> {
-    start_webui_on_listener(bind_webui(port).await?, state).await
+    let auth = super::listen::prepare_auth(listen_bind()).await?;
+    serve_prepared(bind_webui(port).await?, state, auth).await
 }
 
 pub async fn start_webui_on_listener(
     listener: tokio::net::TcpListener,
     state: AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = super::listen::prepare_auth(listener.local_addr()?.ip()).await?;
+    serve_prepared(listener, state, auth).await
+}
+
+pub(crate) async fn serve_prepared(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    auth: std::sync::Arc<super::listen::AuthState>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     let port = addr.port();
-    let auth = tokio::task::spawn_blocking(|| {
-        super::listen::AuthState::open(
-            crate::storage::global()?,
-            super::listen::listen_password().map(str::to_owned),
-            super::listen::cluster_token().map(str::to_owned),
-        )
-    })
-    .await??;
+    let required = auth.sessions.snapshot()?.password.is_some();
     state.init_log_buffer();
     let _status_worker = api::start_status_refresh_worker();
     let _discovery_worker = crate::plugins::youtube_discovery::start_discovery_worker();
@@ -59,6 +60,7 @@ pub async fn start_webui_on_listener(
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route("/auth", get(auth_status))
+        .route("/auth/password", post(change_password))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/version", get(api::get_version))
@@ -244,7 +246,7 @@ pub async fn start_webui_on_listener(
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📍 监听地址:     {}", addr);
     println!("📍 本地访问:     http://127.0.0.1:{}", port);
-    if password_required() {
+    if required {
         println!("📍 网页需密码登录");
     }
 

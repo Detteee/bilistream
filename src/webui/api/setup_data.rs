@@ -259,32 +259,128 @@ pub(super) async fn save_setup_bundle(
     cfg: &mut crate::config::Config,
     channels: Vec<SetupChannel>,
     areas: Vec<SetupArea>,
+    password: Option<crate::webui::sessions::PasswordMutation>,
+    auth: Option<std::sync::Arc<crate::webui::listen::AuthState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let changed = password.is_some();
     crate::config::save_config_with_transaction(cfg, move |tx| {
-        if !channels.is_empty() {
-            let mut data = tx
-                .read("channels.json")?
-                .ok_or_else(|| std::io::Error::other("频道数据不可用"))?
-                .value;
-            merge_channels(&mut data, &channels).map_err(std::io::Error::other)?;
-            tx.write("channels.json", data)?;
-        }
-        if !areas.is_empty() {
-            let mut data = tx
-                .read("areas.json")?
-                .ok_or_else(|| std::io::Error::other("分区数据不可用"))?
-                .value;
-            merge_areas(&mut data, &areas).map_err(std::io::Error::other)?;
-            tx.write("areas.json", data)?;
-        }
-        Ok(())
+        apply_setup_documents(tx, channels, areas, password)
     })
-    .await
+    .await?;
+    if changed {
+        if let Some(auth) = auth {
+            auth.notify_changed();
+        }
+    }
+    Ok(())
+}
+
+fn apply_setup_documents(
+    tx: &mut crate::storage::Transaction<'_>,
+    channels: Vec<SetupChannel>,
+    areas: Vec<SetupArea>,
+    password: Option<crate::webui::sessions::PasswordMutation>,
+) -> std::io::Result<()> {
+    if !channels.is_empty() {
+        let mut data = tx
+            .read("channels.json")?
+            .ok_or_else(|| std::io::Error::other("频道数据不可用"))?
+            .value;
+        merge_channels(&mut data, &channels).map_err(std::io::Error::other)?;
+        tx.write("channels.json", data)?;
+    }
+    if !areas.is_empty() {
+        let mut data = tx
+            .read("areas.json")?
+            .ok_or_else(|| std::io::Error::other("分区数据不可用"))?
+            .value;
+        merge_areas(&mut data, &areas).map_err(std::io::Error::other)?;
+        tx.write("areas.json", data)?;
+    }
+    if let Some(password) = password {
+        password.apply(tx)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_documents_password_and_initial_session_commit_or_rollback_together() {
+        use crate::webui::sessions::{PasswordMutation, Sessions};
+        let root =
+            std::env::temp_dir().join(format!("bilistream-setup-password-{}", std::process::id()));
+        let store =
+            crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
+        let sessions = Sessions::open(store.clone(), || Ok(None)).unwrap();
+        for failure in 0..4 {
+            let before = serde_json::to_value(store.snapshot().unwrap()).unwrap();
+            let mutation = PasswordMutation::new(
+                if failure == 2 { Some(0) } else { None },
+                Some("synthetic".into()),
+                true,
+            )
+            .unwrap();
+            let token = mutation.token().unwrap().to_owned();
+            let result = store.transaction(move |tx| {
+                tx.write("config.json", serde_json::json!({"synthetic": true}))?;
+                let channel = setup_channel(
+                    "youtube",
+                    Some("Synthetic"),
+                    Some("UCabcdefghijklmnopqrstuv"),
+                )
+                .unwrap()
+                .unwrap();
+                if failure == 0 {
+                    tx.write("channels.json", serde_json::json!({"channels": false}))?;
+                }
+                apply_setup_documents(
+                    tx,
+                    vec![channel],
+                    vec![SetupArea {
+                        id: if failure == 1 { 0 } else { 235 },
+                        name: "Synthetic area".into(),
+                        parent_name: String::new(),
+                    }],
+                    Some(mutation),
+                )?;
+                Err::<(), _>(std::io::Error::other(
+                    "forced failure after password/session writes",
+                ))
+            });
+            assert!(result.is_err());
+            assert_eq!(
+                serde_json::to_value(store.snapshot().unwrap()).unwrap(),
+                before
+            );
+            assert!(sessions.snapshot().unwrap().revision.is_none());
+            assert!(sessions
+                .access(Some(&token), crate::storage::now())
+                .unwrap()
+                .0
+                .password
+                .is_none());
+        }
+        let mutation = PasswordMutation::new(None, Some("synthetic".into()), true).unwrap();
+        let token = mutation.token().unwrap().to_owned();
+        store.transaction(move |tx| {
+            tx.write("config.json", serde_json::json!({"auto_cover":false,"enable_anti_collision":false,"interval":60,"bililive":{"room":1,"enable_danmaku_command":false,"bili_rtmp_url":"","bili_rtmp_key":""},"youtube":{},"twitch":{},"enable_lol_monitor":false,"anti_collision_list":{}}))?;
+            apply_setup_documents(tx, vec![], vec![], Some(mutation))
+        }).unwrap();
+        let (snapshot, valid) = sessions
+            .access(Some(&token), crate::storage::now())
+            .unwrap();
+        assert!(snapshot.password.is_some() && valid);
+        assert!(store.read("config.json").unwrap().is_some());
+        let exported = root.join("export");
+        store.export_legacy(&exported).unwrap();
+        assert!(!exported.join("webui-password").exists());
+        assert!(!exported.join("webui-sessions").exists());
+        drop((sessions, store));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn expired_favorite_preview_fails_before_any_provider_request() {

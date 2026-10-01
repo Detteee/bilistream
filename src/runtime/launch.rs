@@ -10,6 +10,8 @@ use tracing_subscriber::fmt;
 struct LaunchArgs {
     bind: String,
     password: Option<String>,
+    password_file: Option<std::path::PathBuf>,
+    restart_password_file: Option<std::path::PathBuf>,
     cluster_token_file: Option<std::path::PathBuf>,
     port: u16,
     ffmpeg_log_level: String,
@@ -20,6 +22,7 @@ struct LaunchArgs {
 enum ParseOutcome {
     Launch(LaunchArgs),
     ExportLegacy(std::path::PathBuf),
+    ResetPanelPassword,
     Help,
     Version,
 }
@@ -43,12 +46,13 @@ Usage: bilistream [OPTIONS]\n\n\
 Options:\n\
   --bind ADDR                 Listen address (default 127.0.0.1, or BILISTREAM_BIND)\n\
   -p, --port PORT             Web UI port (default 3150, or BILISTREAM_PORT)\n\
-  --password PASSWORD         Web UI login password (or BILISTREAM_PASSWORD)\n\
+  --password PASSWORD         Bootstrap panel password (or BILISTREAM_PASSWORD)\n\
   --password-file PATH        Read password from a private file\n\
   --cluster-token-file PATH   Shared node credential (or BILISTREAM_CLUSTER_TOKEN_FILE)\n\
   --ffmpeg-log-level LEVEL    error, info, or debug (default error)\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
+  --reset-panel-password      Clear panel password and sessions offline, then exit\n\
   --export-legacy DIR         Export plaintext for downgrade and exit (stop service first)\n\
   -h, --help                  Print help\n\
   -V, --version               Print version",
@@ -90,6 +94,16 @@ fn parse_launch_args_with(
     env_ffmpeg: Option<String>,
     mut tray: bool,
 ) -> Result<ParseOutcome, String> {
+    if argv
+        .iter()
+        .skip(1)
+        .any(|arg| arg == "--reset-panel-password")
+    {
+        if argv.len() != 2 {
+            return Err("usage: bilistream --reset-panel-password (stop service first)".into());
+        }
+        return Ok(ParseOutcome::ResetPanelPassword);
+    }
     if argv.get(1).is_some_and(|arg| arg == "--export-legacy") {
         if argv.len() != 3 || argv[2].trim().is_empty() {
             return Err("usage: bilistream --export-legacy NEW_DIRECTORY".into());
@@ -191,17 +205,13 @@ fn parse_launch_args_with(
     if bind.trim().is_empty() {
         bind = "127.0.0.1".to_string();
     }
-    if let Some(path) = password_file {
-        password = Some(crate::webui::restart::read_password_file(&path)?);
-    }
-    if let Some(path) = restart_password_file {
-        password = Some(crate::webui::restart::consume_restart_password(&path)?);
-    }
     let password = password.filter(|value| !value.trim().is_empty());
 
     Ok(ParseOutcome::Launch(LaunchArgs {
         bind,
         password,
+        password_file,
+        restart_password_file,
         cluster_token_file,
         port,
         ffmpeg_log_level,
@@ -216,7 +226,13 @@ fn windows_needs_console(argv: &[String]) -> bool {
         let raw = argv[i].as_str();
         let key = raw.split_once('=').map(|(k, _)| k).unwrap_or(raw);
         match key {
-            "-h" | "--help" | "-V" | "--version" | "--webui" => return true,
+            "-h"
+            | "--help"
+            | "-V"
+            | "--version"
+            | "--webui"
+            | "--reset-panel-password"
+            | "--export-legacy" => return true,
             "--tray" => i += 1,
             "--bind"
             | "--password"
@@ -285,20 +301,6 @@ fn allocate_windows_console() {
     }
 }
 
-fn apply_webui_listen(
-    bind: &str,
-    password: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let bind = if bind.trim().is_empty() {
-        "127.0.0.1"
-    } else {
-        bind
-    };
-    let password = password.filter(|value| !value.trim().is_empty());
-    bilistream::webui::install_listen(bind, password)?;
-    Ok(())
-}
-
 /// Services shared by the CLI, native tray, and Tauri entry points.
 /// Shutdown first cancels the monitor, then waits for its stream cleanup.
 pub struct BackendRuntime {
@@ -322,13 +324,10 @@ impl BackendRuntime {
     ) -> Result<Self, String> {
         bilistream::install_crypto_provider();
         init_logger_with_capture();
-        if crate::webui::listen::cluster_token().is_none() {
-            if let Some(path) = std::env::var_os("BILISTREAM_CLUSTER_TOKEN_FILE") {
-                crate::webui::listen::install_cluster_token_file(std::path::Path::new(&path))?;
-            }
-        }
-        // Binding is the readiness signal; no arbitrary sleep or credential
-        // operation stands between startup and the recovery interface.
+        // Resolve encrypted credentials before accepting connections or spawning services.
+        let auth = crate::webui::listen::prepare_auth(crate::webui::listen_bind())
+            .await
+            .map_err(|error| error.to_string())?;
         let listener = bilistream::webui::server::bind_webui(port)
             .await
             .map_err(|e| e.to_string())?;
@@ -336,7 +335,7 @@ impl BackendRuntime {
             spawn_monitor_loop(log_level.to_owned()).map_err(|e| e.to_string())?;
         let server = tokio::spawn(async move {
             if let Err(error) =
-                bilistream::webui::server::start_webui_on_listener(listener, state).await
+                bilistream::webui::server::serve_prepared(listener, state, auth).await
             {
                 tracing::error!("Web UI server error: {error}");
             }
@@ -520,6 +519,14 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let launch = match parse_launch_args(&args) {
+        Ok(ParseOutcome::ResetPanelPassword) => {
+            tokio::task::spawn_blocking(|| {
+                crate::webui::sessions::reset_password(crate::storage::global()?)
+            })
+            .await??;
+            println!("面板密码已清除，旧登录会话已失效。请在本机地址启动，然后在设置中设置新密码。未启动服务。");
+            return Ok(());
+        }
         Ok(ParseOutcome::ExportLegacy(destination)) => {
             tokio::task::spawn_blocking(move || {
                 crate::storage::global()?.export_legacy(&destination)
@@ -548,7 +555,14 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = bilistream::AppState::new().install();
     init_logger_with_capture();
-    apply_webui_listen(&launch.bind, launch.password.clone())?;
+    crate::webui::listen::install_bootstrap(
+        &launch.bind,
+        crate::webui::listen::PasswordBootstrap {
+            password: launch.password.clone(),
+            file: launch.password_file.clone(),
+            restart_file: launch.restart_password_file.clone(),
+        },
+    )?;
     if let Some(path) = &launch.cluster_token_file {
         crate::webui::listen::install_cluster_token_file(path)?;
     }
@@ -749,47 +763,28 @@ mod tests {
     }
 
     #[test]
-    fn launch_consumes_private_restart_credentials() {
-        let directory = std::env::temp_dir().join(format!(
-            "bilistream-launch-credential-test-{}",
-            std::process::id()
+    fn launch_defers_password_files_and_recovery_is_exclusive() {
+        let ParseOutcome::Launch(launch) =
+            parse_test_args(&["--password-file", "/missing/password"]).unwrap()
+        else {
+            panic!("expected launch");
+        };
+        assert!(launch.password.is_none());
+        assert_eq!(
+            launch.password_file.as_deref(),
+            Some(std::path::Path::new("/missing/password"))
+        );
+        let ParseOutcome::Launch(launch) =
+            parse_test_args(&["--restart-password-file", "/missing/handoff"]).unwrap()
+        else {
+            panic!("expected launch");
+        };
+        assert!(launch.restart_password_file.is_some());
+        assert!(matches!(
+            parse_test_args(&["--reset-panel-password"]).unwrap(),
+            ParseOutcome::ResetPanelPassword
         ));
-        crate::storage::paths::private_dir(&directory).unwrap();
-        let file = directory.join("auth.tmp");
-        crate::storage::paths::write_private(&file, b"synthetic-restart-password").unwrap();
-        let public_args = [
-            "bilistream".into(),
-            "--password-file".into(),
-            file.to_string_lossy().into_owned(),
-        ];
-        let ParseOutcome::Launch(launch) =
-            parse_launch_args_with(&public_args, None, None, None, None, false).unwrap()
-        else {
-            panic!("expected launch")
-        };
-        assert_eq!(
-            launch.password.as_deref(),
-            Some("synthetic-restart-password")
-        );
-        assert!(file.exists());
-        let args = [
-            "bilistream".into(),
-            "--webui".into(),
-            "--restart-password-file".into(),
-            file.to_string_lossy().into_owned(),
-        ];
-        let ParseOutcome::Launch(launch) =
-            parse_launch_args_with(&args, None, None, None, None, false).unwrap()
-        else {
-            panic!("expected launch")
-        };
-        assert_eq!(
-            launch.password.as_deref(),
-            Some("synthetic-restart-password")
-        );
-        assert!(!file.exists());
-        assert!(parse_launch_args_with(&args, None, None, None, None, false).is_err());
-        std::fs::remove_dir(directory).unwrap();
+        assert!(parse_test_args(&["--webui", "--reset-panel-password"]).is_err());
     }
 
     #[test]

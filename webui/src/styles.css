@@ -1892,6 +1892,8 @@ details.setup-platform-card { display: block; }
 
 .platform-session-settings { grid-column: 1 / -1; display: grid; gap: .75rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .session-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 2rem; }
+/* Password buttons follow a field grid, not a control group with its own gap. */
+.panel-security-actions { margin: var(--sp-4) 0 var(--sp-2); gap: var(--sp-3); }
 .session-legacy { font-size: .85rem; }
 .session-legacy summary { cursor: pointer; }
 .session-legacy .control-group { margin-top: .75rem; max-width: 36rem; }

@@ -440,6 +440,20 @@
             </div>
           </details>
 
+          <section class="setup-platform-card" aria-labelledby="setup-security-title">
+            <h3 class="setup-platform-title" id="setup-security-title">面板密码（可选）</h3>
+            <p id="setup-panel-password-status" class="setup-help-text" role="status">正在读取密码状态…</p>
+            <label id="setup-panel-password-choice" class="toggle-label hidden">
+              <span class="toggle-switch"><input id="setup-panel-password-enabled" type="checkbox"><span class="toggle-slider"></span></span>
+              <span>设置面板密码</span>
+            </label>
+            <div id="setup-panel-password-group" class="control-group hidden">
+              <label for="setup-panel-password">新密码</label>
+              <input id="setup-panel-password" type="password" autocomplete="new-password" aria-describedby="setup-panel-password-error">
+            </div>
+            <p id="setup-panel-password-error" class="settings-help-text is-invalid" role="alert"></p>
+          </section>
+
           <div class="setup-step-actions setup-step-actions-spaced">
             <button id="setup-step-3-prev-btn" class="btn-secondary setup-action-btn" type="button">← 上一步</button>
             <button id="setup-save-btn" class="btn-success setup-action-btn" type="button">完成设置</button>
@@ -1709,6 +1723,24 @@
                 <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">未直接配置 user_session 时才读取文件中的同名 Cookie。</small></div></details>
               </section>
             </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="panel-security-title">
+          <div class="panel__head"><h2 class="panel__title" id="panel-security-title">安全</h2></div>
+          <div class="panel__body">
+            <p id="panel-password-status" class="settings-help-text" role="status">正在读取密码状态…</p>
+            <p class="settings-help-text">远程访问需要面板密码。更改或清除密码会退出所有登录。</p>
+            <div class="settings-grid">
+              <div id="panel-password-current-group" class="control-group hidden"><label for="panel-password-current">当前密码</label><input id="panel-password-current" type="password" autocomplete="current-password" aria-describedby="panel-password-error"></div>
+              <div class="control-group"><label for="panel-password-new">新密码</label><input id="panel-password-new" type="password" autocomplete="new-password" aria-describedby="panel-password-error" disabled></div>
+            </div>
+            <div class="session-actions panel-security-actions">
+              <button id="panel-password-save" type="button" class="btn-primary" disabled>设置密码</button>
+              <button id="panel-password-clear" type="button" class="btn-secondary hidden" disabled>清除密码</button>
+            </div>
+            <p id="panel-password-clear-hint" class="settings-help-text hidden">远程监听时不能清除密码；请先停止服务并以本机监听地址重启。</p>
+            <p id="panel-password-error" class="settings-help-text" role="status" aria-live="polite"></p>
           </div>
         </section>
 

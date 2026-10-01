@@ -4,6 +4,8 @@ import { showNotification } from './dom.js';
 
 let webUiAccessReady = false;
 let webUiLoginPromise = null;
+let webUiAuth = null;
+const authMutations = new Set();
 
 // Include response-body consumption in the deadline. Aborting a write cannot
 // undo a server commit, so callers must refresh before retrying an uncertain write.
@@ -130,39 +132,52 @@ function promptWebUiLogin() {
   });
   return webUiLoginPromise;
 }
-async function ensureWebUiAccess() {
+async function refreshWebUiAuth() {
+  const auth = await fetchWithDeadline('/api/auth', {}, readJsonApiResponse);
+  if (typeof auth.required !== 'boolean' || typeof auth.authenticated !== 'boolean') throw new Error('无法读取密码状态');
+  webUiAuth = auth;
+  webUiAccessReady = !auth.required || auth.authenticated;
+  const logout = document.getElementById('webui-logout');
+  if (logout) {
+    logout.classList.toggle('hidden', !auth.required);
+    logout.onclick = async () => {
+      logout.disabled = true;
+      try {
+        const response = await fetchWithDeadline('/api/logout', { method: 'POST' });
+        if (!response.ok) throw new Error('退出登录失败，请重试');
+        window.location.reload();
+      } catch (error) {
+        showNotification(error.message, 'error');
+        logout.disabled = false;
+      }
+    };
+  }
+  document.dispatchEvent(new CustomEvent('webui-auth-changed', { detail: auth }));
+  return auth;
+}
+function getWebUiAuth() { return webUiAuth; }
+async function ensureWebUiAccess({ strict = false } = {}) {
   try {
-    const auth = await fetchWithDeadline('/api/auth', {}, response => response.json());
-    const logout = document.getElementById('webui-logout');
-    if (logout) {
-      logout.classList.toggle('hidden', !auth.required);
-      logout.onclick = async () => {
-        logout.disabled = true;
-        try {
-          const response = await fetchWithDeadline('/api/logout', { method: 'POST' });
-          if (!response.ok) throw new Error('退出登录失败，请重试');
-          window.location.reload();
-        } catch (error) {
-          showNotification(error.message, 'error');
-          logout.disabled = false;
-        }
-      };
-    }
+    const auth = await refreshWebUiAuth();
     if (auth.required && !auth.authenticated) {
       await promptWebUiLogin();
+      return await refreshWebUiAuth();
     }
+    return auth;
   } catch (error) {
+    if (strict) throw error;
     // Old servers without /api/auth should still load the panel.
+    webUiAccessReady = true;
   }
-  webUiAccessReady = true;
 }
 
 function isWebUiAccessReady() {
   return webUiAccessReady;
 }
 async function fetchWithWebUiAuth(path, options = {}, consume = response => response) {
+  const { replayAfterLogin = true, ...request } = options;
   let unauthorized = false;
-  const result = await fetchWithDeadline(path, options, response => {
+  const result = await fetchWithDeadline(path, request, response => {
     if (response.status === 401) {
       unauthorized = true;
       return null;
@@ -172,8 +187,13 @@ async function fetchWithWebUiAuth(path, options = {}, consume = response => resp
   if (!unauthorized) {
     return result;
   }
-  await promptWebUiLogin();
-  return fetchWithDeadline(path, options, consume);
+  webUiAccessReady = false;
+  if (!replayAfterLogin) {
+    throw Object.assign(new Error('登录已失效，请登录后确认状态，再重新提交'), { status: 401 });
+  }
+  // Another request may already have created a session or cleared the password.
+  await ensureWebUiAccess({ strict: true });
+  return fetchWithDeadline(path, request, consume);
 }
 async function readManagementResponse(response) {
   if (response.status === 401) {
@@ -193,7 +213,7 @@ async function readManagementResponse(response) {
   }
 
   if (!response.ok) {
-    throw new Error(result?.message || formatHttpError(response, bodyText));
+    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status });
   }
   if (!result) {
     throw new Error('服务器返回空响应');
@@ -223,7 +243,7 @@ function formatHttpError(response, bodyText = '') {
 }
 async function readJsonApiResponse(response) {
   if (response.status === 401) {
-    throw new Error(unauthorizedApiError());
+    throw Object.assign(new Error(unauthorizedApiError()), { status: 401 });
   }
   const bodyText = await response.text();
   let result = null;
@@ -239,7 +259,7 @@ async function readJsonApiResponse(response) {
   }
 
   if (!response.ok) {
-    throw new Error(result?.message || formatHttpError(response, bodyText));
+    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status });
   }
   if (!result) {
     throw new Error('服务器返回空响应');
@@ -256,7 +276,15 @@ async function jsonRequest(method, path, payload, options = {}) {
     request.body = JSON.stringify(payload);
   }
 
-  return fetchWithWebUiAuth(path, request, readJsonApiResponse);
+  const pending = fetchWithWebUiAuth(path, request, readJsonApiResponse);
+  if (options.replayAfterLogin !== false) return pending;
+  authMutations.add(pending);
+  try { return await pending; }
+  finally { authMutations.delete(pending); }
+}
+
+async function settleWebUiAuthMutations() {
+  await Promise.allSettled([...authMutations]);
 }
 
 async function getJson(path, options = {}) {
@@ -285,6 +313,9 @@ export {
   showWebUiLoginGate,
   promptWebUiLogin,
   ensureWebUiAccess,
+  refreshWebUiAuth,
+  getWebUiAuth,
+  settleWebUiAuthMutations,
   isWebUiAccessReady,
   fetchWithWebUiAuth,
   readManagementResponse,
