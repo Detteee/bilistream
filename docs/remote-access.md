@@ -53,4 +53,4 @@ Restart locally with `./bilistream --bind 127.0.0.1`, open the panel directly on
 
 Bind and port can also come from `BILISTREAM_BIND` and `BILISTREAM_PORT`. See [command-line options](advanced-settings.md#command-line-options) for other launch settings.
 
-Multi-server mode has no shared node key. Adding a server checks that server’s panel password once; afterwards servers authenticate each other with their own signing identities. Each server’s admin address must use HTTPS with a valid certificate, or a loopback address for an authenticated tunnel you run yourself. See [multi-server mode](advanced-settings.md#before-you-start).
+Adding a server checks that server’s panel password once. Each server’s admin address must use HTTPS with a valid certificate, or a loopback address for an authenticated tunnel you run yourself. See [multi-server mode](advanced-settings.md#before-you-start).

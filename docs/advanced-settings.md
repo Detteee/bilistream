@@ -79,7 +79,6 @@ See [discovery fallbacks](youtube-discovery.md) and [WebSub tunnel setup](websub
 
 - Set a panel password on every server in **System Settings → 安全**; headless servers can use initial bootstrap from the [remote-access guide](remote-access.md). Adding a server checks that server’s panel password, so cluster setup stays disabled until a password exists. Passwords can differ between servers.
 - Each server needs an admin address the others can reach: HTTPS with a valid certificate (for example through a reverse proxy or tunnel service), or a literal loopback address such as `http://127.0.0.1:8443` for an authenticated tunnel you run yourself. Plain LAN/VPN HTTP, self-signed certificates and redirects are rejected.
-- No shared key file is used. Each server creates its own signing identity, and servers exchange them while one is added.
 
 ### Create a cluster and add servers
 

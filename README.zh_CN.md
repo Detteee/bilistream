@@ -12,8 +12,8 @@
 
 ## 快速开始
 
-1. 从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载适合你系统的版本并解压。
-2. Windows 运行 `bilistream.exe`，Linux/macOS 运行 `./bilistream`。系统依赖见下方。
+1. Linux 或 Windows：从 [GitHub Releases](https://github.com/Detteee/bilistream/releases) 下载并解压。Linux 运行 `./bilistream`，Windows 运行 `bilistream.exe`。
+2. macOS：先[从源码编译](docs/build.zh_CN.md)，再运行 `./target/release/bilistream`。发布包不包含 macOS 版本。
 3. 打开 [http://localhost:3150](http://localhost:3150)。
 4. 跟随向导登录 Bilibili、设置直播间、选择频道和分区。为需要监控的平台选择转播目标，**不转播**则保持关闭。
 
@@ -22,14 +22,15 @@
 ## 系统依赖
 
 - **Windows：**自动下载 ffmpeg、yt-dlp，并尝试安装 Deno。Twitch/Niconico 需另行安装 streamlink，Twitch 还需 ttvlol 插件。[安装步骤](docs/dependencies.zh_CN.md#windows)。
-- **Linux/macOS：**安装 ffmpeg、yt-dlp 和 Deno；Twitch/Niconico 另需 streamlink，Twitch 还需 ttvlol 插件。[Linux](docs/dependencies.zh_CN.md#linux) · [macOS](docs/dependencies.zh_CN.md#macos)。
+- **Linux：**安装 ffmpeg、yt-dlp 和 Deno；Twitch/Niconico 另需 streamlink，Twitch 还需 ttvlol 插件。[安装步骤](docs/dependencies.zh_CN.md#linux)。
+- **macOS：**安装同样的工具，然后从源码编译。[安装步骤](docs/dependencies.zh_CN.md#macos) · [源码编译](docs/build.zh_CN.md)。
 
 ## 使用指南
 
 - [首次设置](docs/first-run.md)
 - [远程访问与密码](docs/remote-access.zh_CN.md)
 - [高级设置与命令行选项](docs/advanced-settings.zh_CN.md)
-- [多服务器](docs/advanced-settings.zh_CN.md#准备工作) — 每台服务器使用自己的签名身份
+- [多服务器](docs/advanced-settings.zh_CN.md#准备工作)
 - [数据、备份与升级](docs/data-and-upgrades.zh_CN.md)
 - [源码编译与桌面应用](docs/build.zh_CN.md)
 - [全部文档](docs/index.md)
