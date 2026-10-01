@@ -29,6 +29,7 @@ This README describes the current source; published releases may contain an earl
 - [First-run setup](docs/first-run.md)
 - [Remote access and password](docs/remote-access.md)
 - [Advanced settings and command-line options](docs/advanced-settings.md)
+- [Multi-server mode](docs/advanced-settings.md#before-you-start) — each server has its own signing identity
 - [Data, backups and upgrades](docs/data-and-upgrades.md)
 - [Build from source and desktop app](docs/build.md)
 - [All documentation](docs/index.md)

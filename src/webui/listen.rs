@@ -115,13 +115,8 @@ pub fn password_required() -> bool {
         .map_or(true, |snapshot| snapshot.password.is_some())
 }
 
-pub(crate) const OBSOLETE_CLUSTER_TOKEN: &str = "BILISTREAM_CLUSTER_TOKEN_FILE / --cluster-token-file 已废弃且不再作为节点凭据。请移除该启动参数，然后在 Web UI 的多服务器设置中创建集群或准备加入集群";
-
 pub(crate) async fn prepare_auth(bind: IpAddr) -> std::io::Result<Arc<AuthState>> {
     tokio::task::spawn_blocking(move || {
-        if std::env::var_os("BILISTREAM_CLUSTER_TOKEN_FILE").is_some() {
-            return Err(std::io::Error::other(OBSOLETE_CLUSTER_TOKEN));
-        }
         // Holds, identity bindings and recovery state load before any monitor.
         let store = crate::storage::global()?;
         crate::cluster::membership::Membership::new(store.clone()).initialize()?;

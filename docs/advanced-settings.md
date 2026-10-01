@@ -29,7 +29,6 @@ The tray is the default on Windows; the console Web UI is the default on Linux/m
 | `--bind ADDR` | `BILISTREAM_BIND` | Admin listen address; default `127.0.0.1`. |
 | `-p`, `--port PORT` | `BILISTREAM_PORT` | Admin port; default `3150`. |
 | `--password PASSWORD`, `--password-file PATH` | `BILISTREAM_PASSWORD` | Initial password import only; saved or explicitly cleared state takes precedence. See [remote access and password](remote-access.md). |
-| `--cluster-token-file PATH` | `BILISTREAM_CLUSTER_TOKEN_FILE` | Removed; startup stops with an error while either is set. See [multi-server mode](#before-you-start). |
 | `--ffmpeg-log-level LEVEL` | `BILISTREAM_FFMPEG_LOG_LEVEL` | `error`, `info` or `debug`; default `error`. |
 | `--reset-panel-password` | — | Clear the panel password offline with the service stopped, then exit; see [recovery](remote-access.md#forgotten-password). |
 | `--export-legacy DIR` | — | Export plaintext for an older binary and exit; see [downgrade](data-and-upgrades.md#downgrade). |
@@ -80,7 +79,7 @@ See [discovery fallbacks](youtube-discovery.md) and [WebSub tunnel setup](websub
 
 - Set a panel password on every server in **System Settings → 安全**; headless servers can use initial bootstrap from the [remote-access guide](remote-access.md). Adding a server checks that server’s panel password, so cluster setup stays disabled until a password exists. Passwords can differ between servers.
 - Each server needs an admin address the others can reach: HTTPS with a valid certificate (for example through a reverse proxy or tunnel service), or a literal loopback address such as `http://127.0.0.1:8443` for an authenticated tunnel you run yourself. Plain LAN/VPN HTTP, self-signed certificates and redirects are rejected.
-- No key files are needed. Each server creates its own signing identity, and servers exchange them while one is added. `--cluster-token-file` and `BILISTREAM_CLUSTER_TOKEN_FILE` are no longer supported; if either is still set, startup stops with an error asking you to remove it.
+- No shared key file is used. Each server creates its own signing identity, and servers exchange them while one is added.
 
 ### Create a cluster and add servers
 
@@ -99,10 +98,6 @@ Every member’s panel has the same controls: add a server, remove one, edit a s
 - A server that still shows **已加入集群** can press **退出集群** after the others have already removed it. The button asks for confirmation, then asks every other server in its member list whether this exact identity is still a member. It turns monitors off and leaves only when each of them returns a signed confirmation that the identity is gone. Channels, credentials and the panel password stay. If any server still accepts the identity, nothing changes; use **移除** instead. If any server does not answer, or the reply fails a clock, signature or revision check and is not that confirmation, nothing changes and the panel names that server. A network partition is not removal. The button stays unavailable while a membership change is in progress. Afterwards, use **准备加入** here and **添加服务器** on a remaining server. The same node ID may be used; joining creates a new identity.
 - The panel shows the current step and the servers that still need to answer. If the page reloads or a reply is lost, it continues the same change; use **重试** instead of starting a new one. A new change can start only after the previous one has reached every server.
 - The server where a change started coordinates it. If that server goes offline, the change stays pending and the other servers stay paused until it returns. Do not remove it or rebuild the cluster to get past the pending change.
-
-### Upgrading from the shared-token cluster
-
-Older versions used a shared key file. That protocol is not compatible, and old and new versions cannot run in one cluster. Stop every server, upgrade all of them and remove the token-file argument or environment variable. An old cluster configuration stays paused (**旧版配置已暂停**) until you create a new cluster on one server and add the others as described above. Settings, channels and credentials are kept. See [data and upgrades](data-and-upgrades.md#upgrade) for backups and rollback.
 
 ## Niconico Live
 

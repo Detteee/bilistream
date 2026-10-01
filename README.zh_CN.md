@@ -29,6 +29,7 @@
 - [首次设置](docs/first-run.md)
 - [远程访问与密码](docs/remote-access.zh_CN.md)
 - [高级设置与命令行选项](docs/advanced-settings.zh_CN.md)
+- [多服务器](docs/advanced-settings.zh_CN.md#准备工作) — 每台服务器使用自己的签名身份
 - [数据、备份与升级](docs/data-and-upgrades.zh_CN.md)
 - [源码编译与桌面应用](docs/build.zh_CN.md)
 - [全部文档](docs/index.md)

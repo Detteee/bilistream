@@ -20,7 +20,7 @@ Backups never contain cluster identities. A backup from a cluster member restore
 
 Stop the old process before starting the new binary. Upgrade imports existing JSON/Cookie files automatically, including older configurations missing newer settings; those settings use their defaults. Original app-owned files are retired only after a verified encrypted recovery copy. External Cookie files are left untouched.
 
-In a cluster, each server keeps its own database and key. Old and new cluster versions cannot run together: before upgrading, stop every server and take a physical backup of each one (stopped data directory, key file, executable and launch command). Then upgrade all servers and recreate the cluster as described in [upgrading from the shared-token cluster](advanced-settings.md#upgrading-from-the-shared-token-cluster).
+In a cluster, each server keeps its own database and key. Old and new builds cannot run together: before upgrading, stop every server and take a physical backup of each one (stopped data directory, key file, executable and launch command). Then upgrade all servers and create the cluster again from **System Settings → 多服务器节点**.
 
 ## Downgrade
 

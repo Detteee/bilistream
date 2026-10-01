@@ -159,9 +159,6 @@ fn parse_launch_args_with(
                     "--restart-password-file",
                 )?));
             }
-            "--cluster-token-file" => {
-                return Err(crate::webui::listen::OBSOLETE_CLUSTER_TOKEN.into());
-            }
             "-p" | "--port" => {
                 let value = take_value(argv, &mut i, inline, "--port")?;
                 port = value
@@ -735,23 +732,6 @@ mod tests {
             .chain(args.iter().map(|s| (*s).to_string()))
             .collect();
         parse_launch_args_with(&argv, None, None, None, None, false)
-    }
-
-    #[test]
-    fn obsolete_cluster_token_file_is_an_actionable_error_not_a_credential() {
-        for args in [
-            &[
-                "--cluster-token-file",
-                "/root/.config/bilistream/cluster-token",
-            ][..],
-            &["--cluster-token-file=/root/.config/bilistream/cluster-token"][..],
-        ] {
-            let error = parse_test_args(args).err().unwrap();
-            assert!(
-                error.contains("已废弃") && error.contains("多服务器设置"),
-                "{error}"
-            );
-        }
     }
 
     #[test]
