@@ -30,8 +30,9 @@ use crate::cluster::{
 use crate::config::{load_config, ClusterConfig, ClusterPeer, Config};
 use crate::plugins::{
     bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    get_bili_live_status, get_ffmpeg_cache_speed, get_ffmpeg_network_stats, get_ffmpeg_speed,
-    is_ffmpeg_hls_cache_active, send_danmaku as send_danmaku_to_bili, set_config_updated,
+    get_bili_live_status, get_bili_room_lock, get_ffmpeg_cache_speed, get_ffmpeg_network_stats,
+    get_ffmpeg_speed, is_ffmpeg_hls_cache_active, send_danmaku as send_danmaku_to_bili,
+    set_config_updated,
 };
 use crate::updater;
 

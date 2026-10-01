@@ -317,6 +317,32 @@ export function formatLiveDuration(unixSeconds) {
   return formatStreamTime(elapsedSec);
 }
 
+/// Active room punishment. A `lock_till` that has already passed is not active,
+/// so a stale status payload does not keep the card locked.
+export function activeRoomLock(bili, nowMs = Date.now()) {
+  if (!bili || bili.room_locked !== true) {
+    return null;
+  }
+  const till = bili.lock_till;
+  if (Number.isFinite(till) && till > 0 && till * 1000 <= nowMs) {
+    return null;
+  }
+  return { lockTill: Number.isFinite(till) && till > 0 ? till : null };
+}
+
+/// Local ban end, including seconds: `YYYY-MM-DD HH:MM:SS`.
+export function formatLockEnd(unixSeconds) {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
+    return '';
+  }
+  const date = new Date(unixSeconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 export function formatLiveClock(unixSeconds) {
   if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
     return '';

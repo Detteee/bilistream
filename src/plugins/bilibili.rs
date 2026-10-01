@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -175,6 +176,23 @@ pub struct BiliLiveStatus {
     pub live_start_ts: Option<i64>,
 }
 
+/// Room punishment snapshot from `room/v1/Room/room_init`.
+///
+/// `get_info` does not carry the ban. `lock_till` is the Unix second the lock
+/// ends; `0` means the response did not give an end time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BiliRoomLock {
+    pub is_locked: bool,
+    pub lock_till: i64,
+    pub hidden_till: i64,
+    pub live_status: i64,
+}
+
+/// One extra second so startLive is not attempted in the same second the lock lifts.
+const ROOM_LOCK_GRACE_SECS: i64 = 1;
+
+static ANNOUNCED_LOCK_TILL: AtomicI64 = AtomicI64::new(-1);
+
 fn json_string(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
 }
@@ -215,6 +233,89 @@ pub(crate) fn parse_bili_live_status(res: &Value) -> Result<BiliLiveStatus, Box<
         live_start_ts: parse_bili_live_time_str(&json_string(&data["live_time"]))
             .map(|dt| dt.timestamp()),
     })
+}
+
+fn json_i64(value: &Value) -> i64 {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .unwrap_or(0)
+}
+
+/// Parses `room/v1/Room/room_init`. A locked room's `lock_till` is the ban end.
+pub fn parse_bili_room_lock(res: &Value) -> Result<BiliRoomLock, Box<dyn Error>> {
+    let code = res["code"].as_i64().unwrap_or(0);
+    if code != 0 {
+        let message = res["message"]
+            .as_str()
+            .or_else(|| res["msg"].as_str())
+            .unwrap_or("Unknown error");
+        return Err(format!("room_init 失败 (错误码 {code}): {message}").into());
+    }
+    let data = &res["data"];
+    if data.is_null() {
+        return Err("Missing data in room_init response".into());
+    }
+    Ok(BiliRoomLock {
+        is_locked: data["is_locked"].as_bool().unwrap_or(false),
+        lock_till: json_i64(&data["lock_till"]),
+        hidden_till: json_i64(&data["hidden_till"]),
+        live_status: json_i64(&data["live_status"]),
+    })
+}
+
+/// How long to wait before the next start attempt.
+///
+/// `None` when the room is not locked, or the ban has already ended, or the
+/// response did not include an end time (`lock_till <= 0`).
+pub fn timed_room_lock_wait_at(lock: &BiliRoomLock, now_unix: i64) -> Option<Duration> {
+    if !lock.is_locked || lock.lock_till <= 0 || lock.lock_till <= now_unix {
+        return None;
+    }
+    let secs = (lock.lock_till - now_unix).saturating_add(ROOM_LOCK_GRACE_SECS);
+    Some(Duration::from_secs(secs as u64))
+}
+
+pub fn timed_room_lock_wait(lock: &BiliRoomLock) -> Option<Duration> {
+    timed_room_lock_wait_at(lock, current_unix_time_secs() as i64)
+}
+
+fn format_lock_end(lock_till: i64) -> Option<String> {
+    chrono::Local
+        .timestamp_opt(lock_till, 0)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+pub fn room_lock_log_line(room: i32, lock: &BiliRoomLock) -> String {
+    let end = format_lock_end(lock.lock_till).unwrap_or_else(|| "未知".to_string());
+    format!(
+        "B站房间 {} 封禁中，解封时间 {}，解封前不再尝试开播（room_init is_locked={} lock_till={} hidden_till={} live_status={}）",
+        room, end, lock.is_locked, lock.lock_till, lock.hidden_till, lock.live_status
+    )
+}
+
+/// Logs the room_init lock once per `lock_till`. A later ban with a new end time logs again.
+pub fn announce_room_lock(room: i32, lock: &BiliRoomLock) {
+    if ANNOUNCED_LOCK_TILL.swap(lock.lock_till, Ordering::Relaxed) == lock.lock_till {
+        return;
+    }
+    tracing::error!("{}", room_lock_log_line(room, lock));
+}
+
+/// Retrieves the room lock from public `room_init`. No credentials.
+pub async fn get_bili_room_lock(room: i32) -> Result<BiliRoomLock, Box<dyn Error>> {
+    // One attempt. The retrying client would stall the monitor for every pass.
+    let (client, _) = bili_status_clients()?;
+    let response = client
+        .get(format!(
+            "https://api.live.bilibili.com/room/v1/Room/room_init?id={room}"
+        ))
+        .send()
+        .await?;
+    let res: Value = crate::plugins::http::response_json_limited(response).await?;
+    parse_bili_room_lock(&res)
 }
 
 /// Retrieves the live status of a Bilibili room from `get_info`.
@@ -404,7 +505,7 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                 return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
             }
             60031 => {
-                // Abnormal streaming behavior - temporary ban
+                // Temporary ban. The end time is not in this body; room_init.lock_till is.
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {})", code);
                 tracing::error!("📛 {}", message);
                 return Err(format!("{}{}", BILI_START_TEMP_BAN_PREFIX, message).into());
@@ -1229,6 +1330,7 @@ pub async fn get_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn credential_cookie_carries_every_configured_field() {
@@ -1289,5 +1391,69 @@ mod tests {
         assert_eq!(status.title, "idle");
         assert_eq!(status.online, 0);
         assert_eq!(status.live_start_ts, None);
+    }
+
+    #[test]
+    fn room_init_lock_till_is_the_ban_end_and_sets_the_wait() {
+        let res = serde_json::json!({
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "room_id": 370627,
+                "is_locked": true,
+                "is_hidden": false,
+                "hidden_till": 0,
+                "lock_till": 1790881195,
+                "live_status": 0
+            }
+        });
+
+        let lock = parse_bili_room_lock(&res).expect("parse room lock");
+        let now = 1790881195 - 140;
+        let wait = timed_room_lock_wait_at(&lock, now).expect("ban still running");
+
+        assert!(lock.is_locked);
+        assert_eq!(lock.lock_till, 1790881195);
+        assert_eq!(wait, Duration::from_secs(141));
+        let line = room_lock_log_line(370627, &lock);
+        assert!(line.contains("lock_till=1790881195"));
+        assert!(line.contains("is_locked=true"));
+        assert!(line.contains("hidden_till=0"));
+        let end = format_lock_end(lock.lock_till).expect("local end time");
+        let parsed = chrono::NaiveDateTime::parse_from_str(&end, "%Y-%m-%d %H:%M:%S")
+            .expect("formatted end");
+        let back = chrono::Local
+            .from_local_datetime(&parsed)
+            .single()
+            .expect("local end");
+        assert_eq!(back.timestamp(), lock.lock_till);
+    }
+
+    #[test]
+    fn an_unlocked_or_expired_room_does_not_wait() {
+        let unlocked = BiliRoomLock {
+            is_locked: false,
+            lock_till: 1790881195,
+            hidden_till: 0,
+            live_status: 0,
+        };
+        assert!(timed_room_lock_wait_at(&unlocked, 1790880000).is_none());
+
+        let expired = BiliRoomLock {
+            is_locked: true,
+            lock_till: 1790881195,
+            hidden_till: 0,
+            live_status: 0,
+        };
+        assert!(timed_room_lock_wait_at(&expired, 1790881195).is_none());
+        assert!(timed_room_lock_wait_at(&expired, 1790881196).is_none());
+
+        let untimed = BiliRoomLock {
+            is_locked: true,
+            lock_till: 0,
+            hidden_till: 0,
+            live_status: 0,
+        };
+        assert!(timed_room_lock_wait_at(&untimed, 1_700_000_000).is_none());
     }
 }

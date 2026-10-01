@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConfigPatch } from '../src/js/config-draft.js';
-import { biliRoomStats, formatLiveClock, formatLiveDuration } from '../src/js/format.js';
+import { activeRoomLock, biliRoomStats, formatLiveClock, formatLiveDuration, formatLockEnd } from '../src/js/format.js';
 
 // The renderer's null-safe public contract needs only the named output nodes.
 const nodes = new Map();
@@ -169,6 +169,58 @@ test('bilibili card paints live duration from get_info, not popularity', () => {
 
   cards.renderBilibiliCard({ is_live: false, title: 'Idle', area_name: '其他单机', area_id: 235 });
   assert.equal(panel.classList.contains('hidden'), true);
+});
+
+test('a room lock shows the ban end and blocks start until lock_till', () => {
+  const status = node('bili-status');
+  const row = node('bili-lock-row');
+  row.classList.add('hidden');
+  const end = node('bili-lock-end');
+  const start = node('startLiveBtn');
+  start.title = '开始直播';
+  const badge = node('app-live-badge');
+  const badgeText = node('app-live-badge-text');
+  node('bili-title');
+  node('bili-area');
+  node('bili-danmaku-command-toggle');
+  const panel = node('bili-network-panel');
+
+  const till = 1_790_881_195;
+  const now = (till - 140) * 1000;
+  assert.equal(activeRoomLock({ room_locked: true, lock_till: till }, now)?.lockTill, till);
+  assert.equal(activeRoomLock({ room_locked: true, lock_till: till }, till * 1000), null);
+  assert.equal(activeRoomLock({ room_locked: false, lock_till: till }, now), null);
+  const date = new Date(till * 1000);
+  const pad = value => String(value).padStart(2, '0');
+  assert.equal(
+    formatLockEnd(till),
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+
+  const future = Math.floor(Date.now() / 1000) + 3600;
+  cards.renderBilibiliCard({
+    is_live: true,
+    ffmpeg_running: true,
+    title: '示例频道 001',
+    room_locked: true,
+    lock_till: future,
+  });
+  assert.equal(panel.classList.contains('hidden'), true);
+  assert.equal(status.className, 'status-indicator status-locked');
+  assert.equal(row.classList.contains('hidden'), false);
+  assert.equal(end.textContent, formatLockEnd(future));
+  assert.equal(start.disabled, true);
+  assert.match(start.title, /解封时间/);
+  assert.equal(badge.classList.contains('is-locked'), true);
+  assert.equal(badge.classList.contains('is-live'), false);
+  assert.equal(badgeText.textContent, '封禁中');
+
+  cards.renderBilibiliCard({ is_live: false, title: 'Idle', room_locked: true, lock_till: 1_700_000_000 });
+  assert.equal(status.className, 'status-indicator status-offline');
+  assert.equal(row.classList.contains('hidden'), true);
+  assert.equal(start.disabled, false);
+  assert.equal(start.title, '开始直播');
+  assert.equal(badgeText.textContent, '未开播');
 });
 
 test('room stays live after handoff, but local network graph disappears', () => {

@@ -12,16 +12,17 @@ use bilistream::plugins::Niconico as NiconicoClient;
 use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
-    bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area, bilibili,
-    check_area_id_with_title, clear_config_updated, clear_manual_restart, clear_manual_stop,
-    clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
-    get_area_name, get_bili_live_status, get_bili_live_time, get_puuid, is_config_updated,
-    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_channel_identity,
-    niconico_configured, resolve_playable_priority_channel, run_danmaku, send_danmaku,
-    set_manual_restart, should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku,
-    stop_ffmpeg, store_prefetched_playable_stream, streamlink_ingest,
-    take_prefetched_playable_stream, wait_config_update_or_timeout, was_manual_restart,
-    was_manual_stop, FfmpegCacheOptions, FfmpegSource, PipedIngest, PriorityChannelPlatform,
+    announce_room_lock, bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area,
+    bilibili, check_area_id_with_title, clear_config_updated, clear_manual_restart,
+    clear_manual_stop, clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg,
+    get_aliases, get_area_name, get_bili_live_status, get_bili_live_time, get_bili_room_lock,
+    get_puuid, is_config_updated, is_danmaku_commands_enabled, is_danmaku_running,
+    is_ffmpeg_running, niconico_channel_identity, niconico_configured,
+    resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
+    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    store_prefetched_playable_stream, streamlink_ingest, take_prefetched_playable_stream,
+    timed_room_lock_wait, wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
+    FfmpegCacheOptions, FfmpegSource, PipedIngest, PriorityChannelPlatform,
     BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
@@ -96,6 +97,33 @@ fn disable_monitors_after_bili_start_temp_ban(cfg: &mut Config) -> bool {
     }
 
     config_changed
+}
+
+/// Waits out a timed room lock. Returns true when the caller should restart the
+/// monitor pass instead of starting the room or shutting monitors off.
+///
+/// A lock with no `lock_till` is not a timed ban; the caller keeps the untimed
+/// start-failure path.
+async fn wait_out_bili_room_lock(room: i32) -> bool {
+    if room <= 0 {
+        return false;
+    }
+    let lock = match get_bili_room_lock(room).await {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::warn!("获取B站房间锁定状态失败: {}", error);
+            return false;
+        }
+    };
+    let Some(wait) = timed_room_lock_wait(&lock) else {
+        return false;
+    };
+    announce_room_lock(room, &lock);
+    crate::webui::state::update_status_cache_with(|status| {
+        status.bilibili.apply_room_lock(&lock);
+    });
+    wait_config_update_or_timeout(wait).await;
+    true
 }
 
 #[derive(PartialEq)]
@@ -544,6 +572,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tracing::info!("⏸️ 弹幕命令已禁用，停止弹幕客户端");
                 stop_danmaku().await;
             }
+        }
+
+        // room_init.lock_till is the ban end. Wait it out before probing sources
+        // or calling startLive; get_info does not carry the lock.
+        if wait_out_bili_room_lock(cfg.bililive.room).await {
+            continue 'outer;
         }
 
         // Validate YouTube/Twitch configuration
@@ -1201,6 +1235,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
                             .unwrap_or(&error);
                         tracing::error!("B站开播失败: {}", message);
+                        // 60031 does not include the end time. A room_init lock with
+                        // lock_till waits; only an untimed ban shuts the monitors off.
+                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
+                            && wait_out_bili_room_lock(cfg.bililive.room).await
+                        {
+                            continue 'outer;
+                        }
                         if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
                             && disable_monitors_after_bili_start_temp_ban(&mut cfg)
                         {

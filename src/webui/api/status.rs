@@ -107,11 +107,20 @@ pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> R
     let live = get_bili_live_status(cfg.bililive.room)
         .await
         .map_err(|e| e.to_string())?;
+    // get_info has no ban clock. A failed room_init leaves the last lock in place.
+    let room_lock = if cfg.bililive.room > 0 {
+        get_bili_room_lock(cfg.bililive.room).await.ok()
+    } else {
+        None
+    };
 
     crate::config::with_current_config(cfg, || {
         update_status_cache_with(|status| {
             status.bilibili.apply_live_status(&live);
             status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
+            if let Some(lock) = &room_lock {
+                status.bilibili.apply_room_lock(lock);
+            }
         })
     });
 

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::plugins::bilibili::BiliLiveStatus;
+use crate::plugins::bilibili::{BiliLiveStatus, BiliRoomLock};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct StatusData {
@@ -40,6 +40,11 @@ pub struct BiliStatus {
     pub online: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_start_ts: Option<i64>,
+    /// Timed room punishment from `room_init`. Absent once the ban has ended.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub room_locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_till: Option<i64>,
     pub stream_quality: Option<String>,
     pub stream_speed: Option<f32>,
     pub stream_cache_speed: Option<f32>,
@@ -55,6 +60,10 @@ pub struct BiliStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stream_cache_bitrate_history: Vec<f32>,
     pub enable_danmaku_command: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl BiliStatus {
@@ -74,6 +83,13 @@ impl BiliStatus {
         } else {
             None
         };
+    }
+
+    /// A future `lock_till` is the ban end. An already-ended lock clears the card.
+    pub fn apply_room_lock(&mut self, lock: &BiliRoomLock) {
+        let timed = crate::plugins::timed_room_lock_wait(lock);
+        self.room_locked = lock.is_locked && (lock.lock_till <= 0 || timed.is_some());
+        self.lock_till = timed.map(|_| lock.lock_till);
     }
 
     pub fn apply_network(&mut self, network: NetworkStatus) {
@@ -483,5 +499,32 @@ mod tests {
         let priority = status.priority_channel.expect("priority status");
         assert!(priority.enabled);
         assert!(priority.auto_restart);
+    }
+
+    #[test]
+    fn a_future_lock_till_stays_on_the_card_and_a_past_one_clears_it() {
+        use crate::plugins::bilibili::BiliRoomLock;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let mut status = BiliStatus::default();
+        let locked = BiliRoomLock {
+            is_locked: true,
+            lock_till: now + 3600,
+            hidden_till: 0,
+            live_status: 0,
+        };
+        status.apply_room_lock(&locked);
+        assert!(status.room_locked);
+        assert_eq!(status.lock_till, Some(locked.lock_till));
+
+        status.apply_room_lock(&BiliRoomLock {
+            lock_till: 1_700_000_000,
+            ..locked
+        });
+        assert!(!status.room_locked);
+        assert_eq!(status.lock_till, None);
     }
 }

@@ -9,9 +9,11 @@
 
 import { setElementDisplay, setElementText } from './dom.js';
 import {
+  activeRoomLock,
   asBitrateHistory,
   biliRoomStats,
   formatAreaText,
+  formatLockEnd,
   formatFps,
   formatHlsCacheStatus,
   formatLiveClock,
@@ -28,6 +30,7 @@ const biliNetworkHistoryLimit = 60;
 
 let lastBiliNetworkLive = false;
 let lastBiliNetworkQuality = null;
+let roomLockActive = false;
 
 /// True while this node runs a publisher, including a stalled publisher.
 export function isBiliNetworkLive() {
@@ -47,15 +50,35 @@ function setStatusIndicator(id, stateClass) {
 
 // Mirrors the Bilibili room state into the top bar so the current state
 // is readable from every view. Absent on the public page.
-export function updateAppLiveBadge(isLive) {
+export function updateAppLiveBadge(isLive, lockLabel = '') {
   const badge = document.getElementById('app-live-badge');
   const text = document.getElementById('app-live-badge-text');
   if (!badge) return;
 
-  badge.classList.toggle('is-live', !!isLive);
+  const locked = !!lockLabel;
+  badge.classList.toggle('is-live', !!isLive && !locked);
+  badge.classList.toggle('is-locked', locked);
+  badge.title = locked ? lockLabel : 'Bilibili 直播间状态';
   if (text) {
-    text.textContent = isLive ? '直播中' : '未开播';
+    text.textContent = locked ? '封禁中' : isLive ? '直播中' : '未开播';
   }
+}
+
+function paintBiliRoomLock(bili) {
+  const lock = activeRoomLock(bili);
+  roomLockActive = !!lock;
+  document.getElementById('bili-lock-row')?.classList.toggle('hidden', !lock);
+  if (lock) {
+    setElementText('bili-lock-end', lock.lockTill ? formatLockEnd(lock.lockTill) : '封禁中');
+  }
+  const start = document.getElementById('startLiveBtn');
+  if (start) {
+    start.disabled = !!lock;
+    start.title = lock
+      ? (lock.lockTill ? `房间封禁中，解封时间 ${formatLockEnd(lock.lockTill)}` : '房间封禁中')
+      : '开始直播';
+  }
+  return lock;
 }
 
 export function setPlatformLiveInfoVisibility(platform, isLive) {
@@ -392,6 +415,17 @@ export function renderBiliNetworkPanel(bili, options = {}) {
     return;
   }
 
+  // A room lock uses the same info rows as an idle card. The live graph
+  // would stack a second block on that row.
+  if (roomLockActive) {
+    panel.classList.add('hidden');
+    panel.classList.remove('single-sided');
+    document.getElementById('bili-network-graph')?.replaceChildren();
+    lastBiliNetworkLive = false;
+    lastBiliNetworkQuality = null;
+    return;
+  }
+
   lastBiliNetworkLive = bili.ffmpeg_running === true;
   lastBiliNetworkQuality = lastBiliNetworkLive
     ? (Number.isFinite(bili.stream_speed)
@@ -438,8 +472,15 @@ export function renderBiliNetworkPanel(bili, options = {}) {
 export function renderBilibiliCard(bili, options = {}) {
   const { readonly = false, showNetwork = true } = options;
 
-  setStatusIndicator('bili-status', bili.is_live ? 'status-live' : 'status-offline');
-  updateAppLiveBadge(bili.is_live);
+  const lock = paintBiliRoomLock(bili);
+  const lockLabel = lock
+    ? (lock.lockTill ? `解封 ${formatLockEnd(lock.lockTill)}` : '房间封禁中')
+    : '';
+  setStatusIndicator(
+    'bili-status',
+    bili.is_live && !lock ? 'status-live' : lock ? 'status-locked' : 'status-offline'
+  );
+  updateAppLiveBadge(bili.is_live, lockLabel);
   setElementText('bili-title', bili.title || '-');
   setElementText('bili-area', formatAreaText(bili.area_name, bili.area_id));
   paintBiliLiveStats(bili, options);

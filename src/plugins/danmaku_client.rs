@@ -669,6 +669,25 @@ impl BilibiliDanmakuClient {
             | "RANK_CHANGED"
             | "RANK_CHANGED_V2"
             | "ENTRY_EFFECT" => {}
+            "ROOM_LOCK" => {
+                // The packet carries no duration. room_init.lock_till is the ban end.
+                // This is a room punishment, not a source-channel warning.
+                let room_id = self.app_config.bililive.room;
+                warn!("B站房间锁定 ROOM_LOCK");
+                tokio::spawn(async move {
+                    match crate::plugins::get_bili_room_lock(room_id).await {
+                        Ok(lock) if lock.is_locked => {
+                            crate::plugins::announce_room_lock(room_id, &lock);
+                        }
+                        Ok(_) => {
+                            warn!("收到 ROOM_LOCK，但 room_init 显示房间未锁定");
+                        }
+                        Err(error) => {
+                            error!("查询房间锁定状态失败: {}", error);
+                        }
+                    }
+                });
+            }
             "ROOM_CONTENT_AUDIT_REPORT" => {
                 if let Some(data) = &message.data {
                     if let Some(title) = data["audit_title"].as_str() {

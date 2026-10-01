@@ -443,6 +443,16 @@ use {
   animation: pulse-dot 2s var(--ease) infinite;
 }
 
+.live-badge.is-locked {
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.live-badge.is-locked .live-badge__dot {
+  background: var(--warn);
+}
+
 @keyframes pulse-dot {
   0%,
   100% {
@@ -1266,6 +1276,11 @@ input[type="checkbox"] {
 .status-offline {
   background: var(--text-mute);
   box-shadow: none;
+}
+
+.status-locked {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
 }
 
 /* Info rows -------------------------------------------------------------- */
