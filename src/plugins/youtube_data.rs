@@ -22,6 +22,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const VIDEOS_URL: &str = "https://www.googleapis.com/youtube/v3/videos";
+const CHANNELS_URL: &str = "https://www.googleapis.com/youtube/v3/channels";
 pub(crate) const MAX_IDS_PER_CALL: usize = 50;
 /// Per key. Google's default is 10,000 units/day; stop short so retries and
 /// calls made before the local count noticed a new day still fit.
@@ -699,6 +700,84 @@ pub(crate) async fn fetch_videos(
     Ok(videos)
 }
 
+/// `channels.list` thumbnail URLs, the `yt3.ggpht.com` images Holodex stores as
+/// `channel.photo`. One unit per 50 ids, on the protected lane. High, then
+/// medium, then the default size. An empty URL is omitted.
+pub(crate) async fn fetch_channel_thumbnails(
+    keys: &[String],
+    proxy: Option<&str>,
+    ids: &[String],
+) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let mut urls = HashMap::new();
+    for chunk in ids.chunks(MAX_IDS_PER_CALL) {
+        let ids = chunk.join(",");
+        let query = [("part", "snippet"), ("id", ids.as_str())];
+        let body: Option<ChannelsResponse> =
+            google_get(keys, proxy, CHANNELS_URL, &query, 1, Lane::Protected).await?;
+        if let Some(body) = body {
+            urls.extend(channel_thumbnail_map(&body.items));
+        }
+    }
+    Ok(urls)
+}
+
+fn channel_thumbnail_map(items: &[ChannelItem]) -> HashMap<String, String> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let url = best_channel_thumbnail(&item.snippet.thumbnails)?;
+            (!item.id.is_empty()).then(|| (item.id.clone(), url))
+        })
+        .collect()
+}
+
+fn best_channel_thumbnail(thumbs: &ChannelThumbs) -> Option<String> {
+    [
+        thumbs.high.as_ref(),
+        thumbs.medium.as_ref(),
+        thumbs.default_size.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|thumb| thumb.url.trim())
+    .find(|url| !url.is_empty())
+    .map(str::to_string)
+}
+
+#[derive(Deserialize, Default)]
+struct ChannelsResponse {
+    #[serde(default)]
+    items: Vec<ChannelItem>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChannelItem {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    snippet: ChannelSnippet,
+}
+
+#[derive(Deserialize, Default)]
+struct ChannelSnippet {
+    #[serde(default)]
+    thumbnails: ChannelThumbs,
+}
+
+#[derive(Deserialize, Default)]
+struct ChannelThumbs {
+    high: Option<ChannelThumb>,
+    medium: Option<ChannelThumb>,
+    #[serde(rename = "default")]
+    default_size: Option<ChannelThumb>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChannelThumb {
+    #[serde(default)]
+    url: String,
+}
+
 pub(crate) async fn videos_for(
     keys: &[String],
     proxy: Option<&str>,
@@ -880,6 +959,44 @@ mod tests {
             placeholder_type: None,
             yt_confirmed: false,
         }
+    }
+
+    #[test]
+    fn channel_thumbnails_prefer_the_high_youtube_cdn_image() {
+        let body = r#"{
+            "items": [
+                {
+                    "id": "UCX4WL24YEOUYd7qDsFSLDOw",
+                    "snippet": {
+                        "thumbnails": {
+                            "default": {"url": "https://yt3.ggpht.com/a=s88"},
+                            "medium": {"url": "https://yt3.ggpht.com/a=s240"},
+                            "high": {"url": "https://yt3.ggpht.com/a=s800"}
+                        }
+                    }
+                },
+                {
+                    "id": "UC-WX1CXssCtCtc2TNIRnJzg",
+                    "snippet": {
+                        "thumbnails": {
+                            "medium": {"url": " https://yt3.ggpht.com/b=s240 "}
+                        }
+                    }
+                },
+                {"id": "UCempty000000000000000000", "snippet": {"thumbnails": {}}}
+            ]
+        }"#;
+        let parsed: ChannelsResponse = serde_json::from_str(body).unwrap();
+        let urls = channel_thumbnail_map(&parsed.items);
+        assert_eq!(
+            urls.get("UCX4WL24YEOUYd7qDsFSLDOw").map(String::as_str),
+            Some("https://yt3.ggpht.com/a=s800")
+        );
+        assert_eq!(
+            urls.get("UC-WX1CXssCtCtc2TNIRnJzg").map(String::as_str),
+            Some("https://yt3.ggpht.com/b=s240")
+        );
+        assert!(!urls.contains_key("UCempty000000000000000000"));
     }
 
     fn video(id: &str, details: Option<YtLiveDetails>) -> YtVideo {

@@ -5,8 +5,8 @@
 //! ever read the snapshot, so their traffic never reaches Holodex or Google.
 
 use axum::body::Bytes;
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,165 @@ fn thumbnail_for(stream: &HolodexStream) -> Option<String> {
     }
 
     (!stream.id.is_empty()).then(|| format!("https://i.ytimg.com/vi/{}/sddefault.jpg", stream.id))
+}
+
+/// Holodex serves a channel image for every YouTube channel id. Discovery rows
+/// often have no `channel.photo`, and the page only paints an avatar from that
+/// field. When this host is down, `use_youtube_cdn_avatars` substitutes the
+/// `yt3.ggpht.com` url Holodex stores as `channel.photo`.
+fn channel_avatar_url(channel_id: &str) -> Option<String> {
+    // YouTube channel ids are `UC` plus 22 url-safe characters. Anything else
+    // must not be interpolated into a fetch URL.
+    let youtube_id = channel_id.len() == 24
+        && channel_id.starts_with("UC")
+        && channel_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    youtube_id.then(|| format!("https://holodex.net/statics/channelImg/{channel_id}/100.png"))
+}
+
+fn channel_id_from_holodex_image(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://holodex.net/statics/channelImg/")?;
+    let (id, file) = rest.split_once('/')?;
+    (file == "100.png" && channel_avatar_url(id).is_some()).then_some(id)
+}
+
+/// YouTube CDN avatars learned after a Holodex channel-image miss.
+struct CdnAvatars {
+    urls: HashMap<String, String>,
+    /// Channels YouTube answered with no usable thumbnail.
+    missing: HashSet<String>,
+    /// A failed `channels.list`. Don't spend another unit until this passes.
+    retry_at: Option<Instant>,
+}
+
+static CDN_AVATARS: Mutex<Option<CdnAvatars>> = Mutex::new(None);
+
+fn with_cdn_avatars<T>(f: impl FnOnce(&mut CdnAvatars) -> T) -> T {
+    let mut guard = CDN_AVATARS.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned YouTube channel-avatar cache");
+        poisoned.into_inner()
+    });
+    f(guard.get_or_insert_with(|| CdnAvatars {
+        urls: HashMap::new(),
+        missing: HashSet::new(),
+        retry_at: None,
+    }))
+}
+
+/// Replaces a Holodex channel image the node could not fetch with the YouTube
+/// CDN url for that channel. A photo Holodex already supplied is left as-is.
+fn apply_cdn_avatars(
+    streams: &mut [PublicStream],
+    cdn_by_channel: &HashMap<String, String>,
+    holodex_fetched: impl Fn(&str) -> bool,
+) {
+    for stream in streams {
+        let Some(photo) = stream.channel_photo.clone() else {
+            continue;
+        };
+        let Some(channel_id) = channel_id_from_holodex_image(&photo) else {
+            continue;
+        };
+        if holodex_fetched(&photo) {
+            continue;
+        }
+        let Some(cdn) = cdn_by_channel
+            .get(channel_id)
+            .filter(|url| super::thumbnails::host_is_allowed(url))
+        else {
+            continue;
+        };
+        stream.channel_photo = Some(cdn.clone());
+    }
+}
+
+fn uncached_holodex_channel_ids(streams: &[PublicStream]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for stream in streams {
+        let Some(photo) = stream.channel_photo.as_deref() else {
+            continue;
+        };
+        let Some(channel_id) = channel_id_from_holodex_image(photo) else {
+            continue;
+        };
+        if super::thumbnails::thumbnail_cached(photo) || ids.iter().any(|id| id == channel_id) {
+            continue;
+        }
+        ids.push(channel_id.to_string());
+    }
+    ids
+}
+
+/// When the Holodex channel image is not in the cache, fill `channel.photo`
+/// from YouTube's CDN. One `channels.list` unit covers up to 50 channels, and
+/// a hit is remembered so the next rebuild does not ask again.
+async fn use_youtube_cdn_avatars(streams: &mut [PublicStream], cfg: &crate::config::Config) {
+    if crate::cluster::yt_index_role().is_peer() {
+        return;
+    }
+    let now = Instant::now();
+    let mut ask = Vec::new();
+    let known = with_cdn_avatars(|cache| {
+        if cache.retry_at.is_some_and(|at| at <= now) {
+            cache.retry_at = None;
+        }
+        let waiting = cache.retry_at.is_some();
+        for id in uncached_holodex_channel_ids(streams) {
+            if waiting || cache.urls.contains_key(&id) || cache.missing.contains(&id) {
+                continue;
+            }
+            ask.push(id);
+        }
+        cache.urls.clone()
+    });
+    apply_cdn_avatars(streams, &known, super::thumbnails::thumbnail_cached);
+    if ask.is_empty() {
+        return;
+    }
+    let keys = cfg.youtube_api_keys();
+    if keys.is_empty() {
+        return;
+    }
+    match crate::plugins::youtube_data::fetch_channel_thumbnails(
+        &keys,
+        cfg.youtube.proxy.as_deref(),
+        &ask,
+    )
+    .await
+    {
+        Ok(found) => {
+            let accepted = with_cdn_avatars(|cache| {
+                for id in &ask {
+                    match found
+                        .get(id)
+                        .filter(|url| super::thumbnails::host_is_allowed(url))
+                    {
+                        Some(url) => {
+                            cache.urls.insert(id.clone(), url.clone());
+                        }
+                        None => {
+                            cache.missing.insert(id.clone());
+                        }
+                    }
+                }
+                cache.urls.clone()
+            });
+            apply_cdn_avatars(streams, &accepted, super::thumbnails::thumbnail_cached);
+        }
+        Err(error) => {
+            let first = with_cdn_avatars(|cache| {
+                let first = cache.retry_at.is_none();
+                cache.retry_at = Some(now + KEEP_LEASE);
+                first
+            });
+            if first {
+                tracing::warn!("YouTube 频道头像查询失败: {}", error);
+            } else {
+                tracing::debug!("YouTube 频道头像查询失败: {}", error);
+            }
+        }
+    }
 }
 
 fn twitch_login_from_link(link: Option<&str>) -> Option<String> {
@@ -327,7 +486,11 @@ pub(super) fn build_public_streams(
                 published_at: stream.published_at,
                 live_viewers: stream.live_viewers,
                 channel_name: stream.channel.name,
-                channel_photo: stream.channel.photo.filter(|photo| !photo.is_empty()),
+                channel_photo: stream
+                    .channel
+                    .photo
+                    .filter(|photo| !photo.is_empty())
+                    .or_else(|| channel_avatar_url(&stream.channel.id)),
                 thumbnail,
                 link: stream.link,
                 suggested_area_id,
@@ -470,7 +633,19 @@ async fn rebuild_public_streams() -> bool {
 
     // Channel photos use the same cache: the page's CSP only allows same-origin
     // images, and those CDNs are often unreachable from the viewer's network.
-    super::thumbnails::reconcile(&image_urls(&public)).await;
+    // A Holodex channel image that did not cache is replaced with the YouTube
+    // CDN url before the page is served.
+    if super::thumbnails::holodex_channel_images_down() {
+        let known = with_cdn_avatars(|cache| cache.urls.clone());
+        apply_cdn_avatars(&mut public, &known, super::thumbnails::thumbnail_cached);
+    }
+    let fetched = image_urls(&public);
+    super::thumbnails::reconcile(&fetched).await;
+    use_youtube_cdn_avatars(&mut public, &cfg).await;
+    let resolved = image_urls(&public);
+    if resolved != fetched {
+        super::thumbnails::reconcile(&resolved).await;
+    }
     rewrite_thumbnails(&mut public);
 
     store_snapshot(&public, list.holodex_ok_at, list.holodex_every);
@@ -561,7 +736,7 @@ mod tests {
     use crate::config::ChannelPlatforms;
     use crate::plugins::holodex::HolodexChannel;
     use crate::plugins::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
 
     #[test]
     fn the_list_is_served_while_either_source_is_healthy() {
@@ -1148,6 +1323,69 @@ mod tests {
         assert_eq!(
             thumbnail_for(&yt).as_deref(),
             Some("https://i.ytimg.com/vi/vid1/sddefault.jpg")
+        );
+    }
+
+    #[test]
+    fn a_channel_without_a_photo_uses_the_holodex_channel_image() {
+        let yt = stream("ねむ", None, "UCX4WL24YEOUYd7qDsFSLDOw");
+        let built = build(vec![yt], true, &[]);
+        let photo = "https://holodex.net/statics/channelImg/UCX4WL24YEOUYd7qDsFSLDOw/100.png";
+        assert_eq!(built[0].channel_photo.as_deref(), Some(photo));
+        assert!(image_urls(&built).iter().any(|url| url == photo));
+
+        let mut url = built[0].channel_photo.clone();
+        rewrite_image(&mut url);
+        assert!(url.unwrap().starts_with("/t/"));
+
+        let mut kept = stream("ランク", None, "UCX4WL24YEOUYd7qDsFSLDOw");
+        kept.channel.photo = Some("https://yt3.ggpht.com/a.jpg".to_string());
+        let built = build(vec![kept], true, &[]);
+        assert_eq!(
+            built[0].channel_photo.as_deref(),
+            Some("https://yt3.ggpht.com/a.jpg")
+        );
+
+        let odd = stream("x", None, "not-a-channel");
+        assert_eq!(build(vec![odd], true, &[])[0].channel_photo, None);
+    }
+
+    #[test]
+    fn a_failed_holodex_channel_image_uses_the_youtube_cdn() {
+        let channel = "UCX4WL24YEOUYd7qDsFSLDOw";
+        let cdn = "https://yt3.ggpht.com/a=s800-c-k-c0x00ffffff-no-rj";
+        let mut found = HashMap::new();
+        found.insert(channel.to_string(), cdn.to_string());
+
+        let mut missed = build(vec![stream("ねむ", None, channel)], true, &[]);
+        apply_cdn_avatars(&mut missed, &found, |_| false);
+        assert_eq!(missed[0].channel_photo.as_deref(), Some(cdn));
+
+        let mut fetched = build(vec![stream("ねむ", None, channel)], true, &[]);
+        apply_cdn_avatars(&mut fetched, &found, |_| true);
+        assert_eq!(
+            fetched[0].channel_photo.as_deref(),
+            Some("https://holodex.net/statics/channelImg/UCX4WL24YEOUYd7qDsFSLDOw/100.png")
+        );
+
+        found.insert(
+            channel.to_string(),
+            "https://evil.example/a.jpg".to_string(),
+        );
+        let mut rejected = build(vec![stream("ねむ", None, channel)], true, &[]);
+        apply_cdn_avatars(&mut rejected, &found, |_| false);
+        assert_eq!(
+            rejected[0].channel_photo.as_deref(),
+            Some("https://holodex.net/statics/channelImg/UCX4WL24YEOUYd7qDsFSLDOw/100.png")
+        );
+
+        let mut kept = stream("ランク", None, channel);
+        kept.channel.photo = Some("https://yt3.ggpht.com/already.jpg".to_string());
+        let mut kept = build(vec![kept], true, &[]);
+        apply_cdn_avatars(&mut kept, &found, |_| false);
+        assert_eq!(
+            kept[0].channel_photo.as_deref(),
+            Some("https://yt3.ggpht.com/already.jpg")
         );
     }
 

@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +37,12 @@ const ALLOWED_HOSTS: &[&str] = &[
 const MAX_BYTES: usize = 512 * 1024;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// After the Holodex channel-image host fails, skip it for one public-list
+/// lease so every rebuild does not wait out `FETCH_TIMEOUT`.
+const HOLODEX_IMAGE_BACKOFF: Duration = Duration::from_secs(4 * 60);
+const HOLODEX_CHANNEL_IMAGE: &str = "https://holodex.net/statics/channelImg/";
+
+static HOLODEX_IMAGES_DOWN_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// A url must be missing from this many consecutive good responses before its
 /// file is removed, so a stream flickering out of the list does not cause a
@@ -247,10 +253,66 @@ async fn delete_unreferenced(dir: &Path, index: &mut CacheIndex, wanted: &[(Stri
     }
 }
 
+/// Whether this url's bytes are already stored. A miss is what tells the
+/// public list to ask YouTube for the channel avatar instead.
+pub(super) fn thumbnail_cached(url: &str) -> bool {
+    let key = thumbnail_key(url);
+    INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|index| index.entries.contains_key(&key)))
+        .unwrap_or(false)
+}
+
+/// The Holodex channel-image host failed recently. Callers can use a YouTube
+/// CDN url without waiting on another timeout.
+pub(super) fn holodex_channel_images_down() -> bool {
+    with_holodex_images(|until| until.is_some_and(|until| until > Instant::now()))
+}
+
+fn holodex_channel_image(url: &str) -> bool {
+    url.starts_with(HOLODEX_CHANNEL_IMAGE)
+}
+
+fn with_holodex_images<T>(f: impl FnOnce(&mut Option<Instant>) -> T) -> T {
+    let mut guard = HOLODEX_IMAGES_DOWN_UNTIL.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned Holodex channel-image outage flag");
+        poisoned.into_inner()
+    });
+    f(&mut guard)
+}
+
+fn note_holodex_channel_images_down() {
+    with_holodex_images(|until| *until = Some(Instant::now() + HOLODEX_IMAGE_BACKOFF));
+}
+
+fn note_holodex_channel_images_up() {
+    with_holodex_images(|until| *until = None);
+}
+
+/// Transport failures and 5xx mean the host is down. A 4xx is that one image.
+fn upstream_outage(transport_error: bool, status: Option<reqwest::StatusCode>) -> bool {
+    transport_error || status.is_some_and(|status| status.is_server_error())
+}
+
 async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry> {
+    if holodex_channel_image(url) && holodex_channel_images_down() {
+        return None;
+    }
     let client = thumbnail_client().ok()?;
-    let response = client.get(url).timeout(FETCH_TIMEOUT).send().await.ok()?;
+    let response = match client.get(url).timeout(FETCH_TIMEOUT).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            if holodex_channel_image(url) {
+                note_holodex_channel_images_down();
+            }
+            return None;
+        }
+    };
     if !response.status().is_success() {
+        if holodex_channel_image(url) && upstream_outage(false, Some(response.status())) {
+            note_holodex_channel_images_down();
+        }
         return None;
     }
 
@@ -273,6 +335,9 @@ async fn fetch_thumbnail(dir: &Path, key: &str, url: &str) -> Option<CacheEntry>
 
     tokio::fs::write(file_path(dir, key), &bytes).await.ok()?;
 
+    if holodex_channel_image(url) {
+        note_holodex_channel_images_up();
+    }
     Some(CacheEntry {
         content_type,
         missing_rounds: 0,
@@ -336,6 +401,15 @@ mod tests {
         assert!(result.is_none());
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         server.abort();
+    }
+
+    #[test]
+    fn a_holodex_channel_image_outage_is_a_transport_failure_or_5xx() {
+        use reqwest::StatusCode;
+        assert!(upstream_outage(true, None));
+        assert!(upstream_outage(false, Some(StatusCode::BAD_GATEWAY)));
+        assert!(!upstream_outage(false, Some(StatusCode::NOT_FOUND)));
+        assert!(!upstream_outage(false, None));
     }
 
     #[test]
