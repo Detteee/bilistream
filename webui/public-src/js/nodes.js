@@ -36,6 +36,19 @@ export function clusterIsRestreaming(nodes) {
   return Array.isArray(nodes) && nodes.some((node) => node.role === 'active' && isRestreaming(node));
 }
 
+/// Who that node is pushing, for the 直播与预告 highlight. Null when idle.
+export function activeRestream(nodes) {
+  if (!Array.isArray(nodes)) return null;
+  const node = nodes.find((item) => item.role === 'active' && isRestreaming(item));
+  const stream = node?.stream;
+  if (!stream) return null;
+  return {
+    platform: stream.platform || '',
+    channel_name: stream.channel_name || '',
+    title: stream.title || '',
+  };
+}
+
 function hasDetail(node) {
   return node.ffmpeg_running === true;
 }

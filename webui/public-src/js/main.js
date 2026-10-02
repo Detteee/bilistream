@@ -5,9 +5,10 @@
 // the tab is hidden.
 
 import { renderStatusCards, renderNiconicoCard, setStatusCardsMessage } from '../../src/js/status-cards.js';
-import { clusterIsRestreaming, renderNodes } from './nodes.js';
+import { applyPublicFold, bindPublicFold } from './fold.js';
+import { clusterIsRestreaming, activeRestream, renderNodes } from './nodes.js';
 import { createJsonPoller } from './request.js';
-import { nextServerCardPlacement } from './server-placement.js';
+import { nextStatusFold } from './status-fold.js';
 import { bindDialog, bindListboxKeyboard } from '../../src/js/dialog.js';
 import {
   closeAreaModal,
@@ -19,6 +20,7 @@ import {
   setDanmakuEnabled,
   setStatus,
   setStatusFreshness,
+  setOnAir,
   setStreamsFreshness,
   startDurationTicker,
   stopDurationTicker,
@@ -37,26 +39,15 @@ let areasTimer = null;
 const getJson = createJsonPoller();
 let statusCardsSignature = null;
 let nodesSignature = null;
-/// Matches markup until the first successful status places the card.
-let serverCardState = { placement: 'above', restreaming: null };
+/// Matches markup: the accordion starts closed. 服务器 stays above the
+/// platform cards inside it; only open/closed changes with 转播中.
+let statusFold = { restreaming: null, open: false };
 
-/// Move the existing 服务器 card; never clone it (meters stay attached).
-function applyServerCardPlacement(placement) {
-  const shell = document.querySelector('.public-shell');
-  const dashboard = shell?.querySelector(':scope > .dashboard');
-  const streams = document.getElementById('public-streams');
-  const card = shell?.querySelector('.cluster-card');
-  if (!shell || !dashboard || !streams || !card) return;
-
-  if (placement === 'above') {
-    if (card.parentElement !== dashboard || dashboard.firstElementChild !== card) {
-      dashboard.insertBefore(card, dashboard.firstElementChild);
-    }
-  } else if (card.previousElementSibling !== streams) {
-    streams.after(card);
-  }
-
-  card.querySelector('.public-streams-link')?.classList.toggle('hidden', placement === 'below');
+function setBrandMark(streaming) {
+  const logo = document.querySelector('.appbar .brand__logo');
+  if (!logo) return;
+  const next = streaming ? 'icon.png' : 'icon-blue.png';
+  if (logo.getAttribute('src') !== next) logo.setAttribute('src', next);
 }
 
 function setSyncBanner(message = '') {
@@ -91,14 +82,13 @@ async function refreshStatus() {
       renderNodes(status.nodes);
       nodesSignature = nextNodes;
     }
-    const nextPlacement = nextServerCardPlacement(serverCardState, {
-      type: 'status',
-      restreaming,
-    });
-    if (nextPlacement.placement !== serverCardState.placement) {
-      applyServerCardPlacement(nextPlacement.placement);
+    const nextFold = nextStatusFold(statusFold, { type: 'status', restreaming });
+    if (nextFold !== statusFold) {
+      statusFold = nextFold;
+      applyPublicFold(statusFold);
     }
-    serverCardState = nextPlacement;
+    setBrandMark(restreaming);
+    setOnAir(restreaming ? activeRestream(status.nodes) : null);
     setDanmakuEnabled(
       status.bilibili?.enable_danmaku_command,
       restreaming,
@@ -109,7 +99,7 @@ async function refreshStatus() {
     console.debug('status refresh failed', error);
     statusCardsSignature = null;
     nodesSignature = null;
-    serverCardState = nextServerCardPlacement(serverCardState, { type: 'refresh-failed' });
+    statusFold = nextStatusFold(statusFold, { type: 'refresh-failed' });
     setStatusFreshness(false);
     setStatusCardsMessage('连接中断');
     renderNodes(null, '连接中断，节点状态未知');
@@ -202,6 +192,10 @@ function initModals() {
 function init() {
   initTheme();
   initModals();
+  bindPublicFold(() => {
+    statusFold = nextStatusFold(statusFold, { type: 'toggle' });
+    applyPublicFold(statusFold);
+  });
 
   loadAreas();
   refreshStatus();

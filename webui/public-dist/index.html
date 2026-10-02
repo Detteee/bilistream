@@ -65,8 +65,18 @@
   <header class="appbar">
     <div class="container appbar__inner">
       <div class="brand">
-        <img class="brand__logo" src="icon.png" alt="" width="30" height="30">
+        <img class="brand__logo" src="icon-blue.png" alt="" width="30" height="30">
         <span class="brand__name">直播状态</span>
+        <button id="public-fold-trigger" class="public-fold__trigger btn-ghost icon-btn" type="button"
+          aria-expanded="false" aria-controls="public-fold-panel" aria-label="展开状态" title="展开状态">
+          <span class="public-fold__chevron" aria-hidden="true">
+            <svg class="public-fold__chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+          <span class="public-fold__ripples" aria-hidden="true"></span>
+        </button>
       </div>
 
       <span class="live-badge" id="app-live-badge" title="Bilibili 直播间状态">
@@ -87,7 +97,10 @@
   <main class="container public-shell">
     <div class="public-banner hidden" id="public-sync-banner" role="status" aria-live="polite">正在与直播节点同步，以下信息可能不是最新的。</div>
 
-    <div class="dashboard">
+    <section class="public-fold" id="public-fold" hidden>
+      <div class="public-fold__panel" id="public-fold-panel" inert>
+        <div class="public-fold__panel-inner">
+          <div class="dashboard" id="public-dashboard">
       <article class="card cluster-card" data-platform="cluster">
         <div class="dashboard-card-header cluster-header">
           <h2 class="dashboard-card-title">
@@ -230,13 +243,17 @@
           </div>
         </div>
       </article>
-    </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section class="panel" id="public-streams" tabindex="-1" aria-labelledby="public-streams-title">
       <div class="panel__head">
-        <h2 class="panel__title" id="public-streams-title">
-          <img class="panel__title-mark" src="icon-blue.png" alt="" width="20" height="20">
-          直播与预告
+        <h2 class="panel__title public-streams-title" id="public-streams-title">
+          <span class="public-streams-live">直播中 <span id="public-live-count">0</span></span>
+          <span class="public-streams-sep" aria-hidden="true">/</span>
+          <span class="public-streams-upcoming">预告 <span id="public-upcoming-count">0</span></span>
         </h2>
       </div>
       <div class="panel__body">

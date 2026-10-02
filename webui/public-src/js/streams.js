@@ -11,6 +11,7 @@ import {
   formatScheduledStart,
   timestampMs,
 } from '../../src/js/format.js';
+import { streamIsOnAir } from './on-air.js';
 
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
@@ -36,6 +37,8 @@ let areasFresh = false;
 /// True while an active node is pushing. Distinct from the config switch: a
 /// restream keeps that on and only gates the processor.
 let restreaming = false;
+/// The publishing node's platform / channel / title, or null while idle.
+let onAir = null;
 
 function rerenderStreams() {
   if (lastStreams) renderStreams(lastStreams, { fresh: streamsFresh });
@@ -51,6 +54,19 @@ export function setStatusFreshness(fresh) {
 export function setStreamsFreshness(fresh) {
   if (streamsFresh === !!fresh) return;
   streamsFresh = !!fresh;
+  rerenderStreams();
+}
+
+export function setOnAir(next) {
+  const normalized = next && (next.platform || next.channel_name || next.title)
+    ? {
+      platform: next.platform || '',
+      channel_name: next.channel_name || '',
+      title: next.title || '',
+    }
+    : null;
+  if (JSON.stringify(onAir) === JSON.stringify(normalized)) return;
+  onAir = normalized;
   rerenderStreams();
 }
 
@@ -344,7 +360,7 @@ export function startDurationTicker() {
   }
 }
 
-function createThumb(stream, isLive) {
+function createThumb(stream, isLive, onAirNow) {
   const thumb = document.createElement('div');
   thumb.className = 'holodex-stream-thumb';
 
@@ -375,6 +391,16 @@ function createThumb(stream, isLive) {
     label.textContent = stream.topic;
     topic.appendChild(label);
     thumb.appendChild(topic);
+  }
+
+  if (onAirNow) {
+    const badge = document.createElement('div');
+    badge.className = 'holodex-stream-thumb-on-air';
+    const mark = document.createElement('span');
+    mark.className = 'holodex-stream-on-air';
+    mark.textContent = '正在转播';
+    badge.appendChild(mark);
+    thumb.appendChild(badge);
   }
 
   const duration = createDurationOverlay(stream, isLive);
@@ -487,9 +513,10 @@ function updateViewerCount(card, viewers) {
 }
 
 function createStreamCard(stream, isLive) {
+  const onAirNow = streamIsOnAir(stream, onAir);
   const card = document.createElement('div');
-  card.className = 'holodex-stream-card';
-  card.append(createThumb(stream, isLive));
+  card.className = onAirNow ? 'holodex-stream-card is-on-air' : 'holodex-stream-card';
+  card.append(createThumb(stream, isLive, onAirNow));
 
   const body = document.createElement('div');
   body.className = 'holodex-stream-body';
@@ -553,9 +580,19 @@ function createStreamCard(stream, isLive) {
   return card;
 }
 
+function setStreamCounts(live, upcoming) {
+  const liveEl = document.getElementById('public-live-count');
+  const upcomingEl = document.getElementById('public-upcoming-count');
+  const liveText = String(live);
+  const upcomingText = String(upcoming);
+  if (liveEl && liveEl.textContent !== liveText) liveEl.textContent = liveText;
+  if (upcomingEl && upcomingEl.textContent !== upcomingText) upcomingEl.textContent = upcomingText;
+}
+
 export function renderStreams(streams, { fresh = true } = {}) {
   streamsFresh = fresh && Array.isArray(streams);
-  const gate = `${danmakuEnabled}:${restreaming}:${statusFresh}:${streamsFresh}:${areasFresh}:${areas.some(areaIsUsable)}`;
+  const onAirGate = onAir ? `${onAir.platform}\n${onAir.channel_name}\n${onAir.title}` : '';
+  const gate = `${danmakuEnabled}:${restreaming}:${statusFresh}:${streamsFresh}:${areasFresh}:${areas.some(areaIsUsable)}:${onAirGate}`;
   const unchanged = lastStreams === streams && renderedGate === gate;
   lastStreams = Array.isArray(streams) ? streams : null;
   revalidatePendingStream();
@@ -570,6 +607,7 @@ export function renderStreams(streams, { fresh = true } = {}) {
   if (!Array.isArray(streams) || streams.length === 0) {
     container.replaceChildren();
     renderedCards.clear();
+    setStreamCounts(0, 0);
     setStatus(status, '当前没有正在直播或即将开播的频道');
     return;
   }
@@ -589,7 +627,8 @@ export function renderStreams(streams, { fresh = true } = {}) {
     occurrences.set(baseKey, occurrence + 1);
     const key = `${baseKey}:${occurrence}`;
     const { live_viewers, ...content } = stream;
-    const signature = `${renderedGate}:${JSON.stringify(content)}`;
+    const onAirFlag = streamIsOnAir(stream, onAir) ? '1' : '0';
+    const signature = `${renderedGate}:${onAirFlag}:${JSON.stringify(content)}`;
     const previous = renderedCards.get(key);
     const element = previous?.signature === signature ? previous.element : createStreamCard(stream, isLive);
     updateViewerCount(element, live_viewers);
@@ -599,6 +638,7 @@ export function renderStreams(streams, { fresh = true } = {}) {
 
   const live = streams.filter(isLiveStream);
   const upcoming = streams.filter((stream) => !isLiveStream(stream));
+  setStreamCounts(live.length, upcoming.length);
   upcoming.sort((a, b) => {
     const timeA = streamStartMs(a, false) ?? Infinity;
     const timeB = streamStartMs(b, false) ?? Infinity;
