@@ -295,7 +295,7 @@ impl AuthState {
     }
 
     async fn peer_request(
-        &self,
+        self: &Arc<Self>,
         request: Request,
         next: Next,
         route: crate::cluster::peer_auth::RoutePolicy,
@@ -308,75 +308,86 @@ impl AuthState {
         let Ok(bytes) = axum::body::to_bytes(body, route.max_request_bytes).await else {
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         };
-        let operation = class == crate::cluster::peer_call::RouteClass::Operation;
-        let _gate = if operation {
-            None
-        } else {
-            Some(crate::cluster::membership::MEMBERSHIP_GATE.read().await)
-        };
-        let store = self.runtime.membership.store();
-        let Ok(identity) = self.runtime.membership.identity() else {
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let trust = if operation {
-            operation_intent(route.path, &bytes).and_then(|intent| operation_trust(store, &intent))
-        } else {
-            trust_snapshot(store)
-        };
-        let Ok(trust) = trust else {
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let Ok(peer) = self.peer.authenticate(
-            &crate::cluster::peer_auth::AdmittedRequest {
-                headers: &parts.headers,
-                method: parts.method.as_str(),
-                path_and_query: &path_and_query,
-                route,
-                body: &bytes,
-            },
-            identity.public(),
-            &trust,
-        ) else {
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let mut request = Request::from_parts(parts, axum::body::Body::from(bytes));
-        request
-            .extensions_mut()
-            .insert(crate::cluster::peer_call::AuthenticatedNode {
-                member_id: peer.member_id().to_owned(),
-                node_id: crate::cluster::peer_call::member_node_id(store, peer.member_id())
-                    .unwrap_or_default(),
-            });
-        let (mut parts, body) = next.run(request).await.into_parts();
-        let Ok(bytes) = axum::body::to_bytes(body, route.max_response_bytes).await else {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        };
-        if !parts.headers.contains_key(header::CONTENT_TYPE) {
-            parts.headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
-        }
-        parts.headers.remove(header::CONTENT_LENGTH);
-        let content_type = parts
-            .headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        match peer.sign_response(
-            &identity,
-            parts.status.as_u16(),
-            &content_type,
-            &bytes,
-            route,
-        ) {
-            Ok(signature) => {
-                parts.headers.insert(header::AUTHORIZATION, signature);
-                Response::from_parts(parts, axum::body::Body::from(bytes))
+        // Once admitted, the handler and every child task it awaits own the
+        // membership guard together. Dropping the HTTP future must not let a
+        // queued node-mode/config write outlive the revision that authorized it.
+        // Read the bounded request body first so disconnected uploaders own no
+        // background task or membership guard.
+        let auth = Arc::clone(self);
+        tokio::spawn(async move {
+            let operation = class == crate::cluster::peer_call::RouteClass::Operation;
+            let _gate = if operation {
+                None
+            } else {
+                Some(crate::cluster::membership::MEMBERSHIP_GATE.read().await)
+            };
+            let store = auth.runtime.membership.store();
+            let Ok(identity) = auth.runtime.membership.identity() else {
+                return StatusCode::UNAUTHORIZED.into_response();
+            };
+            let trust = if operation {
+                operation_intent(route.path, &bytes)
+                    .and_then(|intent| operation_trust(store, &intent))
+            } else {
+                trust_snapshot(store)
+            };
+            let Ok(trust) = trust else {
+                return StatusCode::UNAUTHORIZED.into_response();
+            };
+            let Ok(peer) = auth.peer.authenticate(
+                &crate::cluster::peer_auth::AdmittedRequest {
+                    headers: &parts.headers,
+                    method: parts.method.as_str(),
+                    path_and_query: &path_and_query,
+                    route,
+                    body: &bytes,
+                },
+                identity.public(),
+                &trust,
+            ) else {
+                return StatusCode::UNAUTHORIZED.into_response();
+            };
+            let mut request = Request::from_parts(parts, axum::body::Body::from(bytes));
+            request
+                .extensions_mut()
+                .insert(crate::cluster::peer_call::AuthenticatedNode {
+                    member_id: peer.member_id().to_owned(),
+                    node_id: crate::cluster::peer_call::member_node_id(store, peer.member_id())
+                        .unwrap_or_default(),
+                });
+            let (mut parts, body) = next.run(request).await.into_parts();
+            let Ok(bytes) = axum::body::to_bytes(body, route.max_response_bytes).await else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            if !parts.headers.contains_key(header::CONTENT_TYPE) {
+                parts.headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
             }
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
+            parts.headers.remove(header::CONTENT_LENGTH);
+            let content_type = parts
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            match peer.sign_response(
+                &identity,
+                parts.status.as_u16(),
+                &content_type,
+                &bytes,
+                route,
+            ) {
+                Ok(signature) => {
+                    parts.headers.insert(header::AUTHORIZATION, signature);
+                    Response::from_parts(parts, axum::body::Body::from(bytes))
+                }
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        })
+        .await
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
     }
 
     /// Verify the probe signature with the key it carries. Do not insert
@@ -960,6 +971,10 @@ fn secret_eq(left: &str, right: &str) -> bool {
         .fold(0u8, |acc, (a, b)| acc | (a ^ b))
         == 0
 }
+
+#[cfg(test)]
+#[path = "listen_peer_tests.rs"]
+mod peer_tests;
 
 #[cfg(test)]
 mod tests {

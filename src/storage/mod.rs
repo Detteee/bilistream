@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BACKUP_BYTES: usize = 128 * 1024 * 1024;
+const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 // Every first protocol write must exclude binaries which do not enforce its hold.
 const MANAGED_RECORDS: &[&str] = &[
     "cluster-identity",
@@ -161,9 +162,26 @@ impl Transaction<'_> {
     /// Upgrade in the same FULL-sync transaction as the first identity or hold.
     /// SQLite rolls the PRAGMA back together with the documents on failure.
     pub fn require_managed_schema(&mut self) -> io::Result<()> {
-        self.sql
-            .execute_batch("PRAGMA user_version=2")
-            .map_err(sql_error)
+        self.require_schema(2)
+    }
+
+    /// A signed bounded-stop promise must survive restart without an older
+    /// binary reusing the identity while ignoring the execution watchdog.
+    pub fn require_fencing_schema(&mut self) -> io::Result<()> {
+        self.require_schema(3)
+    }
+
+    fn require_schema(&mut self, minimum: u32) -> io::Result<()> {
+        let current: u32 = self
+            .sql
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(sql_error)?;
+        if current < minimum {
+            self.sql
+                .pragma_update(None, "user_version", minimum)
+                .map_err(sql_error)?;
+        }
+        Ok(())
     }
 
     pub fn read(&self, name: &str) -> io::Result<Option<Document>> {
@@ -253,7 +271,7 @@ impl Store {
         let version: u32 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(sql_error)?;
-        if version > 2 {
+        if version > SUPPORTED_SCHEMA_VERSION {
             return Err(invalid("数据库由更新版本创建，请升级程序"));
         }
         connection.execute_batch("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS documents(name TEXT PRIMARY KEY,payload BLOB NOT NULL,encrypted INTEGER NOT NULL,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL); INSERT OR IGNORE INTO meta VALUES('revision','0');").map_err(sql_error)?;
@@ -523,7 +541,12 @@ impl Store {
                         "集群正在运行或等待恢复，不能覆盖恢复备份",
                     ));
                 }
-                if let Some(config) = docs.get_mut("config.json") {
+            }
+            if let Some(config) = docs.get_mut("config.json") {
+                // An old backup carries no membership records. Sanitize before
+                // publishing it, even when this running destination initialized
+                // while empty: neither downgrade nor export may revive its peers.
+                if protected || config.value["cluster"]["enabled"] == true {
                     sanitize_unjoined_config(&mut config.value)?;
                 }
             }
@@ -544,11 +567,11 @@ impl Store {
 
     fn portable_snapshot(&self) -> io::Result<HashMap<String, Document>> {
         let mut snapshot = self.snapshot()?;
-        if MANAGED_RECORDS
+        let protected = MANAGED_RECORDS
             .iter()
-            .any(|name| snapshot.contains_key(*name))
-        {
-            if let Some(config) = snapshot.get_mut("config.json") {
+            .any(|name| snapshot.contains_key(*name));
+        if let Some(config) = snapshot.get_mut("config.json") {
+            if protected || config.value["cluster"]["enabled"] == true {
                 sanitize_unjoined_config(&mut config.value)?;
             }
         }

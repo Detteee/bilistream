@@ -123,6 +123,24 @@ fn signatures_bind_exact_payload_signer_and_domain() {
     b.field(b"ab");
     b.field(b"c");
     assert_ne!(a.finish(), b.finish());
+
+    let policy = identity.sign(Domain::FencingPolicy, b"fencing-policy-v1");
+    verify_proof(
+        identity.public(),
+        Domain::FencingPolicy,
+        b"fencing-policy-v1",
+        &policy,
+    )
+    .unwrap();
+    for other_domain in [Domain::Prepare, Domain::Hello, Domain::Finish] {
+        assert!(verify_proof(
+            identity.public(),
+            other_domain,
+            b"fencing-policy-v1",
+            &policy
+        )
+        .is_err());
+    }
 }
 
 #[test]
@@ -232,6 +250,46 @@ fn request_binding_revocation_replay_restart_and_no_browser_fallback() {
     let peer = auth(&original, "POST", ROUTE.path, body, &good).unwrap();
     assert_eq!(peer.member_id(), sender.public().member_id);
     assert!(auth(&original, "POST", ROUTE.path, body, &good).is_err());
+}
+
+#[test]
+fn recognition_authentication_does_not_admit_a_self_presented_key_on_other_routes() {
+    let a = Installation::new();
+    let b = Installation::new();
+    let sender = a.identity();
+    let local = b.identity();
+    let receiver = PeerReceiver::new().unwrap();
+    let hello = observed(&receiver, &local);
+    let body = serde_json::to_vec(&RecognitionProbe {
+        cluster_id: "test-cluster".into(),
+        member_id: sender.public().member_id.clone(),
+        public_key: sender.public().public_key.clone(),
+    })
+    .unwrap();
+    let signed = sign_request(
+        &sender,
+        &hello,
+        "test-cluster",
+        7,
+        PeerScope::Ordinary,
+        ROUTE,
+        &body,
+    )
+    .unwrap();
+    let headers = headers(&signed);
+    let request = AdmittedRequest {
+        headers: &headers,
+        method: ROUTE.method,
+        path_and_query: ROUTE.path,
+        route: ROUTE,
+        body: &body,
+    };
+    assert!(receiver
+        .authenticate_recognition(&request, local.public())
+        .is_err());
+    receiver
+        .authenticate(&request, local.public(), &trust(&sender))
+        .unwrap();
 }
 
 #[test]
@@ -376,6 +434,99 @@ fn enrollment_transport_rejects_downgrades_dns_loopback_and_url_credentials() {
 }
 
 #[tokio::test]
+async fn hello_http_classifies_origin_down_without_accepting_invalid_responses() {
+    use axum::{
+        extract::{Path, State},
+        http::StatusCode,
+        response::{IntoResponse, Response},
+        routing::post,
+        Json, Router,
+    };
+    use std::io::ErrorKind;
+
+    #[derive(Clone)]
+    struct HelloState {
+        identity: Arc<NodeIdentity>,
+        receiver: Arc<PeerReceiver>,
+    }
+    async fn hello(
+        State(state): State<HelloState>,
+        Path(reply): Path<String>,
+        Json(challenge): Json<HelloRequest>,
+    ) -> Response {
+        if let Ok(status) = reply.parse::<u16>() {
+            return (StatusCode::from_u16(status).unwrap(), "upstream error").into_response();
+        }
+        if reply == "malformed" {
+            return "invalid JSON".into_response();
+        }
+        let mut hello = state.receiver.hello(&state.identity, &challenge).unwrap();
+        if reply == "tampered" {
+            hello.elapsed_ms += 1;
+        }
+        let mut response = Json(hello).into_response();
+        if reply.starts_with("compressed") {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+        if reply == "compressed-origin-down" {
+            *response.status_mut() = StatusCode::BAD_GATEWAY;
+        }
+        response
+    }
+    let install = Installation::new();
+    let identity = Arc::new(install.identity());
+    let router = Router::new()
+        .route("/{reply}/api/cluster/v1/hello", post(hello))
+        .with_state(HelloState {
+            identity: identity.clone(),
+            receiver: Arc::new(PeerReceiver::new().unwrap()),
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = PeerClient::new(Duration::from_secs(2)).unwrap();
+    let cases = (502..=504)
+        .chain(520..=530)
+        .map(|status| (status.to_string(), ErrorKind::ConnectionAborted))
+        .chain(
+            [301, 307, 401, 403, 429, 500, 501, 505, 519, 531]
+                .into_iter()
+                .map(|status| (status.to_string(), ErrorKind::PermissionDenied)),
+        )
+        .chain([
+            ("malformed".into(), ErrorKind::InvalidData),
+            ("compressed".into(), ErrorKind::InvalidData),
+            (
+                "compressed-origin-down".into(),
+                ErrorKind::ConnectionAborted,
+            ),
+            ("tampered".into(), ErrorKind::PermissionDenied),
+        ]);
+    for (reply, expected) in cases {
+        let endpoint = PeerEndpoint::parse(&format!("http://{address}/{reply}"), true).unwrap();
+        let error = client
+            .hello(&endpoint, identity.public())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), expected, "pinned hello: {reply}");
+        let error = client.discover(&endpoint).await.unwrap_err();
+        assert_eq!(error.kind(), expected, "discovery hello: {reply}");
+    }
+    let endpoint = PeerEndpoint::parse(&format!("http://{address}/valid"), true).unwrap();
+    client.hello(&endpoint, identity.public()).await.unwrap();
+    assert_eq!(
+        client.discover(&endpoint).await.unwrap(),
+        *identity.public()
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn peer_client_never_follows_a_redirect() {
     use axum::{routing::post, Router};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -454,7 +605,10 @@ async fn hello_cap_rejects_an_otherwise_valid_chunked_json_response() {
         axum::serve(listener, router).await.unwrap();
     });
     let client = PeerClient::new(Duration::from_secs(2)).unwrap();
-    assert!(client.discover(&endpoint).await.is_err());
+    assert_eq!(
+        client.discover(&endpoint).await.unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
     server.abort();
 }
 

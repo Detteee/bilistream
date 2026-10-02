@@ -22,6 +22,7 @@ import {
   missingOperationIsPending,
   newOperationBlock,
   newOperationId,
+  operationCleanupPending,
   operationUnsettled,
   pollDelay,
   leaveBlocked,
@@ -72,7 +73,7 @@ async function refreshMembership() {
       if (viewKey !== null && key !== viewKey) await rebaseFromServer();
       viewKey = key;
       const op = view.operation;
-      if (op?.operation_id && operationUnsettled(op)) {
+      if (op?.operation_id && (operationUnsettled(op) || operationCleanupPending(op))) {
         const progress = run(op.operation_id);
         progress.status = op;
         if (!progress.timer && !progress.active) schedule(op.operation_id, pollDelay(progress.attempt));
@@ -130,7 +131,15 @@ async function poll(id) {
   if (entry.self_removal && view?.lifecycle === 'left') {
     return settle(id, { ...(progress.status || { kind: 'remove' }), phase: 'completed', terminal: true, pending_node_ids: [], message: '本服务器已离开集群' });
   }
-  if (progress.status && !operationUnsettled(progress.status)) return settle(id, progress.status);
+  if (progress.status && !operationUnsettled(progress.status)) {
+    if (!operationCleanupPending(progress.status)) return settle(id, progress.status);
+    // Retained membership is complete. Continue observing departed cleanup,
+    // without keeping an unresolved submission that blocks unrelated edits.
+    tracked = tracked.filter(item => item.operation_id !== id);
+    persist();
+    await refreshMembership();
+    state.hooks.refreshClusterStatus?.();
+  }
   if (!progress.unknown) schedule(id, pollDelay(progress.attempt++));
   render();
 }
@@ -374,7 +383,7 @@ function render() {
 
 function operationEntries() {
   const ids = new Set(tracked.map(entry => entry.operation_id));
-  for (const [id, progress] of runs) if (progress.status && operationUnsettled(progress.status)) ids.add(id);
+  for (const [id, progress] of runs) if (progress.status && (operationUnsettled(progress.status) || operationCleanupPending(progress.status))) ids.add(id);
   return [...ids];
 }
 
@@ -395,7 +404,7 @@ function renderOperations() {
     phase.className = 'cluster-operation-phase';
     phase.textContent = progress.unknown ? '服务器尚未记录此操作' : submitting && !progress.status ? '正在提交' : info.phase;
     card.append(title, phase);
-    for (const text of [info.attention, info.message, progress.error]) {
+    for (const text of [info.attention, info.cleanup, info.message, progress.error]) {
       if (!text) continue;
       const line = document.createElement('p');
       line.className = 'settings-help-text';
@@ -415,7 +424,7 @@ function renderOperations() {
         actionButton('重新查询', 'btn-secondary', () => { progress.unknown = false; progress.misses = 0; void poll(id); }),
         actionButton('放弃此记录', 'btn-ghost', () => dismissOperation(id)),
       );
-    } else if ((info.retryable && progress.status?.phase === 'needs_attention') || progress.error) {
+    } else if ((info.retryable && (progress.status?.phase === 'needs_attention' || operationCleanupPending(progress.status))) || progress.error) {
       actions.appendChild(actionButton('重试', 'btn-secondary', () => retryOperation(id)));
     }
     if (actions.children.length) card.appendChild(actions);
@@ -458,6 +467,7 @@ function actionButton(text, className, onClick) {
 
 function memberContext() {
   return {
+    memberCount: view?.members?.length || 0,
     localMemberId: view?.local?.member_id || '',
     publicMemberId: view?.public_member_id || '',
     activeNodeId: getLastClusterStatus()?.active_owner || '',

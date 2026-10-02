@@ -8,6 +8,7 @@ import {
   loadTrackedOperations,
   missingOperationIsPending,
   newOperationBlock,
+  operationCleanupPending,
   operationUnsettled,
   pollDelay,
   removalConsequences,
@@ -87,6 +88,18 @@ test('operation descriptions name the servers that need attention, not a manager
   assert.equal(describeOperation(status({ phase: 'aborted', terminal: true })).success, false);
 });
 
+test('departed cleanup remains visible and retryable without blocking retained edits', () => {
+  const cleanup = status({ kind: 'remove', phase: 'completed', terminal: true, cleanup_pending_node_ids: ['node-003'] });
+  assert.equal(operationCleanupPending(cleanup), true);
+  assert.equal(operationUnsettled(cleanup), false);
+  assert.equal(newOperationBlock({ lifecycle: 'managed', operation: cleanup }), '');
+  const info = describeOperation(cleanup);
+  assert.match(info.phase, /成员变更已完成/);
+  assert.match(info.cleanup, /node-003.*权限已撤销/);
+  assert.equal(info.retryable, true);
+  assert.equal(operationCleanupPending(status()), false);
+});
+
 test('removal consequences cover active, public/index and local servers', () => {
   const context = { localMemberId: 'm1', publicMemberId: 'm2', activeNodeId: 'node-002' };
   const remote = removalConsequences({ member_id: 'm2', node_id: 'node-002' }, context);
@@ -98,6 +111,12 @@ test('removal consequences cover active, public/index and local servers', () => 
   assert.equal(local.needsReplacement, false);
   assert.ok(local.lines.some(line => line.includes('交由其他成员协调')));
   assert.ok(local.lines.every(line => !line.includes('活跃（转播）')));
+  const finalContext = { ...context, memberCount: 1, publicMemberId: 'm1' };
+  const final = removalConsequences({ member_id: 'm1', node_id: 'node-001' }, finalContext);
+  assert.equal(final.needsReplacement, false);
+  assert.ok(final.lines.some(line => line.includes('结束集群')));
+  assert.ok(final.lines.every(line => !line.includes('其他成员协调')));
+  assert.equal(leaveBlocked({ lifecycle: 'managed', members: [{}] }), null);
 });
 
 test('only definite refusals may forget an operation ID', () => {

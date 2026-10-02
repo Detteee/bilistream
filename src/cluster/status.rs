@@ -285,6 +285,9 @@ pub(crate) fn ensure_configured_nodes(
         .peer_heartbeat_acks
         .retain(|node_id, _| configured.contains(node_id.as_str()));
     state
+        .peer_heartbeat_observed
+        .retain(|node_id, _| configured.contains(node_id.as_str()));
+    state
         .peer_owner_views
         .retain(|node_id, _| configured.contains(node_id.as_str()));
 
@@ -443,6 +446,9 @@ pub(crate) fn merge_direct_peer_status(
         state
             .peer_heartbeat_acks
             .insert(peer_node_id.to_string(), received_at);
+        state
+            .peer_heartbeat_observed
+            .insert(peer_node_id.to_string(), std::time::Instant::now());
         state.peer_owner_views.insert(
             peer_node_id.to_string(),
             PeerOwnerView {

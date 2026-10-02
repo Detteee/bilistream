@@ -1,6 +1,9 @@
 use super::*;
+use crate::webui::listen::AuthState;
+use axum::Extension;
 use base64::Engine;
 use std::io;
+use std::sync::Arc;
 
 fn storage_response<T: Serialize>(result: io::Result<T>, message: &str) -> Response {
     match result {
@@ -161,6 +164,26 @@ pub async fn restore_storage_backup(Json(payload): Json<RestoreRequest>) -> Resp
 
 /// A small capability endpoint lets peers avoid sending secret-stripped
 /// full config to old binaries that overwrite node-local source settings.
-pub async fn storage_sync_capabilities() -> Json<serde_json::Value> {
-    Json(json!({"config_sync":2,"node_local_credentials":true}))
+pub(crate) async fn storage_sync_capabilities(
+    Extension(auth): Extension<Arc<AuthState>>,
+) -> Response {
+    let mut capabilities = json!({"config_sync":2,"node_local_credentials":true});
+    let store = auth.runtime().membership.store().clone();
+    // The process watchdog protects only its own installation. Isolated
+    // runtimes must never advertise a promise backed by another store's task.
+    if crate::cluster::fencing_policy_ready()
+        && crate::storage::global().is_ok_and(|global| Arc::ptr_eq(&global, &store))
+    {
+        let policy = tokio::task::spawn_blocking(move || {
+            crate::cluster::membership::FencingPolicy::issue(&store)
+        })
+        .await
+        .map_err(io::Error::other)
+        .and_then(|result| result);
+        match policy {
+            Ok(policy) => capabilities["membership_fencing"] = json!(policy),
+            Err(error) => return storage_response::<()>(Err(error), ""),
+        }
+    }
+    Json(capabilities).into_response()
 }

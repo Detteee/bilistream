@@ -7,6 +7,61 @@ use std::{collections::BTreeSet, io};
 
 pub const PROTOCOL: u32 = 1;
 pub const MAX_MEMBERS: usize = 64;
+pub const FENCING_STOP_BOUND_SECS: u64 = 180;
+
+/// A source's durable promise to enforce bounded execution fencing. Issuing
+/// this policy first excludes older binaries that do not enforce the bound.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FencingPolicy {
+    pub version: u32,
+    pub max_stop_secs: u64,
+    pub proof: SignedProof,
+}
+impl FencingPolicy {
+    pub fn issue(store: &crate::storage::Store) -> io::Result<Self> {
+        store.transaction(|tx| {
+            let identity = NodeIdentity::load_from(tx)?.ok_or_else(denied)?;
+            tx.require_fencing_schema()?;
+            Self::sign(&identity)
+        })
+    }
+    fn sign(identity: &NodeIdentity) -> io::Result<Self> {
+        let version = 1;
+        let max_stop_secs = FENCING_STOP_BOUND_SECS;
+        Ok(Self {
+            version,
+            max_stop_secs,
+            proof: identity.sign(
+                Domain::FencingPolicy,
+                &encode(&(version, max_stop_secs, &identity.public().member_id))?,
+            ),
+        })
+    }
+    pub fn verify(&self, identity: &PublicIdentity) -> io::Result<()> {
+        if self.version != 1 || self.max_stop_secs != FENCING_STOP_BOUND_SECS {
+            return Err(invalid("节点停机界限协议不兼容"));
+        }
+        verify_proof(
+            identity,
+            Domain::FencingPolicy,
+            &encode(&(self.version, self.max_stop_secs, &identity.member_id))?,
+            &self.proof,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RemovalSafety {
+    Prepared {
+        receipt: PreparedReceipt,
+    },
+    Fenced {
+        policy: FencingPolicy,
+        waited_secs: u64,
+    },
+}
 
 /// Members advertise verified HTTPS. A literal loopback HTTP address is the
 /// operator's explicit choice of an already authenticated local tunnel.
@@ -191,6 +246,11 @@ pub struct Intent {
     pub change: Change,
 }
 impl Intent {
+    pub fn is_dissolve(&self) -> bool {
+        self.base.members.len() == 1
+            && matches!(&self.change, Change::Remove { target_member_id, replacement_public_member_id: None }
+                if target_member_id == &self.coordinator)
+    }
     pub fn digest(&self) -> io::Result<String> {
         Ok(digest_hex(&encode(self)?))
     }
@@ -212,7 +272,7 @@ impl Intent {
                 target_member_id, ..
             } => {
                 if self.base.member(target_member_id).is_none()
-                    || target_member_id == &self.coordinator
+                    || (target_member_id == &self.coordinator && !self.is_dissolve())
                 {
                     return Err(invalid("协调节点必须保留在成员中"));
                 }
@@ -368,7 +428,10 @@ impl Proposal {
     }
 }
 
-fn desired_manifest(intent: &Intent, pairing: Option<&PairingReceipt>) -> io::Result<Manifest> {
+pub(super) fn desired_manifest(
+    intent: &Intent,
+    pairing: Option<&PairingReceipt>,
+) -> io::Result<Manifest> {
     let mut members = intent.base.members.clone();
     let mut public = intent.base.public_member_id.clone();
     match &intent.change {
@@ -417,6 +480,33 @@ fn desired_manifest(intent: &Intent, pairing: Option<&PairingReceipt>) -> io::Re
         members,
         public,
     )
+}
+
+/// Validate everything known before reserving another installation or admitting
+/// an operation. A target's descriptor is checked again before pairing is saved.
+pub(super) fn validate_change(intent: &Intent) -> io::Result<()> {
+    intent.validate()?;
+    if let Change::Add { target_url } = &intent.change {
+        if intent.base.members.len() >= MAX_MEMBERS {
+            return Err(invalid("成员数量已达上限"));
+        }
+        let endpoint = member_endpoint(target_url)?;
+        if intent.base.members.iter().any(|member| {
+            member_endpoint(&member.api_url).is_ok_and(|url| {
+                url.as_str().trim_end_matches('/') == endpoint.as_str().trim_end_matches('/')
+            })
+        }) {
+            return Err(invalid("目标地址已属于集群成员"));
+        }
+        intent
+            .base
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid("成员版本已达上限"))?;
+    } else if !intent.is_dissolve() {
+        desired_manifest(intent, None)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,23 +645,98 @@ fn verify_receipts<'a>(
 pub struct Finish {
     pub decision: Decision,
     pub installed: Vec<InstalledReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal_safety: Option<RemovalSafety>,
     pub proof: SignedProof,
 }
 impl Finish {
     pub fn sign(
         decision: Decision,
+        installed: Vec<InstalledReceipt>,
+        identity: &NodeIdentity,
+    ) -> io::Result<Self> {
+        let removal_safety = match &decision.intent.change {
+            Change::Remove {
+                target_member_id, ..
+            } => decision
+                .prepares
+                .iter()
+                .find(|r| &r.proof.signer == target_member_id)
+                .map(|receipt| RemovalSafety::Prepared {
+                    receipt: receipt.clone(),
+                }),
+            _ => None,
+        };
+        Self::sign_with_safety(decision, installed, removal_safety, identity)
+    }
+    pub fn sign_with_safety(
+        decision: Decision,
         mut installed: Vec<InstalledReceipt>,
+        removal_safety: Option<RemovalSafety>,
         identity: &NodeIdentity,
     ) -> io::Result<Self> {
         installed.sort_by(|a, b| a.proof.signer.cmp(&b.proof.signer));
-        let proof = identity.sign(Domain::Finish, &encode(&(&decision, &installed))?);
+        let bytes = if removal_safety.is_some() {
+            encode(&(&decision, &installed, &removal_safety))?
+        } else {
+            encode(&(&decision, &installed))?
+        };
+        let proof = identity.sign(Domain::Finish, &bytes);
         let result = Self {
             decision,
             installed,
+            removal_safety,
             proof,
         };
         result.validate()?;
+        result.validate_removal_safety()?;
         Ok(result)
+    }
+    pub fn validate_removal_safety(&self) -> io::Result<()> {
+        let Change::Remove {
+            target_member_id, ..
+        } = &self.decision.intent.change
+        else {
+            return if self.removal_safety.is_none() {
+                Ok(())
+            } else {
+                Err(denied())
+            };
+        };
+        match &self.removal_safety {
+            // Legacy FINISH already binds the irreversible decision. A source
+            // receipt inside that decision is durable stop proof even before
+            // the explicit removal_safety field was introduced.
+            None if self
+                .decision
+                .prepares
+                .iter()
+                .any(|r| &r.proof.signer == target_member_id) =>
+            {
+                Ok(())
+            }
+            Some(RemovalSafety::Prepared { receipt })
+                if &receipt.proof.signer == target_member_id =>
+            {
+                receipt.verify(
+                    self.decision.proposal.as_ref().ok_or_else(denied)?,
+                    Domain::Prepare,
+                )
+            }
+            Some(RemovalSafety::Fenced {
+                policy,
+                waited_secs,
+            }) if *waited_secs >= policy.max_stop_secs => policy.verify(
+                &self
+                    .decision
+                    .intent
+                    .base
+                    .member(target_member_id)
+                    .ok_or_else(denied)?
+                    .identity(),
+            ),
+            _ => Err(conflict_source_proof()),
+        }
     }
     pub fn validate(&self) -> io::Result<()> {
         self.decision.validate()?;
@@ -594,8 +759,16 @@ impl Finish {
                 .ok_or_else(denied)?
                 .identity(),
             Domain::Finish,
-            &encode(&(&self.decision, &self.installed))?,
+            &if self.removal_safety.is_some() {
+                encode(&(&self.decision, &self.installed, &self.removal_safety))?
+            } else {
+                encode(&(&self.decision, &self.installed))?
+            },
             &self.proof,
         )
     }
+}
+
+fn conflict_source_proof() -> io::Error {
+    super::conflict("缺少离开节点的停机确认或受支持的停机界限证明；请恢复该节点连接并升级")
 }

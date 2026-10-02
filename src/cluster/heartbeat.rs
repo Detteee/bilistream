@@ -45,6 +45,7 @@ impl Drop for ClusterWorker {
 
 pub fn start_cluster_worker() -> ClusterWorker {
     super::sync::mark_process_started();
+    super::fencing::start_execution_fence_watchdog();
     let heartbeat = tokio::spawn(async {
         loop {
             let cycle_started = Instant::now();

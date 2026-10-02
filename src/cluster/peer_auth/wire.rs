@@ -359,6 +359,7 @@ pub struct PeerReceiver {
     boot_nonce: String,
     started: Instant,
     replay: Mutex<ReplayCache>,
+    recognition_replay: Mutex<ReplayCache>,
 }
 
 impl PeerReceiver {
@@ -367,6 +368,7 @@ impl PeerReceiver {
             boot_nonce: URL_SAFE_NO_PAD.encode(random::<32>()?),
             started: Instant::now(),
             replay: Mutex::new(ReplayCache::default()),
+            recognition_replay: Mutex::new(ReplayCache::default()),
         })
     }
 
@@ -462,7 +464,7 @@ impl PeerReceiver {
             local,
             elapsed_ms(self.started),
         )?;
-        if metadata.scope != PeerScope::Ordinary {
+        if metadata.scope != PeerScope::Ordinary || metadata.route != super::RECOGNITION_ROUTE {
             return Err(denied());
         }
         let probe: RecognitionProbe = serde_json::from_slice(request.body).map_err(|_| denied())?;
@@ -534,8 +536,17 @@ impl PeerReceiver {
                 signature: signature.to_owned(),
             },
         )?;
-        // Only a valid signature may consume replay capacity.
-        self.replay
+        // Recognition accepts self-presented keys, so it must not consume the
+        // ordinary/operation budget. Select by the signed, bound route to keep
+        // a request in the same cache even across authentication entry points.
+        // Both caches reject overflow without evicting live nonces; only valid
+        // signatures consume capacity, bounded by TOTAL_REPLAYS in each cache.
+        let replay = if metadata.route == super::RECOGNITION_ROUTE {
+            &self.recognition_replay
+        } else {
+            &self.replay
+        };
+        replay
             .lock()
             .map_err(|_| invalid("节点重放缓存不可用"))?
             .consume(
@@ -754,6 +765,145 @@ fn elapsed_ms(started: Instant) -> u64 {
 #[cfg(test)]
 mod replay_tests {
     use super::*;
+
+    #[test]
+    fn recognition_flood_cannot_exhaust_member_or_operation_replay_budget() {
+        let directory = std::env::temp_dir().join(format!(
+            "bilistream-peer-recognition-{}",
+            crate::cluster::peer_auth::random_id().unwrap()
+        ));
+        let store =
+            crate::storage::Store::open(directory.join("data"), directory.join("key"), None)
+                .unwrap();
+        let local = store.transaction(NodeIdentity::create_in).unwrap();
+        store
+            .write("cluster-local", serde_json::json!({"lifecycle":"left"}))
+            .unwrap();
+        let receiver = PeerReceiver::new().unwrap();
+        let route = RoutePolicy {
+            method: "POST",
+            path: super::super::RECOGNITION_ROUTE,
+            max_request_bytes: OPERATION_BODY_BYTES,
+            max_response_bytes: OPERATION_BODY_BYTES,
+        };
+        let mut first_probe = None;
+        // Each key is self-presented, with no membership grant. Fill the whole
+        // global budget, rather than merely reaching one sender's limit.
+        for member in 0..=TOTAL_REPLAYS / PER_MEMBER_REPLAYS {
+            let stranger = store.transaction(NodeIdentity::rotate_left_in).unwrap();
+            let challenge = HelloRequest::new().unwrap();
+            let hello = receiver
+                .hello(&local, &challenge)
+                .unwrap()
+                .verify(local.public(), &challenge)
+                .unwrap();
+            let body = serde_json::to_vec(&RecognitionProbe {
+                cluster_id: "unaffiliated-cluster".into(),
+                member_id: stranger.public().member_id.clone(),
+                public_key: stranger.public().public_key.clone(),
+            })
+            .unwrap();
+            for nonce in 0..PER_MEMBER_REPLAYS {
+                let signed = sign_request(
+                    &stranger,
+                    &hello,
+                    "unaffiliated-cluster",
+                    1,
+                    PeerScope::Ordinary,
+                    route,
+                    &body,
+                )
+                .unwrap();
+                let mut headers = HeaderMap::new();
+                headers.insert(header::AUTHORIZATION, signed.authorization);
+                let request = AdmittedRequest {
+                    headers: &headers,
+                    method: route.method,
+                    path_and_query: route.path,
+                    route,
+                    body: &body,
+                };
+                let admission = receiver.authenticate_recognition(&request, local.public());
+                if member == TOTAL_REPLAYS / PER_MEMBER_REPLAYS {
+                    assert!(admission.is_err(), "recognition memory must remain bounded");
+                    break;
+                }
+                admission.unwrap();
+                if member == 0 && nonce == 0 {
+                    assert!(receiver
+                        .authenticate_recognition(&request, local.public())
+                        .is_err());
+                    // A different entry point cannot move this exact signed
+                    // recognition request into the ordinary cache.
+                    let trust = TrustSnapshot {
+                        cluster_id: "unaffiliated-cluster".into(),
+                        revisions: vec![1],
+                        scope: PeerScope::Ordinary,
+                        members: vec![stranger.public().clone()],
+                    };
+                    assert!(receiver
+                        .authenticate(&request, local.public(), &trust)
+                        .is_err());
+                    first_probe = Some((headers.clone(), body.clone()));
+                }
+            }
+        }
+        let (headers, body) = first_probe.unwrap();
+        assert!(receiver
+            .authenticate_recognition(
+                &AdmittedRequest {
+                    headers: &headers,
+                    method: route.method,
+                    path_and_query: route.path,
+                    route,
+                    body: &body,
+                },
+                local.public(),
+            )
+            .is_err());
+
+        let member = store.transaction(NodeIdentity::rotate_left_in).unwrap();
+        let challenge = HelloRequest::new().unwrap();
+        let hello = receiver
+            .hello(&local, &challenge)
+            .unwrap()
+            .verify(local.public(), &challenge)
+            .unwrap();
+        for (scope, path) in [
+            (PeerScope::Ordinary, "/api/cluster/heartbeat"),
+            (
+                PeerScope::Operation("pending".into()),
+                "/api/cluster/v1/operation/status",
+            ),
+        ] {
+            let route = RoutePolicy { path, ..route };
+            let trust = TrustSnapshot {
+                cluster_id: "managed-cluster".into(),
+                revisions: vec![1],
+                scope: scope.clone(),
+                members: vec![member.public().clone()],
+            };
+            let signed =
+                sign_request(&member, &hello, "managed-cluster", 1, scope, route, b"{}").unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert(header::AUTHORIZATION, signed.authorization);
+            let request = AdmittedRequest {
+                headers: &headers,
+                method: route.method,
+                path_and_query: route.path,
+                route,
+                body: b"{}",
+            };
+            receiver
+                .authenticate(&request, local.public(), &trust)
+                .unwrap();
+            assert!(receiver
+                .authenticate(&request, local.public(), &trust)
+                .is_err());
+        }
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn receiver_relative_clock_bounds_and_invalid_signature_do_not_consume_nonce() {

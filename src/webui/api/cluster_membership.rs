@@ -138,10 +138,22 @@ fn membership_view(runtime: &Runtime, password_required: bool) -> std::io::Resul
             }
         }
     };
-    let operation = membership
-        .operations()?
-        .into_iter()
+    let operations = membership.operations()?;
+    let operation = operations
+        .iter()
         .find(|op| !op.terminal() || !op.finished_locally)
+        .or_else(|| {
+            operations
+                .iter()
+                .filter(|op| {
+                    op.cleanup_pending()
+                        && local
+                            .descriptor
+                            .as_ref()
+                            .is_some_and(|d| op.intent.coordinator == d.member_id)
+                })
+                .max_by_key(|op| (op.intent.base.revision, op.intent.sequence))
+        })
         .map(|op| project(runtime, &op));
     let managed = matches!(local.lifecycle, Lifecycle::Managed);
     let manifest = manifest.filter(|_| managed);
@@ -359,6 +371,20 @@ pub(crate) async fn submit_operation(
         return reply::<()>(StatusCode::BAD_REQUEST, None, "操作标识格式无效");
     }
     let membership = &runtime.membership;
+    let me = match membership.identity() {
+        Ok(identity) => identity.public().member_id.clone(),
+        Err(error) => return error_reply(&error),
+    };
+    // Idempotent retries also work after a final-node removal entered Left.
+    if let Ok(Some(op)) = membership.operation(&id) {
+        if op.intent.change != change || op.intent.base.revision != expected {
+            return reply::<()>(StatusCode::CONFLICT, None, "同一操作标识不能更改内容");
+        }
+        if op.intent.coordinator == me {
+            runtime.spawn_driver(id.clone());
+        }
+        return status_reply(&runtime, &id, "操作已在进行，正在继续");
+    }
     let (me, manifest) = match (
         membership.identity(),
         membership.manifest(),
@@ -369,21 +395,12 @@ pub(crate) async fn submit_operation(
         }
         _ => return reply::<()>(StatusCode::CONFLICT, None, "本服务器尚未加入受管集群"),
     };
-    // A repeated submission continues the recorded operation; it never
-    // resends a password or starts a substitute.
-    if let Ok(Some(op)) = membership.operation(&id) {
-        if op.intent.change != change || op.intent.base.revision != expected {
-            return reply::<()>(StatusCode::CONFLICT, None, "同一操作标识不能更改内容");
-        }
-        if op.intent.coordinator == me {
-            runtime.spawn_driver(id.clone());
-        }
-        return status_reply(&runtime, &id, "操作已在进行，正在继续");
-    }
     if expected != manifest.revision {
         return reply::<()>(StatusCode::CONFLICT, None, "成员版本已改变，请刷新后重试");
     }
-    if matches!(&change, Change::Remove { target_member_id, .. } if *target_member_id == me) {
+    if manifest.members.len() > 1
+        && matches!(&change, Change::Remove { target_member_id, .. } if *target_member_id == me)
+    {
         return forward_self_removal(&runtime, &manifest, id, expected, change).await;
     }
     let desired: Vec<Descriptor> = match &change {
@@ -414,13 +431,25 @@ pub(crate) async fn submit_operation(
         Ok(Err(error)) => return error_reply(&error),
         Err(_) => return reply::<()>(StatusCode::INTERNAL_SERVER_ERROR, None, "成员事务失败"),
     };
+    if op.intent.is_dissolve() {
+        runtime.spawn_driver(id.clone());
+        return status_reply(&runtime, &id, "正在停止监控并退出最后一个集群成员");
+    }
     let Some(password) = password else {
         let result = {
             let (membership, id) = (membership.clone(), id.clone());
             tokio::task::spawn_blocking(move || membership.propose(id, None)).await
         };
-        if let Ok(Err(error)) = result {
-            return error_reply(&error);
+        match result {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                runtime.spawn_driver(id.clone());
+                return error_reply(&error);
+            }
+            Err(_) => {
+                runtime.spawn_driver(id.clone());
+                return reply::<()>(StatusCode::INTERNAL_SERVER_ERROR, None, "成员事务失败");
+            }
         }
         runtime.spawn_driver(id.clone());
         return status_reply(&runtime, &id, "成员操作已开始");
@@ -463,6 +492,7 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
             })
             .await
             {
+                runtime.spawn_driver(id.clone());
                 return error_reply(&error);
             }
             runtime.spawn_driver(id.clone());

@@ -141,9 +141,12 @@ export async function checkClusterMembership({ base, context, command, evaluate,
   const removesBefore = (await writes()).filter(row => row.patch.kind === 'remove').length;
   await evaluate(`${card('node-002')}.querySelector('.cluster-member-remove-confirm-btn').click()`);
   assert.equal((await writes()).filter(row => row.patch.kind === 'remove').length, removesBefore, 'replacement is required');
+  await membershipMode('cleanup-pending');
   await evaluate(`{ const s = ${card('node-002')}.querySelector('.cluster-member-replacement'); s.value='${'0'.repeat(63)}3'; ${card('node-002')}.querySelector('.cluster-member-remove-confirm-btn').click(); }`);
   await waitFor(`${memberCount(2)} && ${noOperation}`);
+  await waitFor("document.getElementById('cluster-operation-list').textContent.includes('等待清理：node-002') && !document.getElementById('cluster-add-btn').disabled");
   assert.equal(await evaluate(`${card('node-003')}.textContent.includes('状态页')`), true);
+  await membershipMode('ok');
 
   // Ordinary settings save after membership changes: topology is rebased, not edited.
   await evaluate("document.getElementById('save-system-config-btn').click()");
@@ -152,6 +155,12 @@ export async function checkClusterMembership({ base, context, command, evaluate,
   assert.equal(config.cluster.heartbeat_interval_secs, 9);
   assert.equal(config.cluster.peers.length, 1);
   assert.equal(config.interval, 85);
+
+  // Departed cleanup survives a reload without blocking new membership edits.
+  await reload(); await settings();
+  await waitFor("document.getElementById('cluster-operation-list').textContent.includes('等待清理：node-002') && !document.getElementById('cluster-add-btn').disabled");
+  await evaluate("[...document.querySelectorAll('#cluster-operation-list button')].find(b => b.textContent==='重试').click()");
+  await waitFor("!document.getElementById('cluster-operation-list').textContent.includes('等待清理：node-002')");
 
   // Self-removal is forwarded; brief 404s stay pending until this server has left.
   await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove').click()`);
@@ -172,9 +181,19 @@ export async function checkClusterMembership({ base, context, command, evaluate,
   assert.equal(await evaluate("document.getElementById('cluster-member-add').classList.contains('hidden')"), true);
   assert.equal(await secretsStored('synthetic-panel-password'), false);
 
+  // The final member uses local dissolution, with no nonexistent coordinator.
+  await membershipMode('ok');
+  await evaluate("document.getElementById('cluster-create-btn').click()");
+  await waitFor(`${badge('已加入集群')} && ${memberCount(1)}`);
+  assert.equal(await evaluate("document.getElementById('cluster-leave-btn').checkVisibility()"), false);
+  await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove').click()`);
+  assert.match(await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove-confirm').textContent`), /结束集群/);
+  await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove-confirm-btn').click()`);
+  await waitFor(badge('已离开集群'));
+
   for (const secret of ['synthetic-target-password', 'synthetic-wrong-password', 'synthetic-panel-password']) {
     assert.equal(await secretsStored(secret), false, 'no password in browser storage');
   }
   assert.ok((await writes()).filter(row => row.patch.kind === 'add').every(row => row.patch.target_password === '<sent>'));
-  console.log('Compiled membership checks passed: no-password gate, prepare-join, create, add wrong/right password, lost reply + reload resume, leave unreachable/still-accepted/all-rejected, needs-attention retry, update node, public node change, remove with replacement, settings save rebase, forwarded self-removal to left, drafts retained, no stored passwords, 1440/768/390/320px.');
+  console.log('Compiled membership checks passed: no-password gate, prepare-join, create, add wrong/right password, lost reply + reload resume, leave unreachable/still-accepted/all-rejected, needs-attention retry, update node, public node change, remove with replacement, departed cleanup retry across reload, final-node dissolution, settings save rebase, forwarded self-removal to left, drafts retained, no stored passwords, 1440/768/390/320px.');
 }

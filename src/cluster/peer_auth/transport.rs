@@ -181,9 +181,12 @@ impl PeerClient {
             .send()
             .await
             .map_err(transport_error)?;
-        if response.status() != reqwest::StatusCode::OK
-            || response.headers().contains_key(header::CONTENT_ENCODING)
-        {
+        if response.status() != reqwest::StatusCode::OK {
+            // Gateway error bodies are not handshake evidence, even when a
+            // tunnel compresses them despite Accept-Encoding: identity.
+            return Err(unsigned_error(response.status().as_u16()));
+        }
+        if response.headers().contains_key(header::CONTENT_ENCODING) {
             return Err(invalid("节点握手失败"));
         }
         let bytes = crate::plugins::http::response_bytes_limited(response, HELLO_RESPONSE_BYTES)

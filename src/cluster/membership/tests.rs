@@ -276,7 +276,24 @@ async fn offline_standby_removal_revokes_at_every_retained_node() {
     let p = b.engine.propose(op.intent.operation_id, None).unwrap();
     prepare(&b, &[&a, &b], &p).await;
     commit(&b, &[&a, &b], &p);
-    finish(&b, &[&a, &b], &p);
+    assert!(b
+        .engine
+        .decide_finish(p.intent.operation_id.clone())
+        .is_err());
+    let policy = FencingPolicy::issue(c.engine.store()).unwrap();
+    let finish = b
+        .engine
+        .decide_finish_with_safety(
+            p.intent.operation_id.clone(),
+            Some(RemovalSafety::Fenced {
+                waited_secs: policy.max_stop_secs,
+                policy,
+            }),
+        )
+        .unwrap();
+    for node in [&a, &b] {
+        node.engine.apply_finish(finish.clone()).unwrap();
+    }
     for node in [&a, &b] {
         assert!(!trust_snapshot(node.engine.store())
             .unwrap()
@@ -455,4 +472,192 @@ fn legacy_enabled_configuration_stays_held_and_never_creates_an_identity() {
     assert!(execution_hold(&reopened).unwrap().is_some());
     drop(reopened);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn invalid_changes_are_rejected_before_admission_or_candidate_reservation() {
+    let a = Node::new("a", true).await;
+    let b = Node::new("b", false).await;
+    for change in [
+        Change::UpdateNode {
+            target_member_id: a.id(),
+            name: "bad\nname".into(),
+            api_url: "https://a.example.test".into(),
+            priority: 0,
+        },
+        Change::SetPublicNode {
+            public_member_id: Some("missing".into()),
+        },
+        Change::Add {
+            target_url: "https://a.example.test/".into(),
+        },
+    ] {
+        assert!(a
+            .engine
+            .begin(random_id().unwrap(), 1, a.id(), change)
+            .is_err());
+        assert!(a.engine.operations().unwrap().is_empty());
+    }
+    let op = begin_change(
+        &a,
+        Change::Add {
+            target_url: "https://b.example.test".into(),
+        },
+    );
+    let mut local = b.engine.local().unwrap();
+    local.descriptor.as_mut().unwrap().node_id = "a".into();
+    b.engine
+        .store()
+        .write(LOCAL_RECORD, serde_json::to_value(&local).unwrap())
+        .unwrap();
+    assert!(b
+        .engine
+        .reserve_pairing(op.intent.clone(), |_| Ok(()))
+        .is_err());
+    assert_eq!(b.engine.local().unwrap().lifecycle, Lifecycle::JoinReady);
+
+    // Simulate an older target that admitted the duplicate descriptor before
+    // full validation: coordinator construction must durably abort it.
+    let receipt = PairingReceipt::sign(
+        &op.intent,
+        local.descriptor.clone().unwrap(),
+        &b.engine.identity().unwrap(),
+    )
+    .unwrap();
+    local.lifecycle = Lifecycle::Pairing;
+    local.hold = Some(op.intent.operation_id.clone());
+    local.pairing = Some(PairingReservation {
+        intent: op.intent.clone(),
+        receipt: receipt.clone(),
+    });
+    b.engine
+        .store()
+        .write(LOCAL_RECORD, serde_json::to_value(local).unwrap())
+        .unwrap();
+    assert!(a
+        .engine
+        .propose(op.intent.operation_id.clone(), Some(receipt))
+        .is_err());
+    let aborted = a
+        .engine
+        .operation(&op.intent.operation_id)
+        .unwrap()
+        .unwrap();
+    assert!(aborted.terminal());
+    assert_eq!(aborted.pairing_candidate.unwrap().member_id, b.id());
+    b.engine.apply_decision(aborted.decision.unwrap()).unwrap();
+    assert_eq!(b.engine.local().unwrap().lifecycle, Lifecycle::JoinReady);
+    assert!(b.engine.local().unwrap().pairing.is_none());
+}
+
+#[tokio::test]
+async fn final_node_remove_stays_held_on_failed_stop_and_retries_to_left() {
+    let a = Node::new("a", true).await;
+    let op = begin_change(
+        &a,
+        Change::Remove {
+            target_member_id: a.id(),
+            replacement_public_member_id: None,
+        },
+    );
+    let id = op.intent.operation_id;
+    assert!(a
+        .engine
+        .dissolve(id.clone(), || async {
+            Err(io::Error::other("source still running"))
+        })
+        .await
+        .is_err());
+    a.engine.initialize().unwrap();
+    assert_eq!(a.engine.local().unwrap().hold.as_deref(), Some(id.as_str()));
+    assert!(!a.engine.operation(&id).unwrap().unwrap().terminal());
+    a.engine
+        .dissolve(id.clone(), || async { Ok(()) })
+        .await
+        .unwrap();
+    a.engine
+        .dissolve(id.clone(), || async {
+            panic!("completed dissolve must not stop twice")
+        })
+        .await
+        .unwrap();
+    let op = a.engine.operation(&id).unwrap().unwrap();
+    assert!(op.terminal() && op.finished_locally && op.dissolved);
+    assert!(op.decision.is_none() && op.finish.is_none());
+    assert_eq!(a.engine.local().unwrap().lifecycle, Lifecycle::Left);
+    assert!(trust_snapshot(a.engine.store()).is_err());
+    let config = a.engine.store().read("config.json").unwrap().unwrap().value;
+    assert_eq!(config["youtube"]["enable_monitor"], false);
+    assert_eq!(config["priority_channel"]["enabled"], false);
+    assert_eq!(config["unknown_extension"]["keep"], 42);
+}
+
+#[tokio::test]
+async fn removal_finish_rejects_missing_or_forged_stop_proof_and_survives_later_edits() {
+    let a = Node::new("a", true).await;
+    let b = Node::new("b", false).await;
+    let c = Node::new("c", false).await;
+    add(&a, &b, &[&a]).await;
+    add(&a, &c, &[&a, &b]).await;
+    let op = begin_change(
+        &a,
+        Change::Remove {
+            target_member_id: c.id(),
+            replacement_public_member_id: None,
+        },
+    );
+    let p = a
+        .engine
+        .propose(op.intent.operation_id.clone(), None)
+        .unwrap();
+    prepare(&a, &[&a, &b], &p).await;
+    commit(&a, &[&a, &b], &p);
+    let policy = FencingPolicy::issue(c.engine.store()).unwrap();
+    assert!(a
+        .engine
+        .decide_finish(op.intent.operation_id.clone())
+        .is_err());
+    for safety in [
+        RemovalSafety::Fenced {
+            policy: policy.clone(),
+            waited_secs: policy.max_stop_secs - 1,
+        },
+        RemovalSafety::Fenced {
+            policy: FencingPolicy::issue(b.engine.store()).unwrap(),
+            waited_secs: policy.max_stop_secs,
+        },
+    ] {
+        assert!(a
+            .engine
+            .decide_finish_with_safety(op.intent.operation_id.clone(), Some(safety))
+            .is_err());
+    }
+    let proof = a
+        .engine
+        .decide_finish_with_safety(
+            op.intent.operation_id.clone(),
+            Some(RemovalSafety::Fenced {
+                waited_secs: policy.max_stop_secs,
+                policy,
+            }),
+        )
+        .unwrap();
+    for node in [&a, &b] {
+        node.engine.apply_finish(proof.clone()).unwrap();
+    }
+    assert!(a.engine.removed_source_stopped("c").unwrap());
+    assert!(!a.engine.removed_source_stopped("b").unwrap());
+    let edit = begin_change(
+        &a,
+        Change::SetPublicNode {
+            public_member_id: Some(a.id()),
+        },
+    );
+    let p = a.engine.propose(edit.intent.operation_id, None).unwrap();
+    prepare(&a, &[&a, &b], &p).await;
+    commit(&a, &[&a, &b], &p);
+    finish(&a, &[&a, &b], &p);
+    assert!(a.engine.removed_source_stopped("c").unwrap());
+    a.engine.initialize().unwrap();
+    assert!(a.engine.removed_source_stopped("c").unwrap());
 }

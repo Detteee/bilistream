@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex, MutexGuard};
 use tokio::task::JoinHandle;
 
 use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
@@ -75,7 +75,7 @@ enum StuckReason {
 
 // Global process supervisor
 lazy_static::lazy_static! {
-    static ref FFMPEG_SUPERVISOR: Arc<Mutex<Option<FfmpegProcess>>> = Arc::new(Mutex::new(None));
+    static ref FFMPEG_SUPERVISOR: Arc<ProcessSupervisor> = Arc::new(ProcessSupervisor::default());
     // Use atomic for lock-free speed updates (stored as f32 bits)
     static ref FFMPEG_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FFMPEG_CACHE_SPEED: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
@@ -127,6 +127,123 @@ impl Drop for SessionTasks {
         for task in &self.0 {
             task.abort();
         }
+    }
+}
+
+/// Long preparation and cleanup futures may own the process lock. A fence
+/// cancels those futures before acquiring the lock, without borrowing PIDs.
+struct ProcessSupervisor {
+    process: Mutex<Option<FfmpegProcess>>,
+    fencing: watch::Sender<bool>,
+    fence_lock: Mutex<()>,
+}
+
+impl Default for ProcessSupervisor {
+    fn default() -> Self {
+        Self {
+            process: Mutex::new(None),
+            fencing: watch::channel(false).0,
+            fence_lock: Mutex::new(()),
+        }
+    }
+}
+
+impl ProcessSupervisor {
+    async fn lock(&self) -> MutexGuard<'_, Option<FfmpegProcess>> {
+        self.process.lock().await
+    }
+
+    async fn interruptible<T>(&self, work: impl Future<Output = T>) -> Option<T> {
+        let mut fence = self.fencing.subscribe();
+        if *fence.borrow_and_update() {
+            return None;
+        }
+        tokio::select! {
+            biased;
+            _ = fence.changed() => None,
+            result = work => Some(result),
+        }
+    }
+
+    fn spawn(&self, command: &mut Command) -> std::io::Result<Child> {
+        // Serialize the spawn syscall with fence admission. A child spawned
+        // just before admission is owned by its interruptible future or the
+        // supervisor; either path retains kill_on_drop through cancellation.
+        let fencing = self.fencing.borrow();
+        if *fencing {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "推流已隔离",
+            ));
+        }
+        command.spawn()
+    }
+
+    async fn stop_matching(
+        &self,
+        expected: Option<FfmpegSession>,
+        manual: bool,
+        cleanup: impl Future<Output = ()>,
+    ) -> bool {
+        self.interruptible(async {
+            let mut supervisor = self.lock().await;
+            if expected.is_some_and(|session| matching_process(&mut supervisor, session).is_none())
+            {
+                return false;
+            }
+            if manual {
+                MANUAL_STOP.store(true, Ordering::SeqCst);
+            }
+            stop_locked(&mut supervisor).await;
+            cleanup.await;
+            true
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    async fn transition(
+        &self,
+        session: FfmpegSession,
+        prepare: impl Future<Output = bool>,
+    ) -> bool {
+        self.interruptible(async {
+            let mut supervisor = self.lock().await;
+            if matching_process(&mut supervisor, session).is_none() || !prepare.await {
+                return false;
+            }
+            stop_locked(&mut supervisor).await;
+            true
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    async fn fence(&self) {
+        let _exclusive = self.fence_lock.lock().await;
+        self.fencing.send_replace(true);
+        let mut supervisor = self.lock().await;
+        if let Some(mut process) = supervisor.take() {
+            // Send every publishing child its kill signal before any ingest,
+            // process-reaping or filesystem work can delay another publisher.
+            for child in &mut process.children {
+                if let Err(error) = child.start_kill() {
+                    tracing::warn!("FFmpeg fence kill failed: {error}");
+                }
+            }
+            drop(std::mem::take(&mut process.tasks));
+            let cache_dir = process.cache_dir.take();
+            // Owned children kill on drop; IngestProcess also kills its group.
+            drop(process);
+            if let Some(cache_dir) = cache_dir {
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_dir_all(cache_dir).await;
+                });
+            }
+        }
+        reset_stopped_tracking_state();
+        // Startup still rechecks the runtime's execution fence under this lock.
+        self.fencing.send_replace(false);
     }
 }
 
@@ -262,7 +379,7 @@ async fn spawn_piped_ingest(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    match cmd.spawn() {
+    match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
             if let Some(pid) = child.id() {
                 tracing::info!("🚀 streamlink 摄取进程已启动 (PID: {:?})", pid);
@@ -629,6 +746,13 @@ pub async fn stop_ffmpeg() {
     stop_ffmpeg_internal(true).await;
 }
 
+/// Emergency execution fence. Unlike normal stop, cancels preparation/cleanup
+/// waits and signals all owned publishing children without waiting for reaping.
+/// The task survives cancellation of the watchdog or requesting HTTP handler.
+pub async fn fence_ffmpeg() {
+    let _ = tokio::spawn(async { FFMPEG_SUPERVISOR.fence().await }).await;
+}
+
 /// Internal stop function with manual flag
 async fn stop_ffmpeg_internal(manual: bool) {
     stop_ffmpeg_matching(None, manual, async {}).await;
@@ -652,20 +776,12 @@ async fn stop_ffmpeg_matching(
     manual: bool,
     cleanup: impl Future<Output = ()> + Send + 'static,
 ) -> bool {
-    // The cleanup must survive cancellation of the requesting session task.
+    // The cleanup survives cancellation of the requesting session task. An
+    // execution fence may interrupt it to stop every publisher promptly.
     tokio::spawn(async move {
-        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-        if expected.is_some_and(|session| matching_process(&mut supervisor, session).is_none()) {
-            return false;
-        }
-        if manual {
-            MANUAL_STOP.store(true, Ordering::SeqCst);
-        }
-        stop_locked(&mut supervisor).await;
-        cleanup.await;
-        // Hold the lock until cleanup and metric reset are complete.
-        drop(supervisor);
-        true
+        FFMPEG_SUPERVISOR
+            .stop_matching(expected, manual, cleanup)
+            .await
     })
     .await
     .unwrap_or(false)
@@ -677,16 +793,9 @@ pub async fn transition_ffmpeg_session(
     session: FfmpegSession,
     prepare: impl Future<Output = bool> + Send + 'static,
 ) -> bool {
-    tokio::spawn(async move {
-        let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-        if matching_process(&mut supervisor, session).is_none() || !prepare.await {
-            return false;
-        }
-        stop_locked(&mut supervisor).await;
-        true
-    })
-    .await
-    .unwrap_or(false)
+    tokio::spawn(async move { FFMPEG_SUPERVISOR.transition(session, prepare).await })
+        .await
+        .unwrap_or(false)
 }
 
 async fn stop_locked(supervisor: &mut Option<FfmpegProcess>) {
@@ -1737,7 +1846,7 @@ async fn spawn_direct_ffmpeg(
         }
     }
 
-    match cmd.spawn() {
+    match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
             let pid = child.id();
             tracing::info!("🚀 ffmpeg 进程已启动 (PID: {:?})", pid);
@@ -1869,7 +1978,7 @@ async fn spawn_cached_ffmpeg(
         }
     }
 
-    match cache_cmd.spawn() {
+    match FFMPEG_SUPERVISOR.spawn(&mut cache_cmd) {
         Ok(mut cache_child) => {
             let cache_pid = cache_child.id();
             tracing::info!("🚀 ffmpeg HLS 缓存写入进程已启动 (PID: {:?})", cache_pid);
@@ -1960,7 +2069,7 @@ async fn spawn_cached_ffmpeg(
                 let Some(process) = matching_process(&mut supervisor, session) else {
                     return;
                 };
-                match reader_cmd.spawn() {
+                match FFMPEG_SUPERVISOR.spawn(&mut reader_cmd) {
                     Ok(mut reader_child) => {
                         let reader_pid = reader_child.id();
                         tracing::info!("🚀 ffmpeg 延迟推流进程已启动 (PID: {:?})", reader_pid);
@@ -2015,53 +2124,58 @@ pub async fn ffmpeg(
     crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
     cache: FfmpegCacheOptions,
 ) -> Option<FfmpegSession> {
-    // Serialize the running check, process spawn, and registration with stops.
-    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-    if supervisor.is_some() {
-        return None;
-    }
+    FFMPEG_SUPERVISOR
+        .interruptible(async {
+            // Serialize the running check, process spawn, and registration with stops.
+            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+            if supervisor.is_some() {
+                return None;
+            }
 
-    // Recheck cluster execution while holding the same lock as demotion's stop.
-    // A task queued on this lock before a handoff must not start afterwards.
-    let cfg = match crate::config::load_config()
+            // Recheck cluster execution while holding the same lock as demotion's stop.
+            // A task queued on this lock before a handoff must not start afterwards.
+            let cfg = match crate::config::load_config()
+                .await
+                .map_err(|e| e.to_string())
+            {
+                Ok(cfg) => cfg,
+                Err(error) => {
+                    tracing::warn!("FFmpeg startup cancelled: {error}");
+                    return None;
+                }
+            };
+            if !crate::cluster::local_monitoring_allowed(&cfg) {
+                return None;
+            }
+            let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
+            let latency_secs = cache.latency_secs();
+
+            if cache.enabled {
+                spawn_cached_ffmpeg(
+                    &mut supervisor,
+                    rtmp_url_key,
+                    source,
+                    proxy,
+                    log_level,
+                    crop,
+                    latency_secs,
+                )
+                .await;
+            } else {
+                spawn_direct_ffmpeg(
+                    &mut supervisor,
+                    rtmp_url_key,
+                    source,
+                    proxy,
+                    log_level,
+                    crop,
+                )
+                .await;
+            }
+            supervisor.as_ref().map(|process| process.session)
+        })
         .await
-        .map_err(|e| e.to_string())
-    {
-        Ok(cfg) => cfg,
-        Err(error) => {
-            tracing::warn!("FFmpeg startup cancelled: {error}");
-            return None;
-        }
-    };
-    if !crate::cluster::local_monitoring_allowed(&cfg) {
-        return None;
-    }
-    let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
-    let latency_secs = cache.latency_secs();
-
-    if cache.enabled {
-        spawn_cached_ffmpeg(
-            &mut supervisor,
-            rtmp_url_key,
-            source,
-            proxy,
-            log_level,
-            crop,
-            latency_secs,
-        )
-        .await;
-    } else {
-        spawn_direct_ffmpeg(
-            &mut supervisor,
-            rtmp_url_key,
-            source,
-            proxy,
-            log_level,
-            crop,
-        )
-        .await;
-    }
-    supervisor.as_ref().map(|process| process.session)
+        .flatten()
 }
 
 /// Wait for the ffmpeg process to exit and return the exit status
@@ -2201,44 +2315,232 @@ mod tests {
         assert_eq!(supervisor.as_ref().unwrap().session, FfmpegSession(2));
     }
 
-    #[tokio::test]
-    async fn stale_session_cannot_register_a_worker_for_replacement() {
-        *FFMPEG_SUPERVISOR.lock().await = Some(empty_process(FfmpegSession(2)));
-        assert!(
-            crate::webui::api::current_network_status()
+    #[test]
+    fn stale_session_cannot_register_a_worker_for_replacement() {
+        run_supervisor_test(async {
+            *FFMPEG_SUPERVISOR.lock().await = Some(empty_process(FfmpegSession(2)));
+            assert!(
+                crate::webui::api::current_network_status()
+                    .await
+                    .ffmpeg_running
+            );
+            let called = Arc::new(AtomicBool::new(false));
+            let worker_called = called.clone();
+            assert!(!stop_ffmpeg_session(FfmpegSession(1)).await);
+            let stale_called = called.clone();
+            assert!(
+                !transition_ffmpeg_session(FfmpegSession(1), async move {
+                    stale_called.store(true, Ordering::SeqCst);
+                    true
+                })
                 .await
-                .ffmpeg_running
-        );
-        let called = Arc::new(AtomicBool::new(false));
-        let worker_called = called.clone();
-        assert!(!stop_ffmpeg_session(FfmpegSession(1)).await);
-        let stale_called = called.clone();
-        assert!(
-            !transition_ffmpeg_session(FfmpegSession(1), async move {
-                stale_called.store(true, Ordering::SeqCst);
-                true
+            );
+            assert!(!transition_ffmpeg_session(FfmpegSession(2), async { false }).await);
+            spawn_session_task(FfmpegSession(1), async move {
+                worker_called.store(true, Ordering::SeqCst);
             })
-            .await
-        );
-        assert!(!transition_ffmpeg_session(FfmpegSession(2), async { false }).await);
-        spawn_session_task(FfmpegSession(1), async move {
-            worker_called.store(true, Ordering::SeqCst);
-        })
-        .await;
-        tokio::task::yield_now().await;
-        assert!(!called.load(Ordering::SeqCst));
-        let process = FFMPEG_SUPERVISOR.lock().await.take().unwrap();
-        assert_eq!(process.session, FfmpegSession(2));
-        assert!(process.tasks.0.is_empty());
-        // A remote publisher can keep the room live after this local session
-        // ends. The status API must still advertise an idle local publisher.
-        let network = crate::webui::api::current_network_status().await;
-        assert!(!network.ffmpeg_running);
-        assert!(network.stream_bitrate_history.is_empty());
+            .await;
+            tokio::task::yield_now().await;
+            assert!(!called.load(Ordering::SeqCst));
+            let process = FFMPEG_SUPERVISOR.lock().await.take().unwrap();
+            assert_eq!(process.session, FfmpegSession(2));
+            assert!(process.tasks.0.is_empty());
+            // A remote publisher can keep the room live after this local session
+            // ends. The status API must still advertise an idle local publisher.
+            let network = crate::webui::api::current_network_status().await;
+            assert!(!network.ffmpeg_running);
+            assert!(network.stream_bitrate_history.is_empty());
+        });
     }
 
     lazy_static::lazy_static! {
         static ref FFMPEG_COUNTER_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_exited(pid: u32) -> bool {
+        for _ in 0..100 {
+            // A zombie no longer publishes; only its parent's reaper is pending.
+            let exited =
+                std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
+                    stat.rsplit_once(')')
+                        .is_some_and(|(_, fields)| fields.trim_start().starts_with('Z'))
+                });
+            if exited {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    /// Fencing resets the shared counters, and the process supervisor is global,
+    /// so these tests hold the counter lock for the whole runtime.
+    fn run_supervisor_test(test: impl Future<Output = ()>) {
+        let _guard = FFMPEG_COUNTER_TEST_LOCK.lock().unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(test);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_fence_test(test: impl Future<Output = ()>) {
+        run_supervisor_test(test);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sleeper() -> Command {
+        let mut command = Command::new("sleep");
+        command.arg("1000").kill_on_drop(true);
+        command
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fence_kills_every_publisher_while_preparation_holds_the_supervisor() {
+        use tokio::io::AsyncBufReadExt;
+        run_fence_test(async {
+            let supervisor = Arc::new(ProcessSupervisor::default());
+            let publisher = supervisor.spawn(&mut sleeper()).unwrap();
+            let mut ingest = Command::new("sh");
+            configure_ingest_process_group(&mut ingest);
+            ingest
+                .args(["-c", "sleep 1000 & echo $!; wait"])
+                .kill_on_drop(true)
+                .stdout(Stdio::piped());
+            let mut ingest = supervisor.spawn(&mut ingest).unwrap();
+            let mut muxer = String::new();
+            tokio::io::BufReader::new(ingest.stdout.take().unwrap())
+                .read_line(&mut muxer)
+                .await
+                .unwrap();
+            let pids = [
+                publisher.id().unwrap(),
+                ingest.id().unwrap(),
+                muxer.trim().parse().unwrap(),
+            ];
+            let session = FfmpegSession(u64::MAX);
+            *supervisor.lock().await = Some(FfmpegProcess {
+                session,
+                tasks: SessionTasks::default(),
+                children: vec![publisher],
+                ingest: Some(IngestProcess(ingest)),
+                pid: Some(pids[0]),
+                cache_dir: None,
+            });
+            let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+            let preparing = tokio::spawn({
+                let supervisor = supervisor.clone();
+                async move {
+                    supervisor
+                        .transition(session, async move {
+                            held_tx.send(()).unwrap();
+                            std::future::pending::<bool>().await
+                        })
+                        .await
+                }
+            });
+            held_rx.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.fence())
+                .await
+                .expect("fence must not wait for preparation holding the supervisor");
+            assert!(!preparing.await.unwrap());
+            assert!(supervisor.lock().await.is_none());
+            for pid in pids {
+                assert!(wait_exited(pid).await, "publisher {pid} survived the fence");
+            }
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fence_ffmpeg_kills_a_publisher_while_preparation_holds_the_process_supervisor() {
+        run_fence_test(async {
+            let publisher = FFMPEG_SUPERVISOR.spawn(&mut sleeper()).unwrap();
+            let pid = publisher.id().unwrap();
+            let session = FfmpegSession(u64::MAX);
+            *FFMPEG_SUPERVISOR.lock().await = Some(FfmpegProcess {
+                session,
+                tasks: SessionTasks::default(),
+                children: vec![publisher],
+                ingest: None,
+                pid: Some(pid),
+                cache_dir: None,
+            });
+            let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+            let preparing = tokio::spawn(async move {
+                transition_ffmpeg_session(session, async move {
+                    held_tx.send(()).unwrap();
+                    std::future::pending::<bool>().await
+                })
+                .await
+            });
+            held_rx.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), fence_ffmpeg())
+                .await
+                .expect(
+                    "fence_ffmpeg must not wait for preparation holding the process supervisor",
+                );
+            assert!(!preparing.await.unwrap());
+            assert!(FFMPEG_SUPERVISOR.lock().await.is_none());
+            assert!(
+                wait_exited(pid).await,
+                "publisher {pid} survived fence_ffmpeg"
+            );
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fence_closes_the_unregistered_spawn_window() {
+        run_fence_test(async {
+            let supervisor = Arc::new(ProcessSupervisor::default());
+            // Startup has spawned a child but not registered it yet.
+            let (spawned_tx, spawned_rx) = tokio::sync::oneshot::channel();
+            let startup = tokio::spawn({
+                let supervisor = supervisor.clone();
+                async move {
+                    supervisor
+                        .interruptible(async {
+                            let _held = supervisor.lock().await;
+                            let child = supervisor.spawn(&mut sleeper()).unwrap();
+                            spawned_tx.send(child.id().unwrap()).unwrap();
+                            std::future::pending::<()>().await;
+                            drop(child);
+                        })
+                        .await
+                }
+            });
+            let pid = spawned_rx.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.fence())
+                .await
+                .expect("fence must cancel startup holding the supervisor");
+            assert!(startup.await.unwrap().is_none());
+            assert!(wait_exited(pid).await, "unregistered child {pid} survived");
+
+            // A worker already holding the lock (the delayed cache reader)
+            // cannot admit a new publisher once the fence has begun.
+            let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+            let registering = tokio::spawn({
+                let supervisor = supervisor.clone();
+                async move {
+                    let _held = supervisor.lock().await;
+                    locked_tx.send(()).unwrap();
+                    while !*supervisor.fencing.borrow() {
+                        tokio::task::yield_now().await;
+                    }
+                    supervisor.spawn(&mut sleeper()).map(|child| child.id())
+                }
+            });
+            locked_rx.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), supervisor.fence())
+                .await
+                .expect("fence must finish once the registering worker yields");
+            let error = registering.await.unwrap().unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        });
     }
 
     #[test]

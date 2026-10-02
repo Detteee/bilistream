@@ -41,24 +41,53 @@ fn newer_schema_is_rejected_without_lowering_it() {
     let database = store.data_dir().join("bilistream.db");
     drop(store);
     let connection = Connection::open(&database).unwrap();
-    connection.execute_batch("PRAGMA user_version=3").unwrap();
+    connection.execute_batch("PRAGMA user_version=4").unwrap();
     assert!(dir.open().is_err());
     assert_eq!(
         connection
             .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        3
+        4
     );
 }
 
 #[test]
-fn every_protected_lifecycle_exports_unjoined_and_off_without_changing_source() {
+fn fencing_schema_is_atomic_and_cannot_be_lowered_by_later_membership_writes() {
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    let failed: io::Result<()> = store.transaction(|tx| {
+        tx.require_fencing_schema()?;
+        tx.write("cluster-local", json!({"lifecycle":"join_ready"}))?;
+        Err(io::Error::other("synthetic fencing policy failure"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(schema_version(&store), 1);
+    assert!(store.read("cluster-local").unwrap().is_none());
+    store
+        .transaction(|tx| {
+            tx.require_fencing_schema()?;
+            tx.write("cluster-local", json!({"lifecycle":"join_ready"}))
+        })
+        .unwrap();
+    assert_eq!(schema_version(&store), 3);
+    for name in MANAGED_RECORDS {
+        store.write(name, json!({"synthetic":"record"})).unwrap();
+        assert_eq!(schema_version(&store), 3);
+    }
+    drop(store);
+    let reopened = dir.open().unwrap();
+    assert_eq!(schema_version(&reopened), 3);
+}
+
+#[test]
+fn protected_and_legacy_clusters_export_unjoined_and_off_without_changing_source() {
     for lifecycle in [
-        "join_ready",
-        "pairing",
-        "managed",
-        "left",
-        "incompatible_held",
+        None,
+        Some("join_ready"),
+        Some("pairing"),
+        Some("managed"),
+        Some("left"),
+        Some("incompatible_held"),
     ] {
         let dir = Directory::new();
         let store = dir.open().unwrap();
@@ -69,21 +98,23 @@ fn every_protected_lifecycle_exports_unjoined_and_off_without_changing_source() 
         }
         config["priority_channel"] = json!({"enabled":true,"auto_restart":true});
         store.write("config.json", config.clone()).unwrap();
-        store
-            .write(
-                "cluster-local",
-                json!({"lifecycle":lifecycle,"hold":"operation"}),
-            )
-            .unwrap();
-        store
-            .write(
-                "cluster-identity",
-                json!({"private_key":"synthetic-private-identity"}),
-            )
-            .unwrap();
-        store
-            .write("cluster-operations", json!({"private":"synthetic-journal"}))
-            .unwrap();
+        if let Some(lifecycle) = lifecycle {
+            store
+                .write(
+                    "cluster-local",
+                    json!({"lifecycle":lifecycle,"hold":"operation"}),
+                )
+                .unwrap();
+            store
+                .write(
+                    "cluster-identity",
+                    json!({"private_key":"synthetic-private-identity"}),
+                )
+                .unwrap();
+            store
+                .write("cluster-operations", json!({"private":"synthetic-journal"}))
+                .unwrap();
+        }
         let backup = store.export_backup("synthetic-backup-password").unwrap();
         let decoded = crypto::restore("synthetic-backup-password", &backup).unwrap();
         let docs: HashMap<String, Document> = serde_json::from_slice(&decoded).unwrap();
@@ -106,6 +137,60 @@ fn every_protected_lifecycle_exports_unjoined_and_off_without_changing_source() 
         for name in MANAGED_RECORDS {
             assert!(!legacy.join(name).exists());
         }
+    }
+}
+
+#[test]
+fn restore_old_cluster_backup_into_running_empty_store_is_immediately_safe() {
+    for enabled in [true, false] {
+        let source = Directory::new();
+        let source_store = source.open().unwrap();
+        let mut config = config_fixture();
+        config["cluster"] = json!({"enabled":enabled,"node_id":"old-node","peers":[{"node_id":"old-peer","api_url":"https://example.invalid"}],"public_status":{"node_id":"old-node"}});
+        for platform in ["youtube", "twitch", "niconico"] {
+            config[platform] = json!({"enable_monitor":true});
+        }
+        config["priority_channel"] = json!({"enabled":true,"auto_restart":true});
+        source_store.write("config.json", config.clone()).unwrap();
+        // Model a backup produced before portable exports sanitized cluster
+        // settings. Using today's export_backup would hide the import defect.
+        let bytes = serde_json::to_vec(&source_store.snapshot().unwrap()).unwrap();
+        let backup = crypto::export("synthetic-password", &bytes).unwrap();
+        let destination = Directory::new();
+        let store = destination.open().unwrap();
+        let membership = crate::cluster::membership::Membership::new(store.clone());
+        membership.initialize().unwrap();
+        store.restore_backup("synthetic-password", &backup).unwrap();
+        let restored = store.read("config.json").unwrap().unwrap().value;
+        if enabled {
+            assert_eq!(restored["cluster"]["enabled"], false);
+            assert_eq!(restored["cluster"]["peers"], json!([]));
+            assert_eq!(restored["cluster"]["public_status"]["node_id"], "");
+            for platform in ["youtube", "twitch", "niconico"] {
+                assert_eq!(restored[platform]["enable_monitor"], false);
+            }
+            assert_eq!(restored["priority_channel"]["enabled"], false);
+            assert_eq!(restored["priority_channel"]["auto_restart"], false);
+            assert_eq!(restored["bililive"], config["bililive"]);
+            assert_eq!(restored["extension"], config["extension"]);
+        } else {
+            // Ordinary standalone restores retain their monitoring choices.
+            assert_eq!(restored, config);
+        }
+        assert_eq!(schema_version(&store), 1);
+        assert!(store.read("cluster-local").unwrap().is_none());
+        let legacy = destination.0.join("export");
+        store.export_legacy(&legacy).unwrap();
+        let exported: Value =
+            serde_json::from_slice(&fs::read(legacy.join("config.json")).unwrap()).unwrap();
+        for field in ["cluster", "priority_channel", "bililive", "extension"] {
+            assert_eq!(exported[field], restored[field]);
+        }
+        for platform in ["youtube", "twitch", "niconico"] {
+            assert_eq!(exported[platform]["enable_monitor"], !enabled);
+        }
+        membership.initialize().unwrap();
+        assert!(store.read("cluster-local").unwrap().is_none());
     }
 }
 

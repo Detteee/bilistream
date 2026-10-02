@@ -1099,6 +1099,50 @@ fn execution_quorum_requires_fresh_direct_heartbeat_acks() {
 }
 
 #[test]
+fn bounded_execution_quorum_ignores_wall_clock_and_excessive_settings() {
+    let mut cfg = test_config("a", 0);
+    cfg.cluster.failover_timeout_secs = u64::MAX;
+    cfg.cluster.heartbeat_interval_secs = u64::MAX;
+    cfg.cluster.peers = vec![crate::config::ClusterPeer {
+        node_id: "b".into(),
+        name: "b".into(),
+        api_url: "https://b.example.test".into(),
+        priority: 0,
+    }];
+    let observed = std::time::Instant::now();
+    let mut state = ClusterState {
+        execution_fencing_active: true,
+        ..Default::default()
+    };
+    // A fresh wall-clock timestamp alone is never a bounded execution lease.
+    state.peer_heartbeat_acks.insert("b".into(), u64::MAX);
+    assert!(!state_has_bounded_execution_quorum(&state, &cfg, observed));
+    state.peer_heartbeat_observed.insert("b".into(), observed);
+    assert!(state_has_bounded_execution_quorum(&state, &cfg, observed));
+    assert!(!state_has_bounded_execution_quorum(
+        &state,
+        &cfg,
+        observed + Duration::from_secs(EXECUTION_QUORUM_MAX_SECS + 1),
+    ));
+    // A new process has no observations, and changing membership invalidates
+    // its old-revision observations even before the map is pruned.
+    state.peer_heartbeat_acks.clear();
+    assert!(!state_has_bounded_execution_quorum(&state, &cfg, observed));
+    assert!(!state_has_bounded_execution_quorum(
+        &ClusterState::default(),
+        &cfg,
+        observed
+    ));
+    state.peer_heartbeat_acks.insert("b".into(), 1);
+    cfg.cluster.failover_timeout_secs = 5;
+    assert!(!state_has_bounded_execution_quorum(
+        &state,
+        &cfg,
+        observed + Duration::from_secs(6)
+    ));
+}
+
+#[test]
 fn two_node_partition_fails_closed_after_ack_expiry() {
     let mut cfg = test_config("a", 0);
     cfg.cluster.failover_timeout_secs = 10;
@@ -2263,11 +2307,14 @@ fn only_a_down_origin_counts_as_unreachable() {
     }
 }
 
-#[test]
-fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_deadline() {
-    use super::sync::{may_take_over_unconfirmed, source_fence_deadline_secs, NodeModeError};
+#[tokio::test]
+async fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_deadline() {
+    use super::membership::FencingPolicy;
+    use super::sync::{
+        cached_stop_bound, may_take_over_unconfirmed, source_fence_deadline_secs, NodeModeError,
+    };
     let cfg = test_config("ca", 0);
-    let deadline = source_fence_deadline_secs(&cfg.cluster);
+    let deadline = source_fence_deadline_secs(&cfg.cluster, None);
     assert_eq!(
         deadline,
         cfg.cluster.failover_timeout_secs + 2 * cfg.cluster.heartbeat_interval_secs + 5
@@ -2282,20 +2329,57 @@ fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_deadline(
         &down,
         seen,
         &cfg.cluster,
-        after
+        after,
+        None,
     ));
     assert!(
-        !may_take_over_unconfirmed(true, &down, seen, &cfg.cluster, 1_000 + deadline),
+        !may_take_over_unconfirmed(true, &down, seen, &cfg.cluster, 1_000 + deadline, None),
         "not past the deadline"
     );
     assert!(
-        !may_take_over_unconfirmed(true, &refused, seen, &cfg.cluster, after),
+        !may_take_over_unconfirmed(true, &refused, seen, &cfg.cluster, after, None),
         "alive and refusing"
     );
     assert!(
-        !may_take_over_unconfirmed(false, &down, seen, &cfg.cluster, after),
+        !may_take_over_unconfirmed(false, &down, seen, &cfg.cluster, after, None),
         "a panel switch"
     );
+
+    let mut long = test_config("ca", 0);
+    long.cluster.failover_timeout_secs = 10_000;
+    long.cluster.heartbeat_interval_secs = 10_000;
+    let bound = super::membership::FENCING_STOP_BOUND_SECS;
+    let uncapped = source_fence_deadline_secs(&long.cluster, None);
+    let capped = source_fence_deadline_secs(&long.cluster, Some(bound));
+    assert!(uncapped > bound);
+    assert_eq!(capped, bound);
+    assert!(
+        !may_take_over_unconfirmed(true, &down, seen, &long.cluster, 1_000 + bound, Some(bound)),
+        "the signed bound is still closed"
+    );
+    assert!(may_take_over_unconfirmed(
+        true,
+        &down,
+        seen,
+        &long.cluster,
+        1_000 + bound + 1,
+        Some(bound),
+    ));
+    assert!(
+        !may_take_over_unconfirmed(true, &down, seen, &long.cluster, 1_000 + bound + 1, None),
+        "without a cached policy the operator timeout still applies"
+    );
+
+    let source = MembershipNode::new("src", true).await;
+    let _store = HandoffStoreGuard::set(std::sync::Arc::clone(source.engine.store()));
+    assert_eq!(cached_stop_bound("src"), None);
+    let policy = FencingPolicy::issue(source.engine.store()).unwrap();
+    source
+        .engine
+        .remember_fencing_policy(source.engine.identity().unwrap().public().clone(), policy)
+        .unwrap();
+    assert_eq!(cached_stop_bound("src"), Some(bound));
+    assert_eq!(cached_stop_bound("other"), None);
 }
 
 #[tokio::test]
@@ -2328,4 +2412,326 @@ async fn an_owed_demotion_is_dropped_once_this_node_is_not_the_owner() {
         cluster_state_read().unconfirmed_demotion.as_deref(),
         Some("jp")
     );
+}
+
+struct HandoffStoreGuard;
+
+impl HandoffStoreGuard {
+    fn set(store: std::sync::Arc<crate::storage::Store>) -> Self {
+        super::sync::set_handoff_membership_store(Some(store));
+        Self
+    }
+}
+
+impl Drop for HandoffStoreGuard {
+    fn drop(&mut self) {
+        super::sync::set_handoff_membership_store(None);
+    }
+}
+
+struct MembershipNode {
+    dir: std::path::PathBuf,
+    engine: super::membership::Membership,
+}
+
+impl MembershipNode {
+    async fn new(name: &str, create: bool) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-handoff-{}",
+            super::peer_auth::random_id().unwrap()
+        ));
+        let store = crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+        store
+            .write(
+                "config.json",
+                serde_json::json!({
+                    "cluster": {"enabled": false},
+                    "youtube": {"enable_monitor": true},
+                    "twitch": {"enable_monitor": true},
+                    "niconico": {"enable_monitor": true},
+                    "priority_channel": {"enabled": true, "auto_restart": true},
+                    "bililive": {"enable_danmaku_command": false}
+                }),
+            )
+            .unwrap();
+        let engine = super::membership::Membership::new(store);
+        engine
+            .setup(
+                super::membership::SetupRequest {
+                    operation_id: super::peer_auth::random_id().unwrap(),
+                    expected_local_revision: 0,
+                    node_id: name.into(),
+                    name: name.into(),
+                    api_url: format!("https://{name}.example.test"),
+                    priority: 0,
+                },
+                create,
+                || async { Ok(()) },
+            )
+            .await
+            .unwrap();
+        Self { dir, engine }
+    }
+
+    fn id(&self) -> String {
+        self.engine.identity().unwrap().public().member_id.clone()
+    }
+}
+
+impl Drop for MembershipNode {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn begin_membership_change(
+    node: &MembershipNode,
+    change: super::membership::Change,
+) -> super::membership::Operation {
+    node.engine
+        .begin(
+            super::peer_auth::random_id().unwrap(),
+            node.engine.manifest().unwrap().unwrap().revision,
+            node.id(),
+            change,
+        )
+        .unwrap()
+}
+
+async fn enroll_member(
+    coordinator: &MembershipNode,
+    candidate: &MembershipNode,
+    old: &[&MembershipNode],
+) {
+    let op = begin_membership_change(
+        coordinator,
+        super::membership::Change::Add {
+            target_url: candidate
+                .engine
+                .local()
+                .unwrap()
+                .descriptor
+                .unwrap()
+                .api_url,
+        },
+    );
+    let receipt = candidate
+        .engine
+        .reserve_pairing(op.intent.clone(), |_| Ok(()))
+        .unwrap();
+    let proposal = coordinator
+        .engine
+        .propose(op.intent.operation_id.clone(), Some(receipt))
+        .unwrap();
+    let mut nodes = old.to_vec();
+    nodes.push(candidate);
+    for node in &nodes {
+        let prepared = node
+            .engine
+            .prepare(proposal.clone(), || async { Ok(()) })
+            .await
+            .unwrap();
+        coordinator
+            .engine
+            .record_prepare(proposal.intent.operation_id.clone(), prepared)
+            .unwrap();
+    }
+    let decision = coordinator
+        .engine
+        .decide(
+            proposal.intent.operation_id.clone(),
+            super::membership::DecisionKind::Commit,
+        )
+        .unwrap();
+    for node in &nodes {
+        let installed = node
+            .engine
+            .apply_decision(decision.clone())
+            .unwrap()
+            .unwrap();
+        coordinator
+            .engine
+            .record_installed(proposal.intent.operation_id.clone(), installed)
+            .unwrap();
+    }
+    let finish = coordinator
+        .engine
+        .decide_finish(proposal.intent.operation_id)
+        .unwrap();
+    for node in &nodes {
+        node.engine.apply_finish(finish.clone()).unwrap();
+    }
+}
+
+/// Removal commit drops the source from the cluster config while the membership
+/// hold is still set, so the replacement must not resume yet. After the signed
+/// 180s wait, FINISH is the only reason a downed source can be skipped.
+#[tokio::test]
+async fn removal_finish_lets_the_replacement_resume_while_the_source_stays_down() {
+    use super::membership::{Change, DecisionKind, FencingPolicy, Runtime};
+    use super::peer_auth::PeerClient;
+    use axum::{routing::post, Json, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let _state = ClusterStateGuard::new();
+    crate::install_crypto_provider();
+    let a = MembershipNode::new("a", true).await;
+    let b = MembershipNode::new("b", false).await;
+    let c = MembershipNode::new("c", false).await;
+    enroll_member(&a, &b, &[&a]).await;
+    enroll_member(&a, &c, &[&a, &b]).await;
+    let policy = FencingPolicy::issue(c.engine.store()).unwrap();
+    a.engine
+        .remember_fencing_policy(c.engine.identity().unwrap().public().clone(), policy)
+        .unwrap();
+    let remove = begin_membership_change(
+        &a,
+        Change::Remove {
+            target_member_id: c.id(),
+            replacement_public_member_id: None,
+        },
+    );
+    let remove_id = remove.intent.operation_id.clone();
+    let proposal = a.engine.propose(remove_id.clone(), None).unwrap();
+    for node in [&a, &b] {
+        let prepared = node
+            .engine
+            .prepare(proposal.clone(), || async { Ok(()) })
+            .await
+            .unwrap();
+        a.engine
+            .record_prepare(remove_id.clone(), prepared)
+            .unwrap();
+    }
+    let decision = a
+        .engine
+        .decide(remove_id.clone(), DecisionKind::Commit)
+        .unwrap();
+    for node in [&a, &b] {
+        let installed = node
+            .engine
+            .apply_decision(decision.clone())
+            .unwrap()
+            .unwrap();
+        a.engine
+            .record_installed(remove_id.clone(), installed)
+            .unwrap();
+    }
+    assert!(!a.engine.removed_source_stopped("c").unwrap());
+    let _store = HandoffStoreGuard::set(Arc::clone(a.engine.store()));
+
+    let promotions = Arc::new(AtomicUsize::new(0));
+    let seen = promotions.clone();
+    let app = Router::new()
+        .route(
+            "/a/api/cluster/capabilities",
+            axum::routing::get(|| async {
+                Json(serde_json::json!({"config_sync": 2, "node_local_credentials": true}))
+            }),
+        )
+        .route(
+            "/a/api/cluster/apply-node-mode",
+            post(move |Json(payload): Json<ClusterApplyNodeModeRequest>| {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    let mut reply = ClusterStatus {
+                        enabled: true,
+                        local_node_id: "a".into(),
+                        active_owner: Some("a".into()),
+                        lease_until: None,
+                        config_version: String::new(),
+                        auto_failover: true,
+                        public_status: Default::default(),
+                        nodes: vec![empty_node("a", "a", "", 10, true, now_secs())],
+                    };
+                    reply.nodes[0].health = ClusterHealth::healthy();
+                    reply.nodes[0].monitor_toggles =
+                        payload.monitor_toggles.clone().unwrap_or_default();
+                    assert!(payload.active);
+                    assert_eq!(payload.expected_active_owner.as_deref(), Some("c"));
+                    Json(serde_json::json!({"success": true, "data": reply}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut cfg = test_config("coordinator", 0);
+    cfg.cluster.peers = vec![crate::config::ClusterPeer {
+        node_id: "a".into(),
+        name: "a".into(),
+        api_url: format!("http://{address}/a"),
+        priority: 10,
+    }];
+    let now = now_secs();
+    let mut replacement = empty_node("a", "a", "", 10, false, now);
+    replacement.last_seen = Some(now);
+    replacement.health = ClusterHealth::healthy();
+    let before = ClusterStatus {
+        enabled: true,
+        local_node_id: "coordinator".into(),
+        active_owner: Some("a".into()),
+        lease_until: None,
+        config_version: String::new(),
+        auto_failover: true,
+        public_status: Default::default(),
+        nodes: vec![replacement.clone()],
+    };
+    {
+        let mut state = cluster_state_write();
+        state.active_owner = Some("a".into());
+        state.pending_handoff_source = Some("c".into());
+        state.nodes.insert("a".into(), replacement);
+    }
+
+    let blocked =
+        super::sync::finalize_cluster_node_switch_inner(&cfg, &before, "c", "a", false, true)
+            .await
+            .expect_err("commit must still refuse to resume without the stop proof");
+    assert!(blocked.contains("未找到目标节点"), "{blocked}");
+    assert_eq!(promotions.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        cluster_state_read().pending_handoff_source.as_deref(),
+        Some("c")
+    );
+
+    let runtime = Runtime::new(
+        a.engine.clone(),
+        Arc::new(PeerClient::new(Duration::from_secs(2)).unwrap()),
+        Arc::new(|| Box::pin(async { Ok(()) })),
+    );
+    assert!(!runtime
+        .advance_fencing_wait_for_test(&remove_id, super::membership::FENCING_STOP_BOUND_SECS));
+    runtime.drive_once_for_test(&remove_id).await.unwrap();
+    assert!(a
+        .engine
+        .operation(&remove_id)
+        .unwrap()
+        .unwrap()
+        .finish
+        .is_none());
+    assert!(runtime
+        .advance_fencing_wait_for_test(&remove_id, super::membership::FENCING_STOP_BOUND_SECS));
+    runtime.drive_once_for_test(&remove_id).await.unwrap();
+    let finish = a
+        .engine
+        .operation(&remove_id)
+        .unwrap()
+        .unwrap()
+        .finish
+        .expect("the 180s wait signs FINISH");
+    a.engine.apply_finish(finish).unwrap();
+    assert!(a.engine.removed_source_stopped("c").unwrap());
+
+    super::sync::finalize_cluster_node_switch_inner(&cfg, &before, "c", "a", false, true)
+        .await
+        .expect("FINISH lets the replacement resume while c is down");
+    assert_eq!(promotions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cluster_state_read().pending_handoff_source.as_deref(),
+        Some("c")
+    );
+    server.abort();
 }

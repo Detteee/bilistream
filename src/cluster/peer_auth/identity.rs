@@ -47,6 +47,8 @@ pub enum Domain {
     Pairing,
     /// Explicit "is this key still a member" answer. Not a request for peer authority.
     Recognition,
+    /// A source's durable guarantee that execution stops within a hard bound.
+    FencingPolicy,
 }
 
 impl Domain {
@@ -62,6 +64,7 @@ impl Domain {
             Self::Finish => b"finish",
             Self::Pairing => b"pairing",
             Self::Recognition => b"recognition",
+            Self::FencingPolicy => b"fencing-policy",
         }
     }
 }

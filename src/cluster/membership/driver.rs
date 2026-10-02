@@ -11,7 +11,7 @@ use crate::cluster::peer_call::{routes, send_to_member};
 use crate::storage::Store;
 use futures_util::future::{join_all, BoxFuture};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -32,6 +32,7 @@ pub struct Runtime {
     pub client: Arc<PeerClient>,
     stop: StopFn,
     process_hooks: bool,
+    fence_waits: Arc<Mutex<HashMap<String, tokio::time::Instant>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ impl Runtime {
             client,
             stop,
             process_hooks: false,
+            fence_waits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -109,6 +111,7 @@ impl Runtime {
             client: crate::cluster::peer_call::peer_client()?,
             stop: Arc::new(|| Box::pin(stop_local_execution())),
             process_hooks: true,
+            fence_waits: process_fence_waits(),
         })
     }
 
@@ -202,6 +205,21 @@ impl Runtime {
         running().lock().is_ok_and(|set| set.contains(&key))
     }
 
+    #[cfg(test)]
+    pub(crate) fn advance_fencing_wait_for_test(&self, id: &str, seconds: u64) -> bool {
+        let key = format!("{}|{id}", self.membership.store().data_dir().display());
+        let mut waits = self.fence_waits.lock().unwrap();
+        let Some(start) = waits.get_mut(&key) else {
+            return false;
+        };
+        *start -= Duration::from_secs(seconds);
+        true
+    }
+    #[cfg(test)]
+    pub(crate) async fn drive_once_for_test(&self, id: &str) -> io::Result<()> {
+        self.step(id).await.map(|_| ())
+    }
+
     pub async fn drive(&self, id: &str) -> io::Result<()> {
         let mut round = 0;
         loop {
@@ -228,6 +246,13 @@ impl Runtime {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "成员操作不存在"))?;
         let me = self.me()?;
         if op.intent.coordinator != me {
+            return Ok(Step::Done);
+        }
+        if op.intent.is_dissolve() {
+            self.membership
+                .dissolve(id.to_owned(), || (self.stop)())
+                .await?;
+            self.membership_changed();
             return Ok(Step::Done);
         }
         if let Some(finish) = &op.finish {
@@ -257,6 +282,8 @@ impl Runtime {
                 _ => return Ok(Step::Wait("目标服务器暂不可达，无法确认配对状态".into())),
             };
         let candidate = candidate_descriptor(&identity, target_url);
+        let (id, pinned) = (op.intent.operation_id.clone(), candidate.clone());
+        self.blocking(move |m| m.pin_candidate(id, pinned)).await?;
         let request = StatusRequest {
             intent: op.intent.clone(),
             retry: false,
@@ -280,10 +307,8 @@ impl Runtime {
             // password was not kept, so the operator starts a new operation.
             _ => {
                 let id = op.intent.operation_id.clone();
-                let candidate_id = identity.member_id.clone();
                 self.blocking(move |m| {
                     m.decide(id.clone(), DecisionKind::Abort)?;
-                    m.delivered(id.clone(), candidate_id)?;
                     m.note(id, "目标服务器未保留配对，操作已取消".into())
                 })
                 .await?;
@@ -378,6 +403,19 @@ impl Runtime {
         let mut waiting = Vec::new();
         for member in &proposal.destinations {
             let retained = proposal.desired.member(&member.member_id).is_some();
+            if !retained && !op.prepares.contains_key(&member.member_id) {
+                // A source that returns after COMMIT can still stop durably.
+                // Its independent receipt is included in FINISH, without
+                // rewriting the already irreversible decision certificate.
+                if let Reply::Ok(receipt) = self
+                    .call::<_, PreparedReceipt>(member, &op.intent, routes::PREPARE, &proposal)
+                    .await
+                {
+                    let id = op.intent.operation_id.clone();
+                    self.blocking(move |m| m.record_prepare(id, receipt))
+                        .await?;
+                }
+            }
             if retained && op.installations.contains_key(&member.member_id) {
                 continue;
             }
@@ -422,8 +460,57 @@ impl Runtime {
             .iter()
             .all(|m| op.installations.contains_key(&m.member_id))
         {
+            let safety = match &op.intent.change {
+                Change::Remove {
+                    target_member_id, ..
+                } if !op.prepares.contains_key(target_member_id) => {
+                    let member = op.intent.base.member(target_member_id).ok_or_else(denied)?;
+                    let Some(policy) = self.membership.fencing_policy(member)? else {
+                        return Ok(Step::Wait(format!(
+                            "{} 未提供受支持的停机界限证明；请恢复该节点连接并升级后重试",
+                            member.node_id
+                        )));
+                    };
+                    let key = format!(
+                        "{}|{}",
+                        self.membership.store().data_dir().display(),
+                        op.intent.operation_id
+                    );
+                    let elapsed = {
+                        let mut waits = self
+                            .fence_waits
+                            .lock()
+                            .map_err(|_| io::Error::other("停机等待状态不可用"))?;
+                        waits
+                            .entry(key)
+                            .or_insert_with(tokio::time::Instant::now)
+                            .elapsed()
+                    };
+                    if elapsed < Duration::from_secs(policy.max_stop_secs) {
+                        return Ok(Step::Wait(format!(
+                            "等待 {} 的旧成员执行权限停止（还需 {} 秒）",
+                            member.node_id,
+                            policy.max_stop_secs - elapsed.as_secs()
+                        )));
+                    }
+                    Some(RemovalSafety::Fenced {
+                        waited_secs: policy.max_stop_secs,
+                        policy,
+                    })
+                }
+                Change::Remove {
+                    target_member_id, ..
+                } => op
+                    .prepares
+                    .get(target_member_id)
+                    .map(|receipt| RemovalSafety::Prepared {
+                        receipt: receipt.clone(),
+                    }),
+                _ => None,
+            };
             let id = op.intent.operation_id.clone();
-            self.blocking(move |m| m.decide_finish(id)).await?;
+            self.blocking(move |m| m.decide_finish_with_safety(id, safety))
+                .await?;
             return Ok(Step::Again);
         }
         Ok(Step::Wait(format!(
@@ -452,6 +539,9 @@ impl Runtime {
                     // A departing node may have missed the decision; it is
                     // idempotent and must precede its cleanup proof.
                     let _ = self
+                        .call::<_, PreparedReceipt>(member, &op.intent, routes::PREPARE, &proposal)
+                        .await;
+                    let _ = self
                         .call::<_, Option<InstalledReceipt>>(
                             member,
                             &op.intent,
@@ -476,6 +566,9 @@ impl Runtime {
             }
         }
         if waiting.is_empty() {
+            if let Some(manifest) = self.membership.manifest()? {
+                self.refresh_fencing_policies(&manifest).await;
+            }
             Ok(Step::Done)
         } else {
             Ok(Step::Wait(format!(
@@ -487,12 +580,14 @@ impl Runtime {
 
     async fn deliver_abort(&self, op: &Operation, me: &str) -> io::Result<Step> {
         let decision = op.decision.clone().ok_or_else(denied)?;
-        let mut recipients = op
-            .proposal
-            .as_ref()
-            .map(|p| p.destinations.clone())
-            .unwrap_or_else(|| op.intent.base.members.clone());
-        if let (None, Change::Add { target_url }) = (&op.proposal, &op.intent.change) {
+        let mut recipients = op.destinations();
+        let mut waiting = Vec::new();
+        if let (None, None, true, Change::Add { target_url }) = (
+            &op.proposal,
+            &op.pairing_candidate,
+            op.pairing_contacted,
+            &op.intent.change,
+        ) {
             if let Ok(Ok(identity)) = tokio::time::timeout(
                 PEER_TIMEOUT,
                 self.client.discover(&member_endpoint(target_url)?),
@@ -500,11 +595,15 @@ impl Runtime {
             .await
             {
                 if !recipients.iter().any(|m| m.member_id == identity.member_id) {
-                    recipients.push(candidate_descriptor(&identity, target_url));
+                    let candidate = candidate_descriptor(&identity, target_url);
+                    let (id, pinned) = (op.intent.operation_id.clone(), candidate.clone());
+                    self.blocking(move |m| m.pin_candidate(id, pinned)).await?;
+                    recipients.push(candidate);
                 }
+            } else {
+                waiting.push("等待目标服务器恢复以清理可能的配对预约".into());
             }
         }
-        let mut waiting = Vec::new();
         for member in recipients {
             if op.delivered.contains(&member.member_id)
                 && (member.member_id != me || op.finished_locally)
@@ -681,6 +780,7 @@ impl Runtime {
         {
             let mut state = crate::cluster::cluster_state_write();
             state.peer_heartbeat_acks.clear();
+            state.peer_heartbeat_observed.clear();
             state.peer_owner_views.clear();
             state.heartbeat_failures.clear();
             state.peer_observations.clear();
@@ -697,18 +797,9 @@ impl Runtime {
         let me = self.me()?;
         for op in self.membership.operations()? {
             if op.intent.coordinator == me {
-                let undelivered = |members: &[Descriptor]| {
-                    members.iter().any(|m| !op.delivered.contains(&m.member_id))
-                };
-                // Departing nodes' cleanup never keeps a finished operation
-                // pending; every possible recipient of an abort does.
-                let pending_delivery = match (&op.finish, &op.proposal) {
-                    (Some(_), Some(p)) => undelivered(&p.desired.members),
-                    (None, Some(p)) => undelivered(&p.destinations),
-                    (None, None) => undelivered(&op.intent.base.members),
-                    (Some(_), None) => false,
-                };
-                if !op.terminal() || pending_delivery || !op.finished_locally {
+                // Retained completion and remote cleanup are independent.
+                // Keep retrying departed recipients after browser success.
+                if !op.terminal() || op.cleanup_pending() || !op.finished_locally {
                     self.spawn_driver(op.intent.operation_id.clone());
                 }
                 continue;
@@ -729,6 +820,9 @@ impl Runtime {
             {
                 self.adopt(&op, reply).await;
             }
+        }
+        if let Some(manifest) = self.membership.manifest()? {
+            self.refresh_fencing_policies(&manifest).await;
         }
         Ok(())
     }
@@ -810,7 +904,51 @@ impl Runtime {
                 .map(|(m, _)| m.node_id.clone())
                 .collect());
         }
+        self.refresh_fencing_policies(base).await;
         Ok(())
+    }
+
+    /// Optional capabilities are acquired while a member is online and pinned
+    /// to its key. Older binaries simply have no bounded-fencing authority.
+    async fn refresh_fencing_policies(&self, manifest: &Manifest) {
+        let Ok(me) = self.me() else {
+            return;
+        };
+        for member in &manifest.members {
+            if member.member_id == me {
+                continue;
+            }
+            let Ok(response) = send_to_member(
+                &self.membership,
+                &self.client,
+                member,
+                &manifest.cluster_id,
+                manifest.revision,
+                PeerScope::Ordinary,
+                routes::CAPABILITIES,
+                vec![],
+                PEER_TIMEOUT,
+            )
+            .await
+            else {
+                continue;
+            };
+            if response.status != 200 {
+                continue;
+            }
+            let policy = serde_json::from_slice::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|value| {
+                    serde_json::from_value::<FencingPolicy>(value["membership_fencing"].clone())
+                        .ok()
+                });
+            if let Some(policy) = policy {
+                let identity = member.identity();
+                let _ = self
+                    .blocking(move |m| m.remember_fencing_policy(identity, policy))
+                    .await;
+            }
+        }
     }
 
     /// Records intent before the only password-bearing request.
@@ -826,6 +964,12 @@ impl Runtime {
         let identity = tokio::time::timeout(PEER_TIMEOUT, self.client.discover(&endpoint))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "目标服务器连接超时"))??;
+        let (id, candidate) = (
+            op.intent.operation_id.clone(),
+            candidate_descriptor(&identity, target_url),
+        );
+        self.blocking(move |m| m.pin_candidate(id, candidate))
+            .await?;
         #[derive(Serialize)]
         struct Body<'a> {
             intent: &'a Intent,
@@ -851,7 +995,14 @@ impl Runtime {
                 .ok()
                 .and_then(|v| v["message"].as_str().map(str::to_owned))
                 .unwrap_or_else(|| "目标服务器拒绝配对".into());
-            return Ok((identity, Reservation::Refused(response.status, message)));
+            // A proxy/origin failure may replace the reply after the target
+            // durably reserved. Only application refusal statuses are definite.
+            let reservation = if matches!(response.status, 400 | 403 | 409 | 429) {
+                Reservation::Refused(response.status, message)
+            } else {
+                Reservation::Uncertain(format!("HTTP {}: {message}", response.status))
+            };
+            return Ok((identity, reservation));
         }
         let receipt: PairingReceipt = serde_json::from_slice(&response.body)
             .map_err(|_| invalid("目标服务器配对回执无效"))?;
@@ -1035,6 +1186,12 @@ fn refusal_or_wait<T>(error: &io::Error) -> Reply<T> {
 fn running() -> &'static Mutex<HashSet<String>> {
     static RUNNING: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
     RUNNING.get_or_init(Default::default)
+}
+
+fn process_fence_waits() -> Arc<Mutex<HashMap<String, tokio::time::Instant>>> {
+    static WAITS: std::sync::OnceLock<Arc<Mutex<HashMap<String, tokio::time::Instant>>>> =
+        std::sync::OnceLock::new();
+    Arc::clone(WAITS.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))))
 }
 
 /// Body intent for exact-operation routes. Parsed only to select the trust

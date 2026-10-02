@@ -18,6 +18,11 @@ pub const MANIFEST_RECORD: &str = "cluster-membership";
 pub const OPERATIONS_RECORD: &str = "cluster-operations";
 const MAX_OPERATIONS: usize = 128;
 
+// Older journals predate pinning and may have sent the password already.
+fn unknown_pairing_contact() -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Lifecycle {
@@ -44,6 +49,8 @@ pub struct LocalState {
     pub pairing: Option<PairingReservation>,
     pub setup_operation: Option<String>,
     pub setup_intent: Option<String>,
+    #[serde(default)]
+    pub removed_sources: BTreeMap<String, Finish>,
 }
 impl Default for LocalState {
     fn default() -> Self {
@@ -56,6 +63,7 @@ impl Default for LocalState {
             pairing: None,
             setup_operation: None,
             setup_intent: None,
+            removed_sources: BTreeMap::new(),
         }
     }
 }
@@ -73,6 +81,13 @@ pub struct Operation {
     pub delivered: BTreeSet<String>,
     pub finished_locally: bool,
     pub message: Option<String>,
+    /// Pinned before the password-bearing request, even if its reply is lost.
+    #[serde(default)]
+    pub pairing_candidate: Option<Descriptor>,
+    #[serde(default = "unknown_pairing_contact")]
+    pub pairing_contacted: bool,
+    #[serde(default)]
+    pub dissolved: bool,
 }
 impl Operation {
     fn new(intent: Intent) -> Self {
@@ -88,17 +103,46 @@ impl Operation {
             delivered: BTreeSet::new(),
             finished_locally: false,
             message: None,
+            pairing_candidate: None,
+            pairing_contacted: false,
+            dissolved: false,
         }
     }
     pub fn terminal(&self) -> bool {
-        self.finish.is_some()
+        self.dissolved
+            || self.finish.is_some()
             || self
                 .decision
                 .as_ref()
                 .is_some_and(|d| d.kind == DecisionKind::Abort)
     }
+    pub fn cleanup_pending(&self) -> bool {
+        if !self.terminal() || self.dissolved {
+            return false;
+        }
+        self.destinations()
+            .iter()
+            .any(|m| !self.delivered.contains(&m.member_id))
+            || (matches!(self.intent.change, Change::Add { .. })
+                && self.pairing_contacted
+                && self.proposal.is_none()
+                && self.pairing_candidate.is_none())
+    }
+    pub(super) fn destinations(&self) -> Vec<Descriptor> {
+        let mut members = self
+            .proposal
+            .as_ref()
+            .map(|p| p.destinations.clone())
+            .unwrap_or_else(|| self.intent.base.members.clone());
+        if let Some(candidate) = &self.pairing_candidate {
+            if !members.iter().any(|m| m.member_id == candidate.member_id) {
+                members.push(candidate.clone());
+            }
+        }
+        members
+    }
     pub fn status(&self) -> OperationStatus {
-        let phase = if self.finish.is_some() {
+        let phase = if self.finish.is_some() || self.dissolved {
             "completed"
         } else {
             match self.decision.as_ref().map(|d| d.kind) {
@@ -113,26 +157,46 @@ impl Operation {
                 None => "preparing",
             }
         };
-        let pending = self
-            .proposal
+        let aborting = self
+            .decision
             .as_ref()
-            .map(|p| {
-                p.desired
-                    .members
-                    .iter()
-                    .filter(|m| {
-                        if self.finish.is_some() {
-                            !self.delivered.contains(&m.member_id)
-                        } else if self.decision.is_some() {
-                            !self.installations.contains_key(&m.member_id)
-                        } else {
-                            !self.prepares.contains_key(&m.member_id)
-                        }
-                    })
-                    .map(|m| m.node_id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .is_some_and(|d| d.kind == DecisionKind::Abort);
+        let pending = if aborting {
+            let mut pending: Vec<String> = self
+                .destinations()
+                .iter()
+                .filter(|m| !self.delivered.contains(&m.member_id))
+                .map(|m| m.node_id.clone())
+                .collect();
+            if matches!(self.intent.change, Change::Add { .. })
+                && self.pairing_contacted
+                && self.proposal.is_none()
+                && self.pairing_candidate.is_none()
+            {
+                pending.push("配对目标（预约待核对）".into());
+            }
+            pending
+        } else {
+            self.proposal
+                .as_ref()
+                .map(|p| {
+                    p.desired
+                        .members
+                        .iter()
+                        .filter(|m| {
+                            if self.finish.is_some() {
+                                !self.delivered.contains(&m.member_id)
+                            } else if self.decision.is_some() {
+                                !self.installations.contains_key(&m.member_id)
+                            } else {
+                                !self.prepares.contains_key(&m.member_id)
+                            }
+                        })
+                        .map(|m| m.node_id.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         OperationStatus {
             operation_id: self.intent.operation_id.clone(),
             kind: self.intent.change.kind().into(),
@@ -145,8 +209,23 @@ impl Operation {
                 .unwrap_or_default(),
             message: self.message.clone(),
             pending_node_ids: pending,
+            cleanup_pending_node_ids: if self.finish.is_some() {
+                self.destinations()
+                    .iter()
+                    .filter(|m| {
+                        !self.delivered.contains(&m.member_id)
+                            && self
+                                .proposal
+                                .as_ref()
+                                .is_some_and(|p| p.desired.member(&m.member_id).is_none())
+                    })
+                    .map(|m| m.node_id.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             terminal: self.terminal(),
-            retryable: !self.finished_locally || !self.delivered.is_empty() || !self.terminal(),
+            retryable: !self.finished_locally || self.cleanup_pending() || !self.terminal(),
         }
     }
 }
@@ -158,6 +237,8 @@ pub struct OperationStatus {
     pub coordinator_node_id: String,
     pub message: Option<String>,
     pub pending_node_ids: Vec<String>,
+    #[serde(default)]
+    pub cleanup_pending_node_ids: Vec<String>,
     pub terminal: bool,
     pub retryable: bool,
 }
@@ -165,6 +246,8 @@ pub struct OperationStatus {
 struct Journal {
     sequence: u64,
     operations: BTreeMap<String, Operation>,
+    #[serde(default)]
+    fencing_policies: BTreeMap<String, FencingPolicy>,
 }
 
 #[derive(Clone)]
@@ -200,6 +283,70 @@ impl Membership {
             .operations
             .into_values()
             .collect())
+    }
+    pub fn remember_fencing_policy(
+        &self,
+        member: PublicIdentity,
+        policy: FencingPolicy,
+    ) -> io::Result<()> {
+        policy.verify(&member)?;
+        self.store.transaction(move |tx| {
+            let manifest: Manifest = read_tx(tx, MANIFEST_RECORD)?.ok_or_else(denied)?;
+            if manifest
+                .member(&member.member_id)
+                .is_none_or(|m| m.identity() != member)
+            {
+                return Err(denied());
+            }
+            let mut journal = journal_tx(tx)?;
+            if journal.fencing_policies.get(&member.member_id) == Some(&policy) {
+                return Ok(());
+            }
+            let pending_members: BTreeSet<String> = journal
+                .operations
+                .values()
+                .filter(|op| !op.terminal())
+                .flat_map(|op| op.intent.base.members.iter().map(|m| m.member_id.clone()))
+                .collect();
+            journal
+                .fencing_policies
+                .retain(|id, _| manifest.member(id).is_some() || pending_members.contains(id));
+            journal.fencing_policies.insert(member.member_id, policy);
+            write_tx(tx, OPERATIONS_RECORD, &journal)
+        })
+    }
+    pub fn fencing_policy(&self, member: &Descriptor) -> io::Result<Option<FencingPolicy>> {
+        let journal: Journal = read(&self.store, OPERATIONS_RECORD)?.unwrap_or_default();
+        let policy = journal.fencing_policies.get(&member.member_id).cloned();
+        if let Some(policy) = &policy {
+            policy.verify(&member.identity())?;
+        }
+        Ok(policy)
+    }
+
+    /// Stop evidence survives journal compaction and benign later membership
+    /// edits. A current member with the same friendly id always invalidates it.
+    pub fn removed_source_stopped(&self, node_id: &str) -> io::Result<bool> {
+        let docs = self.store.read_many(&[LOCAL_RECORD, MANIFEST_RECORD])?;
+        let local: LocalState = decode(docs.get(LOCAL_RECORD).ok_or_else(denied)?.value.clone())?;
+        let current: Manifest =
+            decode(docs.get(MANIFEST_RECORD).ok_or_else(denied)?.value.clone())?;
+        if local.lifecycle != Lifecycle::Managed
+            || local.hold.is_some()
+            || current.members.iter().any(|m| m.node_id == node_id)
+        {
+            return Ok(false);
+        }
+        let Some(finish) = local.removed_sources.get(node_id) else {
+            return Ok(false);
+        };
+        finish.validate()?;
+        finish.validate_removal_safety()?;
+        let p = finish.decision.proposal.as_ref().ok_or_else(denied)?;
+        Ok(p.desired.cluster_id == current.cluster_id
+            && p.desired.revision <= current.revision
+            && matches!(&p.intent.change, Change::Remove { target_member_id, .. }
+                if p.intent.base.member(target_member_id).is_some_and(|m| m.node_id == node_id)))
     }
 
     /// Called before any runtime starts. A legacy enabled topology never becomes
@@ -410,6 +557,7 @@ impl Membership {
                 &identity,
             )?;
             receipt.verify(&intent)?;
+            desired_manifest(&intent, Some(&receipt))?;
             local.lifecycle = Lifecycle::Pairing;
             local.hold = Some(intent.operation_id.clone());
             local.pairing = Some(PairingReservation {
@@ -463,7 +611,7 @@ impl Membership {
             {
                 return Err(conflict("成员版本已改变或已有待恢复操作"));
             }
-            make_room(&mut journal, base.revision)?;
+            make_room(&mut journal, base.revision, &identity.public().member_id)?;
             journal.sequence = journal
                 .sequence
                 .checked_add(1)
@@ -477,7 +625,7 @@ impl Membership {
                 base,
                 change,
             };
-            intent.validate()?;
+            validate_change(&intent)?;
             let operation = Operation::new(intent);
             journal.operations.insert(id, operation.clone());
             write_tx(tx, OPERATIONS_RECORD, &journal)?;
@@ -491,18 +639,123 @@ impl Membership {
             ensure_coordinator(tx, op)?;
             if let Some(proposal) = &op.proposal {
                 if proposal.pairing == pairing {
-                    return Ok(proposal.clone());
+                    return Ok(Ok(proposal.clone()));
                 }
                 return Err(conflict("操作内容已确定"));
             }
             if op.decision.is_some() {
                 return Err(conflict("操作已决定"));
             }
-            let proposal = Proposal::build(op.intent.clone(), pairing, &identity_tx(tx)?)?;
+            let identity = identity_tx(tx)?;
+            let proposal = match Proposal::build(op.intent.clone(), pairing.clone(), &identity) {
+                Ok(proposal) => proposal,
+                Err(error) => {
+                    // Commit the abort even though proposal construction failed.
+                    // Returning an error inside the transaction would roll it back
+                    // and strand a password-established candidate reservation.
+                    if let Some(receipt) = pairing.filter(|r| r.verify(&op.intent).is_ok()) {
+                        op.pairing_candidate = Some(receipt.candidate);
+                    }
+                    op.decision = Some(Decision::sign(
+                        op.intent.clone(),
+                        None,
+                        DecisionKind::Abort,
+                        vec![],
+                        &identity,
+                    )?);
+                    op.message = Some(error.to_string());
+                    write_tx(tx, OPERATIONS_RECORD, &journal)?;
+                    return Ok(Err(error));
+                }
+            };
             op.proposal = Some(proposal.clone());
             write_tx(tx, OPERATIONS_RECORD, &journal)?;
-            Ok(proposal)
+            Ok(Ok(proposal))
+        })?
+    }
+
+    pub fn pin_candidate(&self, id: String, candidate: Descriptor) -> io::Result<()> {
+        self.store.transaction(move |tx| {
+            let mut journal = journal_tx(tx)?;
+            let op = journal.operations.get_mut(&id).ok_or_else(denied)?;
+            ensure_coordinator(tx, op)?;
+            candidate.validate()?;
+            if op
+                .pairing_candidate
+                .as_ref()
+                .is_some_and(|old| old.identity() != candidate.identity())
+            {
+                return Err(conflict("目标服务器身份已改变，仍需清理原预约"));
+            }
+            op.pairing_candidate = Some(candidate);
+            op.pairing_contacted = true;
+            write_tx(tx, OPERATIONS_RECORD, &journal)
         })
+    }
+
+    /// The final member leaves locally: durable hold, verified shutdown, then
+    /// one atomic monitors-off/Left transition. No quorum certificate is made.
+    pub async fn dissolve<F, Fut>(&self, id: String, stop: F) -> io::Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = io::Result<()>>,
+    {
+        let this = self.clone();
+        let operation = id.clone();
+        let done = tokio::task::spawn_blocking(move || {
+            this.store.transaction(move |tx| {
+                let journal = journal_tx(tx)?;
+                let op = journal.operations.get(&operation).ok_or_else(denied)?;
+                ensure_coordinator(tx, op)?;
+                if !op.intent.is_dissolve() {
+                    return Err(denied());
+                }
+                if op.dissolved {
+                    return Ok(true);
+                }
+                let mut local = local_tx(tx)?;
+                admit_initial(tx, &local, &op.intent)?;
+                if local.hold.as_ref().is_some_and(|hold| hold != &operation) {
+                    return Err(conflict("已有另一项成员维护"));
+                }
+                local.hold = Some(operation.clone());
+                local.reservation = Some(operation);
+                write_tx(tx, LOCAL_RECORD, &local)?;
+                Ok(false)
+            })
+        })
+        .await
+        .map_err(join_error)??;
+        if done {
+            return Ok(());
+        }
+        stop().await?;
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || {
+            this.store.transaction(move |tx| {
+                let mut local = local_tx(tx)?;
+                let mut journal = journal_tx(tx)?;
+                let op = journal.operations.get_mut(&id).ok_or_else(denied)?;
+                ensure_coordinator(tx, op)?;
+                if op.dissolved {
+                    return Ok(());
+                }
+                if !op.intent.is_dissolve()
+                    || local.hold.as_deref() != Some(&id)
+                    || local.reservation.as_deref() != Some(&id)
+                {
+                    return Err(denied());
+                }
+                project_config(tx, None, &op.intent.coordinator, true)?;
+                release_matching(&mut local, &id, true);
+                op.dissolved = true;
+                op.finished_locally = true;
+                write_tx(tx, LOCAL_RECORD, &local)?;
+                write_tx(tx, OPERATIONS_RECORD, &journal)
+            })
+        })
+        .await
+        .map_err(join_error)?
     }
 
     pub async fn prepare<F, Fut>(&self, proposal: Proposal, stop: F) -> io::Result<PreparedReceipt>
@@ -559,7 +812,7 @@ impl Membership {
             {
                 return Err(conflict("另一成员操作已取得本节点预约"));
             }
-            make_room(&mut journal, proposal.intent.base.revision)?;
+            make_room(&mut journal, proposal.intent.base.revision, &id)?;
             let op = journal
                 .operations
                 .entry(proposal.intent.operation_id.clone())
@@ -697,7 +950,11 @@ impl Membership {
                 if !journal.operations.contains_key(&id) {
                     admit_initial(tx, &local, &decision.intent)?;
                 }
-                make_room(&mut journal, decision.intent.base.revision)?;
+                make_room(
+                    &mut journal,
+                    decision.intent.base.revision,
+                    &identity_tx(tx)?.public().member_id,
+                )?;
                 let op = journal
                     .operations
                     .entry(id.clone())
@@ -767,6 +1024,13 @@ impl Membership {
     }
 
     pub fn decide_finish(&self, id: String) -> io::Result<Finish> {
+        self.decide_finish_with_safety(id, None)
+    }
+    pub fn decide_finish_with_safety(
+        &self,
+        id: String,
+        safety: Option<RemovalSafety>,
+    ) -> io::Result<Finish> {
         self.store.transaction(move |tx| {
             let mut journal = journal_tx(tx)?;
             let op = journal.operations.get_mut(&id).ok_or_else(denied)?;
@@ -774,11 +1038,14 @@ impl Membership {
             if let Some(finish) = &op.finish {
                 return Ok(finish.clone());
             }
-            let finish = Finish::sign(
-                op.decision.clone().ok_or_else(denied)?,
-                op.installations.values().cloned().collect(),
-                &identity_tx(tx)?,
-            )?;
+            let decision = op.decision.clone().ok_or_else(denied)?;
+            let installed = op.installations.values().cloned().collect();
+            let identity = identity_tx(tx)?;
+            let finish = if safety.is_some() {
+                Finish::sign_with_safety(decision, installed, safety, &identity)?
+            } else {
+                Finish::sign(decision, installed, &identity)?
+            };
             op.finish = Some(finish.clone());
             write_tx(tx, OPERATIONS_RECORD, &journal)?;
             Ok(finish)
@@ -786,6 +1053,7 @@ impl Membership {
     }
     pub fn apply_finish(&self, finish: Finish) -> io::Result<()> {
         finish.validate()?;
+        finish.validate_removal_safety()?;
         self.store.transaction(move |tx| {
             let mut local = local_tx(tx)?;
             let mut journal = journal_tx(tx)?;
@@ -814,6 +1082,34 @@ impl Membership {
                 .member(&identity_tx(tx)?.public().member_id)
                 .is_some();
             release_matching(&mut local, id, !retained);
+            if retained {
+                if let Change::Remove {
+                    target_member_id, ..
+                } = &finish.decision.intent.change
+                {
+                    let source = finish
+                        .decision
+                        .intent
+                        .base
+                        .member(target_member_id)
+                        .ok_or_else(denied)?;
+                    local
+                        .removed_sources
+                        .insert(source.node_id.clone(), finish.clone());
+                    // Missing old evidence only blocks a stale runtime handoff;
+                    // never interpret its absence as permission to take over.
+                    if local.removed_sources.len() > MAX_MEMBERS {
+                        if let Some(oldest) = local
+                            .removed_sources
+                            .iter()
+                            .min_by_key(|(_, proof)| proof.decision.intent.base.revision)
+                            .map(|(id, _)| id.clone())
+                        {
+                            local.removed_sources.remove(&oldest);
+                        }
+                    }
+                }
+            }
             op.finish = Some(finish);
             op.finished_locally = true;
             write_tx(tx, LOCAL_RECORD, &local)?;
@@ -1158,15 +1454,18 @@ fn admit_initial(tx: &Transaction<'_>, local: &LocalState, intent: &Intent) -> i
     }
     Ok(())
 }
-fn make_room(journal: &mut Journal, base: u64) -> io::Result<()> {
+fn make_room(journal: &mut Journal, base: u64, local_id: &str) -> io::Result<()> {
     if journal.operations.len() < MAX_OPERATIONS {
         return Ok(());
     }
     // Tombstones for the current base must remain: delayed PREPARE is still
     // admissible. Older terminal records cannot vote against a newer manifest.
-    journal
-        .operations
-        .retain(|_, o| !o.terminal() || !o.finished_locally || o.intent.base.revision >= base);
+    journal.operations.retain(|_, o| {
+        !o.terminal()
+            || !o.finished_locally
+            || o.intent.base.revision >= base
+            || (o.intent.coordinator == local_id && o.cleanup_pending())
+    });
     if journal.operations.len() >= MAX_OPERATIONS {
         return Err(conflict("成员操作记录已满，请先恢复待处理操作"));
     }

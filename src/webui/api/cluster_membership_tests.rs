@@ -181,6 +181,11 @@ async fn wait_completed(node: &Node, cookie: &str, id: &str) -> Value {
         if status == 200 && body["data"]["phase"] == "completed" {
             return body;
         }
+        // Offline-removal cases exercise a real driver with a source-signed
+        // policy. Advance only an already-started monotonic fence interval.
+        node.auth
+            .runtime()
+            .advance_fencing_wait_for_test(id, crate::cluster::membership::FENCING_STOP_BOUND_SECS);
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     panic!("operation {id} did not complete");
@@ -328,6 +333,7 @@ async fn three_panels_enroll_and_offline_removal_revokes_every_peer_route() {
     assert_eq!(ok.status, 200);
 
     // Remove the offline standby with two of three members online.
+    seed_fencing_policy(&a, &c);
     c.server.abort();
     let c_id = c.member_id();
     let remove = random_id().unwrap();
@@ -898,6 +904,284 @@ async fn departing_node_restarts_between_decision_and_finish() {
 }
 
 #[tokio::test]
+async fn lost_reservation_response_replaced_by_proxy_502_recovers_real_pairing() {
+    let a = Node::new("proxy-a", Some("pw-a")).await;
+    let mut b = Node::new("proxy-b", Some("pw-b")).await;
+    let (ca, cb) = (login(&a, "pw-a").await, login(&b, "pw-b").await);
+    setup(&a, &ca, true, "a", 10).await;
+    setup(&b, &cb, false, "b", 7).await;
+    b.server.abort();
+    let _ = (&mut b.server).await;
+    let listener = tokio::net::TcpListener::bind(b.addr).await.unwrap();
+    let app = crate::webui::server::build_app(crate::AppState::new(), b.auth.clone()).layer(
+        axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                let reserve = request.uri().path() == crate::cluster::peer_auth::PAIRING_ROUTE;
+                let response = next.run(request).await;
+                if reserve && response.status() == StatusCode::OK {
+                    (StatusCode::BAD_GATEWAY, "origin reply lost after commit").into_response()
+                } else {
+                    response
+                }
+            },
+        ),
+    );
+    b.server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let id = random_id().unwrap();
+    let op = a
+        .membership()
+        .begin(
+            id.clone(),
+            1,
+            a.member_id(),
+            Change::Add {
+                target_url: b.url(),
+            },
+        )
+        .unwrap();
+    let (_, reservation) = a
+        .auth
+        .runtime()
+        .reserve_remote(&op, "pw-b".into())
+        .await
+        .unwrap();
+    assert!(matches!(reservation, Reservation::Uncertain(_)));
+    assert_eq!(
+        b.membership().local().unwrap().lifecycle,
+        Lifecycle::Pairing
+    );
+    let journal = a.membership().operation(&id).unwrap().unwrap();
+    assert!(!journal.delivered.contains(&b.member_id()));
+    assert_eq!(journal.pairing_candidate.unwrap().member_id, b.member_id());
+    a.auth.runtime().recover().await.unwrap();
+    wait_completed(&a, &ca, &id).await;
+    wait_released(&[&a, &b]).await;
+    assert_eq!(
+        b.membership().local().unwrap().lifecycle,
+        Lifecycle::Managed
+    );
+}
+
+#[tokio::test]
+async fn retained_completion_keeps_retrying_departed_finish_after_restart() {
+    let a = Node::new("cleanup-a", Some("pw-a")).await;
+    let mut b = Node::new("cleanup-b", Some("pw-b")).await;
+    let (ca, cb) = (login(&a, "pw-a").await, login(&b, "pw-b").await);
+    setup(&a, &ca, true, "a", 10).await;
+    setup(&b, &cb, false, "b", 7).await;
+    let (_, _, add_id) = add(&a, &ca, &b, "pw-b", 1).await;
+    wait_completed(&a, &ca, &add_id).await;
+    wait_released(&[&a, &b]).await;
+    let id = random_id().unwrap();
+    a.membership()
+        .begin(
+            id.clone(),
+            2,
+            a.member_id(),
+            Change::Remove {
+                target_member_id: b.member_id(),
+                replacement_public_member_id: None,
+            },
+        )
+        .unwrap();
+    let proposal = a.membership().propose(id.clone(), None).unwrap();
+    for node in [&a, &b] {
+        let receipt = node
+            .auth
+            .runtime()
+            .handle_prepare(&a.member_id(), proposal.clone())
+            .await
+            .unwrap();
+        a.membership().record_prepare(id.clone(), receipt).unwrap();
+    }
+    let decision = a
+        .membership()
+        .decide(id.clone(), DecisionKind::Commit)
+        .unwrap();
+    for node in [&a, &b] {
+        let receipt = node
+            .auth
+            .runtime()
+            .handle_decision(&a.member_id(), decision.clone(), DecisionKind::Commit)
+            .await
+            .unwrap()
+            .unwrap();
+        a.membership()
+            .record_installed(id.clone(), receipt)
+            .unwrap();
+    }
+    let finish = a.membership().decide_finish(id.clone()).unwrap();
+    a.membership().apply_finish(finish).unwrap();
+    a.membership().delivered(id.clone(), a.member_id()).unwrap();
+    let before = a.membership().operation(&id).unwrap().unwrap();
+    assert!(before.terminal() && before.finished_locally && before.cleanup_pending());
+    assert!(before.status().pending_node_ids.is_empty());
+    assert_eq!(before.status().cleanup_pending_node_ids, vec!["b"]);
+    b.restart("pw-b").await;
+    // Removed ordinary and STATUS authority is still forbidden. Recovery is
+    // the retained coordinator pushing this exact final proof from its queue.
+    let target = manifest(&a).member(&a.member_id()).unwrap().clone();
+    assert!(signed(
+        &b,
+        &target,
+        routes::STATUS,
+        2,
+        PeerScope::Operation(id.clone()),
+        serde_json::to_vec(&StatusRequest {
+            intent: before.intent,
+            retry: true
+        })
+        .unwrap()
+    )
+    .await
+    .is_err());
+    a.auth.runtime().recover().await.unwrap();
+    for _ in 0..80 {
+        if !a
+            .membership()
+            .operation(&id)
+            .unwrap()
+            .unwrap()
+            .cleanup_pending()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(b.membership().local().unwrap().lifecycle, Lifecycle::Left);
+    assert!(!a
+        .membership()
+        .operation(&id)
+        .unwrap()
+        .unwrap()
+        .cleanup_pending());
+}
+
+#[tokio::test]
+async fn final_member_remove_through_browser_is_durable_and_idempotent() {
+    let mut a = Node::new("dissolve", Some("pw-a")).await;
+    let ca = login(&a, "pw-a").await;
+    setup(&a, &ca, true, "a", 10).await;
+    enable_monitors(&a.store);
+    let id = random_id().unwrap();
+    let request = json!({"operation_id": id, "expected_revision": 1, "kind": "remove", "target_member_id": a.member_id()});
+    let (status, body) = browser(
+        &a,
+        &ca,
+        "POST",
+        "/api/cluster/membership/operations",
+        Some(request.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    wait_completed(&a, &ca, &id).await;
+    assert!(monitors_and_peers_cleared(
+        &a.store.read("config.json").unwrap().unwrap().value
+    ));
+    a.restart("pw-a").await;
+    let ca = login(&a, "pw-a").await;
+    let (status, body) = browser(
+        &a,
+        &ca,
+        "POST",
+        "/api/cluster/membership/operations",
+        Some(request),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["phase"], "completed");
+    assert_eq!(a.membership().local().unwrap().lifecycle, Lifecycle::Left);
+}
+
+#[tokio::test]
+async fn offline_removal_requires_policy_and_restarts_full_monotonic_wait() {
+    let (a, b, mut c, _, _, _) = enrolled("fence-wait").await;
+    let id = random_id().unwrap();
+    a.membership()
+        .begin(
+            id.clone(),
+            3,
+            a.member_id(),
+            Change::Remove {
+                target_member_id: c.member_id(),
+                replacement_public_member_id: None,
+            },
+        )
+        .unwrap();
+    let proposal = a.membership().propose(id.clone(), None).unwrap();
+    for node in [&a, &b] {
+        let receipt = node
+            .auth
+            .runtime()
+            .handle_prepare(&a.member_id(), proposal.clone())
+            .await
+            .unwrap();
+        a.membership().record_prepare(id.clone(), receipt).unwrap();
+    }
+    let decision = a
+        .membership()
+        .decide(id.clone(), DecisionKind::Commit)
+        .unwrap();
+    // Capability is learned while the source is still in the current manifest.
+    let policy = crate::cluster::membership::FencingPolicy::issue(&c.store).unwrap();
+    c.server.abort();
+    let _ = (&mut c.server).await;
+    for node in [&a, &b] {
+        let receipt = node
+            .auth
+            .runtime()
+            .handle_decision(&a.member_id(), decision.clone(), DecisionKind::Commit)
+            .await
+            .unwrap()
+            .unwrap();
+        a.membership()
+            .record_installed(id.clone(), receipt)
+            .unwrap();
+    }
+    a.auth.runtime().drive_once_for_test(&id).await.unwrap();
+    assert!(a
+        .membership()
+        .operation(&id)
+        .unwrap()
+        .unwrap()
+        .finish
+        .is_none());
+    assert!(!a.auth.runtime().advance_fencing_wait_for_test(&id, 180));
+    // Seed the independently verified policy that an online preflight normally
+    // caches; the source has already been removed from current authority.
+    let mut journal = a.store.read("cluster-operations").unwrap().unwrap().value;
+    journal["fencing_policies"][c.member_id()] = serde_json::to_value(policy).unwrap();
+    a.store.write("cluster-operations", journal).unwrap();
+    a.auth.runtime().drive_once_for_test(&id).await.unwrap();
+    assert!(a.auth.runtime().advance_fencing_wait_for_test(&id, 180));
+    let restarted = Runtime::new(
+        a.membership(),
+        Arc::new(crate::cluster::peer_auth::PeerClient::new(Duration::from_secs(2)).unwrap()),
+        Arc::new(|| Box::pin(async { Ok(()) })),
+    );
+    restarted.drive_once_for_test(&id).await.unwrap();
+    assert!(a
+        .membership()
+        .operation(&id)
+        .unwrap()
+        .unwrap()
+        .finish
+        .is_none());
+    assert!(restarted.advance_fencing_wait_for_test(&id, 180));
+    restarted.drive_once_for_test(&id).await.unwrap();
+    let completed = a.membership().operation(&id).unwrap().unwrap();
+    assert!(completed.finish.is_some());
+    assert!(!completed.finished_locally); // FINISH still must be delivered.
+}
+
+#[tokio::test]
 async fn each_panel_can_edit_and_a_left_node_reenrolls_under_the_same_node_id() {
     let a = Node::new("ea", Some("pw-a")).await;
     let b = Node::new("eb", Some("pw-b")).await;
@@ -1075,6 +1359,7 @@ async fn enrolled(tag: &str) -> (Node, Node, Node, String, String, String) {
 /// Remove `c` while it is offline, then bring it back still believing it is a member.
 async fn remove_offline_standby(a: &Node, b: &Node, c: &mut Node, cookie: &str) -> String {
     let removed = c.member_id();
+    seed_fencing_policy(a, c);
     c.server.abort();
     let revision = manifest(a).revision;
     let remove = random_id().unwrap();
@@ -1098,6 +1383,17 @@ async fn remove_offline_standby(a: &Node, b: &Node, c: &mut Node, cookie: &str) 
     assert!(manifest(b).member(&removed).is_none());
     c.restart("pw-c").await;
     removed
+}
+
+fn seed_fencing_policy(coordinator: &Node, source: &Node) {
+    let policy = crate::cluster::membership::FencingPolicy::issue(&source.store).unwrap();
+    coordinator
+        .membership()
+        .remember_fencing_policy(
+            source.membership().identity().unwrap().public().clone(),
+            policy,
+        )
+        .unwrap();
 }
 
 async fn leave(node: &Node, cookie: &str) -> (u16, Value) {

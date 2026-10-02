@@ -394,7 +394,7 @@ try {
   await checkClusterMembership({
     base, context, command, evaluate, waitFor, captureDir,
     capture: process.argv[2] ? capture : async () => {},
-    documentCapture: async () => { await capture(join(root, 'docs/images/cluster-membership.png')); },
+    documentCapture: process.argv[2] ? undefined : async () => { await capture(join(root, 'docs/images/cluster-membership.png')); },
   });
   await command('session.end', {});
 } finally {

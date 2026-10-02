@@ -49,11 +49,16 @@ export function operationUnsettled(op) {
   return !!op && (!op.terminal || (Array.isArray(op.pending_node_ids) && op.pending_node_ids.length > 0));
 }
 
+export function operationCleanupPending(op) {
+  return !!op?.cleanup_pending_node_ids?.length;
+}
+
 // A new operation started before the previous FINISH reached every member is
 // aborted by the servers, so the UI refuses it up front.
 // null hides the control. A string disables it; empty means the managed node may leave.
 export function leaveBlocked(view, tracked = []) {
   if (view?.lifecycle !== 'managed') return null;
+  if (view.members?.length === 1) return null; // The last member dissolves through its Remove action.
   return newOperationBlock(view, tracked);
 }
 
@@ -88,13 +93,17 @@ export function describeOperation(op, entry = {}) {
   const kind = KIND_LABELS[op?.kind || entry.kind] || '成员操作';
   const phase = op?.phase || entry.phase || 'unknown';
   const pending = Array.isArray(op?.pending_node_ids) ? op.pending_node_ids : [];
+  const cleanup = Array.isArray(op?.cleanup_pending_node_ids) ? op.cleanup_pending_node_ids : [];
   const label = op?.terminal && pending.length && phase === 'completed'
     ? '已完成，仍在通知部分服务器'
+    : op?.terminal && cleanup.length && phase === 'completed'
+      ? '成员变更已完成，等待离开服务器清理'
     : PHASE_LABELS[phase] || phase;
   return {
     title: entry.label ? `${kind} · ${entry.label}` : kind,
     phase: label,
     attention: pending.length ? `需要在线确认：${pending.join('、')}` : '',
+    cleanup: cleanup.length ? `等待清理：${cleanup.join('、')}。集群权限已撤销，其他成员操作可以继续。` : '',
     message: op?.message || entry.message || '',
     coordinator: op?.coordinator_node_id ? `协调服务器：${op.coordinator_node_id}` : '',
     retryable: !!op?.retryable || phase === 'unknown',
@@ -108,6 +117,11 @@ export function removalConsequences(member, context = {}) {
   const isLocal = member.member_id && member.member_id === context.localMemberId;
   const isPublic = member.member_id && member.member_id === context.publicMemberId;
   const isActive = member.node_id && member.node_id === context.activeNodeId;
+  if (isLocal && context.memberCount === 1) {
+    lines.push('这是集群的最后一台服务器：移除会结束集群，停止本机转播并关闭全部监控，不会自动恢复单机转播。');
+    if (isPublic) lines.push('本集群的公开状态页和共享 YouTube 索引也会关闭。');
+    return { lines, needsReplacement: false };
+  }
   lines.push('移除期间所有服务器会暂停转播；所有保留的服务器必须在线，并需要原成员中的多数确认。');
   if (isActive) lines.push('它是当前活跃（转播）服务器：移除前会先停止它的转播并确认已停止，完成后由剩余服务器重新选出活跃节点。');
   if (isPublic) lines.push('它负责公开状态页和共享 YouTube 索引：请选择接替的服务器，或关闭状态页。');

@@ -6,6 +6,9 @@ use super::types::*;
 use crate::config::{ClusterConfig, Config};
 use crate::plugins::is_danmaku_commands_enabled;
 use crate::webui::state::{get_status_cache, NetworkStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use std::collections::HashMap;
@@ -15,6 +18,52 @@ pub(crate) const FFMPEG_FAILURE_WINDOW_SECS: u64 = 60 * 60;
 pub(crate) const EXTERNAL_API_FAILURE_RETENTION_SECS: u64 = 60 * 60;
 
 pub(crate) const HEARTBEAT_FAILURE_THRESHOLD: u32 = 3;
+
+/// The signed fencing policy promises a bounded stop even if cluster settings
+/// drift or the operator configured an excessively long heartbeat interval.
+pub(crate) const EXECUTION_QUORUM_MAX_SECS: u64 = 120;
+const EXECUTION_WATCHDOG_PERIOD: Duration = Duration::from_secs(1);
+static EXECUTION_WATCHDOG: OnceLock<tokio::task::JoinHandle<()>> = OnceLock::new();
+static EXECUTION_WATCHDOG_READY: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn fencing_policy_ready() -> bool {
+    EXECUTION_WATCHDOG_READY.load(Ordering::Acquire)
+        && EXECUTION_WATCHDOG
+            .get()
+            .is_some_and(|task| !task.is_finished())
+}
+
+/// This safety task belongs to the process, not the admin listener. Closing or
+/// restarting that listener cannot revoke a fencing promise already pinned by
+/// peers while local monitors are still running.
+pub(crate) fn start_execution_fence_watchdog() {
+    EXECUTION_WATCHDOG.get_or_init(|| {
+        tokio::spawn(async {
+            let mut ticks = tokio::time::interval(EXECUTION_WATCHDOG_PERIOD);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticks.tick().await;
+                cluster_state_write().execution_fencing_active = true;
+                let blocked = match crate::config::load_config().await {
+                    Ok(cfg) => local_monitoring_block_reason(&cfg).is_some(),
+                    // A failed config read cannot extend a previously issued
+                    // policy's execution lease.
+                    Err(_) => true,
+                };
+                if blocked {
+                    crate::plugins::set_manual_restart();
+                    clear_local_stream();
+                    // No is-running probe or normal stop here: both can wait for
+                    // the supervisor mutex held by network/config preparation.
+                    crate::plugins::ffmpeg::fence_ffmpeg().await;
+                }
+                // First confirm that the safety loop reached the independent
+                // supervisor fence before the API may attest its stop bound.
+                EXECUTION_WATCHDOG_READY.store(true, Ordering::Release);
+            }
+        })
+    });
+}
 
 pub fn local_monitoring_allowed(cfg: &Config) -> bool {
     local_monitoring_block_reason(cfg).is_none()
@@ -95,6 +144,9 @@ pub(crate) fn local_has_fresh_quorum(cfg: &Config) -> bool {
 }
 
 pub(crate) fn state_has_fresh_quorum(state: &ClusterState, cfg: &Config, now: u64) -> bool {
+    if state.execution_fencing_active {
+        return state_has_bounded_execution_quorum(state, cfg, Instant::now());
+    }
     let configured = configured_node_ids(cfg);
     let required = configured.len() / 2 + 1;
     let timeout = cfg.cluster.failover_timeout_secs.max(1);
@@ -107,6 +159,33 @@ pub(crate) fn state_has_fresh_quorum(state: &ClusterState, cfg: &Config, now: u6
                 && now
                     .checked_sub(**acknowledged_at)
                     .is_some_and(|age| age <= timeout)
+        })
+        .count();
+    1 + fresh_peers >= required
+}
+
+pub(crate) fn state_has_bounded_execution_quorum(
+    state: &ClusterState,
+    cfg: &Config,
+    now: Instant,
+) -> bool {
+    let configured = configured_node_ids(cfg);
+    let required = configured.len() / 2 + 1;
+    let timeout = Duration::from_secs(
+        cfg.cluster
+            .failover_timeout_secs
+            .clamp(1, EXECUTION_QUORUM_MAX_SECS),
+    );
+    let fresh_peers = state
+        .peer_heartbeat_observed
+        .iter()
+        .filter(|(node_id, observed)| {
+            node_id.as_str() != cfg.cluster.node_id
+            && configured.contains(node_id.as_str())
+            // Clearing old-revision acknowledgements also invalidates their
+            // monotonic observations, before the next heartbeat can arrive.
+            && state.peer_heartbeat_acks.contains_key(node_id.as_str())
+            && now.checked_duration_since(**observed).is_some_and(|age| age <= timeout)
         })
         .count();
     1 + fresh_peers >= required

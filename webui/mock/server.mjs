@@ -60,7 +60,8 @@ export function createMockServer() {
     digest: membership.lifecycle === 'managed' ? membership.digest : null,
     members: membership.lifecycle === 'managed' ? membership.members.map(m => ({ ...m, fingerprint: fingerprint(m.member_id) })) : [],
     public_member_id: membership.lifecycle === 'managed' ? membership.public_member_id : null,
-    operation: [...operations.values()].map(operationStatus).find(s => !s.terminal || s.pending_node_ids.length) || null,
+    operation: [...operations.values()].map(operationStatus).find(s => !s.terminal || s.pending_node_ids.length)
+      || [...operations.values()].map(operationStatus).findLast(s => s.cleanup_pending_node_ids?.length) || null,
   });
   const commit = op => {
     const { change } = op;
@@ -84,13 +85,17 @@ export function createMockServer() {
     if (s.terminal || op.held) return;
     const others = op.base.filter(m => m.member_id !== membership.local_member_id).map(m => m.node_id);
     if (s.phase === 'preparing') Object.assign(s, { phase: 'committing', pending_node_ids: others.slice(0, 1) });
-    else if (s.phase === 'committing') { commit(op); Object.assign(s, { phase: 'completed', terminal: true, retryable: false, pending_node_ids: [], message: null }); }
+    else if (s.phase === 'committing') {
+      commit(op);
+      const cleanup = op.cleanupHeld ? op.base.filter(m => m.member_id === op.change.target_member_id).map(m => m.node_id) : [];
+      Object.assign(s, { phase: 'completed', terminal: true, retryable: !!cleanup.length, pending_node_ids: [], cleanup_pending_node_ids: cleanup, message: null });
+    }
   };
   const newOperation = (body, extra = {}) => {
     const { operation_id, expected_revision, target_password, ...change } = body;
     const coordinator = membership.members.find(m => m.member_id === membership.local_member_id)?.node_id || 'local';
     const op = {
-      change, base: structuredClone(membership.members), held: membershipMode === 'needs-attention', hiddenPolls: 0,
+      change, base: structuredClone(membership.members), held: membershipMode === 'needs-attention', cleanupHeld: membershipMode === 'cleanup-pending' && change.kind === 'remove', hiddenPolls: 0,
       status: { operation_id, kind: change.kind, phase: 'preparing', coordinator_node_id: coordinator, message: null, pending_node_ids: membership.members.map(m => m.node_id), terminal: false, retryable: true, ...extra },
     };
     if (op.held) Object.assign(op.status, { phase: 'needs_attention', message: '以下服务器尚未确认: node-002' , pending_node_ids: ['node-002'] });
@@ -225,6 +230,7 @@ export function createMockServer() {
           const op = operations.get(retry[1]);
           if (!op) return send({ success: false, message: '操作尚未到达本服务器，请稍后刷新或在协调服务器查看' }, 404);
           if (op.held) { op.held = false; Object.assign(op.status, { phase: 'preparing', message: null }); }
+          if (op.status.cleanup_pending_node_ids?.length) Object.assign(op.status, { cleanup_pending_node_ids: [], retryable: false });
           return send({ success: true, data: op.status });
         }
         if (path === '/api/cluster/public-status') {

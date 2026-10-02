@@ -18,7 +18,33 @@ use crate::config::{load_config, save_config, Config};
 use crate::plugins::{set_config_updated, set_manual_restart, stop_ffmpeg};
 use crate::webui::state::refresh_status_cache_config_from;
 use futures_util::future::join_all;
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::time::Duration;
+
+#[cfg(test)]
+static HANDOFF_MEMBERSHIP_STORE: Mutex<Option<Arc<crate::storage::Store>>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_handoff_membership_store(store: Option<Arc<crate::storage::Store>>) {
+    *HANDOFF_MEMBERSHIP_STORE.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned handoff membership store lock");
+        poisoned.into_inner()
+    }) = store;
+}
+
+fn handoff_membership_store() -> Result<Arc<crate::storage::Store>, String> {
+    #[cfg(test)]
+    if let Some(store) = HANDOFF_MEMBERSHIP_STORE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
+        return Ok(store);
+    }
+    crate::storage::global().map_err(|e| format!("无法读取成员停机证明: {e}"))
+}
 
 pub fn cluster_sync_config_from_config(cfg: &Config) -> ClusterSyncConfigRequest {
     let monitored_config = monitored_config_from_config(cfg);
@@ -411,7 +437,7 @@ pub(crate) async fn finalize_cluster_node_switch_with(
     .map_err(|e| format!("集群交接任务失败: {e}"))?
 }
 
-async fn finalize_cluster_node_switch_inner(
+pub(crate) async fn finalize_cluster_node_switch_inner(
     cfg: &Config,
     before: &ClusterStatus,
     source_node_id: &str,
@@ -424,6 +450,15 @@ async fn finalize_cluster_node_switch_inner(
         .then(|| cluster_state_read().pending_handoff_source.clone())
         .flatten();
     let source_node_id = pending_source.as_deref().unwrap_or(source_node_id);
+    let source_stopped_by_membership =
+        if !super::election::configured_node_ids(cfg).contains(source_node_id) {
+            let membership = super::membership::Membership::new(handoff_membership_store()?);
+            membership
+                .removed_source_stopped(source_node_id)
+                .map_err(|e| format!("无法验证成员停机证明: {e}"))?
+        } else {
+            false
+        };
     let current_owner = current_active_owner();
     if current_owner.as_deref() != Some(source_node_id)
         && current_owner.as_deref() != Some(target_node_id)
@@ -482,7 +517,7 @@ async fn finalize_cluster_node_switch_inner(
     // toggles and a stopped process. An automatic failover may take over from a
     // source that cannot be reached once its self-fence has provably run out
     // (`may_take_over_unconfirmed`); anything else leaves the handoff pending.
-    if source_node_id != target_node_id {
+    if source_node_id != target_node_id && !source_stopped_by_membership {
         let disabled = apply_node_mode_with_retry_classified(
             cfg,
             source_node_id,
@@ -517,6 +552,7 @@ async fn finalize_cluster_node_switch_inner(
                 source_last_seen,
                 &cfg.cluster,
                 now_secs(),
+                cached_stop_bound(source_node_id),
             ) && super::fencing::local_has_fresh_quorum(cfg))
             {
                 return Err(format!("源节点尚未确认停止，取消接管: {e}"));
@@ -697,8 +733,34 @@ pub(crate) fn mark_process_started() {
 /// An unreachable source fences itself: without a fresh quorum its ffmpeg
 /// loop and heartbeat stop pushing within `failover_timeout`. Past that, plus
 /// one loop tick and a margin, nothing can still be pushing there.
-pub(crate) fn source_fence_deadline_secs(cluster: &crate::config::ClusterConfig) -> u64 {
-    cluster.failover_timeout_secs.max(1) + 2 * cluster.heartbeat_interval_secs.max(1) + 5
+///
+/// `stop_bound` is the source's cached `FencingPolicy::max_stop_secs`. The
+/// source watchdog already stops execution within 120s, and the policy promises
+/// 180s, so a longer operator timeout must not keep the replacement waiting.
+pub(crate) fn source_fence_deadline_secs(
+    cluster: &crate::config::ClusterConfig,
+    stop_bound: Option<u64>,
+) -> u64 {
+    let configured =
+        cluster.failover_timeout_secs.max(1) + 2 * cluster.heartbeat_interval_secs.max(1) + 5;
+    stop_bound.map_or(configured, |bound| configured.min(bound.max(1)))
+}
+
+/// Verified fencing policy for a still-configured member, if one was cached
+/// while that member was online. Absence keeps the operator-configured wait.
+pub(crate) fn cached_stop_bound(node_id: &str) -> Option<u64> {
+    let store = handoff_membership_store().ok()?;
+    let membership = super::membership::Membership::new(store);
+    let manifest = membership.manifest().ok().flatten()?;
+    let member = manifest
+        .members
+        .iter()
+        .find(|member| member.node_id == node_id)?;
+    membership
+        .fencing_policy(member)
+        .ok()
+        .flatten()
+        .map(|policy| policy.max_stop_secs)
 }
 
 /// Whether an automatic failover may enable the replacement although the
@@ -709,6 +771,7 @@ pub(crate) fn may_take_over_unconfirmed(
     source_last_seen: Option<u64>,
     cluster: &crate::config::ClusterConfig,
     now: u64,
+    stop_bound: Option<u64>,
 ) -> bool {
     if !automatic || !matches!(error, NodeModeError::Unreachable(_)) {
         return false;
@@ -716,7 +779,7 @@ pub(crate) fn may_take_over_unconfirmed(
     let Some(heard) = source_last_seen.or_else(|| PROCESS_STARTED.get().copied()) else {
         return false;
     };
-    now.saturating_sub(heard) > source_fence_deadline_secs(cluster)
+    now.saturating_sub(heard) > source_fence_deadline_secs(cluster, stop_bound)
 }
 
 /// Delivers the all-off demotion owed to a source taken over without its

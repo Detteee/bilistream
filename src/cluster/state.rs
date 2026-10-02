@@ -4,7 +4,7 @@ use super::types::*;
 use crate::config::Config;
 use std::collections::HashMap;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) fn cluster_control_timeout(cfg: &Config) -> Duration {
     Duration::from_secs(cfg.cluster.heartbeat_interval_secs.clamp(5, 15))
@@ -64,6 +64,10 @@ pub(crate) struct ClusterState {
     pub(crate) local_external_api_failure_times: Vec<u64>,
     pub(crate) heartbeat_failures: HashMap<String, u32>,
     pub(crate) peer_heartbeat_acks: HashMap<String, u64>,
+    /// Monotonic observations back the bounded execution lease advertised by
+    /// upgraded nodes. Wall-clock adjustments must never extend that lease.
+    pub(crate) peer_heartbeat_observed: HashMap<String, Instant>,
+    pub(crate) execution_fencing_active: bool,
     pub(crate) peer_owner_views: HashMap<String, PeerOwnerView>,
     /// A newly elected local owner cannot execute until handoff completes.
     pub(crate) pending_handoff_source: Option<String>,
