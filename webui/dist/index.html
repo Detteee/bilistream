@@ -192,18 +192,18 @@
         <!-- Step 1: Bilibili login -->
         <div class="setup-step" id="setup-step-1">
           <details class="session-legacy"><summary>已有备份？直接恢复</summary><input type="file" id="setup-restore-file" accept=".backup" aria-label="选择加密备份"><input type="password" id="setup-restore-password" placeholder="备份密码" autocomplete="off" aria-label="备份密码"><button type="button" id="setup-restore" class="btn-secondary">恢复备份</button></details>
-          <h3 class="setup-step-title">步骤 1 · 登录 Bilibili</h3>
+          <h3 class="setup-step-title">第一步 · 登录 Bilibili</h3>
           <p class="setup-step-description">使用 Bilibili APP 扫描下方二维码登录</p>
 
           <div id="login-status" class="setup-login-status">
-            <span id="login-status-text">检查登录状态...</span>
+            <span id="login-status-text">正在检查登录状态…</span>
           </div>
 
           <div id="qr-code-container" class="setup-qr-container hidden">
             <div class="setup-qr-card">
               <div id="qr-code-display"></div>
               <p class="setup-qr-instruction">请使用 Bilibili APP 扫码登录</p>
-              <p id="qr-status" class="setup-qr-status">等待扫码...</p>
+              <p id="qr-status" class="setup-qr-status">等待扫码…</p>
             </div>
           </div>
 
@@ -219,7 +219,7 @@
 
         <!-- Step 2: basics -->
         <div class="setup-step hidden" id="setup-step-2">
-          <h3 class="setup-step-title">步骤 2 · 基础配置</h3>
+          <h3 class="setup-step-title">第二步 · 基础配置</h3>
 
           <div class="control-group">
             <label for="setup-room">B站直播间号 *</label>
@@ -252,14 +252,14 @@
 
         <!-- Step 3: platforms -->
         <div class="setup-step hidden" id="setup-step-3">
-          <h3 class="setup-step-title">步骤 3 · 添加频道与选择分区</h3>
-          <p class="setup-step-description">选择要转播的频道，其余保持「不转播」。</p>
+          <h3 class="setup-step-title">第三步 · 添加频道与选择分区</h3>
+          <p class="setup-step-description">选择要转播的频道，不需要的请保持「不转播」。</p>
           <button id="setup-load-areas" type="button" class="btn-secondary">加载官方分区</button>
-          <p id="setup-area-hint" class="setup-help-text" role="status">按分类选择分区，也可使用本地分区。</p>
+          <p id="setup-area-hint" class="setup-help-text" role="status">按分类选择分区，也可以使用本地分区。</p>
 
           <details class="setup-platform-card setup-favorites-panel" id="setup-favorites-panel">
             <summary class="setup-platform-title">从 Holodex 收藏导入（可选）</summary>
-            <p class="setup-help-text">勾选想导入的频道，也可跳过。</p>
+            <p class="setup-help-text">勾选想要导入的频道，也可以跳过。</p>
             <div class="control-group">
               <label for="setup-holodex">Holodex API Key (可选)</label>
               <input type="password" autocomplete="off" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
@@ -278,7 +278,7 @@
                 <ol class="setup-jwt-steps">
                   <li>打开 <a href="https://holodex.net/login" target="_blank"
                       rel="noopener noreferrer">holodex.net/login</a> 并完成登录</li>
-                  <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
+                  <li>在浏览器中按 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
                   <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
                 </ol>
                 <p class="setup-jwt-note">完成设置时保存登录信息。</p>
@@ -419,7 +419,7 @@
             <div class="control-group"><label for="setup-nc-id">频道 ID 或频道主页</label><input id="setup-nc-id" type="text" placeholder="vspo / ch2648162 / https://ch.nicovideo.jp/..."></div>
             </div>
             <div class="control-group"><label for="setup-nc-area">B站分区</label><select id="setup-nc-area"><option value="235">其他单机 (235)</option></select></div>
-            <p class="setup-help-text">需要 streamlink；登录会话可在系统设置中填写。</p>
+            <p class="setup-help-text">需要 streamlink；登录信息可以在系统设置中填写。</p>
             </div>
           </div>
 
@@ -461,7 +461,7 @@
         </div>
 
         <p class="setup-footer-help">
-          需要帮助？查看 <a href="https://github.com/Detteee/bilistream" target="_blank" rel="noopener noreferrer">文档</a>
+          需要帮助？请查看 <a href="https://github.com/Detteee/bilistream" target="_blank" rel="noopener noreferrer">文档</a>
         </p>
       </div>
     </div>
@@ -538,7 +538,7 @@
                 <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
               </h2>
               <div class="card-header-actions">
-                <label class="cluster-auto-failover-toggle" title="启用后故障时按优先级自动切换；关闭后仅手动切换">
+                <label class="cluster-auto-failover-toggle" title="启用后故障时将按优先级自动切换；关闭后只能手动切换">
                   <input type="checkbox" id="clusterAutoFailoverToggle">
                   <span>自动转移</span>
                 </label>
@@ -1496,7 +1496,7 @@
       <!-- ========================== 系统设置 ========================== -->
       <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
 
-        <section class="panel">
+        <section class="panel settings-panel--wide">
           <div class="panel__head">
             <h2 class="panel__title">
               <svg aria-hidden="true"><use href="#i-sliders" /></svg>
@@ -1506,7 +1506,7 @@
           <div class="panel__body">
             <div class="settings-grid">
               <div class="control-group">
-                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                <label class="toggle-label" title="仅控制仪表盘卡片是否显示，隐藏并不会停止监控。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-show-twitch-checkbox">
                     <span class="toggle-slider"></span>
@@ -1524,7 +1524,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="仅显示或隐藏仪表盘卡片，不改变优先频道监控和自动重启流设置">
+                <label class="toggle-label" title="仅切换仪表盘卡片显示，不影响优先频道的监控和自动重启流。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-show-priority-checkbox">
                     <span class="toggle-slider"></span>
@@ -1533,7 +1533,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="读取 YouTube 频道 RSS，需要 YouTube Data API Key 确认直播状态。关闭后仍处理 WebSub 推送，并按可用配额轮询上传列表。多服务器共享索引时在 YouTube 索引节点设置">
+                <label class="toggle-label" title="通过读取 YouTube 频道 RSS 确认直播状态，需要 YouTube Data API Key。关闭后仍会处理 WebSub 推送，并按可用配额轮询上传列表。多服务器共享索引时，请在 YouTube 索引节点上设置。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-youtube-rss-checkbox">
                     <span class="toggle-slider"></span>
@@ -1564,7 +1564,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="yt-dlp 兜底：开启后监控每次都直接用 yt-dlp 查询 YouTube（最终兜底，忽略 Holodex / YouTube API 的结果）。关闭时按 Holodex 与 YouTube API 索引判断，每 5 分钟 yt-dlp 安全探测一次">
+                <label class="toggle-label" title="开启后每次监控都直接用 yt-dlp 查询 YouTube（作为最终兜底，忽略 Holodex 与 YouTube API 的结果）；关闭时按 Holodex 和 YouTube API 判断，并每 5 分钟用 yt-dlp 安全探测一次。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="holodex-monitor-gate-toggle" aria-label="yt-dlp 兜底">
                     <span class="toggle-slider"></span>
@@ -1576,7 +1576,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel settings-panel--wide">
           <div class="panel__head">
             <h2 class="panel__title">
               <svg aria-hidden="true"><use href="#i-key" /></svg>
@@ -1587,11 +1587,11 @@
             <div class="settings-keys">
               <div class="control-group">
                 <div class="credential-heading"><label for="config-holodex-key">Holodex API Key (可选)</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
-                <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部配信、游戏分类和其他频道的预定">
+                <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部直播、游戏分类和其他频道的安排">
               </div>
               <div class="control-group">
                 <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key (可选)</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
-                <textarea autocomplete="new-password" id="config-youtube-api-key" title="每行一个 Key，可使用多个项目的额度" class="settings-mono-textarea" rows="3"
+                <textarea autocomplete="new-password" id="config-youtube-api-key" title="每行填写一个 Key，可使用多个项目的配额" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
               </div>
             </div>
@@ -1609,8 +1609,8 @@
                     <input type="number" id="config-websub-port" min="1" max="65535" placeholder="3151">
                   </div>
                 </div>
-                <small class="settings-help-text" title="YouTube 在频道发布视频时主动推送，比 RSS 更快发现未预约的直播，需要 YouTube Data API Key。回调端口只响应 /websub/youtube，不会暴露 Web UI。推送正常时名单上传列表轮询放慢一倍（转播目标不变）。">
-                  用隧道把公网地址转发到此端口，只响应 <code>/websub/youtube</code>；留空关闭
+                <small class="settings-help-text" title="当 YouTube 发布变化时，通过 WebSub 主动推送，比 RSS 更快发现未预约的直播。需要 YouTube Data API Key 配合使用。回调只处理 /websub/youtube 路径，不会暴露 Web UI。推送正常时，上传列表的轮询频率降为一半（不影响转播目标）。">
+                  将隧道指向此端口，只响应 <code>/websub/youtube</code> 路径；留空则关闭 WebSub
                 </small>
               </div>
               <figure id="youtube-hours-chart" class="hours-chart" hidden>
@@ -1647,7 +1647,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel settings-panel--wide">
           <div class="panel__head">
             <h2 class="panel__title">
               <svg aria-hidden="true"><use href="#i-plug" /></svg>
@@ -1668,7 +1668,7 @@
                   <option value="opera">Opera</option>
                   <option value="vivaldi">Vivaldi</option>
                 </select>
-                <small class="settings-help-text">选中后优先使用服务器上的浏览器登录。</small>
+                <small class="settings-help-text">选中后，会优先使用服务器上该浏览器的登录状态。</small>
               </div>
               <div class="control-group">
                 <label for="yt-cookie-upload">YouTube Cookie</label>
@@ -1676,13 +1676,13 @@
                 <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
                 <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
                 <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
-                <small class="settings-help-text">Netscape 格式；自动保存 yt-dlp 更新。</small>
+                <small class="settings-help-text">支持 Netscape 格式，会自动保存并同步给 yt-dlp。</small>
                 <input type="hidden" id="config-yt-cookies-file" value="">
               </div>
               <div class="control-group">
                 <label for="config-yt-deno-path">YouTube Deno 路径 (可选)</label>
                 <input type="text" id="config-yt-deno-path" placeholder="Windows 默认路径可留空">
-                <small class="settings-help-text">用于解决 YouTube n challenge 的 Deno 路径</small>
+                <small class="settings-help-text">用于解决 YouTube n challenge 验证的 Deno 路径。</small>
               </div>
               <div class="control-group">
                 <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
@@ -1719,13 +1719,13 @@
                   <small id="niconico-session-status" class="settings-help-text" role="status">尚未检测</small>
                 </div>
                 <div class="session-actions">
-                  <label class="toggle-label" title="仅检测有效性，不会延长登录；网络失败不等于失效"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
+                  <label class="toggle-label" title="仅检测登录是否仍然有效，不会延长登录期限；网络失败不代表登录失效。"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
                 </div>
               <div class="control-group session-proxy">
                 <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
                 <input type="text" autocomplete="off" spellcheck="false" id="config-nc-proxy" title="使用 HTTP 代理；Clash 可用 mixed 端口" placeholder="http://127.0.0.1:7890">
               </div>
-                <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">未直接配置 user_session 时才读取文件中的同名 Cookie。</small></div></details>
+                <details class="session-legacy"><summary>兼容旧 Cookie 文件</summary><div class="control-group"><label for="config-nc-cookies-file">Netscape 文件路径</label><input type="text" id="config-nc-cookies-file" placeholder="niconico_cookies.txt"><small class="settings-help-text">仅当未直接填写 user_session 时，才会读取文件中的同名 Cookie。</small></div></details>
               </section>
             </div>
           </div>
@@ -1735,7 +1735,7 @@
           <div class="panel__head"><h2 class="panel__title" id="panel-security-title">安全</h2></div>
           <div class="panel__body">
             <p id="panel-password-status" class="settings-help-text" role="status">正在读取密码状态…</p>
-            <p class="settings-help-text">远程访问需要面板密码。更改或清除密码会退出所有登录。</p>
+            <p class="settings-help-text">远程访问需要设置面板密码。更改或清除密码后，所有登录都会退出。</p>
             <div class="settings-grid">
               <div id="panel-password-current-group" class="control-group hidden"><label for="panel-password-current">当前密码</label><input id="panel-password-current" type="password" autocomplete="current-password" aria-describedby="panel-password-error"></div>
               <div class="control-group"><label for="panel-password-new">新密码</label><input id="panel-password-new" type="password" autocomplete="new-password" aria-describedby="panel-password-error" disabled></div>
@@ -1755,12 +1755,12 @@
             <p id="storage-state" class="settings-help-text" aria-live="polite"></p>
             <div class="settings-grid">
               <div class="control-group"><label for="storage-backup-password">备份密码</label><input type="password" id="storage-backup-password" autocomplete="new-password" placeholder="至少 12 个字符"><button type="button" id="storage-backup" class="btn-secondary">下载加密备份</button></div>
-              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未配置的新安装。</small></details>
+              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未完成配置的新安装。</small></details>
             </div>
           </div>
         </section>
 
-        <section class="panel cluster-settings-section" id="cluster-settings" aria-labelledby="cluster-settings-title">
+        <section class="panel settings-panel--wide cluster-settings-section" id="cluster-settings" aria-labelledby="cluster-settings-title">
           <div class="panel__head">
             <h2 class="panel__title" id="cluster-settings-title">
               <svg aria-hidden="true"><use href="#i-servers" /></svg>
@@ -1883,7 +1883,7 @@
           </div>
         </section>
 
-        <section class="panel" id="public-status-settings">
+        <section class="panel settings-panel--wide" id="public-status-settings">
           <div class="panel__head"><h2 class="panel__title">公开状态页</h2></div>
           <div class="panel__body cluster-public-status">
               <p class="settings-help-text">单机可用，默认端口 23234。</p>
@@ -1975,7 +1975,7 @@
             <div class="control-group banned-keyword-field">
               <label class="settings-field-label" for="streaming-banned-keywords">
                 转播禁用关键词
-                <small class="settings-field-help">包含这些关键词的直播将不会被转播（每行一个关键词）</small>
+                <small class="settings-field-help">包含这些关键词的直播将不会被转播（每行填写一个关键词）</small>
               </label>
               <textarea id="streaming-banned-keywords" class="settings-mono-textarea" rows="6"
                 placeholder="watchalong&#10;watchparty&#10;asmr"></textarea>
@@ -1984,7 +1984,7 @@
             <div class="control-group">
               <label class="settings-field-label" for="danmaku-banned-keywords">
                 弹幕命令禁用关键词
-                <small class="settings-field-help">包含这些关键词的直播将禁用弹幕命令（每行一个关键词）</small>
+                <small class="settings-field-help">包含这些关键词的直播会禁用弹幕命令（每行填写一个关键词）</small>
               </label>
               <textarea id="danmaku-banned-keywords" class="settings-mono-textarea" rows="8"
                 placeholder="watchalong&#10;talk&#10;freechat"></textarea>
@@ -2009,7 +2009,7 @@
           </div>
           <div class="panel__body" id="log-container">
             <div id="log-scroll" class="log-scroll">
-              <div id="log-output">等待日志...</div>
+              <div id="log-output">等待日志…</div>
             </div>
             <div class="log-actions">
               <button id="refresh-logs-btn" class="btn-primary compact-btn icon-text-btn" type="button">
@@ -2080,7 +2080,7 @@
           </button>
         </div>
         <p class="holodex-login-description">
-          登录后显示 Holodex 收藏夹直播（含 Twitch 外部配信）。未登录时使用 <code>channels.json</code> 频道列表，可在「配置管理」中编辑。
+          登录后可显示 Holodex 收藏夹的直播（包括 Twitch 外部直播）。未登录时使用 <code>channels.json</code> 中的频道列表，可以在「配置管理」中编辑。
         </p>
         <div id="holodex-modal-auth-hint" class="holodex-login-hint"></div>
         <div class="control-group holodex-login-field">
@@ -2090,8 +2090,8 @@
         <details class="holodex-login-help">
           <summary>如何获取 JWT</summary>
           <ol>
-            <li>点击下方「打开 Holodex」并完成登录</li>
-            <li>浏览器 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
+            <li>点击下方的「打开 Holodex」并完成登录</li>
+            <li>在浏览器中按 F12 → Application（应用程序）→ Cookies → <code>https://holodex.net</code></li>
             <li>找到 <code>HOLODEX_JWT</code>，复制其 Value（值）并粘贴到上方</li>
           </ol>
           <p>JWT 将在到期前 30 天内自动续期并写回 config.json。</p>
@@ -2137,14 +2137,14 @@
           </label>
 
           <div class="crop-capture-panel">
-            <p class="crop-capture-title">自动捕获直播帧中...</p>
-            <p class="crop-capture-help">系统将自动捕获当前直播画面。如果自动捕获失败，可以手动上传图片：</p>
+            <p class="crop-capture-title">正在自动捕获直播画面…</p>
+            <p class="crop-capture-help">系统会自动捕获当前直播画面。如果自动捕获失败，可以手动上传图片：</p>
             <input type="file" id="cropImageUpload" class="crop-file-input" accept="image/*">
           </div>
         </div>
 
         <div id="cropCanvasContainer" class="crop-canvas-section hidden">
-          <p class="crop-canvas-help">选择裁剪区域（拖动角点或边调整大小，点击内部拖动）：</p>
+          <p class="crop-canvas-help">选择裁剪区域（拖动角点或边缘调整大小，点击内部可拖动）：</p>
 
           <div class="crop-ratio-toolbar">
             <button id="ratio-free" class="ratio-button active" type="button" title="自由比例" data-crop-ratio="free">

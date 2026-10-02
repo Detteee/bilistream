@@ -864,15 +864,47 @@
 
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-  gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: var(--sp-4) var(--sp-5);
 }
 
 .settings-keys {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--sp-4) var(--sp-5);
   align-items: start;
+}
+
+/* ==========================================================================
+   12a. Settings layout (multi-column panels)
+   ========================================================================== */
+
+/* On wide windows, compact settings panels share rows instead of stacking. */
+#view-settings.is-active {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr));
+  align-items: start;
+}
+
+.settings-panel--wide {
+  grid-column: 1 / -1;
+}
+
+#view-settings .settings-actions {
+  grid-column: 1 / -1;
+}
+
+/* Full-width 基础设置: keep toggles evenly distributed (2 rows of 4) on
+   large windows, while smaller windows keep the 2-column 240px grid. */
+@media (min-width: 1200px) {
+  #view-settings .settings-panel--wide .settings-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  #view-settings.is-active {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-websub-row,

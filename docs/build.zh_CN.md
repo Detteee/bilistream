@@ -15,7 +15,7 @@ Windows 请改为运行 `target\release\bilistream.exe`。打开 `http://localho
 
 ## Web UI 资源
 
-仓库已包含编译后的 Web UI。修改 `webui/src` 或 `webui/public-src` 后，先用 Node.js 22+ 重新生成，再编译 Rust：
+仓库已包含编译好的 Web UI。修改 `webui/src` 或 `webui/public-src` 后，先用 Node.js 22+ 重新生成，再编译 Rust：
 
 ```bash
 npm ci --prefix webui --ignore-scripts
