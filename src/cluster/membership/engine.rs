@@ -1136,17 +1136,23 @@ impl Membership {
 
     /// Preconditions for a local leave. Network probes happen only after this
     /// returns, and never while a hold or unfinished operation is recorded.
+    /// A removal of this node does not count: that operation is the cluster
+    /// telling it to depart, and recognition leave is how it finishes when
+    /// FINISH has not been applied locally.
     pub fn departure_plan(&self) -> io::Result<DeparturePlan> {
         let local = self.local()?;
         if local.lifecycle != Lifecycle::Managed {
             return Err(conflict("只有已加入集群的服务器可以这样退出"));
         }
-        if local.hold.is_some() || local.reservation.is_some() || local.pairing.is_some() {
-            return Err(conflict("本节点正在维护，不能退出集群"));
-        }
         let journal = read::<Journal>(&self.store, OPERATIONS_RECORD)?.unwrap_or_default();
-        if unfinished(&journal) {
-            return Err(conflict("上一项成员操作尚未完成，不能退出集群"));
+        match departure_block(&local, &journal) {
+            Some(DepartureBlock::Maintenance) => {
+                return Err(conflict("本节点正在维护，不能退出集群"));
+            }
+            Some(DepartureBlock::Unfinished) => {
+                return Err(conflict("上一项成员操作尚未完成，不能退出集群"));
+            }
+            None => {}
         }
         let manifest = self.manifest()?.ok_or_else(denied)?;
         manifest.validate()?;
@@ -1178,15 +1184,17 @@ impl Membership {
     pub fn commit_local_departure(&self, proved: BTreeSet<String>) -> io::Result<()> {
         self.store.transaction(move |tx| {
             let mut local = local_tx(tx)?;
-            if local.lifecycle != Lifecycle::Managed
-                || local.hold.is_some()
-                || local.reservation.is_some()
-                || local.pairing.is_some()
-            {
+            if local.lifecycle != Lifecycle::Managed {
                 return Err(conflict("本节点正在维护或尚未加入，不能退出"));
             }
-            if unfinished(&journal_tx(tx)?) {
-                return Err(conflict("上一项成员操作尚未完成，不能退出集群"));
+            match departure_block(&local, &journal_tx(tx)?) {
+                Some(DepartureBlock::Maintenance) => {
+                    return Err(conflict("本节点正在维护或尚未加入，不能退出"));
+                }
+                Some(DepartureBlock::Unfinished) => {
+                    return Err(conflict("上一项成员操作尚未完成，不能退出集群"));
+                }
+                None => {}
             }
             let identity = identity_tx(tx)?;
             let manifest: Manifest = read_tx(tx, MANIFEST_RECORD)?.ok_or_else(denied)?;
@@ -1228,11 +1236,44 @@ pub struct DeparturePlan {
     pub others: Vec<Descriptor>,
 }
 
-fn unfinished(journal: &Journal) -> bool {
-    journal
+enum DepartureBlock {
+    Maintenance,
+    Unfinished,
+}
+
+/// A removal of this member is the cluster's own departure. It must not trap
+/// the node when the retained members have already revoked it.
+fn departure_block(local: &LocalState, journal: &Journal) -> Option<DepartureBlock> {
+    let self_id = local
+        .descriptor
+        .as_ref()
+        .map(|member| member.member_id.as_str());
+    let own_removal = |op: &Operation| {
+        self_id.is_some_and(|id| {
+            matches!(&op.intent.change, Change::Remove { target_member_id, .. } if target_member_id == id)
+        })
+    };
+    let hold_is_own_removal = local.hold.as_deref().is_some_and(|hold| {
+        journal
+            .operations
+            .get(hold)
+            .is_some_and(|op| own_removal(op))
+    });
+    if local.reservation.is_some()
+        || local.pairing.is_some()
+        || (local.hold.is_some() && !hold_is_own_removal)
+    {
+        return Some(DepartureBlock::Maintenance);
+    }
+    let blocked = journal
         .operations
         .values()
-        .any(|op| !op.terminal() || !op.finished_locally)
+        .any(|op| (!op.terminal() || !op.finished_locally) && !own_removal(op));
+    if blocked {
+        Some(DepartureBlock::Unfinished)
+    } else {
+        None
+    }
 }
 
 /// Read-only. `Absent` is returned only when this committed manifest does not
