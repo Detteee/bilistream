@@ -20,6 +20,9 @@ function createMockElement() {
     textContent: '',
     checked: false,
     offsetWidth: 1,
+    hasAttribute() { return false; },
+    setAttribute() {},
+    closest() { return null; },
     classList: {
       add: name => classes.add(name),
       remove: name => classes.delete(name),
@@ -221,6 +224,44 @@ test('a room lock shows the ban end and blocks start until lock_till', () => {
   assert.equal(start.disabled, false);
   assert.equal(start.title, '开始直播');
   assert.equal(badgeText.textContent, '未开播');
+});
+
+test('the public Bilibili card shows the lock row and hides live duration', () => {
+  const status = node('bili-status');
+  const row = node('bili-lock-row');
+  row.classList.add('hidden');
+  const end = node('bili-lock-end');
+  const liveStats = node('bili-live-stats');
+  liveStats.classList.remove('hidden');
+  const badge = node('app-live-badge');
+  const badgeText = node('app-live-badge-text');
+  node('bili-live-time');
+  node('bili-live-time-label');
+  node('bili-title');
+  node('bili-area');
+  node('bili-danmaku-command-toggle');
+  const future = Math.floor(Date.now() / 1000) + 3600;
+  const start = Math.floor(Date.now() / 1000) - 90;
+
+  cards.renderBilibiliCard({
+    is_live: false,
+    title: '示例频道 001 | 示例直播',
+    area_name: '其他单机',
+    area_id: 235,
+    live_start_ts: start,
+    room_locked: true,
+    lock_till: future,
+  }, { readonly: true, showNetwork: false });
+
+  assert.equal(status.className, 'status-indicator status-locked');
+  assert.equal(row.classList.contains('hidden'), false);
+  assert.equal(end.textContent, formatLockEnd(future));
+  assert.equal(liveStats.classList.contains('hidden'), true);
+  assert.equal(badge.classList.contains('is-locked'), true);
+  assert.equal(badge.classList.contains('is-live'), false);
+  assert.equal(badgeText.textContent, '封禁中');
+
+  cards.renderBilibiliCard({ is_live: false, title: 'Idle' }, { readonly: true, showNetwork: false });
 });
 
 test('room stays live after handoff, but local network graph disappears', () => {

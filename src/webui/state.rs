@@ -62,7 +62,7 @@ pub struct BiliStatus {
     pub enable_danmaku_command: bool,
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }
 

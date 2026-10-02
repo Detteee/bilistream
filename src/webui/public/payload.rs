@@ -7,8 +7,10 @@
 //!
 //! Excluded on purpose: credentials, channel ids, file paths, peer API urls,
 //! heartbeat timestamps, and the per-node WebUI link. Live duration is
-//! included only after get_info succeeds: on the Bilibili card for a
-//! standalone node, and on the publishing node card in a cluster.
+//! included only after `get_info` succeeds, and only while the room is not
+//! under a timed lock: on the Bilibili card for a standalone node, and on the
+//! publishing node card in a cluster. A timed lock (`room_locked`, `lock_till`)
+//! is the same public `room_init` snapshot the dashboard uses.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +42,11 @@ pub struct PublicBiliStatus {
     pub online: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_start_ts: Option<i64>,
+    /// Timed room punishment from `room_init`. Absent once the ban has ended.
+    #[serde(default, skip_serializing_if = "crate::webui::state::is_false")]
+    pub room_locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_till: Option<i64>,
 }
 
 /// YouTube and Twitch differ only in what the second line is called, so they
@@ -128,7 +135,13 @@ impl From<&BiliStatus> for PublicBiliStatus {
             area_name: bili.area_name.clone(),
             enable_danmaku_command: bili.enable_danmaku_command,
             online: bili.online,
-            live_start_ts: bili.live_start_ts,
+            live_start_ts: if bili.room_locked {
+                None
+            } else {
+                bili.live_start_ts
+            },
+            room_locked: bili.room_locked,
+            lock_till: bili.lock_till,
         }
     }
 }
@@ -236,7 +249,7 @@ impl From<&ClusterNodeSnapshot> for PublicNode {
                 .map(PublicNetwork::from),
             online: bili.filter(|_| publishing).and_then(|bili| bili.online),
             live_start_ts: bili
-                .filter(|_| publishing)
+                .filter(|bili| publishing && !bili.room_locked)
                 .and_then(|bili| bili.live_start_ts),
         }
     }
@@ -387,6 +400,29 @@ mod tests {
                 "enable_danmaku_command"
             ])
         );
+
+        let locked = {
+            let mut status = sample_status();
+            status.bilibili.live_start_ts = Some(9);
+            status.bilibili.room_locked = true;
+            status.bilibili.lock_till = Some(1_790_881_195);
+            PublicStatus::build(Some(&status), &sample_cluster())
+        };
+        let locked_value = serde_json::to_value(&locked).unwrap();
+        assert_eq!(
+            keys(&locked_value["bilibili"]),
+            sorted(&[
+                "is_live",
+                "title",
+                "area_id",
+                "area_name",
+                "enable_danmaku_command",
+                "room_locked",
+                "lock_till"
+            ])
+        );
+        assert_eq!(locked_value["bilibili"]["lock_till"], 1_790_881_195);
+        assert!(locked_value["bilibili"].get("live_start_ts").is_none());
         assert_eq!(
             keys(&value["youtube"]),
             sorted(&[
@@ -561,6 +597,10 @@ mod tests {
         let idle = PublicNode::from(&node);
         assert!(idle.online.is_none());
         assert!(idle.live_start_ts.is_none());
+
+        node.ffmpeg_running = true;
+        node.status.as_mut().unwrap().bilibili.room_locked = true;
+        assert!(PublicNode::from(&node).live_start_ts.is_none());
     }
 
     #[test]

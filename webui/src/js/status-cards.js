@@ -391,7 +391,9 @@ function paintBiliLiveStats(bili, options = {}) {
   const stats = document.getElementById('bili-live-stats');
   const { liveStartTs } = biliRoomStats(bili);
   const publishing = bili.ffmpeg_running === true;
+  const locked = !!activeRoomLock(bili);
   const show = liveStartTs != null
+    && !locked
     && !options.hideRoomStats
     && (!showNetwork || publishing);
   stats?.classList.toggle('hidden', !show);
