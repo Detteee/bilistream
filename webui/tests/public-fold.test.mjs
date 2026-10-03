@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { streamIsOnAir } from '../public-src/js/on-air.js';
-import { activeRestream } from '../public-src/js/nodes.js';
+import { activeRestream, streamIsOnAir } from '../src/js/on-air.js';
+import { toCardModel } from '../src/js/stream-model.js';
 import { nextStatusFold } from '../public-src/js/status-fold.js';
 
 const closed = { restreaming: null, open: false };
@@ -78,19 +78,19 @@ test('streamIsOnAir matches the live row the server is pushing', () => {
     command_channel: '示例频道 001',
     title: '别的标题',
   };
-  assert.equal(streamIsOnAir(live, onAir), true);
-  assert.equal(streamIsOnAir({ ...live, status: 'upcoming' }, onAir), false);
-  assert.equal(streamIsOnAir({ ...live, command_platform: 'TW', placeholder_type: 'twitch' }, onAir), false);
-  assert.equal(streamIsOnAir({
+  assert.equal(streamIsOnAir(toCardModel(live), onAir), true);
+  assert.equal(streamIsOnAir(toCardModel({ ...live, status: 'upcoming' }), onAir), false);
+  assert.equal(streamIsOnAir(toCardModel({ ...live, command_platform: 'TW', placeholder_type: 'twitch' }), onAir), false);
+  assert.equal(streamIsOnAir(toCardModel({
     status: 'live',
     command_platform: 'YT',
     channel_name: '其他频道',
     title: '示例直播',
-  }, onAir), true);
-  assert.equal(streamIsOnAir({
+  }), onAir), true);
+  assert.equal(streamIsOnAir(toCardModel({
     status: 'live',
     command_platform: 'YT',
     channel_name: '其他频道',
     title: '另一场',
-  }, onAir), false);
+  }), onAir), false);
 });

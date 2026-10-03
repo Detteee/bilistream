@@ -2474,6 +2474,43 @@ a.cluster-node-name-link {
   transform: translateY(-2px);
 }
 
+.holodex-stream-card.is-on-air {
+  border-color: color-mix(in srgb, var(--live) 62%, var(--line));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--live) 45%, transparent),
+    0 10px 28px color-mix(in srgb, var(--live) 16%, transparent);
+}
+
+.holodex-stream-card.is-on-air:hover {
+  border-color: color-mix(in srgb, var(--live) 72%, var(--line));
+}
+
+.holodex-stream-thumb:has(.holodex-stream-thumb-on-air) .holodex-stream-topic {
+  max-width: calc(100% - 92px);
+}
+
+.holodex-stream-thumb-on-air {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  padding: var(--sp-2);
+  pointer-events: none;
+}
+
+.holodex-stream-on-air {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--live) 80%, #000);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
 .holodex-stream-thumb {
   position: relative;
   line-height: 0;

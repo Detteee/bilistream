@@ -4,14 +4,21 @@
 // command; sending it is the viewer's own action in the live chat, which is
 // where their identity and your moderation already are.
 
-import { createSvgIcon, createStreamThumbnail, reconcileChildren } from '../../src/js/dom.js';
+import { reconcileChildren } from '../../src/js/dom.js';
+import { toCardModel, streamStartMs } from '../../src/js/stream-model.js';
+import { streamIsOnAir } from '../../src/js/on-air.js';
 import {
-  formatClock,
-  formatDuration,
-  formatScheduledStart,
-  timestampMs,
-} from '../../src/js/format.js';
-import { streamIsOnAir } from './on-air.js';
+  createScheduleDivider,
+  createStrokeIcon,
+  createWatchLink,
+  renderCard,
+  startDurationTicker,
+  stopDurationTicker,
+  updateViewerCount,
+  watchUrl,
+} from '../../src/js/stream-card.js';
+
+export { startDurationTicker, stopDurationTicker };
 
 /// Mirrors the reasons the server sends, so a greyed button can say why.
 const REASON_LABELS = {
@@ -197,221 +204,8 @@ function areaById(id) {
   return areas.find((area) => area.id === id) || null;
 }
 
-let durationTickerId = null;
-
 function isLiveStream(stream) {
   return String(stream.status || '').toLowerCase() === 'live';
-}
-
-function watchUrl(stream) {
-  if (stream.link) {
-    return stream.link;
-  }
-  if (!stream.is_placeholder && stream.id) {
-    return `https://www.youtube.com/watch?v=${stream.id}`;
-  }
-  return '';
-}
-
-function streamStartMs(stream, isLive) {
-  const raw = isLive
-    ? (stream.start_actual || stream.available_at || stream.published_at || stream.start_scheduled)
-    : stream.start_scheduled;
-  return timestampMs(raw);
-}
-
-function placeholderKind(stream) {
-  const link = (stream.link || '').toLowerCase();
-  if (link.includes('nicovideo.jp')) {
-    return 'niconico';
-  }
-  if (stream.placeholder_type === 'twitch' || link.includes('twitch.tv')) {
-    return 'twitch';
-  }
-  return 'radio';
-}
-
-function createStrokeIcon(pathData) {
-  const svg = createSvgIcon('0 0 24 24', pathData);
-  svg.setAttribute('width', '15');
-  svg.setAttribute('height', '15');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  return svg;
-}
-
-function createPlayIcon() {
-  const svg = createSvgIcon(
-    '0 0 24 24',
-    'M7 4.5a1 1 0 0 1 1.53-.85l11 7.5a1 1 0 0 1 0 1.7l-11 7.5A1 1 0 0 1 7 19.5v-15Z',
-  );
-  svg.setAttribute('width', '15');
-  svg.setAttribute('height', '15');
-  svg.setAttribute('fill', 'currentColor');
-  return svg;
-}
-
-function createPlaceholderIcon(kind) {
-  const wrapper = document.createElement('span');
-  wrapper.className = kind === 'niconico'
-    ? 'holodex-duration-niconico-icon'
-    : kind === 'twitch'
-      ? 'holodex-duration-twitch-icon'
-      : 'holodex-duration-radio-icon';
-  if (kind === 'niconico') {
-    wrapper.appendChild(createSvgIcon(
-      '0 0 24 24',
-      'M.4787 7.534v12.1279A2.0213 2.0213 0 0 0 2.5 21.6832h2.3888l1.323 2.0948a.4778.4778 0 0 0 .4043.2205.4778.4778 0 0 0 .441-.2205l1.323-2.0948h6.9828l1.323 2.0948a.4778.4778 0 0 0 .441.2205c.1838 0 .3308-.0735.4043-.2205l1.323-2.0948h2.6462a2.0213 2.0213 0 0 0 2.0213-2.0213V7.5339a2.0213 2.0213 0 0 0-2.0213-1.9845h-7.681l4.4468-4.4469L17.1637 0l-5.1452 5.1452L6.8 0 5.6973 1.1025l4.4102 4.4102H2.5367a2.0213 2.0213 0 0 0-2.058 2.058z',
-    ));
-  } else if (kind === 'twitch') {
-    wrapper.appendChild(createSvgIcon('0 0 24 24', 'M11.64 5.93H13.07V10.21H11.64M15.57 5.93H17V10.21H15.57M7 2L3.43 5.57V18.43H7.71V22L11.29 18.43H14.14L20.57 12V2M19.14 11.29L16.29 14.14H13.43L10.93 16.64V14.14H7.71V3.43H19.14Z'));
-  } else {
-    wrapper.appendChild(createSvgIcon('0 0 24 24', 'M12 10C10.9 10 10 10.9 10 12S10.9 14 12 14 14 13.1 14 12 13.1 10 12 10M18 12C18 8.7 15.3 6 12 6S6 8.7 6 12C6 14.2 7.2 16.1 9 17.2L10 15.5C8.8 14.8 8 13.5 8 12.1C8 9.9 9.8 8.1 12 8.1S16 9.9 16 12.1C16 13.6 15.2 14.9 14 15.5L15 17.2C16.8 16.2 18 14.2 18 12M12 2C6.5 2 2 6.5 2 12C2 15.7 4 18.9 7 20.6L8 18.9C5.6 17.5 4 14.9 4 12C4 7.6 7.6 4 12 4S20 7.6 20 12C20 15 18.4 17.5 16 18.9L17 20.6C20 18.9 22 15.7 22 12C22 6.5 17.5 2 12 2Z'));
-  }
-  return wrapper;
-}
-
-function appendDurationText(duration, text) {
-  const span = document.createElement('span');
-  span.className = 'holodex-duration-text';
-  span.textContent = text;
-  duration.appendChild(span);
-}
-
-function createPlaceholderDurationOverlay(stream, isLive) {
-  const kind = placeholderKind(stream);
-  const duration = document.createElement('div');
-  duration.className = kind === 'niconico'
-    ? 'holodex-stream-duration holodex-stream-duration-niconico'
-    : kind === 'twitch'
-      ? 'holodex-stream-duration holodex-stream-duration-twitch'
-      : 'holodex-stream-duration holodex-stream-duration-radio';
-
-  const startMs = streamStartMs(stream, isLive);
-  if (isLive && startMs) {
-    duration.dataset.tick = 'live';
-    duration.dataset.startMs = String(startMs);
-    appendDurationText(duration, formatDuration(Date.now() - startMs));
-  } else if (stream.start_scheduled) {
-    const start = new Date(stream.start_scheduled);
-    appendDurationText(duration, Number.isNaN(start.getTime()) ? '预告' : formatClock(start));
-  }
-
-  const hover = document.createElement('span');
-  hover.className = 'holodex-duration-hover';
-  hover.textContent = kind === 'niconico' ? 'ニコニコ' : kind === 'twitch' ? '外部配信' : '外部直播';
-  duration.append(hover, createPlaceholderIcon(kind));
-  return duration;
-}
-
-function createDurationOverlay(stream, isLive) {
-  if (stream.is_placeholder) {
-    return createPlaceholderDurationOverlay(stream, isLive);
-  }
-
-  const startMs = streamStartMs(stream, isLive);
-  if (!(isLive && startMs)) {
-    return null;
-  }
-
-  const duration = document.createElement('div');
-  duration.className = 'holodex-stream-duration holodex-stream-duration-live';
-  duration.dataset.tick = 'live';
-  duration.dataset.startMs = String(startMs);
-  appendDurationText(duration, formatDuration(Date.now() - startMs));
-  return duration;
-}
-
-export function stopDurationTicker() {
-  if (durationTickerId) {
-    clearInterval(durationTickerId);
-    durationTickerId = null;
-  }
-}
-
-function updateDurations() {
-  const now = Date.now();
-  document.querySelectorAll('.holodex-stream-duration[data-tick="live"]').forEach((el) => {
-    const startMs = Number(el.dataset.startMs);
-    if (!startMs) {
-      return;
-    }
-    const textEl = el.querySelector('.holodex-duration-text');
-    const text = formatDuration(now - startMs);
-    if (textEl && textEl.textContent !== text) textEl.textContent = text;
-  });
-  document.querySelectorAll('.holodex-stream-scheduled[data-start]').forEach(el => {
-    const text = formatScheduledStart(el.dataset.start);
-    if (el.textContent !== text) el.textContent = text;
-  });
-}
-
-export function startDurationTicker() {
-  stopDurationTicker();
-  if (document.visibilityState !== 'visible') {
-    return;
-  }
-  updateDurations();
-  if (document.querySelector('.holodex-stream-duration[data-tick="live"], .holodex-stream-scheduled[data-start]')) {
-    durationTickerId = setInterval(updateDurations, 1000);
-  }
-}
-
-function createThumb(stream, isLive, onAirNow) {
-  const thumb = document.createElement('div');
-  thumb.className = 'holodex-stream-thumb';
-
-  const href = watchUrl(stream);
-  const media = href ? document.createElement('a') : document.createElement('div');
-  if (href) {
-    media.className = 'holodex-stream-thumb-link';
-    media.href = href;
-    media.target = '_blank';
-    media.rel = 'noopener noreferrer';
-    media.setAttribute('aria-label', `观看 ${stream.channel_name || stream.title || '直播'}`);
-  }
-
-  if (stream.thumbnail) {
-    media.appendChild(createStreamThumbnail(stream.thumbnail));
-  } else {
-    const placeholder = document.createElement('div');
-    placeholder.className = 'holodex-stream-thumb-placeholder';
-    media.appendChild(placeholder);
-  }
-  thumb.appendChild(media);
-
-  if (stream.topic) {
-    const topic = document.createElement('div');
-    topic.className = 'holodex-stream-thumb-top';
-    const label = document.createElement('span');
-    label.className = 'holodex-stream-topic';
-    label.textContent = stream.topic;
-    topic.appendChild(label);
-    thumb.appendChild(topic);
-  }
-
-  if (onAirNow) {
-    const badge = document.createElement('div');
-    badge.className = 'holodex-stream-thumb-on-air';
-    const mark = document.createElement('span');
-    mark.className = 'holodex-stream-on-air';
-    mark.textContent = '正在转播';
-    badge.appendChild(mark);
-    thumb.appendChild(badge);
-  }
-
-  const duration = createDurationOverlay(stream, isLive);
-  if (duration) {
-    const bottom = document.createElement('div');
-    bottom.className = 'holodex-stream-thumb-bottom';
-    bottom.appendChild(duration);
-    thumb.appendChild(bottom);
-  }
-
-  return thumb;
 }
 
 function createSwitchButton(stream) {
@@ -438,144 +232,23 @@ function createSwitchButton(stream) {
   return button;
 }
 
-function createWatchLink(href) {
-  const watch = document.createElement('a');
-  watch.className = 'holodex-stream-watch';
-  watch.href = href;
-  watch.target = '_blank';
-  watch.rel = 'noopener noreferrer';
-
-  const label = document.createElement('span');
-  label.textContent = '观看';
-  watch.append(createPlayIcon(), label);
-  return watch;
-}
-
-function createScheduleDivider() {
-  const divider = document.createElement('div');
-  divider.className = 'holodex-schedule-divider';
-
-  const label = document.createElement('span');
-  label.className = 'holodex-schedule-divider-label';
-  label.textContent = '预告';
-
-  divider.appendChild(label);
-  return divider;
-}
-
-function createAvatar(stream) {
-  if (!stream.channel_photo) {
-    return null;
-  }
-  const avatar = document.createElement('span');
-  avatar.className = 'holodex-stream-avatar';
-  const image = document.createElement('img');
-  image.src = stream.channel_photo;
-  image.alt = '';
-  image.loading = 'lazy';
-  image.decoding = 'async';
-  avatar.appendChild(image);
-  return avatar;
-}
-
-function createStatusMeta(stream, isLive) {
-  const statusMeta = document.createElement('div');
-  statusMeta.className = 'holodex-stream-meta';
-
-  if (!isLive) {
-    const scheduled = document.createElement('span');
-    scheduled.className = 'holodex-stream-scheduled';
-    if (stream.start_scheduled) scheduled.dataset.start = stream.start_scheduled;
-    scheduled.textContent = stream.start_scheduled
-      ? formatScheduledStart(stream.start_scheduled)
-      : '预告';
-    statusMeta.appendChild(scheduled);
-    return statusMeta;
-  }
-
-  const liveLabel = document.createElement('span');
-  liveLabel.className = 'holodex-stream-live-label';
-  liveLabel.textContent = '直播中';
-  statusMeta.appendChild(liveLabel);
-
-  const viewers = document.createElement('span');
-  viewers.className = 'holodex-stream-viewers';
-  statusMeta.appendChild(viewers);
-  return statusMeta;
-}
-
-function updateViewerCount(card, viewers) {
-  const element = card.querySelector('.holodex-stream-viewers');
-  if (!element) return;
-  const text = Number.isFinite(viewers) && viewers >= 0 ? `• ${viewers.toLocaleString()} 观看` : '';
-  if (element.textContent !== text) element.textContent = text;
-  element.classList.toggle('hidden', !text);
-}
-
-function createStreamCard(stream, isLive) {
-  const onAirNow = streamIsOnAir(stream, onAir);
-  const card = document.createElement('div');
-  card.className = onAirNow ? 'holodex-stream-card is-on-air' : 'holodex-stream-card';
-  card.append(createThumb(stream, isLive, onAirNow));
-
-  const body = document.createElement('div');
-  body.className = 'holodex-stream-body';
-
-  const contentRow = document.createElement('div');
-  contentRow.className = 'holodex-stream-content-row';
-
-  const avatar = createAvatar(stream);
-  if (avatar) {
-    contentRow.appendChild(avatar);
-  }
-
-  const lines = document.createElement('div');
-  lines.className = 'holodex-stream-lines';
-
-  const title = document.createElement('h4');
-  title.className = 'holodex-stream-title';
-  title.textContent = stream.title || '-';
-  lines.appendChild(title);
-
-  const channelRow = document.createElement('div');
-  channelRow.className = 'holodex-stream-channel-row';
-  const channel = document.createElement('span');
-  channel.className = 'holodex-stream-channel';
-  channel.textContent = stream.channel_name || '-';
-  channelRow.appendChild(channel);
-  lines.appendChild(channelRow);
-
-  lines.appendChild(createStatusMeta(stream, isLive));
-
-  // The 切换 tooltip already has this, but a greyed button is easy to miss,
-  // and a keyword block without the words reads as arbitrary.
-  if (!streamIsSwitchable(stream)) {
-    const note = document.createElement('p');
-    note.className = 'holodex-stream-note';
-    note.textContent = switchDisabledReason(stream);
-    lines.appendChild(note);
-  }
-
-  if (stream.suggested_area_name) {
-    const area = document.createElement('p');
-    area.className = 'holodex-stream-area-hint';
-    area.textContent = `建议分区: ${stream.suggested_area_name}`;
-    lines.appendChild(area);
-  }
-
-  contentRow.appendChild(lines);
-  body.appendChild(contentRow);
-
-  const actions = document.createElement('div');
-  actions.className = 'holodex-stream-actions';
-  const href = watchUrl(stream);
+function createStreamCard(stream) {
+  const model = toCardModel(stream);
+  const onAirNow = streamIsOnAir(model, onAir);
+  const href = watchUrl(model);
+  const actions = [];
   if (href) {
-    actions.appendChild(createWatchLink(href));
+    actions.push(createWatchLink(href));
   }
-  actions.appendChild(createSwitchButton(stream));
-  body.appendChild(actions);
-
-  card.appendChild(body);
+  actions.push(createSwitchButton(stream));
+  const card = renderCard(model, {
+    actions,
+    onAir: onAirNow,
+    href,
+    thumbnail: model.thumbnail,
+    note: streamIsSwitchable(stream) ? '' : switchDisabledReason(stream),
+    areaHint: model.suggestedAreaName ? `建议分区: ${model.suggestedAreaName}` : '',
+  });
   updateViewerCount(card, stream.live_viewers);
   return card;
 }
@@ -621,16 +294,16 @@ export function renderStreams(streams, { fresh = true } = {}) {
   const nextCards = new Map();
   const occurrences = new Map();
   const desired = [];
-  const appendCard = (stream, isLive) => {
+  const appendCard = (stream) => {
     const baseKey = `${stream.command_platform}:${stream.id}`;
     const occurrence = occurrences.get(baseKey) || 0;
     occurrences.set(baseKey, occurrence + 1);
     const key = `${baseKey}:${occurrence}`;
     const { live_viewers, ...content } = stream;
-    const onAirFlag = streamIsOnAir(stream, onAir) ? '1' : '0';
+    const onAirFlag = streamIsOnAir(toCardModel(stream), onAir) ? '1' : '0';
     const signature = `${renderedGate}:${onAirFlag}:${JSON.stringify(content)}`;
     const previous = renderedCards.get(key);
-    const element = previous?.signature === signature ? previous.element : createStreamCard(stream, isLive);
+    const element = previous?.signature === signature ? previous.element : createStreamCard(stream);
     updateViewerCount(element, live_viewers);
     nextCards.set(key, { signature, element });
     desired.push(element);
@@ -640,20 +313,20 @@ export function renderStreams(streams, { fresh = true } = {}) {
   const upcoming = streams.filter((stream) => !isLiveStream(stream));
   setStreamCounts(live.length, upcoming.length);
   upcoming.sort((a, b) => {
-    const timeA = streamStartMs(a, false) ?? Infinity;
-    const timeB = streamStartMs(b, false) ?? Infinity;
+    const timeA = streamStartMs(toCardModel(a), false) ?? Infinity;
+    const timeB = streamStartMs(toCardModel(b), false) ?? Infinity;
     return timeA - timeB;
   });
 
   for (const stream of live) {
-    appendCard(stream, true);
+    appendCard(stream);
   }
   if (upcoming.length && live.length) {
     scheduleDivider ??= createScheduleDivider();
     desired.push(scheduleDivider);
   }
   for (const stream of upcoming) {
-    appendCard(stream, false);
+    appendCard(stream);
   }
 
   reconcileChildren(container, desired);

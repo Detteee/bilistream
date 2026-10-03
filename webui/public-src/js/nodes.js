@@ -6,6 +6,13 @@
 
 import { createClusterNetwork, updateClusterNetwork } from '../../src/js/cluster-network.js';
 import { formatClusterNodeStatus } from '../../src/js/cluster-health.js';
+import {
+  activeRestream,
+  clusterIsRestreaming,
+  isRestreaming,
+} from '../../src/js/on-air.js';
+
+export { activeRestream, clusterIsRestreaming, isRestreaming };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -17,37 +24,6 @@ const STREAM_PLATFORMS = {
   twitch: { symbol: '#i-twitch', label: 'Twitch' },
   niconico: { symbol: '#i-niconico', label: 'Niconico' },
 };
-
-function hasPositive(value) {
-  return Number.isFinite(value) && value > 0;
-}
-
-function hasRtmpTx(network) {
-  return !!network && (hasPositive(network.stream_bitrate_kbps) || hasPositive(network.stream_speed));
-}
-
-/// Owner that is actually pushing. An idle active node is 活跃, not 转播中.
-function isRestreaming(node) {
-  return !!node.ffmpeg_running && hasRtmpTx(node.network);
-}
-
-/// Same condition as the 转播中 badge: an active node with ffmpeg on the wire.
-export function clusterIsRestreaming(nodes) {
-  return Array.isArray(nodes) && nodes.some((node) => node.role === 'active' && isRestreaming(node));
-}
-
-/// Who that node is pushing, for the 直播与预告 highlight. Null when idle.
-export function activeRestream(nodes) {
-  if (!Array.isArray(nodes)) return null;
-  const node = nodes.find((item) => item.role === 'active' && isRestreaming(item));
-  const stream = node?.stream;
-  if (!stream) return null;
-  return {
-    platform: stream.platform || '',
-    channel_name: stream.channel_name || '',
-    title: stream.title || '',
-  };
-}
 
 function hasDetail(node) {
   return node.ffmpeg_running === true;

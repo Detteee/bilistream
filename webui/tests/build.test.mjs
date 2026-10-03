@@ -7,7 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { generateAssets, checkOutputs, validatePublicModules } from '../build.mjs';
 
 test('public bundle cannot silently import admin-only or third-party modules', () => {
-  validatePublicModules(['public-src/js/main.js', 'src/js/status-cards.js']);
+  validatePublicModules([
+    'public-src/js/main.js',
+    'src/js/status-cards.js',
+    'src/js/stream-model.js',
+    'src/js/on-air.js',
+    'src/js/stream-card.js',
+  ]);
   for (const name of ['src/js/api.js', 'src/js/settings.js', 'src/js/overview.js', 'src/js/state.js', 'node_modules/example/index.js']) {
     assert.throws(() => validatePublicModules(['public-src/js/main.js', name]), /non-public module/);
   }

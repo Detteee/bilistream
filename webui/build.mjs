@@ -10,6 +10,7 @@ const targets = ['chrome109', 'firefox115', 'safari16.4'];
 const sharedPublicModules = new Set([
   'src/js/dom.js', 'src/js/format.js', 'src/js/dialog.js',
   'src/js/cluster-health.js', 'src/js/cluster-network.js', 'src/js/status-cards.js',
+  'src/js/stream-model.js', 'src/js/on-air.js', 'src/js/stream-card.js',
 ]);
 
 export function validatePublicModules(inputs) {

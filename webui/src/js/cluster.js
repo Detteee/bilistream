@@ -6,6 +6,7 @@ import { getJson, postJsonApi } from './api.js';
 import { eventStreamHealthy } from './events.js';
 import { createClusterNetwork, updateClusterNetwork } from './cluster-network.js';
 import { selfCheckDisplay, clusterNodeUsable, formatClusterNodeStatus, formatClusterHealthReason, ytIndexChip, ytIndexFollowChip, ytIndexPeerLine } from './cluster-health.js';
+import { activeRestream, clusterIsRestreaming } from './on-air.js';
 
 const clusterRefreshInterval = 3000;
 
@@ -425,6 +426,20 @@ function updateClusterNodeMetrics(element, node) {
   updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
 }
 
+function syncHolodexOnAir(cluster) {
+  // A failed poll passes null. Keep the last highlight, matching the public
+  // page (a failed refresh does not clear 正在转播). Disabled or idle cluster
+  // still clears, including an enabled cluster with no pushing node.
+  if (!cluster) return;
+  if (!cluster.enabled) {
+    state.hooks.setOnAir?.(null);
+    return;
+  }
+  const nodes = Array.isArray(cluster.nodes) ? cluster.nodes : [];
+  const restreaming = clusterIsRestreaming(nodes);
+  state.hooks.setOnAir?.(restreaming ? activeRestream(nodes) : null);
+}
+
 function renderClusterStatus(cluster, errorMessage) {
   const indicator = document.getElementById('cluster-status-indicator');
   const nodeList = document.getElementById('cluster-node-list');
@@ -444,6 +459,7 @@ function renderClusterStatus(cluster, errorMessage) {
     syncMonitorTogglesWithClusterRole();
   }
   state.hooks.updatePriorityToggleAvailability?.();
+  syncHolodexOnAir(cluster);
 
   if (!indicator || !nodeList) {
     return;

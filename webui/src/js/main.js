@@ -37,6 +37,7 @@ import {
   refreshNetworkStatus,
   switchToHolodexStream,
   updatePriorityToggleAvailability,
+  setOnAir,
 } from './overview.js';
 
 const VIEW_IDS = ['overview', 'manage', 'settings', 'logs'];
@@ -159,6 +160,7 @@ function boot() {
   state.hooks.reloadServerConfig = reloadServerConfig;
   state.hooks.refreshClusterStatus = refreshClusterStatus;
   state.hooks.updatePriorityToggleAvailability = updatePriorityToggleAvailability;
+  state.hooks.setOnAir = setOnAir;
 
   bindEventStream();
   startLogRefresh();
