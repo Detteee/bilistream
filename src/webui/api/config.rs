@@ -791,7 +791,7 @@ pub async fn update_config(
 
     if holodex_jwt_saved {
         if let Some(jwt) = cfg.holodex_jwt.clone() {
-            ensure_holodex_username(&mut cfg, &jwt).await;
+            crate::plugins::holodex_account::ensure_holodex_username(&mut cfg, &jwt).await;
         }
     }
 

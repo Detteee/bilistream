@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { createMockServer } from './server.mjs';
 import { checkPanelPasswords } from './password-checks.mjs';
 import { checkClusterMembership } from './membership-checks.mjs';
+import { checkStreamActions } from './stream-action-checks.mjs';
 
 const server = createMockServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -62,6 +63,7 @@ try {
     const { data } = await command('browsingContext.captureScreenshot', { context, origin: 'viewport' });
     await writeFile(path, Buffer.from(data, 'base64'));
   };
+  await checkStreamActions({ base, context, command, evaluate, waitFor });
   assert.equal(await evaluate("document.querySelector('.card[data-platform=\"cluster\"]').classList.contains('hidden')"), true);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.dashboard')).gridTemplateColumns.split(' ').length"), 3);
   await capture(join(captureDir, 'screenshot_of_webui.png'));

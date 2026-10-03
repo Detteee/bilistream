@@ -7,6 +7,7 @@
 //! wait (`take_monitor_wake`), as YouTube's go-live does. GQL needs no key and
 //! has no quota, so every node asks for itself.
 
+use super::twitch::channel_id_from_url;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,18 +124,11 @@ fn normalize(login: &str) -> String {
     login.trim().to_ascii_lowercase()
 }
 
-/// The login of a `twitch.tv/<login>` link.
-fn login_from_link(link: &str) -> Option<String> {
-    let (_, rest) = link.trim().split_once("twitch.tv/")?;
-    let login = normalize(rest.split(['/', '?', '#']).next().unwrap_or(""));
-    (!login.is_empty()).then_some(login)
-}
-
 fn row_login(row: &HolodexStream) -> Option<String> {
     if row.stream_type != "placeholder" {
         return None;
     }
-    login_from_link(row.link.as_deref()?)
+    channel_id_from_url(row.link.as_deref()?)
 }
 
 fn wake_monitor(login: &str) {
@@ -282,7 +276,7 @@ fn poll_due(attempt: Option<Instant>, new_login: bool, now: Instant) -> bool {
 /// target while its monitor is on.
 async fn poll_pass(cfg: &Config) {
     let target = target_login(cfg.twitch.enable_monitor, &cfg.twitch.channel_id);
-    let roster = if crate::webui::holodex_list::any_leased() {
+    let roster = if crate::webui::stream_list::any_leased() {
         roster_logins().await
     } else {
         Vec::new()
@@ -338,7 +332,7 @@ async fn poll_pass(cfg: &Config) {
         wake_monitor(&login);
     }
     if changed {
-        crate::webui::holodex_list::wake();
+        crate::webui::stream_list::wake();
     }
 }
 
@@ -712,14 +706,33 @@ mod tests {
     #[test]
     fn links_name_the_login() {
         assert_eq!(
-            login_from_link("https://www.twitch.tv/Urs_Toko?x=1").as_deref(),
+            channel_id_from_url("https://www.twitch.tv/Urs_Toko?x=1").as_deref(),
             Some("urs_toko")
         );
         assert_eq!(
-            login_from_link("https://twitch.tv/urs_toko/videos").as_deref(),
+            channel_id_from_url("https://twitch.tv/urs_toko/videos").as_deref(),
             Some("urs_toko")
         );
-        assert_eq!(login_from_link("https://youtube.com/watch?v=x"), None);
-        assert_eq!(login_from_link("https://twitch.tv/"), None);
+        assert_eq!(channel_id_from_url("https://youtube.com/watch?v=x"), None);
+        assert_eq!(channel_id_from_url("https://twitch.tv/"), None);
+    }
+    #[test]
+    fn overlay_uses_canonical_hosts_and_retains_the_original_link() {
+        let link = " HTTPS://WWW.TWITCH.TV/URS_Toko/videos?x=1#live ";
+        let rows = apply(
+            vec![row("existing", "live", Some(link))],
+            &answers(Some(live("updated"))),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "updated");
+        assert_eq!(rows[0].link.as_deref(), Some(link));
+        assert_eq!(
+            row_login(&row(
+                "unrelated",
+                "live",
+                Some("https://example.com/twitch.tv/urs_toko")
+            )),
+            None
+        );
     }
 }

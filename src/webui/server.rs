@@ -47,7 +47,7 @@ pub(crate) async fn serve_prepared(
     let _status_worker = api::start_status_refresh_worker();
     let _discovery_worker = crate::plugins::youtube_discovery::start_discovery_worker();
     let _store_worker = crate::plugins::youtube_index::start_store_refresh_worker();
-    let _list_worker = super::holodex_list::start_holodex_list_worker();
+    let _list_worker = super::stream_list::start_stream_list_worker();
     let _twitch_live_worker = crate::plugins::twitch_live::start_twitch_live_worker();
     let _niconico_session_worker = crate::plugins::niconico_session::start_session_worker();
     let _niconico_live_worker = crate::plugins::niconico_live::start_niconico_live_worker();
@@ -217,10 +217,10 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/update/status", get(api::update_status))
         .route("/update/download", post(api::download_update))
         .route("/deps/status", get(api::get_deps_status))
-        .route("/holodex/streams", get(api::api_get_holodex_streams))
-        .route("/holodex/auth/status", get(api::api_holodex_auth_status))
-        .route("/youtube/keys", get(api::api_youtube_key_status))
-        .route("/holodex/switch", post(api::switch_to_holodex_stream))
+        .route("/holodex/streams", get(api::stream_list::get_stream_list))
+        .route("/holodex/auth/status", get(api::holodex_auth::auth_status))
+        .route("/youtube/keys", get(api::youtube_api_status::get_status))
+        .route("/holodex/switch", post(api::stream_switch::switch_stream))
         .route("/refresh/youtube", get(api::refresh_youtube_status))
         .route("/refresh/twitch", get(api::refresh_twitch_status))
         .route("/refresh/niconico", get(api::refresh_niconico_status))

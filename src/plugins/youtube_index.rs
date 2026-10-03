@@ -486,7 +486,7 @@ pub(crate) async fn refresh_tick(cfg: &Config) {
     };
     with_store(|store| store.monitored = monitored);
     if refresh(&keys, cfg.youtube.proxy.as_deref()).await {
-        crate::webui::holodex_list::wake();
+        crate::webui::stream_list::wake();
     }
 }
 

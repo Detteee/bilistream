@@ -329,7 +329,7 @@ impl Worker {
                     for channel in went_live_channels(previous, &index, &monitored) {
                         crate::plugins::youtube::wake_monitor(&channel);
                     }
-                    crate::webui::holodex_list::wake();
+                    crate::webui::stream_list::wake();
                     self.copy = Some(PeerCopy {
                         owner: owner.clone(),
                         index: Arc::new(index),

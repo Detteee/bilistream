@@ -14,6 +14,25 @@ const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
 /// The Twitch web client's public GQL client ID.
 pub(crate) const GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 
+/// Return the canonical Twitch channel ID (login used by stream probes) from
+/// an absolute Twitch HTTP(S) URL.
+///
+/// Only `twitch.tv` and `www.twitch.tv` are accepted. The first
+/// path segment supplies a nonempty login; later segments, query, and fragment do
+/// not affect identity. Callers retain the original URL for display.
+pub(crate) fn channel_id_from_url(link: &str) -> Option<String> {
+    let url = reqwest::Url::parse(link.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?;
+    if !host.eq_ignore_ascii_case("twitch.tv") && !host.eq_ignore_ascii_case("www.twitch.tv") {
+        return None;
+    }
+    let login = url.path_segments()?.next()?.trim();
+    (!login.is_empty()).then(|| login.to_ascii_lowercase())
+}
+
 pub struct Twitch {
     pub channel_id: String,
     pub client: ClientWithMiddleware,
@@ -257,4 +276,47 @@ pub async fn get_twitch_status(
         Some(title.to_string()),
         stream_id,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::channel_id_from_url;
+
+    #[test]
+    fn absolute_twitch_urls_have_one_canonical_identity() {
+        for url in [
+            "https://twitch.tv/example_channel_001",
+            "https://www.twitch.tv/Example_Channel_001",
+            "HTTP://TWITCH.TV/EXAMPLE_CHANNEL_001",
+            "http://www.twitch.tv/example_channel_001/videos",
+            " https://www.twitch.tv/Example_Channel_001?x=1#live ",
+            "https://twitch.tv/example_channel_001/videos?x=1#live",
+        ] {
+            assert_eq!(
+                channel_id_from_url(url).as_deref(),
+                Some("example_channel_001"),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_hosts_empty_paths_and_non_absolute_urls_have_no_login() {
+        for url in [
+            "",
+            " ",
+            "https://twitch.tv",
+            "https://twitch.tv/",
+            "https://twitch.tv//example",
+            "https://example.com/twitch.tv/example_channel_001",
+            "https://twitch.tv.example.com/example_channel_001",
+            "https://twitch.tv@example.com/example_channel_001",
+            "twitch.tv/example_channel_001",
+            "//twitch.tv/example_channel_001",
+            "ftp://twitch.tv/example_channel_001",
+            "not a URL",
+        ] {
+            assert_eq!(channel_id_from_url(url), None, "{url}");
+        }
+    }
 }

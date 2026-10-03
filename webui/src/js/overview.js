@@ -13,12 +13,19 @@ import {
   formatHlsCacheStatus,
   getQualityDisplayText,
 } from './format.js';
-import { fallbackThumbnailUrl, streamStartMs, toCardModel } from './stream-model.js';
+import { fallbackThumbnailUrl, placeholderKind, streamStartMs, toCardModel } from './stream-model.js';
+import {
+  buildHolodexAddChannelPayload,
+  createHolodexSwitchPayload,
+  hasConfiguredChannel,
+  sameChannelCandidate,
+  toAdminChannelCandidate,
+  toAdminStreamAction,
+} from './admin-stream-actions.js';
 import { streamIsOnAir } from './on-air.js';
 import {
   createScheduleDivider,
   createWatchLink,
-  placeholderKind,
   renderCard,
   startDurationTicker,
   stopDurationTicker,
@@ -562,17 +569,17 @@ function renderHolodexCards(container, live, scheduled) {
   const occurrences = new Map();
   const elements = [];
   const append = (stream) => {
-    const baseKey = `${stream.id || ''}:${stream.external_link || ''}`;
+    const baseKey = `${stream.id}:${stream.link}`;
     const occurrence = occurrences.get(baseKey) || 0;
     occurrences.set(baseKey, occurrence + 1);
     const key = `${baseKey}:${occurrence}`;
-    const { live_viewers, ...content } = stream;
+    const { liveViewers, ...content } = stream;
     const configured = holodexCurrentSource === 'favorites' && holodexStreamHasConfiguredChannel(stream);
-    const onAirFlag = streamIsOnAir(toCardModel(stream), holodexOnAir) ? '1' : '0';
+    const onAirFlag = streamIsOnAir(stream, holodexOnAir) ? '1' : '0';
     const signature = JSON.stringify([content, holodexCurrentSource, configured, onAirFlag]);
     const previous = renderedHolodexCards.get(key);
     const element = previous?.signature === signature ? previous.element : createStreamCard(stream);
-    updateViewerCount(element, live_viewers);
+    updateViewerCount(element, liveViewers);
     next.set(key, { signature, element });
     elements.push(element);
   };
@@ -620,7 +627,7 @@ async function refreshHolodexStreams({ force = false } = {}) {
       return;
     }
 
-    const streams = data.data || [];
+    const streams = (data.data || []).map(toCardModel);
     const isFavorites = data.source === 'favorites';
     holodexCurrentSource = data.source || (isFavorites ? 'favorites' : 'channels');
 
@@ -656,8 +663,8 @@ async function refreshHolodexStreams({ force = false } = {}) {
 
     // Sort scheduled streams by time - nearest first
     scheduledStreams.sort((a, b) => {
-      const timeA = streamStartMs(toCardModel(a), false) ?? Infinity;
-      const timeB = streamStartMs(toCardModel(b), false) ?? Infinity;
+      const timeA = streamStartMs(a, false) ?? Infinity;
+      const timeB = streamStartMs(b, false) ?? Infinity;
       return timeA - timeB;
     });
 
@@ -698,12 +705,12 @@ function getHolodexChannelUrl(channelId) {
   if (!channelId) return '';
   return `https://holodex.net/channel/${encodeURIComponent(channelId)}`;
 }
-function getHolodexChannelPhotoUrl(stream) {
-  if (stream.channel_photo) {
-    return stream.channel_photo;
+function getHolodexChannelPhotoUrl(model) {
+  if (model.channelPhoto) {
+    return model.channelPhoto;
   }
-  if (!stream.channel_id) return '';
-  return `https://holodex.net/statics/channelImg/${encodeURIComponent(stream.channel_id)}/50.png`;
+  if (!model.channelId) return '';
+  return `https://holodex.net/statics/channelImg/${encodeURIComponent(model.channelId)}/50.png`;
 }
 async function refreshHolodexChannelsData() {
   const result = await managementRequest('/api/manage/channels');
@@ -713,22 +720,8 @@ async function refreshHolodexChannelsData() {
   state.channelsData = result.data;
   return state.channelsData;
 }
-function normalizeHolodexChannelValue(value) {
-  return String(value || '').trim().toLowerCase();
-}
-function holodexStreamHasConfiguredChannel(stream) {
-  if (!state.channelsData || !Array.isArray(state.channelsData.channels)) return false;
-
-  const streamName = normalizeHolodexChannelValue(stream.channel_name);
-  const youtubeId = normalizeHolodexChannelValue(stream.channel_id);
-  const twitchId = normalizeHolodexChannelValue(parseTwitchLoginFromLink(stream.external_link));
-
-  return state.channelsData.channels.some(channel => {
-    const platforms = channel.platforms || {};
-    return (streamName && normalizeHolodexChannelValue(channel.name) === streamName)
-      || (youtubeId && normalizeHolodexChannelValue(platforms.youtube) === youtubeId)
-      || (twitchId && normalizeHolodexChannelValue(platforms.twitch) === twitchId);
-  });
+function holodexStreamHasConfiguredChannel(model) {
+  return hasConfiguredChannel(toAdminChannelCandidate(model), state.channelsData?.channels);
 }
 function createHolodexChannelAddIcon(pathData, title) {
   const button = document.createElement('button');
@@ -738,20 +731,20 @@ function createHolodexChannelAddIcon(pathData, title) {
   button.appendChild(createSvgIcon('0 0 24 24', pathData));
   return button;
 }
-function createHolodexAddChannelControls(stream) {
-  if (holodexCurrentSource !== 'favorites' || !stream.channel_name || holodexStreamHasConfiguredChannel(stream)) {
+function createHolodexAddChannelControls(model) {
+  const candidate = toAdminChannelCandidate(model);
+  if (holodexCurrentSource !== 'favorites' || !candidate.name
+    || hasConfiguredChannel(candidate, state.channelsData?.channels)) {
     return null;
   }
 
-  const youtubeId = stream.channel_id || '';
-  const twitchId = parseTwitchLoginFromLink(stream.external_link);
-  if (!youtubeId && !twitchId) return null;
+  if (!candidate.youtubeId && !candidate.twitchId) return null;
 
   const control = document.createElement('span');
   control.className = 'holodex-channel-add';
-  control.dataset.channelName = stream.channel_name;
-  control.dataset.youtubeId = youtubeId;
-  control.dataset.twitchId = twitchId;
+  control.dataset.channelName = candidate.name;
+  control.dataset.youtubeId = candidate.youtubeId;
+  control.dataset.twitchId = candidate.twitchId;
 
   const startButton = document.createElement('button');
   startButton.type = 'button';
@@ -808,42 +801,12 @@ function readHolodexStreamActionData(button) {
     externalLink: button.dataset.externalLink || ''
   };
 }
-function parseTwitchLoginFromLink(link) {
-  if (!link) return '';
-  const prefixes = [
-    'https://www.twitch.tv/',
-    'https://twitch.tv/',
-    'http://www.twitch.tv/',
-    'http://twitch.tv/'
-  ];
-  for (const prefix of prefixes) {
-    if (link.startsWith(prefix)) {
-      const rest = link.slice(prefix.length).split(/[/?#]/)[0].trim();
-      if (rest) return rest;
-    }
-  }
-  return '';
-}
-function createStreamCard(stream) {
-  const model = toCardModel(stream);
+function createStreamCard(model) {
   const onAirNow = streamIsOnAir(model, holodexOnAir);
   const kind = model.isPlaceholder ? placeholderKind(model) : '';
-  const platform = model.isPlaceholder
-    ? (kind === 'twitch' ? 'twitch' : kind === 'niconico' ? 'niconico' : 'external')
-    : 'youtube';
-  const twitchChannelId = model.isPlaceholder ? parseTwitchLoginFromLink(model.link) : '';
   const href = watchUrl(model) || (model.id ? `https://www.youtube.com/watch?v=${model.id}` : '');
   const channelHref = getHolodexChannelUrl(model.channelId);
-  const streamActionData = {
-    platform,
-    channelId: stream.channel_id || '',
-    twitchId: twitchChannelId,
-    externalLink: stream.external_link || '',
-    suggestedAreaId: stream.suggested_area_id || '',
-    title: stream.title || '',
-    topicId: stream.topic_id || '',
-    status: stream.status || ''
-  };
+  const streamActionData = toAdminStreamAction(model);
 
   const secondary = document.createElement('div');
   secondary.className = 'holodex-stream-secondary';
@@ -878,13 +841,13 @@ function createStreamCard(stream) {
     thumbnail: model.thumbnail || fallbackThumbnailUrl(model),
     channelHref,
     avatarHref: model.channelId ? channelHref : '',
-    avatarPhoto: model.channelId ? getHolodexChannelPhotoUrl(stream) : '',
-    areaHint: stream.suggested_area_id && model.suggestedAreaName
+    avatarPhoto: model.channelId ? getHolodexChannelPhotoUrl(model) : '',
+    areaHint: model.suggestedAreaId && model.suggestedAreaName
       ? `🎯 建议分区: ${model.suggestedAreaName}`
       : '',
-    channelExtra: createHolodexAddChannelControls(stream),
+    channelExtra: createHolodexAddChannelControls(model),
   });
-  updateViewerCount(card, stream.live_viewers);
+  updateViewerCount(card, model.liveViewers);
   return card;
 }
 // Store pending switch data
@@ -1054,30 +1017,17 @@ async function confirmAreaSelection() {
   closeAreaModal();
   await performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink);
 }
-function createHolodexSwitchPayload(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
-  return {
-    channel_id: channelId,
-    area_id: areaId,
-    title: title || null,
-    topic_id: topicId || null,
-    status: status || null,
-    platform: platform || 'youtube',
-    twitch_channel_id: twitchChannelId || null,
-    external_link: externalLink || null
-  };
-}
 async function performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
   try {
-    const payload = createHolodexSwitchPayload(
+    const payload = createHolodexSwitchPayload({
       channelId,
-      areaId,
       title,
       topicId,
       status,
       platform,
-      twitchChannelId,
+      twitchId: twitchChannelId,
       externalLink
-    );
+    }, areaId);
     const result = await postJsonApi('/api/holodex/switch', payload);
     if (result.success) {
       showNotification(result.message || '频道切换成功', 'success');
@@ -1645,29 +1595,16 @@ function readHolodexAddChannelData(control) {
     twitchId: control.dataset.twitchId || ''
   };
 }
-function buildHolodexAddChannelPayload(channelData) {
-  const platforms = {};
-  if (channelData.youtubeId) platforms.youtube = channelData.youtubeId;
-  if (channelData.twitchId) platforms.twitch = channelData.twitchId;
-
-  return {
-    name: channelData.name,
-    aliases: [],
-    platforms,
-    riot_puuid: null
-  };
-}
 function addHolodexChannelToCache(payload) {
   if (!state.channelsData || !Array.isArray(state.channelsData.channels)) {
     state.channelsData = { channels: [] };
   }
 
-  const exists = state.channelsData.channels.some(channel => {
-    const platforms = channel.platforms || {};
-    return normalizeHolodexChannelValue(channel.name) === normalizeHolodexChannelValue(payload.name)
-      || (payload.platforms.youtube && normalizeHolodexChannelValue(platforms.youtube) === normalizeHolodexChannelValue(payload.platforms.youtube))
-      || (payload.platforms.twitch && normalizeHolodexChannelValue(platforms.twitch) === normalizeHolodexChannelValue(payload.platforms.twitch));
-  });
+  const exists = hasConfiguredChannel({
+    name: payload.name,
+    youtubeId: payload.platforms.youtube,
+    twitchId: payload.platforms.twitch,
+  }, state.channelsData.channels);
 
   if (!exists) {
     state.channelsData.channels.push(payload);
@@ -1683,11 +1620,7 @@ function createHolodexChannelAddedIndicator() {
 function markHolodexChannelAdded(channelData) {
   document.querySelectorAll('.holodex-channel-add').forEach(control => {
     const data = readHolodexAddChannelData(control);
-    const sameChannel = normalizeHolodexChannelValue(data.name) === normalizeHolodexChannelValue(channelData.name)
-      || (channelData.youtubeId && normalizeHolodexChannelValue(data.youtubeId) === normalizeHolodexChannelValue(channelData.youtubeId))
-      || (channelData.twitchId && normalizeHolodexChannelValue(data.twitchId) === normalizeHolodexChannelValue(channelData.twitchId));
-
-    if (sameChannel) {
+    if (sameChannelCandidate(channelData, data)) {
       control.classList.add('holodex-channel-add-added');
       control.replaceChildren(createHolodexChannelAddedIndicator());
     }
@@ -3234,13 +3167,11 @@ export {
   getHolodexChannelUrl,
   getHolodexChannelPhotoUrl,
   refreshHolodexChannelsData,
-  normalizeHolodexChannelValue,
   holodexStreamHasConfiguredChannel,
   createHolodexChannelAddIcon,
   createHolodexAddChannelControls,
   createHolodexStreamActionButton,
   readHolodexStreamActionData,
-  parseTwitchLoginFromLink,
   createStreamCard,
   switchToHolodexStream,
   showAreaModal,
@@ -3251,7 +3182,6 @@ export {
   closeFaceAuthModal,
   retryStartStream,
   confirmAreaSelection,
-  createHolodexSwitchPayload,
   performSwitch,
   cropAndSwitchToHolodexStream,
   testHolodexApiKey,
@@ -3281,7 +3211,6 @@ export {
   cancelTwHlsCacheEdit,
   saveTwHlsCacheEdit,
   readHolodexAddChannelData,
-  buildHolodexAddChannelPayload,
   addHolodexChannelToCache,
   createHolodexChannelAddedIndicator,
   markHolodexChannelAdded,

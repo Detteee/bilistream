@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placeholderKind, updateViewerCount, watchUrl } from '../src/js/stream-card.js';
-import { toCardModel } from '../src/js/stream-model.js';
+import { updateViewerCount, watchUrl } from '../src/js/stream-card.js';
+import { placeholderKind, toCardModel } from '../src/js/stream-model.js';
 
 test('placeholderKind is Niconico first, then Twitch, else radio', () => {
   assert.equal(placeholderKind(toCardModel({

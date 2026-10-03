@@ -1,10 +1,11 @@
 // stream-model.js — the one card-shaped model both 直播与预告 pages render.
 //
-// The admin /api/holodex/streams rows and the public /api/public/streams rows
-// use different field vocabulary for the same facts (external_link vs link,
-// stream_type vs is_placeholder, topic_id vs topic). Normalizing here puts that
-// mapping in a single place, so the shared card renderer and the on-air matcher
-// never branch on which payload produced a row.
+// Admin and public list rows both use link, topic, and is_placeholder.
+// external_link, stream_type === 'placeholder', and topic_id below are a
+// compatibility fallback for a stale admin response, not the live admin
+// contract. Normalizing here puts that mapping in a single place, so the
+// shared card renderer and the on-air matcher never branch on which payload
+// produced a row.
 
 import { timestampMs } from './format.js';
 
@@ -14,12 +15,13 @@ import { timestampMs } from './format.js';
 export function toCardModel(row) {
   const link = row.link || row.external_link || '';
   const isPlaceholder = row.is_placeholder === true || row.stream_type === 'placeholder';
-  const status = String(row.status ?? '').toLowerCase();
+  const status = String(row.status ?? '');
   return {
     id: row.id ?? '',
     title: row.title ?? '',
     topic: row.topic ?? row.topic_id ?? '',
-    isLive: status === 'live',
+    status,
+    isLive: status.toLowerCase() === 'live',
     isPlaceholder,
     placeholderType: row.placeholder_type ?? '',
     link,
@@ -32,6 +34,7 @@ export function toCardModel(row) {
     availableAt: row.available_at ?? '',
     publishedAt: row.published_at ?? '',
     liveViewers: row.live_viewers ?? null,
+    suggestedAreaId: row.suggested_area_id ?? null,
     suggestedAreaName: row.suggested_area_name ?? '',
     command: row.command_platform
       ? {
@@ -41,6 +44,19 @@ export function toCardModel(row) {
         }
       : null,
   };
+}
+
+/// Placeholder presentation policy: Niconico first, then Twitch, else radio.
+/// Identity validation for admin commands lives in admin-stream-actions.js.
+export function placeholderKind(model) {
+  const link = String(model.link || '').toLowerCase();
+  if (link.includes('nicovideo.jp')) {
+    return 'niconico';
+  }
+  if (model.placeholderType === 'twitch' || link.includes('twitch.tv')) {
+    return 'twitch';
+  }
+  return 'radio';
 }
 
 /// The stream's start time in ms, in the same source order both pages already
@@ -53,7 +69,7 @@ export function streamStartMs(model, isLive) {
 }
 
 /// The thumbnail to paint when the payload carries none. The public server
-/// already resolves thumbnails (`thumbnail_for` in public/streams.rs), so this
+/// already resolves thumbnails (`thumbnail_for` in public/stream_list/images.rs), so this
 /// is the admin-page fallback: a Twitch placeholder preview from the login, a
 /// YouTube still from the video id, else nothing (never a Niconico lv id).
 export function fallbackThumbnailUrl(model) {

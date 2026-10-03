@@ -426,7 +426,7 @@ pub async fn monitor_status(
                 wake_monitor(&channel_id);
             }
             if changed {
-                crate::webui::holodex_list::wake();
+                crate::webui::stream_list::wake();
             }
             Ok(status_from_listing(&listing))
         }
@@ -448,7 +448,7 @@ pub async fn monitor_status(
 /// roster even when no channel is due.
 async fn poll_pass(cfg: &Config) {
     let target = target_channel(cfg.niconico.enable_monitor, &cfg.niconico.channel_id);
-    let roster = if crate::webui::holodex_list::any_leased() {
+    let roster = if crate::webui::stream_list::any_leased() {
         roster_channels().await
     } else {
         Vec::new()
@@ -468,7 +468,7 @@ async fn poll_pass(cfg: &Config) {
     let (due, adopted) = with_state(|state| state.begin_pass(&ids, &roster, now, now_local));
     if due.is_empty() {
         if adopted {
-            crate::webui::holodex_list::wake();
+            crate::webui::stream_list::wake();
         }
         return;
     }
@@ -513,7 +513,7 @@ async fn poll_pass(cfg: &Config) {
         wake_monitor(&channel_id);
     }
     if adopted || changed {
-        crate::webui::holodex_list::wake();
+        crate::webui::stream_list::wake();
     }
 }
 

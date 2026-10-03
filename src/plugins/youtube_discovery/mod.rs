@@ -637,7 +637,7 @@ impl Worker {
             *DISCOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *self = Worker::default();
-            crate::webui::holodex_list::wake();
+            crate::webui::stream_list::wake();
             return Ok(());
         }
         let roster = roster_channel_ids(&cfg).await;
@@ -1052,7 +1052,7 @@ impl Worker {
             }
         }
         drop(guard);
-        crate::webui::holodex_list::wake();
+        crate::webui::stream_list::wake();
         Ok(())
     }
 }

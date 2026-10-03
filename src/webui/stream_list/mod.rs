@@ -9,10 +9,13 @@
 //! publishes `events::HOLODEX`. Holodex is a one-minute backstop. A list is
 //! kept only while someone reads it (a 10-min lease).
 
-use super::api::{filter_holodex_streams, map_holodex_streams_with_area};
-use super::events;
+pub(crate) mod facts;
+mod filters;
 use crate::config::{load_config, Config};
 use crate::plugins::holodex::HolodexStream;
+use crate::webui::events;
+use facts::{list_content, StreamListFacts};
+pub(crate) use filters::filter_streams;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -48,7 +51,7 @@ impl ListKind {
 }
 
 /// What a list serves: corrected, filtered rows, before any consumer's mapping.
-pub(crate) struct ListSnapshot {
+pub(crate) struct StreamListSnapshot {
     pub(crate) rows: Vec<HolodexStream>,
     /// When Holodex last answered for this list; `None` before any success.
     pub(crate) holodex_ok_at: Option<Instant>,
@@ -72,8 +75,8 @@ struct ListState {
     /// The last failed fetch's message, served while there are no rows.
     last_error: Option<String>,
     built_at: Option<Instant>,
-    /// The panel mapping last announced over SSE.
-    published: Option<serde_json::Value>,
+    /// The display facts last announced over SSE.
+    published: Option<Vec<StreamListFacts>>,
     /// Warn once per failure streak, then debug.
     failing: bool,
 }
@@ -82,7 +85,7 @@ struct List {
     /// One build at a time.
     state: tokio::sync::Mutex<ListState>,
     /// Readable while a build runs.
-    snapshot: std::sync::RwLock<Option<Arc<ListSnapshot>>>,
+    snapshot: std::sync::RwLock<Option<Arc<StreamListSnapshot>>>,
     leased_until: std::sync::Mutex<Option<Instant>>,
 }
 
@@ -95,14 +98,14 @@ impl List {
         }
     }
 
-    fn snapshot(&self) -> Option<Arc<ListSnapshot>> {
+    fn snapshot(&self) -> Option<Arc<StreamListSnapshot>> {
         self.snapshot
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    fn set_snapshot(&self, snapshot: Option<Arc<ListSnapshot>>) {
+    fn set_snapshot(&self, snapshot: Option<Arc<StreamListSnapshot>>) {
         *self.snapshot.write().unwrap_or_else(|e| e.into_inner()) = snapshot;
     }
 
@@ -164,7 +167,7 @@ fn rebuild_due(woken: bool, holodex_due: bool, built_at: Option<Instant>, now: I
 }
 
 /// Stores `next` and says whether it differs from what was there.
-fn replace_if_changed(slot: &mut Option<serde_json::Value>, next: serde_json::Value) -> bool {
+fn replace_if_changed(slot: &mut Option<Vec<StreamListFacts>>, next: Vec<StreamListFacts>) -> bool {
     if slot.as_ref() == Some(&next) {
         return false;
     }
@@ -299,7 +302,7 @@ async fn holodex_rows(
 
 async fn fetch_favorites(cfg: &mut Config) -> Result<HolodexRows, String> {
     let key = holodex_key(cfg).unwrap_or_default();
-    let (jwt, _) = super::api::apply_holodex_jwt_sync(cfg)
+    let (jwt, _) = crate::plugins::holodex_account::apply_holodex_jwt_sync(cfg)
         .await
         .map_err(|e| format!("Failed to refresh Holodex JWT: {e}"))?;
     let (favorites, rows) = crate::plugins::holodex::get_holodex_favorites_live(&key, &jwt)
@@ -310,7 +313,7 @@ async fn fetch_favorites(cfg: &mut Config) -> Result<HolodexRows, String> {
 
 /// Rebuilds the list and publishes `events::HOLODEX` when the panel's content
 /// changed.
-async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String> {
+async fn build(kind: ListKind, force: bool) -> Result<Arc<StreamListSnapshot>, String> {
     let list = list(kind);
     let mut state = list.state.lock().await;
     let mut cfg = load_config()
@@ -328,18 +331,15 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
     let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
     let rows = crate::plugins::twitch_live::overlay(rows);
     let rows = crate::plugins::niconico_live::overlay(rows);
-    let rows = filter_holodex_streams(rows, allowed);
+    let rows = filter_streams(rows, allowed);
 
-    // Discovered rows come in hash order; compare by ID so order alone is no change.
-    let mut panel = map_holodex_streams_with_area(rows.clone());
-    panel.sort_by(|a, b| a.id.cmp(&b.id));
-    let panel = serde_json::to_value(panel).unwrap_or_default();
+    let panel = list_content(&rows);
     if replace_if_changed(&mut state.published, panel) {
         events::publish(events::HOLODEX);
     }
     state.built_at = Some(Instant::now());
     let usable_yt = crate::plugins::youtube_data::youtube_answers_available(&cfg);
-    let snapshot = Arc::new(ListSnapshot {
+    let snapshot = Arc::new(StreamListSnapshot {
         rows,
         holodex_ok_at: state.holodex_ok_at,
         holodex_every: holodex_every(usable_yt),
@@ -350,7 +350,10 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String>
 
 /// Extends the list's lease and returns its rows. `force` fetches Holodex now
 /// (at most once per `FORCE_GAP`); an idle or empty list is built first.
-pub(crate) async fn current(kind: ListKind, force: bool) -> Result<Arc<ListSnapshot>, String> {
+pub(crate) async fn current(
+    kind: ListKind,
+    force: bool,
+) -> Result<Arc<StreamListSnapshot>, String> {
     let list = list(kind);
     let was_leased = list.extend_lease(Instant::now());
     if !was_leased {
@@ -420,20 +423,20 @@ async fn worker_pass(woken: bool) {
 
 static LIST_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 
-pub struct HolodexListWorker(tokio::task::JoinHandle<()>);
+pub struct StreamListWorker(tokio::task::JoinHandle<()>);
 
-impl Drop for HolodexListWorker {
+impl Drop for StreamListWorker {
     fn drop(&mut self) {
         self.0.abort();
         LIST_WORKER_STARTED.store(false, Ordering::SeqCst);
     }
 }
 
-pub fn start_holodex_list_worker() -> Option<HolodexListWorker> {
+pub fn start_stream_list_worker() -> Option<StreamListWorker> {
     if LIST_WORKER_STARTED.swap(true, Ordering::SeqCst) {
         return None;
     }
-    Some(HolodexListWorker(tokio::spawn(async {
+    Some(StreamListWorker(tokio::spawn(async {
         loop {
             let woken = tokio::select! {
                 _ = WAKE.notified() => true,
@@ -503,19 +506,26 @@ mod tests {
 
     #[test]
     fn an_unchanged_rebuild_publishes_nothing() {
+        let row: HolodexStream = serde_json::from_value(serde_json::json!({
+            "id": "a", "title": "Example", "type": "stream", "status": "live",
+            "channel": { "id": "UCexample", "name": "Example" }
+        }))
+        .unwrap();
         let mut slot = None;
-        assert!(replace_if_changed(
-            &mut slot,
-            serde_json::json!([{"id": "a"}])
-        ));
-        assert!(!replace_if_changed(
-            &mut slot,
-            serde_json::json!([{"id": "a"}])
-        ));
-        assert!(replace_if_changed(
-            &mut slot,
-            serde_json::json!([{"id": "b"}])
-        ));
+        let original = list_content(std::slice::from_ref(&row));
+        assert!(replace_if_changed(&mut slot, original.clone()));
+        assert!(!replace_if_changed(&mut slot, original.clone()));
+        let mut changed = original.clone();
+        changed[0].live_viewers = Some(42);
+        assert!(replace_if_changed(&mut slot, changed));
+        assert!(replace_if_changed(&mut slot, original.clone()));
+        let mut changed = original.clone();
+        changed[0].suggested_area_id = Some(123);
+        assert!(replace_if_changed(&mut slot, changed));
+        assert!(replace_if_changed(&mut slot, original.clone()));
+        let mut changed = original;
+        changed[0].suggested_area_name = Some("Example area".to_string());
+        assert!(replace_if_changed(&mut slot, changed));
     }
 
     #[test]

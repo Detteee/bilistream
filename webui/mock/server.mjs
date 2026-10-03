@@ -6,6 +6,38 @@ import { resolve, extname, sep } from 'node:path';
 
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const ok = data => ({ success: true, data });
+
+// Both wire vocabularies represent identical synthetic streams. Keep expected
+// action bodies in the browser checks independent of this fixture builder.
+function streamActionFixtures(legacy) {
+  const rows = [
+    { id: 'action-twitch', link: 'https://www.twitch.tv/example_channel_101?view=live#now', topic: 'Example topic 101', is_placeholder: true },
+    { id: 'action-area', link: 'https://twitch.tv/example_channel_102/videos', topic: 'Example topic 102', is_placeholder: true, suggested_area_id: null },
+    { id: 'action-crop', link: 'http://twitch.tv/example_channel_103?crop=1', topic: 'Example topic 103', is_placeholder: true },
+    { id: 'action-nico', link: 'https://live.nicovideo.jp/watch/lv100000104', topic: 'Example topic 104', is_placeholder: true },
+    { id: 'action-youtube', link: null, topic: null, is_placeholder: false },
+    { id: 'action-shared', link: 'https://twitch.tv/example_channel_106', topic: 'Example topic 106', is_placeholder: true },
+    { id: 'action-shared', link: 'https://twitch.tv/example_channel_107', topic: 'Example topic 107', is_placeholder: true },
+    { id: 'action-configured', link: 'https://twitch.tv/example_channel_108', topic: 'Example topic 108', is_placeholder: true },
+  ].map((row, i) => ({
+    channel_id: `UC${String(i + 101).padStart(22, '0')}`,
+    channel_name: `示例频道 ${i + 101}`, title: `示例直播 ${i + 101}`,
+    status: 'live', start_actual: '2026-10-03T00:00:00Z',
+    suggested_area_id: 235, suggested_area_name: '其他单机',
+    thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png', live_viewers: 101,
+    ...row,
+  }));
+  return {
+    rows: rows.map(row => {
+      if (!legacy) return row;
+      const { link, topic, is_placeholder, ...rest } = row;
+      return { ...rest, external_link: link, topic_id: topic, stream_type: is_placeholder ? 'placeholder' : 'stream' };
+    }),
+    // Match by Twitch identity, independently of display name/YouTube ID.
+    channels: [{ name: '示例已配置频道 108', platforms: { twitch: 'EXAMPLE_CHANNEL_108' } }],
+  };
+}
+
 export function createMockServer() {
   let needsSetup = false;
   let panelPassword = null, panelGeneration = 1, remoteListener = false, setupResponseLoss = false;
@@ -34,6 +66,7 @@ export function createMockServer() {
   const channel = (platform, live) => ({ ...config[platform], is_live: live, title: live ? '示例直播 · Live preview' : '-', topic: 'Gaming', game: 'Just Chatting', area_id: 235, area_name: '其他单机', crop_enabled: false, ffmpeg_cache_enabled: platform === 'youtube', ffmpeg_cache_latency_secs: 8 });
   const events = new Set();
   const writes = [];
+  let streamActions = null;
   // Synthetic managed membership. Identities are placeholders, not keys.
   const memberId = n => String(n).padStart(64, '0');
   const fingerprint = id => id.slice(0, 16).match(/.{4}/g).join(':');
@@ -106,6 +139,14 @@ export function createMockServer() {
     const path = new URL(req.url, 'http://localhost').pathname;
     const send = (body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
     try {
+      if (path === '/mock/stream-actions') {
+        const mode = new URL(req.url, 'http://localhost').searchParams.get('mode');
+        if (mode === 'reset') streamActions = null;
+        else if (mode === 'viewers' && streamActions) streamActions.rows.forEach(row => row.live_viewers++);
+        else if (mode === 'current' || mode === 'legacy') streamActions = streamActionFixtures(mode === 'legacy');
+        else return send({ success: false, message: 'Unknown stream-action fixture' }, 400);
+        return send(ok(null));
+      }
       if (path === '/mock/favorites-mode') { favoriteMode = new URL(req.url, 'http://localhost').searchParams.get('mode') || 'ok'; return send(ok(null)); }
       if (path === '/mock/setup-mode') { needsSetup = true; return send(ok(null)); }
       if (path === '/mock/password-mode') {
@@ -161,6 +202,18 @@ export function createMockServer() {
         const recorded = structuredClone(patch);
         if ('target_password' in recorded) recorded.target_password = recorded.target_password ? '<sent>' : '';
         writes.push({ path, patch: recorded });
+        if (streamActions) {
+          if (path === '/api/holodex/switch') return send({ success: true, message: '示例频道已切换' });
+          if (path === '/api/crop/capture/twitch' || path === '/api/crop/capture/youtube') {
+            writes.at(-1).query = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
+            return send({ success: true, message: '/mock-thumbnail.svg' });
+          }
+          if (path === '/api/crop/update') return send({ success: true, message: '示例裁剪已保存' });
+          if (path === '/api/manage/channels') {
+            streamActions.channels.push(structuredClone(patch));
+            return send({ success: true, message: '示例频道已添加' });
+          }
+        }
         if (path === '/api/auth/password') {
           if (panelPassword && patch.current_password !== panelPassword) return send({ success: false, message: '当前密码错误' }, 403);
           if (patch.action === 'clear' && remoteListener) return send({ success: false, message: '远程监听不能清除密码' }, 403);
@@ -315,7 +368,8 @@ export function createMockServer() {
       if (path === '/api/niconico/session') return send(ok({ state: sessionSaved ? 'unchecked' : 'unconfigured', message: sessionSaved ? '尚未检测；检测不会延长会话有效期' : '未配置 user_session' }));
       if (path === '/api/areas/catalog') return send(ok(catalog));
       if (path === '/api/manage/areas') return send(ok({areas:[{id:235,name:'其他单机',aliases:[],title_keywords:[]}]}));
-      if (path === '/api/manage/channels') return send(ok({channels:[]}));
+      if (path === '/api/manage/channels') return send(ok({channels:streamActions?.channels || []}));
+      if (streamActions && /^\/api\/crop\/(youtube|twitch)$/.test(path)) return send(ok({enabled:false}));
       if (path === '/api/config') return send(config);
       if (path === '/api/version') return send(ok({ version: '0.7.0', is_tauri: false }));
       if (path === '/api/update/check') return send(ok({ has_update: false, current_version: '0.7.0', latest_version: '0.7.0' }));
@@ -343,6 +397,7 @@ export function createMockServer() {
       if (path === '/api/areas') return send({ areas: [{ id: 235, name: '其他单机' }, { id: 329, name: '无畏契约' }] });
       if (path === '/api/channels') return send({ channels: [{ name: '示例频道 001', platforms: { youtube: 'UC1111111111111111111111' } }, { name: '示例频道 002', platforms: { twitch: 'demo_games' } }, { name: '示例频道 003', platforms: { youtube: 'UC3333333333333333333333' } }] });
       if (path === '/api/youtube/keys') return send(ok({ configured: true, budget_per_key: 9000, remaining_fraction: .78, resets_at: '2026-09-30T07:00:00Z', keys: [{ fingerprint: 'demo…a', used: 2480, state: 'usable' }, { fingerprint: 'demo…b', used: 1480, state: 'usable' }], playlist: { on: true, interval_secs: 180, rss_enabled: config.youtube_rss_enabled, rss_down: false, stretch: 1, websub_slowed: true }, websub: { verified: 24, pending: 0, failed: 0, healthy: true, listening: 3151, last_push: '2026-09-29T04:00:00Z' } }));
+      if (path === '/api/holodex/streams' && streamActions) return send({ success: true, source: 'favorites', data: streamActions.rows });
       if (path === '/api/holodex/streams') return send({ success: true, source: 'channels', data: [
         { id: 'demoLive', title: '示例直播', channel_name: '示例频道 001', channel_id: 'UC1111111111111111111111', status: 'live', start_actual: new Date(Date.now()-2470000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png', live_viewers: 1280 },
         { id: 'demoNext', title: '示例直播预告', channel_name: '示例频道 003', channel_id: 'UC3333333333333333333333', status: 'upcoming', start_scheduled: new Date(Date.now()+3600000).toISOString(), suggested_area_id: 235, suggested_area_name: '其他单机', thumbnail: '/mock-thumbnail.svg', channel_photo: '/icon-blue.png' },

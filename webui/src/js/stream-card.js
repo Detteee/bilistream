@@ -7,22 +7,7 @@
 
 import { createSvgIcon, createStreamThumbnail } from './dom.js';
 import { formatClock, formatDuration, formatScheduledStart } from './format.js';
-import { streamStartMs } from './stream-model.js';
-
-// Placeholder platform ------------------------------------------------------
-
-/// Niconico first, then Twitch, else radio. Reads the normalized model so the
-/// admin `external_link` rows and the public `link` rows resolve identically.
-export function placeholderKind(model) {
-  const link = String(model.link || '').toLowerCase();
-  if (link.includes('nicovideo.jp')) {
-    return 'niconico';
-  }
-  if (model.placeholderType === 'twitch' || link.includes('twitch.tv')) {
-    return 'twitch';
-  }
-  return 'radio';
-}
+import { placeholderKind, streamStartMs } from './stream-model.js';
 
 // Icons ----------------------------------------------------------------------
 

@@ -18,6 +18,7 @@ test('toCardModel maps admin field vocabulary', () => {
     start_scheduled: '2026-10-03T01:00:00Z',
     start_actual: '2026-10-03T01:05:00Z',
     live_viewers: 12,
+    suggested_area_id: 371,
     suggested_area_name: '聊天',
   });
   assert.equal(model.link, 'https://www.twitch.tv/example_channel_001');
@@ -25,6 +26,8 @@ test('toCardModel maps admin field vocabulary', () => {
   assert.equal(model.placeholderType, 'twitch');
   assert.equal(model.topic, 'singing');
   assert.equal(model.isLive, true);
+  assert.equal(model.status, 'LIVE');
+  assert.equal(model.suggestedAreaId, 371);
   assert.equal(model.channelId, 'UC123');
   assert.equal(model.command, null);
 });
@@ -92,4 +95,56 @@ test('fallbackThumbnailUrl is the admin-only YouTube/Twitch still', () => {
     })),
     '',
   );
+});
+
+test('toCardModel maps current admin names, including a placeholder without stream_type', () => {
+  const model = toCardModel({
+    id: 'vid1',
+    title: '示例直播',
+    topic: 'singing',
+    status: 'LIVE',
+    link: 'https://www.twitch.tv/example_channel_001',
+    is_placeholder: true,
+    placeholder_type: 'twitch',
+    thumbnail: '',
+    channel_name: '示例频道 001',
+    channel_id: 'UC123',
+    channel_photo: '/t/avatar',
+    start_scheduled: '2026-10-03T01:00:00Z',
+    start_actual: '2026-10-03T01:05:00Z',
+    live_viewers: 12,
+    suggested_area_id: 371,
+    suggested_area_name: '聊天',
+  });
+  assert.equal(model.link, 'https://www.twitch.tv/example_channel_001');
+  assert.equal(model.isPlaceholder, true);
+  assert.equal(model.placeholderType, 'twitch');
+  assert.equal(model.topic, 'singing');
+  assert.equal(model.isLive, true);
+  assert.equal(model.status, 'LIVE');
+  assert.equal(model.suggestedAreaId, 371);
+  assert.equal(model.channelId, 'UC123');
+  assert.equal(model.command, null);
+
+  const upcoming = toCardModel({
+    link: 'https://www.youtube.com/watch?v=vid2',
+    topic: 'game',
+    is_placeholder: false,
+    status: 'upcoming',
+  });
+  assert.equal(upcoming.link, 'https://www.youtube.com/watch?v=vid2');
+  assert.equal(upcoming.topic, 'game');
+  assert.equal(upcoming.isPlaceholder, false);
+  assert.equal(upcoming.isLive, false);
+});
+
+test('absent admin action optionals stay empty or null in the model', () => {
+  const model = toCardModel({ title: null, topic: null, link: null, status: null, suggested_area_id: null });
+  assert.equal(model.status, '');
+  assert.equal(model.suggestedAreaId, null);
+  assert.equal(model.channelId, '');
+  assert.equal(model.title, '');
+  assert.equal(model.topic, '');
+  assert.equal(model.link, '');
+  assert.equal(model.isLive, false);
 });

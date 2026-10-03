@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Query},
+    extract::Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use super::state::{
     get_logs, get_status_cache, platform_channel_configured, refresh_status_cache_config_from,
-    update_status_cache, update_status_cache_with, BiliStatus, NetworkStatus, NicoStatus,
-    PriorityChannelStatus, StatusData, TwStatus, YtStatus,
+    update_status_cache_with, BiliStatus, NetworkStatus, NicoStatus, PriorityChannelStatus,
+    StatusData, TwStatus, YtStatus,
 };
 use crate::cluster::{
     apply_cluster_node_mode_locally, apply_monitored_config, cache_active_monitor_state_from_peer,
@@ -40,19 +40,21 @@ mod cluster;
 mod cluster_membership;
 mod config;
 mod crop;
-mod holodex;
+pub(crate) mod holodex_auth;
 mod manage;
 mod setup;
 mod setup_data;
 mod status;
 mod storage;
 mod stream;
+pub(crate) mod stream_list;
+pub(crate) mod stream_switch;
+pub(crate) mod youtube_api_status;
 
 pub use cluster::*;
 pub use cluster_membership::*;
 pub use config::*;
 pub use crop::*;
-pub use holodex::*;
 pub use manage::*;
 pub use setup::*;
 pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};

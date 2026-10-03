@@ -4,6 +4,7 @@ pub mod danmaku;
 pub mod danmaku_client;
 pub mod ffmpeg;
 pub mod holodex;
+pub(crate) mod holodex_account;
 pub mod http;
 pub mod niconico;
 pub mod niconico_live;
