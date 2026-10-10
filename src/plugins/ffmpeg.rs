@@ -3549,6 +3549,8 @@ mod tests {
 
     #[test]
     fn fence_finishes_teardown_and_releases_locks_before_writing_logs() {
+        use tracing::instrument::WithSubscriber;
+
         let supervisor = Arc::new(ProcessSupervisor::default());
         let log_supervisor = Arc::clone(&supervisor);
         let writes = Arc::new(AtomicU64::new(0));
@@ -3573,11 +3575,24 @@ mod tests {
                 std::io::sink()
             })
             .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            run_supervisor_test(async {
+        run_supervisor_test(async {
+            // Another test can reach this callsite without a subscriber first.
+            let earlier = ProcessSupervisor::default();
+            *earlier.lock().await = Some(empty_process(FfmpegSession(58)));
+            earlier
+                .fence()
+                .with_subscriber(tracing::Dispatch::none())
+                .await;
+
+            // Register only after acquiring the shared test lock. Otherwise an
+            // unscoped fence can cache Interest::never while this test waits,
+            // and entering our already-registered subscriber will not rebuild it.
+            async {
                 *supervisor.lock().await = Some(empty_process(FfmpegSession(59)));
                 supervisor.fence().await;
-            });
+            }
+            .with_subscriber(subscriber)
+            .await;
         });
         assert!(writes.load(Ordering::SeqCst) > 0);
         assert!(released.load(Ordering::SeqCst));
