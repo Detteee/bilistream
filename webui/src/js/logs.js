@@ -93,16 +93,24 @@ function renderLogs() {
   reconcileChildren(logOutput, nodes);
 }
 function logLineLevel(line) {
-  if (line.includes('ERROR') || line.includes('❌')) {
+  // Tracing's level is authoritative; titles may contain ERROR or warning emoji.
+  // Accept date+offset, older time-only records and explicit bare-level UI lines.
+  const timestamp = /^(?:\d{4}-\d{2}-\d{2}[ T])?\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+/;
+  const message = line.trimStart().replace(timestamp, '');
+  const level = message.match(/^(ERROR|WARN|INFO|DEBUG|TRACE)\b/);
+  if (level) return level[1].toLowerCase();
+
+  // Older explicit UI-only messages sometimes begin with an emoji instead.
+  if (message.startsWith('❌')) {
     return 'error';
   }
-  if (line.includes('WARN') || line.includes('⚠️')) {
+  if (message.startsWith('⚠')) {
     return 'warn';
   }
-  if (line.includes('INFO') || line.includes('✅') || line.includes('🚀')) {
+  if (message.startsWith('✅') || message.startsWith('🚀')) {
     return 'info';
   }
-  if (line.includes('DEBUG') || line.includes('🔄')) {
+  if (message.startsWith('🔄')) {
     return 'debug';
   }
   return '';

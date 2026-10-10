@@ -1,3 +1,4 @@
+use crate::logging::{exit_status, safe_diagnostic, safe_text};
 use chrono::{DateTime, Local};
 use reqwest_middleware::ClientBuilder;
 use reqwest_middleware::ClientWithMiddleware;
@@ -5,7 +6,9 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde_json::json;
 use std::error::Error;
-use std::process::Command;
+use std::future::Future;
+use std::io;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use super::utils::{command_output_with_timeout, configure_no_window};
@@ -82,7 +85,9 @@ impl Twitch {
         if is_live {
             let cfg = crate::config::load_config().await?;
             let quality = cfg.twitch.quality.clone();
-            let m3u8_url = self.get_streamlink_url(Some(&quality)).await?;
+            let m3u8_url = self
+                .get_streamlink_url(Some(&quality), &cfg.cluster.node_id)
+                .await?;
             Ok((
                 is_live,
                 Some(game_name.unwrap_or_default()),
@@ -95,34 +100,18 @@ impl Twitch {
             Ok((is_live, None, None, None, None, stream_id))
         }
     }
-    async fn get_streamlink_url(&self, quality: Option<&str>) -> Result<String, Box<dyn Error>> {
-        // First try with configured proxy region
-        match self.try_with_proxy(&self.proxy_region, quality).await {
-            Ok(url) => return Ok(url),
-            Err(e) => tracing::warn!("Failed with configured proxy {}: {}", self.proxy_region, e),
-        }
-
-        // Try backup proxy regions in order
-        let backup_regions = ["asl", "as", "na", "sa", "eu", "eu3"];
-        for region in backup_regions {
-            if region == self.proxy_region {
-                continue; // Skip if it's the same as the already tried region
-            }
-            match self.try_with_proxy(region, quality).await {
-                Ok(url) => {
-                    tracing::info!(
-                        "Successfully got stream URL with backup proxy region: {}",
-                        region
-                    );
-                    return Ok(url);
-                }
-                Err(e) => tracing::debug!("Failed with backup proxy region {}: {}", region, e),
-            }
-        }
-
-        // If all proxies fail, return the last error
-        tracing::error!("Failed to get stream URL with all proxy regions");
-        Err("Failed to get stream URL with all proxy regions".into())
+    async fn get_streamlink_url(
+        &self,
+        quality: Option<&str>,
+        node: &str,
+    ) -> Result<String, Box<dyn Error>> {
+        streamlink_regions(
+            node,
+            &self.channel_id,
+            &self.proxy_region,
+            |region| async move { self.try_with_proxy(&region, quality).await },
+        )
+        .await
     }
 
     async fn try_with_proxy(
@@ -152,28 +141,10 @@ impl Twitch {
         ))
         .arg(quality);
 
-        let output = match command_output_with_timeout(cmd, STREAMLINK_TIMEOUT, "streamlink").await
-        {
-            Ok(output) => output,
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    return Err("streamlink 未安装或不在 PATH 中。".into());
-                }
-                return Err(e.into());
-            }
-        };
-
-        if output.status.success() {
-            let url = String::from_utf8(output.stdout)?.trim().to_string();
-            Ok(url)
-        } else {
-            let error = String::from_utf8(output.stderr)?;
-            // Check if the error is a usage message, which indicates missing streamlink-ttvlol plugin
-            if error.contains("usage: streamlink [OPTIONS] <URL> [STREAM]") {
-                return Err("Streamlink plugin (streamlink-ttvlol) 未安装。".into());
-            }
-            Err(error.into())
-        }
+        let output = command_output_with_timeout(cmd, STREAMLINK_TIMEOUT, "streamlink")
+            .await
+            .map_err(streamlink_execution_error)?;
+        streamlink_output(output)
     }
 
     fn get_proxy_url_for_region(&self, region: &str) -> Result<String, &'static str> {
@@ -195,6 +166,151 @@ impl Twitch {
             _ => Err("Invalid proxy region specified"),
         }
     }
+}
+
+/// Own the existing configured-region/backup sequence and its one final result.
+/// The attempt closure is also used by deterministic tests; it does not alter
+/// subprocess admission, timeout, output limits, or successful-empty semantics.
+async fn streamlink_regions<F, Fut>(
+    node: &str,
+    channel: &str,
+    configured: &str,
+    mut attempt: F,
+) -> Result<String, Box<dyn Error>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<String, Box<dyn Error>>>,
+{
+    let identity = format!(
+        "{} TW/{}",
+        safe_text(if node.is_empty() { "local" } else { node }, 64),
+        safe_text(channel, 64)
+    );
+    let backup_regions = ["asl", "as", "na", "sa", "eu", "eu3"];
+    let regions = std::iter::once(configured).chain(
+        backup_regions
+            .into_iter()
+            .filter(|region| *region != configured),
+    );
+    let mut attempted = Vec::new();
+    let mut failures = Vec::new();
+    for region in regions {
+        let label = safe_text(if region.is_empty() { "direct" } else { region }, 32);
+        attempted.push(label.clone());
+        match attempt(region.to_string()).await {
+            Ok(url) => {
+                if url.is_empty() {
+                    tracing::warn!(
+                        "{} streamlink 执行成功但未返回取流地址；region={}；已尝试=[{}]",
+                        identity,
+                        label,
+                        attempted.join(",")
+                    );
+                } else if attempted.len() > 1 {
+                    tracing::info!(
+                        "{} streamlink 取流已恢复；region={}；已尝试=[{}]",
+                        identity,
+                        label,
+                        attempted.join(",")
+                    );
+                }
+                return Ok(url);
+            }
+            Err(error) => {
+                let reason = safe_diagnostic(&error.to_string());
+                if attempted.len() == 1 {
+                    tracing::warn!(
+                        "{} streamlink 取流失败；region={}；{}；尝试备用地区",
+                        identity,
+                        label,
+                        reason
+                    );
+                } else {
+                    tracing::debug!(
+                        "{} streamlink 取流失败；region={}；{}",
+                        identity,
+                        label,
+                        reason
+                    );
+                }
+                failures.push(format!("{}: {}", label, safe_text(&reason, 160)));
+            }
+        }
+    }
+    let summary = format!(
+        "{} streamlink 所有地区取流失败；已尝试=[{}]；{}",
+        identity,
+        attempted.join(","),
+        failures.join("；")
+    );
+    // The monitor can turn a failed get_status into an offline observation, so
+    // this collector owns the terminal record as well as the complete error.
+    tracing::error!("{summary}");
+    Err(summary.into())
+}
+
+fn streamlink_execution_error(error: io::Error) -> Box<dyn Error> {
+    if error.kind() == io::ErrorKind::NotFound {
+        return "streamlink 未安装或不在 PATH 中。（启动失败）".into();
+    }
+    let stage = match error.kind() {
+        io::ErrorKind::TimedOut => "执行超时",
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => "输出读取失败",
+        io::ErrorKind::Interrupted => "执行已中断",
+        _ => "子进程执行失败",
+    };
+    Box::new(io::Error::new(
+        error.kind(),
+        format!(
+            "streamlink {stage}：{}",
+            safe_diagnostic(&error.to_string())
+        ),
+    ))
+}
+
+fn streamlink_output(output: Output) -> Result<String, Box<dyn Error>> {
+    if output.status.success() {
+        // Do not introduce URL validation or fallback on an empty successful
+        // stdout: those would change the existing acquisition contract.
+        return Ok(String::from_utf8(output.stdout)?.trim().to_string());
+    }
+    let status = exit_status(&output.status);
+    let stderr = String::from_utf8(output.stderr).map_err(|error| {
+        format!(
+            "streamlink {status}；stderr UTF-8 解码失败：{}",
+            safe_diagnostic(&error.to_string())
+        )
+    })?;
+    if stderr.contains("usage: streamlink [OPTIONS] <URL> [STREAM]") {
+        return Err(
+            format!("Streamlink plugin (streamlink-ttvlol) 未安装。streamlink {status}").into(),
+        );
+    }
+    let reason = if stderr.trim().is_empty() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lower = stdout.to_ascii_lowercase();
+        let has_diagnostic = [
+            "error",
+            "warning",
+            "failed",
+            "http ",
+            "timeout",
+            "timed out",
+            "unable",
+            "no playable",
+            "broken pipe",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker));
+        if has_diagnostic {
+            format!("stderr 为空；stdout: {}", safe_diagnostic(&stdout))
+        } else {
+            safe_diagnostic("")
+        }
+    } else {
+        safe_diagnostic(&stderr)
+    };
+    Err(format!("streamlink {status}；{reason}").into())
 }
 
 pub async fn get_twitch_status(
@@ -280,7 +396,180 @@ pub async fn get_twitch_status(
 
 #[cfg(test)]
 mod tests {
-    use super::channel_id_from_url;
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::instrument::WithSubscriber;
+
+    fn capture() -> (
+        tracing::Dispatch,
+        crate::logging::test_capture::CapturedLogs,
+    ) {
+        crate::logging::test_capture::subscriber(tracing::Level::DEBUG)
+    }
+
+    fn output(code: u32, stdout: &[u8], stderr: &[u8]) -> Output {
+        #[cfg(unix)]
+        let status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw((code as i32) << 8)
+        };
+        #[cfg(windows)]
+        let status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code)
+        };
+        Output {
+            status,
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[test]
+    fn failed_output_keeps_exit_and_a_nonempty_safe_diagnostic() {
+        for stderr in [b"".as_slice(), b" \r\n\t".as_slice()] {
+            let error = streamlink_output(output(7, b"", stderr))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("exit=7"));
+            assert!(error.contains("未提供诊断文本"));
+        }
+        let stdout = b"[cli][ERROR] Unable to open stream: HTTP 403 https://video.ttvnw.net/hls/SYNTHETIC-STREAM?token=SYNTHETIC-TOKEN";
+        let error = streamlink_output(output(1, stdout, b" "))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("stdout:"));
+        assert!(error.contains("HTTP 403"));
+        assert!(!error.contains("SYNTHETIC"));
+
+        let url_only = b"https://video.ttvnw.net/hls/SYNTHETIC-STREAM?token=SYNTHETIC-TOKEN";
+        let error = streamlink_output(output(2, url_only, b""))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("未提供诊断文本"));
+        assert!(!error.contains("SYNTHETIC"));
+        let error = streamlink_output(output(3, b"", &[0xff]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exit=3"));
+        assert!(error.contains("stderr UTF-8 解码失败"));
+    }
+
+    #[test]
+    fn plugin_classification_and_successful_stdout_behavior_stay_intact() {
+        let error = streamlink_output(output(
+            2,
+            b"",
+            b"usage: streamlink [OPTIONS] <URL> [STREAM]",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Streamlink plugin (streamlink-ttvlol) 未安装"));
+        assert!(error.contains("exit=2"));
+        assert_eq!(
+            streamlink_output(output(0, b" \n", b"warning")).unwrap(),
+            ""
+        );
+        assert_eq!(
+            streamlink_output(output(0, b" https://example.invalid/watch \n", b"")).unwrap(),
+            "https://example.invalid/watch"
+        );
+        assert!(streamlink_output(output(0, &[0xff], b"")).is_err());
+
+        let error = streamlink_execution_error(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "streamlink timed out",
+        ));
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(error.to_string().contains("执行超时"));
+        assert!(
+            streamlink_execution_error(io::Error::from(io::ErrorKind::NotFound))
+                .to_string()
+                .contains("未安装或不在 PATH")
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_regions_emit_one_safe_terminal_summary_in_existing_order() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let attempted = Arc::clone(&calls);
+        let (dispatch, bytes) = capture();
+        let error = streamlink_regions("ca", "example_channel_001", "na", move |region| {
+            attempted.lock().unwrap().push(region);
+            std::future::ready(Err::<String, Box<dyn Error>>(
+                "streamlink exit=1 HTTP 502 Authorization: Bearer SYNTHETIC-TOKEN".into(),
+            ))
+        })
+        .with_subscriber(dispatch)
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["na", "asl", "as", "sa", "eu", "eu3"]
+        );
+        assert!(error.contains("已尝试=[na,asl,as,sa,eu,eu3]"));
+        assert!(!error.contains("SYNTHETIC-TOKEN"));
+        let output = bytes.text();
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.contains(" WARN ["))
+                .count(),
+            1
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.contains(" ERROR ["))
+                .count(),
+            1
+        );
+        assert!(output.contains("ca TW/example_channel_001"));
+        assert!(output.contains("region=na"));
+        assert!(!output.contains("SYNTHETIC-TOKEN"));
+    }
+
+    #[tokio::test]
+    async fn backup_recovery_and_empty_configured_success_do_not_add_attempts() {
+        let (dispatch, bytes) = capture();
+        let mut attempts = Vec::new();
+        let result = streamlink_regions("jp", "example_channel_002", "as", |region| {
+            let first = attempts.is_empty();
+            attempts.push(region);
+            std::future::ready(if first {
+                Err::<String, Box<dyn Error>>("streamlink exit=1".into())
+            } else {
+                Ok("synthetic-url".into())
+            })
+        })
+        .with_subscriber(dispatch)
+        .await
+        .unwrap();
+        assert_eq!(result, "synthetic-url");
+        assert_eq!(attempts, ["as", "asl"]);
+        let output = bytes.text();
+        assert_eq!(output.matches("取流已恢复").count(), 1);
+        assert!(output.contains("已尝试=[as,asl]"));
+        assert!(!output.contains("synthetic-url"));
+
+        let mut attempts = Vec::new();
+        let (dispatch, empty_logs) = capture();
+        let empty = streamlink_regions("jp", "example_channel_002", "", |region| {
+            attempts.push(region);
+            std::future::ready(Ok::<String, Box<dyn Error>>(String::new()))
+        })
+        .with_subscriber(dispatch)
+        .await
+        .unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(attempts, [""]);
+        assert!(empty_logs.text().contains("执行成功但未返回取流地址"));
+        assert!(!empty_logs.text().contains("取流已恢复"));
+    }
 
     #[test]
     fn absolute_twitch_urls_have_one_canonical_identity() {

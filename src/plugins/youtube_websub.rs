@@ -124,27 +124,36 @@ struct Accepted {
     first: bool,
 }
 
-/// The info line for a video's first push: how long after `published` it came,
+/// The info line for a video's first push: the age of its publication timestamp,
 /// and whether RSS or the uploads playlist listed it first (`found`).
 fn push_line(
+    node: &str,
     entry: &FeedEntry,
     now: chrono::DateTime<chrono::Utc>,
     found: Option<(&str, Duration)>,
 ) -> String {
-    let delay = entry
+    let age = entry
         .published
         .as_deref()
         .and_then(|published| chrono::DateTime::parse_from_rfc3339(published).ok())
         .map_or_else(
-            || "?".to_string(),
-            |published| format!("{}s", (now - published.to_utc()).num_seconds()),
+            || "未知".to_string(),
+            |published| crate::logging::human_duration((now - published.to_utc()).num_seconds()),
         );
     let mut line = format!(
-        "WebSub 推送 {} ({})，发布后 {}",
-        entry.video_id, entry.channel_name, delay
+        "{} WebSub 推送 {} channel={} ({})，发布距今 {}",
+        crate::logging::safe_text(node, 64),
+        crate::logging::safe_text(&entry.video_id, 64),
+        crate::logging::safe_text(&entry.channel_id, 64),
+        crate::logging::safe_text(&entry.channel_name, 36),
+        age
     );
     if let Some((source, ago)) = found {
-        line.push_str(&format!("，{} 已于 {}s 前发现", source, ago.as_secs()));
+        line.push_str(&format!(
+            "，{} 已于 {}前发现",
+            crate::logging::safe_text(source, 24),
+            crate::logging::human_elapsed(ago)
+        ));
     }
     line
 }
@@ -179,6 +188,8 @@ struct Hub {
     bucket: Bucket,
     listening: Option<u16>,
     error: Option<String>,
+    /// Safe process identity captured by the worker from its owned config.
+    report_node: Option<String>,
 }
 
 impl Hub {
@@ -195,6 +206,7 @@ impl Hub {
             },
             listening: None,
             error: None,
+            report_node: None,
         }
     }
 
@@ -245,7 +257,11 @@ impl Hub {
             "unsubscribe" => self.unsubs.remove(&channel).then_some(challenge?),
             "denied" => {
                 self.subs.get(&channel)?;
-                tracing::warn!("WebSub 订阅被拒绝: {}", channel);
+                tracing::warn!(
+                    "{} WebSub 订阅被拒绝: {}",
+                    self.report_node.as_deref().unwrap_or("unknown"),
+                    crate::logging::safe_text(&channel, 64)
+                );
                 self.subs.insert(
                     channel,
                     SubState::Failed {
@@ -352,16 +368,29 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
     let signature = headers
         .get("x-hub-signature")
         .and_then(|value| value.to_str().ok());
-    match with_hub(|hub| hub.accept(secret(), signature, &body, Instant::now())) {
+    let (accepted, node) = with_hub(|hub| {
+        (
+            hub.accept(secret(), signature, &body, Instant::now()),
+            hub.report_node
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        )
+    });
+    match accepted {
         Ok(accepted) => {
             if !accepted.is_empty() {
                 let now = chrono::Utc::now();
                 for item in &accepted {
                     if item.first {
                         let found = super::youtube_discovery::found_before(&item.entry.video_id);
-                        tracing::info!("{}", push_line(&item.entry, now, found));
+                        tracing::info!("{}", push_line(&node, &item.entry, now, found));
                     } else {
-                        tracing::debug!("WebSub 更新推送: {}", item.entry.video_id);
+                        tracing::debug!(
+                            "{} WebSub 更新推送: {} channel={}",
+                            node,
+                            crate::logging::safe_text(&item.entry.video_id, 64),
+                            crate::logging::safe_text(&item.entry.channel_id, 64)
+                        );
                     }
                 }
                 PUSH_WAKE.notify_one();
@@ -676,6 +705,12 @@ impl Worker {
         let Ok(cfg) = load_config().await else {
             return;
         };
+        let node = if cfg.cluster.node_id.trim().is_empty() {
+            "local".to_string()
+        } else {
+            crate::logging::safe_text(&cfg.cluster.node_id, 64)
+        };
+        with_hub(|hub| hub.report_node = Some(node.clone()));
         let callback = cfg
             .youtube_websub_callback_url
             .as_deref()
@@ -764,7 +799,8 @@ impl Worker {
         if counts != self.counts {
             self.counts = counts;
             tracing::info!(
-                "WebSub 订阅: 已验证 {} / 等待 {} / 失败 {}",
+                "{} WebSub 订阅: 已验证 {} / 等待 {} / 失败 {}",
+                node,
                 counts.0,
                 counts.1,
                 counts.2
@@ -891,31 +927,56 @@ mod tests {
     }
 
     #[test]
-    fn a_push_line_says_how_late_it_came_and_who_was_first() {
+    fn a_push_line_reports_publication_age_and_prior_discovery() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-28T03:10:00Z")
             .unwrap()
             .to_utc();
         let entry = |published: Option<&str>| FeedEntry {
-            video_id: "LsafXKi4N3I".to_string(),
-            channel_id: CHANNEL.to_string(),
-            channel_name: "花芽なずな".to_string(),
-            title: "APEX".to_string(),
+            video_id: "example0001".to_string(),
+            channel_id: "UC_example_001".to_string(),
+            channel_name: "示例频道001".to_string(),
+            title: "示例直播".to_string(),
             published: published.map(str::to_string),
         };
         assert_eq!(
-            push_line(&entry(Some("2026-09-28T03:08:30+00:00")), now, None),
-            "WebSub 推送 LsafXKi4N3I (花芽なずな)，发布后 90s"
+            push_line("ca", &entry(Some("2026-09-28T03:08:30+00:00")), now, None),
+            "ca WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒"
         );
         assert_eq!(
             push_line(
+                "ca",
                 &entry(Some("2026-09-28T12:08:30+09:00")),
                 now,
                 Some(("playlist", Duration::from_secs(40)))
             ),
-            "WebSub 推送 LsafXKi4N3I (花芽なずな)，发布后 90s，playlist 已于 40s 前发现"
+            "ca WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒，playlist 已于 40秒前发现"
         );
-        assert!(push_line(&entry(None), now, None).ends_with("发布后 ?"));
-        assert!(push_line(&entry(Some("soon")), now, None).ends_with("发布后 ?"));
+        assert!(push_line("ca", &entry(None), now, None).ends_with("发布距今 未知"));
+        assert!(push_line("ca", &entry(Some("soon")), now, None).ends_with("发布距今 未知"));
+        let full_node_id = "n".repeat(64);
+        assert!(push_line(&full_node_id, &entry(None), now, None)
+            .starts_with(&format!("{full_node_id} WebSub")));
+        for (seconds, expected) in [
+            (59, "59秒"),
+            (60, "1分"),
+            (3599, "59分59秒"),
+            (3600, "1小时"),
+            (86399, "23小时59分"),
+            (86400, "1天"),
+            (4_288_560, "49天15小时"),
+            (-90, "-1分30秒"),
+        ] {
+            let published = (now - chrono::Duration::seconds(seconds)).to_rfc3339();
+            assert!(push_line("ca", &entry(Some(&published)), now, None)
+                .ends_with(&format!("发布距今 {expected}")));
+        }
+        assert!(push_line(
+            "ca",
+            &entry(None),
+            now,
+            Some(("rss", Duration::from_secs(3661)))
+        )
+        .ends_with("rss 已于 1小时1分前发现"));
     }
 
     #[test]

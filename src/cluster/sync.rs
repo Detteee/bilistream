@@ -15,6 +15,7 @@ use super::version::{
     monitored_config_from_config, monitored_config_integrity_version_from_payload,
 };
 use crate::config::{load_config, save_config, Config};
+use crate::logging::{safe_diagnostic, safe_text};
 use crate::plugins::{set_config_updated, set_manual_restart, stop_ffmpeg};
 use crate::webui::state::refresh_status_cache_config_from;
 use futures_util::future::join_all;
@@ -388,6 +389,66 @@ pub(crate) struct SourceConfigSnapshot {
     toggle_state_authoritative: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum HandoffStage {
+    #[default]
+    Prepare,
+    StopSource,
+    EnableTarget,
+    ConfirmOwner,
+}
+
+impl HandoffStage {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Prepare => "准备交接",
+            Self::StopSource => "确认源停播",
+            Self::EnableTarget => "启用目标",
+            Self::ConfirmOwner => "确认所选节点",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SourceStopEvidence {
+    #[default]
+    Pending,
+    Confirmed,
+    MembershipProof,
+    Unconfirmed,
+}
+
+impl SourceStopEvidence {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "本轮尚未确认",
+            Self::Confirmed => "已确认",
+            Self::MembershipProof => "已验证成员停机证明",
+            Self::Unconfirmed => "本次未确认，已超过自隔离时限",
+        }
+    }
+}
+
+/// Observations only: never consulted by the handoff's decisions or retries.
+/// The heartbeat owns the callback and its bounded, process-local episode.
+#[derive(Clone, Debug)]
+pub(crate) enum HandoffProgress {
+    Source(String),
+    Stage(HandoffStage),
+    ConfigFallback(String),
+    SourceStopped(SourceStopEvidence),
+    FailedRequest(NodeModeError),
+    FailedStage(NodeModeError),
+}
+
+pub(crate) type HandoffObserver = Arc<dyn Fn(HandoffProgress) + Send + Sync>;
+
+fn observe_handoff(observer: Option<&HandoffObserver>, progress: HandoffProgress) {
+    if let Some(observer) = observer {
+        observer(progress);
+    }
+}
+
 pub async fn finalize_cluster_node_switch(
     cfg: &Config,
     before: &ClusterStatus,
@@ -417,19 +478,41 @@ pub(crate) async fn finalize_cluster_node_switch_with(
     preserve_source_drain: bool,
     automatic: bool,
 ) -> Result<(), String> {
+    finalize_cluster_node_switch_observed(
+        cfg,
+        before,
+        source_node_id,
+        target_node_id,
+        preserve_source_drain,
+        automatic,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn finalize_cluster_node_switch_observed(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    target_node_id: &str,
+    preserve_source_drain: bool,
+    automatic: bool,
+    observer: Option<HandoffObserver>,
+) -> Result<(), String> {
     // Complete the ordered handoff even if the requesting HTTP client disconnects.
     let cfg = cfg.clone();
     let before = before.clone();
     let source = source_node_id.to_string();
     let target = target_node_id.to_string();
     tokio::spawn(async move {
-        finalize_cluster_node_switch_inner(
+        finalize_cluster_node_switch_inner_observed(
             &cfg,
             &before,
             &source,
             &target,
             preserve_source_drain,
             automatic,
+            observer.as_ref(),
         )
         .await
     })
@@ -437,6 +520,7 @@ pub(crate) async fn finalize_cluster_node_switch_with(
     .map_err(|e| format!("集群交接任务失败: {e}"))?
 }
 
+#[cfg(test)]
 pub(crate) async fn finalize_cluster_node_switch_inner(
     cfg: &Config,
     before: &ClusterStatus,
@@ -445,11 +529,36 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
     preserve_source_drain: bool,
     automatic: bool,
 ) -> Result<(), String> {
+    finalize_cluster_node_switch_inner_observed(
+        cfg,
+        before,
+        source_node_id,
+        target_node_id,
+        preserve_source_drain,
+        automatic,
+        None,
+    )
+    .await
+}
+
+async fn finalize_cluster_node_switch_inner_observed(
+    cfg: &Config,
+    before: &ClusterStatus,
+    source_node_id: &str,
+    target_node_id: &str,
+    preserve_source_drain: bool,
+    automatic: bool,
+    observer: Option<&HandoffObserver>,
+) -> Result<(), String> {
     let _switch_guard = cluster_switch_lock().lock().await;
     let pending_source = (target_node_id == cfg.cluster.node_id)
         .then(|| cluster_state_read().pending_handoff_source.clone())
         .flatten();
     let source_node_id = pending_source.as_deref().unwrap_or(source_node_id);
+    observe_handoff(
+        observer,
+        HandoffProgress::Source(source_node_id.to_string()),
+    );
     let source_stopped_by_membership =
         if !super::election::configured_node_ids(cfg).contains(source_node_id) {
             let membership = super::membership::Membership::new(handoff_membership_store()?);
@@ -488,11 +597,21 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
             toggle_state_authoritative: true,
         },
         Err(e) => {
-            tracing::warn!(
-                "Failed to export active source config from {}; using local synced config and cached active state: {}",
-                source_node_id,
-                e
-            );
+            let error = safe_diagnostic(&e);
+            if observer.is_some() {
+                observe_handoff(observer, HandoffProgress::ConfigFallback(error.clone()));
+                tracing::debug!(
+                    "Source config export failed for {}; using local synced config and cached active state: {}",
+                    safe_text(source_node_id, 64),
+                    error
+                );
+            } else {
+                tracing::warn!(
+                    "Failed to export active source config from {}; using local synced config and cached active state: {}",
+                    safe_text(source_node_id, 64),
+                    error
+                );
+            }
             SourceConfigSnapshot {
                 payload: cluster_sync_config_from_config(cfg),
                 toggle_state_authoritative: false,
@@ -518,6 +637,7 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
     // source that cannot be reached once its self-fence has provably run out
     // (`may_take_over_unconfirmed`); anything else leaves the handoff pending.
     if source_node_id != target_node_id && !source_stopped_by_membership {
+        observe_handoff(observer, HandoffProgress::Stage(HandoffStage::StopSource));
         let disabled = apply_node_mode_with_retry_classified(
             cfg,
             source_node_id,
@@ -539,6 +659,7 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
                 handoff_target_node_id: Some(target_node_id.to_string()),
             },
             "disable_previous_active",
+            observer,
         )
         .await;
         if let Err(e) = disabled {
@@ -557,17 +678,34 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
             {
                 return Err(format!("源节点尚未确认停止，取消接管: {e}"));
             }
-            tracing::warn!(
-                "源节点 {} 无法连接且已超过自隔离时限，未经确认接管: {}",
-                source_node_id,
-                e
-            );
+            if observer.is_none() {
+                tracing::warn!(
+                    "源节点 {} 无法连接且已超过自隔离时限，未经确认继续交接: {}",
+                    safe_text(source_node_id, 64),
+                    safe_diagnostic(&e.to_string())
+                );
+            }
             cluster_state_write().unconfirmed_demotion = Some(source_node_id.to_string());
+            observe_handoff(
+                observer,
+                HandoffProgress::SourceStopped(SourceStopEvidence::Unconfirmed),
+            );
+        } else {
+            observe_handoff(
+                observer,
+                HandoffProgress::SourceStopped(SourceStopEvidence::Confirmed),
+            );
         }
+    } else if source_stopped_by_membership {
+        observe_handoff(
+            observer,
+            HandoffProgress::SourceStopped(SourceStopEvidence::MembershipProof),
+        );
     }
 
+    observe_handoff(observer, HandoffProgress::Stage(HandoffStage::EnableTarget));
     ensure_handoff_target_is_eligible(cfg, target_node_id)?;
-    apply_cluster_node_mode_to_node_with_retry(
+    apply_node_mode_with_retry_classified(
         cfg,
         target_node_id,
         ClusterApplyNodeModeRequest {
@@ -581,9 +719,12 @@ pub(crate) async fn finalize_cluster_node_switch_inner(
             handoff_target_node_id: None,
         },
         "enable_new_active",
+        observer,
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
+    observe_handoff(observer, HandoffProgress::Stage(HandoffStage::ConfirmOwner));
     if current_active_owner().as_deref() != Some(target_node_id) {
         let status = force_failover(cfg, Some(target_node_id.to_string()));
         if status.active_owner.as_deref() != Some(target_node_id) {
@@ -785,7 +926,7 @@ pub(crate) fn may_take_over_unconfirmed(
 /// Delivers the all-off demotion owed to a source taken over without its
 /// confirmation, once it answers. One attempt per heartbeat.
 pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
-    let source = {
+    let (source, still_owed) = {
         let mut state = cluster_state_write();
         let Some(source) = state.unconfirmed_demotion.clone() else {
             return;
@@ -794,10 +935,17 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
             && configured_node_ids(cfg).contains(source.as_str());
         if !still_owed {
             state.unconfirmed_demotion = None;
-            return;
         }
-        source
+        (source, still_owed)
     };
+    if !still_owed {
+        tracing::info!(
+            "{} 源节点 {} 停播补确认已取消；本机已非所选节点或源节点已退出成员清单",
+            safe_text(&cfg.cluster.node_id, 64),
+            safe_text(&source, 64)
+        );
+        return;
+    }
     let payload = ClusterApplyNodeModeRequest {
         monitored_config: None,
         active: false,
@@ -810,13 +958,28 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
     };
     match apply_node_mode_classified(cfg, &source, &payload).await {
         Ok(()) => {
-            let mut state = cluster_state_write();
-            if state.unconfirmed_demotion.as_deref() == Some(source.as_str()) {
-                state.unconfirmed_demotion = None;
+            let confirmed = {
+                let mut state = cluster_state_write();
+                if state.unconfirmed_demotion.as_deref() == Some(source.as_str()) {
+                    state.unconfirmed_demotion = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            if confirmed {
+                tracing::info!(
+                    "{} 已确认源节点 {} 停止并关闭监控",
+                    safe_text(&cfg.cluster.node_id, 64),
+                    safe_text(&source, 64)
+                );
             }
-            tracing::info!("已确认源节点 {} 停止并关闭监控", source);
         }
-        Err(e) => tracing::debug!("源节点 {} 仍未确认停止: {}", source, e),
+        Err(e) => tracing::debug!(
+            "源节点 {} 仍未确认停止: {}",
+            safe_text(&source, 64),
+            safe_diagnostic(&e.to_string())
+        ),
     }
 }
 
@@ -827,6 +990,7 @@ async fn apply_node_mode_with_retry_classified(
     node_id: &str,
     payload: ClusterApplyNodeModeRequest,
     phase: &str,
+    observer: Option<&HandoffObserver>,
 ) -> Result<(), NodeModeError> {
     let max_attempts = 3;
     let mut refused: Option<NodeModeError> = None;
@@ -835,14 +999,26 @@ async fn apply_node_mode_with_retry_classified(
         match apply_node_mode_classified(cfg, node_id, &payload).await {
             Ok(()) => return Ok(()),
             Err(e) => {
-                tracing::warn!(
-                    "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
-                    phase,
-                    attempt,
-                    max_attempts,
-                    node_id,
-                    e
-                );
+                if observer.is_some() {
+                    observe_handoff(observer, HandoffProgress::FailedRequest(e.clone()));
+                    tracing::debug!(
+                        "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                        phase,
+                        attempt,
+                        max_attempts,
+                        safe_text(node_id, 64),
+                        safe_diagnostic(&e.to_string())
+                    );
+                } else {
+                    tracing::warn!(
+                        "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                        phase,
+                        attempt,
+                        max_attempts,
+                        safe_text(node_id, 64),
+                        safe_diagnostic(&e.to_string())
+                    );
+                }
                 if matches!(e, NodeModeError::Refused(_)) {
                     refused = Some(e.clone());
                 }
@@ -853,18 +1029,9 @@ async fn apply_node_mode_with_retry_classified(
             }
         }
     }
-    Err(refused.unwrap_or(last_error))
-}
-
-pub(crate) async fn apply_cluster_node_mode_to_node_with_retry(
-    cfg: &Config,
-    node_id: &str,
-    payload: ClusterApplyNodeModeRequest,
-    phase: &str,
-) -> Result<(), String> {
-    apply_node_mode_with_retry_classified(cfg, node_id, payload, phase)
-        .await
-        .map_err(|e| e.to_string())
+    let error = refused.unwrap_or(last_error);
+    observe_handoff(observer, HandoffProgress::FailedStage(error.clone()));
+    Err(error)
 }
 
 /// Why a node-mode request failed: the node did not answer (down, or its
@@ -1151,4 +1318,87 @@ pub(crate) fn should_adopt_auto_failover_from_peer(
     cfg: &Config,
 ) -> bool {
     cfg.cluster.enabled && peer_is_active_owner && peer_auto_failover != cfg.cluster.auto_failover
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    use axum::{http::StatusCode, routing::post, Json, Router};
+
+    #[tokio::test]
+    async fn observed_retries_keep_request_order_and_refusal_precedence() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mode_calls = Arc::clone(&calls);
+        let app = Router::new().route(
+            "/api/cluster/apply-node-mode",
+            post(move |Json(payload): Json<ClusterApplyNodeModeRequest>| {
+                let status = {
+                    let mut calls = mode_calls.lock().unwrap();
+                    calls.push(payload);
+                    [409, 530, 502][calls.len() - 1]
+                };
+                async move { StatusCode::from_u16(status).unwrap() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut cfg = crate::cluster::tests::test_config("ca", 100);
+        cfg.cluster.peers = vec![crate::config::ClusterPeer {
+            node_id: "jp".into(),
+            name: "JP".into(),
+            api_url: format!("http://{address}"),
+            priority: 50,
+        }];
+        let payload = ClusterApplyNodeModeRequest {
+            monitored_config: None,
+            active: false,
+            restart: false,
+            preserve_drain: true,
+            monitor_toggles: Some(all_monitor_toggles_off()),
+            channel_targets: None,
+            expected_active_owner: Some("jp".into()),
+            handoff_target_node_id: Some("ca".into()),
+        };
+        let expected_payload = serde_json::to_value(&payload).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed_events = Arc::clone(&events);
+        let observer: HandoffObserver =
+            Arc::new(move |event| observed_events.lock().unwrap().push(event));
+        let result = apply_node_mode_with_retry_classified(
+            &cfg,
+            "jp",
+            payload,
+            "disable_previous_active",
+            Some(&observer),
+        )
+        .await;
+        server.abort();
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, NodeModeError::Refused(_)));
+        assert!(error.to_string().contains("HTTP 409"));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert!(calls
+            .iter()
+            .all(|payload| serde_json::to_value(payload).unwrap() == expected_payload));
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(matches!(
+            &events[0],
+            HandoffProgress::FailedRequest(NodeModeError::Refused(_))
+        ));
+        assert!(matches!(
+            &events[1],
+            HandoffProgress::FailedRequest(NodeModeError::Unreachable(_))
+        ));
+        assert!(matches!(
+            &events[2],
+            HandoffProgress::FailedRequest(NodeModeError::Unreachable(_))
+        ));
+        assert!(
+            matches!(&events[3], HandoffProgress::FailedStage(NodeModeError::Refused(reason)) if reason.contains("HTTP 409"))
+        );
+    }
 }

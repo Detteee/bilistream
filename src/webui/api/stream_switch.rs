@@ -5,6 +5,7 @@ use super::config::{
 use super::ApiResponse;
 use crate::cluster::{monitored_config_version, sync_monitored_config_after_change};
 use crate::config::load_config;
+use crate::logging::safe_text;
 use crate::plugins::set_config_updated;
 use crate::plugins::twitch::channel_id_from_url;
 use crate::webui::state::{
@@ -112,10 +113,13 @@ fn twitch_channel_id(
 pub async fn switch_stream(
     Json(payload): Json<SwitchStreamRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
-    tracing::info!(
-        "Switching to Holodex channel: {} (area: {:?})",
-        payload.channel_id,
-        payload.area_id
+    tracing::debug!(
+        "收到频道切换请求 channel={} area={}",
+        safe_text(&payload.channel_id, 64),
+        payload
+            .area_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "沿用当前分区".into())
     );
 
     let mut cfg = match load_config().await {
@@ -129,6 +133,14 @@ pub async fn switch_stream(
             });
         }
     };
+    let log_node = safe_text(
+        if cfg.cluster.node_id.is_empty() {
+            "local"
+        } else {
+            &cfg.cluster.node_id
+        },
+        64,
+    );
     let previous_cfg = cfg.clone();
     let old_monitored_config_version = monitored_config_version(&cfg);
 
@@ -246,9 +258,11 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "Successfully switched to Niconico channel: {} ({})",
-            cfg.niconico.channel_name,
-            cfg.niconico.channel_id
+            "{} NC/{} 监听目标配置已更新；channel={} area={}",
+            log_node,
+            safe_text(&cfg.niconico.channel_name, 64),
+            safe_text(&cfg.niconico.channel_id, 64),
+            cfg.niconico.area_v2
         );
 
         if niconico_monitor_reload_needed(&previous_cfg, &cfg) {
@@ -338,9 +352,11 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "Successfully switched to Twitch channel: {} ({})",
-            cfg.twitch.channel_name,
-            cfg.twitch.channel_id
+            "{} TW/{} 监听目标配置已更新；channel={} area={}",
+            log_node,
+            safe_text(&cfg.twitch.channel_name, 64),
+            safe_text(&cfg.twitch.channel_id, 64),
+            cfg.twitch.area_v2
         );
 
         if twitch_monitor_reload_needed(&previous_cfg, &cfg) {
@@ -416,9 +432,11 @@ pub async fn switch_stream(
     }
 
     tracing::info!(
-        "Successfully switched to channel: {} ({})",
-        cfg.youtube.channel_name,
-        cfg.youtube.channel_id
+        "{} YT/{} 监听目标配置已更新；channel={} area={}",
+        log_node,
+        safe_text(&cfg.youtube.channel_name, 64),
+        safe_text(&cfg.youtube.channel_id, 64),
+        cfg.youtube.area_v2
     );
 
     if youtube_monitor_reload_needed(&previous_cfg, &cfg) {

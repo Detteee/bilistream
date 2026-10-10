@@ -2294,10 +2294,9 @@ fn an_isolated_active_node_fences_itself_once_its_quorum_is_stale() {
 fn only_a_down_origin_counts_as_unreachable() {
     use super::peer_call::{classify, PeerCallError};
     let unreachable = |status| {
-        matches!(
-            classify(super::peer_auth::unsigned_error(status)),
-            PeerCallError::Unreachable(_)
-        )
+        let error = super::peer_auth::unsigned_error(status);
+        assert!(error.to_string().contains(&format!("HTTP {status}")));
+        matches!(classify(error), PeerCallError::Unreachable(_))
     };
     for status in [502, 503, 504, 520, 522, 530] {
         assert!(unreachable(status), "{status}");

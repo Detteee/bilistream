@@ -7,6 +7,7 @@ use crate as bilistream;
 
 use bilistream::cluster::{self, ClusterStreamIdentity};
 use bilistream::config::{load_config, save_config, Config};
+use bilistream::logging::{safe_diagnostic, safe_text};
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::Niconico as NiconicoClient;
 use bilistream::plugins::Twitch as TwitchClient;
@@ -22,7 +23,7 @@ use bilistream::plugins::{
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     store_prefetched_playable_stream, streamlink_ingest, take_prefetched_playable_stream,
     timed_room_lock_wait, wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
-    FfmpegCacheOptions, FfmpegSource, PipedIngest, PriorityChannelPlatform,
+    FfmpegCacheOptions, FfmpegSource, FfmpegStreamIdentity, PipedIngest, PriorityChannelPlatform,
     BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
@@ -154,6 +155,37 @@ fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
             target_m3u8_available: true
         } | FfmpegLoopExitReason::ClusterHandoff
     )
+}
+
+fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>) {
+    tracing::info!(
+        "{identity} 源直播可用；标题={}",
+        safe_text(title.unwrap_or("无标题"), 80)
+    );
+}
+
+fn log_ffmpeg_loop_exit(
+    context: &str,
+    reason: FfmpegLoopExitReason,
+    execution_block: Option<&str>,
+) {
+    let execution = execution_block
+        .map(|reason| format!("；当前执行受阻：{}", safe_diagnostic(reason)))
+        .unwrap_or_default();
+    match reason {
+        FfmpegLoopExitReason::SourceEnded => {
+            tracing::info!("{context} 源直播已结束，退出推流循环{execution}");
+        }
+        FfmpegLoopExitReason::BiliStopped => {
+            tracing::info!("{context} B站直播已停止，退出推流循环{execution}");
+        }
+        FfmpegLoopExitReason::IntentionalRestart { .. } => {
+            tracing::info!("{context} 收到重启或切换信号，退出本次推流循环{execution}");
+        }
+        FfmpegLoopExitReason::ClusterHandoff => {
+            tracing::info!("{context} 集群执行权限已撤销，退出本节点推流循环{execution}");
+        }
+    }
 }
 
 impl StreamPlatform {
@@ -1141,6 +1173,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let cfg_title = selected_stream.cfg_title();
             let current_video_id = selected_stream.stream_id.clone();
             let mut title = selected_stream.title.clone();
+            let stream_log = FfmpegStreamIdentity::new(
+                &cfg.cluster.node_id,
+                platform,
+                &channel_name,
+                &channel_id,
+            );
             let cluster_stream = ClusterStreamIdentity {
                 platform: platform.to_string(),
                 channel_name: channel_name.clone(),
@@ -1158,22 +1196,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 changed
             };
-            tracing::info!(
-                "{} 正在 {} 直播, 标题:\n          {}",
-                channel_name,
-                platform,
-                title.clone().unwrap_or_else(|| "无标题".to_string())
-            );
+            log_selected_stream(&stream_log, title.as_deref());
 
             if selected_stream.topic.is_some() && title.is_some() {
                 title = selected_stream.stream_title();
                 selected_stream.title = title.clone();
             }
             if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
-                tracing::info!(
-                    "集群备用节点已监测到 {} 正在直播，等待当前活跃节点推流",
-                    channel_name
-                );
+                tracing::info!("{stream_log} 源直播可用，本节点等待集群执行许可");
                 tokio::time::sleep(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
@@ -1218,9 +1248,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             }
                         }
                         tracing::info!(
-                            "B站已开播，标题为 {}，分区为 {} （ID: {}）",
-                            cfg_title,
-                            area_name,
+                            "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
+                            safe_text(&area_name, 32),
                             area_v2
                         );
                         // Clear banned keyword warning when successfully starting a new stream
@@ -1234,7 +1263,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         let message = error
                             .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
                             .unwrap_or(&error);
-                        tracing::error!("B站开播失败: {}", message);
+                        tracing::error!("{stream_log} B站开播失败；{}", safe_diagnostic(message));
                         // 60031 does not include the end time. A room_init lock with
                         // lock_till waits; only an untimed ban shuts the monitors off.
                         if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
@@ -1252,7 +1281,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 tracing::error!("保存配置失败: {}", save_err);
                             }
                         }
-                        tracing::warn!("⚠️ 将在下次循环重试");
+                        tracing::warn!("{stream_log} 本次开播未完成，下轮监控重试");
                         wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                         continue 'outer;
                     }
@@ -1270,7 +1299,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
                         tracing::error!("B站直播标题变更失败: {}", e);
                     } else {
-                        tracing::info!("B站直播标题变更 （{}->{}）", bili_title, cfg_title);
+                        tracing::info!(
+                            "{stream_log} B站直播标题已更新；{} → {}",
+                            safe_text(&bili_title, 32),
+                            safe_text(&cfg_title, 32)
+                        );
                         // title is 【转播】频道名
                         let bili_channel_name = bili_title.split("【转播】").last().unwrap();
                         if bili_channel_name != channel_name {
@@ -1318,9 +1351,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             );
 
             // Main ffmpeg monitoring loop - blocks until stream ends
+            let mut last_session = None;
             let ffmpeg_loop_exit_reason = loop {
                 if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
-                    tracing::warn!("集群租约已转移，停止本节点推流循环");
                     set_manual_restart();
                     stop_ffmpeg().await;
                     break FfmpegLoopExitReason::ClusterHandoff;
@@ -1369,17 +1402,27 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         enabled: cache.enabled,
                         latency_secs: cache.latency_secs,
                     },
+                    stream_log.clone(),
                 )
                 .await;
+                last_session = session;
 
                 if let (Some(monitor), Some(session)) = (lol_monitor.clone(), session) {
-                    ffmpeg::spawn_session_task(session, monitor.run(session)).await;
+                    ffmpeg::spawn_session_task(
+                        session,
+                        monitor.run(session, stream_log.session_label(Some(session))),
+                    )
+                    .await;
                 }
 
                 if let Some(session) = session {
                     ffmpeg::spawn_session_task(
                         session,
-                        monitor_priority_channel_background(channel_name.clone(), session),
+                        monitor_priority_channel_background(
+                            channel_name.clone(),
+                            session,
+                            stream_log.session_label(Some(session)),
+                        ),
                     )
                     .await;
                 }
@@ -1390,18 +1433,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     None => None,
                 };
 
-                let ffmpeg_exit_failed = if let Some(status) = exit_status {
-                    if status.success() {
-                        tracing::info!("✅ ffmpeg正常退出");
-                        false
-                    } else {
-                        tracing::warn!("⚠️ ffmpeg异常退出: {:?}", status);
-                        true
-                    }
-                } else {
-                    tracing::warn!("⚠️ ffmpeg进程已停止");
-                    true
-                };
+                // The supervisor owns child exit diagnostics. None can also
+                // mean declined startup or an intentional/obsolete session.
+                let ffmpeg_exit_failed = exit_status.is_none_or(|status| !status.success());
 
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1429,12 +1463,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 cluster::record_stream_exit(!count_ffmpeg_exit_failure);
 
                 if !current_is_live {
-                    tracing::info!("直播已结束，停止ffmpeg监控循环");
                     break FfmpegLoopExitReason::SourceEnded;
                 }
 
                 if !bili_is_live {
-                    tracing::info!("直播已结束，停止ffmpeg监控循环");
                     break FfmpegLoopExitReason::BiliStopped;
                 }
 
@@ -1443,13 +1475,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     let exit_reason = FfmpegLoopExitReason::IntentionalRestart {
                         target_m3u8_available: new_m3u8_url.is_some(),
                     };
-                    tracing::info!("🔄 检测到手动重启请求，立即退出ffmpeg监控循环");
                     break exit_reason;
                 }
 
                 // Check if config was updated (channel switch)
                 if config_updated_now || !bilistream::config::config_is_current(&cfg) {
-                    tracing::info!("🔄 检测到配置更新请求，但当前流仍在进行，继续转播直到流结束");
+                    tracing::debug!(
+                        "{stream_log} 已检测到配置更新，源直播仍在线，沿用本次目标直到源直播结束"
+                    );
                     // Don't break, let the stream continue until it naturally ends
                 }
 
@@ -1459,16 +1492,28 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if let FfmpegSource::HlsUrl(url) = &mut ffmpeg_source {
                     if let Some(new_url) = new_m3u8_url {
                         if new_url != *url {
-                            tracing::info!("🔄 检测到流URL变化，使用新URL重启");
+                            tracing::debug!("{stream_log} 源播放地址已更新，下次启动使用新地址");
                             *url = new_url;
                         }
                     }
                 }
 
                 // Stream is still live but ffmpeg exited, restart it
-                tracing::info!("🔄 流仍在进行，重启ffmpeg...");
+                tracing::info!(
+                    "{} 源直播仍在线，1秒后重试推流",
+                    stream_log.session_label(session)
+                );
                 tokio::time::sleep(Duration::from_secs(1)).await;
             };
+            let session_log = stream_log.session_label(last_session);
+            // Demotion and the execution watchdog also signal MANUAL_RESTART.
+            // Report the current gate without changing restart/cleanup decisions.
+            let execution_block = cluster::local_monitoring_block_reason(&cfg);
+            log_ffmpeg_loop_exit(
+                &session_log,
+                ffmpeg_loop_exit_reason,
+                execution_block.as_deref(),
+            );
 
             // Check the actual reason for ffmpeg loop exit
             let manual_stop = was_manual_stop();
@@ -1533,17 +1578,22 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if manual_stop {
                     clear_manual_stop();
                 }
-                tracing::info!("Stream was manually restarted, skipping end danmaku");
+                match ffmpeg_loop_exit_reason {
+                    FfmpegLoopExitReason::ClusterHandoff => {
+                        tracing::debug!("{session_log} 集群交接，跳过结束弹幕");
+                    }
+                    _ => tracing::debug!("{session_log} 主动重启或切换，跳过结束弹幕"),
+                }
             } else if manual_stop
                 && matches!(ffmpeg_loop_exit_reason, FfmpegLoopExitReason::BiliStopped)
             {
                 clear_manual_stop();
-                tracing::info!("Stream was stopped manually, skipping end danmaku");
+                tracing::debug!("{session_log} 主动停止，跳过结束弹幕");
             } else if warning_skip {
-                tracing::info!("Stream was stopped due to warning/cut off");
+                tracing::info!("{session_log} 因B站警告或切断结束转播");
             } else if !current_is_live && bili_is_live {
                 // Source stream ended but B站 is still live
-                tracing::info!("{} 直播结束", channel_name);
+                tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
 
                 // Check if B站 has been live for more than 8 hours; if so, stop it
                 match get_bili_live_time(cfg.bililive.room).await {
@@ -1583,13 +1633,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             } else if !bili_is_live {
                 // B站 stream was stopped
-                tracing::info!("B站直播已停止");
+                tracing::debug!("{session_log} 已确认B站房间停止直播");
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                 }
             } else if current_is_live && bili_is_live {
                 // Both streams are still live - this was likely a technical issue
-                tracing::info!("流传输中断，但直播仍在进行");
+                tracing::info!("{session_log} 推流会话已结束，源直播与B站房间仍在线，返回监听");
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1604,7 +1654,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             } else {
                 // Fallback case
-                tracing::info!("流传输已停止");
+                tracing::info!("{session_log} 推流会话已结束，返回监听");
                 if cfg.bililive.enable_danmaku_command {
                     enable_danmaku_commands(true);
                 }
@@ -1736,13 +1786,17 @@ async fn wait_priority(delay: Duration, priority_channel_id: &str) {
 async fn monitor_priority_channel_background(
     current_channel_name: String,
     session: ffmpeg::FfmpegSession,
+    context: String,
 ) {
     tokio::time::sleep(Duration::from_secs(30)).await;
     loop {
         let cfg = match load_config().await.map_err(|error| error.to_string()) {
             Ok(cfg) => cfg,
             Err(error) => {
-                tracing::warn!("优先频道监控: 配置加载失败: {error}");
+                tracing::warn!(
+                    "{context} 优先频道监控配置加载失败；{}",
+                    safe_diagnostic(&error)
+                );
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -1757,7 +1811,10 @@ async fn monitor_priority_channel_background(
         let liveness = resolve_playable_priority_channel(&cfg).await;
         let keywords = bilistream::plugins::banned_keywords::streaming_banned_keywords();
         if let Some(keyword) = liveness.banned_streaming_keyword(&keywords) {
-            tracing::warn!("优先频道包含禁用关键词 {keyword}，跳过自动切换");
+            tracing::warn!(
+                "{context} 优先频道包含禁用关键词 {}，跳过自动切换",
+                safe_text(&keyword, 32)
+            );
             wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
             continue;
         }
@@ -1790,11 +1847,15 @@ async fn monitor_priority_channel_background(
         updated_cfg.twitch.area_v2 = cfg.priority_channel.default_area;
 
         let old_monitored_config_version = cluster::monitored_config_version(&cfg);
+        let transition_context = context.clone();
         // The session lock covers the conditional commit and stop. Failed or
         // stale preparation leaves the current stream running.
         if ffmpeg::transition_ffmpeg_session(session, async move {
             if let Err(error) = bilistream::config::save_config_if_current(&mut updated_cfg).await {
-                tracing::debug!("优先频道切换已取消: {error}");
+                tracing::debug!(
+                    "{transition_context} 优先频道切换已取消；{}",
+                    safe_diagnostic(&error.to_string())
+                );
                 return false;
             }
             bilistream::config::with_current_config(&updated_cfg, || {
@@ -1803,6 +1864,7 @@ async fn monitor_priority_channel_background(
                 bilistream::plugins::set_config_updated();
                 if old_monitored_config_version != cluster::monitored_config_version(&updated_cfg) {
                     let sync_cfg = updated_cfg.clone();
+                    let sync_context = transition_context.clone();
                     // The session is about to stop and abort this monitor. Let the
                     // sync outlive it, without awaiting peer I/O under the supervisor lock.
                     tokio::spawn(async move {
@@ -1810,14 +1872,17 @@ async fn monitor_priority_channel_background(
                             let message =
                                 cluster::sync_monitored_config_after_change(&sync_cfg).await;
                             if !message.is_empty() {
-                                tracing::info!("优先频道自动切换{}", message);
+                                tracing::info!(
+                                    "{sync_context} 优先频道配置同步结果；{}",
+                                    safe_diagnostic(&message)
+                                );
                             }
                         }
                     });
                 }
                 tracing::info!(
-                    "✅ 已切换到优先频道: {}",
-                    updated_cfg.priority_channel.channel_name
+                    "{transition_context} 优先频道目标已更新为 {}，等待新会话启动",
+                    safe_text(&updated_cfg.priority_channel.channel_name, 24)
                 );
             })
             .is_some()
@@ -1951,7 +2016,7 @@ impl LolMonitor {
             Ok(Some(ids)) => ids,
             Ok(None) => return None,
             Err(error) => {
-                tracing::warn!("LOL 监控查询失败: {error}");
+                tracing::warn!("LOL 监控查询失败；{}", safe_diagnostic(&error));
                 return None;
             }
         };
@@ -1959,7 +2024,7 @@ impl LolMonitor {
         invalid_player_word(&ids, &words)
     }
 
-    async fn run(self, session: ffmpeg::FfmpegSession) {
+    async fn run(self, session: ffmpeg::FfmpegSession, context: String) {
         let interval = Duration::from_secs(self.cfg.lol_monitor_interval.unwrap_or(1).max(1));
         loop {
             tokio::time::sleep(interval).await;
@@ -1969,14 +2034,23 @@ impl LolMonitor {
                 // startup until the remote stop has completed. Stale probes have
                 // no global flag to mutate and cannot stop a replacement.
                 ffmpeg::stop_ffmpeg_session_with(session, async move {
-                    tracing::error!("检测到非法词汇:{}，停止直播", word);
+                    tracing::error!(
+                        "{context} 玩家ID包含禁用词 {}，停止B站直播",
+                        safe_text(&word, 32)
+                    );
                     if let Err(error) = bili_stop_live(&cfg).await {
-                        tracing::error!("停止 B 站直播失败: {}", error);
+                        tracing::error!(
+                            "{context} 停止B站直播失败；{}",
+                            safe_diagnostic(&error.to_string())
+                        );
                     }
                     if let Err(error) =
                         send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播").await
                     {
-                        tracing::error!("Failed to send danmaku: {}", error);
+                        tracing::error!(
+                            "{context} 发送弹幕失败；{}",
+                            safe_diagnostic(&error.to_string())
+                        );
                     }
                     if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
                         enable_danmaku_commands(true);
@@ -2357,6 +2431,81 @@ async fn handle_collisions(
 mod tests {
     use super::*;
     use bilistream::config::{BiliLive, Credentials, Twitch, Youtube};
+
+    #[derive(Clone, Default)]
+    struct LogBytes(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBytes {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn runtime_milestones_are_single_line_safe_and_distinguish_end_causes() {
+        let bytes = LogBytes::default();
+        let writer = bytes.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let identity = FfmpegStreamIdentity::new(
+            "jp",
+            "YT",
+            &"示例频道001📺".repeat(8),
+            "example-channel-001",
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            log_selected_stream(&identity, Some(&"很长的示例直播标题📺".repeat(20)));
+            log_selected_stream(&identity, Some("示例标题\n2026-10-10 ERROR 注入\u{1b}[31m"));
+            log_selected_stream(&identity, Some("示例 token=SYNTHETIC_TITLE_TOKEN"));
+            let context = identity.session_label(None);
+            for reason in [
+                FfmpegLoopExitReason::SourceEnded,
+                FfmpegLoopExitReason::BiliStopped,
+                FfmpegLoopExitReason::IntentionalRestart {
+                    target_m3u8_available: true,
+                },
+                FfmpegLoopExitReason::ClusterHandoff,
+            ] {
+                log_ffmpeg_loop_exit(&context, reason, None);
+            }
+            log_ffmpeg_loop_exit(
+                &context,
+                FfmpegLoopExitReason::IntentionalRestart {
+                    target_m3u8_available: true,
+                },
+                Some("集群节点交接尚未确认，暂停本节点执行"),
+            );
+        });
+        let output = String::from_utf8(bytes.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<_> = output.lines().collect();
+        assert_eq!(lines.len(), 8, "{output}");
+        assert!(lines
+            .iter()
+            .all(|line| line.trim_start().starts_with("INFO")));
+        assert!(lines[0].contains('…'));
+        assert!(lines[1].contains("\\n2026-10-10 ERROR"));
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains("SYNTHETIC_TITLE_TOKEN"));
+        assert!(lines[3].contains("源直播已结束"));
+        assert!(lines[4].contains("B站直播已停止"));
+        assert!(lines[5].contains("重启或切换信号"));
+        assert!(lines[6].contains("集群执行权限已撤销"));
+        assert!(!lines[6].contains("主动重启"));
+        assert!(lines[7].contains("当前执行受阻：集群节点交接尚未确认"));
+        assert!(!lines[7].contains("主动重启"));
+        assert!(output.contains("未建立会话"));
+        assert!(!output.contains("None"));
+        assert!(!output.contains("已观察到推流"));
+    }
 
     #[test]
     fn invalid_player_words_ignore_blank_lines_and_match_ids_only() {

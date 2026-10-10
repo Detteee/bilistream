@@ -323,10 +323,10 @@ try {
   assert.ok(writes.filter(row => row.path === '/api/config').every(row => !JSON.stringify(row.patch).includes('•')));
   const performanceChecks = JSON.parse(await evaluate(`(async () => {
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const until = async check => { for (let n=0;n<100;n++) { if (check()) return; await pause(20); } throw new Error('Log UI did not settle'); };
+    const until = async (check, timeout = 2000) => { const deadline = performance.now() + timeout; while (performance.now() < deadline) { if (check()) return; await pause(20); } throw new Error('Log UI did not settle'); };
     let logRequests = 0;
     const fetchOriginal = window.fetch;
-    let lines = Array.from({length: 600}, (_, i) => 'INFO synthetic log ' + i);
+    let lines = Array.from({length: 600}, (_, i) => '2026-10-10 18:00:00+0800 INFO [runtime] jp YT/示例频道001 log ' + i + ' title=ERROR ⚠️');
     let networkRequests = 0;
     window.fetch = (path, options) => {
       if (path === '/api/logs') { logRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}})); }
@@ -346,9 +346,10 @@ try {
       const first = output.firstElementChild;
       const next = first.nextElementSibling;
       const bounded = output.children.length === 500 && first.textContent.includes('log 100');
+      const severity = [...output.children].every(row => row.classList.contains('info'));
       await refresh();
       const retained = first === output.firstElementChild;
-      lines.push('ERROR synthetic log 600');
+      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] jp YT/示例频道001 log 600 Broken pipe');
       await refresh();
       const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
       document.getElementById('clear-logs-btn').click();
@@ -357,14 +358,27 @@ try {
       document.getElementById('main-page').classList.remove('hidden');
       document.getElementById('tab-settings').click();
       networkRequests = 0;
-      await pause(2100);
+      const logsBeforeHidden = logRequests;
+      // Wait through a complete 5-second log poll period. Network-status's
+      // separate counter cannot prove that /api/logs stops while hidden.
+      await pause(5200);
       const hiddenSkipped = networkRequests === 0;
+      const hiddenLogsSkipped = logRequests === logsBeforeHidden;
+      document.getElementById('tab-logs').click();
+      // Returning to an already-loaded log view uses the existing 5-second poll.
+      await until(() => logRequests > logsBeforeHidden, 5500);
+      const visibleLogsFetched = logRequests > logsBeforeHidden;
       document.getElementById('tab-overview').click();
       await until(() => networkRequests > 0);
-      return JSON.stringify({bounded,retained,appended,cleared,hiddenSkipped,visibleFetched:networkRequests>0});
+      return JSON.stringify({bounded,severity,retained,appended,cleared,hiddenSkipped,hiddenLogsSkipped,visibleLogsFetched,visibleFetched:networkRequests>0});
     } finally { window.fetch = fetchOriginal; }
   })()`));
-  assert.deepEqual(performanceChecks, {bounded:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,visibleFetched:true});
+  assert.deepEqual(performanceChecks, {bounded:true,severity:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
+  if (process.argv[2]) {
+    await evaluate("document.getElementById('tab-logs').click()");
+    await capture(join(captureDir, 'log-readability.png'));
+    await evaluate("document.getElementById('tab-overview').click()");
+  }
   // A same-version package must not reload the old page during installation.
   const updateChecks = JSON.parse(await evaluate(`(async () => {
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

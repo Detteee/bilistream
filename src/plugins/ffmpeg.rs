@@ -1,15 +1,21 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::future::Future;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 use tokio::sync::{watch, Mutex, MutexGuard};
 use tokio::task::JoinHandle;
 
 use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
+use crate::logging::{
+    exit_status, has_sensitive_data, human_duration, safe_diagnostic, safe_diagnostic_continuation,
+    safe_text,
+};
 
 // Stuck-detection thresholds for live HLS restreaming.
 const LOW_SPEED_THRESHOLD: f32 = 0.98;
@@ -119,6 +125,170 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FfmpegSession(u64);
 
+impl fmt::Display for FfmpegSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Immutable, non-secret identity captured from the selected stream, never
+/// looked up from the next configuration by a delayed child or log writer.
+#[derive(Clone)]
+pub struct FfmpegStreamIdentity {
+    node: String,
+    platform: String,
+    channel: String,
+    channel_id: String,
+}
+
+impl FfmpegStreamIdentity {
+    pub fn new(node: &str, platform: &str, channel: &str, channel_id: &str) -> Self {
+        Self {
+            node: safe_text(
+                if node.trim().is_empty() {
+                    "local"
+                } else {
+                    node
+                },
+                usize::MAX,
+            ),
+            platform: safe_text(platform, usize::MAX),
+            channel: safe_text(
+                if channel.is_empty() {
+                    channel_id
+                } else {
+                    channel
+                },
+                24,
+            ),
+            channel_id: safe_text(channel_id, usize::MAX),
+        }
+    }
+
+    pub(crate) fn session_label(&self, session: Option<FfmpegSession>) -> String {
+        match session {
+            Some(session) => format!("{self} s={session}"),
+            None => format!("{self} 未建立会话"),
+        }
+    }
+}
+
+impl fmt::Display for FfmpegStreamIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}/{}", self.node, self.platform, self.channel)
+    }
+}
+
+#[derive(Clone)]
+struct SessionLogContext {
+    identity: Arc<FfmpegStreamIdentity>,
+    session: FfmpegSession,
+}
+
+impl SessionLogContext {
+    fn new(identity: FfmpegStreamIdentity, session: FfmpegSession) -> Self {
+        Self {
+            identity: Arc::new(identity),
+            session,
+        }
+    }
+}
+
+impl fmt::Display for SessionLogContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} s={}", self.identity, self.session)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ChildRole {
+    Ingest,
+    Ffmpeg(FfmpegStatsRole),
+}
+
+impl ChildRole {
+    fn stats_role(self) -> Option<FfmpegStatsRole> {
+        match self {
+            Self::Ingest => None,
+            Self::Ffmpeg(role) => Some(role),
+        }
+    }
+}
+
+impl fmt::Display for ChildRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Ingest => "摄取",
+            Self::Ffmpeg(FfmpegStatsRole::Cache) => "缓存",
+            Self::Ffmpeg(FfmpegStatsRole::Push) => "推流",
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ChildLogContext {
+    session: SessionLogContext,
+    role: ChildRole,
+    pid: Option<u32>,
+    started: Instant,
+}
+
+impl ChildLogContext {
+    fn new(session: &SessionLogContext, role: ChildRole, pid: Option<u32>) -> Self {
+        Self {
+            session: session.clone(),
+            role,
+            pid,
+            started: Instant::now(),
+        }
+    }
+
+    fn pid_label(&self) -> String {
+        self.pid
+            .map_or_else(|| "未知".to_string(), |pid| pid.to_string())
+    }
+
+    fn started(&self) {
+        let state = if matches!(self.role, ChildRole::Ffmpeg(FfmpegStatsRole::Cache)) {
+            "；正在预缓冲，等待推流进程"
+        } else {
+            ""
+        };
+        tracing::info!(
+            "{self} 进程已启动 pid={}{state}；channel={}",
+            self.pid_label(),
+            self.session.identity.channel_id
+        );
+    }
+
+    fn exited(&self, status: &std::process::ExitStatus) {
+        let elapsed = human_duration(self.started.elapsed().as_secs() as i64);
+        let description = exit_status(status);
+        if status.success() {
+            tracing::info!(
+                "{self} 进程已退出 pid={} {description}；运行{elapsed}",
+                self.pid_label()
+            );
+        } else {
+            tracing::warn!(
+                "{self} 进程异常退出 pid={} {description}；运行{elapsed}，等待复核直播状态",
+                self.pid_label()
+            );
+        }
+    }
+}
+
+impl fmt::Display for ChildLogContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.session, self.role)
+    }
+}
+
+struct FfmpegChild {
+    child: Child,
+    log: ChildLogContext,
+}
+
 #[derive(Default)]
 struct SessionTasks(Vec<JoinHandle<()>>);
 
@@ -194,7 +364,7 @@ impl ProcessSupervisor {
             if manual {
                 MANUAL_STOP.store(true, Ordering::SeqCst);
             }
-            stop_locked(&mut supervisor).await;
+            stop_locked(&mut supervisor, manual.then_some("主动停止请求")).await;
             cleanup.await;
             true
         })
@@ -212,7 +382,7 @@ impl ProcessSupervisor {
             if matching_process(&mut supervisor, session).is_none() || !prepare.await {
                 return false;
             }
-            stop_locked(&mut supervisor).await;
+            stop_locked(&mut supervisor, Some("切换准备完成")).await;
             true
         })
         .await
@@ -223,16 +393,19 @@ impl ProcessSupervisor {
         let _exclusive = self.fence_lock.lock().await;
         self.fencing.send_replace(true);
         let mut supervisor = self.lock().await;
+        let mut kill_failures = Vec::new();
+        let mut fenced = None;
         if let Some(mut process) = supervisor.take() {
             // Send every publishing child its kill signal before any ingest,
             // process-reaping or filesystem work can delay another publisher.
             for child in &mut process.children {
-                if let Err(error) = child.start_kill() {
-                    tracing::warn!("FFmpeg fence kill failed: {error}");
+                if let Err(error) = child.child.start_kill() {
+                    kill_failures.push((child.log.clone(), error));
                 }
             }
             drop(std::mem::take(&mut process.tasks));
             let cache_dir = process.cache_dir.take();
+            fenced = Some((process.log.clone(), process.roles_label()));
             // Owned children kill on drop; IngestProcess also kills its group.
             drop(process);
             if let Some(cache_dir) = cache_dir {
@@ -244,27 +417,53 @@ impl ProcessSupervisor {
         reset_stopped_tracking_state();
         // Startup still rechecks the runtime's execution fence under this lock.
         self.fencing.send_replace(false);
+        drop(supervisor);
+        drop(_exclusive);
+
+        // A slow writer must not delay another kill, ingest-group drop, or the
+        // release of either supervisor lock. These snapshots retain ownership.
+        for (log, error) in kill_failures {
+            tracing::warn!(
+                "{log} 隔离时发送终止信号失败 pid={}；{}",
+                log.pid_label(),
+                safe_diagnostic(&error.to_string())
+            );
+        }
+        if let Some((context, roles)) = fenced {
+            tracing::info!("{context} 会话执行已隔离，已请求终止子进程；角色={roles}");
+        }
     }
 }
 
 // Represents a managed ffmpeg process
 pub struct FfmpegProcess {
     session: FfmpegSession,
+    log: SessionLogContext,
     tasks: SessionTasks,
-    children: Vec<Child>,
+    children: Vec<FfmpegChild>,
     ingest: Option<IngestProcess>,
     pid: Option<u32>,
     cache_dir: Option<PathBuf>,
 }
 
 impl FfmpegProcess {
+    fn roles_label(&self) -> String {
+        self.ingest
+            .iter()
+            .map(|ingest| ingest.1.role)
+            .chain(self.children.iter().map(|child| child.log.role))
+            .map(|role| role.to_string())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
     pub fn pid(&self) -> Option<u32> {
         self.pid
     }
 
     pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         if let Some(child) = self.children.first_mut() {
-            child.wait().await
+            child.child.wait().await
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -279,8 +478,16 @@ impl FfmpegProcess {
             kill_child_tree(ingest).await;
         }
         for child in &mut self.children {
-            if let Err(e) = child.kill().await {
-                result = Err(e);
+            if let Err(e) = child.child.kill().await {
+                result = Err(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "{} pid={}；{}",
+                        child.log.role,
+                        child.log.pid_label(),
+                        safe_diagnostic(&e.to_string())
+                    ),
+                ));
             }
         }
         result
@@ -317,7 +524,7 @@ pub async fn spawn_session_task(
 
 // Own the process group as well as the direct child: cancellation during startup
 // must also terminate streamlink's muxer.
-struct IngestProcess(Child);
+struct IngestProcess(Child, ChildLogContext);
 
 impl Drop for IngestProcess {
     fn drop(&mut self) {
@@ -353,8 +560,28 @@ async fn kill_child_tree(child: &mut IngestProcess) {
             .await;
         }
     }
-    let _ = child.0.kill().await;
-    let _ = child.0.wait().await;
+    let kill_result = child.0.kill().await;
+    let wait_result = child.0.wait().await;
+    if let Err(error) = kill_result {
+        tracing::warn!(
+            "{} 停止摄取失败；{}",
+            child.1,
+            safe_diagnostic(&error.to_string())
+        );
+    }
+    match wait_result {
+        Ok(status) => tracing::debug!(
+            "{} 进程已回收 pid={} {}；会话清理",
+            child.1,
+            child.1.pid_label(),
+            exit_status(&status)
+        ),
+        Err(error) => tracing::warn!(
+            "{} 回收摄取进程失败；{}",
+            child.1,
+            safe_diagnostic(&error.to_string())
+        ),
+    }
 }
 
 fn configure_ingest_process_group(cmd: &mut Command) {
@@ -367,7 +594,7 @@ fn configure_ingest_process_group(cmd: &mut Command) {
 async fn spawn_piped_ingest(
     ingest: &PipedIngest,
     log_level: &str,
-    session: FfmpegSession,
+    context: &SessionLogContext,
     tasks: &mut SessionTasks,
 ) -> Option<(IngestProcess, tokio::process::ChildStdout)> {
     let mut cmd = Command::new(&ingest.program);
@@ -381,37 +608,46 @@ async fn spawn_piped_ingest(
 
     match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
+            let log = ChildLogContext::new(context, ChildRole::Ingest, child.id());
+            log.started();
             if let Some(pid) = child.id() {
-                tracing::info!("🚀 streamlink 摄取进程已启动 (PID: {:?})", pid);
                 set_high_priority(pid);
             }
             if let Some(stderr) = child.stderr.take() {
                 tasks.0.push(spawn_ffmpeg_stderr_monitor(
-                    session,
                     stderr,
                     log_level.to_string(),
-                    "streamlink",
-                    None,
+                    log.clone(),
                 ));
             }
             let stdout = child.stdout.take()?;
-            Some((IngestProcess(child), stdout))
+            Some((IngestProcess(child, log), stdout))
         }
         Err(e) => {
-            tracing::error!("❌ 启动 streamlink 摄取失败: {}", e);
+            tracing::error!(
+                "{context} 摄取进程启动失败；{}",
+                safe_diagnostic(&e.to_string())
+            );
             None
         }
     }
 }
 
-fn pipe_ingest_stdout(cmd: &mut Command, stdout: tokio::process::ChildStdout) -> bool {
+fn pipe_ingest_stdout(
+    cmd: &mut Command,
+    stdout: tokio::process::ChildStdout,
+    context: &SessionLogContext,
+) -> bool {
     match TryInto::<Stdio>::try_into(stdout) {
         Ok(stdio) => {
             cmd.stdin(stdio);
             true
         }
         Err(e) => {
-            tracing::error!("❌ 无法把摄取 stdout 接到 ffmpeg: {}", e);
+            tracing::error!(
+                "{context} 无法连接摄取管道；{}",
+                safe_diagnostic(&e.to_string())
+            );
             false
         }
     }
@@ -798,17 +1034,38 @@ pub async fn transition_ffmpeg_session(
         .unwrap_or(false)
 }
 
-async fn stop_locked(supervisor: &mut Option<FfmpegProcess>) {
+async fn stop_locked(supervisor: &mut Option<FfmpegProcess>, reason: Option<&str>) {
     if let Some(mut process) = supervisor.take() {
         // Abort readers/monitors before clearing shared state. Every child
         // also has kill_on_drop enabled in case this runtime shuts down.
         drop(std::mem::take(&mut process.tasks));
         if let Err(error) = process.kill().await {
-            tracing::warn!("FFmpeg session cleanup failed: {error}");
+            tracing::warn!(
+                "{} 子进程清理失败；{}",
+                process.log,
+                safe_diagnostic(&error.to_string())
+            );
+        } else if let Some(reason) = reason {
+            // Ingest cleanup reports its own failures; kill() only confirms
+            // that every ffmpeg child stopped successfully.
+            let stopped_roles = process
+                .children
+                .iter()
+                .map(|child| child.log.role.to_string())
+                .collect::<Vec<_>>()
+                .join("/");
+            tracing::info!(
+                "{} ffmpeg 子进程已停止；原因={reason}，角色={stopped_roles}",
+                process.log,
+            );
         }
         if let Some(cache_dir) = process.cache_dir.take() {
             if let Err(error) = tokio::fs::remove_dir_all(&cache_dir).await {
-                tracing::warn!("Cannot remove cache {}: {error}", cache_dir.display());
+                tracing::warn!(
+                    "{} 缓存清理失败；{}",
+                    process.log,
+                    safe_diagnostic(&error.to_string())
+                );
             }
         }
     }
@@ -1614,59 +1871,266 @@ fn start_hls_cache_byte_monitor(session: FfmpegSession, cache_dir: PathBuf) -> J
     })
 }
 
-fn spawn_ffmpeg_stderr_monitor(
-    session: FfmpegSession,
-    stderr: tokio::process::ChildStderr,
-    log_level: String,
-    process_name: &'static str,
-    stats_role: Option<FfmpegStatsRole>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
+const STDERR_LINE_LIMIT: usize = 64 * 1024;
+const STDERR_DIAGNOSTIC_CLASSES: usize = 16;
+const STDERR_REPEAT_INTERVAL: Duration = Duration::from_secs(300);
 
-        let mut stderr = stderr;
-        let mut buffer = vec![0u8; 8192];
-        let mut line_buffer = String::new();
+/// Keep bytes until a delimiter so reads cannot split a UTF-8 character. Once
+/// full, discard through the delimiter: a credential tail is never a new line.
+#[derive(Default)]
+struct StderrLines {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
 
-        while let Ok(n) = stderr.read(&mut buffer).await {
-            if n == 0 {
-                break;
-            }
-
-            let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-            if matching_process(&mut supervisor, session).is_none() {
-                break;
-            }
-            let chunk = String::from_utf8_lossy(&buffer[..n]);
-
-            for ch in chunk.chars() {
-                if ch == '\r' || ch == '\n' {
-                    handle_ffmpeg_stderr_line(
-                        &line_buffer,
-                        log_level.as_str(),
-                        process_name,
-                        stats_role,
-                    );
-                    line_buffer.clear();
-                } else if line_buffer.len() < 64 * 1024 {
-                    line_buffer.push(ch);
-                }
+impl StderrLines {
+    fn push(&mut self, chunk: &[u8], mut line: impl FnMut(&[u8], bool)) {
+        for &byte in chunk {
+            if matches!(byte, b'\r' | b'\n') {
+                self.finish(&mut line);
+            } else if self.bytes.len() < STDERR_LINE_LIMIT {
+                self.bytes.push(byte);
+            } else {
+                self.truncated = true;
             }
         }
+    }
+
+    fn finish(&mut self, mut line: impl FnMut(&[u8], bool)) {
+        if !self.bytes.is_empty() || self.truncated {
+            line(&self.bytes, self.truncated);
+            self.bytes.clear();
+            self.truncated = false;
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiagnosticLevel {
+    Error,
+    Warn,
+    Debug,
+}
+
+fn native_diagnostic_class(lower: &str) -> Option<String> {
+    for (needle, class) in [
+        ("broken pipe", "broken pipe"),
+        ("conversion failed", "conversion failed"),
+        ("connection reset", "connection reset"),
+        ("connection refused", "connection refused"),
+        ("timed out", "timeout"),
+        ("invalid data found", "invalid data"),
+        ("end of file", "end of file"),
+        ("permission denied", "permission denied"),
+        ("invalid argument", "invalid argument"),
+        ("input/output error", "input/output error"),
+        ("no route to host", "no route to host"),
+        ("no space left on device", "no space left on device"),
+        ("protocol not found", "protocol not found"),
+    ] {
+        if lower.contains(needle) {
+            return Some(class.to_string());
+        }
+    }
+    for prefix in ["http error ", "server returned ", "http/1.1 ", "http/2 "] {
+        if let Some((_, rest)) = lower.split_once(prefix) {
+            let code: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if code
+                .parse::<u16>()
+                .is_ok_and(|code| (400..600).contains(&code))
+            {
+                return Some(format!("HTTP {code}"));
+            }
+        }
+    }
+    None
+}
+
+struct StderrReporter {
+    log: ChildLogContext,
+    publishing_observed: bool,
+    sensitive_continuation: bool,
+    reported: VecDeque<(DiagnosticLevel, String)>,
+    suppressed: u64,
+    suppressed_level: DiagnosticLevel,
+    last_diagnostic: String,
+    last_summary: Instant,
+}
+
+impl StderrReporter {
+    fn new(log: ChildLogContext) -> Self {
+        Self {
+            last_summary: log.started,
+            log,
+            publishing_observed: false,
+            sensitive_continuation: false,
+            reported: VecDeque::new(),
+            suppressed: 0,
+            suppressed_level: DiagnosticLevel::Warn,
+            last_diagnostic: String::new(),
+        }
+    }
+
+    fn diagnostic(&mut self, line: &str, log_level: &str, truncated: bool, now: Instant) {
+        let continuation = self.sensitive_continuation;
+        self.sensitive_continuation |= truncated || has_sensitive_data(line);
+        let lower = line.to_ascii_lowercase();
+        let class = native_diagnostic_class(&lower);
+        let level = if is_harmless_hls_keepalive_warning(&lower) {
+            DiagnosticLevel::Debug
+        } else if lower.contains("error") {
+            DiagnosticLevel::Error
+        } else if lower.contains("warning") {
+            DiagnosticLevel::Warn
+        } else if class.is_some() {
+            DiagnosticLevel::Error
+        } else if truncated {
+            DiagnosticLevel::Warn
+        } else if log_level == "debug" || log_level == "info" {
+            DiagnosticLevel::Debug
+        } else {
+            return;
+        };
+        let mut diagnostic = if continuation {
+            safe_diagnostic_continuation(line)
+        } else {
+            safe_diagnostic(line)
+        };
+        if truncated {
+            diagnostic.push_str(" …[原始行超过64 KiB，已截断]");
+        }
+        if level != DiagnosticLevel::Debug {
+            // Keys are bounded, sanitized error classes owned by this child.
+            // Never include a moving URL or another session in suppression.
+            // A warning must not suppress a later error of the same class.
+            let key = (
+                level,
+                class.unwrap_or_else(|| diagnostic.to_ascii_lowercase()),
+            );
+            if self.reported.contains(&key) {
+                self.suppressed += 1;
+                self.last_diagnostic = diagnostic;
+                if level == DiagnosticLevel::Error {
+                    self.suppressed_level = level;
+                }
+                if now.duration_since(self.last_summary) >= STDERR_REPEAT_INTERVAL {
+                    self.repeat_summary("诊断仍在重复", now);
+                }
+                return;
+            }
+            if self.reported.len() == STDERR_DIAGNOSTIC_CLASSES {
+                self.reported.pop_front();
+            }
+            self.reported.push_back(key);
+        }
+        self.emit(level, &diagnostic, now);
+    }
+
+    fn emit(&self, level: DiagnosticLevel, diagnostic: &str, now: Instant) {
+        let elapsed = human_duration(now.duration_since(self.log.started).as_secs() as i64);
+        match level {
+            DiagnosticLevel::Error => tracing::error!("{}；{diagnostic}；运行{elapsed}", self.log),
+            DiagnosticLevel::Warn => tracing::warn!("{}；{diagnostic}；运行{elapsed}", self.log),
+            DiagnosticLevel::Debug => tracing::debug!("{}；{diagnostic}；运行{elapsed}", self.log),
+        }
+    }
+
+    fn repeat_summary(&mut self, state: &str, now: Instant) {
+        if self.suppressed > 0 {
+            self.emit(
+                self.suppressed_level,
+                &format!(
+                    "{state}；已合并{}条重复诊断：{}",
+                    self.suppressed, self.last_diagnostic
+                ),
+                now,
+            );
+            self.suppressed = 0;
+            self.suppressed_level = DiagnosticLevel::Warn;
+            self.last_summary = now;
+        }
+    }
+
+    fn observe_publishing(&mut self, positive_push_sample: bool) {
+        if positive_push_sample && !self.publishing_observed {
+            self.publishing_observed = true;
+            tracing::info!("{} 已观察到推流输出", self.log);
+        }
+    }
+}
+
+fn spawn_ffmpeg_stderr_monitor(
+    stderr: tokio::process::ChildStderr,
+    log_level: String,
+    context: ChildLogContext,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        monitor_ffmpeg_stderr(&FFMPEG_SUPERVISOR, stderr, &log_level, context).await;
     })
+}
+
+async fn monitor_ffmpeg_stderr(
+    supervisor: &ProcessSupervisor,
+    mut stderr: impl tokio::io::AsyncRead + Unpin,
+    log_level: &str,
+    context: ChildLogContext,
+) {
+    use tokio::io::AsyncReadExt;
+
+    let session = context.session.session;
+    let mut reporter = StderrReporter::new(context);
+    let mut buffer = vec![0u8; 8192];
+    let mut lines = StderrLines::default();
+    loop {
+        let read = stderr.read(&mut buffer).await;
+        let mut process = supervisor.lock().await;
+        if matching_process(&mut process, session).is_none() {
+            break;
+        }
+        let mut handle = |bytes: &[u8], truncated| {
+            handle_ffmpeg_stderr_line(
+                &String::from_utf8_lossy(bytes),
+                log_level,
+                &mut reporter,
+                truncated,
+            );
+        };
+        match read {
+            Ok(0) | Err(_) => {
+                // Only an owned reader reaching EOF/error flushes. Drop/abort
+                // deliberately has no flush and never waits for a shutdown tail.
+                lines.finish(&mut handle);
+                if let Err(error) = read {
+                    tracing::warn!(
+                        "{} 读取诊断失败；{}",
+                        reporter.log,
+                        safe_diagnostic(&error.to_string())
+                    );
+                }
+                reporter.repeat_summary("诊断读取结束", Instant::now());
+                break;
+            }
+            Ok(n) => lines.push(&buffer[..n], &mut handle),
+        }
+    }
 }
 
 fn handle_ffmpeg_stderr_line(
     line: &str,
     log_level: &str,
-    process_name: &'static str,
-    stats_role: Option<FfmpegStatsRole>,
+    reporter: &mut StderrReporter,
+    truncated: bool,
 ) {
-    if line.is_empty() {
+    if line.trim().is_empty() {
         return;
     }
 
     if let Some(mut sample) = extract_ffmpeg_stats(line) {
+        // Only an intact stats record without credential text is a safe new
+        // boundary. Stats and a wrapped/truncated diagnostic can share a line.
+        // Preserve all progress updates even when its diagnostic tail is unsafe.
+        reporter.sensitive_continuation = truncated || has_sensitive_data(line);
+        let stats_role = reporter.log.role.stats_role();
         update_progress_time(stats_role);
         if let Some(role) = stats_role {
             if matches!(role, FfmpegStatsRole::Cache) {
@@ -1707,16 +2171,14 @@ fn handle_ffmpeg_stderr_line(
                     }
                 }
             }
+            let positive_push_sample = matches!(role, FfmpegStatsRole::Push)
+                && (sample.bitrate_kbps.is_some_and(|value| value > 0.0)
+                    || sample.speed.is_some_and(|value| value > 0.0));
             update_stats_display(role, sample);
+            reporter.observe_publishing(positive_push_sample);
         }
-    } else if line.contains("error") || line.contains("Error") {
-        tracing::error!("{}: {}", process_name, line);
-    } else if is_harmless_hls_keepalive_warning(line) {
-        tracing::debug!("{}: {}", process_name, line);
-    } else if line.contains("warning") || line.contains("Warning") {
-        tracing::warn!("{}: {}", process_name, line);
-    } else if log_level == "debug" || log_level == "info" {
-        tracing::debug!("{}: {}", process_name, line);
+    } else {
+        reporter.diagnostic(line, log_level, truncated, Instant::now());
     }
 }
 
@@ -1732,14 +2194,14 @@ fn append_remote_hls_input_options(cmd: &mut Command) {
         .arg("2048");
 }
 
-fn is_harmless_hls_keepalive_warning(line: &str) -> bool {
-    line.contains("keepalive request failed")
-        || line.contains("Cannot reuse HTTP connection for different host")
+fn is_harmless_hls_keepalive_warning(lower: &str) -> bool {
+    lower.contains("keepalive request failed")
+        || lower.contains("cannot reuse http connection for different host")
 }
 
 fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
     if let Some((width, height, x, y)) = crop {
-        tracing::info!("🎬 应用裁剪滤镜: {}:{}:{}:{}", width, height, x, y);
+        tracing::debug!("应用裁剪滤镜: {}:{}:{}:{}", width, height, x, y);
         cmd.arg("-vf")
             .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
             .arg("-c:v")
@@ -1801,15 +2263,17 @@ async fn spawn_direct_ffmpeg(
     proxy: Option<String>,
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>,
+    identity: FfmpegStreamIdentity,
 ) {
     let ffmpeg_cmd = get_ffmpeg_command();
-    tracing::info!("⏱️ HLS 缓存已关闭: 直接转播");
 
     let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+    let context = SessionLogContext::new(identity, session);
+    tracing::debug!("{context} HLS 缓存关闭，准备直接推流");
     let mut tasks = SessionTasks::default();
     let ingest_spawned = match &source {
         FfmpegSource::Piped(piped) => {
-            spawn_piped_ingest(piped, &log_level, session, &mut tasks).await
+            spawn_piped_ingest(piped, &log_level, &context, &mut tasks).await
         }
         FfmpegSource::HlsUrl(_) => None,
     };
@@ -1838,7 +2302,7 @@ async fn spawn_direct_ffmpeg(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if let Some(stdout) = ingest_stdout {
-        if !pipe_ingest_stdout(&mut cmd, stdout) {
+        if !pipe_ingest_stdout(&mut cmd, stdout, &context) {
             if let Some(mut ingest) = ingest_child {
                 kill_child_tree(&mut ingest).await;
             }
@@ -1849,7 +2313,8 @@ async fn spawn_direct_ffmpeg(
     match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
             let pid = child.id();
-            tracing::info!("🚀 ffmpeg 进程已启动 (PID: {:?})", pid);
+            let log = ChildLogContext::new(&context, ChildRole::Ffmpeg(FfmpegStatsRole::Push), pid);
+            log.started();
 
             if let Some(pid_value) = pid {
                 set_high_priority(pid_value);
@@ -1860,19 +2325,16 @@ async fn spawn_direct_ffmpeg(
             mark_push_process_started();
 
             if let Some(stderr) = child.stderr.take() {
-                tasks.0.push(spawn_ffmpeg_stderr_monitor(
-                    session,
-                    stderr,
-                    log_level,
-                    "ffmpeg",
-                    Some(FfmpegStatsRole::Push),
-                ));
+                tasks
+                    .0
+                    .push(spawn_ffmpeg_stderr_monitor(stderr, log_level, log.clone()));
             }
 
             let process = FfmpegProcess {
                 session,
+                log: context.clone(),
                 tasks,
-                children: vec![child],
+                children: vec![FfmpegChild { child, log }],
                 ingest: ingest_child,
                 pid,
                 cache_dir: None,
@@ -1887,7 +2349,10 @@ async fn spawn_direct_ffmpeg(
             }
         }
         Err(e) => {
-            tracing::error!("❌ 启动 ffmpeg 失败: {}", e);
+            tracing::error!(
+                "{context} 推流进程启动失败；{}",
+                safe_diagnostic(&e.to_string())
+            );
             if let Some(mut ingest) = ingest_child {
                 kill_child_tree(&mut ingest).await;
             }
@@ -1903,11 +2368,15 @@ async fn spawn_cached_ffmpeg(
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>,
     latency_secs: u64,
+    identity: FfmpegStreamIdentity,
 ) {
     let cache_dir = match create_hls_cache_dir() {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!("❌ 创建 HLS 缓存目录失败: {}", e);
+            tracing::error!(
+                "{identity} 缓存目录创建失败；{}",
+                safe_diagnostic(&e.to_string())
+            );
             return;
         }
     };
@@ -1915,17 +2384,16 @@ async fn spawn_cached_ffmpeg(
     let segment_pattern = cache_dir.join("segment_%06d.ts");
     let ffmpeg_cmd = get_ffmpeg_command();
 
-    tracing::info!(
-        "⏱️ HLS 缓存已启用: {} 秒输入到输出延迟 ({})",
-        latency_secs,
-        playlist_path.display()
-    );
-
     let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
+    let context = SessionLogContext::new(identity, session);
+    tracing::debug!(
+        "{context} HLS 缓存启用；目标延迟={}",
+        human_duration(latency_secs as i64)
+    );
     let mut tasks = SessionTasks::default();
     let ingest_spawned = match &source {
         FfmpegSource::Piped(piped) => {
-            spawn_piped_ingest(piped, &log_level, session, &mut tasks).await
+            spawn_piped_ingest(piped, &log_level, &context, &mut tasks).await
         }
         FfmpegSource::HlsUrl(_) => None,
     };
@@ -1970,7 +2438,7 @@ async fn spawn_cached_ffmpeg(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if let Some(stdout) = ingest_stdout {
-        if !pipe_ingest_stdout(&mut cache_cmd, stdout) {
+        if !pipe_ingest_stdout(&mut cache_cmd, stdout, &context) {
             if let Some(mut ingest) = ingest_child {
                 kill_child_tree(&mut ingest).await;
             }
@@ -1981,7 +2449,12 @@ async fn spawn_cached_ffmpeg(
     match FFMPEG_SUPERVISOR.spawn(&mut cache_cmd) {
         Ok(mut cache_child) => {
             let cache_pid = cache_child.id();
-            tracing::info!("🚀 ffmpeg HLS 缓存写入进程已启动 (PID: {:?})", cache_pid);
+            let log = ChildLogContext::new(
+                &context,
+                ChildRole::Ffmpeg(FfmpegStatsRole::Cache),
+                cache_pid,
+            );
+            log.started();
 
             if let Some(pid_value) = cache_pid {
                 set_high_priority(pid_value);
@@ -1995,18 +2468,20 @@ async fn spawn_cached_ffmpeg(
 
             if let Some(stderr) = cache_child.stderr.take() {
                 tasks.0.push(spawn_ffmpeg_stderr_monitor(
-                    session,
                     stderr,
                     log_level.clone(),
-                    "ffmpeg 缓存写入",
-                    Some(FfmpegStatsRole::Cache),
+                    log.clone(),
                 ));
             }
 
             let process = FfmpegProcess {
                 session,
+                log: context.clone(),
                 tasks,
-                children: vec![cache_child],
+                children: vec![FfmpegChild {
+                    child: cache_child,
+                    log,
+                }],
                 ingest: ingest_child,
                 pid: cache_pid,
                 cache_dir: Some(cache_dir.clone()),
@@ -2018,6 +2493,7 @@ async fn spawn_cached_ffmpeg(
             let reader_log_level = log_level.clone();
             let reader_crop = crop;
             let reader_rtmp_url_key = rtmp_url_key.clone();
+            let reader_context = context.clone();
             let reader_task = tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(latency_secs)).await;
 
@@ -2032,9 +2508,8 @@ async fn spawn_cached_ffmpeg(
 
                 if tokio::fs::metadata(&reader_playlist_path).await.is_err() {
                     tracing::error!(
-                        "❌ 等待 {} 秒后仍未创建 HLS 缓存播放列表: {}",
-                        latency_secs + CACHE_PLAYLIST_WAIT_SECS,
-                        reader_playlist_path.display()
+                        "{reader_context} 缓存预缓冲失败；等待{}仍无播放列表，准备停止会话",
+                        human_duration((latency_secs + CACHE_PLAYLIST_WAIT_SECS) as i64)
                     );
                     stop_ffmpeg_session(session).await;
                     return;
@@ -2072,25 +2547,34 @@ async fn spawn_cached_ffmpeg(
                 match FFMPEG_SUPERVISOR.spawn(&mut reader_cmd) {
                     Ok(mut reader_child) => {
                         let reader_pid = reader_child.id();
-                        tracing::info!("🚀 ffmpeg 延迟推流进程已启动 (PID: {:?})", reader_pid);
+                        let log = ChildLogContext::new(
+                            &reader_context,
+                            ChildRole::Ffmpeg(FfmpegStatsRole::Push),
+                            reader_pid,
+                        );
+                        log.started();
                         if let Some(pid_value) = reader_pid {
                             set_high_priority(pid_value);
                         }
                         mark_push_process_started();
                         if let Some(stderr) = reader_child.stderr.take() {
                             process.tasks.0.push(spawn_ffmpeg_stderr_monitor(
-                                session,
                                 stderr,
                                 reader_log_level,
-                                "ffmpeg 延迟推流",
-                                Some(FfmpegStatsRole::Push),
+                                log.clone(),
                             ));
                         }
 
-                        process.children.push(reader_child);
+                        process.children.push(FfmpegChild {
+                            child: reader_child,
+                            log,
+                        });
                     }
                     Err(e) => {
-                        tracing::error!("❌ 启动延迟 RTMP ffmpeg 失败: {}", e);
+                        tracing::error!(
+                            "{reader_context} 延迟推流进程启动失败；{}",
+                            safe_diagnostic(&e.to_string())
+                        );
                         drop(supervisor);
                         stop_ffmpeg_session(session).await;
                     }
@@ -2106,7 +2590,10 @@ async fn spawn_cached_ffmpeg(
             }
         }
         Err(e) => {
-            tracing::error!("❌ 启动 ffmpeg 缓存写入进程失败: {}", e);
+            tracing::error!(
+                "{context} 缓存进程启动失败；{}",
+                safe_diagnostic(&e.to_string())
+            );
             if let Some(mut ingest) = ingest_child {
                 kill_child_tree(&mut ingest).await;
             }
@@ -2123,6 +2610,7 @@ pub async fn ffmpeg(
     log_level: String,
     crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
     cache: FfmpegCacheOptions,
+    identity: FfmpegStreamIdentity,
 ) -> Option<FfmpegSession> {
     FFMPEG_SUPERVISOR
         .interruptible(async {
@@ -2140,7 +2628,7 @@ pub async fn ffmpeg(
             {
                 Ok(cfg) => cfg,
                 Err(error) => {
-                    tracing::warn!("FFmpeg startup cancelled: {error}");
+                    tracing::warn!("{identity} 启动已取消；{}", safe_diagnostic(&error));
                     return None;
                 }
             };
@@ -2159,6 +2647,7 @@ pub async fn ffmpeg(
                     log_level,
                     crop,
                     latency_secs,
+                    identity,
                 )
                 .await;
             } else {
@@ -2169,6 +2658,7 @@ pub async fn ffmpeg(
                     proxy,
                     log_level,
                     crop,
+                    identity,
                 )
                 .await;
             }
@@ -2193,13 +2683,9 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
         if let Some(process) = matching_process(&mut supervisor, session) {
             // Check if process has exited without blocking
             for child in &mut process.children {
-                match child.try_wait() {
+                match child.child.try_wait() {
                     Ok(Some(status)) => {
-                        if let Some(code) = status.code() {
-                            tracing::info!("ffmpeg 已退出，状态码: {}", code);
-                        } else {
-                            tracing::info!("ffmpeg 已被信号终止");
-                        }
+                        child.log.exited(&status);
 
                         drop(supervisor);
                         stop_ffmpeg_session(session).await;
@@ -2207,7 +2693,12 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        tracing::error!("检查 ffmpeg 状态失败: {}", e);
+                        tracing::error!(
+                            "{} 检查进程状态失败 pid={}；{}",
+                            child.log,
+                            child.log.pid_label(),
+                            safe_diagnostic(&e.to_string())
+                        );
                         drop(supervisor);
                         stop_ffmpeg_session(session).await;
                         return None;
@@ -2225,49 +2716,53 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
     }
 }
 
+fn log_stuck(context: &SessionLogContext, reason: StuckReason) {
+    match reason {
+        StuckReason::NoStats {
+            elapsed_secs,
+            source,
+        } => {
+            tracing::error!(
+                "{context} {source} 停滞，准备终止进程；{}无 stats 输出",
+                human_duration(elapsed_secs as i64)
+            );
+        }
+        StuckReason::StreamTimeFrozen { elapsed_secs } => {
+            tracing::error!(
+                "{context} 推流停滞，准备终止进程；流时间冻结{}",
+                human_duration(elapsed_secs as i64)
+            );
+        }
+        StuckReason::LowSpeed { elapsed_secs } => {
+            tracing::error!(
+                "{context} 推流停滞，准备终止进程；速度低于{}持续{}",
+                LOW_SPEED_THRESHOLD,
+                human_duration(elapsed_secs as i64)
+            );
+        }
+        StuckReason::IdleDrain { elapsed_secs } => {
+            tracing::info!(
+                "{context} 推流排空，准备停止进程；{}无数据",
+                human_duration(elapsed_secs as i64)
+            );
+        }
+    }
+}
+
 /// Background task to monitor ffmpeg timeout and kill if stuck
 async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
     loop {
         let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
-        if matching_process(&mut supervisor, session).is_none() {
+        let Some(process) = matching_process(&mut supervisor, session) else {
             // Process exited, stop monitoring
             break;
-        }
+        };
+        let context = process.log.clone();
 
         let stuck = check_ffmpeg_stuck(timeout_secs);
         drop(supervisor);
         if let Some(reason) = stuck {
-            match reason {
-                StuckReason::NoStats {
-                    elapsed_secs,
-                    source,
-                } => {
-                    tracing::error!(
-                        "⚠️ ffmpeg 似乎卡住（{} {} 秒无 stats 输出），正在终止进程",
-                        source,
-                        elapsed_secs
-                    );
-                }
-                StuckReason::StreamTimeFrozen { elapsed_secs } => {
-                    tracing::error!(
-                        "⚠️ ffmpeg 似乎卡住（流时间冻结 {} 秒），正在终止进程",
-                        elapsed_secs
-                    );
-                }
-                StuckReason::LowSpeed { elapsed_secs } => {
-                    tracing::error!(
-                        "⚠️ ffmpeg 似乎卡住（速度低于 {} 持续 {} 秒），正在终止进程",
-                        LOW_SPEED_THRESHOLD,
-                        elapsed_secs
-                    );
-                }
-                StuckReason::IdleDrain { elapsed_secs } => {
-                    tracing::info!(
-                        "📡 流传输已结束（{} 秒无数据），正在停止 ffmpeg",
-                        elapsed_secs
-                    );
-                }
-            }
+            log_stuck(&context, reason);
             stop_ffmpeg_session(session).await;
             break;
         }
@@ -2280,16 +2775,683 @@ async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, ReadBuf};
+
+    #[derive(Clone, Default)]
+    struct TestLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+    impl Write for TestLogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_logs(run: impl FnOnce()) -> String {
+        let output = TestLogWriter::default();
+        let writer = output.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = output.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    struct TestStderr {
+        chunks: VecDeque<Vec<u8>>,
+        offset: usize,
+        yield_next: bool,
+        error: Option<std::io::Error>,
+    }
+
+    impl TestStderr {
+        fn new(bytes: &[u8], chunk_size: usize) -> Self {
+            Self {
+                chunks: bytes.chunks(chunk_size).map(<[u8]>::to_vec).collect(),
+                offset: 0,
+                yield_next: false,
+                error: None,
+            }
+        }
+    }
+
+    impl AsyncRead for TestStderr {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            output: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if self.yield_next {
+                self.yield_next = false;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            if let Some(chunk) = self.chunks.front() {
+                let count = output.remaining().min(chunk.len() - self.offset);
+                output.put_slice(&chunk[self.offset..self.offset + count]);
+                let complete = self.offset + count == chunk.len();
+                self.offset += count;
+                if complete {
+                    self.chunks.pop_front();
+                    self.offset = 0;
+                }
+                self.yield_next = true;
+                Poll::Ready(Ok(()))
+            } else if let Some(error) = self.error.take() {
+                Poll::Ready(Err(error))
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
+    }
+
+    fn reader_context(session: FfmpegSession, role: ChildRole) -> ChildLogContext {
+        ChildLogContext::new(&test_context(session), role, Some(12345))
+    }
+
+    fn test_context(session: FfmpegSession) -> SessionLogContext {
+        SessionLogContext::new(
+            FfmpegStreamIdentity::new("jp", "YT", "示例频道001", "example-channel-001"),
+            session,
+        )
+    }
+
+    fn test_child(child: Child, session: FfmpegSession) -> FfmpegChild {
+        FfmpegChild {
+            log: ChildLogContext::new(
+                &test_context(session),
+                ChildRole::Ffmpeg(FfmpegStatsRole::Push),
+                child.id(),
+            ),
+            child,
+        }
+    }
 
     fn empty_process(session: FfmpegSession) -> FfmpegProcess {
         FfmpegProcess {
             session,
+            log: test_context(session),
             tasks: SessionTasks::default(),
             children: Vec::new(),
             ingest: None,
             pid: None,
             cache_dir: None,
         }
+    }
+
+    #[test]
+    fn stderr_reader_preserves_split_utf8_delimiters_and_final_diagnostic() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let session = FfmpegSession(41);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                let bytes = concat!(
+                "ERROR 示例诊断 rtmp://example.invalid/live/SYNTHETIC_RTMP?key=SYNTHETIC_KEY Broken pipe\r\n",
+                "WARNING Cookie: SESSDATA=SYNTHETIC_COOKIE\r",
+                "Conversion failed!"
+            );
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(bytes.as_bytes(), 1),
+                    "debug",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Push)),
+                )
+                .await;
+            })
+        });
+        assert_eq!(output.lines().count(), 3, "{output}");
+        assert!(output.contains("ERROR jp YT/示例频道001 s=41 推流"));
+        assert!(output.contains("示例诊断"));
+        assert_eq!(output.matches("Broken pipe").count(), 1);
+        assert_eq!(output.matches("Conversion failed").count(), 1);
+        assert!(output.contains("WARN jp"));
+        assert!(!output.contains('�'));
+        assert!(!output.contains("SYNTHETIC_"));
+        assert!(!output.contains("example.invalid"));
+    }
+
+    #[test]
+    fn stderr_reader_flushes_fragment_and_reports_read_error_once() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let session = FfmpegSession(42);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                let mut stderr = TestStderr::new(b"Broken pipe", 2);
+                stderr.error = Some(std::io::Error::other(
+                "HTTP 502 https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@proxy.invalid/read token=SYNTHETIC_TOKEN",
+            ));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    stderr,
+                    "error",
+                    reader_context(session, ChildRole::Ingest),
+                )
+                .await;
+            })
+        });
+        assert_eq!(output.lines().count(), 2, "{output}");
+        assert_eq!(output.matches("Broken pipe").count(), 1);
+        assert_eq!(output.matches("读取诊断失败").count(), 1);
+        assert!(output.contains("s=42 摄取"));
+        assert!(output.contains("HTTP 502"));
+        assert!(!output.contains("SYNTHETIC_"));
+        assert!(!output.contains("proxy.invalid"));
+    }
+
+    #[test]
+    fn oversized_stderr_discards_secret_tail_through_the_delimiter() {
+        let mut diagnostic = b"ERROR rtmp://example.invalid/live/".to_vec();
+        diagnostic.resize(STDERR_LINE_LIMIT + 20, b'x');
+        diagnostic.extend_from_slice(
+            b"SYNTHETIC_UNLABELLED_TAIL\nWARNING next diagnostic\nConversion failed!",
+        );
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let session = FfmpegSession(43);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(&diagnostic, 8191),
+                    "debug",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Cache)),
+                )
+                .await;
+            })
+        });
+        assert_eq!(output.lines().count(), 3, "{output}");
+        assert_eq!(output.matches("原始行超过64 KiB，已截断").count(), 1);
+        assert!(output.contains("[诊断续行已省略]"));
+        assert!(output.contains("Conversion failed"));
+        assert!(output.lines().all(|line| line.len() < 600));
+        assert!(!output.contains("SYNTHETIC_UNLABELLED_TAIL"));
+        assert!(!output.contains("example.invalid"));
+    }
+
+    #[test]
+    fn interleaved_children_and_replacement_keep_their_owned_identity() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let session = FfmpegSession(44);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                let cache = monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(b"HTTP error 403 Forbidden\nBroken pipe\n", 4),
+                    "error",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Cache)),
+                );
+                let push = monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(b"Broken pipe\nERROR writing trailer: Broken pipe\n", 4),
+                    "error",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Push)),
+                );
+                tokio::join!(cache, push);
+
+                let replacement = FfmpegSession(45);
+                let identity =
+                    FfmpegStreamIdentity::new("ca", "TW", "示例频道002", "example-channel-002");
+                let context = SessionLogContext::new(identity, replacement);
+                *supervisor.lock().await = Some(FfmpegProcess {
+                    log: context.clone(),
+                    ..empty_process(replacement)
+                });
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(b"Broken pipe", 4),
+                    "error",
+                    ChildLogContext::new(
+                        &context,
+                        ChildRole::Ffmpeg(FfmpegStatsRole::Push),
+                        Some(54321),
+                    ),
+                )
+                .await;
+            })
+        });
+        assert!(output.contains("jp YT/示例频道001 s=44 缓存；HTTP error 403 Forbidden"));
+        assert!(output.contains("jp YT/示例频道001 s=44 缓存；Broken pipe"));
+        assert!(output.contains("jp YT/示例频道001 s=44 推流；Broken pipe"));
+        assert!(output.contains("ca TW/示例频道002 s=45 推流；Broken pipe"));
+        assert!(output.contains("已合并1条重复诊断"));
+        assert_eq!(output.lines().count(), 5, "{output}");
+    }
+
+    #[test]
+    fn wrapped_native_credentials_stay_hidden_until_the_next_stats_boundary() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                reset_ffmpeg_tracking_state();
+                let session = FfmpegSession(55);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(
+                        concat!(
+                            "ERROR opening rtmp://example.invalid/live/\r\n",
+                            "SYNTHETIC_UNLABELLED_CREDENTIAL\n",
+                            "Server returned 403 Forbidden\n",
+                            "Broken pipe\n",
+                            "frame=0 fps=0 time=00:00:00.00 bitrate=0kbits/s speed=0x\r",
+                            "WARNING new independent diagnostic"
+                        )
+                        .as_bytes(),
+                        3,
+                    ),
+                    "debug",
+                    reader_context(session, ChildRole::Ingest),
+                )
+                .await;
+                reset_stopped_tracking_state();
+            })
+        });
+        assert_eq!(output.lines().count(), 5, "{output}");
+        assert!(output.contains("[诊断续行已省略]"));
+        assert!(output.contains("HTTP 403"), "{output}");
+        assert!(output.contains("Broken pipe"));
+        assert!(output.contains("WARNING new independent diagnostic"));
+        assert!(!output.contains("SYNTHETIC_"));
+        assert!(!output.contains("example.invalid"));
+    }
+
+    #[test]
+    fn sensitive_or_truncated_stats_keep_wrapped_tails_private() {
+        let mut diagnostic = concat!(
+            "frame=1 fps=1 time=00:00:01.00 bitrate=0kbits/s speed=0x token=SYNTHETIC_STATS_TOKEN\n",
+            "SYNTHETIC_STATS_TOKEN_TAIL\n",
+            "frame=2 fps=2 time=00:00:02.00 bitrate=0kbits/s speed=0x\r",
+            "WARNING independent diagnostic\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let oversized_start = diagnostic.len();
+        diagnostic.extend_from_slice(b"frame=3 fps=3 time=00:00:03.00 bitrate=0kbits/s speed=0x ");
+        diagnostic.resize(oversized_start + STDERR_LINE_LIMIT + 5, b'x');
+        diagnostic.extend_from_slice(b"\nSYNTHETIC_TRUNCATED_STATS_TAIL\n");
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                reset_ffmpeg_tracking_state();
+                let session = FfmpegSession(57);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(&diagnostic, 8191),
+                    "debug",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Push)),
+                )
+                .await;
+                assert_eq!(FFMPEG_PUSH_FRAME.load(Ordering::Relaxed), 3);
+                assert_eq!(optional_f32_from_atomic_bits(&FFMPEG_PUSH_FPS), Some(3.0));
+                assert_eq!(LAST_STREAM_TIME.load(Ordering::Relaxed), 3);
+                assert!(LAST_PUSH_PROGRESS_TIME.load(Ordering::Relaxed) > 0);
+                assert_eq!(LAST_CACHE_PROGRESS_TIME.load(Ordering::Relaxed), 0);
+                reset_stopped_tracking_state();
+            })
+        });
+        assert!(
+            output.contains("WARNING independent diagnostic"),
+            "{output}"
+        );
+        assert!(!output.contains("SYNTHETIC_"), "{output}");
+        assert!(!output.contains("已观察到推流"), "{output}");
+    }
+
+    #[test]
+    fn native_warning_then_error_preserves_severity_and_new_failure() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let session = FfmpegSession(58);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(
+                        concat!(
+                            "WARNING Connection reset; retrying\n",
+                            "Connection reset by peer\n",
+                            "[HLS] KEEPALIVE request failed: Input/output ERROR\n",
+                            "Permission denied\n",
+                            "End of file\n",
+                            "No space left on device\n",
+                            "Protocol not found\n"
+                        )
+                        .as_bytes(),
+                        7,
+                    ),
+                    "error",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Cache)),
+                )
+                .await;
+            })
+        });
+        let lines: Vec<_> = output.lines().collect();
+        assert_eq!(lines.len(), 7, "{output}");
+        assert!(lines[0].trim_start().starts_with("WARN "), "{output}");
+        assert!(lines[1].starts_with("ERROR "), "{output}");
+        assert!(lines[1].contains("Connection reset by peer"), "{output}");
+        assert!(lines[2].starts_with("DEBUG "), "{output}");
+        assert!(
+            lines[3..].iter().all(|line| line.starts_with("ERROR ")),
+            "{output}"
+        );
+        assert!(!output.contains("已合并"), "{output}");
+    }
+
+    #[test]
+    fn repeated_child_error_classes_have_bounded_summaries_and_terminal_output() {
+        let output = capture_logs(|| {
+            let mut reporter =
+                StderrReporter::new(reader_context(FfmpegSession(46), ChildRole::Ingest));
+            let now = reporter.log.started;
+            reporter.diagnostic("Broken pipe", "debug", false, now);
+            for index in 1..=20 {
+                reporter.diagnostic(
+                    "ERROR writing trailer: Broken pipe",
+                    "debug",
+                    false,
+                    now + Duration::from_secs(index * 15),
+                );
+            }
+            reporter.diagnostic(
+                "Broken pipe",
+                "debug",
+                false,
+                now + Duration::from_secs(301),
+            );
+            reporter.diagnostic(
+                "ERROR new decoder failure",
+                "debug",
+                false,
+                now + Duration::from_secs(302),
+            );
+            reporter.diagnostic(
+                "[hls] keepalive request failed: Connection reset",
+                "debug",
+                false,
+                now + Duration::from_secs(303),
+            );
+            reporter.repeat_summary("诊断读取结束", now + Duration::from_secs(304));
+        });
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.contains("Broken pipe"))
+                .count(),
+            3,
+            "{output}"
+        );
+        assert!(output.contains("已合并20条重复诊断"));
+        assert!(output.contains("诊断读取结束；已合并1条重复诊断"));
+        assert!(output.contains("ERROR jp YT/示例频道001 s=46 摄取；ERROR new decoder failure"));
+        assert!(output
+            .lines()
+            .any(|line| line.starts_with("DEBUG") && line.contains("keepalive request failed")));
+    }
+
+    struct PausedStderr {
+        fragment: Option<&'static [u8]>,
+        waiting: Option<tokio::sync::oneshot::Sender<()>>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    }
+
+    impl AsyncRead for PausedStderr {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            output: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if let Some(fragment) = self.fragment.take() {
+                output.put_slice(fragment);
+                return Poll::Ready(Ok(()));
+            }
+            if let Some(waiting) = self.waiting.take() {
+                let _ = waiting.send(());
+            }
+            Pin::new(&mut self.release).poll(cx).map(|_| Ok(()))
+        }
+    }
+
+    #[test]
+    fn stale_reader_eof_never_flushes_into_a_replacement_session() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let supervisor = Arc::new(ProcessSupervisor::default());
+                let old = FfmpegSession(47);
+                *supervisor.lock().await = Some(empty_process(old));
+                let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                let reader = tokio::spawn({
+                    let supervisor = supervisor.clone();
+                    async move {
+                        monitor_ffmpeg_stderr(
+                            &supervisor,
+                            PausedStderr {
+                                fragment: Some(b"ERROR stale unterminated diagnostic"),
+                                waiting: Some(waiting_tx),
+                                release: release_rx,
+                            },
+                            "debug",
+                            reader_context(old, ChildRole::Ingest),
+                        )
+                        .await;
+                    }
+                });
+                waiting_rx.await.unwrap();
+                *supervisor.lock().await = Some(empty_process(FfmpegSession(48)));
+                release_tx.send(()).unwrap();
+                reader.await.unwrap();
+                assert_eq!(
+                    supervisor.lock().await.as_ref().unwrap().session,
+                    FfmpegSession(48)
+                );
+            })
+        });
+        assert!(output.is_empty(), "{output}");
+    }
+
+    #[test]
+    fn aborting_an_owned_reader_does_not_drain_or_emit_its_partial_diagnostic() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                let supervisor = Arc::new(ProcessSupervisor::default());
+                let session = FfmpegSession(49);
+                let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+                let mut process = empty_process(session);
+                process.tasks.0.push(tokio::spawn({
+                    let supervisor = supervisor.clone();
+                    async move {
+                        let _on_drop = dropped_tx;
+                        monitor_ffmpeg_stderr(
+                            &supervisor,
+                            PausedStderr {
+                                fragment: Some(b"Broken pipe from an aborted reader"),
+                                waiting: Some(waiting_tx),
+                                release: release_rx,
+                            },
+                            "debug",
+                            reader_context(session, ChildRole::Ingest),
+                        )
+                        .await;
+                    }
+                }));
+                *supervisor.lock().await = Some(process);
+                waiting_rx.await.unwrap();
+                *supervisor.lock().await = Some(empty_process(FfmpegSession(50)));
+                assert!(tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+                    .await
+                    .unwrap()
+                    .is_err());
+                assert!(
+                    release_tx.send(()).is_err(),
+                    "abort must drop the blocked reader"
+                );
+            })
+        });
+        assert!(output.is_empty(), "{output}");
+    }
+
+    #[test]
+    fn reader_stats_preserve_meters_and_only_observed_push_reports_publishing() {
+        let session = FfmpegSession(51);
+        let push_log = reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Push));
+        let startup = capture_logs(|| push_log.started());
+        assert!(startup.contains("进程已启动 pid=12345"));
+        assert!(!startup.contains("已观察到推流"));
+
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                reset_ffmpeg_tracking_state();
+                FFMPEG_CACHE_BITRATE_KBPS.store(910.0_f32.to_bits(), Ordering::Relaxed);
+                let supervisor = ProcessSupervisor::default();
+                *supervisor.lock().await = Some(empty_process(session));
+                monitor_ffmpeg_stderr(
+                    &supervisor,
+                    TestStderr::new(
+                        b"frame=60 fps=60 time=00:00:04.00 bitrate=9999kbits/s speed=1.5x\r",
+                        5,
+                    ),
+                    "debug",
+                    reader_context(session, ChildRole::Ffmpeg(FfmpegStatsRole::Cache)),
+                )
+                .await;
+                assert_eq!(f32_from_atomic_bits(&FFMPEG_CACHE_SPEED), Some(1.5));
+                assert_eq!(
+                    f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS),
+                    Some(910.0)
+                );
+                assert_eq!(FFMPEG_CACHE_TIME_SECS.load(Ordering::Relaxed), 4);
+                assert!(LAST_CACHE_PROGRESS_TIME.load(Ordering::Relaxed) > 0);
+                assert_eq!(LAST_PUSH_PROGRESS_TIME.load(Ordering::Relaxed), 0);
+                assert_eq!(LAST_STREAM_TIME.load(Ordering::Relaxed), 0);
+
+                monitor_ffmpeg_stderr(&supervisor,
+                TestStderr::new(concat!(
+                    "frame=0 fps=0 time=00:00:00.00 bitrate=0kbits/s speed=0x\r\n",
+                    "frame=120 fps=60 time=00:00:02.00 bitrate=6000kbits/s speed=1x ERROR token=SYNTHETIC_STATS_TOKEN\r",
+                    "frame=180 fps=60 size=96KiB time=00:00:03.00 bitrate=4000kbits/s speed=1x"
+                ).as_bytes(), 7), "debug", push_log,
+            ).await;
+                assert_eq!(f32_from_atomic_bits(&FFMPEG_SPEED), Some(1.0));
+                assert_eq!(f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS), Some(6_000.0));
+                assert_eq!(FFMPEG_TOTAL_BYTES.load(Ordering::Relaxed), 96 * 1024);
+                assert_eq!(FFMPEG_PUSH_FRAME.load(Ordering::Relaxed), 180);
+                assert_eq!(optional_f32_from_atomic_bits(&FFMPEG_PUSH_FPS), Some(60.0));
+                assert_eq!(LAST_STREAM_TIME.load(Ordering::Relaxed), 3);
+                assert!(LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed) > 0);
+                assert!(LAST_PUSH_PROGRESS_TIME.load(Ordering::Relaxed) > 0);
+                assert_eq!(LOW_SPEED_SINCE.load(Ordering::Relaxed), 0);
+                reset_stopped_tracking_state();
+            })
+        });
+        assert_eq!(output.lines().count(), 1, "{output}");
+        assert!(output.contains("s=51 推流 已观察到推流输出"));
+        assert!(!output.contains("SYNTHETIC_STATS_TOKEN"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn actual_child_exit_and_manual_stop_have_numeric_truthful_outcomes() {
+        let output = capture_logs(|| {
+            run_supervisor_test(async {
+                clear_manual_stop();
+                let session = FfmpegSession(52);
+                let mut command = Command::new("sh");
+                command.args(["-c", "exit 7"]).kill_on_drop(true);
+                let child = FFMPEG_SUPERVISOR.spawn(&mut command).unwrap();
+                let log = ChildLogContext::new(
+                    &test_context(session),
+                    ChildRole::Ffmpeg(FfmpegStatsRole::Cache),
+                    child.id(),
+                );
+                log.started();
+                *FFMPEG_SUPERVISOR.lock().await = Some(FfmpegProcess {
+                    children: vec![FfmpegChild { child, log }],
+                    ..empty_process(session)
+                });
+                assert_eq!(wait_ffmpeg_session(session).await.unwrap().code(), Some(7));
+
+                let session = FfmpegSession(53);
+                let child = FFMPEG_SUPERVISOR.spawn(&mut sleeper()).unwrap();
+                let child = test_child(child, session);
+                child.log.started();
+                *FFMPEG_SUPERVISOR.lock().await = Some(FfmpegProcess {
+                    children: vec![child],
+                    ..empty_process(session)
+                });
+                stop_ffmpeg().await;
+                assert!(FFMPEG_SUPERVISOR.lock().await.is_none());
+                assert!(was_manual_stop());
+                clear_manual_stop();
+            })
+        });
+        assert!(output.contains("s=52 缓存 进程已启动 pid="));
+        assert_eq!(output.matches("进程异常退出").count(), 1);
+        assert_eq!(output.matches("exit=7").count(), 1);
+        assert!(output.contains("s=53 ffmpeg 子进程已停止；原因=主动停止请求"));
+        assert!(!output.contains("Some("));
+        assert!(!output.contains("None"));
+        assert!(!output.contains("ExitStatus("));
+    }
+
+    #[test]
+    fn stalls_and_idle_drain_keep_role_duration_and_severity() {
+        let output = capture_logs(|| {
+            let context = test_context(FfmpegSession(54));
+            log_stuck(
+                &context,
+                StuckReason::NoStats {
+                    elapsed_secs: 31,
+                    source: "HLS 缓存写入",
+                },
+            );
+            log_stuck(&context, StuckReason::StreamTimeFrozen { elapsed_secs: 12 });
+            log_stuck(&context, StuckReason::LowSpeed { elapsed_secs: 65 });
+            log_stuck(&context, StuckReason::IdleDrain { elapsed_secs: 10 });
+        });
+        let records: Vec<_> = output.lines().collect();
+        assert_eq!(records.len(), 4);
+        assert!(records[..3].iter().all(|line| line.starts_with("ERROR")));
+        assert!(records[0].contains("s=54 HLS 缓存写入 停滞"));
+        assert!(records[0].contains("31秒无 stats"));
+        assert!(records[1].contains("推流停滞"));
+        assert!(records[2].contains("1分5秒"));
+        assert!(records[3].trim_start().starts_with("INFO"));
+        assert!(records[3].contains("推流排空"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_pid_and_signal_exit_have_explicit_human_values() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = capture_logs(|| {
+            let context =
+                ChildLogContext::new(&test_context(FfmpegSession(56)), ChildRole::Ingest, None);
+            context.started();
+            context.exited(&std::process::ExitStatus::from_raw(15));
+        });
+        assert!(output.contains("s=56 摄取 进程已启动 pid=未知"));
+        assert!(output.contains("进程异常退出 pid=未知 signal=15"));
+        assert!(!output.contains("Some("));
+        assert!(!output.contains("None"));
+        assert!(!output.contains("ExitStatus("));
     }
 
     #[tokio::test]
@@ -2385,6 +3547,42 @@ mod tests {
             .block_on(test);
     }
 
+    #[test]
+    fn fence_finishes_teardown_and_releases_locks_before_writing_logs() {
+        let supervisor = Arc::new(ProcessSupervisor::default());
+        let log_supervisor = Arc::clone(&supervisor);
+        let writes = Arc::new(AtomicU64::new(0));
+        let log_writes = Arc::clone(&writes);
+        let released = Arc::new(AtomicBool::new(true));
+        let log_released = Arc::clone(&released);
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(move || {
+                let stopped = log_supervisor
+                    .process
+                    .try_lock()
+                    .is_ok_and(|process| process.is_none());
+                let unlocked = log_supervisor.fence_lock.try_lock().is_ok();
+                log_released.fetch_and(
+                    stopped && unlocked && !*log_supervisor.fencing.borrow(),
+                    Ordering::SeqCst,
+                );
+                log_writes.fetch_add(1, Ordering::SeqCst);
+                std::io::sink()
+            })
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            run_supervisor_test(async {
+                *supervisor.lock().await = Some(empty_process(FfmpegSession(59)));
+                supervisor.fence().await;
+            });
+        });
+        assert!(writes.load(Ordering::SeqCst) > 0);
+        assert!(released.load(Ordering::SeqCst));
+    }
+
     #[cfg(target_os = "linux")]
     fn run_fence_test(test: impl Future<Output = ()>) {
         run_supervisor_test(test);
@@ -2424,9 +3622,13 @@ mod tests {
             let session = FfmpegSession(u64::MAX);
             *supervisor.lock().await = Some(FfmpegProcess {
                 session,
+                log: test_context(session),
                 tasks: SessionTasks::default(),
-                children: vec![publisher],
-                ingest: Some(IngestProcess(ingest)),
+                children: vec![test_child(publisher, session)],
+                ingest: Some(IngestProcess(
+                    ingest,
+                    ChildLogContext::new(&test_context(session), ChildRole::Ingest, Some(pids[1])),
+                )),
                 pid: Some(pids[0]),
                 cache_dir: None,
             });
@@ -2463,8 +3665,9 @@ mod tests {
             let session = FfmpegSession(u64::MAX);
             *FFMPEG_SUPERVISOR.lock().await = Some(FfmpegProcess {
                 session,
+                log: test_context(session),
                 tasks: SessionTasks::default(),
-                children: vec![publisher],
+                children: vec![test_child(publisher, session)],
                 ingest: None,
                 pid: Some(pid),
                 cache_dir: None,

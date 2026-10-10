@@ -29,6 +29,7 @@ use super::youtube_data::{
     DAILY_UNIT_BUDGET, RESERVED_UNITS, TARGET_RESERVED_UNITS,
 };
 use crate::config::{load_config, Config};
+use crate::logging::{human_duration, human_elapsed, safe_diagnostic, safe_text, FailureReport};
 use chrono::{DateTime, Timelike, Utc};
 use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
@@ -614,23 +615,64 @@ struct Worker {
     websub_slowed: bool,
     /// Roster polling weighted by go-live hours.
     by_hour: bool,
+    report_source: Option<(String, bool)>,
+    config_failures: FailureReport,
+    rss_client_failures: FailureReport,
+    classify_failures: FailureReport,
 }
 
 impl Worker {
     fn configure_rss(&mut self, enabled: bool) {
         if self.rss_enabled != enabled {
             self.rss_enabled = enabled;
+            self.rss.reset_reporting();
+            self.rss_client_failures = FailureReport::default();
             // Resume promptly but retain per-feed backoff and HTTP validators.
             self.next_rss = None;
         }
     }
 
     async fn tick(&mut self) -> Result<(), String> {
-        if crate::cluster::yt_index_role().is_peer() {
+        let role = crate::cluster::yt_index_role();
+        if role.is_peer() {
             // The owner node discovers for the cluster; its rows come with the index.
+            self.report_source = None;
+            self.classify_failures = FailureReport::default();
+            self.rss_client_failures = FailureReport::default();
+            self.rss.reset_reporting();
             return Ok(());
         }
-        let cfg = load_config().await.map_err(|e| e.to_string())?;
+        let cfg = match load_config().await.map_err(|e| e.to_string()) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                let node = self.node_label();
+                note_discovery_failure(
+                    &mut self.config_failures,
+                    &node,
+                    "发现工作器读取配置",
+                    &error,
+                    Instant::now(),
+                );
+                return Err(error);
+            }
+        };
+        let source = (
+            cfg.cluster.node_id.clone(),
+            matches!(role, crate::cluster::YtIndexRole::Owner),
+        );
+        if self.report_source.as_ref() != Some(&source) {
+            self.report_source = Some(source);
+            self.classify_failures = FailureReport::default();
+            self.rss_client_failures = FailureReport::default();
+            self.rss.reset_reporting();
+        }
+        let node = self.node_label();
+        note_discovery_success(
+            &mut self.config_failures,
+            &node,
+            "发现工作器读取配置",
+            Instant::now(),
+        );
         let keys = cfg.youtube_api_keys();
         if keys.is_empty() {
             // Nothing can be classified without a key; drop stale rows too.
@@ -643,6 +685,8 @@ impl Worker {
         let roster = roster_channel_ids(&cfg).await;
         let target = restream_target(&cfg);
         if roster != self.roster {
+            self.classify_failures = FailureReport::default();
+            self.rss_client_failures = FailureReport::default();
             self.no_playlist.clear();
             self.playlist_due.retain(|id, _| roster.contains(id));
             self.playlist_seen
@@ -670,6 +714,14 @@ impl Worker {
             .await
     }
 
+    fn node_label(&self) -> String {
+        match self.report_source.as_ref().map(|(node, _)| node.trim()) {
+            Some("") => "local".to_string(),
+            Some(node) => safe_text(node, 64),
+            None => "unknown".to_string(),
+        }
+    }
+
     async fn read_feeds(
         &mut self,
         roster: &[String],
@@ -679,7 +731,29 @@ impl Worker {
         if !self.rss_enabled {
             return Ok(());
         }
-        let client = pooled_client(proxy).map_err(|e| e.to_string())?;
+        let node = self.node_label();
+        self.rss.set_report_node(&node);
+        let client = match pooled_client(proxy).map_err(|e| e.to_string()) {
+            Ok(client) => {
+                note_discovery_success(
+                    &mut self.rss_client_failures,
+                    &node,
+                    "RSS 客户端创建",
+                    Instant::now(),
+                );
+                client
+            }
+            Err(error) => {
+                note_discovery_failure(
+                    &mut self.rss_client_failures,
+                    &node,
+                    "RSS 客户端创建",
+                    &error,
+                    Instant::now(),
+                );
+                return Err(error);
+            }
+        };
         let jobs: Vec<(String, Option<String>, Option<String>)> = self
             .rss
             .plan(roster, Instant::now())
@@ -690,17 +764,23 @@ impl Worker {
             })
             .collect();
         // Owned items: futures borrowing the roster make tick() unspawnable.
-        let results: Vec<(String, FeedOutcome)> = stream::iter(jobs)
+        let reads: Vec<(String, rss::FeedRead)> = stream::iter(jobs)
             .map(|(id, etag, last_modified)| {
                 let client = client.clone();
+                let node = node.clone();
                 async move {
-                    let outcome = fetch_feed(&client, &id, etag, last_modified).await;
-                    (id, outcome)
+                    let read = fetch_feed(&client, &node, &id, etag, last_modified).await;
+                    (id, read)
                 }
             })
             .buffer_unordered(FEED_CONCURRENCY)
             .collect()
             .await;
+        let causes: Vec<_> = reads.iter().filter_map(|(_, read)| read.failure).collect();
+        let results: Vec<_> = reads
+            .into_iter()
+            .map(|(id, read)| (id, read.outcome))
+            .collect();
         for (_, outcome) in &results {
             if let FeedOutcome::Fresh { entries, .. } = outcome {
                 for entry in entries {
@@ -712,7 +792,8 @@ impl Worker {
                 );
             }
         }
-        self.rss.record(results, Instant::now());
+        self.rss
+            .record_with_causes(results, &causes, Instant::now());
         Ok(())
     }
 
@@ -725,6 +806,7 @@ impl Worker {
         now: Instant,
         target: Option<String>,
     ) {
+        let node = self.node_label();
         let target_reserved = target.is_some();
         set_target_reserved(target_reserved);
         let usable = usable_key_count(keys);
@@ -736,6 +818,7 @@ impl Worker {
             self.websub_slowed = websub_slowed;
             if on {
                 tracing::info!(
+                    node = %node,
                     "{}",
                     if websub_slowed {
                         "WebSub 推送正常，上传列表轮询放慢一倍 (转播目标不变)"
@@ -773,10 +856,11 @@ impl Worker {
             self.by_hour = by_hour;
             match interval.filter(|_| on && by_hour) {
                 Some(interval) => tracing::info!(
-                    "YouTube 上传列表按开播时段轮询: 本时段每频道 {}s",
-                    interval.as_secs()
+                    node = %node,
+                    "YouTube 上传列表按开播时段轮询: 本时段每频道 {}",
+                    human_elapsed(interval)
                 ),
-                None if !by_hour => tracing::info!("YouTube 上传列表恢复均匀轮询"),
+                None if !by_hour => tracing::info!(node = %node, "YouTube 上传列表恢复均匀轮询"),
                 None => {}
             }
         }
@@ -813,24 +897,29 @@ impl Worker {
             self.playlist_on = on;
             match active {
                 Some(interval) => tracing::info!(
-                    "YouTube 上传列表轮询开启: 本时段每频道 {}s{}",
-                    interval.as_secs(),
+                    node = %node,
+                    "YouTube 上传列表轮询开启: 本时段每频道 {}{}",
+                    human_elapsed(interval),
                     if degraded { " (RSS 不可用)" } else { "" }
                 ),
-                None => tracing::info!("YouTube 上传列表轮询关闭"),
+                None => tracing::info!(node = %node, "YouTube 上传列表轮询关闭"),
             }
         } else if on && fit_changed {
             match (fit, active) {
                 (Fit::Short(factor), Some(interval)) => tracing::info!(
-                    "YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}s",
+                    node = %node,
+                    "YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}",
                     factor,
-                    interval.as_secs()
+                    human_elapsed(interval)
                 ),
                 (_, Some(interval)) => tracing::info!(
-                    "YouTube 上传列表轮询恢复计划: 本时段每频道 {}s",
-                    interval.as_secs()
+                    node = %node,
+                    "YouTube 上传列表轮询恢复计划: 本时段每频道 {}",
+                    human_elapsed(interval)
                 ),
-                (_, None) => tracing::info!("YouTube 配额只够索引与转播目标，上传列表轮询暂停"),
+                (_, None) => {
+                    tracing::info!(node = %node, "YouTube 配额只够索引与转播目标，上传列表轮询暂停")
+                }
             }
         }
         let stretch = target_stretch;
@@ -876,9 +965,10 @@ impl Worker {
         if self.target_id.as_deref() != target.as_deref() {
             if let Some(ref id) = target {
                 tracing::info!(
-                    "YouTube 转播目标 {} 上传列表轮询: 每 {}s",
-                    id,
-                    target_poll_interval(stretch).as_secs()
+                    node = %node,
+                    "YouTube 转播目标 {} 上传列表轮询: 每 {}",
+                    safe_text(id, 64),
+                    human_elapsed(target_poll_interval(stretch))
                 );
             }
             self.target_id = target.clone();
@@ -929,7 +1019,7 @@ impl Worker {
                     self.playlist_seen.insert(id, entries);
                 }
                 PlaylistOutcome::NotFound => {
-                    tracing::info!("YouTube 频道 {} 没有上传列表，停止轮询", id);
+                    tracing::info!(node = %node, "YouTube 频道 {} 没有上传列表，停止轮询", safe_text(&id, 64));
                     self.no_playlist.insert(id);
                 }
                 PlaylistOutcome::Failed => {}
@@ -997,8 +1087,20 @@ impl Worker {
             .await
             .map_err(|e| e.to_string())
         {
-            Ok(videos) => videos,
+            Ok(videos) => {
+                let node = self.node_label();
+                note_discovery_success(&mut self.classify_failures, &node, "直播发现分类查询", now);
+                videos
+            }
             Err(e) => {
+                let node = self.node_label();
+                note_discovery_failure(
+                    &mut self.classify_failures,
+                    &node,
+                    "直播发现分类查询",
+                    &e,
+                    now,
+                );
                 // Unclassified candidates wait for the next re-check instead
                 // of retrying every loop.
                 self.next_recheck = Some(now + RSS_TICK);
@@ -1038,10 +1140,13 @@ impl Worker {
                     .unwrap_or(Source::Rss);
                 let since = row.start_actual.as_deref().and_then(seconds_since);
                 tracing::info!(
-                    "发现直播 {} via {}, 开播后 {}s",
-                    row.id,
+                    "{} 发现直播 {} channel={} ({}) via {}，开播距今 {}",
+                    self.node_label(),
+                    safe_text(&row.id, 64),
+                    safe_text(&row.channel.id, 64),
+                    safe_text(&row.channel.name, 36),
                     source.label(),
-                    since.map_or_else(|| "?".to_string(), |secs| secs.to_string())
+                    since.map_or_else(|| "未知".to_string(), human_duration)
                 );
             }
             state.found.insert(row.id.clone(), row);
@@ -1054,6 +1159,43 @@ impl Worker {
         drop(guard);
         crate::webui::stream_list::wake();
         Ok(())
+    }
+}
+
+fn note_discovery_failure(
+    report: &mut FailureReport,
+    node: &str,
+    operation: &str,
+    error: &str,
+    now: Instant,
+) {
+    if let Some(summary) = report.failure(now, 1) {
+        tracing::warn!(
+            "{} YouTube {}失败；{}，等待现有重试；原因={}",
+            node,
+            operation,
+            summary,
+            safe_diagnostic(error)
+        );
+    } else {
+        tracing::debug!(
+            "{} YouTube {}仍失败: {}",
+            node,
+            operation,
+            safe_diagnostic(error)
+        );
+    }
+}
+
+fn note_discovery_success(report: &mut FailureReport, node: &str, operation: &str, now: Instant) {
+    if let Some(summary) = report.success(now) {
+        tracing::info!(
+            "{} YouTube {}已恢复；此前失败={}次 持续={}",
+            node,
+            operation,
+            summary.failures,
+            human_elapsed(summary.elapsed)
+        );
     }
 }
 
@@ -1108,9 +1250,9 @@ pub fn start_discovery_worker() -> Option<DiscoveryWorker> {
     Some(DiscoveryWorker(tokio::spawn(async {
         let mut worker = Worker::default();
         loop {
-            if let Err(e) = worker.tick().await {
-                tracing::warn!("YouTube 直播发现失败: {}", e);
-            }
+            // Each failing operation reports its own streak. An idle tick or
+            // a peer-role skip cannot claim that a failed query recovered.
+            let _ = worker.tick().await;
             tokio::select! {
                 _ = tokio::time::sleep(LOOP) => {}
                 _ = super::youtube_websub::pushed() => {
@@ -1125,6 +1267,56 @@ pub fn start_discovery_worker() -> Option<DiscoveryWorker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_operation_reports_are_bounded_and_only_explicit_success_recovers() {
+        let now = Instant::now();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut worker = Worker::default();
+            for attempt in 0..12 {
+                note_discovery_failure(
+                    &mut worker.classify_failures,
+                    "ny",
+                    "直播发现分类查询",
+                    "HTTP 503 https://api.invalid/?key=synthetic-discovery-key",
+                    now + Duration::from_secs(attempt * 30),
+                );
+            }
+            worker.configure_rss(false);
+            assert!(worker.classify_failures.summary(now).is_some());
+            assert!(!logs.text().contains("已恢复"));
+            note_discovery_failure(
+                &mut worker.rss_client_failures,
+                "ny",
+                "RSS 客户端创建",
+                "synthetic failure",
+                now + Duration::from_secs(331),
+            );
+            note_discovery_success(
+                &mut worker.classify_failures,
+                "ny",
+                "直播发现分类查询",
+                now + Duration::from_secs(332),
+            );
+            note_discovery_success(
+                &mut worker.classify_failures,
+                "ny",
+                "直播发现分类查询",
+                now + Duration::from_secs(333),
+            );
+            assert!(
+                worker.rss_client_failures.summary(now).is_some(),
+                "one operation's success cannot clear another's failure"
+            );
+        });
+        let text = logs.text();
+        assert_eq!(text.matches("WARN [yt-discovery]").count(), 3, "{text}");
+        assert_eq!(text.matches("直播发现分类查询已恢复").count(), 1);
+        assert!(text.contains("此前失败=12次"));
+        assert!(text.contains("ny YouTube RSS 客户端创建失败"));
+        assert!(!text.contains("synthetic-discovery-key"));
+    }
 
     #[test]
     fn merging_adds_only_ids_holodex_did_not_send() {

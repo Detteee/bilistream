@@ -81,10 +81,22 @@ pub async fn get_holodex_streams(
         .timeout(Duration::from_secs(15))
         .header("X-APIKEY", api_key)
         .send()
-        .await?;
+        .await
+        .map_err(|error| {
+            format!(
+                "Holodex live 查询失败（频道数={}）: {}",
+                channel_ids.len(),
+                error.without_url()
+            )
+        })?;
 
     if !response.status().is_success() {
-        return Err(format!("Holodex API error: {}", response.status()).into());
+        return Err(format!(
+            "Holodex live 查询失败（频道数={}）: HTTP {}",
+            channel_ids.len(),
+            response.status()
+        )
+        .into());
     }
 
     Ok(response_json_limited(response).await?)
@@ -190,7 +202,8 @@ pub async fn get_holodex_favorites_live(
         jwt,
     )
     .send()
-    .await?;
+    .await
+    .map_err(reqwest::Error::without_url)?;
 
     if !live_resp.status().is_success() {
         return Err(format!("Holodex favorites live error: {}", live_resp.status()).into());
@@ -225,7 +238,7 @@ pub async fn refresh_holodex_jwt(
     .timeout(Duration::from_secs(10))
     .send()
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.without_url().to_string())?;
 
     if !response.status().is_success() {
         return Ok(None);

@@ -2,6 +2,7 @@ pub mod app_state;
 pub mod cluster;
 pub mod config;
 pub mod deps;
+pub(crate) mod logging;
 pub mod plugins;
 pub mod runtime;
 pub mod storage;

@@ -2,6 +2,7 @@ use super::twitch::get_twitch_status;
 use super::youtube::{get_youtube_area_topic, get_youtube_status};
 use crate::cluster::{monitored_config_version, sync_monitored_config_after_change};
 use crate::config::{load_config, save_config, Config};
+use crate::logging::{safe_diagnostic, safe_text};
 use crate::plugins::banned_keywords::{
     banned_keyword_hit, danmaku_banned_keywords, danmaku_haystack,
 };
@@ -372,7 +373,7 @@ fn resolve_area_alias(alias: &str) -> String {
     let areas_config = match load_areas_config() {
         Some(config) => config,
         None => {
-            tracing::warn!("无法加载 areas.json 配置");
+            tracing::debug!("无法加载 areas.json 配置");
             return alias_trimmed.to_string();
         }
     };
@@ -409,8 +410,132 @@ fn resolve_area_alias(alias: &str) -> String {
         }
     }
 
-    tracing::warn!("未找到分区别名 '{}' 的匹配项", alias_trimmed);
+    tracing::debug!("未找到分区别名 '{}' 的匹配项", safe_text(alias_trimmed, 80));
     alias_trimmed.to_string()
+}
+
+/// Requested identity is resolved as the existing command checks progress.
+/// One emitter owns the final accepted/no-op/rejected record; it does not
+/// decide whether a command is allowed or mutate config/monitor state.
+#[derive(Default)]
+struct DanmakuTargetLog {
+    node: String,
+    platform: String,
+    channel: String,
+    area: Option<(u64, String)>,
+    requested_area: Option<u64>,
+    forced_without_title: bool,
+}
+
+enum DanmakuTargetOutcome<'a> {
+    Updated(&'a str),
+    Unchanged,
+    Rejected(&'a str),
+}
+
+impl DanmakuTargetLog {
+    fn emit(&self, outcome: DanmakuTargetOutcome<'_>) {
+        let node = safe_text(
+            if self.node.is_empty() {
+                "local"
+            } else {
+                &self.node
+            },
+            64,
+        );
+        let identity = if self.platform.is_empty() {
+            format!("{node} 弹幕命令")
+        } else {
+            format!(
+                "{node} {}/{}",
+                safe_text(&self.platform, 16),
+                safe_text(
+                    if self.channel.is_empty() {
+                        "未知频道"
+                    } else {
+                        &self.channel
+                    },
+                    64
+                )
+            )
+        };
+        let area = self.area.as_ref().map_or_else(String::new, |(id, name)| {
+            format!("；分区={}({id})", safe_text(name, 48))
+        });
+        let (action, sync) = match outcome {
+            DanmakuTargetOutcome::Updated(sync) => ("监听目标已更新", sync),
+            DanmakuTargetOutcome::Unchanged => ("监听目标未变", ""),
+            DanmakuTargetOutcome::Rejected(reason) => {
+                tracing::warn!(
+                    "{} 监听目标更新已拒绝{}；原因={}",
+                    identity,
+                    area,
+                    safe_diagnostic(reason)
+                );
+                return;
+            }
+        };
+        let mut detail = String::new();
+        if let (Some(requested), Some((actual, _))) = (self.requested_area, &self.area) {
+            if requested != *actual {
+                detail.push_str(&format!("；按标题/游戏由分区 {requested} 修正"));
+            }
+        }
+        if self.forced_without_title {
+            detail.push_str("；主播允许无标题频道");
+        }
+        if !sync.is_empty() {
+            detail.push_str(&safe_text(sync, 240));
+        }
+        tracing::info!("{} {}{}{}", identity, action, area, detail);
+    }
+
+    fn reject(&self, reason: &str) {
+        self.emit(DanmakuTargetOutcome::Rejected(reason));
+    }
+}
+
+/// Finish the existing config-result branches. The caller supplies its current
+/// update effects and reply transport; reporting never decides those effects.
+async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
+    config_update: Result<Option<(String, Config)>, Box<dyn std::error::Error>>,
+    outcome: DanmakuTargetLog,
+    after_update: AfterUpdate,
+    reply: Reply,
+) where
+    AfterUpdate: FnOnce(String, Config) -> AfterFuture,
+    AfterFuture: Future<Output = String>,
+    Reply: FnOnce(String) -> ReplyFuture,
+    ReplyFuture: Future<Output = ()>,
+{
+    let area_name = outcome
+        .area
+        .as_ref()
+        .map(|(_, name)| name.as_str())
+        .unwrap_or_default();
+    match config_update {
+        Ok(None) => {
+            let message = format!(
+                "{} 监听对象已是：{} - {}",
+                outcome.platform, outcome.channel, area_name
+            );
+            outcome.emit(DanmakuTargetOutcome::Unchanged);
+            reply(message).await;
+        }
+        Ok(Some((old_monitored_config_version, updated_config))) => {
+            let sync_message = after_update(old_monitored_config_version, updated_config).await;
+            reply(format!(
+                "更新：{} - {} - {}",
+                outcome.platform, outcome.channel, area_name
+            ))
+            .await;
+            outcome.emit(DanmakuTargetOutcome::Updated(&sync_message));
+        }
+        Err(error) => {
+            outcome.reject(&format!("更新配置时出错: {error}"));
+            reply(format!("错误：更新配置时出错 {error}")).await;
+        }
+    }
 }
 
 /// Processes a single danmaku command.
@@ -430,7 +555,10 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     let cfg = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::error!("加载配置失败，忽略弹幕命令: {}", e);
+            tracing::error!(
+                "加载配置失败，忽略弹幕命令: {}",
+                safe_diagnostic(&e.to_string())
+            );
             return;
         }
     };
@@ -479,19 +607,25 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
 
     // tracing::info!("📺 转播命令收到: {}", normalized_danmaku);
     let danmaku_command = normalized_danmaku.replace(" :", "");
+    let mut outcome = DanmakuTargetLog {
+        node: cfg.cluster.node_id.clone(),
+        ..Default::default()
+    };
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
     // tracing::info!("弹幕:{:?}", parts);
     if parts.len() < 5 {
-        tracing::error!("弹幕命令格式错误. Skipping...");
+        outcome.reject("弹幕命令格式错误");
         let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
         return;
     }
 
     let platform = parts[2].to_uppercase();
+    outcome.platform = platform.clone();
+    outcome.channel = parts[3].to_string();
     if platform.to_uppercase() != "YT" && platform.to_uppercase() != "TW" {
-        tracing::error!("平台错误. Skipping... : {}", platform);
+        outcome.reject("不支持的平台");
         let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
         return;
     }
@@ -499,43 +633,39 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     let area_alias = parts[4];
 
     if area_alias.is_empty() {
-        tracing::error!("分区不能为空. Skipping...");
+        outcome.reject("分区不能为空");
         let _ = bilibili::send_danmaku(&cfg, "错误：分区不能为空").await;
         return;
     }
 
-    tracing::info!("原始分区输入: '{}'", area_alias);
+    tracing::debug!("原始分区输入: '{}'", safe_text(area_alias, 80));
     let area_name = resolve_area_alias(area_alias);
-    tracing::info!("解析后的分区名称: '{}'", area_name);
+    tracing::debug!("解析后的分区名称: '{}'", safe_text(&area_name, 80));
 
     let area_id = match get_area_id(&area_name) {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("{}", e);
+            outcome.reject(&e.to_string());
             let _ = bilibili::send_danmaku(&cfg, &format!("错误：{}", e)).await;
             return;
         }
     };
 
-    tracing::info!(
-        "平台: {}, 频道: {}, 分区: {}",
-        platform,
-        channel_name,
-        area_name
-    );
+    outcome.area = Some((area_id, area_name.clone()));
+    outcome.requested_area = Some(area_id);
 
     if platform.eq("YT") || platform.eq("TW") {
         let channel_id = match get_channel_id(&platform, channel_name) {
             Ok(id) => id,
             Err(e) => {
-                tracing::error!("检查频道时出错: {}", e);
+                outcome.reject(&format!("检查频道时出错: {e}"));
                 let _ = bilibili::send_danmaku(&cfg, &format!("错误：检查频道时出错 {}", e)).await;
                 return;
             }
         };
 
         if channel_id.is_none() {
-            tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
+            outcome.reject("频道未在当前平台列表中");
             let _ = bilibili::send_danmaku(
                 &cfg,
                 &format!("错误：频道 {} 未在{}列表中", channel_name, platform),
@@ -545,7 +675,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         }
 
         let Some(channel_id_str) = channel_id.as_deref() else {
-            tracing::error!("频道 {} 未在{}列表中", channel_name, platform);
+            outcome.reject("频道未在当前平台列表中");
             let _ = bilibili::send_danmaku(
                 &cfg,
                 &format!("错误：频道 {} 未在{}列表中", channel_name, platform),
@@ -556,7 +686,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         let resolved_channel_name = match get_channel_name(&platform, channel_id_str) {
             Ok(Some(name)) => name,
             Ok(None) => {
-                tracing::error!("频道 ID {} 未在{}列表中", channel_id_str, platform);
+                outcome.reject(&format!("频道 ID {} 未在当前平台列表中", channel_id_str));
                 let _ = bilibili::send_danmaku(
                     &cfg,
                     &format!("错误：频道 ID {} 未在{}列表中", channel_id_str, platform),
@@ -565,10 +695,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                 return;
             }
             Err(e) => {
-                tracing::error!("获取频道名称时出错: {}", e);
+                outcome.reject(&format!("获取频道名称时出错: {e}"));
                 return;
             }
         };
+        outcome.channel = resolved_channel_name.clone();
 
         let (live_title, live_topic, youtube_video_id) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
@@ -579,10 +710,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                         None => {
                             if is_owner {
                                 // Owner can force switch even without title
-                                tracing::warn!("主播强制切换到无标题的YT频道");
+                                outcome.forced_without_title = true;
+                                tracing::debug!("主播允许无标题的 YT 频道");
                                 "无标题直播".to_string()
                             } else {
-                                tracing::error!("获取YT直播标题失败");
+                                outcome.reject("获取 YT 直播标题失败");
                                 let _ =
                                     bilibili::send_danmaku(&cfg, "错误：获取YT直播标题失败").await;
                                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -595,7 +727,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                     (t, topic.unwrap_or_default(), video_id)
                 }
                 Err(e) => {
-                    tracing::error!("获取YT直播标题时出错: {}", e);
+                    outcome.reject(&format!("获取 YT 直播标题时出错: {e}"));
                     let _ =
                         bilibili::send_danmaku(&cfg, &format!("错误：获取YT直播标题时出错 {}", e))
                             .await;
@@ -607,7 +739,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             match get_twitch_status(channel_id_str).await {
                 Ok((is_live, topic, title, _)) => {
                     if !is_live {
-                        tracing::error!("TW频道 {} 未在直播", resolved_channel_name);
+                        outcome.reject("TW 频道未在直播");
                         let _ = bilibili::send_danmaku(
                             &cfg,
                             &format!("错误: {} 未在直播", resolved_channel_name),
@@ -621,10 +753,11 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                         None => {
                             if is_owner {
                                 // Owner can force switch even without title
-                                tracing::warn!("主播强制切换到无标题的TW频道");
+                                outcome.forced_without_title = true;
+                                tracing::debug!("主播允许无标题的 TW 频道");
                                 "无标题直播".to_string()
                             } else {
-                                tracing::error!("获取TW直播标题失败");
+                                outcome.reject("获取 TW 直播标题失败");
                                 let _ =
                                     bilibili::send_danmaku(&cfg, "错误：获取TW直播标题失败").await;
                                 return;
@@ -634,7 +767,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
                     (t, topic.unwrap_or_default(), None)
                 }
                 Err(e) => {
-                    tracing::error!("获取TW状态时出错: {}", e);
+                    outcome.reject(&format!("获取 TW 状态时出错: {e}"));
                     let _ =
                         bilibili::send_danmaku(&cfg, &format!("错误：获取TW直播标题时出错 {}", e))
                             .await;
@@ -648,11 +781,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         let live_topic_title = danmaku_haystack(&live_topic, &live_title);
 
         if let Some(keyword) = banned_keyword_hit(&live_topic_title, &danmaku_banned_keywords()) {
-            tracing::error!(
-                "直播标题/分区包含不支持的关键词: {} | {}",
-                keyword,
-                live_topic_title
-            );
+            outcome.reject(&format!("直播标题/分区包含不支持的关键词: {}", keyword));
             let _ = bilibili::send_danmaku(
                 &cfg,
                 &format!("错误：{} 的标题/分区含:{}", platform, keyword),
@@ -676,16 +805,20 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         let updated_area_name = match get_area_name(updated_area_id) {
             Some(name) => name,
             None => {
+                outcome.reject(&format!(
+                    "无法获取修正后的分区名称（ID: {updated_area_id}）"
+                ));
                 let _ = bilibili::send_danmaku(&cfg, "错误：无法获取更新后的分区名称").await;
                 return;
             }
         };
+        outcome.area = Some((updated_area_id, updated_area_name.clone()));
 
         if updated_area_id != area_id {
-            tracing::info!(
+            tracing::debug!(
                 "🔄 按直播标题/游戏关键词修正弹幕分区: {} -> {} (ID: {})",
-                area_name,
-                updated_area_name,
+                safe_text(&area_name, 48),
+                safe_text(&updated_area_name, 48),
                 updated_area_id
             );
         }
@@ -697,56 +830,29 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             updated_area_id,
         )
         .await;
-        match config_update {
-            Ok(None) => {
-                let message = format!(
-                    "{} 监听对象已是：{} - {}",
-                    platform, resolved_channel_name, updated_area_name
-                );
-                tracing::info!("{}", message);
-                let _ = bilibili::send_danmaku(&cfg, &message).await;
-            }
-            Ok(Some((old_monitored_config_version, updated_config))) => {
+        finish_target_update(
+            config_update,
+            outcome,
+            |old_monitored_config_version, updated_config| async move {
                 // Clear warning flag when user manually changes channel
                 clear_warning_stop();
 
                 // Set config updated flag to skip waiting interval
                 set_config_updated();
 
-                let sync_message =
-                    if old_monitored_config_version != monitored_config_version(&updated_config) {
-                        sync_monitored_config_after_change(&updated_config).await
-                    } else {
-                        String::new()
-                    };
-                if !sync_message.is_empty() {
-                    tracing::info!("弹幕切换频道{}", sync_message);
+                if old_monitored_config_version != monitored_config_version(&updated_config) {
+                    sync_monitored_config_after_change(&updated_config).await
+                } else {
+                    String::new()
                 }
-
-                // Send success notification
-                let _ = bilibili::send_danmaku(
-                    &cfg,
-                    &format!(
-                        "更新：{} - {} - {}",
-                        platform, resolved_channel_name, updated_area_name
-                    ),
-                )
-                .await;
-                tracing::info!(
-                    "✅ 更新成功 {} 频道: {} 分区: {} (ID: {} )",
-                    platform,
-                    resolved_channel_name,
-                    updated_area_name,
-                    updated_area_id
-                );
-            }
-            Err(e) => {
-                tracing::error!("更新配置时出错: {}", e);
-                let _ = bilibili::send_danmaku(&cfg, &format!("错误：更新配置时出错 {}", e)).await;
-            }
-        }
+            },
+            |message| async move {
+                let _ = bilibili::send_danmaku(&cfg, &message).await;
+            },
+        )
+        .await;
     } else {
-        tracing::error!("指令错误: {}", danmaku_command);
+        outcome.reject("不支持的平台");
         let _ = bilibili::send_danmaku(&cfg, &format!("错误：不支持的平台 {}", platform)).await;
     }
 }
@@ -1001,7 +1107,10 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         }
     }
 
-    tracing::error!("未知的分区: '{}' (已尝试匹配)", area_name_trimmed);
+    tracing::debug!(
+        "未知的分区: '{}' (已尝试匹配)",
+        safe_text(area_name_trimmed, 80)
+    );
     Err(format!("未知的分区: {}", area_name_trimmed).into())
 }
 
@@ -1018,6 +1127,128 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::instrument::WithSubscriber;
+
+    #[tokio::test]
+    async fn target_result_branches_preserve_outcome_reply_and_effect_order() {
+        let mut updated = crate::cluster::tests::test_config("ca", 0);
+        assert!(apply_danmaku_target(
+            &mut updated,
+            "YT",
+            "示例频道001",
+            "example_channel_001",
+            235
+        )
+        .unwrap());
+        let rejected: Result<Option<(String, Config)>, Box<dyn std::error::Error>> =
+            Err("保存失败 HTTP 502".into());
+        for (result, expected, expected_reply) in [
+            (
+                Ok(Some(("previous-version".into(), updated))),
+                "监听目标已更新",
+                "更新：YT - 示例频道001 - 其他单机",
+            ),
+            (
+                Ok(None),
+                "监听目标未变",
+                "YT 监听对象已是：示例频道001 - 其他单机",
+            ),
+            (
+                rejected,
+                "监听目标更新已拒绝",
+                "错误：更新配置时出错 保存失败 HTTP 502",
+            ),
+        ] {
+            let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+            let context = DanmakuTargetLog {
+                node: "ca".into(),
+                platform: "YT".into(),
+                channel: "示例频道001".into(),
+                area: Some((235, "其他单机".into())),
+                requested_area: Some(107),
+                forced_without_title: false,
+            };
+            let effects = Arc::new(Mutex::new(Vec::new()));
+            let updated_effects = Arc::clone(&effects);
+            let reply_effects = Arc::clone(&effects);
+            let updated_logs = logs.clone();
+            let reply_logs = logs.clone();
+            finish_target_update(
+                result,
+                context,
+                move |old_version, config| {
+                    assert_eq!(old_version, "previous-version");
+                    assert_eq!(config.youtube.channel_id, "example_channel_001");
+                    assert_eq!(config.youtube.area_v2, 235);
+                    assert!(updated_logs.text().is_empty());
+                    updated_effects.lock().unwrap().push("after-update");
+                    std::future::ready("；已同步到 2 个节点".to_string())
+                },
+                move |message| {
+                    assert_eq!(message, expected_reply);
+                    let is_updated = expected == "监听目标已更新";
+                    assert_eq!(reply_logs.text().is_empty(), is_updated);
+                    if !is_updated {
+                        assert!(reply_logs.text().contains(expected));
+                    }
+                    reply_effects.lock().unwrap().push("reply");
+                    std::future::ready(())
+                },
+            )
+            .with_subscriber(dispatch)
+            .await;
+            let output = logs.text();
+            assert_eq!(output.lines().count(), 1, "{output}");
+            assert!(output.contains("ca YT/示例频道001"));
+            assert!(output.contains("分区=其他单机(235)"));
+            assert!(output.contains(expected));
+            if expected == "监听目标更新已拒绝" {
+                assert!(output.contains(" WARN [danmaku]"));
+                assert!(output.contains("保存失败 HTTP 502"));
+                assert!(!output.contains("监听目标已更新"));
+            } else {
+                assert!(output.contains(" INFO [danmaku]"));
+                assert!(output.contains("由分区 107 修正"));
+            }
+            assert!(!output.contains("转播成功"));
+            assert!(!output.contains("原始分区输入"));
+            assert!(!output.contains("解析后的分区名称"));
+            if expected == "监听目标已更新" {
+                assert_eq!(*effects.lock().unwrap(), ["after-update", "reply"]);
+                assert!(output.contains("已同步到 2 个节点"));
+            } else {
+                assert_eq!(*effects.lock().unwrap(), ["reply"]);
+                assert!(!output.contains("已同步到"));
+            }
+        }
+    }
+
+    #[test]
+    fn target_update_and_rejection_keep_unsafe_details_out_of_real_records() {
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+        let context = DanmakuTargetLog {
+            node: "jp".into(),
+            platform: "TW".into(),
+            channel: "示例频道002\nERROR forged\u{1b}[31m".into(),
+            area: Some((235, "其他单机".into())),
+            ..Default::default()
+        };
+        tracing::dispatcher::with_default(&dispatch, || {
+            context.emit(DanmakuTargetOutcome::Updated(
+                "；集群同步失败 HTTP 530 Cookie: SESSDATA=SYNTHETIC-COOKIE",
+            ));
+            context.reject("读取失败 HTTP 403 https://user:SYNTHETIC-PROXY@proxy.invalid/path\nAuthorization: Bearer SYNTHETIC-TOKEN");
+        });
+        let output = logs.text();
+        assert_eq!(output.lines().count(), 2, "{output}");
+        assert!(output.lines().next().unwrap().contains(" INFO [danmaku]"));
+        assert!(output.lines().nth(1).unwrap().contains(" WARN [danmaku]"));
+        assert!(output.contains("HTTP 530"));
+        assert!(output.contains("HTTP 403"));
+        assert!(!output.contains("SYNTHETIC"));
+        assert!(!output.contains("proxy.invalid"));
+        assert!(!output.contains('\u{1b}'));
+    }
 
     #[tokio::test]
     async fn stopping_cancels_inflight_setup_and_leaves_the_signal_set() {

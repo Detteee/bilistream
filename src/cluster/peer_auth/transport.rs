@@ -340,9 +340,15 @@ impl PeerClient {
 /// statuses are classified as unreachable for the failover rules.
 pub(crate) fn unsigned_error(status: u16) -> io::Error {
     if matches!(status, 502..=504 | 520..=530) {
-        io::Error::new(io::ErrorKind::ConnectionAborted, "节点上游暂不可用")
+        io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            format!("节点上游暂不可用（HTTP {status}）"),
+        )
     } else {
-        io::Error::new(io::ErrorKind::PermissionDenied, "节点拒绝请求或响应未签名")
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("节点拒绝请求或响应未签名（HTTP {status}）"),
+        )
     }
 }
 

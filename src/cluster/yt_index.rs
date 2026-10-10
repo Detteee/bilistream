@@ -14,6 +14,7 @@ use super::state::{
 };
 use super::types::{ClusterNodeSnapshot, PeerApiResponse, YtIndexPayload};
 use crate::config::Config;
+use crate::logging::{human_elapsed, safe_diagnostic, safe_text, FailureReport};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -292,11 +293,17 @@ enum Source {
 struct Worker {
     copy: Option<PeerCopy>,
     source: Source,
-    fetch_failing: bool,
+    fetch_owner: Option<String>,
+    fetch_failures: FailureReport,
+    report_node: String,
 }
 
 impl Worker {
     async fn cycle(&mut self, cfg: &Config) -> YtIndexRole {
+        if self.report_node != cfg.cluster.node_id {
+            self.report_node = cfg.cluster.node_id.clone();
+            self.fetch_failures = FailureReport::default();
+        }
         let wanted = {
             let usable_keys =
                 crate::plugins::youtube_data::usable_key_count(&cfg.youtube_api_keys());
@@ -306,22 +313,25 @@ impl Worker {
         };
         let (owner, version) = match wanted {
             Wanted::Standalone => {
+                self.follow_for_reporting(None);
                 self.copy = None;
                 return YtIndexRole::Standalone;
             }
             Wanted::Owner => {
+                self.follow_for_reporting(None);
                 self.copy = None;
                 return YtIndexRole::Owner;
             }
             Wanted::Peer { owner, version } => (owner, version),
         };
+        self.follow_for_reporting(Some(&owner));
         match self.copy.as_mut() {
             Some(copy) if copy.owner == owner && copy.index.version == version => {
                 copy.confirmed_at = Instant::now();
             }
             _ => match fetch_index(cfg, &owner).await {
                 Ok(index) => {
-                    self.fetch_failing = false;
+                    self.note_fetch_success(&owner, Instant::now());
                     // The active node is usually a peer with no store of its
                     // own, so its monitor learns of a go-live here.
                     let monitored = crate::plugins::youtube::monitored_channels(cfg);
@@ -337,17 +347,58 @@ impl Worker {
                     });
                 }
                 Err(e) => {
-                    if self.fetch_failing {
-                        tracing::debug!("读取节点 {} 的 YouTube 索引失败: {}", owner, e);
-                    } else {
-                        tracing::warn!("读取节点 {} 的 YouTube 索引失败: {}", owner, e);
-                    }
-                    self.fetch_failing = true;
+                    self.note_fetch_failure(&owner, &e.to_string(), Instant::now());
                 }
             },
         }
         let timeout = Duration::from_secs(cfg.cluster.failover_timeout_secs.max(1));
         peer_role(self.copy.as_ref(), &owner, timeout, Instant::now())
+    }
+
+    fn follow_for_reporting(&mut self, owner: Option<&str>) {
+        if self.fetch_owner.as_deref() != owner {
+            self.fetch_owner = owner.map(str::to_string);
+            self.fetch_failures = FailureReport::default();
+        }
+    }
+
+    fn node_label(&self) -> String {
+        if self.report_node.trim().is_empty() {
+            "local".to_string()
+        } else {
+            safe_text(&self.report_node, 64)
+        }
+    }
+
+    fn note_fetch_failure(&mut self, owner: &str, error: &str, now: Instant) {
+        if let Some(summary) = self.fetch_failures.failure(now, 1) {
+            tracing::warn!(
+                "{} 读取节点 {} 的 YouTube 索引失败；{}，按现有规则使用缓存或本地查询；原因={}",
+                self.node_label(),
+                safe_text(owner, 64),
+                summary,
+                safe_diagnostic(error)
+            );
+        } else {
+            tracing::debug!(
+                "{} 读取节点 {} 的 YouTube 索引仍失败: {}",
+                self.node_label(),
+                safe_text(owner, 64),
+                safe_diagnostic(error)
+            );
+        }
+    }
+
+    fn note_fetch_success(&mut self, owner: &str, now: Instant) {
+        if let Some(summary) = self.fetch_failures.success(now) {
+            tracing::info!(
+                "{} 读取节点 {} 的 YouTube 索引已恢复；此前失败={}次 持续={}",
+                self.node_label(),
+                safe_text(owner, 64),
+                summary.failures,
+                human_elapsed(summary.elapsed)
+            );
+        }
     }
 
     fn note(&mut self, role: &YtIndexRole) {
@@ -364,14 +415,28 @@ impl Worker {
         match (&self.source, &source) {
             (before, after) if before == after => {}
             (_, Source::ThisNode) => {
-                tracing::info!("YouTube 索引: 本节点负责集群的 YouTube 查询");
+                tracing::info!(
+                    "{} YouTube 索引: 本节点负责集群的 YouTube 查询",
+                    self.node_label()
+                );
             }
-            (_, Source::Node(node)) => tracing::info!("YouTube 索引: 使用节点 {} 的索引", node),
+            (_, Source::Node(node)) => tracing::info!(
+                "{} YouTube 索引: 使用节点 {} 的索引",
+                self.node_label(),
+                safe_text(node, 64)
+            ),
             (Source::Node(node), Source::Local) => {
-                tracing::warn!("YouTube 索引: 节点 {} 的索引不可用，回退本地查询", node);
+                tracing::warn!(
+                    "{} YouTube 索引: 节点 {} 的索引不可用，回退本地查询",
+                    self.node_label(),
+                    safe_text(node, 64)
+                );
             }
             (_, Source::Local) => {
-                tracing::info!("YouTube 索引: 本节点不再负责集群的 YouTube 查询");
+                tracing::info!(
+                    "{} YouTube 索引: 本节点不再负责集群的 YouTube 查询",
+                    self.node_label()
+                );
             }
         }
         self.source = source;
@@ -428,6 +493,42 @@ mod tests {
     use crate::cluster::empty_node;
     use crate::cluster::tests::test_config;
     use crate::config::ClusterPeer;
+
+    #[test]
+    fn peer_fetch_reporting_keeps_counts_recovers_once_and_resets_for_a_new_owner() {
+        let now = Instant::now();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut worker = Worker {
+                report_node: "jp".to_string(),
+                ..Worker::default()
+            };
+            worker.follow_for_reporting(Some("ca"));
+            for attempt in 0..12 {
+                worker.note_fetch_failure(
+                    "ca",
+                    "HTTP 530 https://peer.invalid/?token=synthetic-peer-token",
+                    now + Duration::from_secs(attempt * 30),
+                );
+            }
+            assert_eq!(worker.fetch_failures.summary(now).unwrap().failures, 12);
+            worker.follow_for_reporting(Some("ny"));
+            worker.note_fetch_failure("ny", "HTTP 502", now + Duration::from_secs(361));
+            worker.note_fetch_success("ny", now + Duration::from_secs(362));
+            worker.note_fetch_success("ny", now + Duration::from_secs(363));
+            assert!(worker.copy.is_none(), "reporting cannot install an index");
+            assert!(worker.source == Source::Local);
+        });
+        let text = logs.text();
+        assert_eq!(text.matches("WARN [yt-index]").count(), 3, "{text}");
+        assert_eq!(text.matches("读取节点 ny 的 YouTube 索引已恢复").count(), 1);
+        assert!(text.contains("累计失败=11次"));
+        assert!(text.contains("此前失败=1次"));
+        assert!(text.contains("jp 读取节点 ca"));
+        assert!(text.contains("HTTP 530"));
+        assert!(!text.contains("synthetic-peer-token"));
+        assert!(!text.contains("https://peer.invalid"));
+    }
     use crate::plugins::holodex::{HolodexChannel, HolodexStream};
     use crate::plugins::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
     use std::collections::{BTreeMap, HashMap};

@@ -2,6 +2,7 @@
 
 use super::{graceful_shutdown, run_bilistream};
 use crate as bilistream;
+use crate::logging::{strip_ansi_codes, HumanFormat};
 use crate::plugins::stop_danmaku;
 use std::time::Duration;
 use tracing_subscriber::fmt;
@@ -571,13 +572,26 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub(super) fn init_logger() {
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    log_subscriber(|| LogWriter, HumanFormat::default(), tracing::Level::INFO).init();
+}
+
+fn log_subscriber<W, T>(
+    writer: W,
+    format: HumanFormat<T>,
+    max_level: tracing::Level,
+) -> impl tracing::Subscriber + Send + Sync
+where
+    W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
+    T: fmt::time::FormatTime + Send + Sync + 'static,
+{
     tracing_subscriber::fmt()
-        .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
-        .with_target(true)
         .with_span_events(fmt::format::FmtSpan::NONE)
-        .with_writer(|| LogWriter)
-        .with_max_level(tracing::Level::INFO)
-        .init();
+        .event_format(format)
+        .with_writer(writer)
+        .with_max_level(max_level)
+        .finish()
 }
 
 struct LogWriter;
@@ -599,94 +613,51 @@ fn write_log_bytes(buf: &[u8]) -> std::io::Result<()> {
 }
 
 fn init_logger_with_capture() {
-    use tracing_subscriber::filter::LevelFilter;
-    use tracing_subscriber::layer::SubscriberExt;
-
-    // Create a custom writer that captures logs
-    struct LogCapture;
-
-    impl std::io::Write for LogCapture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            if let Ok(s) = std::str::from_utf8(buf) {
-                write_log_bytes(buf)?;
-                // Capture for web UI (strip ANSI codes)
-                // First strip ANSI codes from the entire string
-                let clean_str = strip_ansi_codes(s);
-                // Then split into lines
-                for line in clean_str.lines() {
-                    // Skip pure box drawing lines (borders only)
-                    let trimmed = line.trim();
-                    if trimmed.starts_with('┌')
-                        || trimmed.starts_with('├')
-                        || trimmed.starts_with('└')
-                    {
-                        continue;
-                    }
-
-                    // For lines with content, strip the box borders but keep the content
-                    let content = if line.contains('│') {
-                        // Extract content between │ characters
-                        line.split('│')
-                            .filter(|s| !s.trim().is_empty())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .trim()
-                            .to_string()
-                    } else {
-                        line.to_string()
-                    };
-
-                    // Only add non-empty content
-                    if !content.is_empty() {
-                        bilistream::add_log_line(content);
-                    }
-                }
-            }
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            std::io::stdout().flush()
-        }
-    }
-
-    // Helper function to strip ANSI escape codes
-    fn strip_ansi_codes(s: &str) -> String {
-        let mut result = String::with_capacity(s.len());
-        let mut chars = s.chars();
-
-        while let Some(ch) = chars.next() {
-            if ch == '\x1b' {
-                // Skip escape sequence
-                if chars.next() == Some('[') {
-                    // Skip until we find a letter (end of escape sequence)
-                    for c in chars.by_ref() {
-                        if c.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                }
-            } else if ch == '\r' {
-                // Skip carriage return
-                continue;
-            } else {
-                result.push(ch);
-            }
-        }
-
-        result
-    }
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_timer(fmt::time::ChronoLocal::new("%H:%M:%S".to_string()))
-        .with_target(true)
-        .with_span_events(fmt::format::FmtSpan::NONE)
-        .with_writer(|| LogCapture);
-
-    let subscriber = tracing_subscriber::registry()
-        .with(fmt_layer)
-        .with(LevelFilter::INFO);
+    let state = bilistream::AppState::current();
+    let subscriber = log_subscriber(
+        move || LogCapture::new(LogWriter, state.clone()),
+        HumanFormat::default(),
+        tracing::Level::INFO,
+    );
     let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
+/// Mirrors the formatter's safe records, without changing their text. Buffering
+/// here only joins fragmented Write calls (including split UTF-8 code points).
+/// AppState still owns initialization, listener-rebind resets and its 500 rows.
+struct LogCapture<W> {
+    writer: W,
+    state: bilistream::AppState,
+    pending: Vec<u8>,
+}
+
+impl<W> LogCapture<W> {
+    fn new(writer: W, state: bilistream::AppState) -> Self {
+        Self {
+            writer,
+            state,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for LogCapture<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.writer.write_all(buf)?;
+        self.pending.extend_from_slice(buf);
+        if let Some(end) = self.pending.iter().rposition(|byte| *byte == b'\n') {
+            let records = strip_ansi_codes(&String::from_utf8_lossy(&self.pending[..=end]));
+            for line in records.lines().filter(|line| !line.is_empty()) {
+                self.state.add_log_line(line.to_string());
+            }
+            self.pending.drain(..=end);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -726,6 +697,144 @@ fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logging::test_capture::CapturedLogs as TestOutput;
+    use std::io::Write as _;
+
+    struct FixedClock(chrono::DateTime<chrono::FixedOffset>);
+
+    impl fmt::time::FormatTime for FixedClock {
+        fn format_time(&self, writer: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
+            write!(writer, "{}", self.0.format("%Y-%m-%d %H:%M:%S%z"))
+        }
+    }
+
+    fn fixture_clock(timestamp: &str) -> HumanFormat<FixedClock> {
+        HumanFormat::new(FixedClock(
+            chrono::DateTime::parse_from_rfc3339(timestamp).expect("fixture timestamp"),
+        ))
+    }
+
+    fn emit_log_fixtures() {
+        tracing::info!(target: "bilistream::plugins::ffmpeg", "jp YT/示例频道001 session=2 role=push 进程已启动 pid=1234");
+        tracing::info!(target: "bilistream::runtime", "jp YT/示例频道001 标题=INFO ERROR ⚠️ │示例😀\nWARN forged\r\t\x1b[31m红色\x1b[0m");
+        tracing::info!(target: "bilistream::runtime::launch", "Web UI 本地访问 http://localhost:3150");
+        for diagnostic in [
+            "rtmp://push.invalid/live/synthetic-push-key?key=synthetic-query",
+            "https://r1.example.googlevideo.com/videoplayback?sig=synthetic-signature",
+            "https://video.example.ttvnw.net/hls/synthetic-hls?token=synthetic-token",
+            "http://synthetic-user:synthetic-password@proxy.invalid:8080",
+            "Cookie: SESSDATA=synthetic-cookie\n synthetic-cookie-tail",
+            "Authorization: Bearer synthetic-bearer",
+            "api_key=synthetic-api-token",
+            "rtmp://push.invalid/synthetic-head\nsynthetic-tail HTTP 502 Broken pipe",
+            "https: / /malformed/synthetic-head synthetic-tail HTTP 530",
+            "pass\x1b[31mword=synthetic-decorated-password",
+            "http://localhost:3150/?token=synthetic-loopback-token",
+        ] {
+            // Use DEBUG deliberately: the shared boundary is not level-specific.
+            tracing::debug!(target: "bilistream::plugins::ffmpeg", "jp YT/示例频道001 session=2 role=push HTTP 403 {diagnostic}");
+        }
+        tracing::debug!(target: "bilistream::plugins::twitch", token = "synthetic-structured-token", "ca TW/示例频道002 exit=1");
+    }
+
+    #[test]
+    fn both_logger_paths_emit_the_same_safe_records_across_midnight_and_offsets() {
+        for (timestamp, prefix) in [
+            ("2026-10-10T23:59:59+08:00", "2026-10-10 23:59:59+0800"),
+            ("2026-10-11T00:00:00+08:00", "2026-10-11 00:00:00+0800"),
+            ("2026-10-10T12:00:00-04:00", "2026-10-10 12:00:00-0400"),
+        ] {
+            let plain_output = TestOutput::default();
+            let plain_writer = plain_output.clone();
+            let plain = log_subscriber(
+                move || plain_writer.clone(),
+                fixture_clock(timestamp),
+                tracing::Level::DEBUG,
+            );
+            tracing::subscriber::with_default(plain, emit_log_fixtures);
+
+            let state = bilistream::AppState::new();
+            state.init_log_buffer();
+            let unrelated_state = bilistream::AppState::new();
+            unrelated_state.init_log_buffer();
+            let captured_output = TestOutput::default();
+            let output = captured_output.clone();
+            let captured_state = state.clone();
+            let capture = log_subscriber(
+                move || LogCapture::new(output.clone(), captured_state.clone()),
+                fixture_clock(timestamp),
+                tracing::Level::DEBUG,
+            );
+            tracing::subscriber::with_default(capture, emit_log_fixtures);
+
+            let text = strip_ansi_codes(&captured_output.text());
+            assert_eq!(text, strip_ansi_codes(&plain_output.text()));
+            assert_eq!(text.trim_end_matches('\n'), state.get_logs().join("\n"));
+            assert!(unrelated_state.get_logs().is_empty());
+            assert_eq!(state.get_logs().len(), 15);
+            assert!(text.lines().all(|line| line.starts_with(prefix)));
+            assert!(text.contains("INFO [ffmpeg] jp YT/示例频道001 session=2 role=push"));
+            assert!(text.contains("INFO [runtime] jp YT/示例频道001 标题=INFO ERROR ⚠️ │示例😀\\nWARN forged\\r\\t红色"));
+            assert!(text.contains("HTTP 403"));
+            assert!(text.contains("HTTP 502"));
+            assert!(text.contains("HTTP 530"));
+            assert!(text.contains("Broken pipe"));
+            assert!(text.contains("Web UI 本地访问 http://localhost:3150/"));
+            assert!(!text.contains("synthetic-"), "{text}");
+            assert!(!text.contains("bilistream::"));
+            assert!(!text.contains('\r'));
+            assert!(!text.contains('\x1b'));
+        }
+    }
+
+    #[test]
+    fn default_logger_filter_remains_info() {
+        let output = TestOutput::default();
+        let writer = output.clone();
+        let subscriber = log_subscriber(
+            move || writer.clone(),
+            fixture_clock("2026-10-10T18:00:00+08:00"),
+            tracing::Level::INFO,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!("hidden-debug");
+            tracing::info!("visible-info");
+        });
+        assert!(output.text().contains("visible-info"));
+        assert!(!output.text().contains("hidden-debug"));
+    }
+
+    #[test]
+    fn capture_joins_fragmented_utf8_and_preserves_buffer_capacity_and_lifetime() {
+        let state = bilistream::AppState::new();
+        let output = TestOutput::default();
+        let mut capture = LogCapture::new(output.clone(), state.clone());
+        capture.write_all(b"before initialization\n").unwrap();
+        assert!(state.get_logs().is_empty());
+        state.init_log_buffer();
+        let line = "2026-10-10 18:00:00+0800 \x1b[32mINFO\x1b[0m [runtime] jp 示例😀 │详情\n";
+        for byte in line.bytes() {
+            capture.write_all(&[byte]).unwrap();
+        }
+        assert_eq!(
+            state.get_logs(),
+            vec![strip_ansi_codes(line).trim_end().to_string()]
+        );
+        for index in 0..600 {
+            writeln!(
+                capture,
+                "2026-10-10 18:00:00+0800 INFO [runtime] snapshot={index}"
+            )
+            .unwrap();
+        }
+        let logs = state.get_logs();
+        assert_eq!(logs.len(), 500);
+        assert!(logs[0].ends_with("snapshot=100"));
+        assert!(logs[499].ends_with("snapshot=599"));
+        state.init_log_buffer();
+        assert!(state.get_logs().is_empty());
+        assert!(output.text().contains("before initialization\n"));
+    }
 
     fn parse_test_args(args: &[&str]) -> Result<ParseOutcome, String> {
         let argv: Vec<String> = std::iter::once("bilistream".to_string())

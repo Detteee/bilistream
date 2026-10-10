@@ -19,6 +19,7 @@ use super::youtube_data::{
 };
 use crate::cluster::YtIndexPayload;
 use crate::config::{load_config, Config};
+use crate::logging::{human_elapsed, safe_diagnostic, safe_text, FailureReport};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -96,6 +97,9 @@ struct Store {
     /// Interval multiplier from the last refresh; 0 before the first.
     stretch: u32,
     retry_at: Option<Instant>,
+    // Reporting follows this store's source; it does not control retry_at.
+    failures: FailureReport,
+    report_source: Option<(String, bool)>,
     /// `youtube::monitored_channels`, from the last refresher pass.
     monitored: HashSet<String>,
     /// Content of the published index, to tell whether it changed.
@@ -316,13 +320,58 @@ impl Store {
             return;
         }
         tracing::info!(
-            "YouTube 索引: 过去一小时 videos.list 调用 {} 次，跟踪 {} 个视频，刷新间隔 {} 倍",
+            "YouTube 索引: 本机记录过去一小时成功的 videos.list 批次 {} 个，跟踪 {} 个视频，刷新间隔 {} 倍",
             self.units,
             self.entries.len(),
             self.stretch()
         );
         self.units = 0;
         self.stats_since = Some(now);
+    }
+
+    fn set_report_source(&mut self, node: &str, owner: bool) {
+        let source = (node.to_string(), owner);
+        if self.report_source.as_ref() != Some(&source) {
+            self.failures = FailureReport::default();
+            self.report_source = Some(source);
+        }
+    }
+
+    fn report_node(&self) -> String {
+        match self.report_source.as_ref().map(|(node, _)| node.trim()) {
+            Some("") => "local".to_string(),
+            Some(node) => safe_text(node, 64),
+            None => "unknown".to_string(),
+        }
+    }
+
+    fn note_refresh_failure(&mut self, error: &str, count: usize, now: Instant) {
+        if let Some(summary) = self.failures.failure(now, 1) {
+            tracing::warn!(
+                "{} YouTube 索引刷新失败，等待现有重试；视频数={} {} 原因={}",
+                self.report_node(),
+                count,
+                summary,
+                safe_diagnostic(error)
+            );
+        } else {
+            tracing::debug!(
+                "{} YouTube 索引刷新仍失败: {}",
+                self.report_node(),
+                safe_diagnostic(error)
+            );
+        }
+    }
+
+    fn note_refresh_success(&mut self, now: Instant) {
+        if let Some(summary) = self.failures.success(now) {
+            tracing::info!(
+                "{} YouTube 索引刷新已恢复；此前失败={}次 持续={}",
+                self.report_node(),
+                summary.failures,
+                human_elapsed(summary.elapsed)
+            );
+        }
     }
 }
 
@@ -401,6 +450,7 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
             Ok(videos) => {
                 super::youtube_hours::record(&videos);
                 let woken = with_store(|store| {
+                    store.note_refresh_success(now);
                     store.retry_at = None;
                     store.units += due.len().div_ceil(MAX_IDS_PER_CALL) as u32;
                     store.record(&due, videos, now)
@@ -409,11 +459,7 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
                 recorded = true;
             }
             Err(e) => with_store(|store| {
-                if store.retry_at.is_none() {
-                    tracing::warn!("YouTube 索引刷新失败: {}", e);
-                } else {
-                    tracing::debug!("YouTube 索引刷新失败: {}", e);
-                }
+                store.note_refresh_failure(&e, due.len(), now);
                 store.retry_at = Some(now + RETRY_AFTER);
             }),
         }
@@ -476,15 +522,19 @@ pub(crate) async fn refresh_tick(cfg: &Config) {
     }
     // The public-status node is usually idle with its monitors off; the late
     // steps belong to whatever the active node monitors.
-    let monitored = if matches!(
+    let owner = matches!(
         crate::cluster::yt_index_role(),
         crate::cluster::YtIndexRole::Owner
-    ) {
+    );
+    let monitored = if owner {
         crate::cluster::cluster_monitored_channels(cfg)
     } else {
         super::youtube::monitored_channels(cfg)
     };
-    with_store(|store| store.monitored = monitored);
+    with_store(|store| {
+        store.monitored = monitored;
+        store.set_report_source(&cfg.cluster.node_id, owner);
+    });
     if refresh(&keys, cfg.youtube.proxy.as_deref()).await {
         crate::webui::stream_list::wake();
     }
@@ -521,6 +571,57 @@ pub fn start_store_refresh_worker() -> Option<StoreRefreshWorker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_reporting_is_bounded_and_cannot_change_retry_state() {
+        let now = Instant::now();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut store = Store::default();
+            store.set_report_source("ca", true);
+            store.retry_at = Some(now + RETRY_AFTER);
+            for attempt in 0..12 {
+                store.note_refresh_failure(
+                    "HTTP 503 https://api.invalid/?key=synthetic-key",
+                    4,
+                    now + Duration::from_secs(attempt * 30),
+                );
+            }
+            assert_eq!(store.retry_at, Some(now + RETRY_AFTER));
+            store.note_refresh_success(now + Duration::from_secs(360));
+            store.note_refresh_success(now + Duration::from_secs(361));
+            assert_eq!(store.retry_at, Some(now + RETRY_AFTER));
+            store.note_refresh_failure("HTTP 403", 4, now + Duration::from_secs(362));
+            store.set_report_source("jp", false);
+            store.note_refresh_failure("HTTP 403", 4, now + Duration::from_secs(363));
+        });
+        let text = logs.text();
+        assert_eq!(text.matches("WARN [yt-index]").count(), 4, "{text}");
+        assert_eq!(text.matches("YouTube 索引刷新已恢复").count(), 1);
+        assert!(text.contains("此前失败=12次 持续=6分"));
+        assert!(text.contains("jp YouTube 索引刷新失败"));
+        assert!(!text.contains("synthetic-key"));
+    }
+
+    #[test]
+    fn hourly_summary_labels_successful_batches_and_keeps_hourly_cadence() {
+        let now = Instant::now();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut store = Store {
+                units: 7,
+                ..Store::default()
+            };
+            store.log_stats(now);
+            store.log_stats(now + STATS_EVERY - Duration::from_secs(1));
+            assert!(logs.text().is_empty());
+            store.log_stats(now + STATS_EVERY);
+            store.log_stats(now + STATS_EVERY + Duration::from_secs(1));
+        });
+        let text = logs.text();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("本机记录过去一小时成功的 videos.list 批次 7 个"));
+    }
     use crate::plugins::youtube_data::{YtLiveDetails, YtSnippet};
 
     fn at(rfc3339: &str) -> DateTime<Utc> {

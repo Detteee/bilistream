@@ -11,9 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Bytes, tungstenite::Message};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::logging::safe_text;
 use crate::plugins::{bili_stop_live, send_danmaku};
 
 // Bilibili danmaku protocol constants
@@ -453,13 +454,17 @@ impl BilibiliDanmakuClient {
                                         true, // is_owner = true
                                     )
                                     .await;
-                                    info!("🔧 {}", danmaku_text);
+                                    debug!("主播弹幕命令已处理: {}", safe_text(&danmaku_text, 160));
                                 } else if self.enable_commands.load(Ordering::Relaxed)
                                     && danmaku_text.contains("%转播")
                                 {
                                     // Non-owners can use commands "%转播" only when enabled
                                     let formatted_message = format!(" :{}", danmaku_text);
-                                    info!("💬 {} : {}", username, danmaku_text);
+                                    debug!(
+                                        "弹幕命令 {}: {}",
+                                        safe_text(username, 48),
+                                        safe_text(&danmaku_text, 160)
+                                    );
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         false, // is_owner = false
@@ -473,7 +478,18 @@ impl BilibiliDanmakuClient {
                                     )
                                     .await;
                                 } else {
-                                    info!("🚫 Command ignored");
+                                    warn!(
+                                        "{} 弹幕换台请求已拒绝：换台命令未启用；用户={}",
+                                        safe_text(
+                                            if self.app_config.cluster.node_id.is_empty() {
+                                                "local"
+                                            } else {
+                                                &self.app_config.cluster.node_id
+                                            },
+                                            64
+                                        ),
+                                        safe_text(username, 48)
+                                    );
                                 }
                             }
                         }
@@ -691,18 +707,14 @@ impl BilibiliDanmakuClient {
             "ROOM_CONTENT_AUDIT_REPORT" => {
                 if let Some(data) = &message.data {
                     if let Some(title) = data["audit_title"].as_str() {
-                        info!("标题修改成功：{}", title);
+                        info!("标题修改成功：{}", safe_text(title, 160));
                     }
                 } else {
-                    println!("Unknown message: {:?}", message);
+                    debug!("忽略缺少 data 的弹幕事件 type=ROOM_CONTENT_AUDIT_REPORT");
                 }
             }
             _ => {
-                // Log unknown message types for debugging
-
-                warn!("📨 Unknown message type: {}", message.cmd);
-
-                println!("message content : {:?}", message);
+                debug!("忽略未处理的弹幕事件 type={}", safe_text(&message.cmd, 64));
             }
         }
     }
@@ -783,6 +795,75 @@ pub async fn run_native_danmaku_client(
 mod tests {
     use super::*;
     use std::io::Write;
+    use tracing::instrument::WithSubscriber;
+
+    fn client_for_messages() -> BilibiliDanmakuClient {
+        BilibiliDanmakuClient::new(
+            DanmakuConfig {
+                room_id: 1,
+                sessdata: String::new(),
+                bili_jct: String::new(),
+                dede_user_id: "1".into(),
+                dede_user_id_ckmd5: String::new(),
+                buvid3: String::new(),
+            },
+            Arc::new(crate::cluster::tests::test_config("ca", 0)),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[tokio::test]
+    async fn decorative_and_incomplete_messages_log_only_safe_debug_types() {
+        let client = client_for_messages();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+        for cmd in [
+            "SEND_GIFT_V2",
+            "GIFT_POPUP",
+            "SYS_MSG",
+            "ROOM_CONTENT_AUDIT_REPORT",
+        ] {
+            let message = DanmakuMessage {
+                cmd: cmd.into(),
+                info: Some(serde_json::json!({"raw_body": "SYNTHETIC-UNSAFE-BODY"})),
+                data: (cmd != "ROOM_CONTENT_AUDIT_REPORT")
+                    .then(|| serde_json::json!({"body": "SYNTHETIC-UNSAFE-BODY"})),
+            };
+            client
+                .process_danmaku_command(&message)
+                .with_subscriber(dispatch.clone())
+                .await;
+        }
+        let output = logs.text();
+        assert_eq!(output.lines().count(), 4, "{output}");
+        assert!(output.lines().all(|line| line.contains(" DEBUG [danmaku]")));
+        assert!(!output.contains("SYNTHETIC-UNSAFE-BODY"));
+        assert!(!output.contains(" WARN ["));
+    }
+
+    #[tokio::test]
+    async fn a_disabled_non_owner_command_stays_rejected_before_command_processing() {
+        let client = client_for_messages();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+        let message = DanmakuMessage {
+            cmd: "DANMU_MSG".into(),
+            info: Some(serde_json::json!([
+                [],
+                "%转播%YT%示例频道001%其他单机",
+                [2, "示例用户001"]
+            ])),
+            data: None,
+        };
+        client
+            .process_danmaku_command(&message)
+            .with_subscriber(dispatch)
+            .await;
+        let output = logs.text();
+        assert_eq!(output.lines().count(), 1, "{output}");
+        assert!(output.contains(" WARN [danmaku]"));
+        assert!(output.contains("换台命令未启用"));
+        assert!(!output.contains("监听目标已更新"));
+        assert!(!client.enable_commands.load(Ordering::Relaxed));
+    }
 
     fn packet(protocol: u16, body: &[u8]) -> Vec<u8> {
         let mut packet = Vec::new();
