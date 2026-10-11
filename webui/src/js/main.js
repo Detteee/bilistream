@@ -21,6 +21,7 @@ import { checkSetupStatus, initSetupControls } from './setup.js';
 import { initCropModalControls } from './crop.js';
 import { initClusterControls, startClusterRefresh, refreshClusterStatus } from './cluster.js';
 import { initClusterMembership, refreshMembership } from './cluster-membership.js';
+import { initNotifySettings, loadNotifySettings, refreshNotifyStatus } from './notify.js';
 import {
   applyHolodexConfig,
   initDashboardControls,
@@ -54,6 +55,7 @@ function loadViewData(name) {
       break;
     case 'settings':
       loadSystemConfig();
+      loadNotifySettings();
       break;
     case 'logs':
       refreshLogs();
@@ -134,7 +136,10 @@ function reloadConfigAndHolodexPanel() {
 
 function bindEventStream() {
   configureEventStream({
-    onStatus: refreshStatus,
+    onStatus: () => {
+      refreshStatus();
+      if (isViewActive('settings')) refreshNotifyStatus();
+    },
     onConfig: () => {
       invalidateManagedData();
       reloadConfigAndHolodexPanel();
@@ -180,6 +185,7 @@ function boot() {
   initFaceAuthModalControls();
   initClusterControls();
   initClusterMembership();
+  initNotifySettings();
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {

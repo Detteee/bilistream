@@ -137,6 +137,9 @@
       <path
         d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-5 7h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" />
     </symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24">
+      <path d="M12 2a6 6 0 0 0-6 6v3.6l-1.74 3.03A1 1 0 0 0 5.13 16h13.74a1 1 0 0 0 .87-1.37L18 11.6V8a6 6 0 0 0-6-6Zm-2.83 16a3 3 0 0 0 5.66 0H9.17Z" />
+    </symbol>
 
     <symbol id="i-sync" viewBox="0 0 24 24">
       <path
@@ -1880,6 +1883,215 @@
             </div>
 
             <div id="cluster-member-list" class="cluster-peer-list"></div>
+          </div>
+        </section>
+
+        <section class="panel settings-panel--wide notify-settings" id="notify-settings"
+          aria-labelledby="notify-settings-title" data-state="loading">
+          <div class="panel__head">
+            <h2 class="panel__title" id="notify-settings-title">
+              <svg aria-hidden="true"><use href="#i-bell" /></svg>
+              QQ 通知
+            </h2>
+            <span class="panel__sub">节点故障时通过 QQ 机器人私信管理员</span>
+            <div class="panel__actions">
+              <span class="cluster-badge" id="notify-state-badge">读取中</span>
+              <button id="notify-refresh-btn" class="btn-ghost icon-btn compact-btn" type="button"
+                title="刷新状态" aria-label="刷新通知状态">
+                <svg class="btn-icon" id="notify-refresh-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel__body">
+            <div class="notify-head">
+              <label class="toggle-label">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="notify-enabled" aria-describedby="notify-summary" disabled>
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>启用 QQ 通知</span>
+              </label>
+              <p id="notify-summary" class="settings-help-text" role="status">正在读取通知设置…</p>
+            </div>
+
+            <div class="hint notify-alert" id="notify-alert" data-tone="danger" role="alert" hidden></div>
+
+            <div class="cluster-settings-grid">
+              <div class="cluster-settings-panel">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-peer-node-dot" aria-hidden="true"></span>
+                  <span>机器人凭据</span>
+                </div>
+                <div class="cluster-settings-fields">
+                  <div class="control-group cluster-settings-field-wide">
+                    <label for="notify-app-id">AppID</label>
+                    <input type="text" id="notify-app-id" class="notify-mono" inputmode="numeric"
+                      autocomplete="off" spellcheck="false" placeholder="QQ 开放平台的机器人 AppID"
+                      aria-describedby="notify-app-id-error">
+                    <small class="settings-help-text is-invalid" id="notify-app-id-error" hidden></small>
+                  </div>
+                  <div class="control-group cluster-settings-field-wide">
+                    <div class="credential-heading">
+                      <label for="notify-app-secret">AppSecret</label>
+                      <div class="credential-state">
+                        <span class="cluster-badge" id="notify-app-secret-state" role="status">读取中</span>
+                        <button type="button" id="notify-clear-app-secret" class="btn-ghost compact-btn credential-clear"
+                          aria-label="清除本节点保存的 AppSecret" hidden>清除</button>
+                      </div>
+                    </div>
+                    <input type="password" id="notify-app-secret" autocomplete="new-password" spellcheck="false"
+                      title="已保存；输入新值后保存可替换" placeholder="填写 AppSecret" aria-describedby="notify-app-secret-help">
+                  </div>
+                  <div class="control-group cluster-settings-field-wide">
+                    <label for="notify-admin-openid">管理员 openid</label>
+                    <div class="input-action-row notify-openid-row">
+                      <input type="text" id="notify-admin-openid" class="notify-mono" autocomplete="off" spellcheck="false"
+                        placeholder="点「自动获取」或手动填写" aria-describedby="notify-admin-openid-error notify-bind-help">
+                      <button type="button" id="notify-bind-btn" class="btn-secondary"
+                        title="生成配对码，在 QQ 向机器人发送后自动填入 openid">自动获取</button>
+                    </div>
+                    <small class="settings-help-text is-invalid" id="notify-admin-openid-error" hidden></small>
+                    <label class="notify-bind-any">
+                      <input type="checkbox" id="notify-bind-any">
+                      <span>任意消息即可绑定（仅限只有管理员能私信的机器人）</span>
+                    </label>
+                    <div class="notify-bind" id="notify-bind" data-state="idle" hidden aria-live="polite">
+                      <div class="notify-bind-main">
+                        <span class="notify-bind-code" id="notify-bind-code" aria-label="配对码"></span>
+                        <span class="cluster-badge" id="notify-bind-badge"></span>
+                      </div>
+                      <p class="settings-help-text notify-bind-text" id="notify-bind-text"></p>
+                      <button type="button" id="notify-bind-cancel" class="btn-ghost compact-btn notify-bind-cancel">取消</button>
+                    </div>
+                    <small class="settings-help-text" id="notify-bind-help">需先保存 AppID 和 AppSecret。配对码 5 分钟内有效，绑定在活跃节点进行。</small>
+                  </div>
+                </div>
+                <small class="settings-help-text" id="notify-app-secret-help">AppSecret 只加密保存在本节点，不会进入备份或集群同步，保存后不再显示。多服务器时请在每个节点分别填写。</small>
+              </div>
+
+              <div class="cluster-settings-panel">
+                <div class="cluster-settings-panel-header">
+                  <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                  <span id="notify-status-title">发送状态</span>
+                </div>
+                <div class="cluster-node-meta" id="notify-status" aria-labelledby="notify-status-title" aria-live="polite"></div>
+              </div>
+            </div>
+
+            <div class="cluster-settings-panel notify-section">
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark cluster-settings-panel-mark-add" aria-hidden="true"></span>
+                <span>防打扰</span>
+              </div>
+              <div class="cluster-settings-fields notify-noise-fields">
+                <div class="control-group">
+                  <label for="notify-confirm-secs">故障确认 (秒)</label>
+                  <input type="number" id="notify-confirm-secs" min="0" max="600" step="1" placeholder="60"
+                    aria-describedby="notify-confirm-help">
+                  <small class="settings-help-text" id="notify-confirm-help" data-help="持续异常这么久才发送">持续异常这么久才发送</small>
+                </div>
+                <div class="control-group">
+                  <label for="notify-recovery-secs">恢复确认 (秒)</label>
+                  <input type="number" id="notify-recovery-secs" min="0" max="1800" step="1" placeholder="30"
+                    aria-describedby="notify-recovery-help">
+                  <small class="settings-help-text" id="notify-recovery-help" data-help="恢复正常这么久才发「已恢复」">恢复正常这么久才发「已恢复」</small>
+                </div>
+                <div class="control-group">
+                  <label for="notify-cooldown-mins">重复通知冷却 (分钟)</label>
+                  <input type="number" id="notify-cooldown-mins" min="1" max="1440" step="1" placeholder="30"
+                    aria-describedby="notify-cooldown-help">
+                  <small class="settings-help-text" id="notify-cooldown-help" data-help="同一节点同一问题的最短间隔">同一节点同一问题的最短间隔</small>
+                </div>
+                <div class="control-group">
+                  <label for="notify-critical-cooldown-mins">严重事件冷却 (分钟)</label>
+                  <input type="number" id="notify-critical-cooldown-mins" min="1" max="1440" step="1" placeholder="10"
+                    aria-describedby="notify-critical-cooldown-help">
+                  <small class="settings-help-text" id="notify-critical-cooldown-help" data-help="节点宕机、故障转移等">节点宕机、故障转移等</small>
+                </div>
+              </div>
+            </div>
+
+            <div class="cluster-settings-panel notify-section notify-commands-section">
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                <span>QQ 指令</span>
+              </div>
+              <label class="checkbox-inline notify-toggle-row">
+                <input type="checkbox" id="notify-commands" aria-describedby="notify-commands-help" checked disabled>
+                <span>回复管理员的只读指令</span>
+              </label>
+              <small class="settings-help-text" id="notify-commands-help">在 QQ 向机器人发送 status、alert、quota 或 help 可查询，只回复已绑定的管理员，不会改变任何设置。管理员发来的任何消息都会刷新回复窗口。</small>
+            </div>
+
+            <div class="cluster-settings-panel notify-section notify-watch" id="notify-watch">
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                <span id="notify-watch-title">开播通知关注列表</span>
+                <span class="cluster-badge" id="notify-watch-count">0 个频道</span>
+              </div>
+              <label class="checkbox-inline notify-toggle-row">
+                <input type="checkbox" id="notify-watch-enabled" aria-describedby="notify-watch-help" disabled>
+                <span>关注的频道开播时发送 QQ 私信</span>
+              </label>
+              <small class="settings-help-text" id="notify-watch-help">任一节点检测到频道开播即发送「🟢 开播」，每场直播只发一次，不会占用召回额度。</small>
+              <ul class="notify-watch-list" id="notify-watch-list" aria-labelledby="notify-watch-title"></ul>
+              <p class="settings-help-text notify-watch-empty" id="notify-watch-empty">还没有关注的频道。</p>
+              <div class="control-group notify-watch-picker">
+                <label for="notify-watch-search">从已配置的频道添加</label>
+                <input type="search" id="notify-watch-search" placeholder="搜索频道名称或 ID" autocomplete="off"
+                  aria-controls="notify-watch-results" disabled>
+                <ul class="notify-watch-results" id="notify-watch-results" aria-label="可添加的频道"></ul>
+                <small class="settings-help-text" id="notify-watch-no-results" hidden>没有匹配的已配置频道，可在下方手动添加。</small>
+              </div>
+              <div class="notify-watch-manual">
+                <div class="control-group">
+                  <label for="notify-watch-platform">平台</label>
+                  <select id="notify-watch-platform" disabled>
+                    <option value="youtube">YouTube</option>
+                    <option value="twitch">Twitch</option>
+                    <option value="niconico">Niconico</option>
+                  </select>
+                </div>
+                <div class="control-group">
+                  <label for="notify-watch-id">频道 ID</label>
+                  <input type="text" id="notify-watch-id" class="notify-mono" spellcheck="false" autocomplete="off"
+                    placeholder="UC… / 登录名 / ch…" disabled>
+                </div>
+                <div class="control-group">
+                  <label for="notify-watch-name">显示名称（可选）</label>
+                  <input type="text" id="notify-watch-name" maxlength="40" autocomplete="off" disabled>
+                </div>
+                <button type="button" id="notify-watch-add" class="btn-secondary notify-watch-add" disabled>手动添加</button>
+              </div>
+              <small class="settings-help-text is-invalid" id="notify-watch-error" role="alert" hidden></small>
+            </div>
+
+            <details class="session-legacy notify-section notify-advanced" id="notify-advanced">
+              <summary>高级设置</summary>
+              <div class="cluster-settings-fields notify-advanced-fields">
+                <div class="control-group">
+                  <label for="notify-token-url">Token 地址</label>
+                  <input type="text" id="notify-token-url" class="notify-mono" inputmode="url" spellcheck="false"
+                    placeholder="https://bots.qq.com/app/getAppAccessToken" aria-describedby="notify-hosts-help">
+                </div>
+                <div class="control-group">
+                  <label for="notify-api-base">API 地址</label>
+                  <input type="text" id="notify-api-base" class="notify-mono" inputmode="url" spellcheck="false"
+                    placeholder="https://api.sgroup.qq.com" aria-describedby="notify-hosts-help">
+                </div>
+              </div>
+              <small class="settings-help-text is-invalid" id="notify-hosts-error" hidden></small>
+              <small class="settings-help-text" id="notify-hosts-help">一般无需修改。留空使用默认地址。</small>
+            </details>
+
+            <div class="session-actions notify-actions">
+              <button id="notify-save-btn" type="button" class="btn-primary" disabled>保存通知设置</button>
+              <button id="notify-test-btn" type="button" class="btn-secondary"
+                title="向管理员发送一条测试私信，会占用共享发送额度">发送测试消息</button>
+              <p class="settings-help-text notify-dirty" id="notify-dirty" hidden>有未保存的更改</p>
+            </div>
+            <p id="notify-action-result" class="settings-help-text" role="status" aria-live="polite"></p>
           </div>
         </section>
 

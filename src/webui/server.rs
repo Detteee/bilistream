@@ -54,6 +54,8 @@ pub(crate) async fn serve_prepared(
     crate::plugins::youtube_websub::set_webui_port(port);
     let _websub_worker = crate::plugins::youtube_websub::start_websub_worker();
     let _cluster_worker = crate::cluster::start_cluster_worker();
+    // Off until enabled in 系统设置 → QQ 通知; a no-op loop otherwise.
+    let _notify_worker = crate::notify::start();
     let _membership_worker = crate::cluster::membership::start_recovery_worker();
     let _public_supervisor = crate::webui::public::start_public_status_supervisor();
     let app = build_app(state, auth);
@@ -165,6 +167,13 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
             )),
         )
         .route("/config", get(api::get_config).post(api::update_config))
+        .route("/notify", get(api::get_notify).put(api::update_notify))
+        .route("/notify/status", get(api::notify_status))
+        .route("/notify/test", post(api::notify_test))
+        .route(
+            "/notify/bind",
+            post(api::notify_bind).delete(api::notify_cancel_bind),
+        )
         .route("/storage", get(api::storage_status))
         .route("/storage/backup", post(api::export_storage_backup))
         .route(

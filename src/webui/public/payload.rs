@@ -333,6 +333,9 @@ mod tests {
             yt_index_version: None,
             websub: None,
             yt_index: None,
+            notify: None,
+            notify_capable: false,
+            notify_authority: false,
         }
     }
 

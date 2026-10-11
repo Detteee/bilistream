@@ -89,6 +89,10 @@ pub(crate) fn compute_cluster_status_with_version(
 ) -> ClusterStatus {
     let status = build_cluster_status_with_version(cfg, config_version);
     publish_cluster_status_change(&status);
+    // Authoritative path only (heartbeat worker and mutations), never the
+    // read-only view that WebUI polls use. One coalescing wake, no
+    // allocation: the notifier reads the cluster state itself.
+    crate::notify::cluster_changed();
     status
 }
 
@@ -354,6 +358,9 @@ pub(crate) fn empty_node(
         yt_index_version: None,
         websub: None,
         yt_index: None,
+        notify: None,
+        notify_capable: false,
+        notify_authority: false,
     }
 }
 

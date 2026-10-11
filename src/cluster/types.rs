@@ -64,6 +64,18 @@ pub struct ClusterNodeSnapshot {
     /// Older nodes neither send nor read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yt_index: Option<YtIndexNodeState>,
+    /// What the notify authority already sent and spent (`notify::ledger`).
+    /// Holds no secret and no openid. Older nodes neither send nor read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<crate::notify::NotifyLedger>,
+    /// This node has the QQ AppSecret, AppID and admin openid, so it may
+    /// become the notify sender. Older nodes report `false`.
+    #[serde(default)]
+    pub notify_capable: bool,
+    /// This node is the notify sender right now (review §7). Peers use it
+    /// to decide whether the no-quorum fallback may start.
+    #[serde(default)]
+    pub notify_authority: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

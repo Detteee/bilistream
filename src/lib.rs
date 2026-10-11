@@ -3,6 +3,7 @@ pub mod cluster;
 pub mod config;
 pub mod deps;
 pub(crate) mod logging;
+pub mod notify;
 pub mod plugins;
 pub mod runtime;
 pub mod storage;

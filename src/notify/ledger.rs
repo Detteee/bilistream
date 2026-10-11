@@ -1,0 +1,703 @@
+//! Cluster-wide notify ledger (design §8.3).
+//!
+//! All nodes share one QQ bot, so what was already sent and how much of the
+//! shared quota was spent travels in heartbeat snapshots. Every node joins
+//! every ledger it sees. `join` is commutative, associative and idempotent
+//! (only maxima and unions), so wall-clock skew between nodes and the order
+//! heartbeats arrive in never change the result. The ledger never holds a
+//! secret, a token or the admin openid.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub const MAX_INCIDENT_MARKS: usize = 32;
+/// Shared active-message budget. Below the unverified-bot limits printed in
+/// the QQ docs (30/min bot-wide, 20/min per user, 1000/day), which are
+/// themselves unconfirmed.
+pub const ACTIVE_PER_MINUTE: usize = 10;
+pub const ACTIVE_PER_DAY: u32 = 200;
+pub const ACTIVE_REPROBE_SECS: u64 = 86_400;
+/// Peer timestamps further ahead than this are a fast clock, not facts.
+pub const MAX_SKEW_SECS: u64 = 300;
+/// `is_wakeup` periods after the admin's last message: today, 1–3, 3–7 and
+/// 7–30 days.
+const WAKEUP_PERIOD_ENDS: [u64; 4] = [86_400, 3 * 86_400, 7 * 86_400, 30 * 86_400];
+const UTC8_OFFSET: u64 = 8 * 3600;
+const MAX_ACTIVE_MINUTE: usize = ACTIVE_PER_MINUTE * 2;
+const MAX_REASON_CHARS: usize = 80;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotifyLedger {
+    pub updated_at: u64,
+    /// node_id of the newest writer (informational).
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub incidents: Vec<IncidentMark>,
+    /// Active sends per author node and UTC+8 day (G-counter: max per
+    /// author, sum for the value), so two senders never undercount.
+    #[serde(default)]
+    pub active_day: BTreeMap<String, DayCount>,
+    /// Active send times, newest last.
+    #[serde(default)]
+    pub active_minute: Vec<u64>,
+    /// QQ answered 429 / 40034100: no send before this time.
+    #[serde(default)]
+    pub rate_limited_until: u64,
+    #[serde(default)]
+    pub wakeup: WakeupState,
+    #[serde(default)]
+    pub modes: ModeMarks,
+    /// Undelivered alerts per author node (G-counter).
+    #[serde(default)]
+    pub undelivered_total: BTreeMap<String, u32>,
+    /// Per author: how much of `undelivered_total` a delivered message
+    /// already reported.
+    #[serde(default)]
+    pub undelivered_reported: BTreeMap<String, u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<TimedReason>,
+    /// This node's id, used as the counter key. Never serialized or joined.
+    #[serde(skip)]
+    pub local: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IncidentMark {
+    /// `EventKind` key + node (+ variant); see `event::dedup_key`.
+    pub key: String,
+    pub notified_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DayCount {
+    /// Days since the epoch in UTC+8.
+    pub day: u64,
+    pub count: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WakeupState {
+    /// Time of the admin's last C2C message seen by a gateway session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_last_c2c_at: Option<u64>,
+    /// `(cycle start, period index)` pairs; only the current cycle counts.
+    #[serde(default)]
+    pub used: Vec<(u64, u8)>,
+    /// Without a known last message, at most one wakeup attempt per day.
+    #[serde(default)]
+    pub unknown_attempt_at: u64,
+}
+
+/// Delivery-mode facts as timestamps, so the join stays a plain maximum and
+/// a later reset wins everywhere.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModeMarks {
+    /// QQ refused active messages (40034105).
+    #[serde(default)]
+    pub active_unavailable_at: u64,
+    /// The admin turned 主动消息 off (40054013 / C2C_MSG_REJECT) or on.
+    #[serde(default)]
+    pub admin_rejected_at: u64,
+    #[serde(default)]
+    pub admin_accepted_at: u64,
+    #[serde(default)]
+    pub markdown_unsupported_at: u64,
+    /// Credentials or settings changed: every sticky fact above is void.
+    #[serde(default)]
+    pub reset_at: u64,
+}
+
+impl ModeMarks {
+    /// Sticky for a day, then re-probed (one spurious 40034105 must not
+    /// disable active sends forever).
+    pub fn active_unavailable(&self, now: u64) -> bool {
+        self.active_unavailable_at > self.reset_at
+            && now.saturating_sub(self.active_unavailable_at) < ACTIVE_REPROBE_SECS
+    }
+    pub fn admin_rejected(&self) -> bool {
+        self.admin_rejected_at > self.reset_at.max(self.admin_accepted_at)
+    }
+    pub fn markdown_unsupported(&self) -> bool {
+        self.markdown_unsupported_at > self.reset_at
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TimedReason {
+    pub at: u64,
+    pub reason: String,
+}
+
+pub fn utc8_day(now: u64) -> u64 {
+    (now + UTC8_OFFSET) / 86_400
+}
+
+impl NotifyLedger {
+    pub fn touch(&mut self, author: &str, now: u64) {
+        if now >= self.updated_at {
+            self.updated_at = now;
+            self.author = author.to_string();
+        }
+    }
+
+    pub fn mark(&self, key: &str) -> Option<&IncidentMark> {
+        self.incidents.iter().find(|mark| mark.key == key)
+    }
+
+    pub fn record_notified(&mut self, key: &str, at: u64) {
+        match self.incidents.iter_mut().find(|mark| mark.key == key) {
+            Some(mark) if mark.notified_at >= at => {}
+            Some(mark) => {
+                mark.notified_at = at;
+                mark.resolved_at = None;
+            }
+            None => self.incidents.push(IncidentMark {
+                key: key.to_string(),
+                notified_at: at,
+                resolved_at: None,
+            }),
+        }
+        self.trim_marks();
+    }
+
+    pub fn record_resolved(&mut self, key: &str, at: u64) {
+        if let Some(mark) = self.incidents.iter_mut().find(|mark| mark.key == key) {
+            mark.resolved_at = mark.resolved_at.max(Some(at));
+        }
+    }
+
+    fn trim_marks(&mut self) {
+        // Deterministic order makes the join independent of arrival order.
+        self.incidents.sort_by(|a, b| {
+            b.notified_at
+                .cmp(&a.notified_at)
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        self.incidents.truncate(MAX_INCIDENT_MARKS);
+    }
+
+    fn minute_count(&self, now: u64) -> usize {
+        self.active_minute
+            .iter()
+            .filter(|at| now.saturating_sub(**at) < 60)
+            .count()
+    }
+
+    pub fn active_budget_left(&self, now: u64) -> bool {
+        let day_count = self.active_today(now);
+        now >= self.rate_limited_until
+            && self.minute_count(now) < ACTIVE_PER_MINUTE
+            && day_count < ACTIVE_PER_DAY
+    }
+
+    /// Charged per attempt, not per success: a timed-out send may have landed.
+    pub fn record_active(&mut self, now: u64) {
+        if !self.active_minute.contains(&now) {
+            self.active_minute.push(now);
+        } else {
+            // Two sends in one second: keep the count honest.
+            self.active_minute.push(now + 1);
+        }
+        self.normalize_minute();
+        let today = utc8_day(now);
+        let own = self.active_day.entry(self.local.clone()).or_default();
+        if own.day != today {
+            *own = DayCount {
+                day: today,
+                count: 0,
+            };
+        }
+        own.count += 1;
+        // Older days never matter again.
+        self.active_day.retain(|_, count| count.day + 1 >= today);
+    }
+
+    /// Active sends today across all authors.
+    pub fn active_today(&self, now: u64) -> u32 {
+        let today = utc8_day(now);
+        self.active_day
+            .values()
+            .filter(|count| count.day == today)
+            .map(|count| count.count)
+            .sum()
+    }
+
+    fn normalize_minute(&mut self) {
+        self.active_minute.sort_unstable();
+        self.active_minute.dedup();
+        if self.active_minute.len() > MAX_ACTIVE_MINUTE {
+            let excess = self.active_minute.len() - MAX_ACTIVE_MINUTE;
+            self.active_minute.drain(..excess);
+        }
+    }
+
+    pub fn record_rate_limited(&mut self, now: u64) {
+        self.rate_limited_until = self.rate_limited_until.max(now + 60);
+    }
+
+    /// The current wakeup period, or `None` once 30 days have passed.
+    pub fn wakeup_period(&self, now: u64) -> Option<u8> {
+        let last = self.wakeup.admin_last_c2c_at?;
+        let elapsed = now.saturating_sub(last);
+        WAKEUP_PERIOD_ENDS
+            .iter()
+            .position(|end| elapsed < *end)
+            .map(|index| index as u8)
+    }
+
+    fn period_used(&self, period: u8) -> bool {
+        let cycle = self.wakeup.admin_last_c2c_at.unwrap_or_default();
+        self.wakeup.used.contains(&(cycle, period))
+    }
+
+    pub fn wakeup_available(&self, now: u64) -> bool {
+        match self.wakeup.admin_last_c2c_at {
+            Some(_) => self
+                .wakeup_period(now)
+                .is_some_and(|period| !self.period_used(period)),
+            None => now.saturating_sub(self.wakeup.unknown_attempt_at) >= 86_400,
+        }
+    }
+
+    /// Wakeups left in the current 30-day cycle, when it is known.
+    pub fn wakeups_left(&self, now: u64) -> Option<usize> {
+        let period = self.wakeup_period(now)?;
+        Some(
+            (period..WAKEUP_PERIOD_ENDS.len() as u8)
+                .filter(|index| !self.period_used(*index))
+                .count(),
+        )
+    }
+
+    /// After a wakeup sent now: how many are left and when the next one can
+    /// go (start of the next unused period). `None` when the cycle is unknown.
+    pub fn wakeup_after_use(&self, now: u64) -> Option<(usize, Option<u64>)> {
+        let last = self.wakeup.admin_last_c2c_at?;
+        let period = self.wakeup_period(now)?;
+        let left = self.wakeups_left(now)?.saturating_sub(1);
+        let next = ((period + 1)..WAKEUP_PERIOD_ENDS.len() as u8)
+            .find(|index| !self.period_used(*index))
+            .map(|index| last + WAKEUP_PERIOD_ENDS[index as usize - 1]);
+        Some((left, next))
+    }
+
+    pub fn record_wakeup(&mut self, now: u64) {
+        match (self.wakeup.admin_last_c2c_at, self.wakeup_period(now)) {
+            (Some(cycle), Some(period)) => {
+                if !self.wakeup.used.contains(&(cycle, period)) {
+                    self.wakeup.used.push((cycle, period));
+                }
+            }
+            _ => self.wakeup.unknown_attempt_at = self.wakeup.unknown_attempt_at.max(now),
+        }
+        self.normalize_wakeup();
+    }
+
+    /// The admin messaged the bot: a new 30-day wakeup cycle starts.
+    pub fn record_admin_message(&mut self, at: u64) {
+        // A start stamped in the future (fast peer clock) must not pin the
+        // cycle: a real message now replaces it.
+        if self
+            .wakeup
+            .admin_last_c2c_at
+            .is_none_or(|last| at > last || last > at + MAX_SKEW_SECS)
+        {
+            self.wakeup.admin_last_c2c_at = Some(at);
+        }
+        self.normalize_wakeup();
+    }
+
+    fn normalize_wakeup(&mut self) {
+        let cycle = self.wakeup.admin_last_c2c_at.unwrap_or_default();
+        self.wakeup.used.retain(|(start, _)| *start >= cycle);
+        self.wakeup.used.sort_unstable();
+        self.wakeup.used.dedup();
+    }
+
+    pub fn record_undelivered(&mut self, count: u32, reason: &str, at: u64) {
+        let own = self
+            .undelivered_total
+            .entry(self.local.clone())
+            .or_default();
+        *own = own.saturating_add(count);
+        self.set_reason(reason, at);
+    }
+
+    pub fn set_reason(&mut self, reason: &str, at: u64) {
+        // The ledger is advertised in heartbeats: no credentials or ids.
+        let reason = mask_ids(&crate::logging::safe_text(reason, MAX_REASON_CHARS * 2));
+        let reason: String = reason.chars().take(MAX_REASON_CHARS).collect();
+        let next = TimedReason { at, reason };
+        if self.last_reason.as_ref().is_none_or(|last| next > *last) {
+            self.last_reason = Some(next);
+        }
+    }
+
+    pub fn undelivered_pending(&self) -> u32 {
+        self.undelivered_total
+            .iter()
+            .map(|(author, total)| {
+                total.saturating_sub(self.undelivered_reported.get(author).copied().unwrap_or(0))
+            })
+            .sum()
+    }
+
+    pub fn mark_undelivered_reported(&mut self) {
+        for (author, total) in &self.undelivered_total {
+            let reported = self.undelivered_reported.entry(author.clone()).or_default();
+            *reported = (*reported).max(*total);
+        }
+    }
+
+    /// Drop or cap timestamps from the future (a peer with a fast clock, or
+    /// a persisted state from before the local clock was fixed). Applied to
+    /// peer ledgers before the join and to the loaded state.
+    pub fn clamp_future(&mut self, now: u64) {
+        let limit = now + MAX_SKEW_SECS;
+        self.incidents.retain(|mark| mark.notified_at <= limit);
+        for mark in &mut self.incidents {
+            if mark.resolved_at.is_some_and(|at| at > limit) {
+                mark.resolved_at = Some(limit.min(mark.notified_at.max(now)));
+            }
+        }
+        self.active_minute.retain(|at| *at <= limit);
+        let today = utc8_day(limit);
+        self.active_day.retain(|_, count| count.day <= today);
+        self.rate_limited_until = self.rate_limited_until.min(now + 3600);
+        if self.wakeup.admin_last_c2c_at.is_some_and(|at| at > limit) {
+            self.wakeup.admin_last_c2c_at = None;
+        }
+        self.wakeup.used.retain(|(start, _)| *start <= limit);
+        self.wakeup.unknown_attempt_at = self.wakeup.unknown_attempt_at.min(limit);
+        let modes = &mut self.modes;
+        for at in [
+            &mut modes.active_unavailable_at,
+            &mut modes.admin_rejected_at,
+            &mut modes.admin_accepted_at,
+            &mut modes.markdown_unsupported_at,
+            &mut modes.reset_at,
+        ] {
+            if *at > limit {
+                *at = 0;
+            }
+        }
+        if self
+            .last_reason
+            .as_ref()
+            .is_some_and(|reason| reason.at > limit)
+        {
+            self.last_reason = None;
+        }
+        if self.updated_at > limit {
+            self.updated_at = 0;
+            self.author.clear();
+        }
+    }
+
+    /// Join a ledger seen in a peer's heartbeat (see the module docs).
+    pub fn join(&mut self, other: &NotifyLedger) {
+        if (other.updated_at, &other.author) > (self.updated_at, &self.author) {
+            self.updated_at = other.updated_at;
+            self.author = other.author.clone();
+        }
+        for mark in &other.incidents {
+            match self.incidents.iter_mut().find(|own| own.key == mark.key) {
+                Some(own) if mark.notified_at > own.notified_at => *own = mark.clone(),
+                Some(own) if mark.notified_at == own.notified_at => {
+                    own.resolved_at = own.resolved_at.max(mark.resolved_at)
+                }
+                Some(_) => {}
+                None => self.incidents.push(mark.clone()),
+            }
+        }
+        self.trim_marks();
+        join_max(&mut self.active_day, &other.active_day);
+        self.active_minute
+            .extend(other.active_minute.iter().copied());
+        self.normalize_minute();
+        self.rate_limited_until = self.rate_limited_until.max(other.rate_limited_until);
+        self.wakeup.admin_last_c2c_at = self
+            .wakeup
+            .admin_last_c2c_at
+            .max(other.wakeup.admin_last_c2c_at);
+        self.wakeup.used.extend(other.wakeup.used.iter().copied());
+        self.wakeup.unknown_attempt_at = self
+            .wakeup
+            .unknown_attempt_at
+            .max(other.wakeup.unknown_attempt_at);
+        self.normalize_wakeup();
+        let (mine, theirs) = (&mut self.modes, &other.modes);
+        mine.active_unavailable_at = mine.active_unavailable_at.max(theirs.active_unavailable_at);
+        mine.admin_rejected_at = mine.admin_rejected_at.max(theirs.admin_rejected_at);
+        mine.admin_accepted_at = mine.admin_accepted_at.max(theirs.admin_accepted_at);
+        mine.markdown_unsupported_at = mine
+            .markdown_unsupported_at
+            .max(theirs.markdown_unsupported_at);
+        mine.reset_at = mine.reset_at.max(theirs.reset_at);
+        join_max(&mut self.undelivered_total, &other.undelivered_total);
+        join_max(&mut self.undelivered_reported, &other.undelivered_reported);
+        if other.last_reason > self.last_reason {
+            self.last_reason = other.last_reason.clone();
+        }
+    }
+}
+
+/// Hide openid-like runs (24+ letters/digits).
+fn mask_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.chars().count() >= 24 {
+            out.push('…');
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+fn join_max<V: Ord + Clone>(mine: &mut BTreeMap<String, V>, theirs: &BTreeMap<String, V>) {
+    for (key, value) in theirs {
+        match mine.get_mut(key) {
+            Some(own) if *own >= *value => {}
+            Some(own) => *own = value.clone(),
+            None => {
+                mine.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(seed: u64, author: &str) -> NotifyLedger {
+        let mut ledger = NotifyLedger {
+            local: author.to_string(),
+            ..Default::default()
+        };
+        ledger.touch(author, 1_000 + seed);
+        ledger.record_notified(&format!("k{}", seed % 3), 900 + seed);
+        ledger.record_notified("shared", 800 + seed * 7 % 5);
+        if seed.is_multiple_of(2) {
+            ledger.record_resolved("shared", 950 + seed);
+        }
+        ledger.record_active(1_000 + seed);
+        ledger.record_admin_message(500 + seed % 2);
+        ledger.record_wakeup(600 + seed);
+        ledger.record_undelivered(seed as u32 % 3, &format!("reason {seed}"), 700 + seed);
+        ledger.modes.active_unavailable_at = seed * 3;
+        ledger
+    }
+
+    fn joined(order: &[&NotifyLedger]) -> NotifyLedger {
+        let mut out = NotifyLedger::default();
+        for ledger in order {
+            out.join(ledger);
+        }
+        out
+    }
+
+    #[test]
+    fn join_is_commutative_associative_and_idempotent() {
+        let a = sample(1, "a");
+        let b = sample(2, "b");
+        let c = sample(5, "c");
+        let reference = joined(&[&a, &b, &c]);
+        for order in [
+            [&a, &c, &b],
+            [&b, &a, &c],
+            [&b, &c, &a],
+            [&c, &a, &b],
+            [&c, &b, &a],
+        ] {
+            assert_eq!(joined(&order), reference);
+        }
+        let mut twice = reference.clone();
+        twice.join(&reference);
+        twice.join(&a);
+        assert_eq!(twice, reference);
+        let mut ab = a.clone();
+        ab.join(&b);
+        let mut bc = b.clone();
+        bc.join(&c);
+        let mut left = ab;
+        left.join(&c);
+        let mut right = a.clone();
+        right.join(&bc);
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn marks_are_capped_by_recency() {
+        let mut ledger = NotifyLedger::default();
+        for i in 0..40 {
+            ledger.record_notified(&format!("key-{i}"), i);
+        }
+        assert_eq!(ledger.incidents.len(), MAX_INCIDENT_MARKS);
+        assert!(ledger.mark("key-39").is_some());
+        assert!(ledger.mark("key-0").is_none());
+    }
+
+    #[test]
+    fn active_budget_minute_and_day() {
+        let mut ledger = NotifyLedger::default();
+        let now = 1_800_000_000;
+        for i in 0..ACTIVE_PER_MINUTE as u64 {
+            assert!(ledger.active_budget_left(now + i));
+            ledger.record_active(now + i);
+        }
+        assert!(!ledger.active_budget_left(now + 20));
+        assert!(ledger.active_budget_left(now + 61 + ACTIVE_PER_MINUTE as u64));
+        ledger.active_day.insert(
+            "peer".into(),
+            DayCount {
+                day: utc8_day(now),
+                count: ACTIVE_PER_DAY,
+            },
+        );
+        assert!(!ledger.active_budget_left(now + 120));
+        // The next UTC+8 day starts a fresh count.
+        assert!(ledger.active_budget_left(now + 86_400));
+        ledger.record_rate_limited(now + 86_400);
+        assert!(!ledger.active_budget_left(now + 86_430));
+    }
+
+    #[test]
+    fn wakeup_periods_roll_over() {
+        let mut ledger = NotifyLedger::default();
+        let start = 1_800_000_000;
+        assert!(ledger.wakeup_available(start));
+        ledger.record_wakeup(start);
+        assert!(!ledger.wakeup_available(start + 3600));
+        assert!(ledger.wakeup_available(start + 86_400));
+
+        ledger.record_admin_message(start);
+        assert_eq!(ledger.wakeups_left(start), Some(4));
+        ledger.record_wakeup(start + 10);
+        assert!(!ledger.wakeup_available(start + 20));
+        assert_eq!(ledger.wakeups_left(start + 20), Some(3));
+        assert!(ledger.wakeup_available(start + 2 * 86_400));
+        ledger.record_wakeup(start + 2 * 86_400);
+        assert_eq!(ledger.wakeups_left(start + 4 * 86_400), Some(2));
+        assert!(!ledger.wakeup_available(start + 31 * 86_400));
+        // A new admin message starts a new cycle.
+        ledger.record_admin_message(start + 31 * 86_400);
+        assert_eq!(ledger.wakeups_left(start + 31 * 86_400), Some(4));
+    }
+
+    #[test]
+    fn mode_marks_reset_and_undelivered_report() {
+        let mut ledger = NotifyLedger::default();
+        ledger.modes.active_unavailable_at = 10;
+        assert!(ledger.modes.active_unavailable(20));
+        // Re-probed after a day.
+        assert!(!ledger.modes.active_unavailable(10 + ACTIVE_REPROBE_SECS));
+        ledger.modes.reset_at = 11;
+        assert!(!ledger.modes.active_unavailable(20));
+        ledger.modes.admin_rejected_at = 20;
+        assert!(ledger.modes.admin_rejected());
+        ledger.modes.admin_accepted_at = 21;
+        assert!(!ledger.modes.admin_rejected());
+
+        ledger.record_undelivered(2, "主动消息无权限 (40034105)", 30);
+        assert_eq!(ledger.undelivered_pending(), 2);
+        let stale_peer = ledger.clone();
+        ledger.mark_undelivered_reported();
+        ledger.join(&stale_peer);
+        assert_eq!(ledger.undelivered_pending(), 0);
+    }
+
+    #[test]
+    fn future_stamps_from_a_fast_peer_are_ignored() {
+        let now = 1_800_000_000;
+        let mut peer = NotifyLedger {
+            local: "fast".into(),
+            ..Default::default()
+        };
+        for i in 0..ACTIVE_PER_MINUTE as u64 {
+            peer.record_active(now + 3600 + i);
+        }
+        peer.rate_limited_until = now + 86_400;
+        peer.record_admin_message(now + 7200);
+        peer.modes.active_unavailable_at = now + 7200;
+        let mut mine = NotifyLedger::default();
+        let mut clean = peer.clone();
+        clean.clamp_future(now);
+        mine.join(&clean);
+        assert!(!mine.active_budget_left(now + 10)); // capped rate limit, 1 h
+        assert!(mine.active_budget_left(now + 3601));
+        assert_eq!(mine.wakeup.admin_last_c2c_at, None);
+        assert!(!mine.modes.active_unavailable(now));
+        // An already-poisoned cycle start is replaced by a real message.
+        let mut poisoned = NotifyLedger::default();
+        poisoned.record_admin_message(now + 7200);
+        poisoned.record_admin_message(now);
+        assert_eq!(poisoned.wakeup.admin_last_c2c_at, Some(now));
+    }
+
+    #[test]
+    fn counters_from_two_senders_add_up() {
+        let now = 1_800_000_000;
+        let mut a = NotifyLedger {
+            local: "a".into(),
+            ..Default::default()
+        };
+        let mut b = NotifyLedger {
+            local: "b".into(),
+            ..Default::default()
+        };
+        for i in 0..3 {
+            a.record_active(now + i);
+            b.record_active(now + 100 + i);
+        }
+        a.record_undelivered(2, "x", now);
+        b.record_undelivered(3, "y", now);
+        let mut joined = a.clone();
+        joined.join(&b);
+        assert_eq!(joined.active_today(now + 200), 6);
+        assert_eq!(joined.undelivered_pending(), 5);
+        joined.mark_undelivered_reported();
+        let mut back = b.clone();
+        back.join(&joined);
+        assert_eq!(back.undelivered_pending(), 0);
+    }
+
+    #[test]
+    fn ledger_json_has_no_openid_or_secret_fields() {
+        let json = serde_json::to_string(&sample(3, "node-a")).unwrap();
+        for forbidden in ["openid", "secret", "token", "app_id"] {
+            assert!(!json.contains(forbidden), "{forbidden} in {json}");
+        }
+    }
+
+    #[test]
+    fn the_advertised_ledger_carries_no_secret_token_or_openid() {
+        let mut ledger = sample(1_000, "n1");
+        ledger.record_admin_message(900);
+        ledger.record_undelivered(2, "openid ABCDEF0123456789ABCDEF0123456789 token=xyz", 950);
+        ledger.set_reason("access_token abc", 960);
+        let text = serde_json::to_string(&ledger).unwrap();
+        for needle in [
+            "ABCDEF0123456789ABCDEF0123456789",
+            "token=xyz",
+            "access_token abc",
+        ] {
+            assert!(!text.contains(needle), "{needle} leaked: {text}");
+        }
+    }
+}

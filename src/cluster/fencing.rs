@@ -483,6 +483,9 @@ pub(crate) async fn collect_local_snapshot(
                 failed,
             }
         }),
+        notify: crate::notify::heartbeat_ledger(),
+        notify_capable: crate::notify::local_capable(),
+        notify_authority: crate::notify::local_authority(),
     }
 }
 

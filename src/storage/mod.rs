@@ -701,4 +701,4 @@ pub fn write_json<T: Serialize>(name: &str, value: &T) -> io::Result<u64> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

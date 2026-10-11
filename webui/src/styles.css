@@ -2195,3 +2195,352 @@ html:not(.app-ready) #main-page {
 }
 
 #nc-scheduled-row { display: none; }
+
+/* QQ 通知 panel (#notify-settings). Everything is scoped under
+   .notify-settings and only uses tokens from shared.css. Proposed for the end
+   of section 12 "Settings" in webui/src/styles.css. */
+
+.notify-settings .notify-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  margin-bottom: var(--sp-4);
+}
+
+.notify-settings .notify-head > p {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+/* Problem banner: the existing .hint with a semantic left rule. */
+.notify-settings .notify-alert {
+  margin-bottom: var(--sp-4);
+}
+.notify-settings .notify-alert[data-tone="danger"] { border-left-color: var(--danger); }
+.notify-settings .notify-alert[data-tone="warn"] { border-left-color: var(--warn); }
+.notify-settings .notify-alert strong { color: var(--text); }
+
+.notify-settings .notify-section {
+  margin-top: var(--sp-4);
+}
+
+/* Status rows reuse .cluster-node-meta*; give the value a dot slot. */
+.notify-settings .cluster-node-meta { gap: var(--sp-2); }
+.notify-settings .notify-status-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+.notify-settings .status-indicator.notify-dot-danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+.notify-settings .notify-error-text { color: var(--danger); }
+.notify-settings .notify-trace {
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* Inputs that hold opaque ids. */
+.notify-settings .notify-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+/* The panel saves through its own endpoint, so it carries its own button row. */
+.notify-settings .notify-actions {
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-5);
+}
+.notify-settings .notify-dirty {
+  margin: 0;
+  color: var(--warn);
+}
+
+.notify-settings .notify-copy-results {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  list-style: none;
+}
+.notify-settings .notify-copy-results:empty { display: none; }
+.notify-settings .notify-copy-results li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  font-size: var(--fs-sm);
+}
+
+/* Field-level validation: pairs with .settings-help-text.is-invalid. */
+.notify-settings input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   Responsive fixes (found by the width sweep in the design doc, section 15).
+   Breakpoints reuse the admin UI's own: 560px (responsive.css panel padding),
+   700px (#view-settings single column) and 900px (responsive.css container).
+   -------------------------------------------------------------------------- */
+
+/* R1. The panel is a grid item of #view-settings (1fr = minmax(auto, 1fr)),
+   so any unbreakable child widened the whole page. Let it shrink. */
+.notify-settings,
+.notify-settings .cluster-settings-grid > *,
+.notify-settings .control-group {
+  min-width: 0;
+}
+
+/* R2. Status values: long node names and badges wrap inside the box. */
+.notify-settings .cluster-node-meta-label { flex: 0 0 auto; }
+.notify-settings .notify-status-value {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notify-settings .cluster-node-meta-value .cluster-badge,
+.notify-settings .notify-copy-results .cluster-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+/* R3. Copy results: long node names wrap, the result badge stays whole. */
+.notify-settings .notify-copy-results li > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notify-settings .notify-copy-results li > .cluster-badge { flex: 0 1 auto; }
+
+/* R4. Noise fields: 2 columns until 900px, then 4 (no 3+1 orphan, and the
+   validation text keeps a readable line length). */
+.notify-settings .notify-noise-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 900px) {
+  .notify-settings .notify-noise-fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* R5. Advanced host overrides hold long URLs: stack them unless each column
+   gets at least 340px (the default token URL in --font-mono). */
+.notify-settings .notify-advanced-fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  margin-top: var(--sp-3);
+}
+.notify-settings .notify-advanced .control-group {
+  /* .session-legacy caps these at 36rem and adds a top margin. */
+  max-width: none;
+  margin-top: 0;
+}
+
+/* R6. Phones: head wraps instead of crushing the title; actions stack full
+   width; every control reaches a 44px tap target. */
+@media (max-width: 560px) {
+  .notify-settings .panel__head { flex-wrap: wrap; row-gap: var(--sp-1); }
+  .notify-settings .panel__title { white-space: nowrap; }
+  .notify-settings .panel__sub { order: 3; flex-basis: 100%; }
+
+  .notify-settings .notify-head { gap: var(--sp-1); }
+  .notify-settings .notify-head .toggle-label {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  /* Keep summary a list-item so the disclosure triangle stays. */
+  .notify-settings .notify-advanced > summary {
+    padding-block: var(--sp-3);
+  }
+
+  .notify-settings input[type="text"],
+  .notify-settings input[type="number"],
+  .notify-settings input[type="password"],
+  .notify-settings .notify-actions > button {
+    min-height: 44px;
+  }
+  .notify-settings .panel__actions .icon-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .notify-settings .credential-clear {
+    min-height: 44px;
+    padding-inline: var(--sp-3);
+  }
+  .notify-settings .credential-heading { align-items: center; }
+
+  .notify-settings .notify-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .notify-settings .notify-dirty { order: -1; }
+}
+
+/* R7. A wrapped two-line pill reads as a blob; status badges use the small
+   radius so they still look intentional when they wrap. */
+.notify-settings .cluster-node-meta-value .cluster-badge {
+  border-radius: var(--r-sm);
+}
+
+/* Admin openid binding (自动获取). Same tokens and badges as the rest of the
+   panel; wraps like the other rows and keeps 44px targets on phones. */
+.notify-settings .notify-openid-row > input { flex: 1 1 12rem; }
+.notify-settings .notify-bind-any {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.notify-settings .notify-bind-any input { flex: 0 0 auto; margin-top: 0.2em; }
+.notify-settings .notify-bind {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  min-width: 0;
+}
+.notify-settings .notify-bind[hidden] { display: none; }
+.notify-settings .notify-bind[data-state="bound"] { border-left-color: var(--ok); }
+.notify-settings .notify-bind[data-state="expired"],
+.notify-settings .notify-bind[data-state="error"] { border-left-color: var(--warn); }
+.notify-settings .notify-bind-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  min-width: 0;
+}
+.notify-settings .notify-bind-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+.notify-settings .notify-bind-code:empty { display: none; }
+.notify-settings .notify-bind .cluster-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
+.notify-settings .notify-bind-text {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.notify-settings .notify-bind-cancel { grid-row: 1; grid-column: 2; }
+.notify-settings .notify-bind-cancel[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  .notify-settings .notify-openid-row > button,
+  .notify-settings .notify-bind-cancel {
+    min-height: 44px;
+  }
+  .notify-settings .notify-bind-any { min-height: 44px; align-items: center; }
+  .notify-settings .notify-bind-code { font-size: var(--fs-xl); }
+}
+
+/* QQ 通知: QQ 指令 and 开播通知关注列表 */
+.notify-settings .notify-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.notify-settings .notify-watch-list,
+.notify-settings .notify-watch-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.notify-settings .notify-watch-item,
+.notify-settings .notify-watch-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+  min-width: 0;
+}
+.notify-settings .notify-watch-option {
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.notify-settings .notify-watch-option:hover:not(:disabled),
+.notify-settings .notify-watch-option:focus-visible {
+  border-color: var(--accent, #3b82f6);
+}
+.notify-settings .notify-watch-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.notify-settings .notify-watch-option {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.notify-settings .notify-watch-name,
+.notify-settings .notify-watch-meta {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.notify-settings .notify-watch-meta {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+.notify-settings .notify-watch-remove {
+  flex: none;
+  min-height: 44px;
+}
+.notify-settings .notify-watch-results:empty {
+  display: none;
+}
+.notify-settings .notify-watch-manual {
+  display: grid;
+  grid-template-columns: minmax(110px, 140px) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: end;
+  margin-top: 8px;
+}
+.notify-settings .notify-watch-add {
+  min-height: 44px;
+}
+@media (max-width: 720px) {
+  .notify-settings .notify-watch-manual {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .notify-settings .notify-watch-add {
+    width: 100%;
+  }
+}
