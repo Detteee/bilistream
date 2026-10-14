@@ -58,7 +58,9 @@ pub use config::*;
 pub use crop::*;
 pub use manage::*;
 pub use notify::{get_notify, notify_status};
-pub(crate) use notify::{notify_bind, notify_cancel_bind, notify_test, update_notify};
+pub(crate) use notify::{
+    notify_bind, notify_cancel_bind, notify_test, notify_unbind, update_notify,
+};
 pub use setup::*;
 pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};
 pub use status::*;
@@ -484,6 +486,7 @@ mod tests {
             notify: None,
             notify_capable: false,
             notify_authority: false,
+            notify_gateway_held: None,
         }
     }
 

@@ -561,6 +561,10 @@ impl Store {
             for (name, doc) in docs {
                 tx.write_at(&name, doc.value, doc.updated_at)?;
             }
+            // Backups never carry notify records (not in NAMES), but the
+            // target may hold an older plain `notify-config`: seal its openid
+            // in this same transaction (contract: migrate restored data too).
+            crate::notify::store::migrate_plain_openid_tx(tx)?;
             Ok(())
         })
     }

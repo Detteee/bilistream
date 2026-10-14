@@ -44,8 +44,9 @@ pub enum BindState {
         expires_at: u64,
         attempts: u8,
     },
+    /// The openid itself is saved and forgotten here: the view, the status
+    /// and the SSE event never carry it.
     Bound {
-        openid: String,
         via: BindVia,
         at: u64,
     },
@@ -206,11 +207,7 @@ impl Binder {
     }
 
     fn finish(&mut self, openid: &str, via: BindVia, now: u64) -> BindDecision {
-        self.state = BindState::Bound {
-            openid: openid.to_string(),
-            via,
-            at: now,
-        };
+        self.state = BindState::Bound { via, at: now };
         BindDecision::Bind {
             openid: openid.to_string(),
             via,
@@ -240,9 +237,8 @@ impl Binder {
             BindState::Waiting { expires_at, .. } => {
                 serde_json::json!({"state": "expired", "at": expires_at})
             }
-            BindState::Bound { openid, via, at } => serde_json::json!({
+            BindState::Bound { via, at } => serde_json::json!({
                 "state": "bound",
-                "openid": openid,
                 "via": via,
                 "at": at,
                 "node_id": node_id,
@@ -312,6 +308,22 @@ mod tests {
             BindDecision::Ignore
         );
         assert_eq!(binder.view(1_030, "jp")["state"], "bound");
+    }
+
+    #[test]
+    fn bound_bind_view_has_no_openid() {
+        let mut binder = Binder::default();
+        waiting(&mut binder, BindMode::Any);
+        assert!(matches!(
+            binder.on_message(OPENID, "hi", 1_001),
+            BindDecision::Bind { .. }
+        ));
+        let view = binder.view(1_002, "jp");
+        assert_eq!(view["state"], "bound");
+        assert_eq!(view["via"], "message");
+        assert!(view.get("openid").is_none());
+        assert!(!view.to_string().contains(OPENID));
+        assert!(!format!("{:?}", binder.state()).contains(OPENID));
     }
 
     #[test]

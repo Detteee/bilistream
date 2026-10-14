@@ -242,15 +242,18 @@ fn cta_lines_follow_the_wakeup_cycle_and_only_when_they_fit() {
     let mut ledger = NotifyLedger::default();
     ledger.record_admin_message(NOW - 3600);
     let cta = wakeup_cta(&ledger, NOW);
-    assert!(cta.starts_with("召回提醒还剩 3 次（下次 "), "{cta}");
+    assert!(cta.starts_with("召回消息还剩 3 次（下次 "), "{cta}");
     // Last period of the cycle: the last reminder.
     let late = NOW - 3600 + 8 * 86_400;
-    assert!(wakeup_cta(&ledger, late).starts_with("这是本周期最后一次提醒"));
+    assert!(wakeup_cta(&ledger, late).starts_with("这是本周期最后一次召回消息"));
     assert_eq!(with_cta("a", Some("b"), false), "a\nb");
     assert_eq!(with_cta("a", Some("b"), true), "a\n- b");
     let long = "x".repeat(495);
     assert_eq!(with_cta(&long, Some("回复任意消息"), false), long);
-    assert!(last_reply_cta().contains("再发一条消息"));
+    assert_eq!(
+        last_reply_cta(),
+        "本轮可回复次数已用完。回复任意消息即可恢复正常推送。"
+    );
 }
 
 #[test]

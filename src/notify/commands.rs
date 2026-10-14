@@ -1,5 +1,6 @@
-//! Read-only QQ commands (alert format spec §7): `status` / `alert` / `quota` /
-//! `help` (English words; 状态 / 事件 / 额度 / 帮助 are accepted as aliases).
+//! Read-only QQ commands (notification format spec §7): exactly `status`, `event`,
+//! `quota` and `help`. Case-insensitive with an optional leading `/`; no
+//! aliases, no short forms, no Chinese words or full-width punctuation.
 //!
 //! Only the bound admin openid gets an answer; every other sender, and any
 //! other text, is ignored without a reply. Answers are passive replies
@@ -21,21 +22,25 @@ const MAX_ENTRIES: usize = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
     Status,
-    Alerts,
+    Event,
     Quota,
     Help,
 }
 
 /// Exact command words only, case-insensitive, optional leading `/`
-/// ("status", "/Status", " 状态 ").
+/// ("status", "/Status", " help ").
 pub fn parse(content: &str) -> Option<Cmd> {
     let text = content.trim();
-    let text = text.strip_prefix('/').unwrap_or(text).trim().to_lowercase();
+    let text = text
+        .strip_prefix('/')
+        .unwrap_or(text)
+        .trim()
+        .to_ascii_lowercase();
     match text.as_str() {
-        "status" | "s" | "状态" => Some(Cmd::Status),
-        "alert" | "alerts" | "事件" => Some(Cmd::Alerts),
-        "quota" | "额度" => Some(Cmd::Quota),
-        "help" | "?" | "？" | "帮助" => Some(Cmd::Help),
+        "status" => Some(Cmd::Status),
+        "event" => Some(Cmd::Event),
+        "quota" => Some(Cmd::Quota),
+        "help" => Some(Cmd::Help),
         _ => None,
     }
 }
@@ -68,7 +73,7 @@ impl Limiter {
     }
 }
 
-/// An open incident as the 状态/通知 replies show it.
+/// An open incident as the status/event replies show it.
 #[derive(Clone, Debug)]
 pub struct OpenEntry {
     pub kind: EventKind,
@@ -87,6 +92,9 @@ pub struct View<'a> {
     pub passive: Option<&'a PassiveTarget>,
     pub live: Vec<(String, Option<String>)>,
     pub gateway_online: bool,
+    /// A membership change paused execution (not a fault; Clerk N6 keeps it
+    /// apart from a node's drain).
+    pub membership_paused: bool,
 }
 
 fn marker(severity: Severity) -> &'static str {
@@ -110,7 +118,7 @@ fn cut(lines: Vec<String>) -> String {
 pub fn reply(cmd: Cmd, view: &View<'_>) -> String {
     match cmd {
         Cmd::Status => status(view),
-        Cmd::Alerts => alerts(view),
+        Cmd::Event => events(view),
         Cmd::Quota => quota(view),
         Cmd::Help => help(),
     }
@@ -137,6 +145,9 @@ fn status(view: &View<'_>) -> String {
     if view.digest.enabled {
         let healthy = view.digest.nodes.iter().filter(|node| node.healthy).count();
         lines.push(format!("节点 {healthy}/{} 正常", view.digest.nodes.len()));
+        if view.membership_paused {
+            lines.push("成员变更中（暂停执行，非故障）".to_string());
+        }
         for node in view.digest.nodes.iter().take(MAX_NODES) {
             let role = if view.digest.owner.as_deref() == Some(node.id.as_str()) {
                 "活跃"
@@ -144,7 +155,7 @@ fn status(view: &View<'_>) -> String {
                 "备用"
             };
             let health = if node.draining {
-                "成员变更中（暂停执行，非故障）".to_string()
+                "正在排空（非故障）".to_string()
             } else if node.healthy {
                 "正常".to_string()
             } else if node.stale || !node.fresh {
@@ -183,7 +194,7 @@ fn status(view: &View<'_>) -> String {
         }
     }
     lines.push(format!(
-        "通知 网关{} · 召回剩余 {} · 未送达 {}",
+        "通知 网关{} · 召回额度剩余 {} · 未送达 {}",
         if view.gateway_online {
             "在线"
         } else {
@@ -199,7 +210,7 @@ fn status(view: &View<'_>) -> String {
     cut(lines)
 }
 
-fn alerts(view: &View<'_>) -> String {
+fn events(view: &View<'_>) -> String {
     let ctx = view.ctx;
     let mut lines = vec![
         "📋 bilistream 事件".to_string(),
@@ -281,9 +292,9 @@ fn quota(view: &View<'_>) -> String {
                 .and_then(|(_, next)| next)
                 .map(|at| format!("，下一周期 {} 起", month_day(at)))
                 .unwrap_or_default();
-            format!("召回 本周期剩余 {left} 次{next}")
+            format!("召回额度 本周期剩余 {left} 次{next}")
         }
-        None => "召回 周期未知（还没收到过管理员消息）".to_string(),
+        None => "召回额度 未知（尚未收到管理员消息）".to_string(),
     };
     lines.push(wakeups);
     lines.push(format!("未送达 {}", view.ledger.undelivered_pending()));
@@ -295,7 +306,7 @@ fn help() -> String {
     [
         "🔵 bilistream 指令（只读）",
         "status：集群节点、直播和通知通道",
-        "alert：未恢复和最近 24 小时的事件",
+        "event：未恢复和最近 24 小时的事件",
         "quota：被动回复、主动消息和召回剩余次数",
         "help：显示本说明",
         "发送任意消息都会刷新回复窗口，积压的通知会借此送达。",
@@ -328,6 +339,7 @@ mod tests {
             passive,
             live: vec![("主频道".into(), None)],
             gateway_online: true,
+            membership_paused: false,
         }
     }
 
@@ -335,17 +347,34 @@ mod tests {
     fn only_exact_words_are_commands() {
         assert_eq!(parse("status"), Some(Cmd::Status));
         assert_eq!(parse("/Status"), Some(Cmd::Status));
-        assert_eq!(parse("alert"), Some(Cmd::Alerts));
+        assert_eq!(parse(" /EVENT "), Some(Cmd::Event));
+        assert_eq!(parse("event"), Some(Cmd::Event));
         assert_eq!(parse("QUOTA"), Some(Cmd::Quota));
         assert_eq!(parse("help"), Some(Cmd::Help));
-        assert_eq!(parse("状态"), Some(Cmd::Status));
-        assert_eq!(parse("通知"), None);
-        assert_eq!(parse(" /事件 "), Some(Cmd::Alerts));
-        assert_eq!(parse("额度"), Some(Cmd::Quota));
-        assert_eq!(parse("帮助"), Some(Cmd::Help));
-        assert_eq!(parse("状态呢"), None);
-        assert_eq!(parse("hi"), None);
-        assert_eq!(parse("482913"), None);
+        assert_eq!(parse("/help"), Some(Cmd::Help));
+        // No aliases, short forms, old words, Chinese or full-width forms.
+        for word in [
+            "s",
+            "alert",
+            "alerts",
+            "events",
+            "?",
+            "？",
+            "状态",
+            "/事件",
+            "额度",
+            "帮助",
+            "通知",
+            "状态呢",
+            "ｓｔａｔｕｓ",
+            "／status",
+            "status?",
+            "hi",
+            "482913",
+            "//status",
+        ] {
+            assert_eq!(parse(word), None, "{word}");
+        }
     }
 
     #[test]
@@ -407,18 +436,73 @@ mod tests {
         assert!(status.contains("· sg-3 备用 降级：网络不稳定"));
         assert!(status.contains("直播中 主频道"));
         assert!(status.contains("· 🟠 节点降级 sg-3 · 已持续 41 分钟"));
-        let alerts = reply(Cmd::Alerts, &v);
+        let events = reply(Cmd::Event, &v);
         assert!(
-            alerts.contains("· 节点故障 tokyo-1 · 14:54 发送，15:02 恢复"),
-            "{alerts}"
+            events.contains("· 节点故障 tokyo-1 · 14:54 发送，15:02 恢复"),
+            "{events}"
         );
         let quota = reply(Cmd::Quota, &v);
         assert!(quota.contains("被动回复 剩余 3 次"), "{quota}");
         assert!(quota.contains("主动消息 今日 0/200"));
         assert!(reply(Cmd::Help, &v).contains("quota"));
-        for cmd in [Cmd::Status, Cmd::Alerts, Cmd::Quota, Cmd::Help] {
+        assert!(reply(Cmd::Help, &v).contains("event："));
+        assert!(!reply(Cmd::Help, &v).contains("alert"));
+        for cmd in [Cmd::Status, Cmd::Event, Cmd::Quota, Cmd::Help] {
             assert!(reply(cmd, &v).chars().count() <= MAX_CHARS);
         }
         assert_eq!(ledger, before);
+    }
+
+    #[test]
+    fn a_drain_and_a_membership_pause_are_labelled_apart() {
+        // Clerk N6 / copy review row 5.
+        let ctx = RenderContext {
+            now: 1_791_702_240,
+            reporter: "tokyo-1".into(),
+            ..Default::default()
+        };
+        let digest = ClusterDigest {
+            enabled: true,
+            local: "tokyo-1".into(),
+            owner: Some("tokyo-1".into()),
+            nodes: vec![
+                crate::notify::observer::NodeSlot {
+                    id: "tokyo-1".into(),
+                    healthy: true,
+                    fresh: true,
+                    ..Default::default()
+                },
+                crate::notify::observer::NodeSlot {
+                    id: "osaka-2".into(),
+                    healthy: true,
+                    fresh: true,
+                    draining: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let ledger = NotifyLedger::default();
+        let mut v = View {
+            now: 1_791_702_240,
+            ctx: &ctx,
+            digest: &digest,
+            ledger: &ledger,
+            open: Vec::new(),
+            passive: None,
+            live: Vec::new(),
+            gateway_online: true,
+            membership_paused: false,
+        };
+        let text = reply(Cmd::Status, &v);
+        assert!(text.contains("osaka-2 备用 正在排空（非故障）"), "{text}");
+        assert!(!text.contains("成员变更中"), "{text}");
+        v.membership_paused = true;
+        assert!(reply(Cmd::Status, &v).contains("成员变更中（暂停执行，非故障）"));
+        let quota = reply(Cmd::Quota, &v);
+        assert!(
+            quota.contains("召回额度 未知（尚未收到管理员消息）"),
+            "{quota}"
+        );
     }
 }

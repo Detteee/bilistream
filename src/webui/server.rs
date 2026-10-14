@@ -170,6 +170,7 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/notify", get(api::get_notify).put(api::update_notify))
         .route("/notify/status", get(api::notify_status))
         .route("/notify/test", post(api::notify_test))
+        .route("/notify/openid", delete(api::notify_unbind))
         .route(
             "/notify/bind",
             post(api::notify_bind).delete(api::notify_cancel_bind),

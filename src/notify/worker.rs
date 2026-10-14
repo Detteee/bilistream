@@ -11,7 +11,7 @@ use super::commands;
 use super::config::NotifyConfig;
 use super::event::{AlertEvent, EventKind, ItemExtra, Phase};
 use super::format::{self, RenderContext};
-use super::ledger::NotifyLedger;
+use super::ledger::{mask_reason, NotifyLedger};
 use super::live::{self, LiveWatch};
 use super::observer::{self, ClusterDigest};
 use super::policy::{ItemKind, Mode, OutItem, PolicyConfig, Tracker};
@@ -20,8 +20,10 @@ use super::qq::gateway::{self, GatewayEvent, GatewayParams};
 use super::qq::token::TokenCache;
 use super::qq::{QqSink, QqTarget};
 use super::sink::{DeliveryContext, PassiveTarget, Rendered, SendOutcome, Sink};
-use super::store::{self, AppSecret, LastOutcome, PersistedState};
-use super::Command;
+use super::store::{
+    self, AppSecret, LastOutcome, OpenidChange, OpenidState, OpenidWrite, PersistedState,
+};
+use super::{Command, NodeRef, Refusal};
 use crate::storage::Store;
 use futures_util::FutureExt;
 use serde::Serialize;
@@ -75,13 +77,11 @@ pub struct TestReport {
     pub trace_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct BindRefusal {
-    pub reason: String,
-    /// When another node owns the gateway: open that node's panel.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_node: Option<String>,
-}
+/// Warning in `/status.warning` when queued notifications are counted as
+/// undelivered because no node is fully configured (contract: never a
+/// silent drop).
+pub const WARNING_NO_CAPABLE_NODE: &str = "no_capable_node";
+const REASON_NO_CAPABLE_NODE: &str = "未配置完整：没有节点同时具备 AppSecret 和管理员 openid";
 
 /// Aborts the gateway task when the handle is dropped (including when a
 /// panicking worker unwinds).
@@ -159,6 +159,8 @@ pub struct Worker {
     cfg_rev: Option<u64>,
     secret: Option<AppSecret>,
     secret_rev: Option<u64>,
+    /// Sealed `notify-openid` (never printed).
+    openid: OpenidState,
     policy: PolicyConfig,
     tracker: Tracker,
     ledger: NotifyLedger,
@@ -179,6 +181,18 @@ pub struct Worker {
     authority: Authority,
     gateway_owner: bool,
     owner_hint: Option<String>,
+    /// The single openid writer (`authority::openid_writer`).
+    writer: Option<NodeRef>,
+    /// The node holding (or entitled to hold) the QQ gateway session, as
+    /// `/status.gateway_owner` shows it. Informational, except that bind
+    /// refuses while it is another node than the writer (O6).
+    gateway_holder: Option<NodeRef>,
+    /// A peer whose heartbeat says it may still hold a gateway session
+    /// (`authority::may_identify`); this node does not identify until it
+    /// has closed, gone stale or been fenced.
+    gateway_blocker: Option<String>,
+    /// Queued items were counted undelivered: no node is fully configured.
+    no_capable_node: bool,
     cluster_cfg: Option<crate::config::Config>,
     loaded_at: u64,
     dirty: bool,
@@ -225,6 +239,7 @@ impl Worker {
             cfg_rev: None,
             secret: None,
             secret_rev: None,
+            openid: OpenidState::default(),
             policy: PolicyConfig::from_config(&NotifyConfig::default()),
             tracker: Tracker::default(),
             ledger: persisted.ledger,
@@ -245,6 +260,10 @@ impl Worker {
             authority: Authority::None,
             gateway_owner: false,
             owner_hint: None,
+            writer: None,
+            gateway_holder: None,
+            gateway_blocker: None,
+            no_capable_node: false,
             cluster_cfg: None,
             loaded_at: 0,
             dirty: false,
@@ -307,14 +326,20 @@ impl Worker {
         self.loaded_at = now_secs();
     }
 
-    /// Load `notify-config` / `notify-secrets` when their revisions moved.
+    /// Load `notify-config` / `notify-secrets` / `notify-openid` when their
+    /// revisions moved.
     pub fn reload_settings(&mut self) {
         let config = store::load_config(&self.store);
         let secret = store::load_secret(&self.store);
-        let mut changed = false;
+        let openid = store::load_openid(&self.store);
+        // Any save of the settings or the secret clears `bad_credentials`
+        // (contract: "clears on the next successful READY or on a save").
+        let mut saved = false;
+        let mut credentials_changed = false;
         if let Ok((cfg, revision)) = config {
             if revision != self.cfg_rev {
-                changed |= cfg.qq != self.cfg.qq;
+                saved = true;
+                credentials_changed |= cfg.qq != self.cfg.qq;
                 self.policy = PolicyConfig::from_config(&cfg);
                 self.http = build_http(&cfg);
                 self.cfg = cfg;
@@ -323,19 +348,38 @@ impl Worker {
         }
         if let Ok((value, revision)) = secret {
             if revision != self.secret_rev {
-                changed = true;
+                saved = true;
+                credentials_changed = true;
                 self.secret = value;
                 self.secret_rev = revision;
             }
         }
-        if changed {
-            // New credentials or settings: forget the old token, stop
-            // refusing calls, retry a gateway that stopped for good.
+        match openid {
+            Ok(state) if state.record_revision != self.openid.record_revision => {
+                if state.openid != self.openid.openid {
+                    self.next_send_at = 0;
+                }
+                if !state.is_set()
+                    && matches!(self.binder.state(), super::bind::BindState::Bound { .. })
+                {
+                    // Unbound after a bind: the bind view goes back to idle.
+                    self.binder.cancel();
+                }
+                self.openid = state;
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!("QQ 通知管理员 openid 读取失败: {}", error),
+        }
+        if saved {
+            // Stop refusing calls and retry a gateway that stopped for good.
             self.bad_credentials = false;
-            self.tokens = Arc::new(TokenCache::default());
-            self.gateway = None;
             self.gateway_fatal = None;
             self.next_send_at = 0;
+        }
+        if credentials_changed {
+            // New credentials or endpoints: forget the old token and session.
+            self.tokens = Arc::new(TokenCache::default());
+            self.gateway = None;
         }
         // Sticky mode facts belong to one bot and one admin. Reset them only
         // when those really changed, including while this process was down;
@@ -355,7 +399,14 @@ impl Worker {
         let mut hasher = Sha256::new();
         hasher.update(self.cfg.qq.app_id.trim().as_bytes());
         hasher.update([0]);
-        hasher.update(self.cfg.qq.admin_openid.trim().as_bytes());
+        hasher.update(
+            self.openid
+                .openid
+                .as_ref()
+                .map(|id| id.expose())
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         hasher.update([0]);
         hasher.update(self.secret_rev.unwrap_or(0).to_le_bytes());
         hasher
@@ -371,7 +422,17 @@ impl Worker {
     }
 
     fn capable(&self) -> bool {
-        self.cfg.enabled && self.credentials_ready() && !self.cfg.qq.admin_openid.trim().is_empty()
+        self.cfg.enabled && self.credentials_ready() && self.openid.is_set()
+    }
+
+    fn openid_value(&self) -> Option<&str> {
+        self.openid.openid.as_ref().map(|id| id.expose())
+    }
+
+    /// Reason text for the status, the ledger, a log line or a response:
+    /// the exact openid becomes `<set>`, then `mask_ids`.
+    fn mask(&self, text: &str) -> String {
+        mask_reason(text, self.openid_value())
     }
 
     fn sink(&self) -> Option<QqSink> {
@@ -382,7 +443,7 @@ impl Worker {
             target: QqTarget {
                 app_id: self.cfg.qq.app_id.trim().to_string(),
                 secret,
-                openid: self.cfg.qq.admin_openid.trim().to_string(),
+                openid: self.openid_value().unwrap_or_default().to_string(),
                 api_base: self.cfg.qq.api_base().to_string(),
                 token_url: self.cfg.qq.token_url().to_string(),
             },
@@ -482,8 +543,13 @@ impl Worker {
         } else {
             (usize::from(self.capable()), 1)
         };
+        // The QQ gateway follows the sender authority (= the openid writer):
+        // the owner, or the delegate while one sends for an owner without
+        // the openid. One session per bot, on the node that can bind.
+        self.writer = authority::openid_writer(digest, membership_blocked, self.capable())
+            .map(|(node_id, is_local)| NodeRef { node_id, is_local });
         let primary =
-            authority::execution_primary(digest, membership_blocked) && self.credentials_ready();
+            self.writer.as_ref().is_some_and(|writer| writer.is_local) && self.credentials_ready();
         if primary {
             self.lost_primary_at = None;
         } else if self.gateway_owner && self.lost_primary_at.is_none() {
@@ -495,6 +561,8 @@ impl Worker {
         } else {
             Some(self.node_id.clone())
         };
+        self.gateway_blocker = authority::may_identify(digest).err();
+        self.gateway_holder = self.gateway_owner_ref();
         self.authority = authority::decide(&DecideInput {
             digest,
             membership_blocked,
@@ -567,12 +635,23 @@ impl Worker {
     }
 
     fn manage_gateway(&mut self, now: u64) {
+        self.manage_gateway_session(now);
+        // Publish at once whether this node holds a session: the next
+        // heartbeat carries it, so the new holder may identify.
+        self.gateway_holder = self.gateway_owner_ref();
+        super::shared().gateway_held = self.gateway.is_some();
+    }
+
+    fn manage_gateway_session(&mut self, now: u64) {
         let in_hysteresis = self.gateway.is_some()
             && self.credentials_ready()
             && self
                 .lost_primary_at
                 .is_some_and(|at| now.saturating_sub(at) < GATEWAY_HYSTERESIS_SECS);
+        // `credentials_ready` includes `!bad_credentials`: rejected
+        // credentials never respawn the gateway until they are saved again.
         let wanted = (self.gateway_owner || in_hysteresis)
+            && self.credentials_ready()
             && ((self.cfg.enabled && self.cfg.qq.keep_online) || self.binder.waiting(now));
         if let Some(reason) = &self.gateway_fatal {
             // Stopped for good: show why until the settings change.
@@ -595,6 +674,16 @@ impl Worker {
         {
             return;
         }
+        if let Some(peer) = &self.gateway_blocker {
+            // Contract line 70: wait until the old holder has closed (its
+            // heartbeat says so) or is stale/fenced. Never two sessions.
+            let reason = format!("等待节点 {peer} 关闭 QQ 网关");
+            if self.gateway_state.0 != "off" || self.gateway_state.2.as_deref() != Some(&reason) {
+                self.gateway = None;
+                self.gateway_state = ("off", now, Some(reason));
+            }
+            return;
+        }
         let Some(secret) = self.secret.clone() else {
             return;
         };
@@ -607,6 +696,7 @@ impl Worker {
             secret,
             handshake_timeout: GatewayParams::HANDSHAKE_TIMEOUT,
             initial_backoff: GatewayParams::INITIAL_BACKOFF,
+            throttle_backoff: gateway::TOKEN_THROTTLE_BACKOFF,
         };
         self.gateway_state = ("connecting", now, None);
         self.gateway = Some(GatewayTask(tokio::spawn(gateway::run(
@@ -639,6 +729,9 @@ impl Worker {
             // The fallback sender only speaks for itself (review §0.8).
             self.tracker
                 .discard(|item| item.kind != EventKind::QuorumLost);
+        }
+        if self.count_unconfigured(now, digest) {
+            return;
         }
         if self.authority == Authority::None || !self.capable() || now < self.next_send_at {
             return;
@@ -688,6 +781,7 @@ impl Worker {
                 }
                 self.retry_secs = RETRY_MIN_SECS;
                 self.next_send_at = 0;
+                self.no_capable_node = false;
                 self.outcome(true, now, Some(mode), None, None, trace_id, false);
             }
             SendOutcome::Retry {
@@ -698,6 +792,7 @@ impl Worker {
                 self.tracker.requeue(batch);
                 self.next_send_at = (now + self.retry_secs).max(self.ledger.rate_limited_until);
                 self.retry_secs = (self.retry_secs * 2).min(RETRY_MAX_SECS);
+                let reason = self.mask(&reason);
                 self.ledger.set_reason(&reason, now);
                 self.outcome(false, now, None, code, Some(reason), trace_id, false);
             }
@@ -707,6 +802,7 @@ impl Worker {
                 trace_id,
                 bad_credentials,
             } => {
+                let reason = self.mask(&reason);
                 tracing::warn!("QQ 通知无法送达: {} (code {:?})", reason, code);
                 // Resolved items are not 「未送达」: they wait and ride along
                 // with the next delivered message (spec §5).
@@ -732,6 +828,60 @@ impl Worker {
         self.ledger.touch(&self.node_id, now);
         self.dirty = true;
         self.save_state(now);
+    }
+
+    /// No node is fully configured (AppSecret and openid) while enabled:
+    /// the writer node (execution primary, or the single node) counts the
+    /// ready items as undelivered at once and raises `no_capable_node`,
+    /// rather than letting them expire silently (contract line 23; Clerk's
+    /// 1a gate). Resolved items are held, as for any undeliverable send.
+    /// Returns true when it handled the batch.
+    fn count_unconfigured(&mut self, now: u64, digest: &ClusterDigest) -> bool {
+        let peer_capable = digest
+            .nodes
+            .iter()
+            .any(|node| node.id != digest.local && node.fresh && node.notify_capable);
+        let orphaned = self.cfg.enabled
+            && !self.capable()
+            && !peer_capable
+            && self.authority == Authority::None
+            && self.writer.as_ref().is_some_and(|writer| writer.is_local);
+        if !orphaned {
+            if self.capable() || peer_capable {
+                self.no_capable_node = false;
+            }
+            return false;
+        }
+        let batch = self.tracker.take_batch(now, &self.policy);
+        if batch.is_empty() {
+            return false;
+        }
+        let (resolved, alerts): (Vec<OutItem>, Vec<OutItem>) = batch
+            .into_iter()
+            .partition(|item| matches!(item.item, ItemKind::Resolved { .. }));
+        self.held.extend(resolved);
+        if self.held.len() > MAX_HELD {
+            let excess = self.held.len() - MAX_HELD;
+            self.held.drain(..excess);
+        }
+        let alerts = alerts
+            .iter()
+            .filter(|item| item.kind != EventKind::Test)
+            .count();
+        if alerts > 0 {
+            self.ledger
+                .record_undelivered(alerts as u32, REASON_NO_CAPABLE_NODE, now);
+            if !self.no_capable_node {
+                tracing::warn!(
+                    "QQ 通知: {} 条通知未送达，{}",
+                    alerts,
+                    REASON_NO_CAPABLE_NODE
+                );
+            }
+            self.no_capable_node = true;
+            self.dirty = true;
+        }
+        true
     }
 
     fn render_context(
@@ -834,12 +984,16 @@ impl Worker {
         trace_id: Option<String>,
         test: bool,
     ) {
+        if !test {
+            // Real sends go into the heartbeat for standbys: no reason, no ids.
+            self.ledger.record_last_send(at, ok, code, mode);
+        }
         self.last_outcome = Some(LastOutcome {
             ok,
             at,
             mode: mode.map(str::to_string),
             code,
-            reason,
+            reason: reason.map(|reason| self.mask(&reason)),
             trace_id,
             node_id: self.node_id.clone(),
             test,
@@ -910,37 +1064,48 @@ impl Worker {
         mode: BindMode,
         replace: bool,
         now: u64,
-    ) -> Result<serde_json::Value, BindRefusal> {
-        if !replace && !self.cfg.qq.admin_openid.trim().is_empty() {
-            return Err(BindRefusal {
-                reason: "已绑定管理员 openid，确认后才会替换".to_string(),
-                owner_node: None,
-            });
+    ) -> Result<serde_json::Value, Refusal> {
+        // Writer first (contract check order), then the bind preconditions.
+        match &self.writer {
+            None => return Err(Refusal::no_writer("绑定")),
+            Some(writer) if !writer.is_local => {
+                return Err(Refusal::not_owner(&writer.node_id, "进行绑定"))
+            }
+            Some(_) => {}
+        }
+        if !replace && self.openid.is_set() {
+            return Err(Refusal::simple(
+                "already_bound",
+                "已绑定管理员 openid，确认后才会替换",
+            ));
         }
         if self.cfg.qq.app_id.trim().is_empty() || self.secret.is_none() {
-            return Err(BindRefusal {
-                reason: "请先保存 AppID 和 AppSecret".to_string(),
-                owner_node: None,
-            });
+            return Err(Refusal::simple(
+                "credentials_missing",
+                "请先保存 AppID 和 AppSecret",
+            ));
         }
         if self.bad_credentials {
-            return Err(BindRefusal {
-                reason: "AppID 或 AppSecret 无效，请检查后重新保存".to_string(),
-                owner_node: None,
-            });
+            return Err(Refusal::simple(
+                "bad_credentials",
+                "AppID 或 AppSecret 无效，请检查后重新保存",
+            ));
         }
-        if !self.gateway_owner {
-            let owner = self
-                .owner_hint
-                .clone()
-                .filter(|owner| *owner != self.node_id);
-            return Err(BindRefusal {
-                reason: match &owner {
-                    Some(owner) => format!("请打开活跃节点 {owner} 的面板进行绑定"),
-                    None => "本节点当前不能连接 QQ 网关，请打开活跃节点的面板进行绑定".to_string(),
-                },
-                owner_node: owner,
-            });
+        // O6: another node still holds a gateway session (mid-handoff): a
+        // second session would kick the first, so refuse until they agree.
+        // No session at all (keep_online off) is the normal case: the bind
+        // window below makes `manage_gateway` open one here, briefly.
+        if self
+            .gateway_holder
+            .as_ref()
+            .is_some_and(|holder| !holder.is_local)
+            || self.gateway_blocker.is_some()
+            || !self.gateway_owner
+        {
+            return Err(Refusal::simple(
+                "no_writer",
+                "发送节点正在切换，请稍后再绑定",
+            ));
         }
         self.binder
             .start(now, mode, super::bind::DEFAULT_WINDOW_SECS);
@@ -956,7 +1121,7 @@ impl Worker {
             reason: None,
             trace_id: None,
         };
-        if !self.credentials_ready() || self.cfg.qq.admin_openid.trim().is_empty() {
+        if !self.credentials_ready() || !self.openid.is_set() {
             report.reason = Some(if self.bad_credentials {
                 "AppID 或 AppSecret 无效".to_string()
             } else {
@@ -969,7 +1134,7 @@ impl Worker {
             kind: EventKind::Test,
             item: ItemKind::Alert,
             node: self.node_id.clone(),
-            detail: Some("这是一条测试消息，收到即表示 QQ 通知可用".to_string()),
+            detail: Some("这是一条 bilistream 测试消息，收到即说明 QQ 通知可用。".to_string()),
             incident_at: now,
             queued_at: now,
             not_before: now,
@@ -1006,7 +1171,7 @@ impl Worker {
                 trace_id,
                 bad_credentials: false,
             } => {
-                report.reason = Some(reason);
+                report.reason = Some(self.mask(&reason));
                 report.code = code;
                 report.trace_id = trace_id;
             }
@@ -1017,7 +1182,8 @@ impl Worker {
                 bad_credentials: true,
             } => {
                 self.bad_credentials = true;
-                report.reason = Some(reason);
+                self.gateway = None;
+                report.reason = Some(self.mask(&reason));
                 report.code = code;
                 report.trace_id = trace_id;
             }
@@ -1039,9 +1205,21 @@ impl Worker {
     pub async fn handle_gateway_event(&mut self, event: GatewayEvent) {
         let now = now_secs();
         match event {
-            GatewayEvent::Ready => self.gateway_state = ("online", now, None),
-            GatewayEvent::Closed { reason, fatal } => {
-                if fatal {
+            GatewayEvent::Ready => {
+                self.gateway_state = ("online", now, None);
+                self.bad_credentials = false;
+            }
+            GatewayEvent::Closed {
+                reason,
+                fatal,
+                bad_credentials,
+            } => {
+                let reason = self.mask(&reason);
+                if bad_credentials {
+                    tracing::warn!("QQ 通知: {}，等待重新保存 AppID/AppSecret", reason);
+                    self.bad_credentials = true;
+                }
+                if fatal || bad_credentials {
                     self.gateway_fatal = Some(reason.clone());
                     self.gateway = None;
                     self.gateway_state = ("failed", now, Some(reason));
@@ -1050,8 +1228,7 @@ impl Worker {
                 }
             }
             GatewayEvent::ActiveMessages { openid, .. }
-                if self.cfg.qq.admin_openid.trim().is_empty()
-                    || openid.as_deref() != Some(self.cfg.qq.admin_openid.trim()) =>
+                if self.openid_value().is_none() || openid.as_deref() != self.openid_value() =>
             {
                 tracing::debug!("QQ 网关收到非管理员的主动消息开关事件，已忽略");
             }
@@ -1074,7 +1251,7 @@ impl Worker {
                         .await;
                 }
                 BindDecision::Ignore => {
-                    if openid == self.cfg.qq.admin_openid.trim() && !openid.is_empty() {
+                    if !openid.is_empty() && Some(openid.as_str()) == self.openid_value() {
                         // The admin wrote to the bot: a passive reply window
                         // opens and the wakeup cycle restarts.
                         self.passive = Some(PassiveTarget {
@@ -1166,6 +1343,7 @@ impl Worker {
                 passive: Some(&target),
                 live: live_names,
                 gateway_online: self.gateway_state.0 == "online",
+                membership_paused: self.was_membership_blocked,
             },
         );
         let Some(sink) = self.sink() else {
@@ -1182,7 +1360,7 @@ impl Worker {
             self.cfg.qq.api_base(),
             &token,
             &C2cMessage {
-                openid: self.cfg.qq.admin_openid.trim(),
+                openid: self.openid_value().unwrap_or_default(),
                 content: &text,
                 markdown: false,
                 mode: QqMode::Passive,
@@ -1214,29 +1392,30 @@ impl Worker {
         event_id: Option<&str>,
         at: u64,
     ) {
-        // Save first: the binding must survive a failed reply. Compare and
-        // swap on the loaded revision so a concurrent PUT is not lost; one
-        // retry on conflict.
-        for attempt in 0..2 {
-            let (mut cfg, revision) = match store::load_config(&self.store) {
-                Ok(loaded) => loaded,
-                Err(error) => {
-                    tracing::warn!("QQ 通知设置读取失败: {}", error);
-                    break;
-                }
-            };
-            cfg.qq.admin_openid = openid.to_string();
-            match store::save_config(&self.store, &cfg, Some(revision.unwrap_or(0))) {
-                Ok(_) => {
-                    tracing::info!("QQ 通知管理员 openid 已绑定");
-                    self.reload_settings();
-                    break;
-                }
-                Err(error) if attempt == 0 => {
-                    tracing::debug!("QQ 通知 openid 保存冲突，重试: {}", error);
-                }
-                Err(error) => tracing::warn!("QQ 通知 openid 保存失败: {}", error),
+        // Save first, sealed in `notify-openid`: the binding must survive a
+        // failed reply. The pairing itself is the newest intent, so it takes
+        // the next openid_revision without a revision check.
+        let write = OpenidWrite {
+            change: OpenidChange::Set {
+                value: zeroize::Zeroizing::new(openid.to_string()),
+                via: match via {
+                    BindVia::Message => "message",
+                    BindVia::FriendAdd => "friend_add",
+                },
+            },
+            expected: None,
+            writer: self.node_id.clone(),
+            now: at,
+        };
+        match store::write_openid(&self.store, write) {
+            Ok(revision) => {
+                tracing::info!(
+                    "QQ 通知管理员 openid 已绑定 (openid=<set>, revision {})",
+                    revision
+                );
+                self.reload_settings();
             }
+            Err(error) => tracing::warn!("QQ 通知 openid 保存失败: {}", error),
         }
         if via == BindVia::Message {
             self.ledger.record_admin_message(at);
@@ -1284,16 +1463,26 @@ impl Worker {
     }
 
     fn publish(&self, now: u64, digest: &ClusterDigest) {
+        let status = self.status(now, digest);
+        self.publish_status(status);
+    }
+
+    /// The `/api/notify/status` body this worker owns (no openid, ever).
+    pub fn status(&self, now: u64, digest: &ClusterDigest) -> serde_json::Value {
         let ledger = &self.ledger;
-        let status = serde_json::json!({
+        serde_json::json!({
             "worker": "running",
             "node_id": self.node_id,
             "enabled": self.cfg.enabled,
             "capable": self.capable(),
             "credentials_ready": self.credentials_ready(),
             "bad_credentials": self.bad_credentials,
+            "openid_set": self.openid.is_set(),
+            "openid_bound_at": self.openid.bound_at,
+            "openid_revision": self.openid.revision,
             "authority": self.authority.as_str(),
-            "gateway_owner": self.gateway_owner,
+            "openid_writer": self.writer,
+            "gateway_owner": self.gateway_holder,
             "owner_node": self.owner_hint,
             "cluster_enabled": digest.enabled,
             "gateway": {
@@ -1305,6 +1494,8 @@ impl Worker {
             "open_incidents": self.tracker.open_incidents(),
             "queued": self.tracker.queued(),
             "next_retry_at": (self.next_send_at > now).then_some(self.next_send_at),
+            "local_last_send": self.last_outcome,
+            // Deprecated duplicate of `local_last_send` (panel batch 2 drops it).
             "last_outcome": self.last_outcome,
             "quota": {
                 "active_day": ledger.active_today(now),
@@ -1323,6 +1514,7 @@ impl Worker {
             "last_reason": ledger.last_reason,
             "held_resolved": self.held.len(),
             "expired_no_sender": self.expired_no_sender,
+            "warning": self.no_capable_node.then_some(WARNING_NO_CAPABLE_NODE),
             "capable_nodes": self.capable_nodes.0,
             "cluster_nodes": self.capable_nodes.1,
             "commands_enabled": self.cfg.commands_enabled,
@@ -1331,15 +1523,21 @@ impl Worker {
                 "channels": self.cfg.watch.channels.len(),
                 "live": self.live_now.iter().map(|obs| obs.ident()).collect::<Vec<_>>(),
             },
-        });
+        })
+    }
+
+    fn publish_status(&self, status: serde_json::Value) {
         let signature = format!(
-            "{}|{:?}|{}|{}|{}|{:?}",
+            "{}|{:?}|{}|{}|{}|{:?}|{:?}|{}|{}",
             self.gateway_state.0,
             self.binder.state(),
             self.authority.as_str(),
             self.capable(),
             self.ledger.undelivered_pending(),
             self.last_outcome.as_ref().map(|o| (o.ok, o.at)),
+            self.writer,
+            self.openid.revision,
+            self.bad_credentials,
         );
         {
             let mut shared = super::shared();
@@ -1347,6 +1545,8 @@ impl Worker {
             shared.capable = self.capable();
             shared.authority = matches!(self.authority, Authority::Primary | Authority::Delegate);
             shared.status = status;
+            shared.writer = self.writer.clone();
+            shared.gateway_held = self.gateway.is_some();
         }
         let mut last = self.signature.lock().unwrap_or_else(|e| e.into_inner());
         if *last != signature {
@@ -1354,6 +1554,26 @@ impl Worker {
             #[cfg(not(test))]
             crate::webui::events::publish("status");
         }
+    }
+}
+
+impl Worker {
+    /// `{node_id, is_local}` of the node that really holds the QQ gateway
+    /// session (`/status.gateway_owner`, informational): this node while its
+    /// session task runs, else the peer whose heartbeat says it holds one
+    /// (`authority::may_identify`), else null (e.g. the handoff gap, or
+    /// `keep_online` off between bind windows).
+    fn gateway_owner_ref(&self) -> Option<NodeRef> {
+        if self.gateway.is_some() {
+            return Some(NodeRef {
+                node_id: self.node_id.clone(),
+                is_local: true,
+            });
+        }
+        self.gateway_blocker.clone().map(|node_id| NodeRef {
+            node_id,
+            is_local: false,
+        })
     }
 }
 

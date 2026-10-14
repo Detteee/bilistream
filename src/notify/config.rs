@@ -4,6 +4,10 @@
 //! with their own revision, so saving them never conflicts with
 //! `/api/config` edits. Like `notify-secrets`, the record is not in
 //! `storage::NAMES`: it is never synced and not part of backups.
+//!
+//! The admin openid is not here: it is write-only toward the browser and
+//! sealed in its own record `notify-openid` (`store::load_openid`). An older
+//! `qq.admin_openid` field is migrated out on the first load.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -36,7 +40,7 @@ pub struct NotifyConfig {
     pub no_quorum_grace_secs: u64,
     /// Never use the no-quorum fallback sender (may be silent on 2 nodes).
     pub strict_single_sender: bool,
-    /// Answer the bound admin's read-only commands (status/alert/quota/help)
+    /// Answer the bound admin's read-only commands (status/event/quota/help)
     /// with passive replies.
     pub commands_enabled: bool,
     /// 开播通知关注列表.
@@ -116,8 +120,6 @@ impl Default for NotifyConfig {
 pub struct QqNotifyConfig {
     /// Not secret.
     pub app_id: String,
-    /// The admin's per-bot `user_openid`. Not secret.
-    pub admin_openid: String,
     /// OpenAPI and gateway host. Live-verified legacy host by default.
     pub api_base: String,
     pub token_url: String,
@@ -131,7 +133,6 @@ impl Default for QqNotifyConfig {
     fn default() -> Self {
         Self {
             app_id: String::new(),
-            admin_openid: String::new(),
             api_base: QQ_DEFAULT_API_BASE.to_string(),
             token_url: QQ_DEFAULT_TOKEN_URL.to_string(),
             proxy: None,
@@ -168,10 +169,6 @@ pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
     {
         return Err("AppID 应为数字".to_string());
     }
-    let openid = cfg.qq.admin_openid.trim();
-    if openid.len() > 128 || !openid.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Err("管理员 openid 只能包含字母和数字".to_string());
-    }
     let ranges: [(&str, u64, u64, u64); 8] = [
         ("故障确认", cfg.confirm_secs, 0, 600),
         ("恢复确认", cfg.recovery_hold_secs, 0, 1800),
@@ -190,7 +187,7 @@ pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
     for url in [&cfg.qq.api_base, &cfg.qq.token_url] {
         let url = url.trim();
         if !url.is_empty() && !endpoint_allowed(url) {
-            return Err("请填写 https:// 开头的地址，或留空使用默认值".to_string());
+            return Err("请填写 QQ 官方 https:// 地址（*.qq.com），或留空使用默认值".to_string());
         }
     }
     validate_watch(&cfg.watch)?;
@@ -221,9 +218,21 @@ pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// The admin openid typed into the panel: ASCII letters and digits, at most
+/// 128. The message never quotes the input.
+pub fn validate_openid(openid: &str) -> Result<(), String> {
+    if openid.is_empty() || openid.len() > 128 || !openid.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err("管理员 openid 只能包含字母和数字".to_string());
+    }
+    Ok(())
+}
+
 /// QQ endpoints get the AppSecret and the bearer token, so the URL is parsed:
-/// no userinfo, https to any host, or plain http only to an exact loopback
-/// host (the mock servers in tests).
+/// no userinfo, https only to a QQ host (`qq.com` or a subdomain, e.g.
+/// `bots.qq.com`, `api.sgroup.qq.com`, `api.bot.qq.com`), or plain http only
+/// to an exact loopback host (the mock servers in tests). A panel session
+/// can therefore not point the AppSecret at its own server (review M4).
 pub fn endpoint_allowed(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
@@ -235,7 +244,10 @@ pub fn endpoint_allowed(url: &str) -> bool {
         return false;
     };
     match parsed.scheme() {
-        "https" => true,
+        "https" => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            host == "qq.com" || host.ends_with(".qq.com")
+        }
         "http" => matches!(host, "127.0.0.1" | "localhost" | "[::1]"),
         _ => false,
     }
@@ -318,8 +330,11 @@ mod tests {
         cfg.qq.app_id = "12ab".to_string();
         assert!(validate(&cfg).is_err());
         cfg.qq.app_id = "1234567890".to_string();
-        cfg.qq.admin_openid = "78117230F50CADB8722E973772B135AB".to_string();
         validate(&cfg).unwrap();
+        validate_openid("SAMPLE0OPENID0VALUE0ABCDEF012345").unwrap();
+        assert!(validate_openid("").is_err());
+        assert!(validate_openid("bad id!").is_err());
+        assert!(validate_openid(&"A".repeat(129)).is_err());
         cfg.events.insert("cluster.nope".to_string(), true);
         assert!(validate(&cfg).is_err());
     }
@@ -330,6 +345,15 @@ mod tests {
             "https://bots.qq.com/app/getAppAccessToken"
         ));
         assert!(endpoint_allowed("http://127.0.0.1:8080/x"));
+        // Both QQ hosts in use, plus the default API host.
+        assert!(endpoint_allowed("https://api.bot.qq.com/x"));
+        assert!(endpoint_allowed("https://api.sgroup.qq.com"));
+        // M4: a foreign https host never receives the AppSecret.
+        assert!(!endpoint_allowed(
+            "https://evil.example/app/getAppAccessToken"
+        ));
+        assert!(!endpoint_allowed("https://qq.com.evil.example/x"));
+        assert!(!endpoint_allowed("https://evilqq.com/x"));
         // Userinfo trick: the real host is evil.example, and in clear text.
         assert!(!endpoint_allowed("http://127.0.0.1:1@evil.example/x"));
         assert!(!endpoint_allowed("https://user:pw@bots.qq.com/x"));

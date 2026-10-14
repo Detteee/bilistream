@@ -486,6 +486,7 @@ pub(crate) async fn collect_local_snapshot(
         notify: crate::notify::heartbeat_ledger(),
         notify_capable: crate::notify::local_capable(),
         notify_authority: crate::notify::local_authority(),
+        notify_gateway_held: Some(crate::notify::local_gateway_held()),
     }
 }
 

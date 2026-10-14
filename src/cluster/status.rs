@@ -361,6 +361,7 @@ pub(crate) fn empty_node(
         notify: None,
         notify_capable: false,
         notify_authority: false,
+        notify_gateway_held: None,
     }
 }
 

@@ -39,7 +39,7 @@ pub enum Command {
         mode: bind::BindMode,
         /// The panel confirmed replacing an already bound openid.
         replace: bool,
-        reply: oneshot::Sender<Result<serde_json::Value, worker::BindRefusal>>,
+        reply: oneshot::Sender<Result<serde_json::Value, Refusal>>,
     },
     CancelBind,
     /// A one-shot event. Dropped when the channel is full.
@@ -60,6 +60,98 @@ pub struct Shared {
     pub capable: bool,
     pub authority: bool,
     pub status: serde_json::Value,
+    /// The single openid writer as the worker last saw it (`None` = no
+    /// node has authority). Only meaningful while the worker runs.
+    pub writer: Option<NodeRef>,
+    /// This node holds a QQ gateway session (heartbeat `notify_gateway_held`).
+    pub gateway_held: bool,
+}
+
+/// `{node_id, is_local}` as `/status` shows `openid_writer` and
+/// `gateway_owner`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct NodeRef {
+    pub node_id: String,
+    pub is_local: bool,
+}
+
+/// A refused notify write: HTTP 409 with
+/// `{success:false, message, data:{code, ...}}` (contract "Refusal codes").
+/// Clients branch only on `data.code`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refusal {
+    pub message: String,
+    pub data: serde_json::Value,
+}
+
+impl Refusal {
+    pub fn code(&self) -> &str {
+        self.data["code"].as_str().unwrap_or_default()
+    }
+
+    pub fn simple(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            data: serde_json::json!({ "code": code }),
+        }
+    }
+
+    /// `action` completes 「请打开发送节点 X 的面板…」, e.g. 进行绑定.
+    pub fn not_owner(owner: &str, action: &str) -> Self {
+        Self {
+            message: format!("请打开发送节点 {owner} 的面板{action}"),
+            data: serde_json::json!({ "code": "not_owner", "owner": owner }),
+        }
+    }
+
+    /// `action` completes 「暂无可写节点，暂时无法…」, e.g. 绑定.
+    pub fn no_writer(action: &str) -> Self {
+        Self::simple("no_writer", format!("暂无可写节点，暂时无法{action}"))
+    }
+
+    pub fn revision_conflict(current: u64) -> Self {
+        Self {
+            message: "配置已被其他操作修改，请重新加载后再保存".to_string(),
+            data: serde_json::json!({ "code": "revision_conflict", "current_revision": current }),
+        }
+    }
+}
+
+/// Is the worker task alive (its command channel open)?
+pub fn worker_running() -> bool {
+    COMMANDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|sender| !sender.is_closed())
+}
+
+/// The single-writer check for openid writes made outside the worker
+/// (`PUT admin_openid`, `DELETE /api/notify/openid`). A stopped worker
+/// means unknown, which the server answers with `no_writer`.
+pub fn check_writer(action: &str) -> Result<(), Refusal> {
+    let writer = {
+        let shared = shared();
+        if shared.status.is_null() {
+            None
+        } else {
+            shared.writer.clone()
+        }
+    };
+    if !worker_running() {
+        return Err(Refusal::no_writer(action));
+    }
+    writer_allows(writer.as_ref(), action)
+}
+
+/// The writer rule itself: local writer passes, another writer is
+/// `not_owner`, no writer is `no_writer`. No gateway is needed.
+pub fn writer_allows(writer: Option<&NodeRef>, action: &str) -> Result<(), Refusal> {
+    match writer {
+        Some(writer) if writer.is_local => Ok(()),
+        Some(writer) => Err(Refusal::not_owner(&writer.node_id, action)),
+        None => Err(Refusal::no_writer(action)),
+    }
 }
 
 pub static SHARED: LazyLock<Mutex<Shared>> = LazyLock::new(Default::default);
@@ -84,6 +176,11 @@ pub fn heartbeat_ledger() -> Option<NotifyLedger> {
 /// Enabled with AppID, AppSecret and admin openid.
 pub fn local_capable() -> bool {
     shared().capable
+}
+
+/// This node holds a QQ gateway session right now.
+pub fn local_gateway_held() -> bool {
+    shared().gateway_held
 }
 
 /// This node is the notify sender right now.

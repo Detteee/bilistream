@@ -24,8 +24,14 @@ pub enum GatewayEvent {
     Ready,
     Closed {
         reason: String,
-        /// Reconnecting cannot help (4013/4014/4914/4915); the task ended.
+        /// Reconnecting cannot help (4013/4014/4914/4915, bad credentials);
+        /// the task ended.
         fatal: bool,
+        /// The AppID/AppSecret were rejected (token business code 100016,
+        /// 100007 or 10004, or two 4004 closes in a row before READY). The
+        /// worker sets `bad_credentials` and keeps the gateway down until the
+        /// credentials are saved again.
+        bad_credentials: bool,
     },
     /// C2C_MESSAGE_CREATE. `content` is the raw text (only matched against a
     /// pairing code, never logged above debug).
@@ -148,6 +154,9 @@ pub struct GatewayParams {
     pub handshake_timeout: Duration,
     /// First reconnect delay; doubles up to 5 minutes.
     pub initial_backoff: Duration,
+    /// Cap on the extra wait after a throttled token fetch (100001);
+    /// `TOKEN_THROTTLE_BACKOFF` in production, short in tests.
+    pub throttle_backoff: Duration,
 }
 
 impl GatewayParams {
@@ -180,6 +189,11 @@ pub enum Next {
 pub struct Ended {
     pub next: Next,
     pub reason: String,
+    pub bad_credentials: bool,
+    /// READY/RESUMED was seen in this session.
+    pub ready: bool,
+    /// Wait at least this long before the next attempt (token 100001).
+    pub min_backoff: Option<Duration>,
 }
 
 impl Ended {
@@ -187,9 +201,49 @@ impl Ended {
         Self {
             next,
             reason: reason.into(),
+            bad_credentials: false,
+            ready: false,
+            min_backoff: None,
         }
     }
+
+    fn bad_credentials(reason: impl Into<String>) -> Self {
+        Self {
+            bad_credentials: true,
+            ..Self::new(Next::Fatal, reason)
+        }
+    }
+
+    fn after_ready(mut self, ready: bool) -> Self {
+        self.ready = ready;
+        self
+    }
 }
+
+/// Token fetches answered 100001 (too frequent) wait at least this long.
+pub const TOKEN_THROTTLE_BACKOFF: Duration = Duration::from_secs(60);
+
+fn is_bad_credential(code: Option<i64>) -> bool {
+    code.is_some_and(|code| super::BAD_CREDENTIAL_CODES.contains(&code))
+}
+
+/// What a failed token (or gateway-URL) request means for the session.
+fn token_failure(code: Option<i64>, reason: String) -> Ended {
+    if is_bad_credential(code) {
+        Ended::bad_credentials(reason)
+    } else if code == Some(100001) {
+        Ended {
+            min_backoff: Some(TOKEN_THROTTLE_BACKOFF),
+            ..Ended::new(Next::Resume, reason)
+        }
+    } else {
+        Ended::new(Next::Resume, reason)
+    }
+}
+
+/// Two 4004 closes in a row before READY, the second on a freshly fetched
+/// token: the credentials do not work for the gateway.
+pub const AUTH_REJECTIONS_FATAL: u8 = 2;
 
 /// Map a close code to the next step.
 pub fn classify_close(code: u16) -> Ended {
@@ -214,9 +268,21 @@ pub async fn run(params: GatewayParams, events: mpsc::Sender<GatewayEvent>) {
     let mut backoff = params.initial_backoff;
     let mut resume: Option<(String, u64)> = None;
     let mut seen: VecDeque<String> = VecDeque::with_capacity(SEEN_IDS);
+    let mut auth_rejections = 0u8;
     loop {
         let started = std::time::Instant::now();
-        let ended = session(&params, &events, &mut resume, &mut seen).await;
+        let mut ended = session(&params, &events, &mut resume, &mut seen).await;
+        if ended.next == Next::ReauthReidentify && !ended.ready {
+            // The token cache is cleared below, so the next session fetches a
+            // fresh token: a second rejection is not a stale token.
+            auth_rejections += 1;
+            if auth_rejections >= AUTH_REJECTIONS_FATAL {
+                ended =
+                    Ended::bad_credentials("网关鉴权连续失败 (4004)，AppID 或 AppSecret 可能无效");
+            }
+        } else {
+            auth_rejections = 0;
+        }
         match ended.next {
             Next::Resume => {}
             Next::Reidentify => resume = None,
@@ -231,6 +297,7 @@ pub async fn run(params: GatewayParams, events: mpsc::Sender<GatewayEvent>) {
             .send(GatewayEvent::Closed {
                 reason: ended.reason.clone(),
                 fatal,
+                bad_credentials: ended.bad_credentials,
             })
             .await;
         tracing::debug!("QQ 网关会话结束: {}", ended.reason);
@@ -241,12 +308,15 @@ pub async fn run(params: GatewayParams, events: mpsc::Sender<GatewayEvent>) {
         if started.elapsed() > Duration::from_secs(120) {
             backoff = params.initial_backoff;
         }
+        if let Some(min) = ended.min_backoff {
+            backoff = backoff.max(min.min(params.throttle_backoff));
+        }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
 
-async fn token(params: &GatewayParams) -> Result<AccessToken, String> {
+async fn token(params: &GatewayParams) -> Result<AccessToken, super::token::TokenError> {
     params
         .tokens
         .get(
@@ -256,7 +326,6 @@ async fn token(params: &GatewayParams) -> Result<AccessToken, String> {
             params.secret.expose(),
         )
         .await
-        .map_err(|error| error.reason)
 }
 
 /// wss only; plain ws is allowed for loopback (tests).
@@ -280,13 +349,14 @@ async fn session(
     resume: &mut Option<(String, u64)>,
     seen: &mut VecDeque<String>,
 ) -> Ended {
+    // The token's business code is the primary bad-credentials signal.
     let token = match token(params).await {
         Ok(token) => token,
-        Err(reason) => return Ended::new(Next::Resume, reason),
+        Err(error) => return token_failure(error.code, error.reason),
     };
     let url = match super::api::gateway_url(&params.http, &params.api_base, &token).await {
         Ok(url) => url,
-        Err(result) => return Ended::new(Next::Resume, result.reason()),
+        Err(result) => return token_failure(result.code, result.reason()),
     };
     if !allowed_url(&url) {
         return Ended::new(Next::Resume, "网关地址不是 wss");
@@ -309,6 +379,7 @@ async fn session(
     heartbeat.tick().await;
     let mut seq: Option<u64> = resume.as_ref().map(|(_, s)| *s);
     let mut awaiting_ack = false;
+    let mut ready = false;
     // Hello, then READY/RESUMED, each within the handshake timeout.
     let mut handshake = Some(tokio::time::Instant::now() + params.handshake_timeout);
     loop {
@@ -318,14 +389,14 @@ async fn session(
             frame = stream.next() => {
                 let message = match frame {
                     Some(Ok(message)) => message,
-                    Some(Err(_)) => return Ended::new(Next::Resume, "网关连接中断"),
-                    None => return Ended::new(Next::Resume, "网关连接关闭"),
+                    Some(Err(_)) => return Ended::new(Next::Resume, "网关连接中断").after_ready(ready),
+                    None => return Ended::new(Next::Resume, "网关连接关闭").after_ready(ready),
                 };
                 let raw = match message {
                     Message::Text(text) if text.len() <= MAX_FRAME_BYTES => text.to_string(),
                     Message::Close(frame) => {
                         let code = frame.map(|f| u16::from(f.code)).unwrap_or(0);
-                        return classify_close(code);
+                        return classify_close(code).after_ready(ready);
                     }
                     _ => continue,
                 };
@@ -358,14 +429,15 @@ async fn session(
                         handshake = Some(tokio::time::Instant::now() + params.handshake_timeout);
                     }
                     11 => awaiting_ack = false,
-                    7 => return Ended::new(Next::Resume, "网关要求重连"),
-                    9 => return Ended::new(Next::Reidentify, "网关会话无效"),
+                    7 => return Ended::new(Next::Resume, "网关要求重连").after_ready(ready),
+                    9 => return Ended::new(Next::Reidentify, "网关会话无效").after_ready(ready),
                     0 => {
                         if let Some(session_id) = frame.session_id {
                             *resume = Some((session_id, seq.unwrap_or(0)));
                         }
                         if frame.event == Some(GatewayEvent::Ready) {
                             handshake = None;
+                            ready = true;
                         }
                         if let Some(id) = frame.dispatch_id {
                             if seen.contains(&id) {
@@ -388,12 +460,12 @@ async fn session(
             }
             _ = heartbeat.tick() => {
                 if awaiting_ack {
-                    return Ended::new(Next::Resume, "网关心跳无响应");
+                    return Ended::new(Next::Resume, "网关心跳无响应").after_ready(ready);
                 }
                 awaiting_ack = true;
                 let payload = serde_json::json!({"op": 1, "d": seq});
                 if sink.send(Message::Text(payload.to_string().into())).await.is_err() {
-                    return Ended::new(Next::Resume, "网关心跳发送失败");
+                    return Ended::new(Next::Resume, "网关心跳发送失败").after_ready(ready);
                 }
             }
             _ = tokio::time::sleep_until(deadline), if handshake.is_some() => {

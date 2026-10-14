@@ -15,6 +15,8 @@ enum Script {
     Session { frames: Vec<Value>, close: u16 },
     /// Accept and say nothing.
     Silent,
+    /// Hello, wait for identify (recorded), then close 4004 before READY.
+    RejectAuth,
 }
 
 struct Server {
@@ -42,6 +44,26 @@ async fn ws_server(scripts: Vec<Script>) -> Server {
             match script {
                 Script::Silent => {
                     // Hold the socket open until the client gives up.
+                    while let Some(Ok(_)) = ws.next().await {}
+                }
+                Script::RejectAuth => {
+                    let hello = json!({"op": 10, "d": {"heartbeat_interval": 45000}});
+                    ws.send(Message::Text(hello.to_string().into()))
+                        .await
+                        .unwrap();
+                    while let Some(Ok(message)) = ws.next().await {
+                        if let Message::Text(text) = message {
+                            let value: Value = serde_json::from_str(&text).unwrap();
+                            seen.lock().unwrap().push(value["op"].as_i64().unwrap());
+                            break;
+                        }
+                    }
+                    let _ = ws
+                        .close(Some(CloseFrame {
+                            code: CloseCode::from(4004),
+                            reason: "".into(),
+                        }))
+                        .await;
                     while let Some(Ok(_)) = ws.next().await {}
                 }
                 Script::Session { frames, close } => {
@@ -94,6 +116,7 @@ fn params(mock: &MockQq, tokens: Arc<TokenCache>) -> GatewayParams {
         secret: crate::notify::store::AppSecret::new("synthetic-secret"),
         handshake_timeout: Duration::from_millis(500),
         initial_backoff: Duration::from_millis(20),
+        throttle_backoff: Duration::from_millis(200),
     }
 }
 
@@ -139,7 +162,7 @@ async fn fatal_close_stops_and_duplicates_are_dropped() {
     assert_eq!(messages, 2, "{events:?}");
     assert!(matches!(
         events.last(),
-        Some(GatewayEvent::Closed { fatal: true, reason }) if reason.contains("4014")
+        Some(GatewayEvent::Closed { fatal: true, reason, .. }) if reason.contains("4014")
     ));
     // The task ended by itself: no reconnect after a fatal close.
     tokio::time::timeout(Duration::from_secs(2), task)
@@ -199,7 +222,7 @@ async fn missing_hello_times_out_and_reconnects() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            GatewayEvent::Closed { fatal: false, reason } if reason.contains("握手超时")
+            GatewayEvent::Closed { fatal: false, reason, .. } if reason.contains("握手超时")
         )),
         "{events:?}"
     );
@@ -229,4 +252,131 @@ async fn concurrent_token_requests_fetch_once() {
         assert_eq!(task.await.unwrap().unwrap(), "synthetic-token");
     }
     assert_eq!(mock.state.lock().unwrap().token_calls, 1);
+}
+
+#[tokio::test]
+async fn two_4004_closes_before_ready_are_bad_credentials() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let server = ws_server(vec![Script::RejectAuth, Script::RejectAuth, Script::Silent]).await;
+    mock.state.lock().unwrap().gateway_url = Some(server.url.clone());
+    let (events, task) = collect_until_fatal(params(&mock, Arc::default())).await;
+    // The first 4004 retries on a fresh token, the second one is final.
+    assert!(
+        matches!(
+            events.last(),
+            Some(GatewayEvent::Closed {
+                fatal: true,
+                bad_credentials: true,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+    let first = &events[0];
+    assert!(
+        matches!(
+            first,
+            GatewayEvent::Closed {
+                fatal: false,
+                bad_credentials: false,
+                ..
+            }
+        ),
+        "{events:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("gateway task stops")
+        .unwrap();
+    assert_eq!(*server.ops.lock().unwrap(), vec![2, 2]);
+    assert_eq!(mock.state.lock().unwrap().token_calls, 2);
+}
+
+#[tokio::test]
+async fn a_4004_after_ready_is_not_counted_toward_bad_credentials() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let close = |code| Script::Session {
+        frames: vec![],
+        close: code,
+    };
+    // READY, 4004, then one pre-READY 4004, then READY and a fatal close:
+    // never two pre-READY rejections in a row.
+    let server = ws_server(vec![close(4004), Script::RejectAuth, close(4914)]).await;
+    mock.state.lock().unwrap().gateway_url = Some(server.url.clone());
+    let (events, _task) = collect_until_fatal(params(&mock, Arc::default())).await;
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            GatewayEvent::Closed {
+                bad_credentials: true,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(*server.ops.lock().unwrap(), vec![2, 2, 2]);
+}
+
+#[tokio::test]
+async fn bad_credential_token_codes_end_the_gateway_without_a_connect() {
+    crate::install_crypto_provider();
+    for code in [100016, 100007, 10004] {
+        let mock = MockQq::start().await;
+        mock.state.lock().unwrap().token_reply = Some((
+            200,
+            json!({"code": code, "message": "invalid appid or secret"}),
+        ));
+        let (events, task) = collect_until_fatal(params(&mock, Arc::default())).await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [GatewayEvent::Closed {
+                    fatal: true,
+                    bad_credentials: true,
+                    ..
+                }]
+            ),
+            "{code}: {events:?}"
+        );
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("gateway task stops")
+            .unwrap();
+        assert_eq!(mock.state.lock().unwrap().token_calls, 1, "{code}");
+    }
+}
+
+#[tokio::test]
+async fn throttled_token_fetch_backs_off_and_retries() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    mock.state.lock().unwrap().token_reply =
+        Some((200, json!({"code": 100001, "message": "too frequent"})));
+    let (tx, mut rx) = mpsc::channel(64);
+    let task = tokio::spawn(run(params(&mock, Arc::default()), tx));
+    let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            first,
+            GatewayEvent::Closed {
+                fatal: false,
+                bad_credentials: false,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
+    let started = tokio::time::Instant::now();
+    let _second = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    // The throttle wait (200 ms in tests) replaces the 20 ms backoff.
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    task.abort();
 }

@@ -76,6 +76,11 @@ pub struct ClusterNodeSnapshot {
     /// to decide whether the no-quorum fallback may start.
     #[serde(default)]
     pub notify_authority: bool,
+    /// This node holds a QQ gateway session right now (contract line 70: the
+    /// old holder closes before the new one identifies). `None` = an older
+    /// node that does not report it (unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_gateway_held: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

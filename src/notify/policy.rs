@@ -558,7 +558,7 @@ impl Tracker {
             .retain(|item| !(item.kind.stateful() && gone(&item.node)));
     }
 
-    /// Open (confirmed) incidents, worst first, for the 状态/通知 replies.
+    /// Open (confirmed) incidents, worst first, for the status/event command replies.
     pub fn open_entries(&self) -> Vec<(EventKind, String, u64, Severity)> {
         let mut out: Vec<_> = self
             .incidents

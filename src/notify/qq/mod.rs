@@ -242,7 +242,7 @@ impl Sink for QqSink {
         }
 
         if ctx.ledger.modes.admin_rejected() {
-            reasons.push("管理员已关闭主动消息".to_string());
+            reasons.push("管理员已关闭「允许主动发送」".to_string());
         } else if ctx.ledger.modes.active_unavailable(now) {
             reasons.push("主动消息无权限".to_string());
         } else if !ctx.ledger.active_budget_left(now) {

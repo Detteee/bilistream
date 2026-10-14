@@ -1,11 +1,18 @@
 //! `/api/notify*`: QQ 通知 settings, status, test send and openid binding.
 //!
 //! Settings live in their own store records (`notify-config`,
-//! `notify-secrets`) with their own revisions, so saving here never makes
-//! `/api/config` answer 409, and the other way round.
+//! `notify-secrets`, `notify-openid`) with their own revisions, so saving
+//! here never makes `/api/config` answer 409, and the other way round.
+//!
+//! The admin openid is write-only: responses carry `openid_set`,
+//! `openid_bound_at` and `openid_revision`, never the value. Writes go
+//! through the single writer (`notify::check_writer`) and refusals use the
+//! contract's 409 body `{success:false, message, data:{code, ...}}`.
 
 use super::ApiResponse;
-use crate::notify::{self, bind::BindMode, config::validate, store, Command, NotifyConfig};
+use crate::notify::{
+    self, bind::BindMode, config::validate, store, Command, NotifyConfig, Refusal,
+};
 use crate::webui::listen::{AuthGeneration, AuthState};
 use axum::http::HeaderMap;
 use axum::{http::StatusCode, response::IntoResponse, response::Response, Extension, Json};
@@ -37,11 +44,15 @@ fn mutation_allowed(
     auth.browser_mutation_allowed(headers, generation.map(|Extension(g)| g))
 }
 
+fn refused(refusal: Refusal) -> Response {
+    reply(StatusCode::CONFLICT, Some(refusal.data), refusal.message)
+}
+
 fn forbidden_origin() -> Response {
     reply(
         StatusCode::FORBIDDEN,
         None,
-        "请求来源或登录状态已失效，请刷新页面",
+        "登录已失效或请求来源无效，请刷新页面",
     )
 }
 
@@ -55,15 +66,30 @@ fn io_status(error: &std::io::Error) -> StatusCode {
     }
 }
 
+fn openid_view(openid: &store::OpenidState) -> Value {
+    json!({
+        "openid_set": openid.is_set(),
+        "openid_bound_at": openid.bound_at,
+        "openid_revision": openid.revision,
+    })
+}
+
 fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
     let (config, revision) = store::load_config(store)?;
     let (secret, secret_revision) = store::load_secret(store)?;
-    Ok(json!({
+    let openid = store::load_openid(store)?;
+    let mut view = json!({
         "config": config,
         "revision": revision.unwrap_or(0),
+        "appsecret_set": secret.is_some(),
+        // Deprecated duplicate of `appsecret_set` (panel batch 2 drops it).
         "app_secret_configured": secret.is_some(),
         "secret_revision": secret_revision.unwrap_or(0),
-    }))
+    });
+    if let (Some(view), Value::Object(extra)) = (view.as_object_mut(), openid_view(&openid)) {
+        view.extend(extra);
+    }
+    Ok(view)
 }
 
 /// Channels the 关注列表 picker offers: `channels.json` plus the channels in
@@ -145,6 +171,56 @@ pub struct UpdateNotify {
     pub app_secret: Option<String>,
     pub clear_app_secret: bool,
     pub expected_secret_revision: Option<u64>,
+    /// New admin openid (write-only); empty or missing leaves it unchanged.
+    pub admin_openid: Option<String>,
+    /// The `openid_revision` from GET; required with `admin_openid`.
+    pub expected_openid_revision: Option<u64>,
+}
+
+impl UpdateNotify {
+    /// Wipe the write-only values once the update was applied or refused.
+    fn wipe(&mut self) {
+        if let Some(secret) = self.app_secret.as_mut() {
+            zeroize::Zeroize::zeroize(secret);
+        }
+        if let Some(openid) = self.admin_openid.as_mut() {
+            zeroize::Zeroize::zeroize(openid);
+        }
+    }
+}
+
+/// Why an update was not applied.
+#[derive(Debug)]
+pub enum UpdateError {
+    /// 400 / 500 with `data: null`.
+    Status(StatusCode, String),
+    /// 409 with `data.code`.
+    Refused(Refusal),
+}
+
+impl UpdateError {
+    fn into_response(self) -> Response {
+        match self {
+            UpdateError::Status(status, message) => reply(status, None, message),
+            UpdateError::Refused(refusal) => refused(refusal),
+        }
+    }
+
+    #[cfg(test)]
+    fn status(&self) -> StatusCode {
+        match self {
+            UpdateError::Status(status, _) => *status,
+            UpdateError::Refused(_) => StatusCode::CONFLICT,
+        }
+    }
+}
+
+/// Store errors: a stale revision is a `revision_conflict` refusal.
+fn store_error(error: std::io::Error) -> UpdateError {
+    match store::revision_conflict(&error) {
+        Some(conflict) => UpdateError::Refused(Refusal::revision_conflict(conflict.current)),
+        None => UpdateError::Status(io_status(&error), error.to_string()),
+    }
 }
 
 fn merge(target: &mut Value, patch: &Value) {
@@ -162,12 +238,19 @@ fn merge(target: &mut Value, patch: &Value) {
     }
 }
 
-/// Apply a settings update. Separate from the handler for tests.
+/// Apply a settings update. Separate from the handler for tests; `writer`
+/// is the single-writer check, consulted only when the body sets the openid.
+///
+/// Check order (contract): body validation (400), writer (409 `no_writer` /
+/// `not_owner`), then revisions (409 `revision_conflict`). Config, AppSecret
+/// and openid then land in ONE store transaction (review L7): all or none.
 pub fn apply_update(
     store: &crate::storage::Store,
-    update: UpdateNotify,
-) -> Result<Value, (StatusCode, String)> {
-    let conflict = |error: std::io::Error| (io_status(&error), error.to_string());
+    update: &UpdateNotify,
+    node_id: &str,
+    writer: &dyn Fn() -> Result<(), Refusal>,
+) -> Result<Value, UpdateError> {
+    let bad = |message: &str| UpdateError::Status(StatusCode::BAD_REQUEST, message.to_string());
     let secret = update
         .app_secret
         .as_deref()
@@ -176,50 +259,77 @@ pub fn apply_update(
     if secret.is_some_and(|secret| {
         secret.len() > store::MAX_SECRET_LEN || secret.chars().any(char::is_control)
     }) {
-        return Err((StatusCode::BAD_REQUEST, "AppSecret 格式无效".to_string()));
+        return Err(bad("AppSecret 格式无效"));
     }
-    let mut next: Option<NotifyConfig> = None;
-    if let Some(patch) = update.config.as_ref().filter(|patch| !patch.is_null()) {
-        let (current, revision) = store::load_config(store).map_err(conflict)?;
-        if update.expected_revision.unwrap_or(0) != revision.unwrap_or(0) {
-            return Err((
-                StatusCode::CONFLICT,
-                "配置已被其他操作修改，请重新加载后再保存".to_string(),
-            ));
+    let patch = update.config.as_ref().filter(|patch| !patch.is_null());
+    if patch.is_some_and(|patch| patch.pointer("/qq/admin_openid").is_some()) {
+        // The old unsealed path; the value is never echoed.
+        return Err(bad("请在管理员 openid 输入框中填写"));
+    }
+    let openid = update
+        .admin_openid
+        .as_deref()
+        .map(str::trim)
+        .filter(|openid| !openid.is_empty());
+    if let Some(openid) = openid {
+        notify::config::validate_openid(openid).map_err(|message| bad(&message))?;
+        if update.expected_openid_revision.is_none() {
+            return Err(bad("缺少 expected_openid_revision"));
         }
+    }
+    let mut next: Option<(NotifyConfig, u64)> = None;
+    if let Some(patch) = patch {
+        let (current, _) = store::load_config(store).map_err(store_error)?;
         let mut value = serde_json::to_value(&current).map_err(|_| {
-            (
+            UpdateError::Status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "通知设置无法读取".to_string(),
             )
         })?;
         merge(&mut value, patch);
-        let mut parsed: NotifyConfig = serde_json::from_value(value)
-            .map_err(|_| (StatusCode::BAD_REQUEST, "通知设置格式无效".to_string()))?;
+        let mut parsed: NotifyConfig =
+            serde_json::from_value(value).map_err(|_| bad("通知设置格式无效"))?;
         parsed.qq.app_id = parsed.qq.app_id.trim().to_string();
-        parsed.qq.admin_openid = parsed.qq.admin_openid.trim().to_string();
-        validate(&parsed).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-        next = Some(parsed);
+        validate(&parsed).map_err(|message| bad(&message))?;
+        // Compared inside the transaction: a stale revision is a 409.
+        next = Some((parsed, update.expected_revision.unwrap_or(0)));
     }
-    if secret.is_some() || update.clear_app_secret {
-        let (_, revision) = store::load_secret(store).map_err(conflict)?;
-        if update.expected_secret_revision.unwrap_or(0) != revision.unwrap_or(0) {
-            return Err((
-                StatusCode::CONFLICT,
-                "配置已被其他操作修改，请重新加载后再保存".to_string(),
-            ));
-        }
+    if openid.is_some() {
+        writer().map_err(UpdateError::Refused)?;
     }
-    if let Some(cfg) = next.as_ref() {
-        store::save_config(store, cfg, update.expected_revision).map_err(conflict)?;
-    }
-    if let Some(secret) = secret {
-        store::save_secret(store, Some(secret), update.expected_secret_revision)
-            .map_err(conflict)?;
-    } else if update.clear_app_secret {
-        store::save_secret(store, None, update.expected_secret_revision).map_err(conflict)?;
-    }
-    settings_view(store).map_err(conflict)
+    let secret_change = match secret {
+        Some(secret) => store::SecretChange::Set(zeroize::Zeroizing::new(secret.to_string())),
+        None if update.clear_app_secret => store::SecretChange::Clear,
+        None => store::SecretChange::Keep,
+    };
+    let openid_write = openid.map(|openid| store::OpenidWrite {
+        change: store::OpenidChange::Set {
+            value: zeroize::Zeroizing::new(openid.to_string()),
+            via: "manual",
+        },
+        expected: update.expected_openid_revision,
+        writer: node_id.to_string(),
+        now: crate::storage::now(),
+    });
+    store::save_settings(
+        store,
+        next.as_ref().map(|(cfg, expected)| (cfg, *expected)),
+        secret_change,
+        update.expected_secret_revision.unwrap_or(0),
+        openid_write,
+    )
+    .map_err(store_error)?;
+    settings_view(store).map_err(store_error)
+}
+
+/// This node's id, as the openid writer records it.
+async fn local_node_id() -> String {
+    crate::config::load_config()
+        .await
+        .ok()
+        .map(|cfg| cfg.cluster.node_id)
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "local".to_string())
 }
 
 pub(crate) async fn update_notify(
@@ -240,7 +350,23 @@ pub(crate) async fn update_notify(
             .app_secret
             .as_deref()
             .is_none_or(|s| s.trim().is_empty());
-    match apply_update(&store, update) {
+    let node_id = local_node_id().await;
+    let mut update = update;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = apply_update(&store, &update, &node_id, &|| {
+            notify::check_writer("修改管理员 openid")
+        });
+        update.wipe();
+        result
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(UpdateError::Status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "通知设置保存失败".to_string(),
+        ))
+    });
+    match result {
         Ok(view) => {
             let _ = notify::send_command(Command::Reload);
             reply(
@@ -253,8 +379,113 @@ pub(crate) async fn update_notify(
                 },
             )
         }
-        Err((status, message)) => reply(status, None, message),
+        Err(error) => error.into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct UnbindRequest {
+    expected_openid_revision: Option<u64>,
+}
+
+fn parse_unbind(body: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<UnbindRequest>(body)
+        .ok()
+        .and_then(|request| request.expected_openid_revision)
+}
+
+/// Clear the admin openid on the single writer. Separate for tests.
+pub fn apply_unbind(
+    store: &crate::storage::Store,
+    expected: u64,
+    node_id: &str,
+    writer: &dyn Fn() -> Result<(), Refusal>,
+) -> Result<(Value, bool), UpdateError> {
+    writer().map_err(UpdateError::Refused)?;
+    let was_set = store::load_openid(store).map_err(store_error)?.is_set();
+    store::write_openid(
+        store,
+        store::OpenidWrite {
+            change: store::OpenidChange::Clear,
+            expected: Some(expected),
+            writer: node_id.to_string(),
+            now: crate::storage::now(),
+        },
+    )
+    .map_err(store_error)?;
+    let openid = store::load_openid(store).map_err(store_error)?;
+    Ok((openid_view(&openid), was_set))
+}
+
+/// `DELETE /api/notify/openid` with `{expected_openid_revision}`: the only
+/// unbind. The body is read as bytes so a missing or malformed body still
+/// gets the normal `{success, data, message}` wrapper.
+pub(crate) async fn notify_unbind(
+    Extension(auth): Extension<Arc<AuthState>>,
+    generation: Option<Extension<AuthGeneration>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !mutation_allowed(&auth, &headers, generation) {
+        return forbidden_origin();
+    }
+    let Some(expected) = parse_unbind(&body) else {
+        return reply(
+            StatusCode::BAD_REQUEST,
+            None,
+            "缺少 expected_openid_revision",
+        );
+    };
+    let store = match crate::storage::global() {
+        Ok(store) => store,
+        Err(error) => return reply(io_status(&error), None, error.to_string()),
+    };
+    let node_id = local_node_id().await;
+    let result = tokio::task::spawn_blocking(move || {
+        apply_unbind(&store, expected, &node_id, &|| {
+            notify::check_writer("解除绑定")
+        })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(UpdateError::Status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "解除绑定失败".to_string(),
+        ))
+    });
+    match result {
+        Ok((view, was_set)) => {
+            let _ = notify::send_command(Command::Reload);
+            reply(
+                StatusCode::OK,
+                Some(view),
+                if was_set {
+                    "管理员 openid 已解除绑定"
+                } else {
+                    "管理员 openid 未绑定"
+                },
+            )
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `sender: {node, last_send}`: the authority node and its last real send,
+/// from this node's ledger joined with fresh peer heartbeats (no reason
+/// text, no ids).
+fn sender_view(node: Option<&str>, digest: &notify::observer::ClusterDigest, now: u64) -> Value {
+    let mut ledger = notify::SHARED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ledger
+        .clone();
+    for peer in &digest.peer_ledgers {
+        let mut peer = peer.clone();
+        peer.clamp_future(now);
+        ledger.join(&peer);
+    }
+    let last_send = node.and_then(|node| ledger.last_send.get(node).cloned());
+    json!({ "node": node, "last_send": last_send })
 }
 
 pub async fn notify_status() -> Response {
@@ -295,9 +526,11 @@ pub async fn notify_status() -> Response {
                 .find(|node| node.id != digest.local && node.fresh && node.notify_authority)
                 .map(|node| node.id.clone())
         };
+        let sender = sender_view(authority_node.as_deref(), &digest, now);
         if let Some(object) = status.as_object_mut() {
             object.insert("authority_node_id".into(), json!(authority_node));
             object.insert("nodes".into(), json!(nodes));
+            object.insert("sender".into(), sender);
         }
     }
     reply(StatusCode::OK, Some(status), "")
@@ -352,6 +585,10 @@ pub(crate) async fn notify_bind(
     if !mutation_allowed(&auth, &headers, generation) {
         return forbidden_origin();
     }
+    if !notify::worker_running() {
+        // Unknown writer: the server refuses the openid write (contract).
+        return refused(Refusal::no_writer("绑定"));
+    }
     let (sender, receiver) = tokio::sync::oneshot::channel();
     if let Err(message) = notify::send_command(Command::StartBind {
         mode: body.mode,
@@ -363,10 +600,7 @@ pub(crate) async fn notify_bind(
     // Above the worker's 25 s send cap, so a busy worker still answers.
     match tokio::time::timeout(Duration::from_secs(30), receiver).await {
         Ok(Ok(Ok(view))) => reply(StatusCode::OK, Some(view), "请在 QQ 向机器人发送此码"),
-        Ok(Ok(Err(refusal))) => {
-            let data = serde_json::to_value(&refusal).ok();
-            reply(StatusCode::CONFLICT, data, refusal.reason)
-        }
+        Ok(Ok(Err(refusal))) => refused(refusal),
         _ => reply(StatusCode::GATEWAY_TIMEOUT, None, "通知服务无响应"),
     }
 }
@@ -406,10 +640,27 @@ mod tests {
         (root, store)
     }
 
+    const OPENID: &str = "SAMPLE0OPENID0VALUE0ABCDEF012345";
+
+    fn writer_ok() -> Result<(), Refusal> {
+        Ok(())
+    }
+
+    fn update(store: &crate::storage::Store, update: UpdateNotify) -> Result<Value, UpdateError> {
+        apply_update(store, &update, "solo", &writer_ok)
+    }
+
+    fn refusal(error: UpdateError) -> Refusal {
+        match error {
+            UpdateError::Refused(refusal) => refusal,
+            UpdateError::Status(status, message) => panic!("{status}: {message}"),
+        }
+    }
+
     #[test]
     fn update_merges_validates_and_never_echoes_the_secret() {
         let (root, store) = temp_store();
-        let view = apply_update(
+        let view = update(
             &store,
             UpdateNotify {
                 config: Some(
@@ -425,11 +676,17 @@ mod tests {
         assert_eq!(view["config"]["qq"]["app_id"], "1234567890");
         assert_eq!(view["config"]["confirm_secs"], 90);
         assert_eq!(view["config"]["cooldown_secs"], 1800);
+        assert_eq!(view["appsecret_set"], true);
         assert_eq!(view["app_secret_configured"], true);
+        assert_eq!(view["openid_set"], false);
+        assert_eq!(view["openid_revision"], 0);
+        assert!(view["openid_bound_at"].is_null());
+        assert!(view["config"]["qq"].get("admin_openid").is_none());
         assert!(!view.to_string().contains("synthetic-api-secret-marker"));
 
-        // Stale revision → 409; the main config record is untouched.
-        let stale = apply_update(
+        // Stale revision → 409 revision_conflict with the current revision;
+        // the main config record is untouched.
+        let stale = update(
             &store,
             UpdateNotify {
                 config: Some(json!({"enabled": false})),
@@ -438,12 +695,17 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(stale.0, StatusCode::CONFLICT);
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let stale = refusal(stale);
+        assert_eq!(
+            stale.data,
+            json!({"code": "revision_conflict", "current_revision": view["revision"]})
+        );
         assert!(store.read("config.json").unwrap().is_none());
 
         // Out-of-range values are refused server-side.
         let revision = view["revision"].as_u64();
-        let bad = apply_update(
+        let bad = update(
             &store,
             UpdateNotify {
                 config: Some(json!({"cooldown_secs": 5})),
@@ -452,10 +714,28 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(bad.0, StatusCode::BAD_REQUEST);
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+        // A stale secret revision is a revision_conflict too (O3).
+        let stale_secret = refusal(
+            update(
+                &store,
+                UpdateNotify {
+                    app_secret: Some("another-secret".into()),
+                    expected_secret_revision: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(stale_secret.code(), "revision_conflict");
+        assert_eq!(
+            stale_secret.data["current_revision"],
+            view["secret_revision"]
+        );
 
         // Clearing the secret.
-        let cleared = apply_update(
+        let cleared = update(
             &store,
             UpdateNotify {
                 clear_app_secret: true,
@@ -464,7 +744,176 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(cleared["appsecret_set"], false);
         assert_eq!(cleared["app_secret_configured"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn openid_is_write_only_and_validated_before_anything_is_saved() {
+        let (root, store) = temp_store();
+        let bad = |body: UpdateNotify| match update(&store, body).unwrap_err() {
+            UpdateError::Status(status, message) => (status, message),
+            UpdateError::Refused(refusal) => panic!("{refusal:?}"),
+        };
+        // The old nested path is refused (and the value never echoed).
+        let (status, message) = bad(UpdateNotify {
+            config: Some(json!({"qq": {"admin_openid": OPENID}})),
+            expected_revision: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(message, "请在管理员 openid 输入框中填写");
+        // Even an empty nested value: the field no longer exists.
+        let (status, _) = bad(UpdateNotify {
+            config: Some(json!({"qq": {"admin_openid": ""}})),
+            expected_revision: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, message) = bad(UpdateNotify {
+            admin_openid: Some("not an id; DROP".into()),
+            expected_openid_revision: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!message.contains("DROP"));
+        let (_, message) = bad(UpdateNotify {
+            admin_openid: Some(OPENID.into()),
+            ..Default::default()
+        });
+        assert_eq!(message, "缺少 expected_openid_revision");
+        assert!(store.read(store::OPENID_RECORD).unwrap().is_none());
+        assert!(store.read(store::CONFIG_RECORD).unwrap().is_none());
+
+        // On the writer: saved sealed, response has booleans only.
+        let view = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"enabled": true})),
+                expected_revision: Some(0),
+                admin_openid: Some(format!(" {OPENID} ")),
+                expected_openid_revision: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(view["openid_set"], true);
+        assert_eq!(view["openid_revision"], 1);
+        assert!(view["openid_bound_at"].as_u64().is_some());
+        assert_eq!(view["config"]["enabled"], true);
+        assert!(!view.to_string().contains(OPENID));
+        let loaded = store::load_openid(&store).unwrap();
+        assert_eq!(loaded.openid.unwrap().expose(), OPENID);
+        // Empty means unchanged.
+        let view = update(
+            &store,
+            UpdateNotify {
+                admin_openid: Some("  ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(view["openid_revision"], 1);
+        // Stale openid revision: revision_conflict, and the config in the
+        // same body is not applied either.
+        let conflict = refusal(
+            update(
+                &store,
+                UpdateNotify {
+                    config: Some(json!({"enabled": false})),
+                    expected_revision: view["revision"].as_u64(),
+                    admin_openid: Some("OTHER0000000000000000000000000000".into()),
+                    expected_openid_revision: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(
+            conflict.data,
+            json!({"code": "revision_conflict", "current_revision": 1})
+        );
+        assert!(store::load_config(&store).unwrap().0.enabled);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn openid_writes_on_a_non_writer_are_refused_and_save_nothing() {
+        let (root, store) = temp_store();
+        let not_owner = || Err(Refusal::not_owner("osaka-2", "修改管理员 openid"));
+        let body = UpdateNotify {
+            config: Some(json!({"enabled": true})),
+            expected_revision: Some(0),
+            admin_openid: Some(OPENID.into()),
+            expected_openid_revision: Some(0),
+            ..Default::default()
+        };
+        let refused = refusal(apply_update(&store, &body, "tokyo-1", &not_owner).unwrap_err());
+        assert_eq!(
+            refused.data,
+            json!({"code": "not_owner", "owner": "osaka-2"})
+        );
+        assert!(refused.message.contains("osaka-2"));
+        assert!(store.read(store::CONFIG_RECORD).unwrap().is_none());
+        assert!(store.read(store::OPENID_RECORD).unwrap().is_none());
+        let no_writer = || Err(Refusal::no_writer("修改管理员 openid"));
+        let refused = refusal(apply_update(&store, &body, "tokyo-1", &no_writer).unwrap_err());
+        assert_eq!(refused.data, json!({"code": "no_writer"}));
+        // Config and AppSecret-only saves work on any node.
+        let ok = apply_update(
+            &store,
+            &UpdateNotify {
+                config: Some(json!({"enabled": true})),
+                expected_revision: Some(0),
+                app_secret: Some("synthetic-secret".into()),
+                expected_secret_revision: Some(0),
+                ..Default::default()
+            },
+            "tokyo-1",
+            &no_writer,
+        )
+        .unwrap();
+        assert_eq!(ok["appsecret_set"], true);
+        // Unbind follows the same rule.
+        let refused = refusal(apply_unbind(&store, 0, "tokyo-1", &not_owner).unwrap_err());
+        assert_eq!(refused.code(), "not_owner");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unbind_needs_the_revision_and_is_idempotent() {
+        let (root, store) = temp_store();
+        assert_eq!(parse_unbind(b""), None);
+        assert_eq!(parse_unbind(b"{}"), None);
+        assert_eq!(parse_unbind(b"{\"expected_openid_revision\":\"3\"}"), None);
+        assert_eq!(parse_unbind(b"{\"expected_openid_revision\":3}"), Some(3));
+        update(
+            &store,
+            UpdateNotify {
+                admin_openid: Some(OPENID.into()),
+                expected_openid_revision: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let stale = refusal(apply_unbind(&store, 0, "solo", &writer_ok).unwrap_err());
+        assert_eq!(
+            stale.data,
+            json!({"code": "revision_conflict", "current_revision": 1})
+        );
+        let (view, was_set) = apply_unbind(&store, 1, "solo", &writer_ok).unwrap();
+        assert!(was_set);
+        assert_eq!(
+            view,
+            json!({"openid_set": false, "openid_bound_at": null, "openid_revision": 2})
+        );
+        let (view, was_set) = apply_unbind(&store, 2, "solo", &writer_ok).unwrap();
+        assert!(!was_set);
+        assert_eq!(
+            view["openid_revision"], 2,
+            "an unbound unbind changes nothing"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -493,6 +942,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let response =
             notify_cancel_bind(Extension(Arc::clone(&auth)), generation(), headers.clone()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = notify_unbind(
+            Extension(Arc::clone(&auth)),
+            generation(),
+            headers.clone(),
+            axum::body::Bytes::from_static(b"{\"expected_openid_revision\":1}"),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let response = update_notify(
             Extension(Arc::clone(&auth)),

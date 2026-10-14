@@ -41,6 +41,76 @@ pub fn execution_primary(digest: &ClusterDigest, membership_blocked: bool) -> bo
     !membership_blocked && (!digest.enabled || digest.fence_block.is_none())
 }
 
+/// The single openid writer (contract "Single writer" / "Writer edge
+/// cases", Architect 17:43 and 18:12): the node with SENDER AUTHORITY, the
+/// same node `/status.authority_node_id` names.
+/// - Cluster off: the local node.
+/// - The fenced owner (execution primary, `state_monitoring_block_reason`)
+///   while it is fully configured, or while no fully configured node exists
+///   (a fresh cluster binds its first openid there; no openid or gateway is
+///   needed for that).
+/// - The delegate while one is sending for an owner without the openid
+///   (H2 rule, mirrored from `delegate`): it holds the gateway, so it can bind.
+/// - Null without quorum (the no-quorum fallback is never a writer), during
+///   a handoff hold or a membership change.
+///
+/// `local_capable` is this node's own "fully configured"; peers come from
+/// their heartbeats. Returns `(node_id, is_local)`.
+pub fn openid_writer(
+    digest: &ClusterDigest,
+    membership_blocked: bool,
+    local_capable: bool,
+) -> Option<(String, bool)> {
+    let local = || Some((digest.local.clone(), true));
+    if !digest.enabled {
+        return local();
+    }
+    if membership_blocked || !digest.quorum || digest.handoff_pending {
+        return None;
+    }
+    let owner_id = digest.owner.as_deref()?;
+    let local_primary = execution_primary(digest, membership_blocked);
+    let owner_capable = if local_primary {
+        local_capable
+    } else {
+        let owner = digest.node(owner_id)?;
+        if owner.id == digest.local || !owner.fresh || owner.draining {
+            // Not executing here, and the owner is not a live peer.
+            return None;
+        }
+        owner.notify_capable || owner.notify_authority
+    };
+    let owner = || {
+        if local_primary {
+            local()
+        } else {
+            Some((owner_id.to_string(), false))
+        }
+    };
+    if owner_capable {
+        return owner();
+    }
+    // Owner without the openid: the lowest fully configured, non-draining
+    // other node is the delegate (same set as `delegate`).
+    let delegate = digest
+        .nodes
+        .iter()
+        .filter(|node| node.id != owner_id && !node.draining)
+        .filter(|node| {
+            if node.id == digest.local {
+                local_capable && !digest.local_draining
+            } else {
+                node.fresh && node.notify_capable
+            }
+        })
+        .map(|node| node.id.as_str())
+        .min();
+    match delegate {
+        Some(id) => Some((id.to_string(), id == digest.local)),
+        None => owner(),
+    }
+}
+
 pub struct DecideInput<'a> {
     pub digest: &'a ClusterDigest,
     pub membership_blocked: bool,
@@ -122,6 +192,35 @@ pub fn peer_has_authority(digest: &ClusterDigest) -> bool {
         .any(|node| node.id != digest.local && node.fresh && node.notify_authority)
 }
 
+/// May this node IDENTIFY/RESUME a QQ gateway session now? (contract line
+/// 70: the old holder closes before the new one identifies, so there are
+/// never two sessions; QQ would kick the first.) Pure: decided from the
+/// heartbeat view alone. `Err(node)` names the lowest-id peer that may
+/// still hold a session.
+///
+/// A peer counts while it is a current member and fresh: a stale/fenced
+/// heartbeat or one silent past the peer-silence threshold
+/// (`failover_timeout_secs`, which `fresh` already applies) no longer
+/// blocks. `gateway_held: Some(false)` clears it at once. `None` (an older
+/// node that does not report it) is unknown: it is treated as holding
+/// while it advertises notify authority, because an older node's gateway
+/// followed its authority; without authority it never opens one.
+pub fn may_identify(digest: &ClusterDigest) -> Result<(), String> {
+    if !digest.enabled {
+        return Ok(());
+    }
+    digest
+        .nodes
+        .iter()
+        .filter(|node| node.id != digest.local)
+        .filter(|node| digest.members.is_empty() || digest.members.contains(&node.id))
+        .filter(|node| node.fresh && !node.stale)
+        .filter(|node| node.gateway_held.unwrap_or(node.notify_authority))
+        .map(|node| node.id.clone())
+        .min()
+        .map_or(Ok(()), Err)
+}
+
 /// Snapshot what the notifier needs from the cluster state, then drop the
 /// guard. Never clones `ClusterState` (nodes carry full status snapshots).
 pub fn read_digest(cfg: &Config, now: u64) -> ClusterDigest {
@@ -158,6 +257,7 @@ pub fn read_digest(cfg: &Config, now: u64) -> ClusterDigest {
                     .map(|check| (check.state.clone(), check.consecutive_failures)),
                 notify_capable: node.notify_capable,
                 notify_authority: node.notify_authority,
+                gateway_held: node.notify_gateway_held,
             }
         })
         .collect();

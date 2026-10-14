@@ -19,6 +19,11 @@ pub const ACTIVE_PER_DAY: u32 = 200;
 pub const ACTIVE_REPROBE_SECS: u64 = 86_400;
 /// Peer timestamps further ahead than this are a fast clock, not facts.
 pub const MAX_SKEW_SECS: u64 = 300;
+/// The longest rate-limit block this build ever sets is 60 s; anything
+/// further ahead than skew + this is bogus and dropped (review N1).
+pub const MAX_RATE_LIMIT_SECS: u64 = 600;
+/// Per-node last-send entries kept in the ledger.
+pub const MAX_LAST_SEND: usize = 16;
 /// `is_wakeup` periods after the admin's last message: today, 1–3, 3–7 and
 /// 7–30 days.
 const WAKEUP_PERIOD_ENDS: [u64; 4] = [86_400, 3 * 86_400, 7 * 86_400, 30 * 86_400];
@@ -57,6 +62,11 @@ pub struct NotifyLedger {
     pub undelivered_reported: BTreeMap<String, u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reason: Option<TimedReason>,
+    /// Last real (non-test) send attempt per sender node, so standbys can
+    /// show `sender.last_send`. `{at, ok, code, via}` only: no reason text,
+    /// no trace or message ids. Joined by max per node (order-independent).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub last_send: BTreeMap<String, LastSend>,
     /// This node's id, used as the counter key. Never serialized or joined.
     #[serde(skip)]
     pub local: String,
@@ -123,6 +133,17 @@ impl ModeMarks {
     pub fn markdown_unsupported(&self) -> bool {
         self.markdown_unsupported_at > self.reset_at
     }
+}
+
+/// One node's last send attempt as advertised in heartbeats. Field order
+/// matters: the derived `Ord` compares `at` first, so the newest wins.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LastSend {
+    pub at: u64,
+    pub ok: bool,
+    pub code: Option<i64>,
+    /// Delivery mode: `active`, `passive` or `wakeup`.
+    pub via: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -336,6 +357,36 @@ impl NotifyLedger {
         }
     }
 
+    /// This node made a real send attempt (tests do not count).
+    pub fn record_last_send(&mut self, at: u64, ok: bool, code: Option<i64>, via: Option<&str>) {
+        let next = LastSend {
+            at,
+            ok,
+            code,
+            via: via.map(str::to_string),
+        };
+        match self.last_send.get_mut(&self.local) {
+            Some(own) if *own >= next => {}
+            Some(own) => *own = next,
+            None => {
+                self.last_send.insert(self.local.clone(), next);
+            }
+        }
+        self.trim_last_send();
+    }
+
+    fn trim_last_send(&mut self) {
+        if self.last_send.len() <= MAX_LAST_SEND {
+            return;
+        }
+        // Deterministic: keep the newest, ties by node id.
+        let mut entries: Vec<(String, LastSend)> =
+            std::mem::take(&mut self.last_send).into_iter().collect();
+        entries.sort_by(|a, b| b.1.at.cmp(&a.1.at).then_with(|| a.0.cmp(&b.0)));
+        entries.truncate(MAX_LAST_SEND);
+        self.last_send = entries.into_iter().collect();
+    }
+
     pub fn undelivered_pending(&self) -> u32 {
         self.undelivered_total
             .iter()
@@ -366,7 +417,12 @@ impl NotifyLedger {
         self.active_minute.retain(|at| *at <= limit);
         let today = utc8_day(limit);
         self.active_day.retain(|_, count| count.day <= today);
-        self.rate_limited_until = self.rate_limited_until.min(now + 3600);
+        // Dropped, not capped: a capped stamp would be re-capped against the
+        // receiver's moving clock on every heartbeat and never expire (N1).
+        if self.rate_limited_until > now + MAX_SKEW_SECS + MAX_RATE_LIMIT_SECS {
+            self.rate_limited_until = 0;
+        }
+        self.last_send.retain(|_, send| send.at <= limit);
         if self.wakeup.admin_last_c2c_at.is_some_and(|at| at > limit) {
             self.wakeup.admin_last_c2c_at = None;
         }
@@ -442,11 +498,24 @@ impl NotifyLedger {
         if other.last_reason > self.last_reason {
             self.last_reason = other.last_reason.clone();
         }
+        join_max(&mut self.last_send, &other.last_send);
+        self.trim_last_send();
     }
 }
 
+/// Reason text bound for a response, the status, a log line or the ledger:
+/// the exact configured openid becomes `<set>`, then every other openid-like
+/// run is masked (contract: replace, then `mask_ids`).
+pub fn mask_reason(text: &str, openid: Option<&str>) -> String {
+    let replaced = match openid.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => text.replace(id, "<set>"),
+        None => text.to_string(),
+    };
+    mask_ids(&replaced)
+}
+
 /// Hide openid-like runs (24+ letters/digits).
-fn mask_ids(text: &str) -> String {
+pub fn mask_ids(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut run = String::new();
     let flush = |run: &mut String, out: &mut String| {
@@ -501,6 +570,12 @@ mod tests {
         ledger.record_wakeup(600 + seed);
         ledger.record_undelivered(seed as u32 % 3, &format!("reason {seed}"), 700 + seed);
         ledger.modes.active_unavailable_at = seed * 3;
+        ledger.record_last_send(
+            1_000 + seed,
+            seed.is_multiple_of(2),
+            Some(seed as i64),
+            Some("active"),
+        );
         ledger
     }
 
@@ -639,8 +714,9 @@ mod tests {
         let mut clean = peer.clone();
         clean.clamp_future(now);
         mine.join(&clean);
-        assert!(!mine.active_budget_left(now + 10)); // capped rate limit, 1 h
-        assert!(mine.active_budget_left(now + 3601));
+        // A far-future rate limit is dropped, not capped (N1).
+        assert_eq!(mine.rate_limited_until, 0);
+        assert!(mine.active_budget_left(now + 10));
         assert_eq!(mine.wakeup.admin_last_c2c_at, None);
         assert!(!mine.modes.active_unavailable(now));
         // An already-poisoned cycle start is replaced by a real message.
@@ -648,6 +724,99 @@ mod tests {
         poisoned.record_admin_message(now + 7200);
         poisoned.record_admin_message(now);
         assert_eq!(poisoned.wakeup.admin_last_c2c_at, Some(now));
+    }
+
+    #[test]
+    fn a_fast_peer_rate_limit_never_rolls_forward_over_repeated_merges() {
+        // Clerk's rr_m3b: one node a day fast once got a 429. It keeps
+        // advertising the same stamp; the receiver must not keep blocking.
+        let start = 1_800_000_000;
+        let mut fast = NotifyLedger {
+            local: "fast".into(),
+            ..Default::default()
+        };
+        fast.record_rate_limited(start + 86_400);
+        let mut mine = NotifyLedger {
+            local: "me".into(),
+            ..Default::default()
+        };
+        for t in [0, 1800, 3600, 7200, 14_400] {
+            let now = start + t;
+            mine.clamp_future(now);
+            let mut peer = fast.clone();
+            peer.clamp_future(now);
+            mine.join(&peer);
+            assert!(mine.active_budget_left(now + 1), "blocked at +{t}");
+            assert_eq!(mine.rate_limited_until, 0);
+        }
+        // A plausible, near-future stamp from a peer is still honoured once,
+        // and expires instead of sliding.
+        let mut near = NotifyLedger::default();
+        near.record_rate_limited(start + 100);
+        let mut peer = near.clone();
+        peer.clamp_future(start + 100);
+        mine.join(&peer);
+        assert!(!mine.active_budget_left(start + 120));
+        for t in [200, 400, 800] {
+            let mut peer = near.clone();
+            peer.clamp_future(start + t);
+            mine.join(&peer);
+            mine.clamp_future(start + t);
+        }
+        assert!(mine.active_budget_left(start + 800));
+    }
+
+    #[test]
+    fn last_send_joins_per_node_in_any_order_without_reasons_or_ids() {
+        let mut a = NotifyLedger {
+            local: "a".into(),
+            ..Default::default()
+        };
+        let mut b = NotifyLedger {
+            local: "b".into(),
+            ..Default::default()
+        };
+        a.record_last_send(100, true, None, Some("active"));
+        a.record_last_send(90, false, Some(1), Some("active")); // older: ignored
+        b.record_last_send(120, false, Some(11255), Some("passive"));
+        let mut ab = a.clone();
+        ab.join(&b);
+        let mut ba = b.clone();
+        ba.join(&a);
+        assert_eq!(ab.last_send, ba.last_send);
+        assert_eq!(ab.last_send["a"].at, 100);
+        assert!(ab.last_send["a"].ok);
+        assert_eq!(ab.last_send["b"].code, Some(11255));
+        let mut twice = ab.clone();
+        twice.join(&ab);
+        assert_eq!(twice, ab);
+        let json = serde_json::to_string(&ab.last_send).unwrap();
+        assert_eq!(
+            json,
+            r#"{"a":{"at":100,"ok":true,"code":null,"via":"active"},"b":{"at":120,"ok":false,"code":11255,"via":"passive"}}"#
+        );
+        // From the future: dropped.
+        let mut future = b.clone();
+        future.record_last_send(10_000, true, None, None);
+        future.clamp_future(100);
+        assert!(future.last_send.is_empty());
+    }
+
+    #[test]
+    fn reasons_replace_the_exact_openid_then_mask_ids() {
+        let openid = "SAMPLE0OPENID0VALUE0ABCDEF012345";
+        let text = format!("QQ 接口返回 11255：invalid request openid={openid} trace=0123456789abcdef0123456789abcdef");
+        let masked = mask_reason(&text, Some(openid));
+        assert_eq!(
+            masked,
+            "QQ 接口返回 11255：invalid request openid=<set> trace=…"
+        );
+        // A short openid (below the 24-char run) is still replaced exactly.
+        assert_eq!(
+            mask_reason("to ABC123 failed", Some("ABC123")),
+            "to <set> failed"
+        );
+        assert_eq!(mask_reason("plain", None), "plain");
     }
 
     #[test]

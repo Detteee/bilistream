@@ -22,6 +22,9 @@ pub struct NodeSlot {
     pub self_check: Option<(SelfCheckState, u32)>,
     pub notify_capable: bool,
     pub notify_authority: bool,
+    /// The node's heartbeat says it holds a QQ gateway session; `None` when
+    /// it does not say (older node).
+    pub gateway_held: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,7 +83,7 @@ pub fn conditions(
             .map(|node| node.id.as_str())
             .collect();
         let detail = if unreachable.is_empty() {
-            "心跳多数派已丢失".to_string()
+            "本节点失去多数派".to_string()
         } else {
             format!("无法联系 {}", unreachable.join("、"))
         };

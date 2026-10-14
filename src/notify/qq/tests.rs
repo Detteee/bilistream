@@ -118,7 +118,7 @@ async fn active_unavailable_falls_through_to_one_wakeup_for_critical() {
         .as_str()
         .unwrap()
         .to_string();
-    assert!(content.contains("召回提醒还剩 3 次（下次 "), "{content}");
+    assert!(content.contains("召回消息还剩 3 次（下次 "), "{content}");
     assert!(!mock.messages()[0].1["content"]
         .as_str()
         .unwrap()

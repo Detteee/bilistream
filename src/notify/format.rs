@@ -687,15 +687,15 @@ pub fn wakeup_cta(ledger: &NotifyLedger, now: u64) -> String {
             let next = next
                 .map(|at| format!("（下次 {} 起可用）", month_day(at)))
                 .unwrap_or_default();
-            format!("召回提醒还剩 {left} 次{next}。回复任意消息可恢复正常推送。")
+            format!("召回消息还剩 {left} 次{next}。回复任意消息即可恢复正常推送。")
         }
-        Some(_) => "这是本周期最后一次提醒。回复任意消息即可继续接收通知。".to_string(),
-        None => "这是一次召回提醒。回复任意消息可恢复正常推送。".to_string(),
+        Some(_) => "这是本周期最后一次召回消息。回复任意消息即可恢复正常推送。".to_string(),
+        None => "这是一次召回消息。回复任意消息即可恢复正常推送。".to_string(),
     }
 }
 
 pub fn last_reply_cta() -> String {
-    "本轮可回复次数已用完，再发一条消息可继续接收。".to_string()
+    "本轮可回复次数已用完。回复任意消息即可恢复正常推送。".to_string()
 }
 
 pub fn with_cta(body: &str, cta: Option<&str>, markdown: bool) -> String {

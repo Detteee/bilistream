@@ -1381,6 +1381,17 @@ async fn remove_offline_standby(a: &Node, b: &Node, c: &mut Node, cookie: &str) 
     wait_released(&[a, b]).await;
     assert!(manifest(a).member(&removed).is_none());
     assert!(manifest(b).member(&removed).is_none());
+    // The operation can report completed while its driver task is still
+    // finishing deliveries. Restarting c before the driver stops let a late
+    // delivery reach the restarted node (the flaky case Clerk confirmed).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while a.auth.runtime().driver_running(&remove) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the remove driver did not stop"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     c.restart("pw-c").await;
     removed
 }
