@@ -8,7 +8,7 @@ import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, removeWatch,
-  liveRefusal, mergeOpenidFields, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
+  createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
 } from './notify-state.js';
 
 const FIELDS = {
@@ -31,6 +31,9 @@ let settings = null;   // GET /api/notify data
 let baseline = null;   // form snapshot of `settings`
 let status = null;     // GET /api/notify/status data
 let statusAt = 0;      // ms when `status` arrived
+let statusSeq = 0;     // R1: request sequence of the fetch that produced `status`
+const statusReq = createSeq();   // /api/notify/status requests
+const settingsReq = createSeq(); // L1: GET /api/notify requests
 let loading = false;
 let loadError = null;
 let busy = false;
@@ -46,7 +49,7 @@ const watchOptions = new Map();  // watchKey → <li> in the picker
 // confirmed, and when each one reported it cleared.
 let pendingUnbind = new Set();
 let refusal = null;   // last coded refusal from a notify write (banner + recovery)
-let refusalSrc = null; // { error, route } so the banner follows fresh status (B2)
+let refusalSrc = null; // { error, route, seq, creds } so the banner follows fresh status (B2, R1, L3)
 const clearedAt = new Map();
 
 const $ = id => document.getElementById(id);
@@ -128,6 +131,15 @@ function setBadge(el, text, tone) {
 }
 
 function clearRefusal() { refusal = null; refusalSrc = null; }
+function readCreds() {
+  return { app_id: $('notify-app-id')?.value || '', app_secret: $('notify-app-secret')?.value || '' };
+}
+// L3: edits clear the banner, except a credential hint while AppID/AppSecret are unchanged.
+function clearRefusalOnEdit() {
+  if (!refusal) return;
+  if (refusalSrc && refusalSurvivesEdit(refusal.kind, refusalSrc.creds, readCreds())) return;
+  clearRefusal();
+}
 
 function row(label, value, { dot = '', title = '', badge = '', valueClass = '', copy = '' } = {}) {
   const wrap = document.createElement('div');
@@ -471,7 +483,7 @@ function render() {
     alert = { lead: `${short}${code ? `（${code}）` : ''}。`, text: `通知无法送达，转播不受影响。${hint}`, tone: 'danger', action: bad };
   }
   if (refusalSrc) {
-    refusal = liveRefusal(refusalSrc.error, refusalSrc.route, status);
+    refusal = liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq);
     if (!refusal) refusalSrc = null;
   }
   if (refusal) alert = refusal.banner;
@@ -564,6 +576,8 @@ function setResult(text) {
 
 export async function loadNotifySettings() {
   if (!$('notify-settings')) return;
+  const token = settingsReq.next();
+  const stToken = statusReq.next();
   loading = true;
   render();
   try {
@@ -571,15 +585,26 @@ export async function loadNotifySettings() {
       getJson('/api/notify'),
       getJson('/api/notify/status').catch(() => null),
     ]);
+    // L1: a newer load has started; this response is stale.
+    if (!settingsReq.isCurrent(token)) return;
     applySettings(config.data, { force: !isDirty() });
-    if (st?.data) { status = st.data; statusAt = Date.now(); }
+    setStatus(st?.data, stToken);
     loadError = null;
   } catch (error) {
-    loadError = error;
+    if (settingsReq.isCurrent(token)) loadError = error;
   } finally {
-    loading = false;
+    if (settingsReq.isCurrent(token)) loading = false;
     render();
   }
+}
+
+// R1: only take a status newer than the one we have, and remember its sequence.
+function setStatus(data, token) {
+  if (!data || token < statusSeq) return false;
+  status = data;
+  statusAt = Date.now();
+  statusSeq = token;
+  return true;
 }
 
 function applySettings(data, { force }) {
@@ -589,28 +614,27 @@ function applySettings(data, { force }) {
   if (force || !previous) fillForm(baseline);
   else {
     // Keep the draft but take server-side changes (e.g. a bound openid).
-    for (const key of Object.keys(FIELDS)) {
-      if (previous[key] !== baseline[key] && $(FIELDS[key]).value === previous[key]) $(FIELDS[key]).value = baseline[key];
-    }
-    if (previous.watch_channels !== baseline.watch_channels && JSON.stringify(watchDraft) === previous.watch_channels) {
-      watchDraft = JSON.parse(baseline.watch_channels);
-    }
+    const keys = [...Object.keys(FIELDS), 'watch_channels'];
+    const draft = mergeDraft(previous, baseline, readForm(), keys);
+    for (const key of Object.keys(FIELDS)) if ($(FIELDS[key]).value !== draft[key]) $(FIELDS[key]).value = draft[key];
+    if (draft.watch_channels !== JSON.stringify(watchDraft)) watchDraft = JSON.parse(draft.watch_channels);
   }
 }
 
 export async function refreshNotifyStatus() {
   if (!$('notify-settings') || !settings) return;
   try {
+    const stToken = statusReq.next();
     const st = await getJson('/api/notify/status');
-    status = st.data;
-    statusAt = Date.now();
+    if (!setStatus(st.data, stToken)) return;
     updateUnbindProgress();
     const bindState = status?.bind?.state || 'idle';
     if (bindState === 'bound' && lastBindState === 'waiting') {
       showNotification('已获取管理员 openid', 'success');
       clearRefusal();
+      const token = settingsReq.next();
       const config = await getJson('/api/notify');
-      applySettings(config.data, { force: false });
+      if (settingsReq.isCurrent(token)) applySettings(config.data, { force: false });
     }
     lastBindState = bindState;
   } catch (error) {
@@ -695,7 +719,9 @@ async function clearSecret() {
 // loadNotifySettings keeps dirty form edits (force only when clean).
 function handleRefusal(error, route = 'openid') {
   refusal = notifyRefusal(error, status, { route });
-  refusalSrc = refusal ? { error, route } : null;
+  // R1: statuses from requests started up to now are not fresh for this refusal.
+  // L3: snapshot the credentials so a credential hint survives unrelated edits.
+  refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds() } : null;
   if (!refusal) return;
   $('notify-admin-openid').value = '';
   if (refusal.kind === 'revision') loadNotifySettings();
@@ -713,10 +739,13 @@ async function unbindOpenid() {
   busy = true;
   render();
   try {
-    const result = await UNBIND.method(UNBIND.path, { expected_openid_revision: settings.openid_revision });
+    const { merged } = await unbindFlow({
+      settings,
+      remove: body => UNBIND.method(UNBIND.path, body),
+      reload: loadNotifySettings,
+    });
     clearRefusal();
-    settings = mergeOpenidFields(settings, result?.data);
-    loadNotifySettings();
+    settings = merged;
     pendingUnbind = new Set(before);
     showNotification(before.length ? '已在本节点解除绑定，正在同步到其他节点…' : '管理员 openid 已解除绑定', 'success');
   } catch (error) {
@@ -795,6 +824,7 @@ async function startBind() {
     const replace = Boolean(settings?.openid_set);
     if (replace && !confirm('已绑定管理员 openid。重新绑定成功后会替换它，确定吗？')) return;
     const result = await postJson('/api/notify/bind', { mode, replace });
+    clearRefusal(); // R2: a new pairing code supersedes an earlier refusal
     status = { ...(status || {}), bind: result.data };
     statusAt = Date.now();
     lastBindState = 'waiting';
@@ -824,10 +854,10 @@ export function initNotifySettings() {
   if (!panel) return;
   panel.addEventListener('input', event => {
     if (['notify-bind-any', 'notify-watch-search', 'notify-watch-id', 'notify-watch-name'].includes(event.target.id)) return;
-    if (refusal) clearRefusal();
+    clearRefusalOnEdit();
     render();
   });
-  panel.addEventListener('change', () => { if (refusal) clearRefusal(); render(); });
+  panel.addEventListener('change', () => { clearRefusalOnEdit(); render(); });
   for (const id of Object.values(FIELDS)) {
     $(id)?.addEventListener('blur', () => {
       const { errors, warnings } = validateNow();

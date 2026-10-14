@@ -454,9 +454,46 @@ export function mergeOpenidFields(settings, data) {
 
 // B2: a refusal is re-derived from the latest status on every render, and the
 // writer refusals drop once the openid controls are enabled again.
-export function liveRefusal(error, route, status) {
+// R1: `fresh` says whether `status` was fetched after the refusal. A writer
+// refusal is only dropped against fresh status; the status the panel had when
+// the 409 arrived is stale by definition.
+export function liveRefusal(error, route, status, fresh = true) {
   const r = notifyRefusal(error, status, { route });
   if (!r) return null;
-  if ((r.kind === 'not_owner' || r.kind === 'no_writer') && status && 'openid_writer' in status && openidGate(status).enabled) return null;
+  if (fresh && (r.kind === 'not_owner' || r.kind === 'no_writer') && status && 'openid_writer' in status && openidGate(status).enabled) return null;
   return r;
+}
+
+// L1: sequence tokens for overlapping loads. Only the newest request may apply
+// its response; an older one landing last is dropped.
+export function createSeq() {
+  let last = 0;
+  return { next: () => ++last, isCurrent: token => token === last, get last() { return last; } };
+}
+
+// Keep unsaved edits across a reload: take a server-side change only for
+// fields the user hasn't touched (draft still equals the previous baseline).
+export function mergeDraft(previous, next, draft, keys) {
+  const out = { ...draft };
+  for (const key of keys) {
+    if (previous?.[key] !== next[key] && draft[key] === previous?.[key]) out[key] = next[key];
+  }
+  return out;
+}
+
+// L3: credential refusals keep their recovery hint until AppID or AppSecret
+// actually changes; other refusals clear on any edit.
+const CREDENTIAL_REFUSALS = ['bad_credentials', 'credentials_missing'];
+export function refusalSurvivesEdit(kind, atRefusal, now) {
+  if (!CREDENTIAL_REFUSALS.includes(kind)) return false;
+  return (now.app_id || '').trim() === (atRefusal.app_id || '').trim()
+    && (now.app_secret || '').trim() === (atRefusal.app_secret || '').trim();
+}
+
+// L2: unbind = DELETE (with the revision) → merge the openid fields → reload
+// GET /api/notify. Returns the merged settings and the reload promise.
+export async function unbindFlow({ settings, remove, reload }) {
+  const result = await remove({ expected_openid_revision: settings.openid_revision });
+  const merged = mergeOpenidFields(settings, result?.data);
+  return { merged, reloaded: reload() };
 }

@@ -291,3 +291,85 @@ test('B2: writer refusals follow fresh status and drop when controls re-enable',
   assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', {}).kind, 'no_writer', 'unknown writer keeps the banner');
   assert.equal(liveRefusal(err({ code: 'bad_credentials' }), 'openid', local).kind, 'bad_credentials');
 });
+
+import { createSeq, mergeDraft, refusalSurvivesEdit, unbindFlow } from '../src/js/notify-state.js';
+
+test('L1: a stale settings load landing last is ignored', async () => {
+  const seq = createSeq();
+  let applied = null;
+  const load = async (data, delay) => {
+    const token = seq.next();
+    await new Promise(r => setTimeout(r, delay));
+    if (seq.isCurrent(token)) applied = data;
+  };
+  const stale = load({ openid_set: true }, 20);   // older request, lands last
+  const fresh = load({ openid_set: false }, 1);   // newer request, lands first
+  await Promise.all([stale, fresh]);
+  assert.equal(applied.openid_set, false, 'old response must not re-show 已绑定');
+});
+
+test('L2: unbind flow — DELETE then reload GET keeps AppID, 启用 and unsaved edits', async () => {
+  const calls = [];
+  const server = { config: { enabled: true, confirm_secs: 60, recovery_hold_secs: 30, cooldown_secs: 1800, critical_cooldown_secs: 600,
+    qq: { app_id: '1020304050' } }, appsecret_set: true, openid_set: true, openid_bound_at: 1, openid_revision: 4, revision: 9 };
+  const api = {
+    async del(path, body) {
+      calls.push(['DELETE', path, body]);
+      server.openid_set = false; server.openid_bound_at = null; server.openid_revision = 5;
+      return { data: { openid_set: false, openid_bound_at: null, openid_revision: 5 } };
+    },
+    async get(path) { calls.push(['GET', path]); return { data: structuredClone(server) }; },
+  };
+  const before = structuredClone(server);
+  const baseline = configToForm(before.config);
+  const draft = { ...baseline, confirm_secs: '75' };   // unsaved edit
+  let reloaded = null;
+  const { merged, reloaded: done } = await unbindFlow({
+    settings: before,
+    remove: body => api.del('/api/notify/openid', body),
+    reload: async () => { reloaded = (await api.get('/api/notify')).data; },
+  });
+  assert.equal(merged.openid_set, false);
+  assert.equal(merged.config.qq.app_id, '1020304050', 'AppID kept before the reload lands');
+  await done;
+  assert.deepEqual(calls.map(c => c.slice(0, 2)), [['DELETE', '/api/notify/openid'], ['GET', '/api/notify']]);
+  assert.deepEqual(calls[0][2], { expected_openid_revision: 4 });
+  assert.equal(reloaded.openid_set, false);
+  assert.equal(reloaded.config.qq.app_id, '1020304050');
+  assert.equal(reloaded.config.enabled, true);
+  assert.equal(reloaded.appsecret_set, true);
+  const next = configToForm(reloaded.config);
+  const kept = mergeDraft(baseline, next, draft, Object.keys(draft));
+  assert.equal(kept.confirm_secs, '75', 'unsaved edit survives the reload');
+  assert.equal(kept.app_id, '1020304050');
+  assert.equal(kept.enabled, true);
+});
+
+test('L3: credential hints survive unrelated edits until AppID or AppSecret changes', () => {
+  const at = { app_id: '1020304050', app_secret: '' };
+  for (const kind of ['bad_credentials', 'credentials_missing']) {
+    assert.equal(refusalSurvivesEdit(kind, at, { app_id: '1020304050', app_secret: '' }), true, `${kind} kept`);
+    assert.equal(refusalSurvivesEdit(kind, at, { app_id: '1020304051', app_secret: '' }), false, `${kind} AppID changed`);
+    assert.equal(refusalSurvivesEdit(kind, at, { app_id: '1020304050', app_secret: 'x' }), false, `${kind} AppSecret changed`);
+  }
+  assert.equal(refusalSurvivesEdit('already_bound', at, at), false, 'other refusals clear on any edit');
+  assert.equal(refusalSurvivesEdit('revision', at, at), false);
+});
+
+test('R1: writer refusals are only dropped against status fetched after the refusal', () => {
+  const err = data => ({ status: 409, body: { success: false, message: 'x', data } });
+  const local = { openid_writer: { node_id: 'a', is_local: true } };
+  assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'osaka-2' }), 'openid', local, false).kind, 'not_owner', 'stale local status keeps the banner');
+  assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', local, false).kind, 'no_writer');
+  assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'osaka-2' }), 'openid', local, true), null, 'fresh local status drops it');
+});
+
+test('R2: a successful 自动获取 POST clears an earlier refusal', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/js/notify.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('async function startBind'), src.indexOf('async function cancelBind'));
+  const post = body.indexOf("postJson('/api/notify/bind'");
+  const clear = body.indexOf('clearRefusal()');
+  const katch = body.indexOf('catch (error)');
+  assert.ok(post > 0 && clear > post && clear < katch, 'clearRefusal() runs after the bind POST succeeds');
+});
