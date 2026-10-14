@@ -255,6 +255,7 @@ pub struct Worker {
     held: Vec<OutItem>,
     live_watch: LiveWatch,
     live_now: Vec<live::LiveObservation>,
+    watch_channels: Vec<live::ResolvedWatchChannel>,
     limiter: commands::Limiter,
     was_membership_blocked: bool,
     /// 1b: `(membership revision, writer is local)` at the last openid pull.
@@ -472,6 +473,7 @@ impl Worker {
             held: Vec::new(),
             live_watch: LiveWatch::default(),
             live_now: Vec::new(),
+            watch_channels: Vec::new(),
             limiter: commands::Limiter::default(),
             was_membership_blocked: false,
             pull_key: None,
@@ -1032,9 +1034,23 @@ impl Worker {
         if self.authority == Authority::None || !self.capable() || now < self.next_send_at {
             return;
         }
-        let batch = self.tracker.take_batch(now, &self.policy);
+        let mut batch = self.tracker.take_batch(now, &self.policy);
         if batch.is_empty() {
             return;
+        }
+        // A linked platform can start while this notice waits for coalescing
+        // or retry. Render the current sources without queuing another event.
+        for item in &mut batch {
+            if item.kind == EventKind::StreamLive {
+                if let Some(info) = self
+                    .watch_channels
+                    .iter()
+                    .find(|channel| channel.key() == item.key)
+                    .and_then(|channel| channel.live_info(&self.live_now))
+                {
+                    item.extra.live = Some(info);
+                }
+            }
         }
         let label = match self.authority {
             Authority::Fallback => Some(format::LABEL_FALLBACK.to_string()),
@@ -1061,7 +1077,12 @@ impl Worker {
                 for item in &batch {
                     match item.item {
                         ItemKind::Alert if item.kind != EventKind::Test => {
-                            self.ledger.record_notified(&item.key, now)
+                            self.ledger.record_notified(&item.key, now);
+                            if let Some(live) = item.extra.live.as_ref() {
+                                for key in &live.episode_keys {
+                                    self.ledger.record_notified(key, now);
+                                }
+                            }
                         }
                         ItemKind::Resolved { .. } => self.ledger.record_resolved(&item.key, now),
                         _ => {}
@@ -1254,13 +1275,43 @@ impl Worker {
     /// Watch-list go-live (the single call site; see `live.rs`).
     fn channel_live(&mut self, now: u64, seen: &[live::LiveObservation]) {
         self.live_now = seen.to_vec();
+        let catalog = match super::config::WatchCatalog::load(&self.store) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                tracing::debug!("QQ 关注频道读取失败 ({:?})", error.kind());
+                return;
+            }
+        };
+        self.watch_channels = live::resolve_watch(&self.cfg.watch, &catalog);
+        let allowed: HashSet<String> = self
+            .watch_channels
+            .iter()
+            .flat_map(|channel| channel.episode_keys())
+            .collect();
+        let announced: HashSet<String> = self
+            .watch_channels
+            .iter()
+            .filter(|channel| channel.announced(&self.ledger))
+            .flat_map(|channel| channel.episode_keys())
+            .collect();
+        // A queue left on the previous sender must disappear once a peer's
+        // shared mark says that episode was delivered. This also handles
+        // legacy per-account pending items during a rolling upgrade.
+        self.tracker.discard(|item| {
+            item.kind == EventKind::StreamLive
+                && (!self.cfg.watch.enabled
+                    || !allowed.contains(&item.key)
+                    || announced.contains(&item.key))
+        });
         let can_send =
             self.cfg.enabled && matches!(self.authority, Authority::Primary | Authority::Delegate);
+        let before = self.ledger.incidents.clone();
         let tracker = &self.tracker;
         let events = self.live_watch.channel_live(
             now,
             self.started_at,
-            &self.cfg.watch,
+            self.cfg.watch.enabled,
+            &self.watch_channels,
             seen,
             &mut self.ledger,
             can_send,
@@ -1268,6 +1319,9 @@ impl Worker {
         );
         for event in events {
             self.tracker.on_event(event, &self.policy);
+        }
+        if self.ledger.incidents != before {
+            self.dirty = true;
         }
     }
 
@@ -1627,11 +1681,16 @@ impl Worker {
         let digest = self.digest(now);
         let ctx = self.render_context(now, digest.owner.clone(), None);
         let watched: HashMap<String, String> = self
-            .cfg
-            .watch
-            .channels
+            .watch_channels
             .iter()
-            .map(|channel| (channel.ident(), channel.display().to_string()))
+            .flat_map(|channel| {
+                channel.accounts.iter().map(|(p, id)| {
+                    (
+                        super::config::watch_account_ident(p, id),
+                        channel.name.clone(),
+                    )
+                })
+            })
             .collect();
         let mut live_names: Vec<(String, Option<String>)> = Vec::new();
         for obs in &self.live_now {
@@ -1849,6 +1908,28 @@ impl Worker {
     /// The `/api/notify/status` body this worker owns (no openid, ever).
     pub fn status(&self, now: u64, digest: &ClusterDigest) -> serde_json::Value {
         let ledger = &self.ledger;
+        let watched_accounts: HashSet<_> = self
+            .watch_channels
+            .iter()
+            .flat_map(|channel| {
+                channel
+                    .accounts
+                    .iter()
+                    .map(|(p, id)| super::config::watch_account_ident(p, id))
+            })
+            .collect();
+        let live_accounts: Vec<_> = self
+            .live_now
+            .iter()
+            .map(|obs| obs.ident())
+            .filter(|ident| watched_accounts.contains(ident))
+            .collect();
+        let live_entries: Vec<_> = self
+            .watch_channels
+            .iter()
+            .filter(|channel| channel.live_info(&self.live_now).is_some())
+            .map(|channel| serde_json::json!({"kind":channel.kind,"name":channel.name}))
+            .collect();
         serde_json::json!({
             "worker": "running",
             "node_id": self.node_id,
@@ -1914,14 +1995,15 @@ impl Worker {
             "watch": {
                 "enabled": self.cfg.watch.enabled,
                 "channels": self.cfg.watch.channels.len(),
-                "live": self.live_now.iter().map(|obs| obs.ident()).collect::<Vec<_>>(),
+                "live": live_accounts,
+                "live_entries": live_entries,
             },
         })
     }
 
     fn publish_status(&self, status: serde_json::Value) {
         let signature = format!(
-            "{}|{:?}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{:?}",
+            "{}|{:?}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{:?}|{}",
             self.gateway_state.0,
             self.binder.state(),
             self.authority.as_str(),
@@ -1933,6 +2015,7 @@ impl Worker {
             self.bad_credentials,
             status["cluster_quorum"],
             self.sender_block_reason,
+            status["watch"]["live_entries"],
         );
         {
             let mut shared = super::shared();

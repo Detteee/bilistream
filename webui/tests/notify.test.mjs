@@ -96,8 +96,8 @@ test('watch list: identity, validation, add/remove and patch', () => {
     { platform: 'youtube', channel_id: 'UCabc', name: '主频道' },
     { platform: 'twitch', channel_id: 'other', name: '副频道' },
   ];
-  assert.deepEqual(filterCandidates(candidates, '', list).map(c => c.channel_id), ['other']);
-  assert.deepEqual(filterCandidates(candidates, 'twitch', []).map(c => c.channel_id), ['other']);
+  assert.deepEqual(filterCandidates(candidates, '', list).map(c => c.channel_id), ['UCabc', 'other']);
+  assert.deepEqual(filterCandidates(candidates, 'twitch', []).map(c => c.channel_id), []);
   assert.deepEqual(filterCandidates(candidates, '主', []).map(c => c.channel_id), ['UCabc']);
   list = removeWatch(list, 'youtube:UCabc');
   assert.equal(list.length, 0);

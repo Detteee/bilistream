@@ -23,7 +23,17 @@ export const PUSH_MODES = ['push-ok', 'push-no-permission', 'push-rate-limited',
 // F responses carry only *_set flags, credentials_generation and codes, never
 // the AppID, AppSecret or openid value.
 export const CRED_MODES = ['cred-ok', 'cred-appid-pending', 'cred-appsecret-pending', 'cred-joining', 'cred-rebind', 'cred-offline', 'cred-conflict', 'cred-basegen', 'cred-holder-down'];
-export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES, ...PUSH_MODES, ...CRED_MODES];
+export const WATCH_MODES = ['watch', 'watch-empty', 'watch-missing', 'watch-legacy'];
+export const WATCH_CHANNELS = [
+  { name: '星海频道', platforms: ['youtube', 'twitch', 'niconico'] },
+  { name: '周末深夜一起听音乐和聊游戏的很长很长的频道名称', platforms: ['youtube', 'twitch'] },
+  { name: '晚风 & Friends', platforms: ['youtube'] },
+  ...Array.from({ length: 21 }, (_, i) => ({ name: `频道 ${String(i + 4).padStart(2, '0')}`, platforms: i % 2 ? ['youtube'] : ['youtube', 'twitch'] })),
+];
+const WATCH_LEGACY_CHANNELS = WATCH_CHANNELS.flatMap((c, i) => c.platforms.map(platform => ({
+  platform, channel_id: platform === 'youtube' ? `UCexample${i}` : platform === 'twitch' ? `example${i}` : `ch${i}`, name: c.name,
+})));
+export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES, ...PUSH_MODES, ...CRED_MODES, ...WATCH_MODES];
 
 export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   const config = {
@@ -33,6 +43,13 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   };
   let mode = 'ok';
   let revision = 1;
+  const watch = () => WATCH_MODES.includes(mode);
+  const watchFields = () => !watch() ? {} : mode === 'watch-legacy' ? { watch_candidates: WATCH_LEGACY_CHANNELS }
+    : { configured_channels: mode === 'watch-empty' ? [] : WATCH_CHANNELS };
+  const watchStatus = () => !watch() ? {} : { watch: {
+    live: mode === 'watch-empty' ? [] : mode === 'watch-legacy' ? ['youtube:UCexample0', 'twitch:historical_login'] : ['youtube:UCexample0'],
+    ...(mode === 'watch-legacy' ? {} : { live_entries: mode === 'watch-empty' ? [] : [{ kind: 'configured', name: WATCH_CHANNELS[0].name }] }),
+  } };
   const budget = () => {
     const t = now();
     if (mode === 'unknown' || mode === 'legacy') return {};
@@ -44,7 +61,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   const pending = () => (mode === 'low' || mode === 'pending-after-alert' ? ['live_end'] : []);
   const legacy = () => mode === 'legacy';
   const shownConfig = () => { if (!legacy()) return config; const { live_events_enabled, ...rest } = config; return rest; };
-  const settings = () => ({ ...(legacy() ? {} : { pending_live_events: pending() }), revision, config: shownConfig(), secret_revision: 1, openid_revision: 1, appsecret_set: true, openid_set: true, openid_bound_at: now() - 86400, ...budget() });
+  const settings = () => ({ ...(legacy() ? {} : { pending_live_events: pending() }), revision, config: shownConfig(), secret_revision: 1, openid_revision: 1, appsecret_set: true, openid_set: true, openid_bound_at: now() - 86400, ...budget(), ...watchFields() });
   const status = () => {
     const t = now();
     const last = mode === 'low' ? { ok: false, status: 'skipped_quota', at: t - 600 }
@@ -57,7 +74,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       undelivered: 0, ...(legacy() ? {} : { pending_live_events: pending() }), quota: { wakeups_left: budget().wakeup_remaining ?? null, ...budget() },
     };
   };
-  const cred = () => CRED_MODES.includes(mode);
+  const cred = () => CRED_MODES.includes(mode) || (watch() && mode !== 'watch-legacy');
   const ny = () => NY_MODES.includes(mode) || cred();
   let generation = 7;
   let lastPut = null;
@@ -127,12 +144,24 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   return {
     // Test hook: shape of the last F save (never the values).
     lastPut: () => lastPut,
-    setMode(next) { if (!NOTIFY_MODES.includes(next)) return false; mode = next; return true; },
+    setMode(next) {
+      if (!NOTIFY_MODES.includes(next)) return false;
+      if (watch() || WATCH_MODES.includes(next)) {
+        config.watch = { enabled: false, channels: next === 'watch' ? [
+          { kind: 'configured', name: WATCH_CHANNELS[0].name },
+          { kind: 'manual', name: '电台夜话', platforms: { youtube: 'UCmanualradio', twitch: 'manualradio' } },
+        ] : next === 'watch-missing' ? [{ kind: 'configured', name: '已移除的频道', unresolved: true }]
+          : next === 'watch-legacy' ? [WATCH_LEGACY_CHANNELS[0], { platform: 'twitch', channel_id: 'historical_login', name: '旧频道' }] : [],
+        ...(next !== 'watch-legacy' ? { migration_notice: next === 'watch' ? { at: now() - 3600, folded: 2 } : null } : {}) };
+      }
+      mode = next;
+      return true;
+    },
     // Returns [httpStatus, body] or null when the path is not a notify route.
     route(method, path, body = {}) {
       if (path === '/api/notify/status' && method === 'GET') {
         const push = activePush();
-        return [200, { success: true, data: { ...(ny() ? nyStatus() : status()), ...(push ? { active_push: push } : {}) } }];
+        return [200, { success: true, data: { ...(ny() ? nyStatus() : status()), ...(push ? { active_push: push } : {}), ...watchStatus() } }];
       }
       if (path !== '/api/notify') return null;
       if (method === 'GET') return [200, { success: true, data: cred() ? credSettings(settings()) : ny() ? nySettings(settings()) : settings() }];
@@ -148,10 +177,24 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       if (method === 'PUT') {
         if (body.expected_revision != null && body.expected_revision !== revision) return [409, { success: false, message: '设置已更新', data: { code: 'revision_conflict' } }];
         const patch = body.config || {};
+        if (mode === 'watch-legacy' && patch.watch?.channels?.some(c => c.kind)) {
+          return [400, { success: false, message: 'unsupported watch entry', data: { code: 'invalid_field', field: 'watch.channels' } }];
+        }
+        if (watch() && mode !== 'watch-legacy' && Array.isArray(patch.watch?.channels)) {
+          const known = mode === 'watch-empty' ? [] : WATCH_CHANNELS;
+          const previous = config.watch.channels;
+          if (patch.watch.channels.some(c => c.kind !== 'configured' && !previous.some(old => JSON.stringify(old) === JSON.stringify(c)))) {
+            return [400, { success: false, message: 'only configured channels may be added', data: { code: 'invalid_field', field: 'watch.channels' } }];
+          }
+          if (patch.watch.channels.some(c => c.kind === 'configured' && !known.some(k => k.name === c.name) && !previous.some(old => old.kind === 'configured' && old.name === c.name))) {
+            return [400, { success: false, message: 'unknown configured channel', data: { code: 'watch_unknown_channel' } }];
+          }
+        }
         if ('live_events_enabled' in patch && typeof patch.live_events_enabled !== 'boolean') {
           return [400, { success: false, message: 'invalid field', data: { code: 'invalid_field', field: 'live_events_enabled' } }];
         }
         for (const [k, v] of Object.entries(patch)) config[k] = v && typeof v === 'object' && !Array.isArray(v) ? { ...config[k], ...v } : v;
+        if (watch() && mode !== 'watch-legacy' && patch.watch) config.watch.migration_notice = null;
         revision += 1;
         return [200, { success: true, data: cred() ? credSettings(settings()) : settings() }];
       }

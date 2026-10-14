@@ -12,6 +12,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[path = "watch_config.rs"]
+mod watch;
+pub use watch::*;
+
 pub const QQ_DEFAULT_API_BASE: &str = "https://api.sgroup.qq.com";
 pub const QQ_DEFAULT_TOKEN_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 
@@ -48,51 +52,6 @@ pub struct NotifyConfig {
     /// 开播通知关注列表.
     pub watch: WatchConfig,
     pub qq: QqNotifyConfig,
-}
-
-/// Channels whose go-live sends a QQ message.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct WatchConfig {
-    pub enabled: bool,
-    pub channels: Vec<WatchChannel>,
-}
-
-/// Same identity bilistream uses in `channels.json`: platform plus the
-/// platform's channel id (YouTube `UC…`, Twitch login, Niconico slug).
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct WatchChannel {
-    /// `youtube` | `twitch` | `niconico`.
-    pub platform: String,
-    pub channel_id: String,
-    /// Display name in the message; falls back to the id.
-    pub name: String,
-}
-
-pub const WATCH_PLATFORMS: [&str; 3] = ["youtube", "twitch", "niconico"];
-pub const WATCH_MAX_CHANNELS: usize = 50;
-
-impl WatchChannel {
-    /// Stable identity, also the dedup variant: `youtube:UC…`. Twitch logins
-    /// are case-insensitive.
-    pub fn ident(&self) -> String {
-        let id = self.channel_id.trim();
-        if self.platform == "twitch" {
-            format!("{}:{}", self.platform, id.to_ascii_lowercase())
-        } else {
-            format!("{}:{}", self.platform, id)
-        }
-    }
-
-    pub fn display(&self) -> &str {
-        let name = self.name.trim();
-        if name.is_empty() {
-            self.channel_id.trim()
-        } else {
-            name
-        }
-    }
 }
 
 impl Default for NotifyConfig {
@@ -193,7 +152,7 @@ pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
             return Err("请填写 QQ 官方 https:// 地址（*.qq.com），或留空使用默认值".to_string());
         }
     }
-    validate_watch(&cfg.watch)?;
+    validate_watch_fields(&cfg.watch).map_err(|error| error.message)?;
     if let Some(proxy) = cfg.qq.proxy.as_deref().filter(|p| !p.trim().is_empty()) {
         if !["http://", "https://", "socks5://", "socks5h://"]
             .iter()
@@ -254,51 +213,6 @@ pub fn endpoint_allowed(url: &str) -> bool {
         "http" => matches!(host, "127.0.0.1" | "localhost" | "[::1]"),
         _ => false,
     }
-}
-
-/// Platform and id format of one watch entry.
-pub fn watch_channel_valid(channel: &WatchChannel) -> bool {
-    let id = channel.channel_id.trim();
-    WATCH_PLATFORMS.contains(&channel.platform.as_str())
-        && !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
-}
-
-fn validate_watch(watch: &WatchConfig) -> Result<(), String> {
-    if watch.channels.len() > WATCH_MAX_CHANNELS {
-        return Err(format!("关注列表最多 {WATCH_MAX_CHANNELS} 个频道"));
-    }
-    let mut seen = std::collections::HashSet::new();
-    for channel in &watch.channels {
-        if !WATCH_PLATFORMS.contains(&channel.platform.as_str()) {
-            return Err("关注频道的平台只能是 youtube、twitch 或 niconico".to_string());
-        }
-        let id = channel.channel_id.trim();
-        if id.is_empty()
-            || id.len() > 64
-            || !id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
-        {
-            return Err(format!(
-                "关注频道 ID 无效: {}",
-                crate::logging::safe_text(id, 40)
-            ));
-        }
-        if channel.name.chars().count() > 40 {
-            return Err("关注频道名称最多 40 个字".to_string());
-        }
-        if !seen.insert(channel.ident()) {
-            return Err(format!(
-                "关注列表里有重复频道: {}",
-                crate::logging::safe_text(id, 40)
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -373,31 +287,39 @@ mod tests {
         let mut cfg = NotifyConfig::default();
         assert!(cfg.commands_enabled);
         assert!(!cfg.watch.enabled);
-        cfg.watch.channels.push(WatchChannel {
-            platform: "youtube".into(),
-            channel_id: "UCabc_123-x".into(),
+        cfg.watch.channels.push(WatchChannel::Manual {
             name: "主频道".into(),
-        });
-        cfg.watch.channels.push(WatchChannel {
-            platform: "twitch".into(),
-            channel_id: "SomeLogin".into(),
-            name: String::new(),
+            platforms: WatchPlatforms {
+                youtube: Some("UCabc_123-x".into()),
+                twitch: Some("SomeLogin".into()),
+                ..Default::default()
+            },
         });
         validate(&cfg).unwrap();
-        assert_eq!(cfg.watch.channels[1].ident(), "twitch:somelogin");
-        assert_eq!(cfg.watch.channels[1].display(), "SomeLogin");
+        assert_eq!(cfg.watch.channels[0].ident(), "manual:主频道");
         let mut dup = cfg.clone();
-        dup.watch.channels.push(WatchChannel {
-            platform: "twitch".into(),
-            channel_id: "somelogin".into(),
+        dup.watch.channels.push(WatchChannel::Manual {
             name: "x".into(),
+            platforms: WatchPlatforms {
+                twitch: Some("somelogin".into()),
+                ..Default::default()
+            },
         });
         assert!(validate(&dup).is_err());
         let mut bad = cfg.clone();
-        bad.watch.channels[0].platform = "bilibili".into();
+        bad.watch.channels[0] = WatchChannel::Manual {
+            name: String::new(),
+            platforms: WatchPlatforms::default(),
+        };
         assert!(validate(&bad).is_err());
         let mut bad = cfg.clone();
-        bad.watch.channels[0].channel_id = "https://youtube.com/x".into();
+        bad.watch.channels[0] = WatchChannel::Manual {
+            name: "x".into(),
+            platforms: WatchPlatforms {
+                youtube: Some("https://youtube.com/x".into()),
+                ..Default::default()
+            },
+        };
         assert!(validate(&bad).is_err());
     }
 }

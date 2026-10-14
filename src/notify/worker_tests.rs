@@ -1012,13 +1012,14 @@ async fn watched_channel_going_live_sends_one_green_notice() {
     let mock = MockQq::start().await;
     let (_temp, store) = store();
     configure(&store, &mock, OPENID);
+    store.write("channels.json", json!({"channels":[{
+        "name":"主频道","aliases":[],"platforms":{"youtube":"UCwatched","twitch":"watched-login"}
+    }]})).unwrap();
     let (mut cfg, rev) = store::load_config(&store).unwrap();
     cfg.watch.enabled = true;
     cfg.watch
         .channels
-        .push(crate::notify::config::WatchChannel {
-            platform: "youtube".into(),
-            channel_id: "UCwatched".into(),
+        .push(crate::notify::config::WatchChannel::Configured {
             name: "主频道".into(),
         });
     store::save_config(&store, &cfg, rev).unwrap();
@@ -1031,19 +1032,166 @@ async fn watched_channel_going_live_sends_one_green_notice() {
         title: Some("【歌枠】".into()),
     }];
     worker.channel_live(now, &seen);
+    let mut linked = seen.clone();
+    linked.push(crate::notify::live::LiveObservation {
+        platform: "twitch".into(),
+        channel_id: "WATCHED-LOGIN".into(),
+        title: Some("同场直播".into()),
+    });
+    worker.channel_live(now + 5, &linked);
+    assert_eq!(worker.tracker.queued(), 1);
     worker.deliver(now + 11, &single_node()).await;
     let messages = mock.messages();
     assert_eq!(messages.len(), 1);
     let content = messages[0].1["content"].as_str().unwrap();
     assert!(content.starts_with("🟢 开播 · 主频道\n"), "{content}");
-    assert!(content.contains("平台 YouTube"));
+    assert!(
+        content.contains("来源 YouTube、Twitch"),
+        "send-time sources: {content}"
+    );
     assert!(messages[0].1.get("is_wakeup").is_none());
     // Still live on the next wakes: no second notice.
     for t in [30, 60, 90] {
-        worker.channel_live(now + t, &seen);
+        worker.channel_live(now + t, &linked);
         worker.deliver(now + t + 11, &single_node()).await;
     }
     assert_eq!(mock.messages().len(), 1);
+    worker.channel_live(now + 690, &[]);
+    worker.channel_live(now + 700, &linked);
+    worker.deliver(now + 711, &single_node()).await;
+    assert_eq!(
+        mock.messages().len(),
+        2,
+        "a new episode is not blocked by the alert cooldown"
+    );
+}
+
+#[tokio::test]
+async fn migrating_one_live_legacy_follow_sends_nothing_and_persists_episode_suppression() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, OPENID);
+    store.write("channels.json", json!({"channels":[{
+        "name":"canonical","aliases":[],"platforms":{"youtube":"UClegacy","twitch":"linked-login"}
+    }]})).unwrap();
+    let mut value = store.read(store::CONFIG_RECORD).unwrap().unwrap().value;
+    value["watch"] = json!({"enabled":true,"channels":[{"platform":"youtube","channel_id":"UClegacy","name":"old label"}]});
+    store.write(store::CONFIG_RECORD, value).unwrap();
+    let now = now_secs();
+    let mut ledger = NotifyLedger::default();
+    ledger.record_notified("stream.live:youtube:UClegacy", now - 60);
+    store::save_state(
+        &store,
+        &PersistedState {
+            ledger,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut worker = ready_worker(&store, "solo").await;
+    assert!(worker.cfg.watch.enabled);
+    assert_eq!(
+        worker.cfg.watch.channels,
+        [crate::notify::config::WatchChannel::Configured {
+            name: "canonical".into()
+        }]
+    );
+    // Even if a different linked source is what the new sender observes,
+    // the old per-platform delivered mark suppresses the whole channel.
+    let seen = vec![crate::notify::live::LiveObservation {
+        platform: "twitch".into(),
+        channel_id: "linked-login".into(),
+        title: None,
+    }];
+    worker.apply_digest(&single_node(), false, now);
+    worker.channel_live(now, &seen);
+    assert_eq!(worker.tracker.queued(), 0);
+    assert!(worker.dirty, "the imported channel mark must be persisted");
+    worker.deliver(now + 11, &single_node()).await;
+    assert!(mock.messages().is_empty());
+    worker.save_state(now + 11);
+    // save_state fsyncs off the async thread; restart only after that write
+    // actually completes, rather than racing its spawn_blocking task.
+    worker.save_task.take().unwrap().await.unwrap();
+    assert!(store::load_state(&store)
+        .ledger
+        .mark("stream.live:configured:canonical")
+        .is_some());
+    let mut restarted = ready_worker(&store, "solo").await;
+    restarted.apply_digest(&single_node(), false, now + 20);
+    restarted.channel_live(now + 20, &seen);
+    restarted.deliver(now + 31, &single_node()).await;
+    assert!(mock.messages().is_empty());
+}
+
+#[test]
+fn only_configured_entries_are_live_and_peer_delivery_discards_their_pending_notice() {
+    crate::install_crypto_provider();
+    let (_temp, store) = store();
+    store
+        .write(
+            "channels.json",
+            json!({"channels":[{
+                "name":"same name","aliases":[],"platforms":{"youtube":"UCconfigured"}
+            }]}),
+        )
+        .unwrap();
+    let mut config = NotifyConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    config.watch = serde_json::from_value(json!({"enabled":true,"channels":[
+        {"kind":"configured","name":"same name"},
+        {"kind":"manual","name":"same name","platforms":{"twitch":"manual-login"}}
+    ]}))
+    .unwrap();
+    store::save_config(&store, &config, None).unwrap();
+    let mut worker = Worker::new(store, "solo".into());
+    worker.authority = Authority::Primary;
+    let now = now_secs();
+    let unavailable = vec![crate::notify::live::LiveObservation {
+        platform: "twitch".into(),
+        channel_id: "manual-login".into(),
+        title: None,
+    }];
+    worker.tracker.on_event(
+        AlertEvent::new(EventKind::StreamLive, Phase::Fire, "manual", now)
+            .with_variant("same name"),
+        &worker.policy,
+    );
+    assert_eq!(worker.tracker.queued(), 1);
+    worker.channel_live(now, &unavailable);
+    assert_eq!(
+        worker.tracker.queued(),
+        0,
+        "retained manual data is never monitored"
+    );
+    let status = worker.status(now, &single_node());
+    assert_eq!(status["watch"]["live"], json!([]));
+    assert_eq!(status["watch"]["live_entries"], json!([]));
+    let seen = vec![crate::notify::live::LiveObservation {
+        platform: "youtube".into(),
+        channel_id: "UCconfigured".into(),
+        title: None,
+    }];
+    worker.channel_live(now, &seen);
+    assert_eq!(worker.tracker.queued(), 1);
+    let status = worker.status(now, &single_node());
+    assert_eq!(status["watch"]["live"], json!(["youtube:UCconfigured"]));
+    assert_eq!(
+        status["watch"]["live_entries"],
+        json!([{"kind":"configured","name":"same name"}])
+    );
+    let mut peer = NotifyLedger::default();
+    peer.record_notified("stream.live:youtube:UCconfigured", now + 1);
+    worker.ledger.join(&peer);
+    worker.channel_live(now + 2, &seen);
+    assert_eq!(
+        worker.tracker.queued(),
+        0,
+        "a peer already delivered this queued episode"
+    );
 }
 
 #[tokio::test]

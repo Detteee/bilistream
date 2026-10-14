@@ -92,11 +92,13 @@ impl EventKind {
 /// Go-live details for `stream.live`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveInfo {
-    /// `youtube` | `twitch` | `niconico`.
-    pub platform: String,
+    /// Platforms currently live, in YouTube/Twitch/Niconico order.
+    pub platforms: Vec<String>,
     /// Display name from the watch list.
     pub name: String,
     pub title: Option<String>,
+    /// Channel and legacy account marks written only after delivery.
+    pub episode_keys: Vec<String>,
 }
 
 /// Event-specific fields the renderer needs beyond node and detail.

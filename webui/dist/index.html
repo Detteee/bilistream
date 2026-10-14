@@ -2074,42 +2074,39 @@
               <div class="cluster-settings-panel-header">
                 <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
                 <span id="notify-watch-title">开播通知关注列表</span>
-                <span class="cluster-badge" id="notify-watch-count">0 个频道</span>
+                <span class="cluster-badge" id="notify-watch-count" role="status">已关注 0 / 50</span>
               </div>
               <label class="checkbox-inline notify-toggle-row">
                 <input type="checkbox" id="notify-watch-enabled" aria-describedby="notify-watch-help" disabled>
                 <span>关注的频道开播时发送 QQ 私信</span>
               </label>
-              <small class="settings-help-text" id="notify-watch-help">任一节点检测到频道开播即发送「🟢 开播」，每场直播只发一次，不会占用召回额度。</small>
+              <small class="settings-help-text" id="notify-watch-help">按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。</small>
+              <div class="notify-watch-notice" id="notify-watch-migration" role="status" hidden>
+                <span id="notify-watch-migration-text"></span>
+                <button type="button" class="btn-ghost compact-btn" id="notify-watch-migration-dismiss">知道了</button>
+              </div>
               <ul class="notify-watch-list" id="notify-watch-list" aria-labelledby="notify-watch-title"></ul>
-              <p class="settings-help-text notify-watch-empty" id="notify-watch-empty">还没有关注的频道。</p>
-              <div class="control-group notify-watch-picker">
-                <label for="notify-watch-search">从已配置的频道添加</label>
-                <input type="search" id="notify-watch-search" placeholder="搜索频道名称或 ID" autocomplete="off"
-                  aria-controls="notify-watch-results" disabled>
-                <ul class="notify-watch-results" id="notify-watch-results" aria-label="可添加的频道"></ul>
-                <small class="settings-help-text" id="notify-watch-no-results" hidden>没有匹配的已配置频道，可在下方手动添加。</small>
-              </div>
-              <div class="notify-watch-manual">
-                <div class="control-group">
-                  <label for="notify-watch-platform">平台</label>
-                  <select id="notify-watch-platform" disabled>
-                    <option value="youtube">YouTube</option>
-                    <option value="twitch">Twitch</option>
-                    <option value="niconico">Niconico</option>
-                  </select>
+              <p class="settings-help-text notify-watch-empty" id="notify-watch-empty">还没有关注的频道，点「选择频道」开始添加。</p>
+              <details class="notify-watch-picker" id="notify-watch-picker">
+                <summary class="btn-secondary" id="notify-watch-picker-toggle" aria-controls="notify-watch-picker-content">
+                  <span>选择频道</span>
+                  <span class="notify-watch-chevron" aria-hidden="true">⌄</span>
+                </summary>
+                <div class="notify-watch-picker-content" id="notify-watch-picker-content">
+                  <div class="control-group">
+                    <label for="notify-watch-search">搜索频道名称</label>
+                    <div class="notify-watch-search-row">
+                      <input type="search" id="notify-watch-search" placeholder="输入名称筛选（可选）" autocomplete="off"
+                        aria-controls="notify-watch-results" aria-describedby="notify-watch-results-count" disabled>
+                      <button type="button" class="btn-ghost" id="notify-watch-search-clear" aria-label="清空频道搜索" hidden>清空</button>
+                    </div>
+                  </div>
+                  <small class="settings-help-text" id="notify-watch-results-count" role="status"></small>
+                  <ul class="notify-watch-results" id="notify-watch-results" aria-label="频道列表"></ul>
+                  <p class="settings-help-text notify-watch-no-results" id="notify-watch-no-results" hidden></p>
                 </div>
-                <div class="control-group">
-                  <label for="notify-watch-id">频道 ID</label>
-                  <input type="text" id="notify-watch-id" class="notify-mono" spellcheck="false" autocomplete="off"
-                    placeholder="UC… / 登录名 / ch…" disabled>
-                </div>
-                <div class="control-group">
-                  <label for="notify-watch-name">显示名称（可选）</label>
-                  <input type="text" id="notify-watch-name" maxlength="40" autocomplete="off" disabled>
-                </div>
-                <button type="button" id="notify-watch-add" class="btn-secondary notify-watch-add" disabled>手动添加</button>
-              </div>
+              </details>
+              <small class="settings-help-text notify-watch-draft-help">选择或移除后，点「保存通知设置」生效。</small>
               <small class="settings-help-text is-invalid" id="notify-watch-error" role="alert" hidden></small>
             </div>
 

@@ -106,6 +106,7 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
     let (config, revision) = settings.config;
     let (secret, secret_revision) = settings.secret;
     let openid = settings.openid;
+    let catalog = notify::config::WatchCatalog::load(store)?;
     // F rule 16: the AppID is write-only like the AppSecret. The config
     // goes out with `qq.appid_set` and never with `qq.app_id`.
     let appid = config.qq.app_id.trim().to_string();
@@ -117,8 +118,24 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
         qq.insert("appid_set".into(), json!(appid_set));
         qq.insert("app_id_hint".into(), json!(app_id_hint(&appid)));
     }
+    if let Some(entries) = config
+        .pointer_mut("/watch/channels")
+        .and_then(Value::as_array_mut)
+    {
+        for entry in entries {
+            if entry["kind"] == "configured" {
+                let unresolved = entry["name"]
+                    .as_str()
+                    .is_none_or(|name| !catalog.channels.contains_key(name));
+                if unresolved {
+                    entry["unresolved"] = json!(true);
+                }
+            }
+        }
+    }
     let mut view = json!({
         "config": config,
+        "configured_channels": catalog.view(),
         "revision": revision.unwrap_or(0),
         "appsecret_set": secret.is_some(),
         // Deprecated duplicate of `appsecret_set` (panel batch 2 drops it).
@@ -146,19 +163,16 @@ pub(crate) fn settings_view_for_tests(store: &crate::storage::Store) -> std::io:
 /// Channels the 关注列表 picker offers: `channels.json` plus the channels in
 /// the current YouTube/Twitch/Niconico settings. Deduped by identity.
 pub fn watch_candidates(cfg: Option<&crate::config::Config>) -> Vec<Value> {
-    use crate::notify::config::WatchChannel;
-    let mut out: Vec<WatchChannel> = Vec::new();
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut push = |platform: &str, id: Option<&str>, name: &str| {
         let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
             return;
         };
-        let channel = WatchChannel {
-            platform: platform.to_string(),
-            channel_id: id.to_string(),
-            name: name.trim().to_string(),
-        };
-        if !out.iter().any(|known| known.ident() == channel.ident()) {
-            out.push(channel);
+        if notify::config::watch_account_valid(platform, id)
+            && seen.insert(notify::config::watch_account_ident(platform, id))
+        {
+            out.push(json!({"platform":platform,"channel_id":id,"name":name.trim()}));
         }
     };
     if let Ok(channels) = crate::config::load_channels() {
@@ -193,10 +207,7 @@ pub fn watch_candidates(cfg: Option<&crate::config::Config>) -> Vec<Value> {
             &cfg.niconico.channel_name,
         );
     }
-    out.iter()
-        .filter(|channel| crate::notify::config::watch_channel_valid(channel))
-        .map(|channel| json!(channel))
-        .collect()
+    out
 }
 
 /// Addendum A/C/D read-only fields on GET /api/notify, copied by name from
@@ -291,6 +302,8 @@ pub enum UpdateError {
     Refused(Refusal),
     /// Addendum F refusal (`credentials_conflict` …).
     Credentials(notify::credentials::SaveError),
+    /// Channel watch validation, with a stable code and field path.
+    Watch(notify::config::WatchError),
 }
 
 impl UpdateError {
@@ -299,6 +312,11 @@ impl UpdateError {
             UpdateError::Status(status, message) => reply(status, None, message),
             UpdateError::Refused(refusal) => refused(refusal),
             UpdateError::Credentials(error) => credentials_refused(error),
+            UpdateError::Watch(error) => reply(
+                StatusCode::BAD_REQUEST,
+                Some(json!({"code":error.code,"field":error.field})),
+                error.message,
+            ),
         }
     }
 
@@ -308,6 +326,7 @@ impl UpdateError {
             UpdateError::Status(status, _) => *status,
             UpdateError::Refused(_) => StatusCode::CONFLICT,
             UpdateError::Credentials(error) => credentials_status(*error),
+            UpdateError::Watch(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -336,6 +355,53 @@ fn merge(target: &mut Value, patch: &Value) {
         }
         (target, patch) => *target = patch.clone(),
     }
+}
+
+/// Shared by local and forwarded saves. Normalize legacy follows before
+/// validation, strip read-only metadata, and acknowledge migration only
+/// when this request actually saves watch preferences.
+pub(crate) fn updated_config(
+    store: &crate::storage::Store,
+    current: &NotifyConfig,
+    patch: &Value,
+) -> Result<NotifyConfig, UpdateError> {
+    let catalog = notify::config::WatchCatalog::load(store).map_err(store_error)?;
+    let mut value = serde_json::to_value(current).map_err(|_| {
+        UpdateError::Status(StatusCode::INTERNAL_SERVER_ERROR, "通知设置无法读取".into())
+    })?;
+    let mut patch = patch.clone();
+    if let Some(qq) = patch.get_mut("qq").and_then(Value::as_object_mut) {
+        qq.remove("appid_set");
+        qq.remove("app_id_hint");
+        if qq.get("app_id").is_some_and(Value::is_null) {
+            qq.remove("app_id");
+        }
+    }
+    let watch_saved = patch.get("watch").is_some();
+    if let Some(watch) = patch.get_mut("watch").and_then(Value::as_object_mut) {
+        watch.remove("migration_notice");
+    }
+    merge(&mut value, &patch);
+    notify::config::migrate_watch(&mut value, &catalog, crate::storage::now())
+        .map_err(UpdateError::Watch)?;
+    let mut parsed: NotifyConfig = serde_json::from_value(value).map_err(|_| {
+        if watch_saved {
+            UpdateError::Watch(notify::config::WatchError::invalid())
+        } else {
+            UpdateError::Status(StatusCode::BAD_REQUEST, "通知设置格式无效".into())
+        }
+    })?;
+    parsed.qq.app_id = parsed.qq.app_id.trim().to_string();
+    for channel in &mut parsed.watch.channels {
+        channel.normalize();
+    }
+    notify::config::validate_watch(&parsed.watch, &catalog, &current.watch)
+        .map_err(UpdateError::Watch)?;
+    validate(&parsed).map_err(|message| UpdateError::Status(StatusCode::BAD_REQUEST, message))?;
+    if watch_saved {
+        parsed.watch.migration_notice = None;
+    }
+    Ok(parsed)
 }
 
 /// Apply a settings update. Separate from the handler for tests; `writer`
@@ -441,17 +507,7 @@ where
     let mut next: Option<(NotifyConfig, u64)> = None;
     if let Some(patch) = patch {
         let (current, _) = store::load_config(store).map_err(store_error)?;
-        let mut value = serde_json::to_value(&current).map_err(|_| {
-            UpdateError::Status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "通知设置无法读取".to_string(),
-            )
-        })?;
-        merge(&mut value, patch);
-        let mut parsed: NotifyConfig =
-            serde_json::from_value(value).map_err(|_| bad("通知设置格式无效"))?;
-        parsed.qq.app_id = parsed.qq.app_id.trim().to_string();
-        validate(&parsed).map_err(|message| bad(&message))?;
+        let parsed = updated_config(store, &current, patch)?;
         // Compared inside the transaction: a stale revision is a 409.
         next = Some((parsed, update.expected_revision.unwrap_or(0)));
     }
@@ -1305,6 +1361,262 @@ mod tests {
             UpdateError::Refused(refusal) => refusal,
             UpdateError::Status(status, message) => panic!("{status}: {message}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    fn watch_catalog(store: &crate::storage::Store) {
+        store
+            .write(
+                "channels.json",
+                json!({"channels":[
+                    {"name":"canonical","aliases":[],"niconico_name":"nico alias",
+                     "platforms":{"youtube":"UCtest","twitch":"TestLogin","niconico":"nico-test"}}
+                ]}),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn watch_reads_and_saves_group_legacy_entries_and_keep_capability_metadata() {
+        let (_root, store) = temp_store();
+        watch_catalog(&store);
+        store
+            .write(
+                store::CONFIG_RECORD,
+                json!({"watch":{"enabled":true,"channels":[
+                    {"platform":"youtube","channel_id":"UCtest","name":"old"},
+                    {"platform":"twitch","channel_id":"TESTLOGIN","name":"old"}
+                ]}}),
+            )
+            .unwrap();
+        let first = settings_view(&store).unwrap();
+        let entries = json!([{"kind":"configured","name":"canonical"}]);
+        assert_eq!(first["config"]["watch"]["channels"], entries);
+        assert_eq!(
+            first["configured_channels"],
+            json!([{"name":"canonical","platforms":["youtube","twitch","niconico"]}])
+        );
+        assert_eq!(first["config"]["watch"]["migration_notice"]["folded"], 2);
+        // Saving other preferences leaves the notice in place.
+        let other = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"commands_enabled":false})),
+                expected_revision: first["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            other["config"]["watch"]["migration_notice"],
+            first["config"]["watch"]["migration_notice"]
+        );
+        // A stale legacy panel can still submit account entries. The saved
+        // form is grouped, the notice is acknowledged, and GET/PUT agree.
+        let saved = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"watch":{"enabled":true,"channels":[
+                {"platform":"niconico","channel_id":"nico-test","name":"nico alias"}
+            ],"migration_notice":{"at":0,"folded":999}}})),
+                expected_revision: other["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved["config"]["watch"]["channels"], entries);
+        assert!(saved["config"]["watch"]["migration_notice"].is_null());
+        assert_eq!(saved["configured_channels"], first["configured_channels"]);
+        assert_eq!(settings_view(&store).unwrap(), saved);
+    }
+
+    #[test]
+    fn an_unresolved_configured_entry_can_be_saved_or_removed_but_not_newly_added() {
+        let (_root, store) = temp_store();
+        store
+            .write(
+                store::CONFIG_RECORD,
+                json!({"watch":{"channels":[{"kind":"configured","name":"removed"}]}}),
+            )
+            .unwrap();
+        let first = settings_view(&store).unwrap();
+        assert_eq!(first["config"]["watch"]["channels"][0]["unresolved"], true);
+        let saved = update(&store, UpdateNotify {
+            config: Some(json!({"watch":{"enabled":true,"channels":first["config"]["watch"]["channels"]}})),
+            expected_revision: first["revision"].as_u64(), ..Default::default()
+        }).unwrap();
+        assert_eq!(saved["config"]["watch"]["channels"][0]["name"], "removed");
+        assert!(
+            store.read(store::CONFIG_RECORD).unwrap().unwrap().value["watch"]["channels"][0]
+                .get("unresolved")
+                .is_none()
+        );
+        let removed = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"watch":{"channels":[]}})),
+                expected_revision: saved["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let error = update(
+            &store,
+            UpdateNotify {
+                config: Some(
+                    json!({"watch":{"channels":[{"kind":"configured","name":"removed"}]}}),
+                ),
+                expected_revision: removed["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            UpdateError::Watch(notify::config::WatchError {
+                code: "watch_unknown_channel",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn historical_unmatched_watch_data_is_retained_unchanged_or_removed_only() {
+        let (_root, store) = temp_store();
+        watch_catalog(&store);
+        store
+            .write(
+                store::CONFIG_RECORD,
+                json!({"watch":{"enabled":true,"channels":[
+                    {"platform":"youtube","channel_id":"UChistorical","name":"historical"}
+                ]}}),
+            )
+            .unwrap();
+        let first = settings_view(&store).unwrap();
+        let retained = first["config"]["watch"]["channels"][0].clone();
+        assert_eq!(
+            retained,
+            json!({"kind":"manual","name":"historical","platforms":{"youtube":"UChistorical"}})
+        );
+        // An unrelated save preserves the unavailable target and notice.
+        let other = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"commands_enabled":false})),
+                expected_revision: first["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(other["config"]["watch"], first["config"]["watch"]);
+        let mut renamed = retained.clone();
+        renamed["name"] = json!("edited");
+        let mut retargeted = retained.clone();
+        retargeted["platforms"]["youtube"] = json!("UCdifferent");
+        for entry in [
+            renamed,
+            retargeted,
+            // Even a catalog account cannot be newly submitted as manual.
+            json!({"kind":"manual","name":"canonical","platforms":{"youtube":"UCtest"}}),
+            json!({"kind":"manual","name":"forged","platforms":{"youtube":"UCexternal"},"legacy":true}),
+            // A legacy flat body cannot bypass configured-only admission.
+            json!({"platform":"youtube","channel_id":"UCexternal","name":"canonical"}),
+        ] {
+            let error = update(
+                &store,
+                UpdateNotify {
+                    config: Some(json!({"watch":{"enabled":true,"channels":[entry]}})),
+                    expected_revision: other["revision"].as_u64(),
+                    app_secret: Some("synthetic-not-saved".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                UpdateError::Watch(notify::config::WatchError {
+                    code: "invalid_field",
+                    ..
+                })
+            ));
+            assert_eq!(settings_view(&store).unwrap(), other);
+            assert!(store::load_secret(&store).unwrap().0.is_none());
+        }
+        let saved = update(&store, UpdateNotify {
+            config:Some(json!({"watch":{"channels":[retained,{"kind":"configured","name":"canonical"}]}})),
+            expected_revision:other["revision"].as_u64(), ..Default::default()
+        }).unwrap();
+        assert_eq!(saved["config"]["watch"]["channels"][0], retained);
+        assert!(saved["config"]["watch"]["migration_notice"].is_null());
+        let removed = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"watch":{"channels":[]}})),
+                expected_revision: saved["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(removed["config"]["watch"]["channels"], json!([]));
+        let error = update(
+            &store,
+            UpdateNotify {
+                config: Some(json!({"watch":{"channels":[retained]}})),
+                expected_revision: removed["revision"].as_u64(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            UpdateError::Watch(notify::config::WatchError {
+                code: "invalid_field",
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn watch_refusals_use_stable_envelopes_and_do_not_write_any_settings() {
+        let (_root, store) = temp_store();
+        watch_catalog(&store);
+        let too_many: Vec<_> = (0..51).map(|i| json!({"kind":"manual","name":format!("name{i}"),"platforms":{"youtube":format!("UC{i}")}})).collect();
+        for (code, entries) in [
+            (
+                "watch_duplicate",
+                json!([
+                    {"kind":"configured","name":"canonical"},
+                    {"kind":"configured","name":"canonical"}
+                ]),
+            ),
+            (
+                "watch_unknown_channel",
+                json!([{"kind":"configured","name":"missing"}]),
+            ),
+            ("watch_too_many", json!(too_many)),
+            (
+                "invalid_field",
+                json!([{"kind":"manual","name":"","platforms":{"youtube":"UCvalid"}}]),
+            ),
+            ("invalid_field", json!([{"kind":"unknown","name":"x"}])),
+        ] {
+            let error = update(
+                &store,
+                UpdateNotify {
+                    config: Some(json!({"watch":{"enabled":true,"channels":entries}})),
+                    app_secret: Some("synthetic-unsaved-secret".into()),
+                    expected_revision: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            let (status, response) = body(error.into_response()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response["success"], false);
+            assert_eq!(response["data"]["code"], code);
+            assert_eq!(response["data"]["field"], "watch.channels");
+            assert!(store.read(store::CONFIG_RECORD).unwrap().is_none());
+            assert!(store::load_secret(&store).unwrap().0.is_none());
         }
     }
 

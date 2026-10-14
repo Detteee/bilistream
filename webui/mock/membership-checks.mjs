@@ -163,9 +163,11 @@ export async function checkClusterMembership({ base, context, command, evaluate,
   await waitFor("!document.getElementById('cluster-operation-list').textContent.includes('等待清理：node-002')");
 
   // Self-removal is forwarded; brief 404s stay pending until this server has left.
+  // Two hidden polls and two phase reads need 0.5 + 2 + 3 + 4.5 seconds
+  // before completion, so leave bounded room for request/render latency.
   await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove').click()`);
   await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove-confirm-btn').click()`);
-  await waitFor(badge('已离开集群'));
+  await waitFor(badge('已离开集群'), 20000);
   assert.equal(await evaluate("document.getElementById('cluster-member-add').classList.contains('hidden')"), true);
   assert.equal(await evaluate("localStorage.getItem('clusterMembershipOperations') === null"), true);
   await evaluate("document.getElementById('cluster-settings').scrollIntoView({block:'start'}); window.scrollBy(0,-90)");
@@ -189,7 +191,7 @@ export async function checkClusterMembership({ base, context, command, evaluate,
   await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove').click()`);
   assert.match(await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove-confirm').textContent`), /结束集群/);
   await evaluate(`${card('node-001')}.querySelector('.cluster-member-remove-confirm-btn').click()`);
-  await waitFor(badge('已离开集群'));
+  await waitFor(badge('已离开集群'), 20000);
 
   for (const secret of ['synthetic-target-password', 'synthetic-wrong-password', 'synthetic-panel-password']) {
     assert.equal(await secretsStored(secret), false, 'no password in browser storage');

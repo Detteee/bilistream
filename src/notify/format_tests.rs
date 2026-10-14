@@ -223,14 +223,15 @@ fn held_resolved_items_ride_along() {
 fn go_live_and_test_messages() {
     let mut live = item(EventKind::StreamLive, "youtube", "UCabc");
     live.extra.live = Some(LiveInfo {
-        platform: "youtube".into(),
+        platforms: vec!["youtube".into(), "twitch".into()],
         name: "主频道".into(),
         title: Some("【歌枠】Singing https://youtu.be/x".into()),
+        ..Default::default()
     });
     let text = render(&[live], &ctx());
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "🟢 开播 · 主频道");
-    assert_eq!(lines[2], "平台 YouTube");
+    assert_eq!(lines[2], "来源 YouTube、Twitch");
     assert_eq!(lines[3], "标题 【歌枠】Singing youtu[.]be/x");
     let test = render(&[item(EventKind::Test, "tokyo-1", "")], &ctx());
     assert!(test.starts_with("🧪 通知测试 · tokyo-1\n时间 "));

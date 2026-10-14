@@ -1,7 +1,9 @@
 //! Completion of a credential save already committed by the gateway holder.
 //! Local preferences stay local; only their unchanged base may be replaced.
 
-use super::{check_update, merge, reply, settings_view, store_error, UpdateError, UpdateNotify};
+use super::{
+    check_update, reply, settings_view, store_error, updated_config, UpdateError, UpdateNotify,
+};
 use crate::notify::{credentials, openid_sync::PeerLink, store, NotifyConfig, Refusal};
 use crate::storage::{Store, Transaction};
 use axum::{http::StatusCode, response::Response};
@@ -44,11 +46,8 @@ pub(crate) fn prepare(
     let Some(patch) = update.config.as_ref() else {
         return Ok(None);
     };
+    let desired = updated_config(store, &base, patch)?;
     let base = config_value(&base).map_err(store_error)?;
-    let mut desired = base.clone();
-    merge(&mut desired, patch);
-    let desired: NotifyConfig = serde_json::from_value(desired)
-        .map_err(|_| store_error(io::Error::other("通知设置无法读取")))?;
     let desired = config_value(&desired).map_err(store_error)?;
     let base = preferences(base);
     if preferences(desired.clone()) == base {

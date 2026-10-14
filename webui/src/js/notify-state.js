@@ -1,6 +1,9 @@
 // notify-state.js — pure helpers for the QQ 通知 panel (no DOM access), so
 // they can be tested with node --test.
 
+import { normalizeWatch, watchRefusal } from './notify-watch.js';
+export { WATCH_PLATFORMS, WATCH_MAX, watchKey, normalizeWatch, watchEntryError, addWatch, removeWatch, filterCandidates } from './notify-watch.js';
+
 export const DEFAULTS = Object.freeze({
   confirm_secs: 60,
   recovery_hold_secs: 30,
@@ -122,60 +125,6 @@ export function configToForm(config = {}) {
     // so it can never be dirty or sent.
     ...(liveEventsSupported(config) ? { live_events_enabled: config.live_events_enabled !== false } : {}),
   };
-}
-
-// ---------------------------------------------------------------------------
-// 开播通知关注列表
-
-export const WATCH_PLATFORMS = Object.freeze({ youtube: 'YouTube', twitch: 'Twitch', niconico: 'Niconico' });
-export const WATCH_MAX = 50;
-
-// Same identity as the server: platform + id, Twitch logins case-insensitive.
-export function watchKey(channel) {
-  const id = String(channel?.channel_id ?? '').trim();
-  return `${channel?.platform}:${channel?.platform === 'twitch' ? id.toLowerCase() : id}`;
-}
-
-export function normalizeWatch(list) {
-  return (Array.isArray(list) ? list : []).map(c => ({
-    platform: String(c.platform || ''),
-    channel_id: String(c.channel_id || '').trim(),
-    name: String(c.name || '').trim(),
-  }));
-}
-
-// Mirrors validate_watch in src/notify/config.rs. Returns '' when valid.
-export function watchEntryError(channel, list = []) {
-  if (!WATCH_PLATFORMS[channel?.platform]) return '请选择平台';
-  const id = String(channel.channel_id ?? '').trim();
-  if (!id) return '请填写频道 ID';
-  if (id.length > 64 || !/^[0-9A-Za-z_.@-]+$/.test(id)) return '频道 ID 只能包含字母、数字和 _ - . @';
-  if (String(channel.name ?? '').trim().length > 40) return '名称最多 40 个字';
-  if (list.some(c => watchKey(c) === watchKey(channel))) return '已在关注列表中';
-  if (list.length >= WATCH_MAX) return `最多关注 ${WATCH_MAX} 个频道`;
-  return '';
-}
-
-export function addWatch(list, channel) {
-  const error = watchEntryError(channel, list);
-  if (error) return { list, error };
-  return { list: [...list, ...normalizeWatch([channel])], error: '' };
-}
-
-export function removeWatch(list, key) {
-  return list.filter(c => watchKey(c) !== key);
-}
-
-// Picker results: configured channels not yet watched, matching the query
-// on name, id or platform.
-export function filterCandidates(candidates, query, list, limit = 8) {
-  const q = String(query || '').trim().toLowerCase();
-  const taken = new Set(list.map(watchKey));
-  return normalizeWatch(candidates)
-    .filter(c => !taken.has(watchKey(c)))
-    .filter(c => !q || [c.name, c.channel_id, c.platform, WATCH_PLATFORMS[c.platform]]
-      .some(v => String(v || '').toLowerCase().includes(q)))
-    .slice(0, limit);
 }
 
 function intOr(value, fallback) {
@@ -433,6 +382,8 @@ export function noWriterReason(status) {
 export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
   const data = error?.body?.data;
   const code = data && typeof data === 'object' ? data.code : null;
+  const watch = route === 'config' && watchRefusal(error);
+  if (watch) return watch;
   switch (code) {
     case 'not_owner':
       return { kind: 'not_owner', owner: data.owner || null, banner: { lead: '本节点不是发送节点，未修改管理员 openid。', text: data.owner ? `请在 ${data.owner} 上绑定或解绑。` : '请在当前发送节点上绑定或解绑。', tone: 'warn' } };

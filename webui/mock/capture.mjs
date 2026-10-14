@@ -9,6 +9,7 @@ import { createMockServer } from './server.mjs';
 import { checkPanelPasswords } from './password-checks.mjs';
 import { checkClusterMembership } from './membership-checks.mjs';
 import { checkStreamActions } from './stream-action-checks.mjs';
+import { checkNotifyWatch } from './notify-watch-checks.mjs';
 
 const server = createMockServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -47,8 +48,8 @@ try {
     if (result.type === 'exception') throw new Error(result.exceptionDetails.text);
     return result.result?.value;
   };
-  const waitFor = async expression => {
-    for (let i = 0; i < 100; i++) { if (await evaluate(`document.readyState === 'complete' && (${expression})`)) return; await new Promise(resolve => setTimeout(resolve, 100)); }
+  const waitFor = async (expression, timeoutMs = 10000) => {
+    for (let i = 0; i < Math.ceil(timeoutMs / 100); i++) { if (await evaluate(`document.readyState === 'complete' && (${expression})`)) return; await new Promise(resolve => setTimeout(resolve, 100)); }
     throw new Error(`UI condition timed out: ${expression}`);
   };
   await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
@@ -412,6 +413,7 @@ try {
     capture: process.argv[2] ? capture : async () => {},
     documentCapture: process.argv[2] ? undefined : async () => { await capture(join(root, 'docs/images/cluster-membership.png')); },
   });
+  await checkNotifyWatch({ base, context, command, evaluate, waitFor, captureDir, capture: process.argv[2] ? capture : async () => {} });
   await command('session.end', {});
 } finally {
   ws?.close(); browser.kill(); server.closeAllConnections(); server.close();

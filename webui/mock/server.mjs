@@ -201,7 +201,9 @@ export function createMockServer() {
       }
       if (req.method === 'PUT' && path === '/api/notify') {
         let text = ''; for await (const chunk of req) text += chunk;
-        const [code, body] = notify.route('PUT', path, JSON.parse(text || '{}'));
+        const patch = JSON.parse(text || '{}');
+        writes.push({ path, patch });
+        const [code, body] = notify.route('PUT', path, patch);
         return send(body, code);
       }
       if (req.method === 'POST' || req.method === 'DELETE') {

@@ -425,6 +425,216 @@ fn a_legacy_pull_gets_the_original_openid_shape_without_synced_credentials() {
     assert_eq!(modern.credentials.as_ref().unwrap().appsecret, SECRET);
 }
 
+fn binding_before_seed() -> Temp {
+    let source = temp();
+    configure(&source.1, APPID, SECRET);
+    bind(&source.1, "jp");
+    seed_if_needed(&source.1, "ny", NOW, false).unwrap();
+    source
+}
+
+fn set_binding_association(store: &Store, association: &str) {
+    let mut meta = load_meta(store).unwrap();
+    meta.openid_appid = association.into();
+    store
+        .write(CREDENTIALS_RECORD, serde_json::to_value(meta).unwrap())
+        .unwrap();
+}
+
+fn document_state(store: &Store, name: &str) -> Option<serde_json::Value> {
+    store
+        .read(name)
+        .unwrap()
+        .map(|doc| serde_json::to_value(doc).unwrap())
+}
+
+#[test]
+fn same_binding_full_copy_completes_a_legacy_binding_on_a_blank_receiver() {
+    let source = binding_before_seed();
+    let receiver = temp();
+    let full = export_copy(&source.1).unwrap();
+    let mut legacy = full.clone();
+    legacy.credentials = None;
+    let accepted = crate::notify::store::accept_copy_as(&receiver.1, &legacy, None, NOW).unwrap();
+    assert!(accepted.applied);
+    let binding = load_openid(&receiver.1).unwrap();
+    assert_eq!(binding.revision, 1);
+    assert_eq!(binding.writer, "jp");
+    assert_eq!(load_meta(&receiver.1).unwrap().generation, 0);
+    assert!(appid(&receiver.1).is_empty());
+
+    let accepted = crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW + 1).unwrap();
+    assert!(accepted.applied);
+    assert_eq!(
+        load_meta(&receiver.1).unwrap(),
+        load_meta(&source.1).unwrap()
+    );
+    assert_eq!(
+        load_openid(&receiver.1).unwrap(),
+        binding,
+        "binding revision and record remain untouched"
+    );
+    assert_eq!(appid(&receiver.1), APPID);
+    assert_eq!(secret(&receiver.1).as_deref(), Some(SECRET));
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], false);
+    assert!(
+        !load_config(&receiver.1).unwrap().0.enabled,
+        "ca stays disabled"
+    );
+    let revision = receiver
+        .1
+        .read(CREDENTIALS_RECORD)
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert!(
+        !crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW + 2)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        receiver
+            .1
+            .read(CREDENTIALS_RECORD)
+            .unwrap()
+            .unwrap()
+            .revision,
+        revision
+    );
+}
+
+#[tokio::test]
+async fn same_binding_retry_repairs_only_unknown_metadata_and_reports_a_pull_change() {
+    let source = binding_before_seed();
+    let receiver = temp();
+    let full = export_copy(&source.1).unwrap();
+    crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW).unwrap();
+    // Persist the exact deployment failure: values and keys are current,
+    // but the earlier legacy copy left the binding's association unknown.
+    set_binding_association(&receiver.1, "");
+    let before = load_meta(&receiver.1).unwrap();
+    let binding = load_openid(&receiver.1).unwrap();
+    let config = document_state(&receiver.1, crate::notify::store::CONFIG_RECORD);
+    let secret = document_state(&receiver.1, crate::notify::store::SECRETS_RECORD);
+    let revision = receiver
+        .1
+        .read(CREDENTIALS_RECORD)
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], true);
+    let cluster = MemCluster::new(&[("jp", source.1.clone()), ("ca", receiver.1.clone())]);
+
+    assert!(
+        pull_all(&receiver.1, &cluster.link("ca")).await.unwrap(),
+        "metadata-only repair must report applied so the worker reloads"
+    );
+    let mut expected = before;
+    expected.openid_appid = APPID.into();
+    assert_eq!(load_meta(&receiver.1).unwrap(), expected);
+    assert_eq!(load_openid(&receiver.1).unwrap(), binding);
+    assert_eq!(
+        document_state(&receiver.1, crate::notify::store::CONFIG_RECORD),
+        config
+    );
+    assert_eq!(
+        document_state(&receiver.1, crate::notify::store::SECRETS_RECORD),
+        secret
+    );
+    assert_eq!(
+        receiver
+            .1
+            .read(CREDENTIALS_RECORD)
+            .unwrap()
+            .unwrap()
+            .revision,
+        revision + 1
+    );
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], false);
+    assert!(
+        !pull_all(&receiver.1, &cluster.link("ca")).await.unwrap(),
+        "repair is idempotent"
+    );
+    assert_eq!(
+        receiver
+            .1
+            .read(CREDENTIALS_RECORD)
+            .unwrap()
+            .unwrap()
+            .revision,
+        revision + 1
+    );
+}
+
+#[test]
+fn same_binding_repair_never_relabels_other_bindings_or_known_associations() {
+    use crate::notify::store::CopyState;
+    let source = binding_before_seed();
+    let full = export_copy(&source.1).unwrap();
+    for case in [
+        "different_openid",
+        "known_association",
+        "stale_writer",
+        "stale_binding",
+        "unbound_local",
+        "unbound_copy",
+        "empty_proof",
+        "unusable_proof",
+        "legacy_copy",
+    ] {
+        let receiver = temp();
+        crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW).unwrap();
+        let mut incoming = full.clone();
+        if matches!(case, "stale_binding") {
+            bind(&receiver.1, "jp");
+        } else if matches!(case, "unbound_local") {
+            write_openid(
+                &receiver.1,
+                OpenidWrite {
+                    change: OpenidChange::Clear,
+                    expected: Some(1),
+                    writer: "jp".into(),
+                    now: NOW + 1,
+                },
+            )
+            .unwrap();
+            // Equal key cannot resurrect an explicitly unbound recipient.
+            incoming.revision = 2;
+        }
+        set_binding_association(
+            &receiver.1,
+            if case == "known_association" {
+                APPID2
+            } else {
+                ""
+            },
+        );
+        match case {
+            "different_openid" => incoming.openid = "SYNTHETICOTHEROPENID000000000001".into(),
+            "stale_writer" => incoming.writer = "aa".into(),
+            "unbound_copy" => {
+                incoming.state = CopyState::Unbound;
+                incoming.openid.clear();
+            }
+            "empty_proof" => incoming.credentials.as_mut().unwrap().openid_appid.clear(),
+            "unusable_proof" => incoming.credentials.as_mut().unwrap().appsecret.clear(),
+            "legacy_copy" => incoming.credentials = None,
+            _ => {}
+        }
+        let binding = load_openid(&receiver.1).unwrap();
+        let metadata = document_state(&receiver.1, CREDENTIALS_RECORD);
+        let accepted =
+            crate::notify::store::accept_copy_as(&receiver.1, &incoming, None, NOW + 2).unwrap();
+        assert!(!accepted.applied, "{case}");
+        assert_eq!(load_openid(&receiver.1).unwrap(), binding, "{case}");
+        assert_eq!(
+            document_state(&receiver.1, CREDENTIALS_RECORD),
+            metadata,
+            "{case}"
+        );
+    }
+}
+
 #[test]
 fn an_openid_bound_under_another_appid_is_reported_as_rebind_and_hidden() {
     let a = holder("a");
@@ -500,6 +710,91 @@ fn mixed_forwarded_update(store: &Store) -> crate::webui::api::notify::UpdateNot
         "base_generation": load_meta(store).unwrap().generation
     }))
     .unwrap()
+}
+
+#[tokio::test]
+async fn forwarded_credentials_and_a_legacy_watch_save_keep_watch_preferences_local() {
+    use crate::webui::api::notify::{credential_part, forwarded, strip_credentials};
+    let (a, b) = (holder("a"), temp());
+    let cluster = MemCluster::new(&[("a", a.1.clone()), ("b", b.1.clone())]);
+    *cluster.holder.lock().unwrap() = Some("a".into());
+    push_all(&a.1, &cluster.link("a"), FAST).await.unwrap();
+    b.1.write(
+        "channels.json",
+        serde_json::json!({"channels":[{
+            "name":"canonical","aliases":[],"platforms":{"youtube":"UCwatch","twitch":"watchlogin"}
+        }]}),
+    )
+    .unwrap();
+    let mut update = mixed_forwarded_update(&b.1);
+    update.config.as_mut().unwrap()["watch"] = serde_json::json!({"enabled":true,"channels":[
+        {"platform":"youtube","channel_id":"UCwatch","name":"old"},
+        {"platform":"twitch","channel_id":"WATCHLOGIN","name":"old"}
+    ]});
+    let request = credential_part(&b.1, &update).unwrap().unwrap();
+    strip_credentials(&mut update);
+    let prepared = forwarded::prepare(&b.1, &update, "b", "a").unwrap();
+    let outcome = save(
+        &b.1,
+        &cluster.link("b"),
+        &Holder::Peer("a".into()),
+        &request,
+        "b",
+        NOW,
+    )
+    .await
+    .unwrap();
+    let complete = forwarded::complete(
+        b.1.clone(),
+        &cluster.link("b"),
+        "a",
+        outcome,
+        prepared,
+        |_| Ok(()),
+    )
+    .await;
+    assert!(complete.cache_ready);
+    assert!(!complete.local_settings_pending);
+    assert_eq!(complete.view["credentials_generation"], outcome.generation);
+    assert_eq!(
+        complete.view["config"]["watch"]["channels"],
+        serde_json::json!([{"kind":"configured","name":"canonical"}])
+    );
+    assert!(complete.view["config"]["watch"]["enabled"]
+        .as_bool()
+        .unwrap());
+    assert!(complete.view["config"]["watch"]["migration_notice"].is_null());
+    assert_eq!(
+        complete.view["configured_channels"],
+        serde_json::json!([{"name":"canonical","platforms":["youtube","twitch"]}])
+    );
+    assert_eq!(secret(&a.1).as_deref(), Some(SECRET2));
+    assert_eq!(secret(&b.1).as_deref(), Some(SECRET2));
+    assert!(!load_config(&a.1).unwrap().0.watch.enabled);
+    assert!(load_config(&a.1).unwrap().0.watch.channels.is_empty());
+}
+
+#[test]
+fn invalid_watch_input_is_rejected_during_forward_preflight_before_credentials_commit() {
+    use crate::webui::api::notify::{forwarded, strip_credentials, UpdateError};
+    let b = holder("b");
+    let mut update = mixed_forwarded_update(&b.1);
+    update.config.as_mut().unwrap()["watch"] = serde_json::json!({"enabled":true,"channels":[
+        {"kind":"configured","name":"not-configured"}
+    ]});
+    strip_credentials(&mut update);
+    let before = snapshot(&b.1);
+    let Err(error) = forwarded::prepare(&b.1, &update, "b", "a") else {
+        panic!("invalid watch was accepted");
+    };
+    assert!(matches!(
+        error,
+        UpdateError::Watch(crate::notify::config::WatchError {
+            code: "watch_unknown_channel",
+            ..
+        })
+    ));
+    assert_eq!(snapshot(&b.1), before);
 }
 
 #[tokio::test]

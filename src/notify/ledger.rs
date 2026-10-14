@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const MAX_INCIDENT_MARKS: usize = 32;
+/// Fifty channel episodes plus their three per-account compatibility marks
+/// must not evict each other (or displace fault-incident history).
+pub const MAX_WATCH_MARKS: usize = super::config::WATCH_MAX_CHANNELS * 4;
 /// Shared active-message budget. Below the unverified-bot limits printed in
 /// the QQ docs (30/min bot-wide, 20/min per user, 1000/day), which are
 /// themselves unconfirmed.
@@ -204,7 +207,26 @@ impl NotifyLedger {
                 .cmp(&a.notified_at)
                 .then_with(|| a.key.cmp(&b.key))
         });
-        self.incidents.truncate(MAX_INCIDENT_MARKS);
+        let (mut incidents, mut watch) = (0, 0);
+        self.incidents.retain(|mark| {
+            let watch_key = mark
+                .key
+                .strip_prefix("stream.live:")
+                .and_then(|key| key.split_once(':'))
+                .is_some_and(|(kind, name)| {
+                    matches!(
+                        kind,
+                        "configured" | "manual" | "youtube" | "twitch" | "niconico"
+                    ) && !name.is_empty()
+                });
+            let (count, max) = if watch_key {
+                (&mut watch, MAX_WATCH_MARKS)
+            } else {
+                (&mut incidents, MAX_INCIDENT_MARKS)
+            };
+            *count += 1;
+            *count <= max
+        });
     }
 
     fn minute_count(&self, now: u64) -> usize {
@@ -635,6 +657,44 @@ mod tests {
         assert_eq!(ledger.incidents.len(), MAX_INCIDENT_MARKS);
         assert!(ledger.mark("key-39").is_some());
         assert!(ledger.mark("key-0").is_none());
+    }
+
+    #[test]
+    fn fifty_watch_episodes_keep_all_aliases_without_displacing_fault_marks() {
+        let mut ledger = NotifyLedger::default();
+        for i in 0..super::super::config::WATCH_MAX_CHANNELS {
+            for kind in ["configured", "youtube", "twitch", "niconico"] {
+                ledger.record_notified(&format!("stream.live:{kind}:channel-{i}"), 100 + i as u64);
+            }
+        }
+        for i in 0..40 {
+            ledger.record_notified(&format!("cluster.node_down:node-{i}"), 300 + i);
+        }
+        assert_eq!(ledger.incidents.len(), MAX_WATCH_MARKS + MAX_INCIDENT_MARKS);
+        for i in 0..super::super::config::WATCH_MAX_CHANNELS {
+            for kind in ["configured", "youtube", "twitch", "niconico"] {
+                assert!(ledger
+                    .mark(&format!("stream.live:{kind}:channel-{i}"))
+                    .is_some());
+            }
+        }
+        assert!(ledger.mark("cluster.node_down:node-39").is_some());
+        assert!(ledger.mark("cluster.node_down:node-0").is_none());
+        let mut newer = NotifyLedger::default();
+        for i in 0..60 {
+            newer.record_notified(&format!("stream.live:manual:new-{i}"), 500 + i);
+            // Unknown stream.live variants share the normal bounded history.
+            newer.record_notified(&format!("stream.live:unknown:{i}"), 600 + i);
+        }
+        let mut left = ledger.clone();
+        left.join(&newer);
+        let mut right = newer;
+        right.join(&ledger);
+        assert_eq!(left, right);
+        assert_eq!(left.incidents.len(), MAX_WATCH_MARKS + MAX_INCIDENT_MARKS);
+        let once = left.clone();
+        left.join(&right);
+        assert_eq!(left, once);
     }
 
     #[test]

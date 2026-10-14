@@ -326,9 +326,15 @@ fn summary_line(item: &OutItem, ctx: &RenderContext) -> String {
                 .extra
                 .live
                 .as_ref()
-                .map(|live| platform_name(&live.platform).to_string())
+                .map(|live| {
+                    live.platforms
+                        .iter()
+                        .map(|p| platform_name(p))
+                        .collect::<Vec<_>>()
+                        .join("、")
+                })
                 .unwrap_or_default();
-            format!("· 🟢 开播 {} · {}", subject(item, ctx), platform)
+            format!("· 🟢 开播 {} · 来源 {}", subject(item, ctx), platform)
         }
         ItemKind::Alert => {
             let mut line = format!("· {} {} {}", marker(item), title(item), subject(item, ctx));
@@ -548,9 +554,14 @@ fn single(
         (_, EventKind::StreamLive) => {
             parts.first = format!("{label}🟢 开播 · {subject}");
             if let Some(live) = &item.extra.live {
-                parts
-                    .body
-                    .push(format!("平台 {}", platform_name(&live.platform)));
+                parts.body.push(format!(
+                    "来源 {}",
+                    live.platforms
+                        .iter()
+                        .map(|p| platform_name(p))
+                        .collect::<Vec<_>>()
+                        .join("、")
+                ));
                 if let Some(stream_title) = live.title.as_deref().filter(|t| !t.trim().is_empty()) {
                     parts
                         .body

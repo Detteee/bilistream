@@ -43,8 +43,11 @@ pub(crate) fn settings_records(
         super::credentials::CREDENTIALS_RECORD,
     ];
     let mut records = store.read_many(&names)?;
-    if records.get(CONFIG_RECORD).is_some_and(has_plain_openid) {
-        migrate_plain_openid(store)?;
+    if records
+        .get(CONFIG_RECORD)
+        .is_some_and(needs_settings_migration)
+    {
+        migrate_settings(store)?;
         records = store.read_many(&names)?;
     }
     Ok(records)
@@ -457,7 +460,7 @@ pub(crate) fn export_copy_with(
 /// What a received copy did here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CopyOutcome {
-    /// The copy was newer and replaced the local record.
+    /// The recipient, credential set or binding association changed.
     pub applied: bool,
     /// Local logical revision afterwards.
     pub revision: u64,
@@ -548,9 +551,30 @@ where
             if copy.revision == 0 || copy.key() <= (current.revision, current.writer.as_str()) {
                 // New credentials cannot relabel a retained, higher-revision
                 // openid as belonging to their AppID. A mismatch is rebind.
-                super::credentials::associate_binding_tx(tx, &current_appid)?;
+                // A legacy copy may have delivered this exact binding before
+                // credentials arrived. Its unknown association can be filled
+                // by explicit proof for the same bound recipient, even when
+                // the credentials generation itself was already imported.
+                let same_binding = copy.revision > 0
+                    && copy.key() == (current.revision, current.writer.as_str())
+                    && copy.state == CopyState::Bound
+                    && current
+                        .openid
+                        .as_ref()
+                        .is_some_and(|openid| openid.expose() == copy.openid);
+                let proof = copy
+                    .credentials
+                    .as_ref()
+                    .filter(|set| {
+                        current_appid.is_empty()
+                            && same_binding
+                            && set.usable()
+                            && !set.openid_appid.is_empty()
+                    })
+                    .map(|set| set.openid_appid.as_str());
+                super::credentials::associate_binding_tx(tx, proof.unwrap_or(&current_appid))?;
                 CopyOutcome {
-                    applied: credentials,
+                    applied: credentials || proof.is_some(),
                     revision: current.revision,
                     restamped,
                 }
@@ -628,13 +652,41 @@ fn has_plain_openid(doc: &Document) -> bool {
     doc.value.pointer("/qq/admin_openid").is_some()
 }
 
+fn needs_settings_migration(doc: &Document) -> bool {
+    has_plain_openid(doc) || super::config::has_legacy_watch(&doc.value)
+}
+
+/// Migrate local preferences in the same transaction as any legacy binding.
+/// The roster is read inside this transaction so an account migration never
+/// uses half of a concurrent channel edit. No credential generation changes.
+fn migrate_settings(store: &Store) -> io::Result<bool> {
+    store.transaction(|tx| {
+        let openid_changed = migrate_plain_openid_tx(tx)?;
+        let Some(mut doc) = tx.read(CONFIG_RECORD)? else {
+            return Ok(openid_changed);
+        };
+        if !super::config::has_legacy_watch(&doc.value) {
+            return Ok(openid_changed);
+        }
+        let catalog = super::config::WatchCatalog::from_value(
+            tx.read("channels.json")?.map(|doc| doc.value),
+        )?;
+        let changed = super::config::migrate_watch(&mut doc.value, &catalog, crate::storage::now())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.message))?;
+        if changed {
+            tx.write(CONFIG_RECORD, doc.value)?;
+        }
+        Ok(openid_changed || changed)
+    })
+}
+
 pub fn load_config(store: &Store) -> io::Result<(NotifyConfig, Option<u64>)> {
     let Some(mut doc) = store.read(CONFIG_RECORD)? else {
         return Ok((NotifyConfig::default(), None));
     };
-    if has_plain_openid(&doc) {
-        // First load after an upgrade (or of a legacy document): seal it.
-        migrate_plain_openid(store)?;
+    if needs_settings_migration(&doc) {
+        // First load after an upgrade: seal the binding and group old follows.
+        migrate_settings(store)?;
         match store.read(CONFIG_RECORD)? {
             Some(migrated) => doc = migrated,
             None => return Ok((NotifyConfig::default(), None)),
@@ -914,6 +966,87 @@ mod tests {
     }
 
     const MARKER: &str = "synthetic-notify-secret-marker";
+
+    #[test]
+    fn legacy_watch_migration_is_local_atomic_and_idempotent_on_settings_load() {
+        let temp = TempStore::new();
+        let store = &temp.1;
+        store
+            .write(
+                "channels.json",
+                serde_json::json!({"channels":[{
+                    "name":"canonical","niconico_name":"display alias","aliases":[],
+                    "platforms":{"youtube":"UCtest","twitch":"testlogin","niconico":"nico-test"}
+                }]}),
+            )
+            .unwrap();
+        let mut value = serde_json::to_value(NotifyConfig::default()).unwrap();
+        value["enabled"] = Value::Bool(true);
+        value["watch"] = serde_json::json!({"enabled":true,"channels":[
+            {"platform":"youtube","channel_id":"UCtest","name":"old"},
+            {"platform":"niconico","channel_id":"nico-test","name":"display alias"}
+        ]});
+        let before_revision = store.write(CONFIG_RECORD, value).unwrap();
+        save_secret(store, Some(MARKER), None).unwrap();
+        let before_secret = store.read(SECRETS_RECORD).unwrap().unwrap();
+        let before_credentials = store
+            .read(super::super::credentials::CREDENTIALS_RECORD)
+            .unwrap();
+        let settings = load_settings(store).unwrap();
+        assert!(settings.config.0.enabled);
+        assert!(settings.config.0.watch.enabled);
+        assert_eq!(
+            settings.config.0.watch.channels,
+            [super::super::config::WatchChannel::Configured {
+                name: "canonical".into()
+            }]
+        );
+        assert_eq!(
+            settings
+                .config
+                .0
+                .watch
+                .migration_notice
+                .as_ref()
+                .unwrap()
+                .folded,
+            2
+        );
+        assert!(settings.config.1.unwrap() > before_revision);
+        assert_eq!(settings.secret.0.unwrap().expose(), MARKER);
+        let after_secret = store.read(SECRETS_RECORD).unwrap().unwrap();
+        assert_eq!(
+            (after_secret.value, after_secret.revision),
+            (before_secret.value, before_secret.revision)
+        );
+        assert_eq!(
+            store
+                .read(super::super::credentials::CREDENTIALS_RECORD)
+                .unwrap()
+                .map(|doc| (doc.value, doc.revision)),
+            before_credentials.map(|doc| (doc.value, doc.revision))
+        );
+        let again = load_config(store).unwrap();
+        assert_eq!(again, settings.config);
+        assert_eq!(load_settings(store).unwrap().config, again);
+    }
+
+    #[test]
+    fn empty_disabled_watch_preferences_do_not_gain_a_migration_or_revision() {
+        let temp = TempStore::new();
+        let revision = temp
+            .1
+            .write(
+                CONFIG_RECORD,
+                serde_json::json!({"watch":{"enabled":false,"channels":[]}}),
+            )
+            .unwrap();
+        let settings = load_settings(&temp.1).unwrap();
+        assert!(!settings.config.0.watch.enabled);
+        assert!(settings.config.0.watch.channels.is_empty());
+        assert!(settings.config.0.watch.migration_notice.is_none());
+        assert_eq!(settings.config.1, Some(revision));
+    }
 
     #[test]
     fn secret_round_trips_with_revision_checks_and_redacted_debug() {

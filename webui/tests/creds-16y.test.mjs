@@ -178,7 +178,8 @@ test('leak audit: F responses carry flags only, never a credential value', () =>
 test('panel wiring: base_generation on every save, AppSecret cleared after every request, AppID write-only, copy', async () => {
   const js = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
-  assert.match(js, /const body = saveBody\(settings, formToPatch\(form, baseline\), \{ secret, openid \}\);/);
+  assert.match(js, /const patch = formToPatch\(form, baseline\);/);
+  assert.match(js, /const body = saveBody\(settings, patch, \{ secret, openid \}\);/);
   assert.match(js, /finally \{[\s\S]{0,200}\$\('notify-app-secret'\)\.value = '';/);
   assert.match(js, /if \(appIdWriteOnly\(data\)\) baseline\.app_id = '';/);
   assert.match(js, /action\.target === 'refresh'\) \{ clearRefusal\(\); loadNotifySettings\(\); return; \}/);

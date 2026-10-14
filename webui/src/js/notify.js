@@ -6,10 +6,14 @@ import { showNotification, setButtonLoading, reconcileChildren } from './dom.js'
 import { isViewActive } from './state.js';
 import { LIVE_EVENTS_TICK_MS, STATUS_STALE_MS, activePushValueInto, renderLiveEventsInto } from './live-events-view.js';
 import {
-  DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
+  WATCH_PLATFORMS, WATCH_MAX, filterCandidates, groupedWatchSupported,
+  toggleWatchCandidate, watchCatalog, watchForSave, watchKey, watchMigrationText, watchRowLive, watchRows, watchSelection,
+} from './notify-watch.js';
+import {
+  DEFAULTS, bindView, configToForm, errorCopy,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
-  middleTruncate, removeWatch, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
-  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, watchKey, nodeSignature,
+  middleTruncate, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
+  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature,
   credentialsSync, baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, appIdWriteOnly, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
   APPSECRET_HELP_SYNC, APPID_HELP_SYNC, APPID_EMPTY, pendingSettingsForm, LOCAL_SETTINGS_PENDING_TEXT,
 } from './notify-state.js';
@@ -45,6 +49,7 @@ let lastBindState = 'idle';
 let bindTimer = null;
 let watchDraft = [];    // 关注列表 being edited
 let watchSig = '';      // inputs of the last renderWatch(); skip identical re-renders
+let watchMigrationDismissed = false;
 let statusSig = '';     // same for renderStatus()
 let liveEventsError = '';  // inline invalid_field copy for the 开播/下播 switch
 const watchChips = new Map();    // watchKey → <li>, reused so focus survives
@@ -74,8 +79,6 @@ function fillForm(form) {
   if ($('notify-live-events') && 'live_events_enabled' in form) $('notify-live-events').checked = form.live_events_enabled;
   if ($('notify-watch-enabled')) $('notify-watch-enabled').checked = form.watch_enabled;
   watchDraft = JSON.parse(form.watch_channels || '[]');
-  watchChips.clear();
-  watchOptions.clear();
   watchSig = '';
   const advanced = $('notify-advanced');
   if (advanced && (form.token_url || form.api_base)) advanced.open = true;
@@ -194,7 +197,7 @@ function row(label, value, { dot = '', title = '', badge = '', valueClass = '', 
 }
 
 function watchChip(channel) {
-  const key = watchKey(channel);
+  const key = channel.key;
   let item = watchChips.get(key);
   if (!item) {
     item = document.createElement('li');
@@ -203,19 +206,17 @@ function watchChip(channel) {
     const label = document.createElement('span');
     label.className = 'notify-watch-name';
     const name = document.createElement('span');
-    name.textContent = channel.name || channel.channel_id;
+    name.className = 'notify-watch-label';
     const badge = document.createElement('span');
     badge.className = 'cluster-badge active notify-watch-live';
     badge.textContent = '直播中';
     label.append(name, ' ', badge);
     const meta = document.createElement('span');
-    meta.className = 'notify-watch-meta notify-mono';
-    meta.textContent = `${WATCH_PLATFORMS[channel.platform] || channel.platform} · ${channel.channel_id}`;
+    meta.className = 'notify-watch-meta';
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'btn-ghost compact-btn notify-watch-remove';
     remove.textContent = '移除';
-    remove.setAttribute('aria-label', `从关注列表移除 ${channel.name || channel.channel_id}`);
     remove.addEventListener('click', () => removeFromWatch(key));
     const text = document.createElement('span');
     text.className = 'notify-watch-text';
@@ -223,9 +224,19 @@ function watchChip(channel) {
     item.append(text, remove);
     watchChips.set(key, item);
   }
-  const live = (status?.watch?.live || []).includes(key);
+  item.querySelector('.notify-watch-label').textContent = channel.name;
+  const platformText = channel.platforms.map(p => WATCH_PLATFORMS[p]).join('、');
+  item.querySelector('.notify-watch-meta').textContent = channel.missing
+    ? '频道管理中已无此频道，暂不检查；可移除。'
+    : channel.unavailable ? '旧关注项未关联频道管理，请先添加对应频道或移除。' : platformText;
+  item.dataset.unavailable = String(channel.unavailable);
   const badge = item.querySelector('.notify-watch-live');
-  badge.hidden = !live;
+  const live = watchRowLive(channel, status);
+  badge.hidden = !live && !channel.unavailable;
+  badge.classList.toggle('sync-warning', channel.unavailable);
+  badge.classList.toggle('active', !channel.unavailable);
+  badge.textContent = channel.missing ? '未找到' : channel.unavailable ? '不可用' : '直播中';
+  item.querySelector('.notify-watch-remove').setAttribute('aria-label', `从关注列表移除 ${channel.name}${channel.historical ? '（旧关注项）' : ''}`);
   item.querySelector('.notify-watch-remove').disabled = busy || !settings;
   return item;
 }
@@ -235,77 +246,123 @@ function watchOption(channel) {
   let li = watchOptions.get(key);
   if (!li) {
     li = document.createElement('li');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'notify-watch-option';
+    li.dataset.key = key;
+    const label = document.createElement('label');
+    label.className = 'notify-watch-option';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const text = document.createElement('span');
+    text.className = 'notify-watch-text';
     const name = document.createElement('span');
     name.className = 'notify-watch-name';
-    name.textContent = channel.name || channel.channel_id;
     const meta = document.createElement('span');
-    meta.className = 'notify-watch-meta notify-mono';
-    meta.textContent = `${WATCH_PLATFORMS[channel.platform]} · ${channel.channel_id}`;
-    btn.append(name, meta);
-    btn.setAttribute('aria-label', `关注 ${channel.name || channel.channel_id}（${WATCH_PLATFORMS[channel.platform]}）`);
-    btn.addEventListener('click', () => {
-      if (addToWatch(channel)) $('notify-watch-search')?.focus();
+    meta.className = 'notify-watch-meta';
+    const selected = document.createElement('span');
+    selected.className = 'notify-watch-selected';
+    text.append(name, meta);
+    label.append(input, text, selected);
+    input.addEventListener('change', () => {
+      const candidate = watchCatalog(settings).find(c => watchKey(c) === key);
+      if (!candidate) return;
+      const result = toggleWatchCandidate(watchDraft, candidate, input.checked);
+      setWatchError(result.error);
+      if (!result.error) {
+        watchDraft = result.list;
+        clearRefusalOnEdit();
+      }
+      watchSig = ''; // also restore a refused checkbox without replacing it
+      render();
     });
-    li.append(btn);
+    li.append(label);
     watchOptions.set(key, li);
   }
-  li.firstChild.disabled = busy || !settings;
+  const selected = watchSelection(channel, watchDraft);
+  const label = li.firstChild;
+  const input = label.querySelector('input');
+  input.checked = selected.checked && !selected.partial;
+  input.indeterminate = selected.partial;
+  input.disabled = busy || !settings || (watchDraft.length >= WATCH_MAX && !selected.checked);
+  label.classList.toggle('is-selected', selected.checked);
+  label.classList.toggle('is-disabled', input.disabled);
+  label.querySelector('.notify-watch-name').textContent = channel.name;
+  label.querySelector('.notify-watch-meta').textContent = channel.platforms.map(p => WATCH_PLATFORMS[p]).join('、');
+  label.querySelector('.notify-watch-selected').textContent = selected.partial ? '部分已关注' : selected.checked ? '已关注' : '';
   return li;
 }
 
 // After 移除, keep keyboard users in the list: next chip's 移除, else the
 // previous one, else the search box.
 function removeFromWatch(key) {
-  const index = watchDraft.findIndex(channel => watchKey(channel) === key);
-  watchDraft = removeWatch(watchDraft, key);
+  const rows = watchRows(watchDraft, watchCatalog(settings));
+  const index = rows.findIndex(channel => channel.key === key);
+  const keys = new Set(rows[index]?.members.map(watchKey) || []);
+  watchDraft = watchDraft.filter(c => !keys.has(watchKey(c)));
   watchChips.delete(key);
+  setWatchError('');
+  clearRefusalOnEdit();
   render();
-  const next = watchDraft[index] || watchDraft[index - 1];
-  const target = next ? watchChips.get(watchKey(next))?.querySelector('.notify-watch-remove') : $('notify-watch-search');
+  const remaining = watchRows(watchDraft, watchCatalog(settings));
+  const next = remaining[index] || remaining[index - 1];
+  const target = next ? watchChips.get(next.key)?.querySelector('.notify-watch-remove') : $('notify-watch-picker-toggle');
   target?.focus();
 }
 
-function addToWatch(channel) {
-  const { list, error } = addWatch(watchDraft, channel);
+function setWatchError(error) {
   const errEl = $('notify-watch-error');
   if (errEl) {
     errEl.textContent = error;
     errEl.hidden = !error;
   }
-  if (error) return false;
-  watchDraft = list;
-  render();
-  return true;
 }
 
 function renderWatch() {
   const listEl = $('notify-watch-list');
   if (!listEl) return;
   const disabled = busy || !settings;
-  for (const id of ['notify-watch-search', 'notify-watch-platform', 'notify-watch-id', 'notify-watch-name', 'notify-watch-add']) {
+  for (const id of ['notify-watch-search', 'notify-watch-search-clear']) {
     const el = $(id);
     if (el) el.disabled = disabled;
   }
+  $('notify-watch-picker-toggle')?.setAttribute('aria-disabled', String(disabled));
   // Only rebuild when something the list shows changed (F1): typing in other
   // fields and status polls must not move focus.
   const query = $('notify-watch-search')?.value || '';
-  const sig = JSON.stringify([watchDraft, settings?.watch_candidates || [], query, status?.watch?.live || [], disabled]);
+  const catalog = watchCatalog(settings);
+  const migration = watchMigrationText(settings);
+  const sig = JSON.stringify([watchDraft, catalog, query, status?.watch, disabled, migration, watchMigrationDismissed, groupedWatchSupported(settings)]);
   if (sig === watchSig) return;
   watchSig = sig;
-  reconcileChildren(listEl, watchDraft.map(watchChip));
+  const rows = watchRows(watchDraft, catalog);
+  reconcileChildren(listEl, rows.map(watchChip));
+  const rowKeys = new Set(rows.map(c => c.key));
+  for (const key of watchChips.keys()) if (!rowKeys.has(key)) watchChips.delete(key);
+  const catalogKeys = new Set(catalog.map(watchKey));
+  for (const key of watchOptions.keys()) if (!catalogKeys.has(key)) watchOptions.delete(key);
   const empty = $('notify-watch-empty');
-  if (empty) empty.hidden = watchDraft.length > 0;
+  if (empty) empty.hidden = rows.length > 0;
   const count = $('notify-watch-count');
-  if (count) count.textContent = `${watchDraft.length} 个频道`;
+  setBadge(count, `已关注 ${rows.length} / ${WATCH_MAX}`, watchDraft.length >= WATCH_MAX ? 'sync-warning' : '');
+  $('notify-watch-help').textContent = groupedWatchSupported(settings)
+    ? '按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。'
+    : '按频道名称选择关注项。当前节点暂不支持跨平台合并通知。';
+  $('notify-watch-search-clear').hidden = !query;
+  $('notify-watch-migration-text').textContent = migration;
+  $('notify-watch-migration').hidden = !migration || watchMigrationDismissed;
   const results = $('notify-watch-results');
   if (results) {
-    const matches = filterCandidates(settings?.watch_candidates || [], query, watchDraft);
+    const matches = filterCandidates(catalog, query);
     reconcileChildren(results, matches.map(watchOption));
+    const selected = catalog.filter(c => watchSelection(c, watchDraft).checked).length;
+    const countText = query.trim() ? `找到 ${matches.length} 个频道` : `共 ${catalog.length} 个频道 · 已选 ${selected} 个`;
+    const resultsCount = $('notify-watch-results-count');
+    if (resultsCount.textContent !== countText) resultsCount.textContent = countText;
     const none = $('notify-watch-no-results');
-    if (none) none.hidden = matches.length > 0;
+    if (none) {
+      none.hidden = matches.length > 0;
+      none.textContent = !settings ? '正在读取频道列表…' : !catalog.length
+        ? '还没有可关注的频道，请先在频道管理中添加频道。'
+        : '没有匹配的频道，可清空搜索，或先在频道管理中添加频道。';
+    }
   }
 }
 
@@ -712,6 +769,7 @@ function renderAlert(alert) {
 
 function actionTarget(target) {
   if (target === 'credentials') return !$('notify-app-id').value.trim() ? $('notify-app-id') : $('notify-app-secret');
+  if (target === 'watch-remove') return $('notify-watch-list')?.querySelector('.notify-watch-remove') || $('notify-watch-picker-toggle');
   return $(target);
 }
 
@@ -753,8 +811,15 @@ function setStatus(data, token) {
   return true;
 }
 
-function applySettings(data, { force }) {
+function applySettings(data, { force, keepCatalog = false }) {
   const previous = baseline;
+  // Older PUT responses omit the read-only picker catalog. A mutation keeps
+  // the loaded catalog; a fresh GET can still change the reported capability.
+  if (keepCatalog) {
+    for (const key of ['configured_channels', 'watch_candidates']) {
+      if (!(key in data) && Array.isArray(settings?.[key])) data = { ...data, [key]: settings[key] };
+    }
+  }
   settings = data;
   baseline = configToForm(data.config);
   // F rev 3: the AppID is write-only; its value never goes in the input.
@@ -812,7 +877,17 @@ async function save() {
     && !confirm('关闭后集群节点故障将不再发送 QQ 私信，确定吗？')) return;
   // One PUT for the whole save (F rev 2: all-or-nothing), base_generation
   // on every save whenever the backend reports a generation.
-  const body = saveBody(settings, formToPatch(form, baseline), { secret, openid });
+  const patch = formToPatch(form, baseline);
+  if (patch.watch) {
+    const encoded = watchForSave(watchDraft, settings);
+    if (encoded.error) {
+      setWatchError(encoded.error);
+      $('notify-watch-picker-toggle')?.focus();
+      return;
+    }
+    patch.watch.channels = encoded.list;
+  }
+  const body = saveBody(settings, patch, { secret, openid });
   busy = true;
   render();
   const btn = $('notify-save-btn');
@@ -823,9 +898,10 @@ async function save() {
     const result = await putJson('/api/notify', body);
     clearRefusal();
     liveEventsError = '';
+    setWatchError('');
     $('notify-app-secret').value = '';
     const pendingDraft = pendingSettingsForm(result.data, baseline, form);
-    applySettings(result.data, { force: true });
+    applySettings(result.data, { force: true, keepCatalog: true });
     if (pendingDraft) fillForm(pendingDraft);
     if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
     showNotification(pendingDraft ? LOCAL_SETTINGS_PENDING_TEXT : openid ? '管理员 openid 已绑定' : '通知设置已保存', pendingDraft ? 'warning' : 'success');
@@ -859,7 +935,7 @@ async function clearSecret() {
     request: () => putJson('/api/notify', clearSecretBody(settings)),
     onSuccess: result => {
       clearRefusal();
-      applySettings(result.data, { force: !isDirty() });
+      applySettings(result.data, { force: !isDirty(), keepCatalog: true });
       showNotification('AppSecret 已清除', 'success');
     },
     onError: error => {
@@ -884,8 +960,8 @@ function handleRefusal(error, route = 'openid') {
   $('notify-admin-openid').value = '';
   // L1: the AppSecret field is cleared either way; focus moves only when one was typed.
   $('notify-app-secret').value = '';
-  if (refusal.focus) queueMicrotask(() => $(refusal?.focus || '')?.focus());
-  if (refusal.kind === 'revision') loadNotifySettings();
+  if (refusal.focus) queueMicrotask(() => actionTarget(refusal?.focus || '')?.focus());
+  if (refusal.kind === 'revision' || error?.body?.data?.code === 'watch_unknown_channel') loadNotifySettings();
   else refreshNotifyStatus();
 }
 
@@ -1022,11 +1098,12 @@ export function initNotifySettings() {
   const panel = $('notify-settings');
   if (!panel) return;
   panel.addEventListener('input', event => {
-    if (['notify-bind-any', 'notify-watch-search', 'notify-watch-id', 'notify-watch-name'].includes(event.target.id)) return;
+    if (event.target.id === 'notify-bind-any' || event.target.closest('.notify-watch-picker')) return;
     clearRefusalOnEdit();
     render();
   });
   panel.addEventListener('change', event => {
+    if (event.target.closest('.notify-watch-picker')) return;
     if (event.target.id === 'notify-live-events') liveEventsError = '';
     clearRefusalOnEdit();
     render();
@@ -1048,16 +1125,30 @@ export function initNotifySettings() {
   $('notify-bind-btn')?.addEventListener('click', startBind);
   $('notify-bind-cancel')?.addEventListener('click', cancelBind);
   $('notify-watch-search')?.addEventListener('input', () => renderWatch());
-  $('notify-watch-add')?.addEventListener('click', () => {
-    const ok = addToWatch({
-      platform: $('notify-watch-platform').value,
-      channel_id: $('notify-watch-id').value,
-      name: $('notify-watch-name').value,
-    });
-    if (ok) {
-      $('notify-watch-id').value = '';
-      $('notify-watch-name').value = '';
-    }
+  $('notify-watch-search-clear')?.addEventListener('click', () => {
+    $('notify-watch-search').value = '';
+    renderWatch();
+    $('notify-watch-search').focus();
+  });
+  $('notify-watch-picker-toggle')?.addEventListener('click', event => {
+    if (busy || !settings) event.preventDefault();
+  });
+  $('notify-watch-picker')?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !$('notify-watch-picker').open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    $('notify-watch-picker').open = false;
+    $('notify-watch-picker-toggle').focus();
+  });
+  $('notify-watch-search')?.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowDown') return;
+    const first = $('notify-watch-results').querySelector('input:not(:disabled)');
+    if (first) { event.preventDefault(); first.focus(); }
+  });
+  $('notify-watch-migration-dismiss')?.addEventListener('click', () => {
+    watchMigrationDismissed = true;
+    renderWatch();
+    $('notify-watch-picker-toggle').focus();
   });
   $('notify-refresh-btn')?.addEventListener('click', async () => {
     const icon = $('notify-refresh-icon');
