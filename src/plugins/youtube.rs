@@ -136,6 +136,14 @@ impl Youtube {
     > {
         get_youtube_status_with(&self.channel_id, Probe::Throttled).await
     }
+
+    /// The push loop's m3u8 refetch: always a fresh yt-dlp run (never the
+    /// throttled index or cached probe), and "not live" only when yt-dlp says
+    /// the channel is offline or the stream is scheduled. Other yt-dlp errors
+    /// (network, 429/5xx, bot check) are returned as errors.
+    pub async fn get_status_refetch(&self) -> Result<YoutubeStatus, Box<dyn Error>> {
+        get_youtube_status_with(&self.channel_id, Probe::Refetch).await
+    }
 }
 
 /// A scheduled stream stops counting as "next up" once it is this far ahead.
@@ -271,6 +279,9 @@ enum Probe {
     /// time, whatever the index says. An unscheduled go-live has no video ID
     /// until it starts, so the index cannot be trusted to know it.
     Always,
+    /// The push loop's m3u8 refetch: like `Always`, and yt-dlp errors that
+    /// are not a positive offline/scheduled statement become errors.
+    Refetch,
 }
 
 const SAFETY_PROBE_INTERVAL: Duration = Duration::from_secs(300);
@@ -283,7 +294,7 @@ const ONE_OFF_MAX_AGE: Duration = Duration::from_secs(15);
 fn overlay_max_age(probe: Probe) -> Option<Duration> {
     match probe {
         Probe::Now => Some(ONE_OFF_MAX_AGE),
-        Probe::Throttled | Probe::Always => None,
+        Probe::Throttled | Probe::Always | Probe::Refetch => None,
     }
 }
 
@@ -394,7 +405,7 @@ fn decide_monitor_action(
     match view {
         IndexView::Unavailable => MonitorAction::YtDlp,
         IndexView::Live => MonitorAction::ConfirmLive,
-        _ if probe == Probe::Always => MonitorAction::YtDlp,
+        _ if matches!(probe, Probe::Always | Probe::Refetch) => MonitorAction::YtDlp,
         IndexView::Upcoming | IndexView::NoAnswer if probe == Probe::Throttled => {
             match since_last_probe {
                 Some(age) if age < SAFETY_PROBE_INTERVAL => MonitorAction::IndexAnswer,
@@ -406,7 +417,7 @@ fn decide_monitor_action(
     }
 }
 
-type YoutubeStatus = (
+pub type YoutubeStatus = (
     bool,                    // is_live
     Option<String>,          // topic
     Option<String>,          // title
@@ -705,8 +716,9 @@ async fn get_youtube_status_with(
 
     let last_probe = match probe {
         Probe::Throttled => last_safety_probe(channel_id),
-        Probe::Now | Probe::Always => None,
+        Probe::Now | Probe::Always | Probe::Refetch => None,
     };
+    let strict = probe == Probe::Refetch;
     let index_answer = |status: YoutubeChannelStatus| {
         (
             false,
@@ -761,6 +773,7 @@ async fn get_youtube_status_with(
                 cookies_file,
                 cookies_from_browser,
                 deno_path,
+                strict,
             )
             .await?;
             Ok((
@@ -799,6 +812,7 @@ async fn get_youtube_status_with(
                 cookies_file,
                 cookies_from_browser,
                 deno_path,
+                strict,
             )
             .await?;
             let (is_live, _, title, m3u8_url, start_time, video_id) = probed;
@@ -817,7 +831,32 @@ async fn get_youtube_status_with(
     }
 }
 
+/// yt-dlp's own words for a channel that is offline or whose stream has
+/// ended or not started. Scheduled starts are matched earlier by the
+/// begin-in regexes.
+///
+/// Every offline/scheduled wording lives in `YT_DLP_NOT_LIVE_WORDING`.
+/// "The channel is not currently live" is yt-dlp's own `UserNotLive` message
+/// (yt_dlp/utils/_utils.py), raised by the `youtube:tab` extractor for a
+/// channel's /live tab. The others are YouTube's playability reasons, which
+/// yt-dlp passes through verbatim (`raise_no_formats(reason)`).
+fn yt_dlp_says_offline(stderr: &str) -> bool {
+    YT_DLP_NOT_LIVE_WORDING
+        .iter()
+        .any(|marker| stderr.contains(marker))
+}
+
+/// See `yt_dlp_says_offline`.
+const YT_DLP_NOT_LIVE_WORDING: &[&str] = &[
+    "is not currently live",
+    "This live event will begin",
+    "This live event has ended",
+    "Premieres in",
+    "Premiere will begin",
+];
+
 // Update get_status_with_yt_dlp to match the new order
+#[allow(clippy::too_many_arguments)]
 async fn get_status_with_yt_dlp(
     channel_id: &str,
     proxy: Option<String>,
@@ -826,6 +865,7 @@ async fn get_status_with_yt_dlp(
     _cookies_file: &Option<String>,
     cookies_from_browser: &Option<String>,
     deno_path: &Option<String>,
+    strict: bool,
 ) -> Result<
     (
         bool,                    // is_live
@@ -900,6 +940,15 @@ async fn get_status_with_yt_dlp(
                 get_youtube_live_title(channel_id).await?
             };
             return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
+        }
+        if strict && !yt_dlp_says_offline(&stderr) {
+            // Network, 429/5xx, bot check or anything else: not a statement
+            // that the channel is offline.
+            return Err(format!(
+                "yt-dlp error is not an offline statement: {}",
+                stderr.trim()
+            )
+            .into());
         }
         return Ok((false, None, None, None, None, video_id)); // Channel is not live and no scheduled time
     } else if let Some((m3u8_url, has_multiple)) = first_m3u8_url_from_stdout(&stdout) {
@@ -1405,5 +1454,57 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Verbatim yt-dlp stderr for a channel whose /live tab has no stream:
+    /// `UserNotLive` ("The channel is not currently live", utils/_utils.py)
+    /// raised from `youtube:tab` (extractor/youtube/_tab.py), formatted by
+    /// `ExtractorError` as "[ie] id: msg" and prefixed "ERROR: " by YoutubeDL.
+    #[test]
+    fn real_yt_dlp_not_live_line_is_offline() {
+        let line =
+            "ERROR: [youtube:tab] UCJFZiqLMntJufDCHc6bQixg: The channel is not currently live";
+        assert!(line.contains("ERROR: [youtube"));
+        assert!(yt_dlp_says_offline(line));
+    }
+
+    /// H1: on the refetch only yt-dlp's offline/scheduled wording is "not
+    /// live"; network, 429/5xx and bot checks are not.
+    #[test]
+    fn refetch_treats_only_offline_wording_as_not_live() {
+        assert!(yt_dlp_says_offline(
+            "ERROR: [youtube:tab] UC123: The channel is not currently live"
+        ));
+        assert!(yt_dlp_says_offline(
+            "ERROR: [youtube] abc: This live event will begin in a few moments."
+        ));
+        assert!(yt_dlp_says_offline(
+            "ERROR: [youtube] abc: This live event has ended."
+        ));
+        for stderr in [
+            "ERROR: [youtube] abc: Unable to download webpage: HTTP Error 503: Service Unavailable",
+            "ERROR: [youtube] abc: Unable to download webpage: HTTP Error 429: Too Many Requests",
+            "ERROR: [youtube] abc: Sign in to confirm you\u{2019}re not a bot.",
+            "ERROR: [youtube] abc: Unable to download webpage: <urlopen error timed out>",
+            "ERROR: [youtube] abc: something new",
+        ] {
+            assert!(!yt_dlp_says_offline(stderr), "{stderr}");
+        }
+        // The refetch never answers from the index or a stored probe.
+        for view in [
+            IndexView::Upcoming,
+            IndexView::NoAnswer,
+            IndexView::Unavailable,
+        ] {
+            assert_eq!(
+                decide_monitor_action(view, Probe::Refetch, Some(Duration::ZERO)),
+                MonitorAction::YtDlp
+            );
+        }
+        assert_eq!(
+            decide_monitor_action(IndexView::Live, Probe::Refetch, None),
+            MonitorAction::ConfirmLive
+        );
+        assert_eq!(overlay_max_age(Probe::Refetch), None);
     }
 }

@@ -254,7 +254,7 @@ async fn fetch_listings(
             let id = id.clone();
             let proxy = proxy.clone();
             async move {
-                let result = fetch_channel_listing(&id, proxy.as_deref())
+                let result = fetch_channel_listing(&id, proxy.as_deref(), false)
                     .await
                     .map_err(|e| e.to_string());
                 (id, result)
@@ -413,7 +413,7 @@ pub async fn monitor_status(
     with_state(|state| {
         state.last_attempt.insert(id.clone(), now);
     });
-    match fetch_channel_listing(&id, cfg.proxy.as_deref()).await {
+    match fetch_channel_listing(&id, cfg.proxy.as_deref(), false).await {
         Ok(listing) => {
             let (woken, changed) = with_state(|state| {
                 if state.failing {

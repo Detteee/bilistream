@@ -68,8 +68,19 @@ impl Twitch {
         })
     }
 
-    pub async fn get_status(
+    pub async fn get_status(&self) -> Result<TwitchSourceStatus, Box<dyn Error>> {
+        self.get_status_mode(false).await
+    }
+
+    /// The push loop's m3u8 refetch: "not live" only when Twitch returns the
+    /// user with no live stream; anything else is an error.
+    pub async fn get_status_refetch(&self) -> Result<TwitchSourceStatus, Box<dyn Error>> {
+        self.get_status_mode(true).await
+    }
+
+    async fn get_status_mode(
         &self,
+        strict: bool,
     ) -> Result<
         (
             bool,                    // is_live
@@ -81,7 +92,8 @@ impl Twitch {
         ),
         Box<dyn Error>,
     > {
-        let (is_live, game_name, title, stream_id) = get_twitch_status(&self.channel_id).await?;
+        let (is_live, game_name, title, stream_id) =
+            get_twitch_status_mode(&self.channel_id, strict).await?;
         if is_live {
             let cfg = crate::config::load_config().await?;
             let quality = cfg.twitch.quality.clone();
@@ -313,8 +325,62 @@ fn streamlink_output(output: Output) -> Result<String, Box<dyn Error>> {
     Err(format!("streamlink {status}；{reason}").into())
 }
 
+pub type TwitchSourceStatus = (
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<DateTime<Local>>,
+    Option<String>,
+);
+
+type TwitchGqlStatus = (bool, Option<String>, Option<String>, Option<String>);
+
 pub async fn get_twitch_status(
     channel_id: &str,
+) -> Result<TwitchGqlStatus, Box<dyn std::error::Error>> {
+    get_twitch_status_mode(channel_id, false).await
+}
+
+/// Reads the GetStreamInfo reply. In strict mode only a returned user whose
+/// `stream` is null or not `live` counts as not live; `data.user == null` or a
+/// reply without the expected shape is an error.
+fn parse_twitch_stream_status(
+    json_response: &serde_json::Value,
+    strict: bool,
+) -> Result<TwitchGqlStatus, Box<dyn std::error::Error>> {
+    if strict {
+        let user = json_response
+            .get("data")
+            .and_then(|data| data.get("user"))
+            .filter(|user| user.is_object())
+            .ok_or("Twitch GraphQL returned no user")?;
+        match user.get("stream") {
+            Some(stream) if stream.is_null() || stream.is_object() => {}
+            _ => return Err("Twitch GraphQL reply has no stream field".into()),
+        }
+    }
+    let is_live = json_response["data"]["user"]["stream"]["type"] == "live";
+    let game_name = json_response["data"]["user"]["stream"]["game"]["name"]
+        .as_str()
+        .unwrap_or("");
+    let title = json_response["data"]["user"]["stream"]["title"]
+        .as_str()
+        .unwrap_or("");
+    let stream_id = json_response["data"]["user"]["stream"]["id"]
+        .as_str()
+        .map(|s| s.to_string());
+    Ok((
+        is_live,
+        Some(game_name.to_string()),
+        Some(title.to_string()),
+        stream_id,
+    ))
+}
+
+async fn get_twitch_status_mode(
+    channel_id: &str,
+    strict: bool,
 ) -> Result<
     (
         bool,           // is_live
@@ -371,27 +437,7 @@ pub async fn get_twitch_status(
     {
         return Err("Twitch GraphQL returned errors".into());
     }
-    // status = {is_live, game_name, title, stream_id}
-    let is_live = json_response["data"]["user"]["stream"]["type"] == "live";
-    let game_name = json_response["data"]["user"]["stream"]["game"]["name"]
-        .as_str()
-        .unwrap_or("");
-    let title = json_response["data"]["user"]["stream"]["title"]
-        .as_str()
-        .unwrap_or("");
-    let stream_id = json_response["data"]["user"]["stream"]["id"]
-        .as_str()
-        .map(|s| s.to_string());
-    // let start_time = json_response["data"]["user"]["stream"]["start_time"].as_str().unwrap_or("");
-    // Parse the response to get game name
-    // println!("{:?}", json_response);
-
-    Ok((
-        is_live,
-        Some(game_name.to_string()),
-        Some(title.to_string()),
-        stream_id,
-    ))
+    parse_twitch_stream_status(&json_response, strict)
 }
 
 #[cfg(test)]
@@ -606,6 +652,24 @@ mod tests {
             "not a URL",
         ] {
             assert_eq!(channel_id_from_url(url), None, "{url}");
+        }
+    }
+
+    /// M2: strict refetch reads "not live" only from a returned user.
+    #[test]
+    fn strict_twitch_status_needs_a_returned_user() {
+        let offline = json!({"data": {"user": {"stream": null}}});
+        assert!(!parse_twitch_stream_status(&offline, true).unwrap().0);
+        let live = json!({"data": {"user": {"stream": {"id": "1", "type": "live", "title": "t"}}}});
+        assert!(parse_twitch_stream_status(&live, true).unwrap().0);
+        for bad in [
+            json!({"data": {"user": null}}),
+            json!({"data": {}}),
+            json!({"data": {"user": {"other": 1}}}),
+        ] {
+            assert!(parse_twitch_stream_status(&bad, true).is_err(), "{bad}");
+            // The lenient callers are unchanged.
+            assert!(!parse_twitch_stream_status(&bad, false).unwrap().0);
         }
     }
 }

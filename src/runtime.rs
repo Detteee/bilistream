@@ -180,29 +180,13 @@ fn exit_keeps_crop(reason: FfmpegLoopExitReason) -> bool {
     )
 }
 
-/// How an offline source reading is confirmed before the stream is treated as
-/// ended. YouTube and Twitch can flap, and a status error also reads offline.
-#[derive(Clone, Copy, Debug)]
-struct EndRecheckPlan {
-    /// Further offline readings required after the first one.
-    samples: u32,
-    /// Gap before each further reading.
-    interval: Duration,
-    /// How often the stop/restart/handoff signals are polled while waiting.
-    poll: Duration,
-}
-
-/// About 60 s in total: three more readings, 20 s apart.
-const END_RECHECK_PLAN: EndRecheckPlan = EndRecheckPlan {
-    samples: 3,
-    interval: Duration::from_secs(20),
-    poll: Duration::from_secs(1),
-};
-
+/// The stop/restart signals and cluster gate read at the moment the source
+/// m3u8 refetch misses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct EndRecheckSignals {
-    /// Read-only cluster gate; this node may still execute.
-    monitoring_allowed: bool,
+struct EndSignals {
+    /// This node may execute: cluster off, or it is the active node and not
+    /// in the middle of a takeover (read-only `local_monitoring_allowed`).
+    node_active: bool,
     /// The stop/restart generation moved past the value captured when this
     /// ffmpeg session started. Flags left over from before do not count.
     stop_or_restart_requested: bool,
@@ -210,25 +194,33 @@ struct EndRecheckSignals {
     restart_flag: bool,
 }
 
-fn end_recheck_signals(
+fn end_signals(
     session_generation: u64,
     generation: u64,
     restart_flag: bool,
-    monitoring_allowed: bool,
-) -> EndRecheckSignals {
-    EndRecheckSignals {
-        monitoring_allowed,
+    node_active: bool,
+) -> EndSignals {
+    EndSignals {
+        node_active,
         stop_or_restart_requested: generation != session_generation,
         restart_flag,
     }
 }
 
-/// One source reading taken during the recheck.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SourceReading {
-    is_live: bool,
-    m3u8_url: Option<String>,
-    stream_id: Option<String>,
+/// Captures the stop/restart generation for an ffmpeg session. The push loop
+/// calls this right before each spawn; tests call the same function.
+fn capture_session_generation() -> u64 {
+    stop_restart_generation()
+}
+
+/// Reads the live end signals against a captured session generation.
+fn current_end_signals(session_generation: u64, node_active: bool) -> EndSignals {
+    end_signals(
+        session_generation,
+        stop_restart_generation(),
+        was_manual_restart(),
+        node_active,
+    )
 }
 
 /// Unknown ids on either side are treated as the same broadcast.
@@ -246,22 +238,10 @@ enum EndRecheckCancel {
     ManualRestart,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum EndRecheckOutcome {
-    ConfirmedOffline,
-    /// The source read live again; restart at once with this playlist URL.
-    BackLive {
-        m3u8_url: Option<String>,
-    },
-    /// The source is live with a different broadcast id.
-    NewBroadcast,
-    Cancelled(EndRecheckCancel),
-}
-
-/// Handoff wins; then a request made during this session is a restart when
-/// `MANUAL_RESTART` is set (restart paths set it, a plain stop does not).
-fn end_recheck_cancel(signals: EndRecheckSignals) -> Option<EndRecheckCancel> {
-    if !signals.monitoring_allowed {
+/// Handoff (standby / mid-takeover) wins; then a request made during this
+/// session is a restart when `MANUAL_RESTART` is set, otherwise a stop.
+fn end_recheck_cancel(signals: EndSignals) -> Option<EndRecheckCancel> {
+    if !signals.node_active {
         Some(EndRecheckCancel::ClusterHandoff)
     } else if !signals.stop_or_restart_requested {
         None
@@ -272,50 +252,171 @@ fn end_recheck_cancel(signals: EndRecheckSignals) -> Option<EndRecheckCancel> {
     }
 }
 
-/// Confirms an offline reading. Returns as soon as the source reads live, or a
-/// cancel signal appears; shutdown simply drops this future, which holds no
-/// state that needs cleanup.
-async fn confirm_source_offline<P, PF, S>(
-    plan: EndRecheckPlan,
-    session_stream_id: Option<&str>,
-    mut probe: P,
-    mut signals: S,
-) -> EndRecheckOutcome
-where
-    P: FnMut() -> PF,
-    PF: std::future::Future<Output = SourceReading>,
-    S: FnMut() -> EndRecheckSignals,
-{
-    for _ in 0..plan.samples {
-        let mut waited = Duration::ZERO;
-        loop {
-            if let Some(cancel) = end_recheck_cancel(signals()) {
-                return EndRecheckOutcome::Cancelled(cancel);
-            }
-            if waited >= plan.interval {
-                break;
-            }
-            let step = plan
-                .poll
-                .min(plan.interval - waited)
-                .max(Duration::from_millis(1));
-            tokio::time::sleep(step).await;
-            waited += step;
-        }
-        let reading = probe().await;
-        if reading.is_live {
-            if !same_broadcast(session_stream_id, reading.stream_id.as_deref()) {
-                return EndRecheckOutcome::NewBroadcast;
-            }
-            return EndRecheckOutcome::BackLive {
-                m3u8_url: reading.m3u8_url,
-            };
+/// The source refetch made after ffmpeg exits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RefetchReading {
+    /// The source answered and is live.
+    Live {
+        m3u8_url: Option<String>,
+        stream_id: Option<String>,
+    },
+    /// The source answered and is not live: no new m3u8. This is the end.
+    Offline,
+    /// The status request itself failed (timeout, 5xx, transport). Not an end.
+    Error,
+}
+
+impl RefetchReading {
+    fn from_result<E>(result: Result<SourceStatus, E>) -> Self {
+        match result {
+            Ok((true, _, _, m3u8_url, _, stream_id)) => RefetchReading::Live {
+                m3u8_url,
+                stream_id,
+            },
+            Ok(_) => RefetchReading::Offline,
+            Err(_) => RefetchReading::Error,
         }
     }
-    if let Some(cancel) = end_recheck_cancel(signals()) {
-        return EndRecheckOutcome::Cancelled(cancel);
+}
+
+/// Signals for marking the stream ended after the loop (M1). A restart whose
+/// target is not live moved the generation itself, so that one exit skips the
+/// generation check; `end_action` already chose to announce. The active-node
+/// check and the once-per-broadcast `announced` flag still apply.
+fn post_loop_end_signals(reason: FfmpegLoopExitReason, mut signals: EndSignals) -> EndSignals {
+    if matches!(reason, FfmpegLoopExitReason::IntentionalRestart { .. }) {
+        signals.stop_or_restart_requested = false;
     }
-    EndRecheckOutcome::ConfirmedOffline
+    signals
+}
+
+/// What the push loop does after one refetch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RefetchStep {
+    /// Same broadcast still live: restart ffmpeg (with the fresh URL if any).
+    Restart { m3u8_url: Option<String> },
+    /// Request failed: go through the normal ffmpeg retry, nothing ends.
+    Retry,
+    /// The stream ended. `announce` is false when 直播结束 already went out
+    /// for this broadcast. `timed_out` marks an end after
+    /// `STREAM_END_ERROR_WINDOW` of request errors.
+    Ended { announce: bool, timed_out: bool },
+    /// Live with a different broadcast id: back to the outer loop.
+    NewBroadcast,
+    /// Miss while a stop/restart arrived or this node is not active.
+    Cancelled(EndRecheckCancel),
+}
+
+/// The one shared "stream ended" state. It drives the 直播结束 danmaku, the
+/// 换台 command gate (`DANMAKU_COMMANDS_ENABLED`), and through that gate the
+/// public status page's `bilibili.enable_danmaku_command` switch button.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct StreamEndState {
+    /// Broadcast this state belongs to (`platform:channel:stream id`).
+    stream_key: Option<String>,
+    /// The id of that broadcast, for `same_broadcast`.
+    stream_id: Option<String>,
+    /// The active node saw a real source-offline miss and nothing has come
+    /// back live since.
+    ended: bool,
+    /// 直播结束 was already sent for this broadcast.
+    announced: bool,
+    /// Start of the current run of refetch request errors with no clear
+    /// answer from the source. Cleared by any clear answer.
+    errors_since: Option<std::time::Instant>,
+}
+
+/// Request errors alone for this long (no clear "live" answer) end the stream.
+/// There is no other retry limit in the push loop; see the changelog.
+const STREAM_END_ERROR_WINDOW: Duration = Duration::from_secs(600);
+
+impl StreamEndState {
+    /// A stream is starting. A different broadcast clears everything; the same
+    /// broadcast coming back only clears `ended`, so the gate closes while it
+    /// is live and a later miss does not announce twice.
+    fn start_session(&mut self, stream_key: String, stream_id: Option<&str>) {
+        // Only a known, equal id is the same broadcast here: an unknown id
+        // must not inherit the earlier `announced` (L1).
+        let same = self.stream_key.as_deref() == Some(stream_key.as_str())
+            && matches!((self.stream_id.as_deref(), stream_id), (Some(a), Some(b)) if a == b);
+        if !same {
+            self.announced = false;
+        }
+        self.stream_key = Some(stream_key);
+        self.stream_id = stream_id.map(str::to_string);
+        self.ended = false;
+        self.errors_since = None;
+    }
+
+    fn on_refetch(
+        &mut self,
+        reading: RefetchReading,
+        signals: EndSignals,
+        now: std::time::Instant,
+    ) -> RefetchStep {
+        if !matches!(reading, RefetchReading::Error) {
+            self.errors_since = None;
+        }
+        match reading {
+            RefetchReading::Error => {
+                let since = *self.errors_since.get_or_insert(now);
+                if now.saturating_duration_since(since) < STREAM_END_ERROR_WINDOW {
+                    return RefetchStep::Retry;
+                }
+                match self.mark_ended(signals) {
+                    Some(announce) => {
+                        self.errors_since = None;
+                        RefetchStep::Ended {
+                            announce,
+                            timed_out: true,
+                        }
+                    }
+                    None => RefetchStep::Cancelled(
+                        end_recheck_cancel(signals).expect("mark_ended refused"),
+                    ),
+                }
+            }
+            RefetchReading::Live {
+                m3u8_url,
+                stream_id,
+            } => {
+                if !same_broadcast(self.stream_id.as_deref(), stream_id.as_deref()) {
+                    return RefetchStep::NewBroadcast;
+                }
+                self.ended = false;
+                RefetchStep::Restart { m3u8_url }
+            }
+            RefetchReading::Offline => match self.mark_ended(signals) {
+                Some(announce) => RefetchStep::Ended {
+                    announce,
+                    timed_out: false,
+                },
+                None => {
+                    RefetchStep::Cancelled(end_recheck_cancel(signals).expect("mark_ended refused"))
+                }
+            },
+        }
+    }
+
+    /// Marks the stream ended unless this node is not active or a stop/restart
+    /// arrived this session. Returns whether 直播结束 still has to be sent.
+    /// Used by the refetch miss, the error window and the post-loop paths
+    /// (B站 stopped first, M1), so all of them announce once and open 换台.
+    fn mark_ended(&mut self, signals: EndSignals) -> Option<bool> {
+        if end_recheck_cancel(signals).is_some() {
+            return None;
+        }
+        self.ended = true;
+        let announce = !self.announced;
+        self.announced = true;
+        Some(announce)
+    }
+
+    /// Commands (and the page's 切换 button) open only on an ended stream, on
+    /// an active node, with commands turned on in config.
+    fn commands_gate(&self, commands_configured: bool, node_active: bool) -> bool {
+        self.ended && commands_configured && node_active
+    }
 }
 
 /// What to announce once the push loop has exited.
@@ -546,17 +647,6 @@ enum SourceClient<'a> {
     Niconico(&'a NiconicoClient),
 }
 
-impl SourceClient<'_> {
-    async fn get_status(&self) -> SourceStatus {
-        match self {
-            SourceClient::Youtube(client) => client.get_status().await,
-            SourceClient::Twitch(client) => client.get_status().await,
-            SourceClient::Niconico(client) => client.get_status().await,
-        }
-        .unwrap_or(OFFLINE_SOURCE_STATUS)
-    }
-}
-
 fn selected_source_client<'a>(
     selected: &StreamCandidate,
     yt: &'a Option<YoutubeClient>,
@@ -574,10 +664,23 @@ fn selected_source_client<'a>(
     }
 }
 
-async fn source_client_status(client: &Option<SourceClient<'_>>) -> SourceStatus {
+impl SourceClient<'_> {
+    /// The strict, always-fresh refetch: "not live" only on a positive source
+    /// statement; every other failure is an `Err`.
+    async fn try_status(&self) -> Result<SourceStatus, Box<dyn std::error::Error>> {
+        match self {
+            SourceClient::Youtube(client) => client.get_status_refetch().await,
+            SourceClient::Twitch(client) => client.get_status_refetch().await,
+            SourceClient::Niconico(client) => client.get_status_refetch().await,
+        }
+    }
+}
+
+/// The m3u8 refetch after ffmpeg exits. No client means no source: offline.
+async fn refetch_source(client: &Option<SourceClient<'_>>) -> RefetchReading {
     match client {
-        Some(client) => client.get_status().await,
-        None => OFFLINE_SOURCE_STATUS,
+        Some(client) => RefetchReading::from_result(client.try_status().await),
+        None => RefetchReading::Offline,
     }
 }
 
@@ -771,6 +874,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     // Credential renewal is explicit and runs after the interface is available.
     bilistream::config::refresh_credentials().await?;
     let mut cluster_wait: Option<(std::time::Instant, String)> = None;
+    // Survives outer-loop passes so the same broadcast coming back after a
+    // miss does not announce 直播结束 twice.
+    let mut stream_end = StreamEndState::default();
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -1581,6 +1687,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 &priority_tw_live,
             );
 
+            stream_end.start_session(
+                format!("{platform}:{channel_id}"),
+                current_video_id.as_deref(),
+            );
+            let mut end_announce = false;
+            let mut session_generation = capture_session_generation();
+
             // Main ffmpeg monitoring loop - blocks until stream ends
             let mut last_session = None;
             let ffmpeg_loop_exit_reason = loop {
@@ -1624,7 +1737,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                 // Stop/restart requests from before this session must not
                 // cancel its end-of-stream recheck.
-                let session_generation = stop_restart_generation();
+                session_generation = capture_session_generation();
                 let session = ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -1674,48 +1787,48 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let (mut current_is_live, _, _, mut new_m3u8_url, _, _) =
-                    source_client_status(&source_client).await;
-                // One offline reading is not enough: confirm it before ending.
-                // A live reading restarts at once and never waits here.
+                // The end of the stream is this refetch failing to find the
+                // source live: no new m3u8. Same signal as the page's 切换.
+                let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
+                let step = stream_end.on_refetch(
+                    refetch_source(&source_client).await,
+                    current_end_signals(session_generation, node_active),
+                    std::time::Instant::now(),
+                );
                 let mut end_check_cancel = None;
                 let mut new_broadcast = false;
-                if !current_is_live {
-                    tracing::info!("{stream_log} 源直播状态为未直播，确认中（约60秒）");
-                    let outcome = confirm_source_offline(
-                        END_RECHECK_PLAN,
-                        current_video_id.as_deref(),
-                        || async {
-                            let (is_live, _, _, m3u8_url, _, stream_id) =
-                                source_client_status(&source_client).await;
-                            SourceReading {
-                                is_live,
-                                m3u8_url,
-                                stream_id,
-                            }
-                        },
-                        // Read-only: local_may_push would rewrite local_stream.
-                        || {
-                            end_recheck_signals(
-                                session_generation,
-                                stop_restart_generation(),
-                                was_manual_restart(),
-                                !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg),
-                            )
-                        },
-                    )
-                    .await;
-                    match outcome {
-                        EndRecheckOutcome::ConfirmedOffline => {}
-                        EndRecheckOutcome::BackLive { m3u8_url } => {
-                            tracing::info!("{stream_log} 源直播恢复在线，立即重启推流");
-                            current_is_live = true;
-                            new_m3u8_url = m3u8_url;
-                        }
-                        EndRecheckOutcome::NewBroadcast => new_broadcast = true,
-                        EndRecheckOutcome::Cancelled(cancel) => end_check_cancel = Some(cancel),
+                let mut source_ended = false;
+                let (current_is_live, new_m3u8_url) = match step {
+                    RefetchStep::Restart { m3u8_url } => (true, m3u8_url),
+                    RefetchStep::Retry => {
+                        tracing::warn!("{stream_log} 源状态请求失败，按网络错误重试推流");
+                        (true, None)
                     }
-                }
+                    RefetchStep::Ended {
+                        announce,
+                        timed_out,
+                    } => {
+                        if timed_out {
+                            tracing::warn!(
+                                "{stream_log} 源状态请求连续失败{}秒且无在线回应，按直播结束处理",
+                                STREAM_END_ERROR_WINDOW.as_secs()
+                            );
+                        } else {
+                            tracing::info!("{stream_log} 源播放列表刷新未找到直播，源直播已结束");
+                        }
+                        end_announce = announce;
+                        source_ended = true;
+                        (false, None)
+                    }
+                    RefetchStep::NewBroadcast => {
+                        new_broadcast = true;
+                        (true, None)
+                    }
+                    RefetchStep::Cancelled(cancel) => {
+                        end_check_cancel = Some(cancel);
+                        (false, None)
+                    }
+                };
                 // On error, assume still live and retry next iteration.
                 let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
                     .await
@@ -1754,7 +1867,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     break FfmpegLoopExitReason::NewBroadcast;
                 }
 
-                if !current_is_live {
+                if source_ended {
                     break FfmpegLoopExitReason::SourceEnded;
                 }
 
@@ -1857,11 +1970,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Stop priority monitoring when ffmpeg loop ends
             cluster::clear_local_stream();
 
-            // SourceEnded was already confirmed offline inside the loop; reading
-            // the source once more could flap back and turn 结束 into 中断.
+            // SourceEnded is the refetch miss itself; reading the source once
+            // more could flap back and turn 结束 into 中断.
+            // Other exits read the source strictly: only a positive offline
+            // statement counts; a failed request reads as still live.
             let current_is_live = match ffmpeg_loop_exit_reason {
                 FfmpegLoopExitReason::SourceEnded => false,
-                _ => source_client_status(&source_client).await.0,
+                _ => !matches!(
+                    refetch_source(&source_client).await,
+                    RefetchReading::Offline
+                ),
             };
             // On error, assume still live to avoid incorrect status messages.
             let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
@@ -1907,17 +2025,45 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tracing::info!("{session_log} 因B站警告或切断结束转播");
                 }
                 EndAction::AnnounceEnd { bili_live } => {
+                    // B站 stopped first (or another exit) with the source
+                    // positively offline: mark it ended through the same
+                    // state, with the same active-node and generation checks.
+                    if ffmpeg_loop_exit_reason != FfmpegLoopExitReason::SourceEnded {
+                        let node_active =
+                            !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
+                        let signals = post_loop_end_signals(
+                            ffmpeg_loop_exit_reason,
+                            current_end_signals(session_generation, node_active),
+                        );
+                        end_announce = stream_end.mark_ended(signals).unwrap_or(false);
+                    }
                     if bili_live {
                         tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
                     } else {
                         tracing::debug!("{session_log} 已确认源直播结束，B站房间已停播");
                     }
-                    if cfg.bililive.enable_danmaku_command {
+                    // One shared ended state drives the 换台 gate (and with
+                    // it the page's 切换 button) and the danmaku. A node that
+                    // lost the active role since the miss does neither.
+                    let node_active =
+                        !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
+                    let gate =
+                        stream_end.commands_gate(cfg.bililive.enable_danmaku_command, node_active);
+                    if gate {
                         enable_danmaku_commands(true);
-                        tokio::time::sleep(Duration::from_secs(2)).await;
                     }
-                    let text = end_danmaku_text(&channel_name, cfg.bililive.enable_danmaku_command);
-                    if let Err(e) = send_danmaku(&cfg, &text).await {
+                    let send_result = if node_active && end_announce {
+                        if gate {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                        let text =
+                            end_danmaku_text(&channel_name, cfg.bililive.enable_danmaku_command);
+                        send_danmaku(&cfg, &text).await.map(|_| ())
+                    } else {
+                        tracing::debug!("{session_log} 本节点非活动或本场已发送结束弹幕，不再发送");
+                        Ok(())
+                    };
+                    if let Err(e) = send_result {
                         if bili_live {
                             tracing::error!("Failed to send danmaku: {}", e);
                         } else {
@@ -3052,89 +3198,397 @@ mod tests {
         assert!(selected.ffmpeg_source().is_some());
     }
 
-    fn quick_plan() -> EndRecheckPlan {
-        EndRecheckPlan {
-            samples: 3,
-            interval: Duration::from_millis(5),
-            poll: Duration::from_millis(1),
-        }
+    const URL: &str = "https://example.invalid/new.m3u8";
+
+    fn t0() -> std::time::Instant {
+        std::time::Instant::now()
     }
 
-    fn calm() -> EndRecheckSignals {
-        end_recheck_signals(7, 7, false, true)
+    fn calm() -> EndSignals {
+        end_signals(7, 7, false, true)
     }
 
-    fn offline() -> SourceReading {
-        SourceReading {
-            is_live: false,
-            m3u8_url: None,
-            stream_id: None,
-        }
-    }
-
-    fn live(stream_id: Option<&str>) -> SourceReading {
-        SourceReading {
-            is_live: true,
-            m3u8_url: Some("https://example.invalid/new.m3u8".to_string()),
+    fn live(stream_id: Option<&str>) -> RefetchReading {
+        RefetchReading::Live {
+            m3u8_url: Some(URL.to_string()),
             stream_id: stream_id.map(str::to_string),
         }
     }
 
-    type ProbeReading = std::future::Ready<SourceReading>;
-    type CallCount = std::sync::Arc<std::sync::atomic::AtomicUsize>;
-
-    /// Source readings in order; past the end the source reads offline.
-    fn probe_script(readings: Vec<SourceReading>) -> (CallCount, impl FnMut() -> ProbeReading) {
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = calls.clone();
-        let probe = move || {
-            let n = counter.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(readings.get(n).cloned().unwrap_or_else(offline))
-        };
-        (calls, probe)
+    fn session(stream_id: Option<&str>) -> StreamEndState {
+        let mut state = StreamEndState::default();
+        state.start_session("YT:chan".to_string(), stream_id);
+        state
     }
 
-    #[tokio::test]
-    async fn end_recheck_confirms_offline_after_three_more_readings() {
-        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
-        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
-        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn end_recheck_returns_at_once_when_source_flaps_back_live() {
-        let (calls, probe) = probe_script(vec![offline(), live(Some("v1")), offline()]);
-        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
+    /// Required (1): an m3u8 miss on the active node ends the stream and
+    /// announces straight away, with no further readings or waits.
+    #[test]
+    fn m3u8_miss_sends_straight_away() {
+        let mut state = session(Some("v1"));
+        let step = state.on_refetch(RefetchReading::Offline, calm(), t0());
         assert_eq!(
-            outcome,
-            EndRecheckOutcome::BackLive {
-                m3u8_url: Some("https://example.invalid/new.m3u8".to_string())
+            step,
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: false
             }
         );
-        // No further readings after the live one: the restart is not delayed.
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-
-        // An id missing on either side counts as the same broadcast.
-        let (_, probe) = probe_script(vec![live(None)]);
-        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
-        assert!(matches!(outcome, EndRecheckOutcome::BackLive { .. }));
-        let (_, probe) = probe_script(vec![live(Some("v1"))]);
-        let outcome = confirm_source_offline(quick_plan(), None, probe, calm).await;
-        assert!(matches!(outcome, EndRecheckOutcome::BackLive { .. }));
+        assert!(state.ended);
+        assert_eq!(
+            end_action(FfmpegLoopExitReason::SourceEnded, false, false, false, true),
+            EndAction::AnnounceEnd { bili_live: true }
+        );
+        // A status reply that is "not live" maps to the miss.
+        assert_eq!(
+            RefetchReading::from_result::<()>(Ok(OFFLINE_SOURCE_STATUS)),
+            RefetchReading::Offline
+        );
     }
 
-    #[tokio::test]
-    async fn end_recheck_sends_a_new_broadcast_back_to_the_outer_loop() {
-        // YouTube/Twitch: a different stream or video id.
-        let (calls, probe) = probe_script(vec![offline(), live(Some("video-2"))]);
-        let outcome = confirm_source_offline(quick_plan(), Some("video-1"), probe, calm).await;
-        assert_eq!(outcome, EndRecheckOutcome::NewBroadcast);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        // Niconico: a new program id must not reuse the old lv.
-        let (_, probe) = probe_script(vec![live(Some("lv200"))]);
-        let outcome = confirm_source_offline(quick_plan(), Some("lv100"), probe, calm).await;
-        assert_eq!(outcome, EndRecheckOutcome::NewBroadcast);
+    /// Required (2): a manual stop or restart at that moment sends nothing and
+    /// leaves the gate shut. Uses the real capture point and generation (N3).
+    #[test]
+    fn manual_stop_or_restart_at_the_miss_sends_nothing() {
+        let session_generation = capture_session_generation();
+        set_manual_restart();
+        let signals = current_end_signals(session_generation, true);
+        clear_manual_restart();
+        assert!(signals.stop_or_restart_requested);
+
+        for (signals, expected) in [
+            (end_signals(7, 8, false, true), EndRecheckCancel::ManualStop),
+            (
+                end_signals(7, 9, true, true),
+                EndRecheckCancel::ManualRestart,
+            ),
+        ] {
+            let mut state = session(Some("v1"));
+            assert_eq!(
+                state.on_refetch(RefetchReading::Offline, signals, t0()),
+                RefetchStep::Cancelled(expected)
+            );
+            assert!(!state.ended);
+            assert!(!state.commands_gate(true, true));
+        }
+        for restart in [false, true] {
+            assert_eq!(
+                end_action(
+                    FfmpegLoopExitReason::EndCheckCancelled { restart },
+                    false,
+                    false,
+                    false,
+                    true
+                ),
+                EndAction::SkipEndCheckCancelled
+            );
+        }
+    }
+
+    /// Required (3) / scope 5: a standby or mid-takeover node never sends and
+    /// never opens the gate.
+    #[test]
+    fn standby_or_mid_takeover_node_never_sends_or_opens_gate() {
+        let mut state = session(Some("v1"));
+        let standby = end_signals(7, 7, false, false);
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, standby, t0()),
+            RefetchStep::Cancelled(EndRecheckCancel::ClusterHandoff)
+        );
+        assert!(!state.ended);
+        assert!(!state.commands_gate(true, false));
+        assert_eq!(
+            end_action(
+                FfmpegLoopExitReason::ClusterHandoff,
+                false,
+                false,
+                false,
+                true
+            ),
+            EndAction::SkipHandoff
+        );
+        // Lost the active role after the miss: the gate stays shut.
+        let mut state = session(Some("v1"));
+        state.on_refetch(RefetchReading::Offline, calm(), t0());
+        assert!(!state.commands_gate(true, false));
+    }
+
+    /// Scope 1: a 换台 command before the miss is refused; right after it is
+    /// accepted. The gate is the value written to DANMAKU_COMMANDS_ENABLED,
+    /// which is what the public page reports as `bilibili.enable_danmaku_command`.
+    #[test]
+    fn switch_command_refused_before_miss_accepted_right_after() {
+        let mut state = session(Some("v1"));
+        assert!(!state.commands_gate(true, true), "refused while live");
+        state.on_refetch(RefetchReading::Offline, calm(), t0());
+        assert!(state.commands_gate(true, true), "accepted after the miss");
+        // Commands turned off in config never open it.
+        assert!(!state.commands_gate(false, true));
+    }
+
+    /// Scope 2: a timeout or 5xx retries ffmpeg, sends nothing, gate shut.
+    #[test]
+    fn request_failure_retries_without_ending() {
+        let mut state = session(Some("v1"));
+        let reading = RefetchReading::from_result::<&str>(Err("HTTP 503 / timeout"));
+        assert_eq!(reading, RefetchReading::Error);
+        assert_eq!(state.on_refetch(reading, calm(), t0()), RefetchStep::Retry);
+        assert!(!state.ended);
+        assert!(!state.announced);
+        assert!(!state.commands_gate(true, true));
+    }
+
+    /// Scope 3: repeated misses announce once per broadcast; a new stream
+    /// clears the state.
+    #[test]
+    fn repeated_misses_announce_once_and_next_stream_clears() {
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: false
+            }
+        );
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: false,
+                timed_out: false
+            }
+        );
+        // Same broadcast picked up again by the outer loop, then missing again.
+        state.start_session("YT:chan".to_string(), Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: false,
+                timed_out: false
+            }
+        );
+        // The next stream starts: fresh state, announces again.
+        state.start_session("YT:chan".to_string(), Some("v2"));
+        assert!(!state.ended && !state.announced);
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: false
+            }
+        );
+        // A different channel is also a new stream.
+        state.start_session("TW:other".to_string(), None);
+        assert!(!state.announced);
+    }
+
+    /// Scope 4: the same stream id back live after a miss closes the gate.
+    #[test]
+    fn same_stream_back_live_closes_gate() {
+        let mut state = session(Some("v1"));
+        state.on_refetch(RefetchReading::Offline, calm(), t0());
+        assert!(state.commands_gate(true, true));
+        assert_eq!(
+            state.on_refetch(live(Some("v1")), calm(), t0()),
+            RefetchStep::Restart {
+                m3u8_url: Some(URL.to_string())
+            }
+        );
+        assert!(!state.commands_gate(true, true));
+        // Via the outer loop too.
+        state.on_refetch(RefetchReading::Offline, calm(), t0());
+        state.start_session("YT:chan".to_string(), Some("v1"));
+        assert!(!state.commands_gate(true, true));
+        // A missing id counts as the same broadcast.
+        assert!(matches!(
+            state.on_refetch(live(None), calm(), t0()),
+            RefetchStep::Restart { .. }
+        ));
+    }
+
+    /// L1: a new broadcast with an unknown id does not inherit `announced`.
+    #[test]
+    fn unknown_id_broadcast_does_not_inherit_announced() {
+        for (first, next) in [(Some("v1"), None), (None, Some("v1")), (None, None)] {
+            let mut state = session(first);
+            state.on_refetch(RefetchReading::Offline, calm(), t0());
+            assert!(state.announced);
+            state.start_session("YT:chan".to_string(), next);
+            assert!(!state.announced, "{first:?} -> {next:?}");
+            assert_eq!(
+                state.on_refetch(RefetchReading::Offline, calm(), t0()),
+                RefetchStep::Ended {
+                    announce: true,
+                    timed_out: false
+                }
+            );
+        }
+    }
+
+    /// M1: B站 stopped first with the source positively offline marks the
+    /// stream ended through the same state (announce once, gate opens), and
+    /// keeps the active-node and generation checks.
+    #[test]
+    fn bili_stopped_first_marks_ended_through_shared_state() {
+        use FfmpegLoopExitReason as R;
+        assert_eq!(
+            end_action(R::BiliStopped, false, false, false, false),
+            EndAction::AnnounceEnd { bili_live: false }
+        );
+        let mut state = session(Some("v1"));
+        assert_eq!(state.mark_ended(calm()), Some(true));
+        assert!(state.commands_gate(true, true));
+        // Once per broadcast, also when a later miss follows.
+        assert_eq!(state.mark_ended(calm()), Some(false));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: false,
+                timed_out: false
+            }
+        );
+        // Standby or a stop this session: no send, no gate.
+        let mut state = session(Some("v1"));
+        assert_eq!(state.mark_ended(end_signals(7, 7, false, false)), None);
+        assert_eq!(state.mark_ended(end_signals(7, 8, false, true)), None);
+        assert!(!state.commands_gate(true, true));
+    }
+
+    /// A restart exit that finds the source offline skips the generation
+    /// check, but still announces only once per broadcast: a later miss or a
+    /// repeated restart exit sends nothing more. A standby still never sends.
+    #[test]
+    fn restart_exit_offline_announces_once_per_broadcast() {
+        let restart = FfmpegLoopExitReason::IntentionalRestart {
+            target_m3u8_available: false,
+        };
+        assert_eq!(
+            end_action(restart, false, false, false, true),
+            EndAction::AnnounceEnd { bili_live: true }
+        );
+        let moved = end_signals(7, 8, true, true);
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.mark_ended(post_loop_end_signals(restart, moved)),
+            Some(true)
+        );
+        assert_eq!(
+            state.mark_ended(post_loop_end_signals(restart, moved)),
+            Some(false)
+        );
+        state.start_session("YT:chan".to_string(), Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, calm(), t0()),
+            RefetchStep::Ended {
+                announce: false,
+                timed_out: false
+            }
+        );
+        assert_eq!(
+            state.mark_ended(post_loop_end_signals(restart, moved)),
+            Some(false)
+        );
+        // Other exits keep the generation check; standby never sends.
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.mark_ended(post_loop_end_signals(
+                FfmpegLoopExitReason::BiliStopped,
+                moved
+            )),
+            None
+        );
+        let standby = end_signals(7, 8, true, false);
+        assert_eq!(
+            state.mark_ended(post_loop_end_signals(restart, standby)),
+            None
+        );
+    }
+
+    /// Request errors alone for STREAM_END_ERROR_WINDOW end the stream once.
+    #[test]
+    fn request_errors_for_the_window_end_the_stream() {
+        let start = t0();
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Error, calm(), start),
+            RefetchStep::Retry
+        );
+        let almost = start + STREAM_END_ERROR_WINDOW - Duration::from_secs(1);
+        assert_eq!(
+            state.on_refetch(RefetchReading::Error, calm(), almost),
+            RefetchStep::Retry
+        );
+        assert!(!state.commands_gate(true, true));
+        let expired = start + STREAM_END_ERROR_WINDOW;
+        assert_eq!(
+            state.on_refetch(RefetchReading::Error, calm(), expired),
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: true
+            }
+        );
+        assert!(state.commands_gate(true, true));
+        // Expiry on a standby or after a stop: nothing.
+        for signals in [
+            end_signals(7, 7, false, false),
+            end_signals(7, 8, false, true),
+        ] {
+            let mut state = session(Some("v1"));
+            state.on_refetch(RefetchReading::Error, signals, start);
+            assert!(matches!(
+                state.on_refetch(RefetchReading::Error, signals, expired),
+                RefetchStep::Cancelled(_)
+            ));
+            assert!(!state.announced && !state.ended);
+        }
+    }
+
+    /// A clear "live" answer restarts the error window.
+    #[test]
+    fn live_answer_resets_the_error_window() {
+        let start = t0();
+        let mut state = session(Some("v1"));
+        state.on_refetch(RefetchReading::Error, calm(), start);
+        let mid = start + Duration::from_secs(400);
+        assert!(matches!(
+            state.on_refetch(live(Some("v1")), calm(), mid),
+            RefetchStep::Restart { .. }
+        ));
+        state.on_refetch(RefetchReading::Error, calm(), mid + Duration::from_secs(1));
+        // 600 s after the first error, but only 300 s after the live answer.
+        assert_eq!(
+            state.on_refetch(
+                RefetchReading::Error,
+                calm(),
+                start + STREAM_END_ERROR_WINDOW + Duration::from_secs(100)
+            ),
+            RefetchStep::Retry
+        );
+        assert_eq!(
+            state.on_refetch(
+                RefetchReading::Error,
+                calm(),
+                mid + Duration::from_secs(1) + STREAM_END_ERROR_WINDOW
+            ),
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: true
+            }
+        );
+    }
+
+    /// F4: a different id goes back to the outer loop.
+    #[test]
+    fn refetch_sends_a_new_broadcast_back_to_the_outer_loop() {
+        let mut state = session(Some("video-1"));
+        assert_eq!(
+            state.on_refetch(live(Some("video-2")), calm(), t0()),
+            RefetchStep::NewBroadcast
+        );
+        let mut state = session(Some("lv100"));
+        assert_eq!(
+            state.on_refetch(live(Some("lv200")), calm(), t0()),
+            RefetchStep::NewBroadcast
+        );
         assert!(same_broadcast(Some("lv100"), Some("lv100")));
         assert!(!same_broadcast(Some("lv100"), Some("lv200")));
     }
@@ -3149,104 +3603,22 @@ mod tests {
         assert!(!exit_keeps_crop(R::NewBroadcast));
     }
 
-    #[tokio::test]
-    async fn end_recheck_cancels_on_handoff_stop_and_restart_without_probing() {
-        for (signals, expected) in [
-            (
-                end_recheck_signals(7, 7, false, false),
-                EndRecheckCancel::ClusterHandoff,
-            ),
-            (
-                end_recheck_signals(7, 8, false, true),
-                EndRecheckCancel::ManualStop,
-            ),
-            (
-                end_recheck_signals(7, 9, true, true),
-                EndRecheckCancel::ManualRestart,
-            ),
-        ] {
-            let (calls, probe) = probe_script(vec![]);
-            let outcome =
-                confirm_source_offline(quick_plan(), Some("v1"), probe, move || signals).await;
-            assert_eq!(outcome, EndRecheckOutcome::Cancelled(expected));
-            assert_eq!(calls.load(Ordering::SeqCst), 0);
-        }
-    }
-
-    /// F1 (a): flags and generation bumps from before the session do not
-    /// cancel the recheck, and 直播结束 still goes out.
-    #[tokio::test]
-    async fn stale_stop_restart_from_before_the_session_does_not_cancel() {
-        // Both flags still set, generation unchanged since capture.
-        let stale = end_recheck_signals(42, 42, true, true);
+    /// F1 (a)/(c): flags and bumps from before the session (e.g. a standby
+    /// demoted while idle, then promoted) do not cancel; 直播结束 goes out.
+    #[test]
+    fn stale_stop_restart_from_before_the_session_does_not_cancel() {
+        let stale = end_signals(42, 42, true, true);
         assert_eq!(end_recheck_cancel(stale), None);
-        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
-        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, move || stale).await;
-        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        // The stale MANUAL_STOP after the loop does not skip a SourceEnded.
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Offline, stale, t0()),
+            RefetchStep::Ended {
+                announce: true,
+                timed_out: false
+            }
+        );
         assert_eq!(
             end_action(FfmpegLoopExitReason::SourceEnded, true, false, false, true),
-            EndAction::AnnounceEnd { bili_live: true }
-        );
-    }
-
-    /// F1 (b): a stop or restart requested during the recheck still cancels.
-    #[tokio::test]
-    async fn stop_or_restart_during_the_recheck_cancels_it() {
-        for (restart, expected) in [
-            (false, EndRecheckCancel::ManualStop),
-            (true, EndRecheckCancel::ManualRestart),
-        ] {
-            let generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(10));
-            let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let (gen, seen) = (generation.clone(), polls.clone());
-            let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
-            let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, move || {
-                // The request lands part-way through the first wait.
-                if seen.fetch_add(1, Ordering::SeqCst) == 3 {
-                    gen.fetch_add(1, Ordering::SeqCst);
-                }
-                end_recheck_signals(10, gen.load(Ordering::SeqCst), restart, true)
-            })
-            .await;
-            assert_eq!(outcome, EndRecheckOutcome::Cancelled(expected));
-            assert_eq!(calls.load(Ordering::SeqCst), 0);
-        }
-    }
-
-    /// F1 (c): a standby that was demoted (restart + stop flags set while idle)
-    /// and later promoted announces the end of its first stream.
-    #[tokio::test]
-    async fn promoted_standby_first_stream_still_announces_end() {
-        let generation = std::sync::atomic::AtomicU64::new(0);
-        // Demotion while idle: set_manual_restart() then stop_ffmpeg() each
-        // set a flag and bump the generation.
-        let manual_restart = true;
-        generation.fetch_add(1, Ordering::SeqCst);
-        let manual_stop = true;
-        generation.fetch_add(1, Ordering::SeqCst);
-        // Promotion: nothing clears the flags. The first session captures.
-        let session_generation = generation.load(Ordering::SeqCst);
-        let (_, probe) = probe_script(vec![offline(), offline(), offline()]);
-        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, || {
-            end_recheck_signals(
-                session_generation,
-                generation.load(Ordering::SeqCst),
-                manual_restart,
-                true,
-            )
-        })
-        .await;
-        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
-        assert_eq!(
-            end_action(
-                FfmpegLoopExitReason::SourceEnded,
-                manual_stop,
-                false,
-                false,
-                true
-            ),
             EndAction::AnnounceEnd { bili_live: true }
         );
     }
@@ -3273,28 +3645,6 @@ mod tests {
                 restart
             }));
         }
-    }
-
-    #[tokio::test]
-    async fn end_recheck_is_dropped_cleanly_on_shutdown() {
-        let plan = EndRecheckPlan {
-            samples: 3,
-            interval: Duration::from_secs(20),
-            poll: Duration::from_secs(1),
-        };
-        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
-        let shutdown = tokio::sync::Notify::new();
-        shutdown.notify_one();
-        // The monitor runtime selects shutdown against run_bilistream; the
-        // recheck must yield to it immediately rather than finish its 60 s.
-        let started = std::time::Instant::now();
-        let finished = tokio::select! {
-            _ = shutdown.notified() => None,
-            outcome = confirm_source_offline(plan, Some("v1"), probe, calm) => Some(outcome),
-        };
-        assert_eq!(finished, None);
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

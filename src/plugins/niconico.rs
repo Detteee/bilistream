@@ -72,7 +72,23 @@ impl Niconico {
     > {
         get_niconico_status(&self.cfg).await
     }
+
+    /// The push loop's m3u8 refetch: "not live" only when the page parses and
+    /// shows no broadcast on air (or streamlink says the program has no
+    /// playable streams); an unparsed page or an empty stream list is an error.
+    pub async fn get_status_refetch(&self) -> Result<NiconicoStatus, Box<dyn Error>> {
+        get_niconico_status_mode(&self.cfg, true).await
+    }
 }
+
+pub type NiconicoStatus = (
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<chrono::DateTime<chrono::Local>>,
+    Option<String>,
+);
 
 pub fn normalize_live_id(input: &str) -> String {
     let trimmed = input.trim();
@@ -382,6 +398,27 @@ fn parse_channel_program(section: &str) -> Option<ChannelProgram> {
     })
 }
 
+/// The channel live page's own structure is present (an on-air, upcoming or
+/// past section), so an empty listing is a real "nothing on air" rather than
+/// a captcha, maintenance page or layout change.
+fn channel_listing_page_recognized(html: &str) -> bool {
+    now_section(html).is_some()
+        || future_section(html).is_some()
+        || html_class_section(html, "past").is_some()
+        || html.contains(r#"id="live_past""#)
+        || html.contains("id='live_past'")
+}
+
+/// Strict reading for the refetch: `Idle` only from a recognized page.
+fn parse_channel_live_listing_strict(html: &str) -> Result<ChannelLiveListing, Box<dyn Error>> {
+    match parse_channel_live_listing(html) {
+        ChannelLiveListing::Idle if !channel_listing_page_recognized(html) => {
+            Err("Niconico channel page did not parse".into())
+        }
+        listing => Ok(listing),
+    }
+}
+
 fn parse_channel_live_listing(html: &str) -> ChannelLiveListing {
     if let Some(program) = now_section(html).and_then(parse_channel_program) {
         return ChannelLiveListing::OnAir(program);
@@ -479,6 +516,7 @@ fn niconico_page_request(
 pub(crate) async fn fetch_channel_listing(
     channel_id: &str,
     proxy: Option<&str>,
+    strict: bool,
 ) -> Result<ChannelLiveListing, Box<dyn Error>> {
     let url = channel_live_url(channel_id);
     let request = niconico_page_request(&url, proxy)?;
@@ -488,6 +526,9 @@ pub(crate) async fn fetch_channel_listing(
     }
     let bytes = super::http::response_bytes_limited(response, 8 * 1024 * 1024).await?;
     let html = String::from_utf8_lossy(&bytes);
+    if strict {
+        return parse_channel_live_listing_strict(&html);
+    }
     Ok(parse_channel_live_listing(&html))
 }
 
@@ -606,8 +647,13 @@ struct StreamlinkMetadata {
     title: Option<String>,
 }
 
-pub async fn get_niconico_status(
+pub async fn get_niconico_status(cfg: &NiconicoConfig) -> Result<NiconicoStatus, Box<dyn Error>> {
+    get_niconico_status_mode(cfg, false).await
+}
+
+async fn get_niconico_status_mode(
     cfg: &NiconicoConfig,
+    strict: bool,
 ) -> Result<
     (
         bool,
@@ -621,7 +667,7 @@ pub async fn get_niconico_status(
 > {
     let channel_id = niconico_channel_id(cfg);
     if !channel_id.is_empty() {
-        return match fetch_channel_listing(&channel_id, cfg.proxy.as_deref()).await {
+        return match fetch_channel_listing(&channel_id, cfg.proxy.as_deref(), strict).await {
             Ok(ChannelLiveListing::OnAir(program)) => Ok((
                 true,
                 None,
@@ -650,12 +696,13 @@ pub async fn get_niconico_status(
     if live_id.is_empty() {
         return Ok((false, None, None, None, None, None));
     }
-    get_niconico_status_via_streamlink(&live_id, cfg).await
+    get_niconico_status_via_streamlink(&live_id, cfg, strict).await
 }
 
 async fn get_niconico_status_via_streamlink(
     live_id: &str,
     cfg: &NiconicoConfig,
+    strict: bool,
 ) -> Result<
     (
         bool,
@@ -706,6 +753,9 @@ async fn get_niconico_status_via_streamlink(
     }
 
     if parsed.streams.is_empty() {
+        if strict {
+            return Err("streamlink returned no streams for the program".into());
+        }
         return Ok((false, None, None, None, None, Some(live_id.to_string())));
     }
 
@@ -1116,5 +1166,24 @@ mod tests {
             parse_niconico_cover_thumbnail_url(html).as_deref(),
             Some("https://listing-thumbnail.live.nicovideo.jp?image=prod-lv1/t.jpg&w=640&h=360")
         );
+    }
+
+    /// M2: an unparsed channel page (captcha, maintenance) is an error on the
+    /// refetch; a recognized page with nothing on air is "not live".
+    #[test]
+    fn strict_channel_listing_needs_a_recognized_page() {
+        let idle = r#"<section class="sub now"></section><section class="sub past"></section>"#;
+        assert_eq!(
+            parse_channel_live_listing_strict(idle).unwrap(),
+            ChannelLiveListing::Idle
+        );
+        for page in [
+            "<html><body>Please verify you are human</body></html>",
+            "メンテナンス中",
+            "",
+        ] {
+            assert!(parse_channel_live_listing_strict(page).is_err(), "{page}");
+            assert_eq!(parse_channel_live_listing(page), ChannelLiveListing::Idle);
+        }
     }
 }
