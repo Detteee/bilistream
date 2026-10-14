@@ -290,6 +290,54 @@ fn post_loop_end_signals(reason: FfmpegLoopExitReason, mut signals: EndSignals) 
     signals
 }
 
+/// How often the push loop samples whether data is moving.
+const PUSH_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// One reading of the push stats the status page shows (`stream_bitrate_kbps`,
+/// `stream_speed`, `stream_time_secs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct PushSample {
+    bitrate_kbps: Option<f32>,
+    speed: Option<f32>,
+    push_time_secs: Option<u32>,
+}
+
+fn current_push_sample() -> PushSample {
+    let stats = bilistream::plugins::get_ffmpeg_network_stats();
+    PushSample {
+        bitrate_kbps: stats.push_bitrate_kbps,
+        speed: bilistream::plugins::get_ffmpeg_speed(),
+        push_time_secs: stats.push_time_secs,
+    }
+}
+
+/// Time an ffmpeg session spent moving data. An interval counts only when
+/// both ends show bitrate > 0 and speed > 0 (the page's 转播中 rule) and the
+/// stream time advanced across it (progress).
+#[derive(Clone, Debug, Default)]
+struct PushMovingTime {
+    last: Option<(std::time::Instant, PushSample)>,
+    moving: Duration,
+}
+
+impl PushMovingTime {
+    fn sample(&mut self, now: std::time::Instant, sample: PushSample) {
+        let moving = |s: &PushSample| {
+            s.bitrate_kbps.is_some_and(|b| b > 0.0) && s.speed.is_some_and(|v| v > 0.0)
+        };
+        if let Some((then, prev)) = self.last {
+            let progressed = matches!(
+                (prev.push_time_secs, sample.push_time_secs),
+                (Some(a), Some(b)) if b > a
+            );
+            if moving(&prev) && moving(&sample) && progressed {
+                self.moving += now.saturating_duration_since(then);
+            }
+        }
+        self.last = Some((now, sample));
+    }
+}
+
 /// What the push loop does after one refetch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RefetchStep {
@@ -330,6 +378,11 @@ struct StreamEndState {
 /// There is no other retry limit in the push loop; see the changelog.
 const STREAM_END_ERROR_WINDOW: Duration = Duration::from_secs(600);
 
+/// An ffmpeg session that pushed at least this long counts as a healthy push:
+/// the stream was up, so an earlier run of status errors no longer counts
+/// toward `STREAM_END_ERROR_WINDOW` (Clerk N1).
+const HEALTHY_PUSH_CLEARS_ERRORS: Duration = Duration::from_secs(60);
+
 impl StreamEndState {
     /// A stream is starting. A different broadcast clears everything; the same
     /// broadcast coming back only clears `ended`, so the gate closes while it
@@ -346,6 +399,16 @@ impl StreamEndState {
         self.stream_id = stream_id.map(str::to_string);
         self.ended = false;
         self.errors_since = None;
+    }
+
+    /// Called when an ffmpeg session ends, before its refetch, with the time
+    /// that session spent actually moving data (`PushMovingTime`). The error
+    /// window only counts while the stream is down, so a healthy push of
+    /// `HEALTHY_PUSH_CLEARS_ERRORS` or more clears it; a shorter one does not.
+    fn on_push_ended(&mut self, pushed_for: Duration) {
+        if pushed_for >= HEALTHY_PUSH_CLEARS_ERRORS {
+            self.errors_since = None;
+        }
     }
 
     fn on_refetch(
@@ -1775,8 +1838,23 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 // Wait for this FFmpeg session to exit.
+                // Meanwhile, count only the time data is actually moving
+                // (N1): a stalled session must not clear the error window.
+                let mut push_moving = PushMovingTime::default();
                 let exit_status = match session {
-                    Some(session) => ffmpeg::wait_ffmpeg_session(session).await,
+                    Some(session) => {
+                        let wait = ffmpeg::wait_ffmpeg_session(session);
+                        tokio::pin!(wait);
+                        let mut tick = tokio::time::interval(PUSH_SAMPLE_INTERVAL);
+                        loop {
+                            tokio::select! {
+                                status = &mut wait => break status,
+                                _ = tick.tick() => {
+                                    push_moving.sample(std::time::Instant::now(), current_push_sample());
+                                }
+                            }
+                        }
+                    }
                     None => None,
                 };
 
@@ -1790,6 +1868,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // The end of the stream is this refetch failing to find the
                 // source live: no new m3u8. Same signal as the page's 切换.
                 let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
+                stream_end.on_push_ended(push_moving.moving);
                 let step = stream_end.on_refetch(
                     refetch_source(&source_client).await,
                     current_end_signals(session_generation, node_active),
@@ -3540,6 +3619,116 @@ mod tests {
             ));
             assert!(!state.announced && !state.ended);
         }
+    }
+
+    /// N1: an error, then a healthy push of 60 s or more, then another error
+    /// is a retry: the push cleared the window.
+    #[test]
+    fn healthy_push_clears_the_error_window() {
+        let start = t0();
+        let mut state = session(Some("v1"));
+        assert_eq!(
+            state.on_refetch(RefetchReading::Error, calm(), start),
+            RefetchStep::Retry
+        );
+        // ffmpeg then pushes fine for 20 min on the old URL.
+        state.on_push_ended(Duration::from_secs(20 * 60));
+        let later = start + Duration::from_secs(20 * 60 + 5);
+        assert_eq!(
+            state.on_refetch(RefetchReading::Error, calm(), later),
+            RefetchStep::Retry
+        );
+        // Exactly the threshold also clears.
+        state.on_push_ended(HEALTHY_PUSH_CLEARS_ERRORS);
+        assert_eq!(
+            state.on_refetch(
+                RefetchReading::Error,
+                calm(),
+                later + STREAM_END_ERROR_WINDOW + Duration::from_secs(1)
+            ),
+            RefetchStep::Retry
+        );
+        assert!(!state.ended && !state.announced);
+    }
+
+    /// N1: pushes shorter than 60 s do not clear the window; the stream is
+    /// still treated as down and ends once the window runs out.
+    #[test]
+    fn short_push_does_not_clear_the_error_window() {
+        let start = t0();
+        let mut state = session(Some("v1"));
+        state.on_refetch(RefetchReading::Error, calm(), start);
+        let mut now = start;
+        while now < start + STREAM_END_ERROR_WINDOW {
+            state.on_push_ended(HEALTHY_PUSH_CLEARS_ERRORS - Duration::from_secs(1));
+            now += Duration::from_secs(62);
+            let step = state.on_refetch(RefetchReading::Error, calm(), now);
+            if now < start + STREAM_END_ERROR_WINDOW {
+                assert_eq!(step, RefetchStep::Retry);
+            } else {
+                assert_eq!(
+                    step,
+                    RefetchStep::Ended {
+                        announce: true,
+                        timed_out: true
+                    }
+                );
+            }
+        }
+    }
+
+    fn run_session(minutes: u64, sample: impl Fn(u32) -> PushSample) -> Duration {
+        let start = t0();
+        let mut moving = PushMovingTime::default();
+        let steps = (minutes * 60 / PUSH_SAMPLE_INTERVAL.as_secs()) as u32;
+        for i in 0..=steps {
+            moving.sample(start + PUSH_SAMPLE_INTERVAL * i, sample(i));
+        }
+        moving.moving
+    }
+
+    /// N1: a 20-minute session with no data moving does not clear the window,
+    /// whether the stats read zero or ffmpeg reports speed with frozen time.
+    #[test]
+    fn stalled_twenty_minute_session_does_not_clear_the_window() {
+        let stalled = [
+            run_session(20, |_| PushSample::default()),
+            run_session(20, |_| PushSample {
+                bitrate_kbps: None,
+                speed: Some(0.5),
+                push_time_secs: Some(100),
+            }),
+            run_session(20, |i| PushSample {
+                bitrate_kbps: Some(3000.0),
+                speed: Some(1.0),
+                push_time_secs: Some(100 + (i / 1000)), // frozen
+            }),
+        ];
+        for pushed in stalled {
+            assert!(pushed < HEALTHY_PUSH_CLEARS_ERRORS, "{pushed:?}");
+            let start = t0();
+            let mut state = session(Some("v1"));
+            state.on_refetch(RefetchReading::Error, calm(), start);
+            state.on_push_ended(pushed);
+            assert_eq!(
+                state.on_refetch(
+                    RefetchReading::Error,
+                    calm(),
+                    start + Duration::from_secs(20 * 60)
+                ),
+                RefetchStep::Ended {
+                    announce: true,
+                    timed_out: true
+                }
+            );
+        }
+        // A session that is moving data for 20 min counts in full.
+        let healthy = run_session(20, |i| PushSample {
+            bitrate_kbps: Some(3000.0),
+            speed: Some(1.0),
+            push_time_secs: Some(i * 5),
+        });
+        assert_eq!(healthy, Duration::from_secs(20 * 60));
     }
 
     /// A clear "live" answer restarts the error window.
