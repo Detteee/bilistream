@@ -25,6 +25,10 @@ pub struct NodeSlot {
     /// The node's heartbeat says it holds a QQ gateway session; `None` when
     /// it does not say (older node).
     pub gateway_held: Option<bool>,
+    /// 1b: the peer's heartbeat booleans; `None` from an older node.
+    pub appsecret_set: Option<bool>,
+    pub appid_set: Option<bool>,
+    pub openid_set: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -129,6 +129,13 @@ pub(crate) mod routes {
         OPERATION_BODY_BYTES,
         OPERATION_BODY_BYTES,
     );
+    /// Batch 1b: the writer pushes the sealed admin openid record (or an
+    /// explicit unbound state) to a current member.
+    pub(crate) const NOTIFY_OPENID_PUSH: RoutePolicy =
+        route("POST", "/api/cluster/v1/notify/openid", 4096, 4096);
+    /// Batch 1b: a joining node or a new writer pulls a member's record once.
+    pub(crate) const NOTIFY_OPENID_PULL: RoutePolicy =
+        route("GET", "/api/cluster/v1/notify/openid", 0, 4096);
     /// Unauthenticated bootstrap: identity proof and password-gated pairing.
     pub(crate) const HELLO: RoutePolicy = route(
         "POST",
@@ -176,6 +183,8 @@ const TABLE: &[(RoutePolicy, RouteClass)] = &[
     (routes::APPLY_PUBLIC_STATUS, RouteClass::PeerOnly),
     (routes::SETTINGS, RouteClass::PeerOnly),
     (routes::FORWARD, RouteClass::PeerOnly),
+    (routes::NOTIFY_OPENID_PUSH, RouteClass::PeerOnly),
+    (routes::NOTIFY_OPENID_PULL, RouteClass::PeerOnly),
     (routes::DRAIN, RouteClass::Control),
     (routes::AUTO_FAILOVER, RouteClass::Control),
     (routes::FAILOVER, RouteClass::Control),

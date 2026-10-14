@@ -1450,10 +1450,14 @@ fn read_tx<T: serde::de::DeserializeOwned>(
     tx.read(name)?.map(|d| decode(d.value)).transpose()
 }
 fn write_tx<T: Serialize>(tx: &mut Transaction<'_>, name: &str, value: &T) -> io::Result<()> {
-    tx.write(
-        name,
-        serde_json::to_value(value).map_err(|_| invalid("成员记录编码失败"))?,
-    )?;
+    let value = serde_json::to_value(value).map_err(|_| invalid("成员记录编码失败"))?;
+    // Batch 1b: a node that leaves (or is removed) deletes its copy of the
+    // admin openid in the same transaction that records the departure.
+    let departed = name == LOCAL_RECORD && value.get("lifecycle") == Some(&"left".into());
+    tx.write(name, value)?;
+    if departed {
+        crate::notify::store::forget_openid_tx(tx)?;
+    }
     Ok(())
 }
 fn local_tx(tx: &Transaction<'_>) -> io::Result<LocalState> {
@@ -1591,4 +1595,57 @@ fn project_config(
     }
     tx.write("config.json", config)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod openid_departure_tests {
+    use super::*;
+
+    /// 1b: recording a departure (left / removed) deletes the local copy of
+    /// the admin openid in the same transaction; other local writes keep it.
+    #[test]
+    fn leaving_wipes_the_openid_copy_in_the_same_transaction() {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "bilistream-departure-{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        ));
+        std::fs::create_dir_all(root.join("legacy")).unwrap();
+        let store = Store::open(
+            root.join("data"),
+            root.join("keys/master.key"),
+            Some(root.join("legacy")),
+        )
+        .unwrap();
+        let set = || crate::notify::store::OpenidWrite {
+            change: crate::notify::store::OpenidChange::Set {
+                value: zeroize::Zeroizing::new("E4F0A1B2C3D4E5F60718293A4B5C6D7E".into()),
+                via: "manual",
+            },
+            expected: None,
+            writer: "a".into(),
+            now: 1,
+        };
+        crate::notify::store::write_openid(&store, set()).unwrap();
+        let managed = LocalState {
+            lifecycle: Lifecycle::Managed,
+            ..Default::default()
+        };
+        store
+            .transaction(move |tx| write_tx(tx, LOCAL_RECORD, &managed))
+            .unwrap();
+        assert!(crate::notify::store::load_openid(&store).unwrap().is_set());
+        let left = LocalState {
+            lifecycle: Lifecycle::Left,
+            ..Default::default()
+        };
+        store
+            .transaction(move |tx| write_tx(tx, LOCAL_RECORD, &left))
+            .unwrap();
+        let state = crate::notify::store::load_openid(&store).unwrap();
+        assert!(!state.is_set());
+        assert_eq!(state.revision, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

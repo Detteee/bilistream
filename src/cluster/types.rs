@@ -81,6 +81,14 @@ pub struct ClusterNodeSnapshot {
     /// node that does not report it (unknown).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_gateway_held: Option<bool>,
+    /// Batch 1b: this node has the AppSecret / the admin openid (booleans
+    /// only, never the values). `None` = an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_appsecret_set: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_appid_set: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_openid_set: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

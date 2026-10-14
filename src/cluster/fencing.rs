@@ -487,6 +487,9 @@ pub(crate) async fn collect_local_snapshot(
         notify_capable: crate::notify::local_capable(),
         notify_authority: crate::notify::local_authority(),
         notify_gateway_held: Some(crate::notify::local_gateway_held()),
+        notify_appsecret_set: Some(crate::notify::local_credential_flags().0),
+        notify_appid_set: Some(crate::notify::local_appid_set()),
+        notify_openid_set: Some(crate::notify::local_credential_flags().1),
     }
 }
 

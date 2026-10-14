@@ -258,6 +258,9 @@ pub fn read_digest(cfg: &Config, now: u64) -> ClusterDigest {
                 notify_capable: node.notify_capable,
                 notify_authority: node.notify_authority,
                 gateway_held: node.notify_gateway_held,
+                appsecret_set: node.notify_appsecret_set,
+                appid_set: node.notify_appid_set,
+                openid_set: node.notify_openid_set,
             }
         })
         .collect();

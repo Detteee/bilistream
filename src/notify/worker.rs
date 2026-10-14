@@ -150,6 +150,43 @@ pub(crate) async fn supervise_loop<F>(
     }
 }
 
+/// Periodic catch-up pull (1b revision): a member that missed every push
+/// retry converges without a restart.
+pub(crate) const PULL_EVERY_SECS: u64 = 600;
+
+/// 1b pull trigger mark: membership revision, writer-is-local, and when the
+/// last pull started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PullMark {
+    pub revision: u64,
+    pub writer_local: bool,
+    pub at: u64,
+}
+
+/// A pull is due on a new membership revision (joined, or first step after
+/// a start), on becoming the writer, or `PULL_EVERY_SECS` after the last
+/// one. Returns the new mark when a pull is due; `now` is the worker clock.
+pub(crate) fn next_pull(
+    last: Option<PullMark>,
+    revision: u64,
+    writer_local: bool,
+    now: u64,
+) -> Option<PullMark> {
+    let due = match last {
+        None => true,
+        Some(mark) => {
+            mark.revision != revision
+                || (writer_local && !mark.writer_local)
+                || now.saturating_sub(mark.at) >= PULL_EVERY_SECS
+        }
+    };
+    due.then_some(PullMark {
+        revision,
+        writer_local,
+        at: now,
+    })
+}
+
 pub struct Worker {
     store: Arc<Store>,
     http: reqwest::Client,
@@ -213,6 +250,8 @@ pub struct Worker {
     live_now: Vec<live::LiveObservation>,
     limiter: commands::Limiter,
     was_membership_blocked: bool,
+    /// 1b: `(membership revision, writer is local)` at the last openid pull.
+    pull_key: Option<PullMark>,
     /// Items that expired while no node could send (H2 accounting).
     expired_no_sender: u32,
     warned_no_sender: bool,
@@ -277,6 +316,7 @@ impl Worker {
             live_now: Vec::new(),
             limiter: commands::Limiter::default(),
             was_membership_blocked: false,
+            pull_key: None,
             expired_no_sender: 0,
             warned_no_sender: false,
             settings_fp: persisted.settings,
@@ -489,7 +529,27 @@ impl Worker {
             digest = self.digest(now);
         }
         self.was_membership_blocked = membership_blocked;
+        let cluster = digest.enabled && !membership_blocked;
         self.step_with(now, digest, membership_blocked).await;
+        if cluster {
+            self.maybe_pull(now);
+        }
+    }
+
+    /// 1b: pull the openid once after joining (or starting) at a membership
+    /// revision, once on becoming the writer, and every 10 minutes.
+    fn maybe_pull(&mut self, now: u64) {
+        let Ok((revision, _)) = super::openid_sync::current_members(&self.store) else {
+            return;
+        };
+        let writer_local = self.writer.as_ref().is_some_and(|writer| writer.is_local);
+        if let Some(mark) = next_pull(self.pull_key, revision, writer_local, now) {
+            self.pull_key = Some(mark);
+            super::openid_sync::spawn_pull(Arc::clone(&self.store), self.node_id.clone());
+        } else if let Some(mark) = self.pull_key.as_mut() {
+            // Losing the writer role updates the mark without a pull.
+            mark.writer_local = writer_local;
+        }
     }
 
     async fn step_with(&mut self, now: u64, digest: ClusterDigest, membership_blocked: bool) {
@@ -1414,6 +1474,8 @@ impl Worker {
                     revision
                 );
                 self.reload_settings();
+                // 1b: every current member gets the new value.
+                super::openid_sync::spawn_push(Arc::clone(&self.store), self.node_id.clone());
             }
             Err(error) => tracing::warn!("QQ 通知 openid 保存失败: {}", error),
         }
@@ -1547,6 +1609,9 @@ impl Worker {
             shared.status = status;
             shared.writer = self.writer.clone();
             shared.gateway_held = self.gateway.is_some();
+            shared.appsecret_set = self.secret.is_some();
+            shared.appid_set = !self.cfg.qq.app_id.trim().is_empty();
+            shared.openid_set = self.openid.is_set();
         }
         let mut last = self.signature.lock().unwrap_or_else(|e| e.into_inner());
         if *last != signature {

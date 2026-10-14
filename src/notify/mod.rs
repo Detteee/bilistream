@@ -14,8 +14,10 @@ pub mod format;
 pub mod ledger;
 pub mod live;
 pub mod observer;
+pub mod openid_sync;
 pub mod policy;
 pub mod qq;
+pub mod readiness;
 pub mod sink;
 pub mod store;
 #[cfg(test)]
@@ -65,6 +67,10 @@ pub struct Shared {
     pub writer: Option<NodeRef>,
     /// This node holds a QQ gateway session (heartbeat `notify_gateway_held`).
     pub gateway_held: bool,
+    /// 1b `/status.nodes[]` and heartbeat booleans (never the values).
+    pub appsecret_set: bool,
+    pub appid_set: bool,
+    pub openid_set: bool,
 }
 
 /// `{node_id, is_local}` as `/status` shows `openid_writer` and
@@ -176,6 +182,17 @@ pub fn heartbeat_ledger() -> Option<NotifyLedger> {
 /// Enabled with AppID, AppSecret and admin openid.
 pub fn local_capable() -> bool {
     shared().capable
+}
+
+/// `(appsecret_set, openid_set)` on this node, as the worker last saw them.
+pub fn local_credential_flags() -> (bool, bool) {
+    let shared = shared();
+    (shared.appsecret_set, shared.openid_set)
+}
+
+/// This node has a saved AppID (Addendum C).
+pub fn local_appid_set() -> bool {
+    shared().appid_set
 }
 
 /// This node holds a QQ gateway session right now.

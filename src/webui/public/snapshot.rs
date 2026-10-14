@@ -214,6 +214,9 @@ mod tests {
             notify_capable: false,
             notify_authority: false,
             notify_gateway_held: None,
+            notify_appsecret_set: None,
+            notify_appid_set: None,
+            notify_openid_set: None,
         }
     }
 

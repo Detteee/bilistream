@@ -237,3 +237,60 @@ async fn operation_handler_can_take_membership_write_gate() {
     drop((auth, identity));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// N3 (rev 4): a member signing at an older membership revision is refused
+/// on both openid peer routes before the handler runs; the current
+/// revision is admitted.
+#[tokio::test]
+async fn openid_peer_routes_refuse_a_member_signing_at_an_older_revision() {
+    let (root, auth) = installation().await;
+    let reached = Arc::new(AtomicBool::new(false));
+    let handler = {
+        let reached = Arc::clone(&reached);
+        move || {
+            let reached = Arc::clone(&reached);
+            async move {
+                reached.store(true, Ordering::SeqCst);
+                StatusCode::OK
+            }
+        }
+    };
+    assert_eq!(
+        routes::NOTIFY_OPENID_PUSH.path,
+        routes::NOTIFY_OPENID_PULL.path
+    );
+    let app = Router::new()
+        .route(
+            routes::NOTIFY_OPENID_PUSH.path,
+            post(handler.clone()).get(handler),
+        )
+        .layer(axum::middleware::from_fn(require_webui_auth))
+        .layer(Extension(Arc::clone(&auth)));
+    let current = auth
+        .runtime
+        .membership
+        .manifest()
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert!(current >= 1);
+    for (route, body) in [
+        (routes::NOTIFY_OPENID_PUSH, b"{}".to_vec()),
+        (routes::NOTIFY_OPENID_PULL, Vec::new()),
+    ] {
+        let stale = signed_request(&auth, route, current - 1, PeerScope::Ordinary, body.clone());
+        let status = app.clone().oneshot(stale).await.unwrap().status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{} stale", route.method);
+        assert!(
+            !reached.load(Ordering::SeqCst),
+            "{} handler not run",
+            route.method
+        );
+        let fresh = signed_request(&auth, route, current, PeerScope::Ordinary, body);
+        let status = app.clone().oneshot(fresh).await.unwrap().status();
+        assert_eq!(status, StatusCode::OK, "{} current", route.method);
+        assert!(reached.swap(false, Ordering::SeqCst));
+    }
+    drop((app, auth));
+    std::fs::remove_dir_all(root).unwrap();
+}

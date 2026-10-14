@@ -107,6 +107,8 @@ pub struct OpenidState {
     pub via: Option<String>,
     /// Logical `openid_revision`: 0 = never written.
     pub revision: u64,
+    /// Node that assigned `revision` (partition tie-break, 1b).
+    pub writer: String,
     /// Store revision of the record (change detection only).
     pub record_revision: Option<u64>,
 }
@@ -151,6 +153,7 @@ fn parse_openid(doc: Option<Document>) -> io::Result<OpenidState> {
         via: openid.as_ref().and(parsed.via.clone()),
         openid,
         revision: parsed.revision,
+        writer: parsed.writer.clone(),
         record_revision,
     })
 }
@@ -292,6 +295,167 @@ where
     between(tx)?;
     tx.write(CONFIG_RECORD, value)?;
     Ok(true)
+}
+
+/// Bound or explicitly unbound, as a peer copy says (batch 1b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyState {
+    Bound,
+    Unbound,
+}
+
+/// The `notify-openid` record as it travels between current members on the
+/// signed peer route (contract "Peer distribution"). Only on that route;
+/// never in a browser response, a log or `Debug` output.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OpenidCopy {
+    pub state: CopyState,
+    /// Empty when `state` is `unbound`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub openid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    pub revision: u64,
+    #[serde(default)]
+    pub writer: String,
+}
+
+impl Drop for OpenidCopy {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.openid);
+    }
+}
+
+impl std::fmt::Debug for OpenidCopy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenidCopy")
+            .field("state", &self.state)
+            .field("openid", &if self.openid.is_empty() { "" } else { "<set>" })
+            .field("revision", &self.revision)
+            .field("writer", &self.writer)
+            .finish()
+    }
+}
+
+impl OpenidCopy {
+    /// Partition order (contract "Single writer"): the greatest
+    /// `(openid_revision, writer_node_id)` wins.
+    pub fn key(&self) -> (u64, &str) {
+        (self.revision, self.writer.as_str())
+    }
+}
+
+const COPY_VIA: [&str; 3] = ["manual", "message", "friend_add"];
+
+/// This node's record as a peer copy.
+pub fn export_copy(store: &Store) -> io::Result<OpenidCopy> {
+    let state = load_openid(store)?;
+    Ok(OpenidCopy {
+        state: if state.is_set() {
+            CopyState::Bound
+        } else {
+            CopyState::Unbound
+        },
+        openid: state
+            .openid
+            .as_ref()
+            .map(|id| id.expose().to_string())
+            .unwrap_or_default(),
+        bound_at: state.bound_at,
+        via: state.via.clone(),
+        revision: state.revision,
+        writer: state.writer.clone(),
+    })
+}
+
+/// What a received copy did here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CopyOutcome {
+    /// The copy was newer and replaced the local record.
+    pub applied: bool,
+    /// Local logical revision afterwards.
+    pub revision: u64,
+}
+
+fn invalid_copy() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "管理员 openid 副本无效")
+}
+
+/// Keep the greater of the local record and `copy` by
+/// `(openid_revision, writer_node_id)`, in one transaction. An `unbound`
+/// copy that wins clears the local value (unbind propagation).
+pub fn accept_copy(store: &Store, copy: &OpenidCopy) -> io::Result<CopyOutcome> {
+    match copy.state {
+        CopyState::Bound => {
+            super::config::validate_openid(&copy.openid).map_err(|_| invalid_copy())?;
+            if copy
+                .via
+                .as_deref()
+                .is_some_and(|via| !COPY_VIA.contains(&via))
+            {
+                return Err(invalid_copy());
+            }
+        }
+        CopyState::Unbound if !copy.openid.is_empty() => return Err(invalid_copy()),
+        CopyState::Unbound => {}
+    }
+    if copy.writer.len() > 128 || copy.writer.chars().any(char::is_control) {
+        return Err(invalid_copy());
+    }
+    if copy.revision == 0 {
+        // "Never written": nothing to adopt.
+        return Ok(CopyOutcome {
+            applied: false,
+            revision: load_openid(store)?.revision,
+        });
+    }
+    let copy = copy.clone();
+    store.transaction(move |tx| {
+        let current = parse_openid(tx.read(OPENID_RECORD)?)?;
+        if copy.key() <= (current.revision, current.writer.as_str()) {
+            return Ok(CopyOutcome {
+                applied: false,
+                revision: current.revision,
+            });
+        }
+        let bound = copy.state == CopyState::Bound;
+        let doc = OpenidDoc {
+            admin_openid: if bound {
+                copy.openid.clone()
+            } else {
+                String::new()
+            },
+            bound_at: if bound { copy.bound_at } else { None },
+            via: if bound { copy.via.clone() } else { None },
+            revision: copy.revision,
+            writer: copy.writer.clone(),
+        };
+        let value =
+            serde_json::to_value(&doc).map_err(|_| io::Error::other("管理员 openid 无法保存"))?;
+        tx.write(OPENID_RECORD, value)?;
+        Ok(CopyOutcome {
+            applied: true,
+            revision: copy.revision,
+        })
+    })
+}
+
+/// A node that leaves the membership deletes its copy (contract: "a
+/// removed node ... deletes its local `notify-openid` when it leaves").
+/// The record is reset to "never written", so after a later re-join any
+/// member's copy wins. Runs inside the membership transaction.
+pub fn forget_openid_tx(tx: &mut Transaction<'_>) -> io::Result<()> {
+    if tx.read(OPENID_RECORD)?.is_none() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(OpenidDoc::default())
+        .map_err(|_| io::Error::other("管理员 openid 无法清除"))?;
+    tx.write(OPENID_RECORD, value)?;
+    Ok(())
 }
 
 pub fn migrate_plain_openid(store: &Store) -> io::Result<bool> {

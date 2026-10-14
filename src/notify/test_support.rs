@@ -103,3 +103,175 @@ async fn gateway(State(state): State<Arc<Mutex<MockState>>>) -> Json<Value> {
         .unwrap_or_else(|| "ws://127.0.0.1:9/".to_string());
     Json(json!({ "url": url }))
 }
+
+/// In-process stand-in for the signed peer channel (batch 1b tests): every
+/// node is a `Store`, calls go through the real receivers
+/// (`openid_sync::serve_push` / `serve_pull`) with the receiver's member
+/// list, and a node can be made unreachable for its next N calls.
+/// `(push target, changing reads, joining node, its store)`.
+pub type ChangeOnPush = (String, u32, String, Arc<crate::storage::Store>);
+
+pub struct MemCluster {
+    pub revision: Mutex<u64>,
+    /// Committed members of `revision`.
+    pub members: Mutex<Vec<String>>,
+    pub stores: Mutex<std::collections::HashMap<String, Arc<crate::storage::Store>>>,
+    /// node → calls still to fail as unreachable (`u32::MAX` = offline).
+    pub down: Mutex<std::collections::HashMap<String, u32>>,
+    /// node → push calls it received (delivered or not).
+    pub pushes: Mutex<std::collections::HashMap<String, u32>>,
+    /// `members()` calls still to fail as "membership changing" (rev 4).
+    pub changing: Mutex<u32>,
+    /// Rev 4: when a push reaches this node, a membership change starts
+    /// mid-round: that push answers `MembershipChanged`, the next
+    /// `changing` reads fail, and the new revision adds the given member.
+    pub change_on_push: Mutex<Option<ChangeOnPush>>,
+}
+
+impl MemCluster {
+    pub fn new(nodes: &[(&str, Arc<crate::storage::Store>)]) -> Arc<Self> {
+        Arc::new(Self {
+            revision: Mutex::new(1),
+            members: Mutex::new(nodes.iter().map(|(id, _)| id.to_string()).collect()),
+            stores: Mutex::new(
+                nodes
+                    .iter()
+                    .map(|(id, store)| (id.to_string(), Arc::clone(store)))
+                    .collect(),
+            ),
+            down: Mutex::new(Default::default()),
+            pushes: Mutex::new(Default::default()),
+            changing: Mutex::new(0),
+            change_on_push: Mutex::new(None),
+        })
+    }
+
+    pub fn link(self: &Arc<Self>, local: &str) -> MemLink {
+        MemLink {
+            cluster: Arc::clone(self),
+            local: local.to_string(),
+        }
+    }
+
+    pub fn set_down(&self, node: &str, calls: u32) {
+        self.down.lock().unwrap().insert(node.to_string(), calls);
+    }
+
+    /// Commit a new membership revision without `node`.
+    pub fn remove(&self, node: &str) {
+        self.members.lock().unwrap().retain(|member| member != node);
+        *self.revision.lock().unwrap() += 1;
+    }
+
+    /// Commit a new membership revision that adds `node`.
+    pub fn add(&self, node: &str, store: Arc<crate::storage::Store>) {
+        self.stores.lock().unwrap().insert(node.to_string(), store);
+        self.members.lock().unwrap().push(node.to_string());
+        *self.revision.lock().unwrap() += 1;
+    }
+
+    fn reachable(&self, node: &str) -> bool {
+        let mut down = self.down.lock().unwrap();
+        match down.get_mut(node) {
+            Some(0) | None => true,
+            Some(left) => {
+                if *left != u32::MAX {
+                    *left -= 1;
+                }
+                false
+            }
+        }
+    }
+
+    fn store(&self, node: &str) -> Arc<crate::storage::Store> {
+        Arc::clone(&self.stores.lock().unwrap()[node])
+    }
+}
+
+pub struct MemLink {
+    cluster: Arc<MemCluster>,
+    local: String,
+}
+
+use super::openid_sync::{LinkError, PeerLink, PushAck};
+use super::store::OpenidCopy;
+
+#[async_trait::async_trait]
+impl PeerLink for MemLink {
+    fn members(&self) -> std::io::Result<(u64, Vec<String>)> {
+        {
+            let mut changing = self.cluster.changing.lock().unwrap();
+            if *changing > 0 {
+                *changing -= 1;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "成员版本正在变化",
+                ));
+            }
+        }
+        let members = self.cluster.members.lock().unwrap().clone();
+        if !members.contains(&self.local) {
+            // Removed: no trust snapshot, so no peer calls at all.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "本节点不在当前成员清单",
+            ));
+        }
+        Ok((
+            *self.cluster.revision.lock().unwrap(),
+            members.into_iter().filter(|m| *m != self.local).collect(),
+        ))
+    }
+
+    async fn push(
+        &self,
+        revision: u64,
+        node: &str,
+        copy: &OpenidCopy,
+    ) -> Result<PushAck, LinkError> {
+        if revision != *self.cluster.revision.lock().unwrap() {
+            return Err(LinkError::MembershipChanged);
+        }
+        *self
+            .cluster
+            .pushes
+            .lock()
+            .unwrap()
+            .entry(node.to_string())
+            .or_default() += 1;
+        let hook = {
+            let mut hook = self.cluster.change_on_push.lock().unwrap();
+            if hook.as_ref().is_some_and(|(at, ..)| at == node) {
+                hook.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, reads, joined, store)) = hook {
+            *self.cluster.changing.lock().unwrap() = reads;
+            self.cluster.add(&joined, store);
+            return Err(LinkError::MembershipChanged);
+        }
+        if !self.cluster.reachable(node) {
+            return Err(LinkError::Unreachable);
+        }
+        let members = self.cluster.members.lock().unwrap().clone();
+        let body = serde_json::to_vec(copy).unwrap();
+        super::openid_sync::serve_push(&self.cluster.store(node), &self.local, &members, &body)
+            .map_err(|_| LinkError::Refused)
+    }
+
+    async fn pull(&self, revision: u64, node: &str) -> Result<OpenidCopy, LinkError> {
+        if revision != *self.cluster.revision.lock().unwrap() {
+            return Err(LinkError::MembershipChanged);
+        }
+        if !self.cluster.reachable(node) {
+            return Err(LinkError::Unreachable);
+        }
+        let members = self.cluster.members.lock().unwrap().clone();
+        let copy = super::openid_sync::serve_pull(&self.cluster.store(node), &self.local, &members)
+            .map_err(|_| LinkError::Refused)?;
+        // Through JSON, as on the wire.
+        Ok(serde_json::from_slice(&serde_json::to_vec(&copy).unwrap()).unwrap())
+    }
+}

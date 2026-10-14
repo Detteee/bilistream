@@ -92,6 +92,11 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
     Ok(view)
 }
 
+#[cfg(test)]
+pub(crate) fn settings_view_for_tests(store: &crate::storage::Store) -> std::io::Result<Value> {
+    settings_view(store)
+}
+
 /// Channels the 关注列表 picker offers: `channels.json` plus the channels in
 /// the current YouTube/Twitch/Niconico settings. Deduped by identity.
 pub fn watch_candidates(cfg: Option<&crate::config::Config>) -> Vec<Value> {
@@ -154,6 +159,17 @@ pub async fn get_notify() -> Response {
     match result {
         Ok(mut view) => {
             view["watch_candidates"] = json!(watch_candidates(cfg.as_ref()));
+            if let Some(cfg) = cfg.as_ref() {
+                let status = notify::status_view();
+                let digest = notify::authority::read_digest(cfg, crate::storage::now());
+                let local_authority = matches!(
+                    status.get("authority").and_then(Value::as_str),
+                    Some("primary" | "delegate")
+                );
+                if let (_, Some(set)) = readiness_view(&status, &digest, local_authority) {
+                    view["writer_openid_set"] = json!(set);
+                }
+            }
             reply(StatusCode::OK, Some(view), "")
         }
         Err(error) => reply(io_status(&error), None, error.to_string()),
@@ -351,6 +367,12 @@ pub(crate) async fn update_notify(
             .as_deref()
             .is_none_or(|s| s.trim().is_empty());
     let node_id = local_node_id().await;
+    let openid_changed = update
+        .admin_openid
+        .as_deref()
+        .is_some_and(|openid| !openid.trim().is_empty());
+    let push_store = Arc::clone(&store);
+    let push_node = node_id.clone();
     let mut update = update;
     let result = tokio::task::spawn_blocking(move || {
         let result = apply_update(&store, &update, &node_id, &|| {
@@ -369,6 +391,10 @@ pub(crate) async fn update_notify(
     match result {
         Ok(view) => {
             let _ = notify::send_command(Command::Reload);
+            if openid_changed {
+                // 1b: the new value goes to every current member.
+                notify::openid_sync::spawn_push(push_store, push_node);
+            }
             reply(
                 StatusCode::OK,
                 Some(view),
@@ -441,6 +467,8 @@ pub(crate) async fn notify_unbind(
         Err(error) => return reply(io_status(&error), None, error.to_string()),
     };
     let node_id = local_node_id().await;
+    let push_store = Arc::clone(&store);
+    let push_node = node_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         apply_unbind(&store, expected, &node_id, &|| {
             notify::check_writer("解除绑定")
@@ -456,6 +484,8 @@ pub(crate) async fn notify_unbind(
     match result {
         Ok((view, was_set)) => {
             let _ = notify::send_command(Command::Reload);
+            // 1b: clear it on every current member, retried until acked.
+            notify::openid_sync::spawn_push(push_store, push_node);
             reply(
                 StatusCode::OK,
                 Some(view),
@@ -467,6 +497,95 @@ pub(crate) async fn notify_unbind(
             )
         }
         Err(error) => error.into_response(),
+    }
+}
+
+fn peer_refusal(refusal: notify::openid_sync::ServeRefusal) -> Response {
+    use notify::openid_sync::ServeRefusal;
+    let (status, message) = match refusal {
+        ServeRefusal::NotMember => (StatusCode::FORBIDDEN, "节点不在当前成员清单"),
+        ServeRefusal::Invalid => (StatusCode::BAD_REQUEST, "管理员 openid 副本无效"),
+        ServeRefusal::Store => (StatusCode::INTERNAL_SERVER_ERROR, "管理员 openid 无法保存"),
+    };
+    reply(status, None, message)
+}
+
+/// The signed caller's node id and this node's current member set, or the
+/// refusal. Without the router's `AuthenticatedNode` (never a browser:
+/// the path is peer-only) the call is refused.
+fn peer_context(
+    peer: Option<Extension<crate::cluster::peer_call::AuthenticatedNode>>,
+    headers: &HeaderMap,
+) -> Result<(String, Arc<crate::storage::Store>, Vec<String>), Box<Response>> {
+    if !notify::openid_sync::inbound_transport_allowed(headers) {
+        return Err(Box::new(reply(
+            StatusCode::FORBIDDEN,
+            None,
+            "管理员 openid 只能通过 HTTPS 或本机认证隧道传输",
+        )));
+    }
+    let Some(Extension(peer)) = peer else {
+        return Err(Box::new(peer_refusal(
+            notify::openid_sync::ServeRefusal::NotMember,
+        )));
+    };
+    let store = crate::storage::global()
+        .map_err(|_| Box::new(peer_refusal(notify::openid_sync::ServeRefusal::Store)))?;
+    let (_, members) = notify::openid_sync::current_members(&store)
+        .map_err(|_| Box::new(peer_refusal(notify::openid_sync::ServeRefusal::NotMember)))?;
+    Ok((peer.node_id, store, members))
+}
+
+/// `POST /api/cluster/v1/notify/openid` (peer-only, signed): a member's
+/// copy; the greater `(openid_revision, writer)` is kept. Answers
+/// `{applied, revision}`, never the value.
+pub(crate) async fn peer_openid_push(
+    peer: Option<Extension<crate::cluster::peer_call::AuthenticatedNode>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (from, store, members) = match peer_context(peer, &headers) {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let body = zeroize::Zeroizing::new(body.to_vec());
+    let result = tokio::task::spawn_blocking(move || {
+        notify::openid_sync::serve_push(&store, &from, &members, &body)
+    })
+    .await
+    .unwrap_or(Err(notify::openid_sync::ServeRefusal::Store));
+    match result {
+        Ok(ack) => {
+            if ack.applied {
+                let _ = notify::send_command(Command::Reload);
+            }
+            reply(StatusCode::OK, Some(json!(ack)), "")
+        }
+        Err(refusal) => peer_refusal(refusal),
+    }
+}
+
+/// `GET /api/cluster/v1/notify/openid` (peer-only, signed): this node's
+/// record for a joining node or a new writer, `unbound` included.
+pub(crate) async fn peer_openid_pull(
+    peer: Option<Extension<crate::cluster::peer_call::AuthenticatedNode>>,
+    headers: HeaderMap,
+) -> Response {
+    let (from, store, members) = match peer_context(peer, &headers) {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        notify::openid_sync::serve_pull(&store, &from, &members)
+    })
+    .await
+    .unwrap_or(Err(notify::openid_sync::ServeRefusal::Store));
+    match result {
+        Ok(copy) => {
+            let data = serde_json::to_value(&copy).ok();
+            reply(StatusCode::OK, data, "")
+        }
+        Err(refusal) => peer_refusal(refusal),
     }
 }
 
@@ -488,6 +607,23 @@ fn sender_view(node: Option<&str>, digest: &notify::observer::ClusterDigest, now
     json!({ "node": node, "last_send": last_send })
 }
 
+/// Addendum C fields from the worker status and the heartbeat digest.
+fn readiness_view(
+    status: &Value,
+    digest: &notify::observer::ClusterDigest,
+    local_authority: bool,
+) -> (Vec<Value>, Option<bool>) {
+    let (appsecret, openid) = notify::local_credential_flags();
+    let writer = notify::readiness::writer_from_status(status);
+    notify::readiness::view(
+        digest,
+        writer.as_ref(),
+        (notify::local_appid_set(), appsecret, openid),
+        status["capable"].as_bool().unwrap_or(false),
+        local_authority,
+    )
+}
+
 pub async fn notify_status() -> Response {
     let mut status = notify::status_view();
     if let Ok(cfg) = crate::config::load_config().await {
@@ -499,24 +635,7 @@ pub async fn notify_status() -> Response {
         );
         let fallback =
             status.get("authority").and_then(Value::as_str) == Some("no_quorum_fallback");
-        let nodes: Vec<Value> = if digest.enabled {
-            digest
-                .nodes
-                .iter()
-                .map(|node| {
-                    let local = node.id == digest.local;
-                    json!({
-                        "node_id": node.id,
-                        "is_local": local,
-                        "notify_capable": if local { status["capable"].as_bool().unwrap_or(false) } else { node.notify_capable },
-                        "notify_authority": if local { local_authority } else { node.notify_authority && node.fresh },
-                        "fresh": node.fresh,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let (nodes, writer_openid) = readiness_view(&status, &digest, local_authority);
         let authority_node = if local_authority || fallback {
             Some(digest.local.clone())
         } else {
@@ -530,6 +649,10 @@ pub async fn notify_status() -> Response {
         if let Some(object) = status.as_object_mut() {
             object.insert("authority_node_id".into(), json!(authority_node));
             object.insert("nodes".into(), json!(nodes));
+            object.remove("writer_openid_set");
+            if let Some(set) = writer_openid {
+                object.insert("writer_openid_set".into(), json!(set));
+            }
             object.insert("sender".into(), sender);
         }
     }

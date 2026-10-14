@@ -1722,3 +1722,86 @@ async fn delegate_handoff_back_to_the_owner_closes_before_identify() {
     assert!(gap > 0);
     assert_eq!(a.authority, Authority::Primary);
 }
+
+/// 1b gate: bind on A, fail over to B, B sends without a rebind. B has its
+/// own AppSecret (manual copy, Phase 2) but never saw a bind window; the
+/// openid reaches it only through A's push on the peer route.
+#[tokio::test]
+async fn bind_on_a_then_failover_to_b_sends_without_a_rebind() {
+    use crate::notify::openid_sync::{push_all, RetryPolicy};
+    use crate::notify::test_support::MemCluster;
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_ta, store_a) = store();
+    let (_tb, store_b) = store();
+    configure(&store_a, &mock, "");
+    configure(&store_b, &mock, "");
+    let peers = MemCluster::new(&[("a", Arc::clone(&store_a)), ("b", Arc::clone(&store_b))]);
+    let now = now_secs();
+    let nodes = |a_alive: bool, a_capable: bool, b_capable: bool| {
+        let mut nodes = vec![
+            slot(
+                "a",
+                a_alive,
+                if a_alive {
+                    "healthy"
+                } else {
+                    "heartbeat_timeout"
+                },
+            ),
+            slot("b", true, "healthy"),
+        ];
+        nodes[0].notify_capable = a_capable;
+        nodes[1].notify_capable = b_capable;
+        nodes
+    };
+
+    // Bind on A, the owner and writer.
+    let mut a = ready_worker(&store_a, "a").await;
+    a.apply_digest(&cluster("a", "a", nodes(true, false, false)), false, now);
+    assert!(a.writer.as_ref().is_some_and(|w| w.is_local));
+    let view = a.start_bind(BindMode::Code, false, now).unwrap();
+    let code = view["code"].as_str().unwrap().to_string();
+    a.handle_gateway_event(GatewayEvent::C2c {
+        openid: OPENID.into(),
+        msg_id: "m-1".into(),
+        content: format!("绑定 {code}"),
+        at: now + 1,
+    })
+    .await;
+    assert_eq!(stored_openid(&store_a).as_deref(), Some(OPENID));
+    // What finish_bind's background push does, over the in-process channel.
+    let fast = RetryPolicy {
+        attempts: 3,
+        first_delay: std::time::Duration::from_millis(1),
+        max_delay: std::time::Duration::from_millis(2),
+    };
+    let report = push_all(&store_a, &peers.link("a"), fast).await.unwrap();
+    assert_eq!(report.acked, vec!["b".to_string()]);
+    let sent_by_a = mock.messages().len(); // the passive 「绑定成功」
+
+    // B: never bound, now holds the sealed copy.
+    let mut b = ready_worker(&store_b, "b").await;
+    b.reload_settings();
+    assert!(b.capable(), "B is fully configured from the pushed copy");
+    let status = b.status(now + 2, &cluster("b", "a", nodes(true, true, true)));
+    assert_eq!(status["openid_set"], true);
+    assert!(!status.to_string().contains(OPENID));
+
+    // A dies; B takes over (handoff hold first), then sends the failover.
+    b.apply_digest(&cluster("b", "a", nodes(true, true, true)), false, now + 2);
+    let mut held = cluster("b", "b", nodes(false, true, true));
+    held.handoff_pending = true;
+    held.fence_block = Some("集群节点交接尚未确认".into());
+    b.apply_digest(&held, false, now + 5);
+    let dead = cluster("b", "b", nodes(false, true, true));
+    b.apply_digest(&dead, false, now + 20);
+    b.apply_digest(&dead, false, now + 25);
+    assert_eq!(b.authority, Authority::Primary);
+    b.deliver(now + 60, &dead).await;
+    let messages = mock.messages();
+    assert!(messages.len() > sent_by_a, "B sent without a rebind");
+    assert!(messages[sent_by_a..].iter().all(|(to, _)| to == OPENID));
+    assert_eq!(b.ledger.undelivered_pending(), 0);
+    assert_eq!(stored_openid(&store_b).as_deref(), Some(OPENID));
+}
