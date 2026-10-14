@@ -441,3 +441,22 @@ export function bindView(bind, elapsed = 0) {
   }
   return { hidden: true };
 }
+
+// B1: DELETE /api/notify/openid returns only the openid fields; merge them so
+// AppID, 启用 and the rest of the settings survive until the GET reload lands.
+export function mergeOpenidFields(settings, data) {
+  if (!settings) return settings;
+  const pick = {};
+  for (const k of ['openid_set', 'openid_bound_at', 'openid_revision']) if (data && k in data) pick[k] = data[k];
+  if (!('openid_set' in pick)) { pick.openid_set = false; pick.openid_bound_at = null; }
+  return { ...settings, ...pick };
+}
+
+// B2: a refusal is re-derived from the latest status on every render, and the
+// writer refusals drop once the openid controls are enabled again.
+export function liveRefusal(error, route, status) {
+  const r = notifyRefusal(error, status, { route });
+  if (!r) return null;
+  if ((r.kind === 'not_owner' || r.kind === 'no_writer') && status && 'openid_writer' in status && openidGate(status).enabled) return null;
+  return r;
+}

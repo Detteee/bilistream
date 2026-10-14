@@ -264,3 +264,30 @@ test('keep_online off: gateway_owner null between bind windows is not a handoff'
   assert.doesNotMatch(openidGate(remote).hint, /切换中/);
   assert.equal(isHandoff({ openid_writer: { node_id: 'a', is_local: true }, gateway_owner: { node_id: 'a', is_local: true } }), false);
 });
+
+import { liveRefusal, mergeOpenidFields } from '../src/js/notify-state.js';
+
+test('B1: unbind keeps AppID and 启用', () => {
+  const before = { config: { enabled: true, qq: { app_id: '1029384' } }, appsecret_set: true, openid_set: true, openid_bound_at: 1, openid_revision: 4, revision: 9 };
+  const after = mergeOpenidFields(before, { openid_set: false, openid_bound_at: null, openid_revision: 5 });
+  assert.equal(after.config.qq.app_id, '1029384');
+  assert.equal(after.config.enabled, true);
+  assert.equal(after.appsecret_set, true);
+  assert.equal(after.revision, 9);
+  assert.deepEqual([after.openid_set, after.openid_bound_at, after.openid_revision], [false, null, 5]);
+  assert.equal(mergeOpenidFields(before, undefined).openid_set, false, 'empty body still marks unbound');
+  assert.equal(mergeOpenidFields(before, { config: {} }).config.qq.app_id, '1029384', 'ignores non-openid keys');
+});
+
+test('B2: writer refusals follow fresh status and drop when controls re-enable', () => {
+  const err = data => ({ status: 409, body: { success: false, message: 'x', data } });
+  const remote = { openid_writer: { node_id: 'b', is_local: false } };
+  const local = { openid_writer: { node_id: 'a', is_local: true } };
+  assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'b' }), 'openid', remote).kind, 'not_owner');
+  assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'b' }), 'openid', local), null);
+  assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', local), null);
+  const quorum = { openid_writer: null, authority: 'none', nodes: [{}, {}] };
+  assert.match(liveRefusal(err({ code: 'no_writer' }), 'openid', quorum).banner.text, /集群暂无多数派/);
+  assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', {}).kind, 'no_writer', 'unknown writer keeps the banner');
+  assert.equal(liveRefusal(err({ code: 'bad_credentials' }), 'openid', local).kind, 'bad_credentials');
+});

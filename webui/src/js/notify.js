@@ -8,7 +8,7 @@ import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, removeWatch,
-  notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
+  liveRefusal, mergeOpenidFields, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
 } from './notify-state.js';
 
 const FIELDS = {
@@ -46,6 +46,7 @@ const watchOptions = new Map();  // watchKey → <li> in the picker
 // confirmed, and when each one reported it cleared.
 let pendingUnbind = new Set();
 let refusal = null;   // last coded refusal from a notify write (banner + recovery)
+let refusalSrc = null; // { error, route } so the banner follows fresh status (B2)
 const clearedAt = new Map();
 
 const $ = id => document.getElementById(id);
@@ -117,11 +118,16 @@ function showFieldErrors(errors, warnings) {
   }
 }
 
+// B3: only touch the DOM on a real change, so role="status" badges are not
+// re-announced on every keystroke.
 function setBadge(el, text, tone) {
   if (!el) return;
-  el.className = `cluster-badge${tone ? ` ${tone}` : ''}`;
-  el.textContent = text;
+  const cls = `cluster-badge${tone ? ` ${tone}` : ''}`;
+  if (el.className !== cls) el.className = cls;
+  if (el.textContent !== text) el.textContent = text;
 }
+
+function clearRefusal() { refusal = null; refusalSrc = null; }
 
 function row(label, value, { dot = '', title = '', badge = '', valueClass = '', copy = '' } = {}) {
   const wrap = document.createElement('div');
@@ -464,6 +470,10 @@ function render() {
     const [short, hint] = errorCopy(code, out.reason || status?.last_reason?.reason);
     alert = { lead: `${short}${code ? `（${code}）` : ''}。`, text: `通知无法送达，转播不受影响。${hint}`, tone: 'danger', action: bad };
   }
+  if (refusalSrc) {
+    refusal = liveRefusal(refusalSrc.error, refusalSrc.route, status);
+    if (!refusal) refusalSrc = null;
+  }
   if (refusal) alert = refusal.banner;
   renderAlert(alert);
 
@@ -598,6 +608,7 @@ export async function refreshNotifyStatus() {
     const bindState = status?.bind?.state || 'idle';
     if (bindState === 'bound' && lastBindState === 'waiting') {
       showNotification('已获取管理员 openid', 'success');
+      clearRefusal();
       const config = await getJson('/api/notify');
       applySettings(config.data, { force: false });
     }
@@ -638,7 +649,7 @@ async function save() {
   setButtonLoading(btn, null, true);
   try {
     const result = await putJson('/api/notify', body);
-    refusal = null;
+    clearRefusal();
     $('notify-app-secret').value = '';
     applySettings(result.data, { force: true });
     if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
@@ -665,7 +676,7 @@ async function clearSecret() {
   render();
   try {
     const result = await putJson('/api/notify', { clear_app_secret: true, expected_secret_revision: settings.secret_revision });
-    refusal = null;
+    clearRefusal();
     applySettings(result.data, { force: !isDirty() });
     showNotification('AppSecret 已清除', 'success');
   } catch (error) {
@@ -684,6 +695,7 @@ async function clearSecret() {
 // loadNotifySettings keeps dirty form edits (force only when clean).
 function handleRefusal(error, route = 'openid') {
   refusal = notifyRefusal(error, status, { route });
+  refusalSrc = refusal ? { error, route } : null;
   if (!refusal) return;
   $('notify-admin-openid').value = '';
   if (refusal.kind === 'revision') loadNotifySettings();
@@ -702,9 +714,9 @@ async function unbindOpenid() {
   render();
   try {
     const result = await UNBIND.method(UNBIND.path, { expected_openid_revision: settings.openid_revision });
-    refusal = null;
-    if (result?.data) applySettings(result.data, { force: !isDirty() });
-    else settings = { ...settings, openid_set: false, openid_bound_at: null };
+    clearRefusal();
+    settings = mergeOpenidFields(settings, result?.data);
+    loadNotifySettings();
     pendingUnbind = new Set(before);
     showNotification(before.length ? '已在本节点解除绑定，正在同步到其他节点…' : '管理员 openid 已解除绑定', 'success');
   } catch (error) {
@@ -812,9 +824,10 @@ export function initNotifySettings() {
   if (!panel) return;
   panel.addEventListener('input', event => {
     if (['notify-bind-any', 'notify-watch-search', 'notify-watch-id', 'notify-watch-name'].includes(event.target.id)) return;
+    if (refusal) clearRefusal();
     render();
   });
-  panel.addEventListener('change', () => render());
+  panel.addEventListener('change', () => { if (refusal) clearRefusal(); render(); });
   for (const id of Object.values(FIELDS)) {
     $(id)?.addEventListener('blur', () => {
       const { errors, warnings } = validateNow();
