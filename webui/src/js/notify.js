@@ -4,7 +4,7 @@
 import { getJson, putJson, postJson, deleteJson } from './api.js';
 import { showNotification, setButtonLoading, reconcileChildren } from './dom.js';
 import { isViewActive } from './state.js';
-import { LIVE_EVENTS_TICK_MS, renderLiveEventsInto } from './live-events-view.js';
+import { LIVE_EVENTS_TICK_MS, STATUS_STALE_MS, activePushValueInto, renderLiveEventsInto } from './live-events-view.js';
 import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
@@ -60,7 +60,7 @@ function readForm() {
   const form = { enabled: Boolean($('notify-enabled')?.checked) };
   for (const [key, id] of Object.entries(FIELDS)) form[key] = $(id)?.value ?? '';
   form.commands_enabled = $('notify-commands') ? $('notify-commands').checked : true;
-form.watch_enabled = Boolean($('notify-watch-enabled')?.checked);
+  form.watch_enabled = Boolean($('notify-watch-enabled')?.checked);
   form.watch_channels = JSON.stringify(watchDraft);
   return withLiveEvents(form, liveEventsSupported(settings?.config), $('notify-live-events')?.checked);
 }
@@ -299,15 +299,13 @@ function renderWatch() {
 
 // §17.3: budget line, next-close segment and passive hint. Only text nodes
 // and attributes change, and only when they differ (no flicker, B3).
-function setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
-function setHidden(el, hidden) { if (el && el.hidden !== hidden) el.hidden = hidden; }
 function renderLiveEvents() {
   renderLiveEventsInto(document, {
     group: $('notify-types'),
     line: $('notify-wakeup-budget'), main: $('notify-wakeup-main'), next: $('notify-wakeup-next'),
     passive: $('notify-passive-hint'), error: $('notify-live-events-error'), owner: $('notify-live-events-owner'),
-    input: $('notify-live-events'),
-  }, { status, settings, statusAt, now: Date.now(), error: liveEventsError, supported: liveEventsSupported(settings?.config) });
+    input: $('notify-live-events'), help: $('notify-live-events-help'),
+  }, { status, settings, statusAt, now: Date.now(), error: liveEventsError, supported: liveEventsSupported(settings?.config), disabled: !settings || busy });
 }
 
 function renderStatus() {
@@ -337,6 +335,13 @@ function renderStatus() {
   const out = senderOutcome(s);
   const modeText = { passive: '被动回复', active: '主动消息', wakeup: '召回消息' };
   rows.push(row('送达方式', out?.ok ? (modeText[out.mode] || '—') : '—'));
+  // §17.8: 主动推送 after 送达方式; no row when the backend has no active_push.
+  const push = activePushValueInto(document, s, { available: Boolean(status) && Date.now() - statusAt < STATUS_STALE_MS });
+  if (push) {
+    const r = row('主动推送', '');
+    r.lastChild.replaceWith(push);
+    rows.push(r);
+  }
   if (!out) {
     const senderNode = s.sender?.node;
     const isSender = s.authority === 'primary';
@@ -702,7 +707,8 @@ export async function refreshNotifyStatus() {
     lastBindState = bindState;
   } catch (error) {
     // Keep the last status; the next poll retries. Review B1: still redraw
-    // the budget line so it falls back to — once the status is 90 s old.
+    // the budget line (and 主动推送) so they fall back to — once the status is 90 s old.
+    renderStatus();
     renderLiveEvents();
     return;
   }
@@ -919,6 +925,13 @@ async function cancelBind() {
   refreshNotifyStatus();
 }
 
+let liveTick = null;
+let liveVisibilityHooked = false;
+export function liveTickActive() {
+  return Boolean(settings) && isViewActive('settings') && !document.hidden;
+}
+function liveTickFn() { if (liveTickActive()) { renderStatus(); renderLiveEvents(); } }
+
 export function initNotifySettings() {
   const panel = $('notify-settings');
   if (!panel) return;
@@ -967,7 +980,14 @@ export function initNotifySettings() {
     icon?.classList.remove('is-spinning');
   });
   // Review B1: the 90 s stale rule needs a clock, not only successful polls.
-  setInterval(() => { if (settings) renderLiveEvents(); }, LIVE_EVENTS_TICK_MS);
+  // Clerk L1: one handle, cleared on re-init, and paused (skipped) while the
+  // tab is hidden or 系统设置 is not the active view.
+  if (liveTick) clearInterval(liveTick);
+  liveTick = setInterval(liveTickFn, LIVE_EVENTS_TICK_MS);
+  if (!liveVisibilityHooked) {
+    liveVisibilityHooked = true;
+    document.addEventListener('visibilitychange', liveTickFn);
+  }
   // Same visibility gate as the other 系统设置 timers.
   setInterval(() => {
     if (isViewActive('settings') && !document.hidden) refreshNotifyStatus();

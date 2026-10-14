@@ -2475,6 +2475,8 @@ html:not(.app-ready) #main-page {
 /* QQ 通知 §17: 通知类型 budget line. Text only; tone via data-tone. */
 .notify-settings .notify-budget { margin: var(--sp-1) 0 0; }
 .notify-settings .notify-budget-seg { white-space: nowrap; }
+.notify-settings .notify-push-seg { white-space: nowrap; }
+.notify-settings .notify-push[data-tone="warn"] { color: var(--warn); }
 .notify-settings .notify-budget[data-tone="warn"] .notify-budget-main,
 .notify-settings .notify-status-value.is-skipped { color: var(--warn); }
 .notify-settings .notify-budget-next { color: var(--text-mute); }

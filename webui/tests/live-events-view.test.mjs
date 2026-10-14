@@ -52,7 +52,8 @@ test('B1: a blocked /status falls back to — after 90 s, driven by failed polls
   assert.equal(e.main.textContent, '唤醒额度 3/4 · 保留 2 用于故障提醒', 'recovers on the next good poll');
   const src = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
   assert.match(src, /catch \(error\) \{[^}]*renderLiveEvents\(\);/, 'failed poll redraws');
-  assert.match(src, /setInterval\(\(\) => \{ if \(settings\) renderLiveEvents\(\); \}, LIVE_EVENTS_TICK_MS\)/, 'timer redraws');
+  assert.match(src, /liveTick = setInterval\(liveTickFn, LIVE_EVENTS_TICK_MS\)/, 'timer redraws');
+  assert.match(src, /function liveTickFn\(\) \{ if \(liveTickActive\(\)\) \{ renderStatus\(\); renderLiveEvents\(\); \} \}/);
 });
 
 test('B2: the invalid_field error is described, marks the switch invalid, and clears', async () => {

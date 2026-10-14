@@ -545,20 +545,55 @@ export function pickBudget(status, settings) {
 
 // §17.3 view model. `available` is false when /status is missing or stale.
 // Returns { main, tone, next|null, passive }.
-export function wakeupBudgetView(budget, { available = true } = {}) {
+// §17.8: `push` is the top-level `active_push` (undefined on an older
+// backend, which keeps the §17 rules). With it, the budget is the fallback:
+// 「备用：」 prefix, warn and the passive hint only while push is not `ok`.
+export function wakeupBudgetView(budget, { available = true, push = undefined } = {}) {
   const remaining = budget?.wakeup_remaining;
   const reserve = budget?.wakeup_reserve;
   const known = available && Number.isInteger(remaining) && Number.isInteger(reserve);
-  if (!known) return { main: '唤醒额度 —', tone: 'muted', next: null, passive: false };
-  const low = remaining <= reserve;
+  const hasPush = push !== undefined;
+  const prefix = hasPush ? '备用：' : '';
+  if (!known) return { main: `${prefix}唤醒额度 —`, tone: 'muted', next: null, passive: false };
+  const pushOk = hasPush && push?.last_result === 'ok';
+  const low = remaining <= reserve && !pushOk;
   const at = budget.wakeup_next_close_at;
+  const windowOpen = budget.passive_window_open === true;
   return {
-    main: `唤醒额度 ${remaining}/4 · 保留 ${reserve} 用于故障提醒${low ? '，开播/下播只用被动回复' : ''}`,
+    main: `${prefix}唤醒额度 ${remaining}/4 · 保留 ${reserve} 用于故障提醒${low ? '，开播/下播只用被动回复' : ''}`,
     tone: low ? 'warn' : 'ok',
     next: Number.isFinite(at) && at > 0 ? ` · 下一档 ${formatLocalShort(at)} 到期` : null,
-    passive: budget.passive_window_open === true,
+    passive: hasPush ? windowOpen && pushLimited(push) : windowOpen,
   };
 }
+
+export function pushLimited(push) {
+  return push?.last_result === 'no_permission' || push?.last_result === 'rate_limited';
+}
+
+// RFC3339 (or unix seconds) → browser-local MM-DD HH:mm; '—' when unusable.
+export function formatPushTime(value) {
+  const ms = typeof value === 'number' ? value * 1000 : Date.parse(value ?? '');
+  return Number.isFinite(ms) && ms > 0 ? formatLocalShort(ms / 1000) : '—';
+}
+
+// §17.8 主动推送 row. null = no row (field absent, older backend).
+// Returns { segments: [text…] (joined with ' · '), tone: '' | 'warn' }.
+export function activePushView(status, { available = true } = {}) {
+  if (!status || !('active_push' in status)) return null;
+  const p = status.active_push;
+  if (!available || !p || p.last_result == null) return { segments: ['—'], tone: '' };
+  const month = `本月 ${Number(p.month_sent) || 0} 条`;
+  switch (p.last_result) {
+    case 'ok': return { segments: ['可用', formatPushTime(p.last_at), month], tone: '' };
+    case 'no_permission': return { segments: ['受限（无主动消息权限）', `自 ${formatPushTime(p.refused_since)}`], tone: 'warn' };
+    case 'rate_limited': return { segments: ['受限（频率限制）', `自 ${formatPushTime(p.refused_since)}`, month], tone: 'warn' };
+    default: return { segments: ['—'], tone: '' };
+  }
+}
+
+export const LIVE_EVENTS_HINT = '占用 QQ 发送额度，故障提醒优先';
+export const LIVE_EVENTS_HINT_PUSH = '优先主动推送；被限制时改用回复窗口或唤醒额度，故障提醒优先';
 
 // §17.4 上次发送 text for a skipped notice. The pending note is separate.
 export function skippedRow(outcome, localNode = '') {

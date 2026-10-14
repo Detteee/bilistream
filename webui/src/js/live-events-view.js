@@ -1,6 +1,6 @@
 // live-events-view.js — §17 DOM updates for the 通知类型 group, kept apart
 // from notify.js so they can run against a fake DOM in node --test.
-import { liveEventsGate, pickBudget, wakeupBudgetView } from './notify-state.js';
+import { LIVE_EVENTS_HINT, LIVE_EVENTS_HINT_PUSH, activePushView, liveEventsGate, pickBudget, wakeupBudgetView } from './notify-state.js';
 
 export const STATUS_STALE_MS = 90_000;  // three missed polls
 export const LIVE_EVENTS_TICK_MS = 10_000;
@@ -11,10 +11,10 @@ const setHidden = (el, hidden) => { if (el && el.hidden !== hidden) el.hidden = 
 // Budget text as phrases; each phrase is its own nowrap span, so the line can
 // only break at the ` · ` / `，` separators between them (§17.6, review B3).
 export function budgetSegments(view) {
-  const m = /^唤醒额度 (\d+\/4) · (保留 \d+ 用于故障提醒)(，(开播\/下播只用被动回复))?$/.exec(view.main);
+  const m = /^((?:备用：)?)唤醒额度 (\d+\/4) · (保留 \d+ 用于故障提醒)(，(开播\/下播只用被动回复))?$/.exec(view.main);
   if (!m) return [{ text: view.main }];
-  const out = [{ text: `唤醒额度 ${m[1]}` }, { sep: ' · ' }, { text: m[2] }];
-  if (m[4]) out.push({ sep: '，' }, { text: m[4], suffix: true });
+  const out = [{ text: `${m[1]}唤醒额度 ${m[2]}` }, { sep: ' · ' }, { text: m[3] }];
+  if (m[5]) out.push({ sep: '，' }, { text: m[5], suffix: true });
   return out;
 }
 
@@ -31,14 +31,18 @@ function fillSegments(doc, el, segments) {
   }));
 }
 
-// els: { group, line, main, next, passive, error, owner, input }.
-// state: { status, settings, statusAt, now, error, supported }.
+// els: { group, line, main, next, passive, error, owner, input, help }.
+// state: { status, settings, statusAt, now, error, supported, disabled }.
+// `disabled` is the panel-wide lock (loading/busy); the writer gate adds to it,
+// so a redraw both disables and re-enables the switch (Clerk L2).
 // rev 4: `supported` false (older backend) hides the whole 通知类型 group.
-export function renderLiveEventsInto(doc, els, { status, settings, statusAt, now, error = '', supported = true }) {
+export function renderLiveEventsInto(doc, els, { status, settings, statusAt, now, error = '', supported = true, disabled = false }) {
   setHidden(els.group, !supported);
   if (!supported || !els.line) return null;
   const available = Boolean(status) && now - statusAt < STATUS_STALE_MS;
-  const view = wakeupBudgetView(pickBudget(status, settings), { available });
+  const push = status && 'active_push' in status ? status.active_push : undefined;
+  const view = wakeupBudgetView(pickBudget(status, settings), { available, push });
+  setText(els.help, push !== undefined ? LIVE_EVENTS_HINT_PUSH : LIVE_EVENTS_HINT);
   if (els.line.dataset.tone !== view.tone) els.line.dataset.tone = view.tone;
   fillSegments(doc, els.main, budgetSegments(view));
   const nextSegs = view.next ? [{ sep: ' · ' }, { text: view.next.replace(/^ · /, '') }] : [];
@@ -49,7 +53,10 @@ export function renderLiveEventsInto(doc, els, { status, settings, statusAt, now
   const gate = liveEventsGate(status);
   setText(els.owner, gate.enabled ? '' : gate.hint);
   setHidden(els.owner, gate.enabled);
-  if (els.input && !gate.enabled) els.input.disabled = true;
+  if (els.input) {
+    const off = disabled || !gate.enabled;
+    if (els.input.disabled !== off) els.input.disabled = off;
+  }
   return view;
 }
 
@@ -67,4 +74,22 @@ export function setLiveEventsError(els, text) {
   if (input.getAttribute('aria-describedby') !== next) input.setAttribute('aria-describedby', next);
   if (text) input.setAttribute('aria-invalid', 'true');
   else input.removeAttribute('aria-invalid');
+}
+
+// §17.8 主动推送 value: one nowrap span per segment, joined by ' · ' text so
+// it wraps only at the separators. Returns the value element or null.
+export function activePushValueInto(doc, status, { available = true } = {}) {
+  const view = activePushView(status, { available });
+  if (!view) return null;
+  const v = doc.createElement('span');
+  v.className = 'cluster-node-meta-value notify-status-value notify-push';
+  if (view.tone) v.dataset.tone = view.tone;
+  view.segments.forEach((text, i) => {
+    if (i) v.append(doc.createTextNode(' · '));
+    const span = doc.createElement('span');
+    span.className = 'notify-push-seg';
+    span.textContent = text;
+    v.append(span);
+  });
+  return v;
 }
