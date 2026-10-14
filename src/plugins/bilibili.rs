@@ -651,34 +651,129 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub async fn send_danmaku(
-    cfg: &Config,
-    message: &str,
-) -> Result<Value, Box<dyn std::error::Error>> {
+/// `msg/send` codes for "sending too fast". 10031 is documented; 10030 is the
+/// older code for the same cooldown.
+pub const DANMAKU_RATE_LIMIT_CODES: [i64; 2] = [10030, 10031];
+
+/// Wait before the single retry after a rate-limit rejection; the live chat
+/// cooldown is a little over one second.
+const DANMAKU_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(2);
+
+/// A danmaku that Bilibili answered with a non-zero code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanmakuRejected {
+    pub code: i64,
+    pub message: String,
+}
+
+impl std::fmt::Display for DanmakuRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Failed to send danmaku: code {}: {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl Error for DanmakuRejected {}
+
+/// The Bilibili rejection code inside a `send_danmaku` error, if it was one.
+pub fn danmaku_rejection_code(error: &(dyn Error + 'static)) -> Option<i64> {
+    error.downcast_ref::<DanmakuRejected>().map(|r| r.code)
+}
+
+/// Only a rate-limit rejection is worth one more try; e.g. 1003212 (too long)
+/// can never succeed on a resend.
+pub fn danmaku_should_retry(code: i64) -> bool {
+    DANMAKU_RATE_LIMIT_CODES.contains(&code)
+}
+
+/// The `msg/send` body, form-encoded so `&`, `+`, `%` and `=` in the text
+/// cannot split or truncate it.
+pub fn danmaku_form_body(message: &str, room: i32, csrf: &str, rnd: i64) -> String {
+    let room = room.to_string();
+    let rnd = rnd.to_string();
+    serde_urlencoded::to_string([
+        ("bubble", "0"),
+        ("msg", message),
+        ("color", "16777215"),
+        ("mode", "1"),
+        ("fontsize", "25"),
+        ("rnd", rnd.as_str()),
+        ("roomid", room.as_str()),
+        ("csrf_token", csrf),
+        ("csrf", csrf),
+    ])
+    .expect("string pairs always form-encode")
+}
+
+async fn send_danmaku_once(cfg: &Config, message: &str) -> Result<Value, Box<dyn Error>> {
     let client = bili_plain_http_client();
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let body = danmaku_form_body(
+        message,
+        cfg.bililive.room,
+        &cfg.bililive.credentials.bili_jct,
+        chrono::Local::now().timestamp(),
+    );
     let resp: Value = client
         .post("https://api.live.bilibili.com/msg/send")
         .header("Cookie", &cookie)
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "bubble=0&msg={}&color=16777215&mode=1&fontsize=25&rnd={}&roomid={}&csrf_token={}&csrf={}",
-            message,
-            chrono::Local::now().timestamp(),
-            cfg.bililive.room,
-            cfg.bililive.credentials.bili_jct,
-            cfg.bililive.credentials.bili_jct
-        ))
+        .body(body)
         .send()
         .await?
         .json()
         .await?;
 
-    if resp["code"].as_i64() != Some(0) {
-        return Err(format!("Failed to send danmaku: {}", resp["message"]).into());
+    match resp["code"].as_i64() {
+        Some(0) => Ok(resp),
+        code => Err(Box::new(DanmakuRejected {
+            code: code.unwrap_or(-1),
+            message: resp["message"]
+                .as_str()
+                .or_else(|| resp["msg"].as_str())
+                .unwrap_or("")
+                .to_string(),
+        })),
     }
+}
 
-    Ok(resp)
+/// Runs `send`, and once more after `backoff` only when the first attempt was
+/// rejected for sending too fast. Other failures are returned as they are.
+pub(crate) async fn send_with_one_retry<F, Fut>(
+    mut send: F,
+    backoff: Duration,
+) -> Result<Value, Box<dyn Error>>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, Box<dyn Error>>>,
+{
+    let code = match send().await {
+        Ok(value) => return Ok(value),
+        Err(error) => match danmaku_rejection_code(error.as_ref()) {
+            Some(code) if danmaku_should_retry(code) => code,
+            _ => return Err(error),
+        },
+    };
+    tracing::info!(
+        "弹幕发送过快（code {code}），{}秒后重试一次",
+        backoff.as_secs()
+    );
+    tokio::time::sleep(backoff).await;
+    send().await
+}
+
+pub async fn send_danmaku(
+    cfg: &Config,
+    message: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    send_with_one_retry(
+        || send_danmaku_once(cfg, message),
+        DANMAKU_RATE_LIMIT_BACKOFF,
+    )
+    .await
 }
 
 /// Updates the live stream cover on Bilibili.
@@ -1331,6 +1426,7 @@ pub async fn get_thumbnail(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn credential_cookie_carries_every_configured_field() {
@@ -1455,5 +1551,109 @@ mod tests {
             live_status: 0,
         };
         assert!(timed_room_lock_wait_at(&untimed, 1_700_000_000).is_none());
+    }
+
+    // ---- danmaku sending: encoding and retry ----
+
+    fn decoded_fields(body: &str) -> Vec<(String, String)> {
+        serde_urlencoded::from_str(body).expect("body decodes")
+    }
+
+    #[test]
+    fn danmaku_body_round_trips_reserved_cjk_and_emoji() {
+        let msg = "A&B+C%D=E 频道，直播结束📺👨‍👩‍👧 #?&msg=x";
+        let body = danmaku_form_body(msg, 12345, "jct&+%", 1_700_000_000);
+        let fields = decoded_fields(&body);
+        assert_eq!(fields.len(), 9, "{body}");
+        let get = |key: &str| {
+            fields
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("msg"), Some(msg));
+        assert_eq!(get("roomid"), Some("12345"));
+        assert_eq!(get("rnd"), Some("1700000000"));
+        assert_eq!(get("csrf"), Some("jct&+%"));
+        assert_eq!(get("csrf_token"), Some("jct&+%"));
+        // The injected "&msg=x" stays inside the one msg value.
+        assert_eq!(fields.iter().filter(|(k, _)| k == "msg").count(), 1);
+        assert!(!body.contains("A&B"), "{body}");
+        assert!(body.contains("A%26B%2BC%25D%3DE"), "{body}");
+    }
+
+    #[test]
+    fn danmaku_body_encodes_name_with_ampersand_and_plus() {
+        let msg = "Tom & Jerry+ 直播结束，可使用弹幕指令进行换台";
+        let body = danmaku_form_body(msg, 1, "jct", 0);
+        assert!(body.contains("Tom+%26+Jerry%2B"), "{body}");
+        let fields = decoded_fields(&body);
+        assert_eq!(fields[1], ("msg".to_string(), msg.to_string()));
+    }
+
+    type ScriptedSend = std::future::Ready<Result<Value, Box<dyn Error>>>;
+
+    /// A sender that plays `script` in order: `Ok`, a rejection code, or
+    /// -999 for a transport error.
+    fn scripted_sender(
+        script: Vec<Result<Value, i64>>,
+    ) -> (Arc<AtomicUsize>, impl FnMut() -> ScriptedSend) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let sender = move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(script[n].clone().map_err(|code| {
+                if code == -999 {
+                    Box::<dyn Error>::from("connection reset")
+                } else {
+                    Box::new(DanmakuRejected {
+                        code,
+                        message: "x".to_string(),
+                    }) as Box<dyn Error>
+                }
+            }))
+        };
+        (calls, sender)
+    }
+
+    #[tokio::test]
+    async fn rate_limited_danmaku_is_retried_once() {
+        let (calls, send) = scripted_sender(vec![Err(10031), Ok(json!({"code": 0}))]);
+        assert!(send_with_one_retry(send, Duration::ZERO).await.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let (calls, send) = scripted_sender(vec![Err(10030), Ok(json!({"code": 0}))]);
+        assert!(send_with_one_retry(send, Duration::ZERO).await.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn danmaku_retry_happens_only_once() {
+        let (calls, send) = scripted_sender(vec![Err(10031), Err(10031), Ok(json!({}))]);
+        let error = send_with_one_retry(send, Duration::ZERO).await.unwrap_err();
+        assert_eq!(danmaku_rejection_code(error.as_ref()), Some(10031));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn too_long_danmaku_is_not_retried() {
+        let (calls, send) = scripted_sender(vec![Err(1003212), Ok(json!({}))]);
+        let error = send_with_one_retry(send, Duration::ZERO).await.unwrap_err();
+        assert_eq!(danmaku_rejection_code(error.as_ref()), Some(1003212));
+        assert!(error.to_string().contains("Failed to send danmaku"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(!danmaku_should_retry(1003212));
+    }
+
+    #[tokio::test]
+    async fn transport_errors_and_other_codes_are_not_retried() {
+        let (calls, send) = scripted_sender(vec![Err(-999), Ok(json!({}))]);
+        let error = send_with_one_retry(send, Duration::ZERO).await.unwrap_err();
+        assert_eq!(danmaku_rejection_code(error.as_ref()), None);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let (calls, send) = scripted_sender(vec![Err(-111), Ok(json!({}))]);
+        assert!(send_with_one_retry(send, Duration::ZERO).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

@@ -120,6 +120,11 @@ static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 // Track if a manual restart was requested (force immediate restart even if stream is live)
 static MANUAL_RESTART: AtomicBool = AtomicBool::new(false);
 
+// Bumped by every stop or restart request (each `MANUAL_STOP` or
+// `MANUAL_RESTART` set). Unlike the flags it is never cleared, so a consumer
+// can tell a request made during its session from one left over from before.
+static STOP_RESTART_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,6 +368,7 @@ impl ProcessSupervisor {
             }
             if manual {
                 MANUAL_STOP.store(true, Ordering::SeqCst);
+                bump_stop_restart_generation();
             }
             stop_locked(&mut supervisor, manual.then_some("主动停止请求")).await;
             cleanup.await;
@@ -705,6 +711,16 @@ pub fn clear_manual_stop() {
 // Set manual restart flag (force immediate restart)
 pub fn set_manual_restart() {
     MANUAL_RESTART.store(true, Ordering::SeqCst);
+    bump_stop_restart_generation();
+}
+
+fn bump_stop_restart_generation() {
+    STOP_RESTART_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Current stop/restart generation; see `STOP_RESTART_GENERATION`.
+pub fn stop_restart_generation() -> u64 {
+    STOP_RESTART_GENERATION.load(Ordering::SeqCst)
 }
 
 // Check if manual restart was requested
@@ -3366,6 +3382,17 @@ mod tests {
         assert!(!output.contains("SYNTHETIC_STATS_TOKEN"));
     }
 
+    #[test]
+    fn restart_request_bumps_generation_and_clearing_does_not_rewind_it() {
+        let before = stop_restart_generation();
+        set_manual_restart();
+        let after = stop_restart_generation();
+        assert!(after > before);
+        clear_manual_restart();
+        // Clearing the flag leaves the generation where it was.
+        assert!(stop_restart_generation() >= after);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn actual_child_exit_and_manual_stop_have_numeric_truthful_outcomes() {
@@ -3396,9 +3423,11 @@ mod tests {
                     children: vec![child],
                     ..empty_process(session)
                 });
+                let generation = stop_restart_generation();
                 stop_ffmpeg().await;
                 assert!(FFMPEG_SUPERVISOR.lock().await.is_none());
                 assert!(was_manual_stop());
+                assert!(stop_restart_generation() > generation);
                 clear_manual_stop();
             })
         });

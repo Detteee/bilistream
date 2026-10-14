@@ -21,10 +21,10 @@ use bilistream::plugins::{
     is_ffmpeg_running, niconico_channel_identity, niconico_configured,
     resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
     should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
-    store_prefetched_playable_stream, streamlink_ingest, take_prefetched_playable_stream,
-    timed_room_lock_wait, wait_config_update_or_timeout, was_manual_restart, was_manual_stop,
-    FfmpegCacheOptions, FfmpegSource, FfmpegStreamIdentity, PipedIngest, PriorityChannelPlatform,
-    BILI_START_TEMP_BAN_PREFIX,
+    stop_restart_generation, store_prefetched_playable_stream, streamlink_ingest,
+    take_prefetched_playable_stream, timed_room_lock_wait, wait_config_update_or_timeout,
+    was_manual_restart, was_manual_stop, FfmpegCacheOptions, FfmpegSource, FfmpegStreamIdentity,
+    PipedIngest, PriorityChannelPlatform, BILI_START_TEMP_BAN_PREFIX,
 };
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
@@ -144,8 +144,17 @@ enum StreamPlatform {
 enum FfmpegLoopExitReason {
     SourceEnded,
     BiliStopped,
-    IntentionalRestart { target_m3u8_available: bool },
+    IntentionalRestart {
+        target_m3u8_available: bool,
+    },
     ClusterHandoff,
+    /// A manual stop or restart arrived while confirming the source had ended.
+    EndCheckCancelled {
+        restart: bool,
+    },
+    /// The source came back with a different broadcast (stream/video id or
+    /// Niconico program id); the outer loop sets it up from scratch.
+    NewBroadcast,
 }
 
 fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
@@ -154,7 +163,223 @@ fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
         FfmpegLoopExitReason::IntentionalRestart {
             target_m3u8_available: true
         } | FfmpegLoopExitReason::ClusterHandoff
+            | FfmpegLoopExitReason::EndCheckCancelled { .. }
+            | FfmpegLoopExitReason::NewBroadcast
     )
+}
+
+/// The crop setting carries over only into a restarted stream; a stop, an
+/// ended source or a new broadcast clears it.
+fn exit_keeps_crop(reason: FfmpegLoopExitReason) -> bool {
+    matches!(
+        reason,
+        FfmpegLoopExitReason::IntentionalRestart {
+            target_m3u8_available: true
+        } | FfmpegLoopExitReason::ClusterHandoff
+            | FfmpegLoopExitReason::EndCheckCancelled { restart: true }
+    )
+}
+
+/// How an offline source reading is confirmed before the stream is treated as
+/// ended. YouTube and Twitch can flap, and a status error also reads offline.
+#[derive(Clone, Copy, Debug)]
+struct EndRecheckPlan {
+    /// Further offline readings required after the first one.
+    samples: u32,
+    /// Gap before each further reading.
+    interval: Duration,
+    /// How often the stop/restart/handoff signals are polled while waiting.
+    poll: Duration,
+}
+
+/// About 60 s in total: three more readings, 20 s apart.
+const END_RECHECK_PLAN: EndRecheckPlan = EndRecheckPlan {
+    samples: 3,
+    interval: Duration::from_secs(20),
+    poll: Duration::from_secs(1),
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EndRecheckSignals {
+    /// Read-only cluster gate; this node may still execute.
+    monitoring_allowed: bool,
+    /// The stop/restart generation moved past the value captured when this
+    /// ffmpeg session started. Flags left over from before do not count.
+    stop_or_restart_requested: bool,
+    /// `MANUAL_RESTART` is set, which tells a restart apart from a stop.
+    restart_flag: bool,
+}
+
+fn end_recheck_signals(
+    session_generation: u64,
+    generation: u64,
+    restart_flag: bool,
+    monitoring_allowed: bool,
+) -> EndRecheckSignals {
+    EndRecheckSignals {
+        monitoring_allowed,
+        stop_or_restart_requested: generation != session_generation,
+        restart_flag,
+    }
+}
+
+/// One source reading taken during the recheck.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SourceReading {
+    is_live: bool,
+    m3u8_url: Option<String>,
+    stream_id: Option<String>,
+}
+
+/// Unknown ids on either side are treated as the same broadcast.
+fn same_broadcast(session: Option<&str>, reading: Option<&str>) -> bool {
+    match (session, reading) {
+        (Some(session), Some(reading)) => session == reading,
+        _ => true,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndRecheckCancel {
+    ClusterHandoff,
+    ManualStop,
+    ManualRestart,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EndRecheckOutcome {
+    ConfirmedOffline,
+    /// The source read live again; restart at once with this playlist URL.
+    BackLive {
+        m3u8_url: Option<String>,
+    },
+    /// The source is live with a different broadcast id.
+    NewBroadcast,
+    Cancelled(EndRecheckCancel),
+}
+
+/// Handoff wins; then a request made during this session is a restart when
+/// `MANUAL_RESTART` is set (restart paths set it, a plain stop does not).
+fn end_recheck_cancel(signals: EndRecheckSignals) -> Option<EndRecheckCancel> {
+    if !signals.monitoring_allowed {
+        Some(EndRecheckCancel::ClusterHandoff)
+    } else if !signals.stop_or_restart_requested {
+        None
+    } else if signals.restart_flag {
+        Some(EndRecheckCancel::ManualRestart)
+    } else {
+        Some(EndRecheckCancel::ManualStop)
+    }
+}
+
+/// Confirms an offline reading. Returns as soon as the source reads live, or a
+/// cancel signal appears; shutdown simply drops this future, which holds no
+/// state that needs cleanup.
+async fn confirm_source_offline<P, PF, S>(
+    plan: EndRecheckPlan,
+    session_stream_id: Option<&str>,
+    mut probe: P,
+    mut signals: S,
+) -> EndRecheckOutcome
+where
+    P: FnMut() -> PF,
+    PF: std::future::Future<Output = SourceReading>,
+    S: FnMut() -> EndRecheckSignals,
+{
+    for _ in 0..plan.samples {
+        let mut waited = Duration::ZERO;
+        loop {
+            if let Some(cancel) = end_recheck_cancel(signals()) {
+                return EndRecheckOutcome::Cancelled(cancel);
+            }
+            if waited >= plan.interval {
+                break;
+            }
+            let step = plan
+                .poll
+                .min(plan.interval - waited)
+                .max(Duration::from_millis(1));
+            tokio::time::sleep(step).await;
+            waited += step;
+        }
+        let reading = probe().await;
+        if reading.is_live {
+            if !same_broadcast(session_stream_id, reading.stream_id.as_deref()) {
+                return EndRecheckOutcome::NewBroadcast;
+            }
+            return EndRecheckOutcome::BackLive {
+                m3u8_url: reading.m3u8_url,
+            };
+        }
+    }
+    if let Some(cancel) = end_recheck_cancel(signals()) {
+        return EndRecheckOutcome::Cancelled(cancel);
+    }
+    EndRecheckOutcome::ConfirmedOffline
+}
+
+/// What to announce once the push loop has exited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndAction {
+    SkipHandoff,
+    SkipRestart,
+    SkipEndCheckCancelled,
+    SkipNewBroadcast,
+    SkipManualStop,
+    SkipWarning,
+    /// Source ended: send the end danmaku. `bili_live` is false when the room
+    /// is already offline; that send is best effort.
+    AnnounceEnd {
+        bili_live: bool,
+    },
+    /// Source still live and the room still live: transport interruption.
+    AnnounceInterrupted,
+    /// Source live, room stopped from elsewhere: no danmaku.
+    BiliStoppedQuietly,
+}
+
+fn end_action(
+    reason: FfmpegLoopExitReason,
+    manual_stop: bool,
+    warning_skip: bool,
+    source_live: bool,
+    bili_live: bool,
+) -> EndAction {
+    if restart_exit_should_skip_end_danmaku(reason) {
+        return match reason {
+            FfmpegLoopExitReason::ClusterHandoff => EndAction::SkipHandoff,
+            FfmpegLoopExitReason::EndCheckCancelled { .. } => EndAction::SkipEndCheckCancelled,
+            FfmpegLoopExitReason::NewBroadcast => EndAction::SkipNewBroadcast,
+            _ => EndAction::SkipRestart,
+        };
+    }
+    if manual_stop && matches!(reason, FfmpegLoopExitReason::BiliStopped) {
+        return EndAction::SkipManualStop;
+    }
+    if warning_skip {
+        return EndAction::SkipWarning;
+    }
+    match (source_live, bili_live) {
+        (false, bili_live) => EndAction::AnnounceEnd { bili_live },
+        (true, true) => EndAction::AnnounceInterrupted,
+        (true, false) => EndAction::BiliStoppedQuietly,
+    }
+}
+
+fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
+    if commands_enabled {
+        format!("{} 直播结束，可使用弹幕指令进行换台", channel_name)
+    } else {
+        format!("{} 直播结束", channel_name)
+    }
+}
+
+/// The room is stopped automatically once it has been live this long and the
+/// source has ended.
+const AUTO_STOP_AFTER_HOURS: i64 = 3;
+
+fn should_auto_stop_after_end(live_hours: i64) -> bool {
+    live_hours >= AUTO_STOP_AFTER_HOURS
 }
 
 fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>) {
@@ -184,6 +409,12 @@ fn log_ffmpeg_loop_exit(
         }
         FfmpegLoopExitReason::ClusterHandoff => {
             tracing::info!("{context} 集群执行权限已撤销，退出本节点推流循环{execution}");
+        }
+        FfmpegLoopExitReason::NewBroadcast => {
+            tracing::info!("{context} 源频道已开始新的直播，回到监听重新开播{execution}");
+        }
+        FfmpegLoopExitReason::EndCheckCancelled { .. } => {
+            tracing::info!("{context} 确认源直播结束期间收到停止或重启，退出推流循环{execution}");
         }
     }
 }
@@ -1391,6 +1622,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     _ => &cfg.twitch.ffmpeg_cache,
                 };
 
+                // Stop/restart requests from before this session must not
+                // cancel its end-of-stream recheck.
+                let session_generation = stop_restart_generation();
                 let session = ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -1440,8 +1674,48 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Check if stream is still live before restarting
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let (current_is_live, _, _, new_m3u8_url, _, _) =
+                let (mut current_is_live, _, _, mut new_m3u8_url, _, _) =
                     source_client_status(&source_client).await;
+                // One offline reading is not enough: confirm it before ending.
+                // A live reading restarts at once and never waits here.
+                let mut end_check_cancel = None;
+                let mut new_broadcast = false;
+                if !current_is_live {
+                    tracing::info!("{stream_log} 源直播状态为未直播，确认中（约60秒）");
+                    let outcome = confirm_source_offline(
+                        END_RECHECK_PLAN,
+                        current_video_id.as_deref(),
+                        || async {
+                            let (is_live, _, _, m3u8_url, _, stream_id) =
+                                source_client_status(&source_client).await;
+                            SourceReading {
+                                is_live,
+                                m3u8_url,
+                                stream_id,
+                            }
+                        },
+                        // Read-only: local_may_push would rewrite local_stream.
+                        || {
+                            end_recheck_signals(
+                                session_generation,
+                                stop_restart_generation(),
+                                was_manual_restart(),
+                                !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg),
+                            )
+                        },
+                    )
+                    .await;
+                    match outcome {
+                        EndRecheckOutcome::ConfirmedOffline => {}
+                        EndRecheckOutcome::BackLive { m3u8_url } => {
+                            tracing::info!("{stream_log} 源直播恢复在线，立即重启推流");
+                            current_is_live = true;
+                            new_m3u8_url = m3u8_url;
+                        }
+                        EndRecheckOutcome::NewBroadcast => new_broadcast = true,
+                        EndRecheckOutcome::Cancelled(cancel) => end_check_cancel = Some(cancel),
+                    }
+                }
                 // On error, assume still live and retry next iteration.
                 let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
                     .await
@@ -1461,6 +1735,24 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     warning_skip_now,
                 );
                 cluster::record_stream_exit(!count_ffmpeg_exit_failure);
+
+                match end_check_cancel {
+                    Some(EndRecheckCancel::ClusterHandoff) => {
+                        set_manual_restart();
+                        stop_ffmpeg().await;
+                        break FfmpegLoopExitReason::ClusterHandoff;
+                    }
+                    Some(EndRecheckCancel::ManualRestart) => {
+                        break FfmpegLoopExitReason::EndCheckCancelled { restart: true };
+                    }
+                    Some(EndRecheckCancel::ManualStop) => {
+                        break FfmpegLoopExitReason::EndCheckCancelled { restart: false };
+                    }
+                    None => {}
+                }
+                if new_broadcast {
+                    break FfmpegLoopExitReason::NewBroadcast;
+                }
 
                 if !current_is_live {
                     break FfmpegLoopExitReason::SourceEnded;
@@ -1534,7 +1826,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Clear crop settings for both platforms when stream ends
             // Don't clear on manual restart - let it apply for the restarted stream
-            if !restart_exit_should_skip_danmaku {
+            if !exit_keeps_crop(ffmpeg_loop_exit_reason) {
                 let mut config_changed = false;
 
                 if cfg.youtube.crop.is_some() {
@@ -1565,98 +1857,122 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Stop priority monitoring when ffmpeg loop ends
             cluster::clear_local_stream();
 
-            // Check current live status to determine what actually happened
-            let (current_is_live, _, _, _, _, _) = source_client_status(&source_client).await;
+            // SourceEnded was already confirmed offline inside the loop; reading
+            // the source once more could flap back and turn 结束 into 中断.
+            let current_is_live = match ffmpeg_loop_exit_reason {
+                FfmpegLoopExitReason::SourceEnded => false,
+                _ => source_client_status(&source_client).await.0,
+            };
             // On error, assume still live to avoid incorrect status messages.
             let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
                 .await
                 .map(|status| status.is_live)
                 .unwrap_or(true);
 
-            // Determine what happened and send appropriate message
-            if restart_exit_should_skip_danmaku {
-                if manual_stop {
-                    clear_manual_stop();
-                }
-                match ffmpeg_loop_exit_reason {
-                    FfmpegLoopExitReason::ClusterHandoff => {
-                        tracing::debug!("{session_log} 集群交接，跳过结束弹幕");
-                    }
-                    _ => tracing::debug!("{session_log} 主动重启或切换，跳过结束弹幕"),
-                }
-            } else if manual_stop
-                && matches!(ffmpeg_loop_exit_reason, FfmpegLoopExitReason::BiliStopped)
+            let action = end_action(
+                ffmpeg_loop_exit_reason,
+                manual_stop,
+                warning_skip,
+                current_is_live,
+                bili_is_live,
+            );
+            if matches!(
+                action,
+                EndAction::SkipHandoff
+                    | EndAction::SkipRestart
+                    | EndAction::SkipEndCheckCancelled
+                    | EndAction::SkipNewBroadcast
+                    | EndAction::SkipManualStop
+            ) && manual_stop
             {
                 clear_manual_stop();
-                tracing::debug!("{session_log} 主动停止，跳过结束弹幕");
-            } else if warning_skip {
-                tracing::info!("{session_log} 因B站警告或切断结束转播");
-            } else if !current_is_live && bili_is_live {
-                // Source stream ended but B站 is still live
-                tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
+            }
+            match action {
+                EndAction::SkipHandoff => {
+                    tracing::debug!("{session_log} 集群交接，跳过结束弹幕");
+                }
+                EndAction::SkipRestart => {
+                    tracing::debug!("{session_log} 主动重启或切换，跳过结束弹幕");
+                }
+                EndAction::SkipNewBroadcast => {
+                    tracing::debug!("{session_log} 源频道新直播，跳过结束弹幕");
+                }
+                EndAction::SkipEndCheckCancelled => {
+                    tracing::debug!("{session_log} 确认结束期间收到停止或重启，跳过结束弹幕");
+                }
+                EndAction::SkipManualStop => {
+                    tracing::debug!("{session_log} 主动停止，跳过结束弹幕");
+                }
+                EndAction::SkipWarning => {
+                    tracing::info!("{session_log} 因B站警告或切断结束转播");
+                }
+                EndAction::AnnounceEnd { bili_live } => {
+                    if bili_live {
+                        tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
+                    } else {
+                        tracing::debug!("{session_log} 已确认源直播结束，B站房间已停播");
+                    }
+                    if cfg.bililive.enable_danmaku_command {
+                        enable_danmaku_commands(true);
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    let text = end_danmaku_text(&channel_name, cfg.bililive.enable_danmaku_command);
+                    if let Err(e) = send_danmaku(&cfg, &text).await {
+                        if bili_live {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        } else {
+                            // Best effort: the room is already offline.
+                            tracing::info!("{session_log} B站房间已停播，结束弹幕未发送: {}", e);
+                        }
+                    }
 
-                // Check if B站 has been live for more than 8 hours; if so, stop it
-                match get_bili_live_time(cfg.bililive.room).await {
-                    Ok(Some(live_start)) => {
-                        let duration = chrono::Local::now().signed_duration_since(live_start);
-                        if duration.num_hours() >= 3 {
-                            tracing::info!(
-                                "B站直播已超过3小时（{}小时），自动停播",
-                                duration.num_hours()
-                            );
-                            if let Err(e) = bili_stop_live(&cfg).await {
-                                tracing::error!("自动停播失败: {}", e);
+                    // Announce first, then stop a room that has been live for
+                    // AUTO_STOP_AFTER_HOURS (3) hours or more.
+                    if bili_live {
+                        match get_bili_live_time(cfg.bililive.room).await {
+                            Ok(Some(live_start)) => {
+                                let hours = chrono::Local::now()
+                                    .signed_duration_since(live_start)
+                                    .num_hours();
+                                if should_auto_stop_after_end(hours) {
+                                    tracing::info!(
+                                        "B站直播已超过{}小时（{}小时），自动停播",
+                                        AUTO_STOP_AFTER_HOURS,
+                                        hours
+                                    );
+                                    if let Err(e) = bili_stop_live(&cfg).await {
+                                        tracing::error!("自动停播失败: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!("获取B站直播时间失败: {}", e);
                             }
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!("获取B站直播时间失败: {}", e);
+                }
+                EndAction::BiliStoppedQuietly => {
+                    tracing::debug!("{session_log} 已确认B站房间停止直播");
+                    if cfg.bililive.enable_danmaku_command {
+                        enable_danmaku_commands(true);
                     }
                 }
-
-                if cfg.bililive.enable_danmaku_command {
-                    enable_danmaku_commands(true);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    if let Err(e) = send_danmaku(
-                        &cfg,
-                        &format!("{} 直播结束，可使用弹幕指令进行换台", channel_name),
-                    )
-                    .await
-                    {
-                        tracing::error!("Failed to send danmaku: {}", e);
+                EndAction::AnnounceInterrupted => {
+                    // Both streams are still live - this was likely a technical issue
+                    tracing::info!("{session_log} 推流会话已结束，源直播与B站房间仍在线，返回监听");
+                    if cfg.bililive.enable_danmaku_command {
+                        enable_danmaku_commands(true);
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        if let Err(e) = send_danmaku(
+                            &cfg,
+                            &format!("{} 流传输中断，可使用弹幕指令进行换台", channel_name),
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to send danmaku: {}", e);
+                        }
                     }
-                } else if let Err(e) =
-                    send_danmaku(&cfg, &format!("{} 直播结束", channel_name)).await
-                {
-                    tracing::error!("Failed to send danmaku: {}", e);
-                }
-            } else if !bili_is_live {
-                // B站 stream was stopped
-                tracing::debug!("{session_log} 已确认B站房间停止直播");
-                if cfg.bililive.enable_danmaku_command {
-                    enable_danmaku_commands(true);
-                }
-            } else if current_is_live && bili_is_live {
-                // Both streams are still live - this was likely a technical issue
-                tracing::info!("{session_log} 推流会话已结束，源直播与B站房间仍在线，返回监听");
-                if cfg.bililive.enable_danmaku_command {
-                    enable_danmaku_commands(true);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    if let Err(e) = send_danmaku(
-                        &cfg,
-                        &format!("{} 流传输中断，可使用弹幕指令进行换台", channel_name),
-                    )
-                    .await
-                    {
-                        tracing::error!("Failed to send danmaku: {}", e);
-                    }
-                }
-            } else {
-                // Fallback case
-                tracing::info!("{session_log} 推流会话已结束，返回监听");
-                if cfg.bililive.enable_danmaku_command {
-                    enable_danmaku_commands(true);
                 }
             }
         } else {
@@ -2736,6 +3052,334 @@ mod tests {
         assert!(selected.ffmpeg_source().is_some());
     }
 
+    fn quick_plan() -> EndRecheckPlan {
+        EndRecheckPlan {
+            samples: 3,
+            interval: Duration::from_millis(5),
+            poll: Duration::from_millis(1),
+        }
+    }
+
+    fn calm() -> EndRecheckSignals {
+        end_recheck_signals(7, 7, false, true)
+    }
+
+    fn offline() -> SourceReading {
+        SourceReading {
+            is_live: false,
+            m3u8_url: None,
+            stream_id: None,
+        }
+    }
+
+    fn live(stream_id: Option<&str>) -> SourceReading {
+        SourceReading {
+            is_live: true,
+            m3u8_url: Some("https://example.invalid/new.m3u8".to_string()),
+            stream_id: stream_id.map(str::to_string),
+        }
+    }
+
+    type ProbeReading = std::future::Ready<SourceReading>;
+    type CallCount = std::sync::Arc<std::sync::atomic::AtomicUsize>;
+
+    /// Source readings in order; past the end the source reads offline.
+    fn probe_script(readings: Vec<SourceReading>) -> (CallCount, impl FnMut() -> ProbeReading) {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let probe = move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(readings.get(n).cloned().unwrap_or_else(offline))
+        };
+        (calls, probe)
+    }
+
+    #[tokio::test]
+    async fn end_recheck_confirms_offline_after_three_more_readings() {
+        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
+        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
+        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn end_recheck_returns_at_once_when_source_flaps_back_live() {
+        let (calls, probe) = probe_script(vec![offline(), live(Some("v1")), offline()]);
+        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
+        assert_eq!(
+            outcome,
+            EndRecheckOutcome::BackLive {
+                m3u8_url: Some("https://example.invalid/new.m3u8".to_string())
+            }
+        );
+        // No further readings after the live one: the restart is not delayed.
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // An id missing on either side counts as the same broadcast.
+        let (_, probe) = probe_script(vec![live(None)]);
+        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, calm).await;
+        assert!(matches!(outcome, EndRecheckOutcome::BackLive { .. }));
+        let (_, probe) = probe_script(vec![live(Some("v1"))]);
+        let outcome = confirm_source_offline(quick_plan(), None, probe, calm).await;
+        assert!(matches!(outcome, EndRecheckOutcome::BackLive { .. }));
+    }
+
+    #[tokio::test]
+    async fn end_recheck_sends_a_new_broadcast_back_to_the_outer_loop() {
+        // YouTube/Twitch: a different stream or video id.
+        let (calls, probe) = probe_script(vec![offline(), live(Some("video-2"))]);
+        let outcome = confirm_source_offline(quick_plan(), Some("video-1"), probe, calm).await;
+        assert_eq!(outcome, EndRecheckOutcome::NewBroadcast);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Niconico: a new program id must not reuse the old lv.
+        let (_, probe) = probe_script(vec![live(Some("lv200"))]);
+        let outcome = confirm_source_offline(quick_plan(), Some("lv100"), probe, calm).await;
+        assert_eq!(outcome, EndRecheckOutcome::NewBroadcast);
+        assert!(same_broadcast(Some("lv100"), Some("lv100")));
+        assert!(!same_broadcast(Some("lv100"), Some("lv200")));
+    }
+
+    #[test]
+    fn new_broadcast_exit_skips_end_danmaku_and_clears_crop() {
+        use FfmpegLoopExitReason as R;
+        assert_eq!(
+            end_action(R::NewBroadcast, false, false, true, true),
+            EndAction::SkipNewBroadcast
+        );
+        assert!(!exit_keeps_crop(R::NewBroadcast));
+    }
+
+    #[tokio::test]
+    async fn end_recheck_cancels_on_handoff_stop_and_restart_without_probing() {
+        for (signals, expected) in [
+            (
+                end_recheck_signals(7, 7, false, false),
+                EndRecheckCancel::ClusterHandoff,
+            ),
+            (
+                end_recheck_signals(7, 8, false, true),
+                EndRecheckCancel::ManualStop,
+            ),
+            (
+                end_recheck_signals(7, 9, true, true),
+                EndRecheckCancel::ManualRestart,
+            ),
+        ] {
+            let (calls, probe) = probe_script(vec![]);
+            let outcome =
+                confirm_source_offline(quick_plan(), Some("v1"), probe, move || signals).await;
+            assert_eq!(outcome, EndRecheckOutcome::Cancelled(expected));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    /// F1 (a): flags and generation bumps from before the session do not
+    /// cancel the recheck, and 直播结束 still goes out.
+    #[tokio::test]
+    async fn stale_stop_restart_from_before_the_session_does_not_cancel() {
+        // Both flags still set, generation unchanged since capture.
+        let stale = end_recheck_signals(42, 42, true, true);
+        assert_eq!(end_recheck_cancel(stale), None);
+        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
+        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, move || stale).await;
+        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        // The stale MANUAL_STOP after the loop does not skip a SourceEnded.
+        assert_eq!(
+            end_action(FfmpegLoopExitReason::SourceEnded, true, false, false, true),
+            EndAction::AnnounceEnd { bili_live: true }
+        );
+    }
+
+    /// F1 (b): a stop or restart requested during the recheck still cancels.
+    #[tokio::test]
+    async fn stop_or_restart_during_the_recheck_cancels_it() {
+        for (restart, expected) in [
+            (false, EndRecheckCancel::ManualStop),
+            (true, EndRecheckCancel::ManualRestart),
+        ] {
+            let generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(10));
+            let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (gen, seen) = (generation.clone(), polls.clone());
+            let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
+            let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, move || {
+                // The request lands part-way through the first wait.
+                if seen.fetch_add(1, Ordering::SeqCst) == 3 {
+                    gen.fetch_add(1, Ordering::SeqCst);
+                }
+                end_recheck_signals(10, gen.load(Ordering::SeqCst), restart, true)
+            })
+            .await;
+            assert_eq!(outcome, EndRecheckOutcome::Cancelled(expected));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    /// F1 (c): a standby that was demoted (restart + stop flags set while idle)
+    /// and later promoted announces the end of its first stream.
+    #[tokio::test]
+    async fn promoted_standby_first_stream_still_announces_end() {
+        let generation = std::sync::atomic::AtomicU64::new(0);
+        // Demotion while idle: set_manual_restart() then stop_ffmpeg() each
+        // set a flag and bump the generation.
+        let manual_restart = true;
+        generation.fetch_add(1, Ordering::SeqCst);
+        let manual_stop = true;
+        generation.fetch_add(1, Ordering::SeqCst);
+        // Promotion: nothing clears the flags. The first session captures.
+        let session_generation = generation.load(Ordering::SeqCst);
+        let (_, probe) = probe_script(vec![offline(), offline(), offline()]);
+        let outcome = confirm_source_offline(quick_plan(), Some("v1"), probe, || {
+            end_recheck_signals(
+                session_generation,
+                generation.load(Ordering::SeqCst),
+                manual_restart,
+                true,
+            )
+        })
+        .await;
+        assert_eq!(outcome, EndRecheckOutcome::ConfirmedOffline);
+        assert_eq!(
+            end_action(
+                FfmpegLoopExitReason::SourceEnded,
+                manual_stop,
+                false,
+                false,
+                true
+            ),
+            EndAction::AnnounceEnd { bili_live: true }
+        );
+    }
+
+    /// F2: only a restart keeps the crop; a stop during the recheck clears it.
+    #[test]
+    fn end_check_cancel_keeps_crop_only_for_restart() {
+        use FfmpegLoopExitReason as R;
+        assert!(!exit_keeps_crop(R::EndCheckCancelled { restart: false }));
+        assert!(exit_keeps_crop(R::EndCheckCancelled { restart: true }));
+        // Unchanged from before the patch.
+        assert!(exit_keeps_crop(R::IntentionalRestart {
+            target_m3u8_available: true
+        }));
+        assert!(exit_keeps_crop(R::ClusterHandoff));
+        assert!(!exit_keeps_crop(R::IntentionalRestart {
+            target_m3u8_available: false
+        }));
+        assert!(!exit_keeps_crop(R::SourceEnded));
+        assert!(!exit_keeps_crop(R::BiliStopped));
+        // Both still skip the end danmaku.
+        for restart in [false, true] {
+            assert!(restart_exit_should_skip_end_danmaku(R::EndCheckCancelled {
+                restart
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn end_recheck_is_dropped_cleanly_on_shutdown() {
+        let plan = EndRecheckPlan {
+            samples: 3,
+            interval: Duration::from_secs(20),
+            poll: Duration::from_secs(1),
+        };
+        let (calls, probe) = probe_script(vec![offline(), offline(), offline()]);
+        let shutdown = tokio::sync::Notify::new();
+        shutdown.notify_one();
+        // The monitor runtime selects shutdown against run_bilistream; the
+        // recheck must yield to it immediately rather than finish its 60 s.
+        let started = std::time::Instant::now();
+        let finished = tokio::select! {
+            _ = shutdown.notified() => None,
+            outcome = confirm_source_offline(plan, Some("v1"), probe, calm) => Some(outcome),
+        };
+        assert_eq!(finished, None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn end_action_keeps_intentional_skips() {
+        use FfmpegLoopExitReason as R;
+        let restart = R::IntentionalRestart {
+            target_m3u8_available: true,
+        };
+        for (source, bili) in [(false, true), (false, false), (true, true)] {
+            assert_eq!(
+                end_action(R::ClusterHandoff, false, false, source, bili),
+                EndAction::SkipHandoff
+            );
+            assert_eq!(
+                end_action(restart, false, false, source, bili),
+                EndAction::SkipRestart
+            );
+            assert_eq!(
+                end_action(
+                    R::EndCheckCancelled { restart: false },
+                    true,
+                    false,
+                    source,
+                    bili
+                ),
+                EndAction::SkipEndCheckCancelled
+            );
+            assert_eq!(
+                end_action(R::BiliStopped, true, false, source, bili),
+                EndAction::SkipManualStop
+            );
+            assert_eq!(
+                end_action(R::SourceEnded, false, true, source, bili),
+                EndAction::SkipWarning
+            );
+        }
+    }
+
+    #[test]
+    fn end_action_announces_end_whether_or_not_room_is_live() {
+        use FfmpegLoopExitReason as R;
+        assert_eq!(
+            end_action(R::SourceEnded, false, false, false, true),
+            EndAction::AnnounceEnd { bili_live: true }
+        );
+        // Cause 2: the room already stopped no longer means silence.
+        assert_eq!(
+            end_action(R::SourceEnded, false, false, false, false),
+            EndAction::AnnounceEnd { bili_live: false }
+        );
+        assert_eq!(
+            end_action(R::BiliStopped, false, false, false, false),
+            EndAction::AnnounceEnd { bili_live: false }
+        );
+        // Source still live: interrupted, or the room stopped from elsewhere.
+        assert_eq!(
+            end_action(
+                R::IntentionalRestart {
+                    target_m3u8_available: false
+                },
+                false,
+                false,
+                true,
+                true
+            ),
+            EndAction::AnnounceInterrupted
+        );
+        assert_eq!(
+            end_action(R::BiliStopped, false, false, true, false),
+            EndAction::BiliStoppedQuietly
+        );
+    }
+
+    #[test]
+    fn end_danmaku_text_and_auto_stop_threshold() {
+        assert_eq!(
+            end_danmaku_text("示例", true),
+            "示例 直播结束，可使用弹幕指令进行换台"
+        );
+        assert_eq!(end_danmaku_text("示例", false), "示例 直播结束");
+        assert!(!should_auto_stop_after_end(2));
+        assert!(should_auto_stop_after_end(3));
+        assert!(should_auto_stop_after_end(8));
+    }
+
     #[test]
     fn restart_skip_requires_replacement_m3u8() {
         assert!(restart_exit_should_skip_end_danmaku(
@@ -2754,6 +3398,9 @@ mod tests {
         ));
         assert!(restart_exit_should_skip_end_danmaku(
             FfmpegLoopExitReason::ClusterHandoff
+        ));
+        assert!(restart_exit_should_skip_end_danmaku(
+            FfmpegLoopExitReason::EndCheckCancelled { restart: false }
         ));
     }
 
