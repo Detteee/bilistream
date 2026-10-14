@@ -560,6 +560,7 @@ pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
             thresholds: ClusterHealthThresholds::default(),
             public_status: crate::config::PublicStatusConfig::default(),
         },
+        history: Default::default(),
     }
 }
 

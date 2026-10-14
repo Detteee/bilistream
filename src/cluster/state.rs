@@ -99,3 +99,14 @@ pub(crate) fn now_secs() -> u64 {
 pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
     crate::storage::read_json(name).ok()
 }
+
+/// Peers' heartbeat B站 live books (analytics §17). The read guard is
+/// dropped before this returns.
+pub(crate) fn peer_live_books(local_node_id: &str) -> Vec<crate::history::live_book::BiliLiveBook> {
+    cluster_state_read()
+        .nodes
+        .values()
+        .filter(|node| node.node_id != local_node_id)
+        .filter_map(|node| node.bili_live.clone())
+        .collect()
+}

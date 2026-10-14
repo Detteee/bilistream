@@ -340,6 +340,7 @@ mod tests {
             notify_appsecret_set: None,
             notify_appid_set: None,
             notify_openid_set: None,
+            bili_live: None,
         }
     }
 

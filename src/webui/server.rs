@@ -56,6 +56,8 @@ pub(crate) async fn serve_prepared(
     let _cluster_worker = crate::cluster::start_cluster_worker();
     // Off until enabled in 系统设置 → QQ 通知; a no-op loop otherwise.
     let _notify_worker = crate::notify::start();
+    // 统计 history writer; off with `history.enabled=false`.
+    crate::history::start().await;
     let _membership_worker = crate::cluster::membership::start_recovery_worker();
     let _public_supervisor = crate::webui::public::start_public_status_supervisor();
     let app = build_app(state, auth);
@@ -125,6 +127,15 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
             post(api::cluster_cache_active_monitor_state),
         )
         .route("/cluster/push-config", post(api::cluster_push_config))
+        .route("/history/status", get(api::history::status))
+        .route("/history/summary", get(api::history::summary))
+        .route("/history/sessions", get(api::history::sessions))
+        .route("/history/events", get(api::history::events))
+        .route("/history/stats", get(api::history::stats))
+        .route(
+            "/cluster/v1/history",
+            post(api::history::peer_history).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/cluster/membership", get(api::get_membership))
         .route("/cluster/create", post(api::create_cluster))
         .route("/cluster/prepare-join", post(api::prepare_join))

@@ -17,6 +17,8 @@ pub const CLUSTER: &str = "cluster";
 pub const CONFIG: &str = "config";
 /// A Holodex panel list (channels or favorites) changed.
 pub const HOLODEX: &str = "holodex";
+/// 统计 history committed new rows (throttled to ≤ 1 per 5 s by the writer).
+pub const HISTORY: &str = "history";
 
 /// Notify all connected WebUI clients that `kind` changed. Never blocks; if no
 /// client is connected the event is dropped.

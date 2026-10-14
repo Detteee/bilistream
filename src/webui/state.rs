@@ -461,6 +461,7 @@ mod tests {
             enable_twitch_monitor: false,
             niconico: crate::config::Niconico::default(),
             cluster: ClusterConfig::default(),
+            history: Default::default(),
         }
     }
 

@@ -294,3 +294,109 @@ async fn openid_peer_routes_refuse_a_member_signing_at_an_older_revision() {
     drop((app, auth));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// 统计 design §11: the history peer route is members only. A member at an
+/// older revision is 401, a signer from another installation (not a
+/// member) and an unsigned caller are refused, all before the handler; the
+/// current member is admitted. A malformed body is 400 in the real handler.
+#[tokio::test]
+async fn history_peer_route_is_members_only_and_refuses_bad_bodies() {
+    let (root, auth) = installation().await;
+    let (other_root, other) = installation().await;
+    let reached = Arc::new(AtomicBool::new(false));
+    let handler = {
+        let reached = Arc::clone(&reached);
+        move || {
+            let reached = Arc::clone(&reached);
+            async move {
+                reached.store(true, Ordering::SeqCst);
+                StatusCode::OK
+            }
+        }
+    };
+    let app = Router::new()
+        .route(routes::HISTORY.path, post(handler))
+        .layer(axum::middleware::from_fn(require_webui_auth))
+        .layer(Extension(Arc::clone(&auth)));
+    let current = auth
+        .runtime
+        .membership
+        .manifest()
+        .unwrap()
+        .unwrap()
+        .revision;
+    let body = br#"{"name":"sessions","query":{"from":1,"to":2}}"#.to_vec();
+
+    let stale = signed_request(
+        &auth,
+        routes::HISTORY,
+        current - 1,
+        PeerScope::Ordinary,
+        body.clone(),
+    );
+    assert_eq!(
+        app.clone().oneshot(stale).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(!reached.load(Ordering::SeqCst));
+
+    let foreign = signed_request(
+        &other,
+        routes::HISTORY,
+        current,
+        PeerScope::Ordinary,
+        body.clone(),
+    );
+    let status = app.clone().oneshot(foreign).await.unwrap().status();
+    // The shared peer-auth layer cannot verify a non-member's signature, so
+    // it answers 401 (the same as every other peer route), not 403.
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "non-member");
+    assert!(
+        !reached.load(Ordering::SeqCst),
+        "non-member never reaches the handler"
+    );
+
+    let unsigned = Request::builder()
+        .method("POST")
+        .uri(routes::HISTORY.path)
+        .body(Body::from(body.clone()))
+        .unwrap();
+    let status = app.clone().oneshot(unsigned).await.unwrap().status();
+    assert!(
+        status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN,
+        "{status}"
+    );
+    assert!(!reached.load(Ordering::SeqCst));
+
+    let fresh = signed_request(&auth, routes::HISTORY, current, PeerScope::Ordinary, body);
+    assert_eq!(
+        app.clone().oneshot(fresh).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert!(reached.swap(false, Ordering::SeqCst));
+
+    // The real handler: a body that is not a history query is a 400.
+    let real = Router::new().route(
+        routes::HISTORY.path,
+        post(crate::webui::api::history::peer_history),
+    );
+    for bad in [
+        &b"not json"[..],
+        br#"{"name":"sessions","query":{"from":1,"to":2},"sql":"DELETE FROM sessions"}"#,
+        br#"{"name":"sessions"}"#,
+    ] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(routes::HISTORY.path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(bad.to_vec()))
+            .unwrap();
+        assert_eq!(
+            real.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    drop((app, auth, other));
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(other_root).unwrap();
+}

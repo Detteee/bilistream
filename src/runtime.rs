@@ -157,6 +157,27 @@ enum FfmpegLoopExitReason {
     NewBroadcast,
 }
 
+/// 结束原因 for the 统计 history (design §5.4): only the seven codes.
+fn history_end_reason(
+    reason: FfmpegLoopExitReason,
+    manual_stop: bool,
+) -> crate::history::EndReason {
+    use crate::history::EndReason;
+    match reason {
+        FfmpegLoopExitReason::SourceEnded | FfmpegLoopExitReason::NewBroadcast => {
+            EndReason::SourceEnded
+        }
+        FfmpegLoopExitReason::BiliStopped if manual_stop => EndReason::UserStop,
+        FfmpegLoopExitReason::BiliStopped => EndReason::BiliStopped,
+        FfmpegLoopExitReason::IntentionalRestart { .. }
+        | FfmpegLoopExitReason::EndCheckCancelled { restart: true } => {
+            EndReason::IntentionalRestart
+        }
+        FfmpegLoopExitReason::EndCheckCancelled { restart: false } => EndReason::UserStop,
+        FfmpegLoopExitReason::ClusterHandoff => EndReason::ClusterHandoff,
+    }
+}
+
 fn restart_exit_should_skip_end_danmaku(reason: FfmpegLoopExitReason) -> bool {
     matches!(
         reason,
@@ -1759,6 +1780,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Main ffmpeg monitoring loop - blocks until stream ends
             let mut last_session = None;
+            // 统计: one relay session per stream selection, opened by the
+            // first real push; dropping it unfinished records `aborted`.
+            let mut history_session: Option<crate::history::SessionGuard> = None;
             let ffmpeg_loop_exit_reason = loop {
                 if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
                     set_manual_restart();
@@ -1816,6 +1840,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 )
                 .await;
                 last_session = session;
+                if let Some(run) = session {
+                    history_session
+                        .get_or_insert_with(|| {
+                            crate::history::SessionGuard::start(
+                                &cfg,
+                                platform,
+                                &channel_id,
+                                &channel_name,
+                                Some(&cfg_title),
+                            )
+                        })
+                        .run_started(run.id());
+                }
 
                 if let (Some(monitor), Some(session)) = (lol_monitor.clone(), session) {
                     ffmpeg::spawn_session_task(
@@ -1927,6 +1964,14 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     warning_skip_now,
                 );
                 cluster::record_stream_exit(!count_ffmpeg_exit_failure);
+                if let (Some(guard), Some(run)) = (&history_session, session) {
+                    guard.run_exited(
+                        run.id(),
+                        exit_status.and_then(|status| status.code()),
+                        !ffmpeg_exit_failed,
+                        count_ffmpeg_exit_failure,
+                    );
+                }
 
                 match end_check_cancel {
                     Some(EndRecheckCancel::ClusterHandoff) => {
@@ -2001,6 +2046,12 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
             // Check the actual reason for ffmpeg loop exit
             let manual_stop = was_manual_stop();
+            if let Some(guard) = history_session.take() {
+                guard.finish(history_end_reason(ffmpeg_loop_exit_reason, manual_stop));
+            }
+            if matches!(ffmpeg_loop_exit_reason, FfmpegLoopExitReason::BiliStopped) {
+                crate::history::on_bili_stopped(&cfg);
+            }
             let manual_restart = was_manual_restart();
             let warning_skip = should_skip_due_to_warning(&channel_name);
             let restart_exit_should_skip_danmaku =
@@ -2988,6 +3039,54 @@ mod tests {
     }
 
     #[test]
+    fn history_end_reason_uses_only_the_seven_codes() {
+        use crate::history::EndReason;
+        let cases = [
+            (
+                FfmpegLoopExitReason::SourceEnded,
+                false,
+                EndReason::SourceEnded,
+            ),
+            (
+                FfmpegLoopExitReason::NewBroadcast,
+                false,
+                EndReason::SourceEnded,
+            ),
+            (
+                FfmpegLoopExitReason::BiliStopped,
+                false,
+                EndReason::BiliStopped,
+            ),
+            (FfmpegLoopExitReason::BiliStopped, true, EndReason::UserStop),
+            (
+                FfmpegLoopExitReason::IntentionalRestart {
+                    target_m3u8_available: true,
+                },
+                false,
+                EndReason::IntentionalRestart,
+            ),
+            (
+                FfmpegLoopExitReason::EndCheckCancelled { restart: true },
+                false,
+                EndReason::IntentionalRestart,
+            ),
+            (
+                FfmpegLoopExitReason::EndCheckCancelled { restart: false },
+                true,
+                EndReason::UserStop,
+            ),
+            (
+                FfmpegLoopExitReason::ClusterHandoff,
+                false,
+                EndReason::ClusterHandoff,
+            ),
+        ];
+        for (reason, manual_stop, want) in cases {
+            assert_eq!(history_end_reason(reason, manual_stop), want, "{reason:?}");
+        }
+    }
+
+    #[test]
     fn runtime_milestones_are_single_line_safe_and_distinguish_end_causes() {
         let bytes = LogBytes::default();
         let writer = bytes.clone();
@@ -3157,6 +3256,7 @@ mod tests {
             enable_twitch_monitor: true,
             niconico: bilistream::config::Niconico::default(),
             cluster: bilistream::config::ClusterConfig::default(),
+            history: Default::default(),
         }
     }
 

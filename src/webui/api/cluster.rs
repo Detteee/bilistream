@@ -82,9 +82,15 @@ pub(crate) fn monitor_toggle_enable_rejected_response() -> ApiResponse<()> {
 
 pub async fn get_cluster_status() -> Json<ApiResponse<ClusterStatus>> {
     match load_cluster_status().await {
-        Ok(status) => Json(ApiResponse {
+        Ok(mut status) => Json(ApiResponse {
             success: true,
-            data: Some(status),
+            data: Some({
+                // The live book (live_key) never reaches a browser.
+                for node in &mut status.nodes {
+                    node.bili_live = None;
+                }
+                status
+            }),
             message: None,
         }),
         Err(e) => Json(ApiResponse {

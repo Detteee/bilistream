@@ -13,6 +13,8 @@ mod self_check;
 mod settings_sync;
 mod state;
 mod status;
+#[cfg(test)]
+pub(crate) use status::empty_node;
 mod sync;
 mod types;
 mod version;

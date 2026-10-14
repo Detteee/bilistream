@@ -89,6 +89,11 @@ pub struct ClusterNodeSnapshot {
     pub notify_appid_set: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_openid_set: Option<bool>,
+    /// The B站 live book (`history::live_book`, analytics design §17): which
+    /// `live_key` the shared room is in. Peer heartbeat only; stripped from
+    /// `/api/cluster/status`. Older nodes neither send nor read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bili_live: Option<crate::history::live_book::BiliLiveBook>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

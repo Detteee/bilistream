@@ -186,6 +186,9 @@ pub struct Config {
     pub niconico: Niconico,
     #[serde(default)]
     pub cluster: ClusterConfig,
+    /// Local 统计 history (design §13). Per node; never synced or backed up.
+    #[serde(default)]
+    pub history: HistoryConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -616,6 +619,56 @@ fn default_quality() -> String {
 
 pub(crate) fn default_websub_port() -> u16 {
     3151
+}
+
+/// `config.json` → `history` (analytics design §13). Per node: not part of
+/// `ClusterSettings` or `MonitoredConfig`, so it never travels.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct HistoryConfig {
+    pub enabled: bool,
+    /// ffmpeg sample interval, clamped to 5–60 s.
+    pub sample_secs: u64,
+    /// Fetch B站 StopLiveData once after a live session ends (+1 retry).
+    pub bili_stop_summary: bool,
+    /// Capture mode (off by default, per node): writes allowlist-redacted
+    /// B站 replies to the git-ignored `.trellis/fixtures/` only.
+    pub capture: bool,
+    pub retention: HistoryRetention,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sample_secs: 10,
+            bili_stop_summary: true,
+            capture: false,
+            retention: HistoryRetention::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct HistoryRetention {
+    pub raw_days: u64,
+    pub rollup_days: u64,
+    pub event_days: u64,
+    pub event_rows: u64,
+    pub max_mb: u64,
+}
+
+impl Default for HistoryRetention {
+    fn default() -> Self {
+        Self {
+            raw_days: 7,
+            rollup_days: 90,
+            event_days: 180,
+            event_rows: 200_000,
+            max_mb: 512,
+        }
+    }
 }
 
 fn default_true() -> bool {

@@ -1,0 +1,1685 @@
+//! 统计 history backend tests (design §12). Fixtures are the real,
+//! key-stripped captures in `/workspace/bili-fixtures` copied byte-for-byte
+//! into `src/history/fixtures/`.
+
+use super::enrich::{parse_room_live_key, parse_stop_live_data, StopLiveDataError};
+use super::event::{BiliTotals, EndReason, Event, EventKind, Severity};
+use super::live_book::{BiliLiveBook, BiliLiveMark, SummaryMark, SummaryPhase};
+use super::query::{self, Query};
+use super::{maintain, schema, writer::Writer};
+use crate::config::HistoryRetention;
+use crate::webui::api::history::{self as api, PeerRequest, Peers, Scope};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+const UNKNOWN_KEY: &str = include_str!("fixtures/stoplivedata_unknown_key.json");
+const LIVE_SESSION: &str = include_str!("fixtures/stoplivedata_live_session.json");
+const ROOM_GET_INFO: &str = include_str!("fixtures/room_get_info.json");
+const DAY: i64 = 86_400;
+const T0: i64 = 1_791_000_000;
+
+fn tmp(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "bilistream-history-{name}-{}-{}",
+        std::process::id(),
+        crate::storage::now()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn writer(name: &str) -> (Writer, std::path::PathBuf) {
+    let dir = tmp(name);
+    let path = dir.join("history.sqlite");
+    let conn = schema::open_rw(&path).unwrap();
+    let mut w = Writer::new(conn, "local", 7);
+    w.apply(&ev(T0 - 10, EventKind::ProcessStarted { version: "test" }))
+        .unwrap();
+    w.set_secrets(vec!["SYNTHKEY-0123456789".into()]);
+    (w, path)
+}
+
+fn ev(at: i64, kind: EventKind) -> Event {
+    Event {
+        at: at as u64,
+        kind,
+    }
+}
+
+fn session(w: &mut Writer, seq: u64, at: i64, live_key: Option<&str>) {
+    w.apply(&ev(
+        at,
+        EventKind::SessionStarted {
+            seq,
+            platform: "YT",
+            channel_id: "UC1".into(),
+            channel_name: "示例频道".into(),
+            title: Some("示例直播".into()),
+            live_key: live_key.map(str::to_string),
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(at, EventKind::FfmpegStarted { seq, run: seq * 10 }))
+        .unwrap();
+}
+
+fn end(w: &mut Writer, seq: u64, at: i64, reason: EndReason) {
+    w.apply(&ev(at, EventKind::SessionEnded { seq, reason }))
+        .unwrap();
+}
+
+fn q(from: i64, to: i64) -> Query {
+    Query {
+        from,
+        to,
+        limit: 50,
+        max_points: 1000,
+        ..Default::default()
+    }
+}
+
+fn sessions(w: &Writer, now: i64) -> query::SessionsPage {
+    query::sessions(&w.conn, &q(T0 - DAY, now), now).unwrap()
+}
+
+// ------------------------------------------------------------- schema
+
+#[test]
+fn new_file_is_incremental_vacuum_v1_and_corrupt_file_is_recreated() {
+    let dir = tmp("schema");
+    let path = dir.join("history.sqlite");
+    let conn = schema::open_rw(&path).unwrap();
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+        .unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!((mode, version), (2, schema::SCHEMA_VERSION));
+    drop(conn);
+    std::fs::write(
+        &path,
+        b"this is not a sqlite database at all, just junk bytes....",
+    )
+    .unwrap();
+    let conn = schema::open_rw(&path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    assert!(path.with_extension("sqlite.corrupt").exists());
+}
+
+#[test]
+fn schema_has_no_revenue_column_and_only_seven_end_reasons() {
+    let (w, _) = writer("revenue-schema");
+    let sql: String = w
+        .conn
+        .query_row(
+            "SELECT group_concat(sql, ' ') FROM sqlite_master",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let lower = sql.to_lowercase();
+    assert!(!lower.contains("hamster") && !lower.contains("revenue") && !lower.contains("rmb"));
+    for code in EndReason::ALL {
+        assert!(sql.contains(&format!("'{}'", code.as_str())));
+    }
+    w.conn
+        .execute(
+            "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,started_at,last_seen_at)
+             VALUES ('x','local',1,99,'YT','c','n',1,1)",
+            [],
+        )
+        .unwrap();
+    assert!(w
+        .conn
+        .execute("UPDATE sessions SET end_reason='failed' WHERE eid='x'", [])
+        .is_err());
+    assert_eq!(EndReason::ALL.len(), 7);
+    assert!(EndReason::parse("failed").is_none());
+}
+
+// ------------------------------------------------------- StopLiveData
+
+#[test]
+fn unknown_key_fixture_loaded_whole_is_a_failed_fetch() {
+    let reply: Value = serde_json::from_str(UNKNOWN_KEY).unwrap();
+    assert_eq!(reply["code"], 0, "the trap: code 0 with sentinels");
+    assert!(reply["data"]["WatchedCount"].as_i64().unwrap() > 0);
+    assert_eq!(
+        parse_stop_live_data(&reply),
+        Err(StopLiveDataError::Sentinel("LiveTime"))
+    );
+}
+
+#[test]
+fn live_session_fixture_is_valid_and_keeps_only_the_allowlist() {
+    let mut reply: Value = serde_json::from_str(LIVE_SESSION).unwrap();
+    reply["data"]["HamsterRmb"] = json!(12345);
+    reply["data"]["SomethingElse"] = json!("x");
+    let totals = parse_stop_live_data(&reply).unwrap();
+    assert_eq!(
+        totals,
+        BiliTotals {
+            live_time_raw: Some(17434),
+            add_fans: Some(0),
+            new_fans_club: Some(0),
+            danmu_num: Some(457),
+            max_online: Some(2765),
+            watched_count: Some(469),
+        }
+    );
+    let text = serde_json::to_string(&totals).unwrap();
+    assert!(!text.contains("Hamster") && !text.contains("12345"));
+    let redacted = super::enrich::redact_stop_live_data(&reply);
+    assert!(redacted["data"].get("HamsterRmb").is_none());
+    assert!(redacted["data"].get("SomethingElse").is_none());
+    assert_eq!(redacted["data"].as_object().unwrap().len(), 6);
+}
+
+#[test]
+fn stop_live_data_failure_paths() {
+    assert_eq!(
+        parse_stop_live_data(&json!({"code": -101, "message": "账号未登录"})),
+        Err(StopLiveDataError::Code(-101))
+    );
+    assert_eq!(
+        parse_stop_live_data(&json!({"code": 0})),
+        Err(StopLiveDataError::NoData)
+    );
+    assert_eq!(
+        parse_stop_live_data(&json!({"code": 0, "data": {"DanmuNum": 3, "AddFans": -1}})),
+        Err(StopLiveDataError::Sentinel("AddFans"))
+    );
+    // Missing fields in a valid reply are NULL for that field only.
+    let partial = parse_stop_live_data(&json!({"code": 0, "data": {"DanmuNum": 3}})).unwrap();
+    assert_eq!(partial.danmu_num, Some(3));
+    assert_eq!(partial.max_online, None);
+}
+
+#[tokio::test]
+async fn fetch_retries_once_after_five_minutes_then_gives_up() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    let calls = AtomicUsize::new(0);
+    let ok_second = super::enrich::fetch_with_retry(
+        || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Err("timeout".to_string())
+                } else {
+                    Ok(serde_json::from_str::<Value>(LIVE_SESSION).unwrap())
+                }
+            }
+        },
+        Duration::from_millis(5),
+        Duration::from_millis(30),
+    )
+    .await;
+    assert_eq!(ok_second.unwrap().danmu_num, Some(457));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let started = std::time::Instant::now();
+    let sentinel_twice = super::enrich::fetch_with_retry(
+        || async { Ok(serde_json::from_str::<Value>(UNKNOWN_KEY).unwrap()) },
+        Duration::from_millis(5),
+        Duration::from_millis(30),
+    )
+    .await;
+    assert!(sentinel_twice.is_none());
+    assert!(started.elapsed() >= Duration::from_millis(35));
+    assert_eq!(super::enrich::RETRY_DELAY, Duration::from_secs(300));
+}
+
+#[test]
+fn failed_summary_leaves_totals_null_and_duration_is_our_own() {
+    let (mut w, _) = writer("summary-null");
+    session(&mut w, 1, T0, Some("K1"));
+    w.apply(&ev(
+        T0,
+        EventKind::BiliLiveStarted {
+            live_key: "K1".into(),
+            room: 5,
+        },
+    ))
+    .unwrap();
+    end(&mut w, 1, T0 + 3600, EndReason::BiliStopped);
+    // Session closed before any summary: pending.
+    let page = sessions(&w, T0 + 4000);
+    let s = &page.items[0];
+    assert_eq!(s.duration_secs, 3600);
+    assert_eq!(s.end_reason.as_deref(), Some("bili_stopped"));
+    assert_eq!(s.bili.as_ref().unwrap().state, "pending");
+    // Unknown-key reply → failed, every total NULL.
+    let reply: Value = serde_json::from_str(UNKNOWN_KEY).unwrap();
+    let totals = parse_stop_live_data(&reply).ok();
+    w.apply(&ev(
+        T0 + 3605,
+        EventKind::BiliLiveSummary {
+            live_key: "K1".into(),
+            totals,
+        },
+    ))
+    .unwrap();
+    let nulls: (String, Option<i64>, Option<i64>, Option<i64>) = w
+        .conn
+        .query_row(
+            "SELECT summary_state, watched_count, bili_live_time_raw, add_fans FROM bili_lives WHERE live_key='K1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(nulls, ("failed".into(), None, None, None));
+    let bili = sessions(&w, T0 + 4000).items[0].bili.clone().unwrap();
+    assert_eq!(bili.state, "failed");
+    assert_eq!(
+        (bili.watched, bili.danmu, bili.add_fans),
+        (None, None, None)
+    );
+    // A valid summary later (retry) fills totals; LiveTime is never the duration.
+    let totals = parse_stop_live_data(&serde_json::from_str(LIVE_SESSION).unwrap()).ok();
+    w.apply(&ev(
+        T0 + 3900,
+        EventKind::BiliLiveSummary {
+            live_key: "K1".into(),
+            totals,
+        },
+    ))
+    .unwrap();
+    let s = sessions(&w, T0 + 4000).items[0].clone();
+    let bili = s.bili.unwrap();
+    assert_eq!(
+        (bili.state.as_str(), bili.watched, bili.danmu),
+        ("ok", Some(469), Some(457))
+    );
+    assert_eq!(s.duration_secs, 3600, "never LiveTime (17434)");
+    let body = serde_json::to_string(&sessions(&w, T0 + 4000)).unwrap();
+    assert!(!body.contains("K1"), "live_key never in API output");
+    assert!(!body.contains("Hamster") && !body.contains("live_time"));
+}
+
+#[test]
+fn online_peak_comes_from_our_samples() {
+    let (mut w, _) = writer("online-peak");
+    session(&mut w, 1, T0, None);
+    for (i, v) in [120u64, 340, 200].into_iter().enumerate() {
+        w.apply(&ev(
+            T0 + 10 * i as i64,
+            EventKind::BiliCounts {
+                online: Some(v),
+                watched: None,
+            },
+        ))
+        .unwrap();
+    }
+    let bili = sessions(&w, T0 + 60).items[0].bili.clone().unwrap();
+    assert_eq!(bili.online_peak, Some(340.0));
+}
+
+// ------------------------------------------------------------ live_key
+
+#[test]
+fn missing_live_key_is_pending_while_open_then_skipped() {
+    let (mut w, _) = writer("no-key");
+    session(&mut w, 1, T0, None);
+    assert_eq!(
+        sessions(&w, T0 + 60).items[0].bili.as_ref().unwrap().state,
+        "pending"
+    );
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    let bili = sessions(&w, T0 + 700).items[0].bili.clone().unwrap();
+    assert_eq!(bili.state, "skipped");
+    assert_eq!(bili.watched, None);
+}
+
+#[test]
+fn getinfo_fixture_has_no_usable_key_and_a_real_one_is_adopted() {
+    let reply: Value = serde_json::from_str(ROOM_GET_INFO).unwrap();
+    assert_eq!(
+        parse_room_live_key(&reply),
+        None,
+        "redacted placeholder is no key"
+    );
+    let mut with_key = reply.clone();
+    with_key["data"]["live_key"] = json!("synthetic-live-key-1");
+    assert_eq!(
+        parse_room_live_key(&with_key).as_deref(),
+        Some("synthetic-live-key-1")
+    );
+    let mut offline = with_key.clone();
+    offline["data"]["live_status"] = json!(0);
+    assert_eq!(parse_room_live_key(&offline), None);
+    let captured = super::enrich::redact_room_info(&with_key).to_string();
+    assert!(!captured.contains("synthetic-live-key-1") && !captured.contains("uid"));
+}
+
+#[test]
+fn session_adopts_key_from_getinfo_after_start() {
+    let (mut w, _) = writer("adopt");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 5,
+        EventKind::SessionLiveKey {
+            seq: 1,
+            live_key: "G1".into(),
+        },
+    ))
+    .unwrap();
+    let key: Option<String> = w
+        .conn
+        .query_row("SELECT live_key FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(key.as_deref(), Some("G1"));
+}
+
+fn mark(key: &str, started: u64, phase: SummaryPhase, node: Option<&str>) -> BiliLiveMark {
+    BiliLiveMark {
+        room: 5,
+        live_key: key.into(),
+        started_at: started,
+        started_by: "a".into(),
+        stopped_at: None,
+        summary: SummaryMark {
+            phase,
+            node: node.map(str::to_string),
+            at: 0,
+            totals: None,
+        },
+    }
+}
+
+#[test]
+fn live_book_merge_is_order_independent_bounded_and_redacted() {
+    let a = BiliLiveBook {
+        entries: vec![mark("K", 100, SummaryPhase::Claimed, Some("b"))],
+    };
+    let mut stopped = mark("K", 90, SummaryPhase::Claimed, Some("a"));
+    stopped.stopped_at = Some(200);
+    let b = BiliLiveBook {
+        entries: vec![stopped],
+    };
+    let mut ab = a.clone();
+    ab.join(&b);
+    let mut ba = b.clone();
+    ba.join(&a);
+    assert_eq!(ab, ba);
+    let m = &ab.entries[0];
+    assert_eq!((m.started_at, m.stopped_at), (90, Some(200)));
+    assert_eq!(
+        m.summary.node.as_deref(),
+        Some("a"),
+        "ties by lower node id"
+    );
+    assert!(super::live_book::should_back_off(&ab, 5, "K", "b"));
+    assert!(!super::live_book::should_back_off(&ab, 5, "K", "a"));
+    let mut many = BiliLiveBook::default();
+    for i in 0..12 {
+        many.join(&BiliLiveBook {
+            entries: vec![mark(&format!("K{i}"), i, SummaryPhase::Pending, None)],
+        });
+    }
+    assert_eq!(many.entries.len(), super::live_book::MAX_ENTRIES);
+    assert_eq!(many.open_key(5).unwrap().live_key, "K11");
+    assert!(
+        !format!("{many:?}").contains("K11"),
+        "Debug never prints the key"
+    );
+}
+
+#[test]
+fn heartbeat_book_is_stripped_from_the_browser_cluster_view() {
+    super::live_book::reset_for_test();
+    super::live_book::record_started(5, "SECRET-LIVE-KEY", "local", 1);
+    let book = super::live_book::heartbeat_book().unwrap();
+    assert_eq!(book.entries.len(), 1);
+    let mut node = crate::cluster::empty_node("a", "a", "", 0, true, 1);
+    node.bili_live = Some(book);
+    assert!(
+        serde_json::to_string(&node)
+            .unwrap()
+            .contains("SECRET-LIVE-KEY"),
+        "peers get it"
+    );
+    node.bili_live = None;
+    assert!(!serde_json::to_string(&node)
+        .unwrap()
+        .contains("SECRET-LIVE-KEY"));
+    super::live_book::reset_for_test();
+}
+
+// ---------------------------------------------------------- crash close
+
+#[test]
+fn crash_sweep_closes_older_boot_sessions_as_process_restart() {
+    let (mut w, path) = writer("crash");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 120,
+        EventKind::StatsSample {
+            seq: 1,
+            bitrate_kbps: (5000.0, 6000.0, 7000.0),
+            fps: Some(60.0),
+            speed: Some(1.0),
+        },
+    ))
+    .unwrap();
+    drop(w);
+    let mut w2 = Writer::new(schema::open_rw(&path).unwrap(), "local", 8);
+    w2.apply(&ev(T0 + 999, EventKind::ProcessStarted { version: "test" }))
+        .unwrap();
+    let s = sessions(&w2, T0 + 1000).items[0].clone();
+    assert_eq!(s.end_reason.as_deref(), Some("process_restart"));
+    assert_eq!(s.ended_at, Some(T0 + 120), "ended_at = last_seen_at");
+    assert_eq!(s.median_bitrate_kbps, Some(6000.0));
+}
+
+#[test]
+fn every_end_reason_round_trips_and_open_session_has_none() {
+    let (mut w, _) = writer("reasons");
+    for (i, reason) in EndReason::ALL.into_iter().enumerate() {
+        let seq = i as u64 + 1;
+        session(&mut w, seq, T0 + i as i64 * 100, None);
+        end(&mut w, seq, T0 + i as i64 * 100 + 50, reason);
+    }
+    session(&mut w, 99, T0 + 5000, None);
+    let page = sessions(&w, T0 + 6000);
+    let open = page.items.iter().find(|s| s.ended_at.is_none()).unwrap();
+    assert_eq!(open.end_reason, None);
+    let mut codes: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|s| s.end_reason.clone())
+        .collect();
+    codes.sort();
+    let mut want: Vec<_> = EndReason::ALL
+        .iter()
+        .map(|r| r.as_str().to_string())
+        .collect();
+    want.sort();
+    assert_eq!(codes, want);
+}
+
+// ----------------------------------------------------------- redaction
+
+#[test]
+fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
+    let (mut w, path) = writer("redact");
+    w.apply(&ev(
+        T0,
+        EventKind::SessionStarted {
+            seq: 1,
+            platform: "TW",
+            channel_id: "c".into(),
+            channel_name: "name SYNTHKEY-0123456789".into(),
+            title: Some("rtmp://live/x?key=SYNTHKEY-0123456789".into()),
+            live_key: None,
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(
+        T0,
+        EventKind::Generic {
+            kind: "bili.warning",
+            subject: None,
+            severity: Severity::Warn,
+            title: "警告 SYNTHKEY-0123456789".into(),
+            detail: "SYNTHKEY-0123456789".into(),
+        },
+    ))
+    .unwrap();
+    let mut qq = q(T0 - 10, T0 + 10);
+    qq.limit = 20;
+    let bodies = format!(
+        "{}{}",
+        serde_json::to_string(&sessions(&w, T0 + 5)).unwrap(),
+        serde_json::to_string(&query::events(&w.conn, &qq).unwrap()).unwrap()
+    );
+    assert!(bodies.contains("[已隐藏]"));
+    drop(w);
+    for file in [path.clone(), path.with_extension("sqlite-wal")] {
+        if let Ok(bytes) = std::fs::read(&file) {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains("SYNTHKEY-0123456789"),
+                "{file:?}"
+            );
+        }
+    }
+    assert!(!bodies.contains("SYNTHKEY-0123456789"));
+}
+
+// ------------------------------------------------- retention and rollup
+
+fn raw(w: &Writer, ts: i64, v: f64) {
+    w.conn
+        .execute(
+            "INSERT INTO samples_raw (metric,node,ts,session_id,min,max,sum,count) VALUES (1,'local',?1,NULL,?2,?2,?2,1)",
+            rusqlite::params![ts, v],
+        )
+        .unwrap();
+}
+
+fn count(w: &Writer, table: &str) -> i64 {
+    w.conn
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn rollup_is_half_open_idempotent_and_exact() {
+    let (w, _) = writer("rollup");
+    let base = T0 - T0 % 60;
+    for i in 0..12 {
+        raw(&w, base + i * 10, 100.0 + i as f64); // two full minutes
+    }
+    // now = base + 120 + 120 → end = floor(now-120, 60) = base+120: both minutes.
+    let now = base + 240;
+    assert_eq!(
+        maintain::rollup_1m(&w.conn, now).unwrap(),
+        Some((base, base + 120))
+    );
+    assert_eq!(
+        maintain::rollup_1m(&w.conn, now).unwrap(),
+        None,
+        "watermark moved"
+    );
+    let rows: Vec<(i64, f64, f64, f64, i64)> = w
+        .conn
+        .prepare("SELECT bucket,min,max,sum,count FROM samples_1m ORDER BY bucket")
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (base, 100.0, 105.0, 615.0, 6),
+            (base + 60, 106.0, 111.0, 651.0, 6)
+        ]
+    );
+    // A row at the boundary (base+120) belongs to the next range only.
+    raw(&w, base + 120, 1.0);
+    assert_eq!(maintain::rollup_1m(&w.conn, base + 240).unwrap(), None);
+    assert_eq!(
+        maintain::rollup_1m(&w.conn, base + 300).unwrap(),
+        Some((base + 120, base + 180))
+    );
+    assert_eq!(count(&w, "samples_1m"), 3);
+}
+
+#[test]
+fn raw_is_deleted_only_below_watermark_and_past_retention() {
+    let (w, _) = writer("prune");
+    let r = HistoryRetention::default();
+    let now = T0;
+    let old = now - 8 * DAY;
+    raw(&w, old, 1.0);
+    raw(&w, now - DAY, 2.0);
+    // No rollup yet: nothing may be deleted even though it is past 7 d.
+    assert_eq!(maintain::prune_raw(&w.conn, now, r.raw_days).unwrap(), 0);
+    assert_eq!(count(&w, "samples_raw"), 2);
+    // Crash between rollup and delete: watermark committed, raw survives,
+    // and the next tick does not add the range twice.
+    maintain::rollup_1m(&w.conn, now).unwrap();
+    let before = count(&w, "samples_1m");
+    let report = maintain::tick(&w.conn, now, &r).unwrap();
+    assert_eq!(report.rolled, None);
+    assert_eq!(count(&w, "samples_1m"), before);
+    assert_eq!(report.raw_deleted, 1, "only the 8-day-old row");
+    assert_eq!(count(&w, "samples_raw"), 1);
+}
+
+#[test]
+fn rollups_and_events_expire_at_their_edges() {
+    let (w, _) = writer("expire");
+    let r = HistoryRetention {
+        event_rows: 3,
+        ..Default::default()
+    };
+    let now = T0;
+    for (bucket, v) in [(now - 90 * DAY - 60, 1.0), (now - 90 * DAY, 2.0)] {
+        w.conn
+            .execute(
+                "INSERT INTO samples_1m (metric,node,bucket,min,max,sum,count) VALUES (1,'local',?1,?2,?2,?2,1)",
+                rusqlite::params![bucket, v],
+            )
+            .unwrap();
+    }
+    for i in 0..5 {
+        w.conn
+            .execute(
+                "INSERT INTO events (eid,at,node,kind,severity,title,detail) VALUES (?1,?2,'local','x','info','t','')",
+                rusqlite::params![format!("e{i}"), now - 10 + i],
+            )
+            .unwrap();
+    }
+    w.conn
+        .execute(
+            "INSERT INTO events (eid,at,node,kind,severity,title,detail) VALUES ('old',?1,'local','x','info','t','')",
+            [now - 181 * DAY],
+        )
+        .unwrap();
+    maintain::tick(&w.conn, now, &r).unwrap();
+    let left: i64 = w
+        .conn
+        .query_row("SELECT min(bucket) FROM samples_1m", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, now - 90 * DAY, "exactly 90 d kept, older dropped");
+    assert_eq!(count(&w, "events"), 3, "age first, then the row cap");
+    let oldest: String = w
+        .conn
+        .query_row("SELECT eid FROM events ORDER BY id LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(oldest, "e2");
+}
+
+// ------------------------------------------------------------- queries
+
+fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[test]
+fn params_are_validated_and_clamped() {
+    let p = query::parse(
+        &params(&[
+            ("severity", "warn,error"),
+            ("max_points", "99999"),
+            ("limit", "9999"),
+        ]),
+        T0,
+        90,
+        20,
+    )
+    .unwrap();
+    assert_eq!(p.severities, vec!["warn", "error"]);
+    assert_eq!(p.max_points, query::MAX_POINTS);
+    assert_eq!(p.limit, 500);
+    assert_eq!(p.to - p.from, DAY);
+    let long = query::parse(
+        &params(&[("from", "0"), ("to", &T0.to_string())]),
+        T0,
+        90,
+        20,
+    )
+    .unwrap();
+    assert_eq!(long.to - long.from, 90 * DAY);
+    for bad in [
+        params(&[("from", "10"), ("to", "5")]),
+        params(&[("cursor", "nope")]),
+        params(&[("metrics", "bitrate,revenue")]),
+        params(&[("tz_offset_min", "9999")]),
+        params(&[("bucket", "week")]),
+    ] {
+        assert!(query::parse(&bad, T0, 90, 20).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn stats_tier_points_and_mean() {
+    assert_eq!(query::choose_tier(T0 - 3 * DAY, T0, T0, 7), "raw");
+    assert_eq!(query::choose_tier(T0 - 3 * DAY - 1, T0, T0, 7), "1m");
+    assert_eq!(query::choose_tier(T0 - 8 * DAY, T0 - 7 * DAY, T0, 7), "1m");
+    for points in [2usize, 7, 240, 1000, 2000] {
+        let (_, n) = query::stats_layout(T0 - 90 * DAY, T0, "1m", points);
+        assert!(n <= points);
+    }
+    let (w, _) = writer("stats");
+    raw(&w, T0, 10.0);
+    raw(&w, T0 + 10, 30.0);
+    let mut qq = q(T0, T0 + 20);
+    qq.metrics = vec!["bitrate".into()];
+    qq.max_points = 2;
+    let parts = query::stats(&w.conn, &qq, "raw", None).unwrap();
+    let out = query::render_stats(&parts);
+    assert_eq!(out["series"]["bitrate"]["mean"][0], json!(20.0));
+    assert_eq!(out["series"]["bitrate"]["min"][0], json!(10.0));
+    assert_eq!(out["series"]["bitrate"]["max"][0], json!(30.0));
+}
+
+#[test]
+fn sessions_gaps_cursor_and_neighbours() {
+    let (mut w, _) = writer("sessions");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 100,
+        EventKind::FfmpegExited {
+            seq: 1,
+            run: 10,
+            code: Some(1),
+            success: false,
+            counted_failure: true,
+            diagnostic: Some("http error 403".into()),
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(T0 + 145, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    session(&mut w, 2, T0 + 1000, None);
+    end(&mut w, 2, T0 + 1100, EndReason::UserStop);
+    session(&mut w, 3, T0 + 2000, None);
+    let now = T0 + 2100;
+    let first = &sessions(&w, now).items;
+    assert_eq!(first.len(), 3);
+    let s1 = first.iter().find(|s| s.started_at == T0).unwrap();
+    assert_eq!(s1.gaps, vec![(T0 + 100, T0 + 145, "failed".to_string())]);
+    assert_eq!((s1.runs, s1.restarts, s1.failures), (2, 1, 1));
+    let mut paged = q(T0 - DAY, now);
+    paged.limit = 2;
+    let p1 = query::sessions(&w.conn, &paged, now).unwrap();
+    assert_eq!(p1.items.len(), 2);
+    let cursor = p1.next_cursor.clone().unwrap();
+    paged.cursor = Some({
+        let (a, b) = cursor.split_once('~').unwrap();
+        (a.parse().unwrap(), b.to_string())
+    });
+    let p2 = query::sessions(&w.conn, &paged, now).unwrap();
+    assert_eq!(p2.items.len(), 1);
+    assert_eq!(p2.next_cursor, None);
+    let mut by_id = q(T0 - DAY, now);
+    by_id.id = Some(first[1].id.clone());
+    let one = query::sessions(&w.conn, &by_id, now).unwrap();
+    assert_eq!(one.prev_id.as_deref(), Some(first[2].id.as_str()));
+    assert_eq!(one.next_id.as_deref(), Some(first[0].id.as_str()));
+}
+
+#[test]
+fn events_filter_by_comma_severity_and_kind_prefix() {
+    let (mut w, _) = writer("events");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 100,
+        EventKind::FfmpegExited {
+            seq: 1,
+            run: 10,
+            code: Some(1),
+            success: false,
+            counted_failure: true,
+            diagnostic: None,
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(T0 + 110, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    end(&mut w, 1, T0 + 600, EndReason::Aborted);
+    w.apply(&ev(
+        T0 + 50,
+        EventKind::NotifySent {
+            key: "node.down".into(),
+            phase: "fire",
+            ok: false,
+            code: Some(40034105),
+            suppressed: 0,
+            undelivered: 1,
+        },
+    ))
+    .unwrap();
+    let mut qq = q(T0 - 10, T0 + 1000);
+    qq.limit = 20;
+    qq.severities = vec!["warn".into(), "error".into()];
+    let page = query::events(&w.conn, &qq).unwrap();
+    let kinds: Vec<_> = page
+        .items
+        .iter()
+        .map(|e| (e.kind.as_str(), e.severity.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ("stream.ended", "warn"),
+            ("stream.failed", "error"),
+            ("notify.sent", "warn")
+        ]
+    );
+    assert!(page.items[0].session_id.is_some());
+    assert!(page.items[2].session_id.is_none(), "session_id is optional");
+    assert!(page.items[2].title.contains("40034105"));
+    qq.severities.clear();
+    qq.kinds = vec!["stream".into()];
+    assert!(query::events(&w.conn, &qq)
+        .unwrap()
+        .items
+        .iter()
+        .all(|e| e.kind.starts_with("stream.")));
+}
+
+// ------------------------------------------------------- cluster scope
+
+struct MockPeers(HashMap<String, Result<Value, &'static str>>);
+
+impl Peers for MockPeers {
+    fn fetch<'a>(
+        &'a self,
+        node: &'a str,
+        _req: &'a PeerRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, super::MissingNode>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            match self.0.get(node) {
+                Some(Ok(v)) => Ok(v.clone()),
+                Some(Err(reason)) => Err(api::missing(node, reason, "mock")),
+                None => Err(api::missing(node, "unreachable", "mock")),
+            }
+        })
+    }
+}
+
+/// The local DB behind the same seam, answering synchronously.
+struct LocalConn(std::sync::Mutex<rusqlite::Connection>, i64);
+
+impl Peers for LocalConn {
+    fn fetch<'a>(
+        &'a self,
+        node: &'a str,
+        req: &'a PeerRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, super::MissingNode>> + Send + 'a>,
+    > {
+        let out = api::local_parts(&self.0.lock().unwrap(), req, node, self.1)
+            .map_err(|e| api::missing(node, "error", &e.to_string()));
+        Box::pin(async move { out })
+    }
+}
+
+fn cluster_cfg() -> crate::config::Config {
+    let mut cfg = crate::cluster::tests::test_config("local", 0);
+    cfg.cluster.enabled = true;
+    cfg.cluster.node_id = "local".into();
+    cfg.cluster.peers = ["tokyo-1", "sg-3"]
+        .iter()
+        .map(|id| crate::config::ClusterPeer {
+            node_id: id.to_string(),
+            name: String::new(),
+            api_url: format!("https://{id}.example"),
+            priority: 0,
+        })
+        .collect();
+    cfg
+}
+
+#[tokio::test]
+async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
+    let (mut w, path) = writer("cluster");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 600, EndReason::ClusterHandoff);
+    let now = T0 + 1000;
+    // tokyo-1 answers with its own session (same shape a peer route returns).
+    let peer_page = query::SessionsPage {
+        items: vec![query::SessionItem {
+            id: "tokyo-1:1:1".into(),
+            eid: "tokyo-1:1:1".into(),
+            node: "tokyo-1".into(),
+            platform: "TW".into(),
+            channel_id: "c".into(),
+            channel_name: "n".into(),
+            title: None,
+            started_at: T0 + 700,
+            ended_at: None,
+            duration_secs: 300,
+            end_reason: None,
+            runs: 1,
+            restarts: 0,
+            failures: 0,
+            stuck: 0,
+            gaps: vec![],
+            median_bitrate_kbps: None,
+            bili: None,
+        }],
+        ..Default::default()
+    };
+    let peers = MockPeers(HashMap::from([
+        (
+            "tokyo-1".to_string(),
+            Ok(serde_json::to_value(&peer_page).unwrap()),
+        ),
+        ("sg-3".to_string(), Err("timeout")),
+    ]));
+    let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
+    drop(w);
+    let cfg = cluster_cfg();
+    let window = params(&[("from", &(T0 - 10).to_string()), ("to", &now.to_string())]);
+    let data = api::answer(&cfg, "sessions", &window, &peers, &local, now)
+        .await
+        .unwrap();
+    assert_eq!(data["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        data["items"][0]["node"], "tokyo-1",
+        "newest first across nodes"
+    );
+    assert_eq!(
+        data["missing_nodes"],
+        json!([{"node_id": "sg-3", "reason": "timeout", "detail": "mock"}])
+    );
+    assert!(data.get("neighbours").is_none() && data.get("more").is_none());
+    // scope=local: [] even with a dead peer.
+    let mut local_only = window.clone();
+    local_only.insert("scope".into(), "local".into());
+    for name in ["summary", "sessions", "events", "stats"] {
+        let data = api::answer(&cfg, name, &local_only, &peers, &local, now)
+            .await
+            .unwrap();
+        assert_eq!(data["missing_nodes"], json!([]), "{name}");
+        let data = api::answer(&cfg, name, &window, &peers, &local, now)
+            .await
+            .unwrap();
+        assert_eq!(data["missing_nodes"][0]["node_id"], "sg-3", "{name}");
+    }
+    // Unknown node → 400.
+    let mut unknown = window.clone();
+    unknown.insert("scope".into(), "nope".into());
+    assert_eq!(
+        api::answer(&cfg, "summary", &unknown, &peers, &local, now)
+            .await
+            .unwrap_err()
+            .0,
+        400
+    );
+    assert_eq!(api::resolve_scope(&cfg, None).unwrap(), Scope::Cluster);
+    // The same peer answering twice is idempotent (union by eid).
+    let merged = query::merge_sessions(vec![peer_page.clone(), peer_page], 50);
+    assert_eq!(merged.items.len(), 1);
+}
+
+#[test]
+fn peer_errors_map_to_normative_reasons() {
+    use crate::cluster::peer_call::PeerCallError::{Refused, Unreachable};
+    let r = |e| api::classify("n", &e).reason;
+    assert_eq!(r(Unreachable("节点请求超时".into())), "timeout");
+    assert_eq!(r(Unreachable("connection refused".into())), "unreachable");
+    assert_eq!(r(Refused("HTTP 401".into())), "auth");
+    assert_eq!(r(Refused("HTTP 404".into())), "version");
+    assert_eq!(r(Refused("HTTP 500".into())), "error");
+}
+
+#[test]
+fn summary_kpis_and_revenue_free_output() {
+    let (mut w, _) = writer("summary");
+    session(&mut w, 1, T0, Some("K1"));
+    w.apply(&ev(
+        T0 + 100,
+        EventKind::FfmpegExited {
+            seq: 1,
+            run: 10,
+            code: Some(1),
+            success: false,
+            counted_failure: true,
+            diagnostic: Some("http error 403".into()),
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(T0 + 160, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    end(&mut w, 1, T0 + 3600, EndReason::SourceEnded);
+    let totals = parse_stop_live_data(&serde_json::from_str(LIVE_SESSION).unwrap()).ok();
+    w.apply(&ev(
+        T0 + 3700,
+        EventKind::BiliLiveSummary {
+            live_key: "K1".into(),
+            totals,
+        },
+    ))
+    .unwrap();
+    let mut qq = q(T0, T0 + 4000);
+    qq.bucket = Some("hour".into());
+    let parts = query::summary(&w.conn, &qq, "local", T0 + 4000).unwrap();
+    let out = query::render_summary(&query::merge_summary(vec![parts.clone(), parts]), &[]);
+    // Two copies of the same live session (by key hash) count once.
+    assert_eq!(out["kpis"]["watched"], 469);
+    assert_eq!(out["kpis"]["danmu"], 457);
+    assert_eq!(out["kpis"]["recover_secs_avg"], 60);
+    assert_eq!(out["reliability"]["reasons"][0]["class"], "http error 403");
+    assert_eq!(out["missing_nodes"], json!([]));
+    let text = out.to_string();
+    assert!(!text.contains("Hamster") && !text.contains("revenue") && !text.contains("live_time"));
+    assert!(!text.contains("K1"));
+}
+
+// -------------------------------------------------------------- capture
+
+#[test]
+fn capture_writes_only_to_the_git_ignored_fixtures_dir() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = super::capture::fixtures_dir(repo);
+    assert!(dir.ends_with(".trellis/fixtures"));
+    let probe = dir.join("stoplivedata-probe.json");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["check-ignore", "-q", "--no-index"])
+        .arg(&probe)
+        .status();
+    if let Ok(status) = status {
+        assert!(status.success(), "{probe:?} must be git-ignored");
+    }
+    let root = tmp("capture");
+    let reply: Value = serde_json::from_str(LIVE_SESSION).unwrap();
+    let file = super::capture::write_to(
+        &root,
+        "stoplivedata",
+        &super::enrich::redact_stop_live_data(&reply),
+    )
+    .unwrap();
+    assert!(file.starts_with(super::capture::fixtures_dir(&root)));
+    let text = std::fs::read_to_string(file).unwrap();
+    assert!(text.contains("DanmuNum") && !text.contains("Hamster"));
+    assert!(!super::capture::is_enabled_for_test(), "off by default");
+}
+
+// ------------------------------------------------------- 401 per route
+
+#[tokio::test]
+async fn every_history_route_is_401_without_a_session() {
+    crate::install_crypto_provider();
+    let dir = tmp("auth");
+    let store = crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+    store.write("config.json", json!({})).unwrap();
+    let auth = crate::webui::listen::AuthState::open(store.clone(), Some("synthetic-pass".into()))
+        .unwrap();
+    let app = crate::webui::server::build_app(crate::AppState::new(), auth);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await;
+    });
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    for route in ["status", "summary", "sessions", "events", "stats"] {
+        let url = format!("http://{addr}/api/history/{route}?from=1&to=2");
+        let response = http.get(&url).send().await.unwrap();
+        assert_eq!(response.status(), 401, "/api/history/{route}");
+        assert!(!crate::webui::listen::is_public_api_path(&format!(
+            "/api/history/{route}"
+        )));
+    }
+    // The peer route refuses browsers outright.
+    assert!(crate::cluster::peer_call::browser_forbidden(
+        "/api/cluster/v1/history"
+    ));
+    server.abort();
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ------------------------------------------- Revision 1 (design §11)
+
+#[test]
+fn clamped_to_days_is_set_only_when_parse_cut_the_range() {
+    let long = query::parse(
+        &params(&[("from", "0"), ("to", &T0.to_string())]),
+        T0,
+        90,
+        20,
+    )
+    .unwrap();
+    assert_eq!(long.clamped_to_days, Some(90));
+    let exact = (T0 - 90 * DAY).to_string();
+    let edge = query::parse(
+        &params(&[("from", &exact), ("to", &T0.to_string())]),
+        T0,
+        90,
+        20,
+    )
+    .unwrap();
+    assert_eq!(
+        edge.clamped_to_days, None,
+        "exactly rollup_days is not a clamp"
+    );
+    let short = query::parse(&params(&[]), T0, 90, 20).unwrap();
+    assert_eq!(short.clamped_to_days, None);
+    // Never travels to a peer.
+    let wire = serde_json::to_value(&long).unwrap();
+    assert!(wire.get("clamped_to_days").is_none());
+}
+
+#[tokio::test]
+async fn clamped_to_days_is_in_the_response_only_when_clamped() {
+    let (mut w, path) = writer("clamp");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    drop(w);
+    let now = T0 + 1000;
+    let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
+    let peers = MockPeers(HashMap::new());
+    let cfg = crate::cluster::tests::test_config("local", 0);
+    let rollup = cfg.history.retention.rollup_days;
+    let long = params(&[("from", "0"), ("to", &now.to_string()), ("scope", "local")]);
+    let short = params(&[
+        ("from", &(T0 - 10).to_string()),
+        ("to", &now.to_string()),
+        ("scope", "local"),
+    ]);
+    for name in ["summary", "sessions", "events", "stats"] {
+        let data = api::answer(&cfg, name, &long, &peers, &local, now)
+            .await
+            .unwrap();
+        assert_eq!(data["clamped_to_days"], json!(rollup), "{name} clamped");
+        let data = api::answer(&cfg, name, &short, &peers, &local, now)
+            .await
+            .unwrap();
+        assert!(data.get("clamped_to_days").is_none(), "{name} not clamped");
+    }
+}
+
+#[test]
+fn missing_live_key_logs_no_value_and_session_totals_stay_null() {
+    let reply: Value = serde_json::from_str(ROOM_GET_INFO).unwrap();
+    let mut placeholder = reply.clone();
+    placeholder["data"]["up_session"] = json!("<redacted:str>");
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+    tracing::dispatcher::with_default(&dispatch, || {
+        assert_eq!(super::room_key_or_note(&reply), None);
+        assert_eq!(super::room_key_or_note(&placeholder), None);
+        super::note_live_key_unavailable("getinfo_failed");
+    });
+    let text = logs.text();
+    assert_eq!(text.matches("live_key unavailable").count(), 3, "{text}");
+    assert!(!text.contains("redacted") && !text.contains("up_session") && !text.contains("{"));
+    // The session keeps no key and has NULL StopLiveData totals.
+    let (mut w, _) = writer("no-key-null");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    let key: Option<String> = w
+        .conn
+        .query_row("SELECT live_key FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(key, None);
+    let lives: i64 = w
+        .conn
+        .query_row("SELECT count(*) FROM bili_lives", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(lives, 0);
+    let bili = sessions(&w, T0 + 700).items[0].bili.clone().unwrap();
+    assert_eq!(bili.watched, None);
+    let item = serde_json::to_value(&bili).unwrap();
+    for (k, v) in item.as_object().unwrap() {
+        if k != "state" {
+            assert!(v.is_null(), "{k} must be null without a live_key");
+        }
+    }
+}
+
+#[test]
+fn string_ids_round_trip_percent_encoded_in_query_and_path() {
+    use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
+    let (mut w, _) = writer("ids");
+    session(&mut w, 1, T0, None);
+    let id = sessions(&w, T0 + 60).items[0].id.clone();
+    assert_eq!(id.split(':').count(), 3, "node:boot:n");
+    let enc = utf8_percent_encode(&id, NON_ALPHANUMERIC).to_string();
+    assert!(enc.contains("%3A") && !enc.contains(':'));
+    // Query value.
+    let parsed: HashMap<String, String> =
+        serde_urlencoded::from_str(&format!("id={enc}&session={enc}")).unwrap();
+    assert_eq!(parsed["id"], id);
+    let qq = query::parse(&parsed, T0 + 60, 90, 50).unwrap();
+    let page = query::sessions(
+        &w.conn,
+        &Query {
+            from: T0 - DAY,
+            ..qq.clone()
+        },
+        T0 + 60,
+    )
+    .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id, id);
+    // Path segment.
+    assert_eq!(percent_decode_str(&enc).decode_utf8().unwrap(), id);
+    // And through JSON (the peer body).
+    let req = PeerRequest {
+        name: "sessions".into(),
+        query: qq,
+    };
+    let back: PeerRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+    assert_eq!(back.query.id.as_deref(), Some(id.as_str()));
+}
+
+fn all_ids(path: &std::path::Path) -> Vec<String> {
+    let conn = schema::open_ro(path).unwrap();
+    let mut out = Vec::new();
+    for sql in ["SELECT eid FROM sessions", "SELECT eid FROM events"] {
+        let mut st = conn.prepare(sql).unwrap();
+        out.extend(
+            st.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap),
+        );
+    }
+    out
+}
+
+#[test]
+fn boot_part_never_repeats_after_restart_or_restore_from_backup() {
+    // Per process start, random; never read back from the database.
+    let boots: std::collections::HashSet<i64> = (0..256).map(|_| super::boot_id()).collect();
+    assert_eq!(boots.len(), 256);
+    assert!(boots.iter().all(|b| *b >= 0));
+
+    let dir = tmp("restore");
+    let path = dir.join("history.sqlite");
+    let backup = dir.join("backup.sqlite");
+    let start = |boot: i64, at: i64| {
+        let mut w = Writer::new(schema::open_rw(&path).unwrap(), "local", boot);
+        w.apply(&ev(at, EventKind::ProcessStarted { version: "test" }))
+            .unwrap();
+        w
+    };
+    let mut issued: Vec<String> = Vec::new();
+    // Boot 1 writes, then the file is backed up.
+    let mut w = start(super::boot_id(), T0);
+    session(&mut w, 1, T0 + 1, None);
+    end(&mut w, 1, T0 + 2, EndReason::SourceEnded);
+    drop(w);
+    issued.extend(all_ids(&path));
+    std::fs::copy(&path, &backup).unwrap();
+    // Restart: boot 2 writes more ids after the backup.
+    let mut w = start(super::boot_id(), T0 + 10);
+    session(&mut w, 1, T0 + 11, None);
+    drop(w);
+    issued.extend(all_ids(&path));
+    // Restore the backup (boot 2's rows are gone), then boot 3 starts.
+    for ext in ["sqlite-wal", "sqlite-shm"] {
+        let _ = std::fs::remove_file(path.with_extension(ext));
+    }
+    std::fs::copy(&backup, &path).unwrap();
+    let mut w = start(super::boot_id(), T0 + 20);
+    session(&mut w, 1, T0 + 21, None);
+    end(&mut w, 1, T0 + 22, EndReason::SourceEnded);
+    drop(w);
+    let issued: std::collections::HashSet<String> = issued.into_iter().collect();
+    let after = all_ids(&path);
+    let fresh: Vec<&String> = after.iter().filter(|id| !issued.contains(*id)).collect();
+    assert!(!fresh.is_empty());
+    let boot = |id: &str| id.split(':').nth(1).unwrap().to_string();
+    let old_boots: std::collections::HashSet<String> = issued.iter().map(|i| boot(i)).collect();
+    for id in fresh {
+        assert!(
+            !old_boots.contains(&boot(id)),
+            "{id} reuses an earlier boot"
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn peer_body_must_be_a_valid_history_query() {
+    let cfg = crate::cluster::tests::test_config("local", 0);
+    let now = T0;
+    let good = || PeerRequest {
+        name: "sessions".into(),
+        query: q(T0 - DAY, T0),
+    };
+    assert_eq!(api::check_peer_request(&mut good(), &cfg, now), Ok(None));
+    for name in ["summary", "events", "stats"] {
+        let mut r = good();
+        r.name = name.into();
+        assert!(api::check_peer_request(&mut r, &cfg, now).is_ok(), "{name}");
+    }
+    // Revision 2: a range longer than this node's rollup_days is clamped,
+    // not refused.
+    let mut long = good();
+    long.query.from = long.query.to - 400 * DAY;
+    assert_eq!(api::check_peer_request(&mut long, &cfg, now), Ok(Some(90)));
+    assert_eq!(long.query.to - long.query.from, 90 * DAY);
+    let mut cases: Vec<PeerRequest> = Vec::new();
+    for name in ["status", "delete", "rollup", "", "sessions;DROP"] {
+        let mut r = good();
+        r.name = name.into();
+        cases.push(r);
+    }
+    type Edit = Box<dyn Fn(&mut Query)>;
+    let edits: Vec<Edit> = vec![
+        Box::new(|q| q.from = q.to),
+        Box::new(|q| q.to = T0 + DAY),
+        Box::new(|q| q.limit = 0),
+        Box::new(|q| q.limit = 100_000),
+        Box::new(|q| q.max_points = 1_000_000),
+        Box::new(|q| q.tier = Some("samples_raw".into())),
+        Box::new(|q| q.bucket = Some("week".into())),
+        Box::new(|q| q.platform = Some("XX".into())),
+        Box::new(|q| q.metrics = vec!["revenue".into()]),
+        Box::new(|q| q.tz_offset_min = 9999),
+        Box::new(|q| q.id = Some("x".repeat(300))),
+        Box::new(|q| q.cursor = Some((0, String::new()))),
+    ];
+    for edit in &edits {
+        let mut r = good();
+        edit(&mut r.query);
+        cases.push(r);
+    }
+    for r in &mut cases {
+        assert!(api::check_peer_request(r, &cfg, now).is_err(), "{r:?}");
+    }
+    // Unknown fields and non-JSON bodies never deserialize.
+    for body in [
+        r#"{"name":"sessions","query":{"from":1,"to":2},"sql":"DELETE"}"#,
+        r#"{"name":"sessions","query":{"from":1,"to":2,"write":true}}"#,
+        r#"{"name":"sessions"}"#,
+        "not json",
+    ] {
+        assert!(serde_json::from_str::<PeerRequest>(body).is_err(), "{body}");
+    }
+}
+
+fn db_digest(path: &std::path::Path) -> Vec<(String, i64)> {
+    let conn = schema::open_ro(path).unwrap();
+    let mut out = Vec::new();
+    for t in [
+        "sessions",
+        "runs",
+        "events",
+        "samples_raw",
+        "samples_1m",
+        "bili_lives",
+        "boots",
+        "meta",
+    ] {
+        let n: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
+            .unwrap();
+        out.push((t.to_string(), n));
+    }
+    let v: i64 = conn
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    out.push(("schema".into(), v));
+    out
+}
+
+#[test]
+fn peer_parts_are_read_only_and_expose_nothing_beyond_the_admin_view() {
+    let (mut w, path) = writer("peer-ro");
+    session(&mut w, 1, T0, Some("K1"));
+    raw(&w, T0 + 30, 1.0);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    let now = T0 + 1000;
+    drop(w);
+    let before = db_digest(&path);
+    let bytes_before = std::fs::read(&path).unwrap();
+    let conn = schema::open_ro(&path).unwrap();
+    let mut peer: HashMap<&str, Value> = HashMap::new();
+    for name in ["summary", "sessions", "events", "stats"] {
+        let req = PeerRequest {
+            name: name.into(),
+            query: q(T0 - 10, now),
+        };
+        let v = api::local_parts(&conn, &req, "local", now).unwrap();
+        let text = v.to_string();
+        for secret in [
+            "K1",
+            "live_key",
+            "openid",
+            "SYNTHKEY",
+            "cookie",
+            "SESSDATA",
+            "appsecret",
+        ] {
+            assert!(!text.contains(secret), "{name} leaks {secret}");
+        }
+        peer.insert(name, v);
+    }
+    // A write through the read-only connection is refused.
+    assert!(conn.execute("DELETE FROM sessions", []).is_err());
+    drop(conn);
+    assert_eq!(db_digest(&path), before);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes_before);
+    // Item rows a member gets are exactly what a logged-in admin sees.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
+    let cfg = crate::cluster::tests::test_config("local", 0);
+    let window = params(&[
+        ("from", &(T0 - 10).to_string()),
+        ("to", &now.to_string()),
+        ("scope", "local"),
+    ]);
+    let keys = |v: &Value| -> std::collections::BTreeSet<String> {
+        v.as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+    for name in ["sessions", "events"] {
+        let admin = rt
+            .block_on(api::answer(
+                &cfg,
+                name,
+                &window,
+                &MockPeers(HashMap::new()),
+                &local,
+                now,
+            ))
+            .unwrap();
+        let a_items = admin["items"].as_array().unwrap();
+        let p_items = peer[name]["items"].as_array().unwrap();
+        assert_eq!(a_items.len(), p_items.len(), "{name}");
+        for (a, p) in a_items.iter().zip(p_items) {
+            assert_eq!(keys(p), keys(a), "{name}: same fields, no extra");
+            assert_eq!(p, a, "{name}: same values");
+        }
+    }
+}
+
+#[test]
+fn retention_deletes_old_rows_and_repeated_ticks_keep_the_db_bounded() {
+    let (w, path) = writer("bounded");
+    let r = HistoryRetention {
+        raw_days: 1,
+        rollup_days: 3,
+        event_days: 4,
+        event_rows: 500,
+        ..Default::default()
+    };
+    let mut peaks: Vec<(i64, i64, i64)> = Vec::new();
+    for day in 0..12i64 {
+        let base = T0 + day * DAY;
+        for i in 0..288 {
+            raw(&w, base + i * 300, i as f64);
+        }
+        for i in 0..40 {
+            w.conn
+                .execute(
+                    "INSERT INTO events (eid,at,node,kind,severity,title,detail) VALUES (?1,?2,'local','x','info','t','')",
+                    rusqlite::params![format!("d{day}-{i}"), base + i * 60],
+                )
+                .unwrap();
+        }
+        // Several ticks per simulated day, as the writer would run them.
+        for k in 1..=4 {
+            maintain::tick(&w.conn, base + k * (DAY / 4), &r).unwrap();
+        }
+        let now = base + DAY;
+        let min_raw: Option<i64> = w
+            .conn
+            .query_row("SELECT min(ts) FROM samples_raw", [], |r| r.get(0))
+            .unwrap();
+        let min_1m: Option<i64> = w
+            .conn
+            .query_row("SELECT min(bucket) FROM samples_1m", [], |r| r.get(0))
+            .unwrap();
+        let min_ev: Option<i64> = w
+            .conn
+            .query_row("SELECT min(at) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            min_raw.unwrap() >= now - r.raw_days as i64 * DAY,
+            "day {day}: raw past raw_days"
+        );
+        assert!(
+            min_1m.unwrap() >= now - r.rollup_days as i64 * DAY,
+            "day {day}: 1m past rollup_days"
+        );
+        assert!(
+            min_ev.unwrap() >= now - r.event_days as i64 * DAY,
+            "day {day}: events past event_days"
+        );
+        let pages: i64 = w
+            .conn
+            .query_row("PRAGMA page_count", [], |r| r.get(0))
+            .unwrap();
+        peaks.push((
+            count(&w, "samples_raw") + count(&w, "samples_1m"),
+            count(&w, "events"),
+            pages,
+        ));
+    }
+    // After the longest horizon (event_days) the counts and file stop growing.
+    let steady = &peaks[6..];
+    let (rows0, ev0, pages0) = steady[0];
+    for (i, (rows, ev, pages)) in steady.iter().enumerate() {
+        assert!(
+            *rows <= rows0 + 288,
+            "step {i}: sample rows keep growing {peaks:?}"
+        );
+        assert!(
+            *ev <= ev0.max(r.event_rows as i64),
+            "step {i}: events keep growing"
+        );
+        assert!(
+            *pages <= pages0 + pages0 / 10 + 8,
+            "step {i}: file keeps growing {peaks:?}"
+        );
+    }
+    drop(w);
+    assert!(std::fs::metadata(&path).unwrap().len() > 0);
+}
+
+// ------------------------------------- Revision 2 (design §11 e3797697)
+
+/// A peer node answering exactly as `peer_history` does, with its own
+/// (smaller) rollup_days; or offline.
+struct MixedPeers {
+    small: std::sync::Mutex<rusqlite::Connection>,
+    small_cfg: crate::config::Config,
+    now: i64,
+    offline: Vec<&'static str>,
+}
+
+impl Peers for MixedPeers {
+    fn fetch<'a>(
+        &'a self,
+        node: &'a str,
+        req: &'a PeerRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, super::MissingNode>> + Send + 'a>,
+    > {
+        let out = if self.offline.contains(&node) {
+            Err(api::missing(node, "unreachable", "mock"))
+        } else {
+            let mut req = req.clone();
+            let clamped = api::check_peer_request(&mut req, &self.small_cfg, self.now).unwrap();
+            api::local_parts(&self.small.lock().unwrap(), &req, node, self.now)
+                .map(|v| api::with_peer_clamp(v, clamped))
+                .map_err(|e| api::missing(node, "error", &e.to_string()))
+        };
+        Box::pin(async move { out })
+    }
+}
+
+fn mixed(offline: Vec<&'static str>, now: i64) -> (MixedPeers, LocalConn) {
+    let (mut w, path) = writer("mixed-local");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    drop(w);
+    let (mut p, ppath) = writer("mixed-peer");
+    session(&mut p, 1, T0 + 700, None);
+    drop(p);
+    let mut small_cfg = cluster_cfg();
+    small_cfg.cluster.node_id = "tokyo-1".into();
+    small_cfg.history.retention.rollup_days = 30;
+    (
+        MixedPeers {
+            small: std::sync::Mutex::new(schema::open_ro(&ppath).unwrap()),
+            small_cfg,
+            now,
+            offline,
+        },
+        LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now),
+    )
+}
+
+fn missing_ids(data: &Value) -> Vec<String> {
+    data["missing_nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["node_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn smaller_retention_peer_is_partial_not_missing_on_every_route() {
+    let now = T0 + 1000;
+    let (peers, local) = mixed(vec!["sg-3"], now);
+    let cfg = cluster_cfg();
+    assert_eq!(cfg.history.retention.rollup_days, 90);
+    let to = now.to_string();
+    // 400 d: both clamp. 60 d: only the peer clamps. 10 d: nobody does.
+    let cases = [
+        ((now - 400 * DAY).to_string(), Some(90), true),
+        ((now - 60 * DAY).to_string(), None, true),
+        ((now - 10 * DAY).to_string(), None, false),
+    ];
+    for (from, local_clamp, peer_clamps) in &cases {
+        let window = params(&[("from", from), ("to", &to)]);
+        for name in ["summary", "sessions", "events", "stats"] {
+            let data = api::answer(&cfg, name, &window, &peers, &local, now)
+                .await
+                .unwrap();
+            assert_eq!(
+                data["clamped_to_days"],
+                json!(local_clamp),
+                "{name} {from}: local only"
+            );
+            if *peer_clamps {
+                assert_eq!(
+                    data["partial_nodes"],
+                    json!([{"node": "tokyo-1", "clamped_to_days": 30}]),
+                    "{name} {from}"
+                );
+            } else {
+                assert!(
+                    data.get("partial_nodes").is_none(),
+                    "{name} {from}: no clamp, no key"
+                );
+            }
+            assert_eq!(
+                missing_ids(&data),
+                vec!["sg-3"],
+                "{name} {from}: partial peer not missing"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn offline_smaller_peer_is_only_in_missing_nodes() {
+    let now = T0 + 1000;
+    // tokyo-1 has the smaller rollup_days and is offline as well.
+    let (peers, local) = mixed(vec!["tokyo-1", "sg-3"], now);
+    let cfg = cluster_cfg();
+    let window = params(&[("from", "0"), ("to", &now.to_string())]);
+    for name in ["summary", "sessions", "events", "stats"] {
+        let data = api::answer(&cfg, name, &window, &peers, &local, now)
+            .await
+            .unwrap();
+        assert!(data.get("partial_nodes").is_none(), "{name}");
+        assert_eq!(data["clamped_to_days"], json!(90), "{name}");
+        assert_eq!(missing_ids(&data), vec!["tokyo-1", "sg-3"], "{name}");
+    }
+}

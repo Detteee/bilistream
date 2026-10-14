@@ -536,6 +536,19 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
         }
     }
 
+    // 统计: the B站 live session id goes into the cluster live book only
+    // (never logged).
+    if response["code"].as_i64() == Some(0) {
+        let key = match &response["data"]["live_key"] {
+            Value::String(key) => Some(key.trim().to_string()),
+            Value::Number(key) => Some(key.to_string()),
+            _ => None,
+        };
+        if let Some(key) = key.filter(|k| !k.is_empty() && k != "0") {
+            crate::history::on_bili_started(cfg, &key);
+        }
+    }
+
     // Reflect the new live state in the WebUI immediately; the periodic
     // refresh fills in title/area details afterwards.
     crate::webui::state::update_status_cache_with(|status| {
@@ -648,7 +661,66 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     });
     crate::webui::state::request_status_refresh();
 
+    crate::history::on_bili_stopped(cfg);
     Ok(())
+}
+
+/// Error text for history fetches: never the URL (it carries the live key).
+fn safe_fetch_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        "timeout".into()
+    } else if error.is_decode() {
+        "invalid json".into()
+    } else if error.is_status() {
+        format!("http {}", error.status().map_or(0, |s| s.as_u16()))
+    } else {
+        "request failed".into()
+    }
+}
+
+/// 统计: `StopLiveData` for one B站 live session (read-only GET, 10 s).
+/// Returns the raw reply; `history::enrich` applies the allowlist.
+pub(crate) async fn bili_stop_live_data(cfg: &Config, live_key: &str) -> Result<Value, String> {
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
+    let url = reqwest::Url::parse_with_params(
+        "https://api.live.bilibili.com/xlive/app-blink/v1/live/StopLiveData",
+        &[("live_key", live_key)],
+    )
+    .map_err(|_| "invalid key".to_string())?;
+    client
+        .get(url)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Cookie", &cookie)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(safe_fetch_error)?
+        .error_for_status()
+        .map_err(safe_fetch_error)?
+        .json()
+        .await
+        .map_err(safe_fetch_error)
+}
+
+/// 统计: read-only `GetInfo` for the account's room, the fallback source
+/// of `live_key` when the cluster live book has none (10 s timeout).
+pub(crate) async fn bili_room_info(cfg: &Config) -> Result<Value, String> {
+    let cookie = bili_credential_cookie(&cfg.bililive.credentials);
+    let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
+    client
+        .get("https://api.live.bilibili.com/xlive/app-blink/v1/room/GetInfo?platform=pc")
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Cookie", &cookie)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(safe_fetch_error)?
+        .error_for_status()
+        .map_err(safe_fetch_error)?
+        .json()
+        .await
+        .map_err(safe_fetch_error)
 }
 
 /// `msg/send` codes for "sending too fast". 10031 is documented; 10030 is the

@@ -130,6 +130,13 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FfmpegSession(u64);
 
+impl FfmpegSession {
+    /// Per-process run id (history `runs.run`).
+    pub fn id(self) -> u64 {
+        self.0
+    }
+}
+
 impl fmt::Display for FfmpegSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)

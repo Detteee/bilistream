@@ -40,6 +40,7 @@ mod cluster;
 mod cluster_membership;
 mod config;
 mod crop;
+pub(crate) mod history;
 pub(crate) mod holodex_auth;
 mod manage;
 pub(crate) mod notify;
@@ -430,6 +431,7 @@ mod tests {
             enable_twitch_monitor: false,
             niconico: crate::config::Niconico::default(),
             cluster: ClusterConfig::default(),
+            history: Default::default(),
         }
     }
 
@@ -491,6 +493,7 @@ mod tests {
             notify_appsecret_set: None,
             notify_appid_set: None,
             notify_openid_set: None,
+            bili_live: None,
         }
     }
 

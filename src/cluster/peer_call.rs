@@ -43,6 +43,10 @@ pub(crate) mod routes {
     /// The owner caps its index at 2,000 answers of roughly 250 bytes each.
     pub(crate) const YT_INDEX: RoutePolicy =
         route("GET", "/api/cluster/yt-index", 0, MAX_BODY_BYTES);
+    /// 统计 read for `scope=cluster` (analytics §8): validated query in,
+    /// the peer's own mergeable parts out. Read-only.
+    pub(crate) const HISTORY: RoutePolicy =
+        route("POST", "/api/cluster/v1/history", 16 * 1024, 1024 * 1024);
     pub(crate) const APPLY_NODE_MODE: RoutePolicy = route(
         "POST",
         "/api/cluster/apply-node-mode",
@@ -177,6 +181,7 @@ const TABLE: &[(RoutePolicy, RouteClass)] = &[
     (routes::CAPABILITIES, RouteClass::PeerOnly),
     (routes::EXPORT_CONFIG, RouteClass::PeerOnly),
     (routes::YT_INDEX, RouteClass::PeerOnly),
+    (routes::HISTORY, RouteClass::PeerOnly),
     (routes::APPLY_NODE_MODE, RouteClass::PeerOnly),
     (routes::SYNC_CONFIG, RouteClass::PeerOnly),
     (routes::CACHE_MONITOR_STATE, RouteClass::PeerOnly),

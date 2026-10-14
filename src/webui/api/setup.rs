@@ -389,6 +389,7 @@ pub(crate) async fn save_setup_config(
             enable_twitch_monitor: false,
             niconico: crate::config::Niconico::default(),
             cluster: crate::config::ClusterConfig::default(),
+            history: Default::default(),
         }
     };
     let previous_cfg = cfg.clone();
