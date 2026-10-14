@@ -51,6 +51,7 @@ export function senderOutcome(status) {
       reason: last.reason ?? (same ? local.reason : null) ?? null,
       trace_id: last.trace_id ?? (same ? local.trace_id : null) ?? null,
       node_id: status.sender.node || '',
+      ...(last.status ? { status: last.status } : {}),
     };
   }
   return localOutcome(status);
@@ -62,7 +63,7 @@ export function senderOutcome(status) {
 export function staleLocalFailure(status) {
   const local = localOutcome(status);
   const shown = senderOutcome(status);
-  if (!local || local.ok || shown === local) return null;
+  if (!local || local.ok || isSkipped(local) || shown === local) return null;
   if (shown && shown.at === local.at && shown.node_id === local.node_id) return null;
   return local;
 }
@@ -117,6 +118,9 @@ export function configToForm(config = {}) {
     watch_enabled: Boolean(config.watch?.enabled),
     // JSON so sameForm can compare it like the other fields.
     watch_channels: JSON.stringify(normalizeWatch(config.watch?.channels || [])),
+    // rev 4: an older backend has no key at all → the form has no key either,
+    // so it can never be dirty or sent.
+    ...(liveEventsSupported(config) ? { live_events_enabled: config.live_events_enabled !== false } : {}),
   };
 }
 
@@ -193,6 +197,7 @@ export function formToPatch(form, baseline) {
       api_base: f.api_base.trim() || DEFAULTS.api_base,
     },
     commands_enabled: f.commands_enabled !== false,
+    ...('live_events_enabled' in f ? { live_events_enabled: f.live_events_enabled !== false } : {}),
     watch: { enabled: Boolean(f.watch_enabled), channels: JSON.parse(f.watch_channels || '[]') },
   });
   const next = full(form);
@@ -282,7 +287,7 @@ export function selectState({ loading = false, loadError = null, settings = null
   }
   if (missing.length) return { key: 'incomplete', badge: '未配置', tone: 'sync-warning', missing };
   const outcome = senderOutcome(status);
-  const qqFailure = isBadCredentials(status) || (outcome && !outcome.ok);
+  const qqFailure = isBadCredentials(status) || (outcome && !outcome.ok && !isSkipped(outcome));
   if (qqFailure) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
   // `status.warning` (1a) is the source of truth so the panel and the QQ alert
   // agree; the per-node check is only a fallback when the field is absent.
@@ -496,4 +501,95 @@ export async function unbindFlow({ settings, remove, reload }) {
   const result = await remove({ expected_openid_revision: settings.openid_revision });
   const merged = mergeOpenidFields(settings, result?.data);
   return { merged, reloaded: reload() };
+}
+
+// ---------------------------------------------------------------------------
+// §17 本直播间开播/下播 (Addendum A rev 2)
+
+// `skipped_quota` is a held notice, not a failure (§17.4): it never turns the
+// badge red, never feeds 错误 / Trace ID and never counts as `ok === false`.
+export function isSkipped(outcome) {
+  return outcome?.status === 'skipped_quota';
+}
+
+// Browser-local `MM-DD HH:mm`, no zone label (§17.3a).
+export function formatLocalShort(seconds) {
+  const d = new Date(seconds * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// The read-only budget fields, taken by name only so nothing else (the ledger
+// fields in particular) can reach the page. Fresh `/status` `quota` first,
+// then the GET /api/notify copy.
+const BUDGET_KEYS = ['wakeup_remaining', 'wakeup_reserve', 'wakeup_next_close_at', 'passive_window_open'];
+export function pickBudget(status, settings) {
+  const out = {};
+  for (const source of [status?.quota, settings]) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of BUDGET_KEYS) if (!(key in out) && key in source) out[key] = source[key];
+  }
+  return out;
+}
+
+// §17.3 view model. `available` is false when /status is missing or stale.
+// Returns { main, tone, next|null, passive }.
+export function wakeupBudgetView(budget, { available = true } = {}) {
+  const remaining = budget?.wakeup_remaining;
+  const reserve = budget?.wakeup_reserve;
+  const known = available && Number.isInteger(remaining) && Number.isInteger(reserve);
+  if (!known) return { main: '唤醒额度 —', tone: 'muted', next: null, passive: false };
+  const low = remaining <= reserve;
+  const at = budget.wakeup_next_close_at;
+  return {
+    main: `唤醒额度 ${remaining}/4 · 保留 ${reserve} 用于故障提醒${low ? '，开播/下播只用被动回复' : ''}`,
+    tone: low ? 'warn' : 'ok',
+    next: Number.isFinite(at) && at > 0 ? ` · 下一档 ${formatLocalShort(at)} 到期` : null,
+    passive: budget.passive_window_open === true,
+  };
+}
+
+// §17.4 上次发送 text for a skipped notice. The pending note is separate.
+export function skippedRow(outcome, localNode = '') {
+  if (!isSkipped(outcome)) return null;
+  const from = outcome.node_id && outcome.node_id !== localNode ? `（来自 ${outcome.node_id}）` : '';
+  return `已跳过：额度不足 · ${formatUtc8(outcome.at)}${from}`;
+}
+
+// Addendum D: 待补发 comes only from `pending_live_events` (never from
+// last_send). Missing or empty → nothing pending. Unknown codes are ignored.
+const PENDING_LABELS = { live_start: '开播', live_end: '下播' };
+export function pendingLiveNote(source, senderNode = '', localNode = '') {
+  const list = Array.isArray(source?.pending_live_events) ? source.pending_live_events : [];
+  const names = ['live_start', 'live_end'].filter(k => list.includes(k)).map(k => PENDING_LABELS[k]);
+  if (!names.length) return '';
+  const from = senderNode && senderNode !== localNode ? `（来自 ${senderNode}）` : '';
+  return `${names.join('/')}通知待补发，管理员下次给机器人发消息时一并送达。${from}`;
+}
+
+// §17.5: the switch follows the writer rules. Absent writer → enabled.
+export function liveEventsGate(status) {
+  if (!status || !('openid_writer' in status)) return { enabled: true, hint: '' };
+  const writer = status.openid_writer;
+  if (writer?.is_local) return { enabled: true, hint: '' };
+  if (writer?.node_id) return { enabled: false, hint: `请在 ${writer.node_id} 上修改。只有当前发送节点可以保存通知设置。` };
+  return { enabled: false, hint: `暂无可写节点。${noWriterReason(status)}` };
+}
+
+// rev 4: the feature exists only when GET /api/notify's config carries the key.
+export function liveEventsSupported(config) {
+  return Boolean(config) && typeof config === 'object' && 'live_events_enabled' in config;
+}
+
+// readForm helper: add the switch value only when the backend supports it.
+export function withLiveEvents(form, supported, checked) {
+  if (!supported) return form;
+  return { ...form, live_events_enabled: Boolean(checked) };
+}
+
+// `invalid_field` naming the switch → inline copy under the row (§17.2).
+export function liveEventsFieldError(error) {
+  const data = error?.body?.data;
+  return data?.code === 'invalid_field' && data.field === 'live_events_enabled'
+    ? '开播/下播开关的值无效，请刷新后重试。' : '';
 }

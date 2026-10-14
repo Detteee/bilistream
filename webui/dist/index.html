@@ -2033,6 +2033,24 @@
               </div>
             </div>
 
+            <div class="cluster-settings-panel notify-section notify-types" id="notify-types" hidden>
+              <div class="cluster-settings-panel-header">
+                <span class="cluster-settings-panel-mark" aria-hidden="true"></span>
+                <span>通知类型</span>
+              </div>
+              <label class="checkbox-inline notify-toggle-row">
+                <input type="checkbox" id="notify-live-events" aria-describedby="notify-live-events-help notify-wakeup-budget" checked disabled>
+                <span>本直播间开播/下播</span>
+              </label>
+              <small class="settings-help-text" id="notify-live-events-help">占用 QQ 发送额度，故障提醒优先</small>
+              <small class="settings-help-text is-invalid" id="notify-live-events-error" role="alert" hidden></small>
+              <small class="settings-help-text" id="notify-live-events-owner" hidden></small>
+              <p class="settings-help-text notify-budget" id="notify-wakeup-budget" data-tone="muted" aria-live="off">
+                <span class="notify-budget-main" id="notify-wakeup-main"><span class="notify-budget-seg">唤醒额度 —</span></span><span class="notify-budget-next" id="notify-wakeup-next" hidden></span>
+              </p>
+              <small class="settings-help-text notify-passive-hint" id="notify-passive-hint" hidden>当前可直接回复：开播/下播不占用唤醒额度</small>
+            </div>
+
             <div class="cluster-settings-panel notify-section notify-commands-section">
               <div class="cluster-settings-panel-header">
                 <span class="cluster-settings-panel-mark" aria-hidden="true"></span>

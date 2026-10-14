@@ -4,10 +4,11 @@
 import { getJson, putJson, postJson, deleteJson } from './api.js';
 import { showNotification, setButtonLoading, reconcileChildren } from './dom.js';
 import { isViewActive } from './state.js';
+import { LIVE_EVENTS_TICK_MS, renderLiveEventsInto } from './live-events-view.js';
 import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
-  middleTruncate, removeWatch,
+  middleTruncate, removeWatch, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
   createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
 } from './notify-state.js';
 
@@ -43,6 +44,7 @@ let bindTimer = null;
 let watchDraft = [];    // 关注列表 being edited
 let watchSig = '';      // inputs of the last renderWatch(); skip identical re-renders
 let statusSig = '';     // same for renderStatus()
+let liveEventsError = '';  // inline invalid_field copy for the 开播/下播 switch
 const watchChips = new Map();    // watchKey → <li>, reused so focus survives
 const watchOptions = new Map();  // watchKey → <li> in the picker
 // Unbind progress (§16.9): node ids that still had the openid when the user
@@ -58,15 +60,16 @@ function readForm() {
   const form = { enabled: Boolean($('notify-enabled')?.checked) };
   for (const [key, id] of Object.entries(FIELDS)) form[key] = $(id)?.value ?? '';
   form.commands_enabled = $('notify-commands') ? $('notify-commands').checked : true;
-  form.watch_enabled = Boolean($('notify-watch-enabled')?.checked);
+form.watch_enabled = Boolean($('notify-watch-enabled')?.checked);
   form.watch_channels = JSON.stringify(watchDraft);
-  return form;
+  return withLiveEvents(form, liveEventsSupported(settings?.config), $('notify-live-events')?.checked);
 }
 
 function fillForm(form) {
   $('notify-enabled').checked = form.enabled;
   for (const [key, id] of Object.entries(FIELDS)) $(id).value = form[key];
   if ($('notify-commands')) $('notify-commands').checked = form.commands_enabled;
+  if ($('notify-live-events') && 'live_events_enabled' in form) $('notify-live-events').checked = form.live_events_enabled;
   if ($('notify-watch-enabled')) $('notify-watch-enabled').checked = form.watch_enabled;
   watchDraft = JSON.parse(form.watch_channels || '[]');
   watchChips.clear();
@@ -293,6 +296,19 @@ function renderWatch() {
   }
 }
 
+// §17.3: budget line, next-close segment and passive hint. Only text nodes
+// and attributes change, and only when they differ (no flicker, B3).
+function setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
+function setHidden(el, hidden) { if (el && el.hidden !== hidden) el.hidden = hidden; }
+function renderLiveEvents() {
+  renderLiveEventsInto(document, {
+    group: $('notify-types'),
+    line: $('notify-wakeup-budget'), main: $('notify-wakeup-main'), next: $('notify-wakeup-next'),
+    passive: $('notify-passive-hint'), error: $('notify-live-events-error'), owner: $('notify-live-events-owner'),
+    input: $('notify-live-events'),
+  }, { status, settings, statusAt, now: Date.now(), error: liveEventsError, supported: liveEventsSupported(settings?.config) });
+}
+
 function renderStatus() {
   const box = $('notify-status');
   if (!box) return;
@@ -325,6 +341,10 @@ function renderStatus() {
     const isSender = s.authority === 'primary';
     rows.push(row('上次发送', isSender || !s.sender ? '尚未发送' : senderNode ? `暂无记录（发送节点 ${senderNode}）` : '—'));
   }
+  else if (isSkipped(out)) {
+    // §17.4: held, not failed — warn tone, no 错误 / Trace ID rows.
+    rows.push(row('上次发送', skippedRow(out, s.node_id), { valueClass: 'is-skipped' }));
+  }
   else {
     const from = out.node_id && out.node_id !== s.node_id ? `（来自 ${out.node_id}）` : '';
     const test = out.test ? '（测试）' : '';
@@ -343,9 +363,11 @@ function renderStatus() {
     rows.push(row('本节点上次', `失败 · ${formatUtc8(stale.at)} · ${short}${stale.code ? ` ${stale.code}` : ''}`));
     if (stale.trace_id && stale.trace_id !== out?.trace_id) rows.push(traceRow(stale.trace_id));
   }
+  // Addendum D: pending notices from their own field, fresh /status first.
+  const pendingSrc = s && 'pending_live_events' in s ? s : settings;
+  const pending = pendingLiveNote(pendingSrc, s.sender?.node || '', s.node_id || '');
+  if (pending && liveEventsSupported(settings?.config)) rows.push(row('待补发', pending));
   rows.push(row('未送达', `${Number(s.undelivered) || 0} 条`));
-  const quota = s.quota || {};
-  rows.push(row('召回额度', quota.wakeups_left == null ? '未知（等待管理员消息）' : `剩余 ${quota.wakeups_left} / 4`));
   if (hasNodeCredentials(s)) rows.push(credentialRow(s));
   else if (Array.isArray(s.nodes) && s.nodes.length) {
     const capable = s.nodes.filter(n => n.notify_capable);
@@ -513,7 +535,7 @@ function render() {
   meta.hidden = !metaText;
 
   const disabled = !settings || busy;
-  for (const id of ['notify-enabled', 'notify-app-secret', 'notify-admin-openid', 'notify-clear-openid', 'notify-commands', 'notify-watch-enabled', 'notify-bind-any', ...Object.values(FIELDS)]) {
+  for (const id of ['notify-enabled', 'notify-app-secret', 'notify-admin-openid', 'notify-clear-openid', 'notify-commands', 'notify-live-events', 'notify-watch-enabled', 'notify-bind-any', ...Object.values(FIELDS)]) {
     const el = $(id);
     if (el) el.disabled = disabled;
   }
@@ -533,6 +555,7 @@ function render() {
     test.title = canTest ? '向管理员发送一条测试私信，会占用共享发送额度' : '请先保存 AppID、AppSecret 和管理员 openid';
   }
   renderStatus();
+  renderLiveEvents();
   renderBind();
   renderWatch();
 }
@@ -638,7 +661,10 @@ export async function refreshNotifyStatus() {
     }
     lastBindState = bindState;
   } catch (error) {
-    // Keep the last status; the next poll retries.
+    // Keep the last status; the next poll retries. Review B1: still redraw
+    // the budget line so it falls back to — once the status is 90 s old.
+    renderLiveEvents();
+    return;
   }
   render();
 }
@@ -674,6 +700,7 @@ async function save() {
   try {
     const result = await putJson('/api/notify', body);
     clearRefusal();
+    liveEventsError = '';
     $('notify-app-secret').value = '';
     applySettings(result.data, { force: true });
     if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
@@ -681,6 +708,8 @@ async function save() {
     setResult('');
   } catch (error) {
     handleRefusal(error, openid ? 'openid' : 'config');
+    liveEventsError = liveEventsFieldError(error);
+    if (liveEventsError) $('notify-live-events')?.focus();
     showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
     // §16.4: the typed openid never outlives the request, success or not.
@@ -857,7 +886,11 @@ export function initNotifySettings() {
     clearRefusalOnEdit();
     render();
   });
-  panel.addEventListener('change', () => { clearRefusalOnEdit(); render(); });
+  panel.addEventListener('change', event => {
+    if (event.target.id === 'notify-live-events') liveEventsError = '';
+    clearRefusalOnEdit();
+    render();
+  });
   for (const id of Object.values(FIELDS)) {
     $(id)?.addEventListener('blur', () => {
       const { errors, warnings } = validateNow();
@@ -892,6 +925,8 @@ export function initNotifySettings() {
     await (settings ? refreshNotifyStatus() : loadNotifySettings());
     icon?.classList.remove('is-spinning');
   });
+  // Review B1: the 90 s stale rule needs a clock, not only successful polls.
+  setInterval(() => { if (settings) renderLiveEvents(); }, LIVE_EVENTS_TICK_MS);
   // Same visibility gate as the other 系统设置 timers.
   setInterval(() => {
     if (isViewActive('settings') && !document.hidden) refreshNotifyStatus();

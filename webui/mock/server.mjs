@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
 import { historyRoute, HISTORY_MODES } from './history-fixtures.mjs';
+import { createNotifyState } from './notify-fixtures.mjs';
 
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const ok = data => ({ success: true, data });
@@ -49,6 +50,7 @@ export function createMockServer() {
   const proxyMask = value => value.replace(/:([^/@]*)@/, (_, password) => ':' + '•'.repeat([...decodeURIComponent(password)].length) + '@');
   let favoriteMode = 'ok';
   let historyMode = 'populated';
+  const notify = createNotifyState();
   const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? '示例收藏频道 001' : i === 1 ? '示例收藏频道 002 / Example Channel 002 / サンプルチャンネル 002' : `示例收藏频道 ${String(i + 1).padStart(3, '0')}` }));
   const catalog = [{id:235,name:'其他单机',parent_name:'单机游戏'},{id:329,name:'无畏契约',parent_name:'网游'}, ...Array.from({ length: 300 }, (_, i) => ({ id: 1000 + i, name: i === 0 ? '开放世界探索与多人合作冒险 · Open World and Multiplayer Adventures' : `演示分区 ${i + 1}`, parent_name: `演示分类 ${Math.floor(i / 30) + 1}` }))];
   const config = {
@@ -167,6 +169,10 @@ export function createMockServer() {
         historyMode = mode;
         return send(ok(null));
       }
+      if (path === '/mock/notify-mode') {
+        const mode = new URL(req.url, 'http://localhost').searchParams.get('mode');
+        return notify.setMode(mode) ? send(ok(null)) : send({ success: false, message: `unknown notify mode: ${mode}` }, 400);
+      }
       if (path === '/mock/auth-stats') return send({ passwordAttempts, setupAttempts });
       if (path === '/mock/membership-mode') {
         membershipMode = new URL(req.url, 'http://localhost').searchParams.get('mode') || 'ok';
@@ -192,6 +198,11 @@ export function createMockServer() {
       if (path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
         res.write(': mock connected\n\n'); events.add(res); req.on('close', () => events.delete(res)); return;
+      }
+      if (req.method === 'PUT' && path === '/api/notify') {
+        let text = ''; for await (const chunk of req) text += chunk;
+        const [code, body] = notify.route('PUT', path, JSON.parse(text || '{}'));
+        return send(body, code);
       }
       if (req.method === 'POST' || req.method === 'DELETE') {
         let text = ''; for await (const chunk of req) text += chunk;
@@ -370,6 +381,8 @@ export function createMockServer() {
       if (path === '/mock/writes') return send(writes);
       const history = historyRoute(path, new URL(req.url, 'http://localhost').searchParams, historyMode, ok);
       if (history) return send(history[1], history[0]);
+      const notifyRes = notify.route(req.method, path);
+      if (notifyRes) return send(notifyRes[1], notifyRes[0]);
       if (path === '/api/storage') return send({ ready: true, configured: true, schema: 1, sqlite_version: '3.53.2' });
       if (path === '/api/youtube/cookies') return send(ok({ configured: cookieCount > 0, count: cookieCount, revision: cookieRevision, updated_at: 1 }));
       if (path === '/api/player-filter') return send(ok({ content: playerFilter, revision: filterRevision }));
