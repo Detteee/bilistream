@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
+import { historyRoute, HISTORY_MODES } from './history-fixtures.mjs';
 
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const ok = data => ({ success: true, data });
@@ -47,6 +48,7 @@ export function createMockServer() {
   const proxyValues = {};
   const proxyMask = value => value.replace(/:([^/@]*)@/, (_, password) => ':' + '•'.repeat([...decodeURIComponent(password)].length) + '@');
   let favoriteMode = 'ok';
+  let historyMode = 'populated';
   const favorites = Array.from({ length: 160 }, (_, i) => ({ id: 'UC' + String(i).padStart(22, '0'), name: i === 0 ? '示例收藏频道 001' : i === 1 ? '示例收藏频道 002 / Example Channel 002 / サンプルチャンネル 002' : `示例收藏频道 ${String(i + 1).padStart(3, '0')}` }));
   const catalog = [{id:235,name:'其他单机',parent_name:'单机游戏'},{id:329,name:'无畏契约',parent_name:'网游'}, ...Array.from({ length: 300 }, (_, i) => ({ id: 1000 + i, name: i === 0 ? '开放世界探索与多人合作冒险 · Open World and Multiplayer Adventures' : `演示分区 ${i + 1}`, parent_name: `演示分类 ${Math.floor(i / 30) + 1}` }))];
   const config = {
@@ -157,6 +159,12 @@ export function createMockServer() {
         if (mode === 'local') remoteListener = false;
         if (mode === 'expire') panelGeneration++;
         if (mode === 'lose-setup-response') setupResponseLoss = true;
+        return send(ok(null));
+      }
+      if (path === '/mock/history-mode') {
+        const mode = new URL(req.url, 'http://localhost').searchParams.get('mode') || 'populated';
+        if (!HISTORY_MODES.includes(mode)) return send({ success: false, message: `unknown history mode: ${mode}` }, 400);
+        historyMode = mode;
         return send(ok(null));
       }
       if (path === '/mock/auth-stats') return send({ passwordAttempts, setupAttempts });
@@ -360,6 +368,8 @@ export function createMockServer() {
         return send({ success: true, message: '配置已保存' });
       }
       if (path === '/mock/writes') return send(writes);
+      const history = historyRoute(path, new URL(req.url, 'http://localhost').searchParams, historyMode, ok);
+      if (history) return send(history[1], history[0]);
       if (path === '/api/storage') return send({ ready: true, configured: true, schema: 1, sqlite_version: '3.53.2' });
       if (path === '/api/youtube/cookies') return send(ok({ configured: cookieCount > 0, count: cookieCount, revision: cookieRevision, updated_at: 1 }));
       if (path === '/api/player-filter') return send(ok({ content: playerFilter, revision: filterRevision }));
