@@ -2,8 +2,16 @@ import { stopLiveDataToBili } from '../src/js/analytics-format.js';
 // Synthetic /api/history/* responses for the 统计 view. Shapes follow
 // Architect's contract (.trellis/tasks/10-11-analytics-dashboard/design.md §9).
 // All data is fake, deterministic for a given `now`, and labelled 示例.
-// Modes (GET /mock/history-mode?mode=…): populated | empty | missing | error | partial.
-export const HISTORY_MODES = ['populated', 'empty', 'missing', 'error', 'partial'];
+// Modes (GET /mock/history-mode?mode=…): populated | empty | missing | error | partial
+// | clamped (W15 clamped_to_days) | partial-nodes (W16 partial_nodes)
+// | clamped-partial (both, plus missing_nodes on cluster scope).
+export const HISTORY_MODES = ['populated', 'empty', 'missing', 'error', 'partial', 'clamped', 'partial-nodes', 'clamped-partial'];
+export const CLAMP_DAYS = 90;
+export const PARTIAL_NODES = [{ node: 'tokyo-1', clamped_to_days: 30 }, { node: 'sg-3', clamped_to_days: 14 }];
+// Session / event ids are opaque `node:boot:n` strings (contract): never numbers.
+const BOOT = { local: '3f9a1c2b', 'tokyo-1': '7d01e5aa' };
+export const sid = (node, n) => `${node}:${BOOT[node] || '00000000'}:${n}`;
+const tail = id => Number(String(id).split(':').pop()) || 0;
 const MISSING = [{ node_id: 'sg-3', reason: 'timeout', detail: 'no response in 3000 ms' }];
 
 const DAY = 86400;
@@ -55,7 +63,7 @@ function allSessions(now) {
       }
       const dur = (ended_at ?? now) - started_at;
       out.push({
-        id, eid: `local-${id}`, node: id % 5 === 0 ? 'tokyo-1' : 'local', ...ch,
+        id: sid(id % 5 === 0 ? 'tokyo-1' : 'local', id), n: id, eid: `local-${id}`, node: id % 5 === 0 ? 'tokyo-1' : 'local', ...ch,
         title: `${ch.channel_name} | 示例直播 ${id}`, started_at, ended_at, duration_secs: dur,
         end_reason: live ? null : failures ? (id % 2 ? 'aborted' : 'process_restart') : CLEAN_END[id % CLEAN_END.length], runs: restarts + 1, restarts, failures, stuck: 0, gaps,
         median_bitrate_kbps: 5800 + Math.floor(rand() * 600),
@@ -173,19 +181,19 @@ function eventsResponse(q, now, partial) {
   const items = [];
   let id = 1000;
   for (const s of allSessions(now)) {
-    if (s.ended_at) items.push({ id: id++, eid: `ev-${id}`, at: s.ended_at, node: s.node, kind: 'stream.ended', session_id: s.id, title: `转播结束：${s.channel_name}`, detail: `时长 ${Math.round(s.duration_secs / 60)} 分钟`, severity: 'info' });
+    if (s.ended_at) items.push({ id: sid(s.node, id++), eid: `ev-${id}`, at: s.ended_at, node: s.node, kind: 'stream.ended', session_id: s.id, title: `转播结束：${s.channel_name}`, detail: `时长 ${Math.round(s.duration_secs / 60)} 分钟`, severity: 'info' });
     for (const [a, , kind] of s.gaps) {
-      items.push({ id: id++, eid: `ev-${id}`, at: a, node: s.node, kind: kind === 'failed' ? 'stream.failed' : 'stream.reconnecting', title: kind === 'failed' ? `转播失败：${s.channel_name}` : `重新连接：${s.channel_name}`, detail: 'ffmpeg 退出（示例）', severity: kind === 'failed' ? 'error' : 'warn' });
-      if (kind === 'failed') items.push({ id: id++, eid: `ev-${id}`, at: a + 5, node: s.node, kind: 'notify.sent', title: `QQ 告警已送达：转播失败 ${s.channel_name}`, detail: '', severity: 'info' });
+      items.push({ id: sid(s.node, id++), eid: `ev-${id}`, at: a, node: s.node, kind: kind === 'failed' ? 'stream.failed' : 'stream.reconnecting', title: kind === 'failed' ? `转播失败：${s.channel_name}` : `重新连接：${s.channel_name}`, detail: 'ffmpeg 退出（示例）', severity: kind === 'failed' ? 'error' : 'warn' });
+      if (kind === 'failed') items.push({ id: sid(s.node, id++), eid: `ev-${id}`, at: a + 5, node: s.node, kind: 'notify.sent', title: `QQ 告警已送达：转播失败 ${s.channel_name}`, detail: '', severity: 'info' });
     }
-    items.push({ id: id++, eid: `ev-${id}`, at: s.started_at, node: s.node, kind: 'stream.started', title: `开始转播：${s.channel_name}`, detail: s.title, severity: 'info' });
+    items.push({ id: sid(s.node, id++), eid: `ev-${id}`, at: s.started_at, node: s.node, kind: 'stream.started', title: `开始转播：${s.channel_name}`, detail: s.title, severity: 'info' });
   }
-  items.push({ id: id++, eid: `ev-${id}`, at: now - 2 * DAY, node: 'tokyo-1', kind: 'cluster.failover', title: '故障转移 · local → tokyo-1', detail: 'local 心跳超时 20 秒（示例）', severity: 'warn' });
+  items.push({ id: sid('tokyo-1', id++), eid: `ev-${id}`, at: now - 2 * DAY, node: 'tokyo-1', kind: 'cluster.failover', title: '故障转移 · local → tokyo-1', detail: 'local 心跳超时 20 秒（示例）', severity: 'warn' });
   const kinds = q.kind ? q.kind.split(',') : null;
   const list = items
     .filter(e => e.at >= q.from && e.at <= q.to && (!kinds || kinds.some(k => e.kind === k || e.kind.startsWith(`${k}.`))))
     .filter(e => !q.severity || q.severity.split(',').includes(e.severity))
-    .sort((a, b) => b.at - a.at || b.id - a.id);
+    .sort((a, b) => b.at - a.at || tail(b.id) - tail(a.id));
   const paged = page(list, q, 20);
   return paged && { ...paged, missing_nodes: partial ? MISSING : [] };
 }
@@ -245,10 +253,16 @@ export function historyRoute(path, params, mode, ok, nowSec = Math.floor(Date.no
   q.from = Number(q.from) || q.to - DAY;
   if (!(q.from < q.to)) return [400, { success: false, message: 'from 必须早于 to' }];
   // missing_nodes only applies to cluster scope; scope=local is always [].
-  const partial = mode === 'partial' && q.scope !== 'local';
+  const partial = (mode === 'partial' || mode === 'clamped-partial') && q.scope !== 'local';
   const empty = mode === 'empty';
   const name = path.slice('/api/history/'.length);
   if (name === 'status') return [200, ok(historyStatus(mode, nowSec))];
+  const base = ok;
+  ok = data => base(data && typeof data === 'object' ? {
+    ...data,
+    ...(mode === 'clamped' || mode === 'clamped-partial' ? { clamped_to_days: CLAMP_DAYS } : {}),
+    ...(mode === 'partial-nodes' || mode === 'clamped-partial' ? { partial_nodes: PARTIAL_NODES.map(p => ({ ...p })) } : {}),
+  } : data);
   if (empty) {
     if (name === 'summary') return [200, ok(emptySummary())];
     if (name === 'sessions' || name === 'events') return [200, ok({ items: [], next_cursor: null, prev_id: null, next_id: null, missing_nodes: [] })];

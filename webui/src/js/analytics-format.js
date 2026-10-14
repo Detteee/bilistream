@@ -376,3 +376,43 @@ export function endReasonLabel(code) {
 export function neighbourLabel(word, title) {
   return typeof title === 'string' && title.trim() ? `${word}：${title.trim()}` : word;
 }
+
+// ---------- 统计 follow-up (W15 / W16, string ids) ----------
+// Every key and value goes through encodeURIComponent so string ids such as
+// `jp:3f9a1c2b:12` survive the path/query round-trip. Empty values are skipped.
+export function historyQuery(params) {
+  const parts = [];
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return parts.join('&');
+}
+const posInt = n => Number.isInteger(n) && n > 0;
+// W15: the server clamped the requested range to its retention.
+export function clampNoticeText(days) {
+  return posInt(days) ? `所选范围超出保留期，仅显示最近 ${days} 天` : null;
+}
+// W16: some nodes keep less history than the range covers.
+export function partialNodesText(list) {
+  if (!Array.isArray(list)) return null;
+  const segs = list.filter(p => p && typeof p.node === 'string' && p.node && posInt(p.clamped_to_days))
+    .map(p => `${p.node} 仅含最近 ${p.clamped_to_days} 天`);
+  return segs.length ? `部分节点保留期较短：${segs.join('、')}` : null;
+}
+// Merge retention hints from several /history responses: the tightest clamp
+// wins, and per node the smallest day count wins (first-seen node order).
+export function mergeRetention(datas) {
+  let clamp = null;
+  const nodes = new Map();
+  for (const d of datas || []) {
+    if (!d || typeof d !== 'object') continue;
+    if (posInt(d.clamped_to_days)) clamp = clamp == null ? d.clamped_to_days : Math.min(clamp, d.clamped_to_days);
+    for (const p of Array.isArray(d.partial_nodes) ? d.partial_nodes : []) {
+      if (!p || typeof p.node !== 'string' || !p.node || !posInt(p.clamped_to_days)) continue;
+      nodes.set(p.node, nodes.has(p.node) ? Math.min(nodes.get(p.node), p.clamped_to_days) : p.clamped_to_days);
+    }
+  }
+  return { clamped: clampNoticeText(clamp), partial: partialNodesText([...nodes].map(([node, clamped_to_days]) => ({ node, clamped_to_days }))) };
+}
+export const EVENTS_EMPTY = '暂无事件记录';

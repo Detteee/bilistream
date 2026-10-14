@@ -16,6 +16,7 @@ import {
   ringArcs, biliTotals, biliStateLabel, aggregateAudience, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, heatLevel, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
+  historyQuery, mergeRetention, EVENTS_EMPTY,
 } from './analytics-format.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -137,13 +138,7 @@ function resolvedRange() {
 function scopeParam() {
   return prefs.scope ? { scope: prefs.scope } : {};
 }
-function query(params) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== '') search.set(key, String(value));
-  }
-  return search.toString();
-}
+const query = historyQuery;
 class NotSupported extends Error {}
 
 // Stale-while-revalidate (W14 P5): fresh 30 s, stale ≤ 10 min (render, then
@@ -190,6 +185,23 @@ function showNotice(text, tone = '', nodes = null) {
     notice.append(name, document.createTextNode(` ${node.reason}`));
   });
   notice.append(document.createTextNode('，以下统计不含这些节点。'));
+}
+// W15 / W16: neutral retention notices under #analytics-notice, clamp first.
+// The range picker keeps the user's choice; only these notices explain it.
+let retentionSeen = [];
+function resetRetention() {
+  retentionSeen = [];
+  applyRetention(null);
+}
+function applyRetention(data) {
+  if (data) retentionSeen.push(data);
+  const { clamped, partial } = mergeRetention(retentionSeen);
+  for (const [id, text] of [['analytics-clamp-notice', clamped], ['analytics-partial-notice', partial]]) {
+    const n = $(id);
+    if (!n) continue;
+    n.textContent = text || '';
+    n.hidden = !text;
+  }
 }
 function applyMissing(missing) {
   const info = missingNodeText(missing);
@@ -743,7 +755,7 @@ function renderEvents(data, append = false) {
   const items = Array.isArray(data?.items) ? data.items : [];
   let list = bodyOf('events')?.querySelector('.analytics-events');
   if (!append || !list) {
-    if (!items.length) return setEmpty('events', '此时间范围内没有事件。');
+    if (!items.length) return setEmpty('events', EVENTS_EMPTY);
     list = el('ol', 'analytics-events');
     setBody('events', list);
   }
@@ -776,7 +788,7 @@ async function openDetail(id) {
       history('sessions', { id, ...scopeParam() }),
       history('stats', { session: id, metrics: 'bitrate,fps,speed,online,watched', max_points: Math.min(2000, Math.max(240, body.clientWidth || 600)), ...scopeParam() }),
     ]);
-    if (view.detailId !== id) return;
+    if (String(view.detailId) !== String(id)) return;
     const s = res?.items?.[0];
     if (!s) { body.replaceChildren(el('div', 'empty-state', '未找到该场转播。')); return; }
     const now = Date.now() / 1000;
@@ -852,6 +864,7 @@ async function refresh({ force = false } = {}) {
   const done = () => { if (gen === generation) button.disabled = false; };
   for (const key of ['strip', 'hours', 'audience', 'reliability', 'calendar', 'events']) setLoading(key);
   showNotice('');
+  resetRetention();
 
   let status;
   try {
@@ -908,20 +921,23 @@ async function refresh({ force = false } = {}) {
     renderCalendar(summary);
     renderNodes(summary);
     applyMissing(summary?.missing_nodes);
+    applyRetention(summary);
   }, error => fail(['hours', 'reliability', 'calendar'], error));
   sessionsJob.then(data => {
     if (!live()) return;
     view.sessions = Array.isArray(data?.items) ? data.items : [];
     renderStrips(view.sessions, r, status.oldest_at);
     applyMissing(data?.missing_nodes);
+    applyRetention(data);
   }, error => fail(['strip', 'audience'], error));
   Promise.all([sessionsJob, statsJob]).then(([, stats]) => {
     if (!live()) return;
+    applyRetention(stats);
     renderAudience(stats, r);
     if (prefs.quality === 'range') renderQualityRange(stats, r);
     view.stats = stats;
   }, error => { if (live()) { setError('audience', error); if (prefs.quality === 'range') setError('quality', error); } });
-  eventsJob.then(data => live() && renderEvents(data), error => fail(['events'], error));
+  eventsJob.then(data => { if (live()) { applyRetention(data); renderEvents(data); } }, error => fail(['events'], error));
   Promise.allSettled([summaryJob, sessionsJob, statsJob, eventsJob]).then(() => {
     done();
     if (live() && failures >= 3) showNotice('无法读取统计数据：多个模块加载失败。实时数据不受影响。', 'danger');
