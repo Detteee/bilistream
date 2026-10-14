@@ -184,6 +184,40 @@ export function watchMigrationText(settings) {
     : '已按频道合并关注项。';
 }
 
+// Acknowledgement is browser-local, scoped to a node and the server's migration
+// identity. It never changes the watch list or clears the server's notice.
+export function createWatchMigrationAcknowledgements(getStorage = () => null) {
+  const dismissed = new Set();
+  const identity = (nodeId, notice) => {
+    if (!notice) return null;
+    const node = typeof nodeId === 'string' ? nodeId.trim() : '';
+    const at = Number.isSafeInteger(notice.at) && notice.at >= 0 ? notice.at : null;
+    const folded = Number.isSafeInteger(notice.folded) && notice.folded >= 0 ? notice.folded : null;
+    return { key: `bilistream.notify.watch.migration:${JSON.stringify([node, at, folded])}`, persistent: Boolean(node) && at !== null };
+  };
+  return {
+    isDismissed(nodeId, notice) {
+      const id = identity(nodeId, notice);
+      if (!id) return false;
+      if (dismissed.has(id.key)) return true;
+      try {
+        if (id.persistent && getStorage()?.getItem(id.key) === '1') {
+          dismissed.add(id.key);
+          return true;
+        }
+      } catch { /* storage is optional; acknowledgement still works in this page */ }
+      return false;
+    },
+    dismiss(nodeId, notice) {
+      const id = identity(nodeId, notice);
+      if (!id) return;
+      dismissed.add(id.key);
+      try { if (id.persistent) getStorage()?.setItem(id.key, '1'); }
+      catch { /* denied storage / quota: keep the in-memory acknowledgement */ }
+    },
+  };
+}
+
 export function watchRefusal(error) {
   const { code, field } = error?.body?.data || {};
   const copy = {

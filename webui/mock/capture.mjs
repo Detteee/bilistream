@@ -10,6 +10,7 @@ import { checkPanelPasswords } from './password-checks.mjs';
 import { checkClusterMembership } from './membership-checks.mjs';
 import { checkStreamActions } from './stream-action-checks.mjs';
 import { checkNotifyWatch } from './notify-watch-checks.mjs';
+import { checkNotifyMigration } from './notify-migration-checks.mjs';
 
 const server = createMockServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -414,6 +415,7 @@ try {
     documentCapture: process.argv[2] ? undefined : async () => { await capture(join(root, 'docs/images/cluster-membership.png')); },
   });
   await checkNotifyWatch({ base, context, command, evaluate, waitFor, captureDir, capture: process.argv[2] ? capture : async () => {} });
+  await checkNotifyMigration({ base, context, command, evaluate, waitFor });
   await command('session.end', {});
 } finally {
   ws?.close(); browser.kill(); server.closeAllConnections(); server.close();

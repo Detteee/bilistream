@@ -6,7 +6,7 @@ import { showNotification, setButtonLoading, reconcileChildren } from './dom.js'
 import { isViewActive } from './state.js';
 import { LIVE_EVENTS_TICK_MS, STATUS_STALE_MS, activePushValueInto, renderLiveEventsInto } from './live-events-view.js';
 import {
-  WATCH_PLATFORMS, WATCH_MAX, filterCandidates, groupedWatchSupported,
+  WATCH_PLATFORMS, WATCH_MAX, createWatchMigrationAcknowledgements, filterCandidates, groupedWatchSupported,
   toggleWatchCandidate, watchCatalog, watchForSave, watchKey, watchMigrationText, watchRowLive, watchRows, watchSelection,
 } from './notify-watch.js';
 import {
@@ -49,7 +49,7 @@ let lastBindState = 'idle';
 let bindTimer = null;
 let watchDraft = [];    // 关注列表 being edited
 let watchSig = '';      // inputs of the last renderWatch(); skip identical re-renders
-let watchMigrationDismissed = false;
+const watchMigrationAcks = createWatchMigrationAcknowledgements(() => window.localStorage);
 let statusSig = '';     // same for renderStatus()
 let liveEventsError = '';  // inline invalid_field copy for the 开播/下播 switch
 const watchChips = new Map();    // watchKey → <li>, reused so focus survives
@@ -329,7 +329,8 @@ function renderWatch() {
   const query = $('notify-watch-search')?.value || '';
   const catalog = watchCatalog(settings);
   const migration = watchMigrationText(settings);
-  const sig = JSON.stringify([watchDraft, catalog, query, status?.watch, disabled, migration, watchMigrationDismissed, groupedWatchSupported(settings)]);
+  const migrationDismissed = watchMigrationAcks.isDismissed(status?.node_id, settings?.config?.watch?.migration_notice);
+  const sig = JSON.stringify([watchDraft, catalog, query, status?.watch, disabled, migration, migrationDismissed, groupedWatchSupported(settings)]);
   if (sig === watchSig) return;
   watchSig = sig;
   const rows = watchRows(watchDraft, catalog);
@@ -347,7 +348,7 @@ function renderWatch() {
     : '按频道名称选择关注项。当前节点暂不支持跨平台合并通知。';
   $('notify-watch-search-clear').hidden = !query;
   $('notify-watch-migration-text').textContent = migration;
-  $('notify-watch-migration').hidden = !migration || watchMigrationDismissed;
+  $('notify-watch-migration').hidden = !migration || migrationDismissed;
   const results = $('notify-watch-results');
   if (results) {
     const matches = filterCandidates(catalog, query);
@@ -812,6 +813,11 @@ function setStatus(data, token) {
 }
 
 function applySettings(data, { force, keepCatalog = false }) {
+  // A GET that captured settings before a successful save must not restore the
+  // old watch list or migration notice. Newer reads (and legacy replies without
+  // a revision) remain eligible; request sequencing still orders equal versions.
+  if (Number.isSafeInteger(data.revision) && Number.isSafeInteger(settings?.revision)
+    && data.revision < settings.revision) return;
   const previous = baseline;
   // Older PUT responses omit the read-only picker catalog. A mutation keeps
   // the loaded catalog; a fresh GET can still change the reported capability.
@@ -1146,7 +1152,7 @@ export function initNotifySettings() {
     if (first) { event.preventDefault(); first.focus(); }
   });
   $('notify-watch-migration-dismiss')?.addEventListener('click', () => {
-    watchMigrationDismissed = true;
+    watchMigrationAcks.dismiss(status?.node_id, settings?.config?.watch?.migration_notice);
     renderWatch();
     $('notify-watch-picker-toggle').focus();
   });
