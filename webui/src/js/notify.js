@@ -2,17 +2,17 @@
 // button; never part of the /api/config patch.
 
 import { getJson, putJson, postJson, deleteJson } from './api.js';
-import { showNotification, setButtonLoading } from './dom.js';
+import { showNotification, setButtonLoading, reconcileChildren } from './dom.js';
 import { isViewActive } from './state.js';
 import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
-  formToPatch, formatDuration, formatUtc8, isBadCredentials, removeWatch, sameForm, selectState,
-  validateForm, watchKey,
+  appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
+  middleTruncate, removeWatch,
+  notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
 } from './notify-state.js';
 
 const FIELDS = {
   app_id: 'notify-app-id',
-  admin_openid: 'notify-admin-openid',
   token_url: 'notify-token-url',
   api_base: 'notify-api-base',
   confirm_secs: 'notify-confirm-secs',
@@ -38,6 +38,15 @@ let lastAlert = '';
 let lastBindState = 'idle';
 let bindTimer = null;
 let watchDraft = [];    // 关注列表 being edited
+let watchSig = '';      // inputs of the last renderWatch(); skip identical re-renders
+let statusSig = '';     // same for renderStatus()
+const watchChips = new Map();    // watchKey → <li>, reused so focus survives
+const watchOptions = new Map();  // watchKey → <li> in the picker
+// Unbind progress (§16.9): node ids that still had the openid when the user
+// confirmed, and when each one reported it cleared.
+let pendingUnbind = new Set();
+let refusal = null;   // last coded refusal from a notify write (banner + recovery)
+const clearedAt = new Map();
 
 const $ = id => document.getElementById(id);
 
@@ -56,12 +65,29 @@ function fillForm(form) {
   if ($('notify-commands')) $('notify-commands').checked = form.commands_enabled;
   if ($('notify-watch-enabled')) $('notify-watch-enabled').checked = form.watch_enabled;
   watchDraft = JSON.parse(form.watch_channels || '[]');
+  watchChips.clear();
+  watchOptions.clear();
+  watchSig = '';
   const advanced = $('notify-advanced');
   if (advanced && (form.token_url || form.api_base)) advanced.open = true;
 }
 
+function typedOpenid() {
+  return $('notify-admin-openid')?.value.trim() || '';
+}
+
 function isDirty() {
-  return Boolean(baseline) && (!sameForm(readForm(), baseline) || Boolean($('notify-app-secret')?.value.trim()));
+  return Boolean(baseline) && (!sameForm(readForm(), baseline)
+    || Boolean($('notify-app-secret')?.value.trim()) || Boolean(typedOpenid()));
+}
+
+function validateNow() {
+  return validateForm(readForm(), {
+    secretConfigured: appSecretSet(settings),
+    secretEntered: Boolean($('notify-app-secret')?.value.trim()),
+    openidSet: Boolean(settings?.openid_set),
+    openidText: typedOpenid(),
+  });
 }
 
 function showFieldErrors(errors, warnings) {
@@ -75,6 +101,8 @@ function showFieldErrors(errors, warnings) {
       help.classList.toggle('is-invalid', Boolean(errors[key] || warnings[key]));
     }
   }
+  // Never echo the typed openid: messages are fixed strings (§16.4).
+  $('notify-admin-openid')?.setAttribute('aria-invalid', errors.admin_openid ? 'true' : 'false');
   for (const key of ['app_id', 'admin_openid']) {
     const el = $(`notify-${key.replace('_', '-')}-error`);
     if (!el) continue;
@@ -95,7 +123,7 @@ function setBadge(el, text, tone) {
   el.textContent = text;
 }
 
-function row(label, value, { dot = '', title = '', badge = '' } = {}) {
+function row(label, value, { dot = '', title = '', badge = '', valueClass = '', copy = '' } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'cluster-node-meta-row';
   const l = document.createElement('span');
@@ -114,7 +142,16 @@ function row(label, value, { dot = '', title = '', badge = '' } = {}) {
     b.className = `cluster-badge ${badge}`;
     b.textContent = value;
     v.append(b);
+  } else if (copy) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `notify-copy ${valueClass}`.trim();
+    btn.textContent = value;
+    btn.setAttribute('aria-label', `${label} ${copy}，点击复制`);
+    btn.addEventListener('click', () => copyText(copy, `已复制 ${label}`));
+    v.append(btn);
   } else {
+    if (valueClass) v.classList.add(...valueClass.split(' '));
     v.append(document.createTextNode(value));
   }
   if (title) v.title = title;
@@ -123,36 +160,78 @@ function row(label, value, { dot = '', title = '', badge = '' } = {}) {
 }
 
 function watchChip(channel) {
-  const item = document.createElement('li');
-  item.className = 'notify-watch-item';
-  const label = document.createElement('span');
-  label.className = 'notify-watch-name';
-  label.textContent = channel.name || channel.channel_id;
-  const meta = document.createElement('span');
-  meta.className = 'notify-watch-meta notify-mono';
-  meta.textContent = `${WATCH_PLATFORMS[channel.platform] || channel.platform} · ${channel.channel_id}`;
-  const live = (status?.watch?.live || []).includes(watchKey(channel));
-  if (live) {
+  const key = watchKey(channel);
+  let item = watchChips.get(key);
+  if (!item) {
+    item = document.createElement('li');
+    item.className = 'notify-watch-item';
+    item.dataset.key = key;
+    const label = document.createElement('span');
+    label.className = 'notify-watch-name';
+    const name = document.createElement('span');
+    name.textContent = channel.name || channel.channel_id;
     const badge = document.createElement('span');
-    badge.className = 'cluster-badge active';
+    badge.className = 'cluster-badge active notify-watch-live';
     badge.textContent = '直播中';
-    label.append(' ', badge);
+    label.append(name, ' ', badge);
+    const meta = document.createElement('span');
+    meta.className = 'notify-watch-meta notify-mono';
+    meta.textContent = `${WATCH_PLATFORMS[channel.platform] || channel.platform} · ${channel.channel_id}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn-ghost compact-btn notify-watch-remove';
+    remove.textContent = '移除';
+    remove.setAttribute('aria-label', `从关注列表移除 ${channel.name || channel.channel_id}`);
+    remove.addEventListener('click', () => removeFromWatch(key));
+    const text = document.createElement('span');
+    text.className = 'notify-watch-text';
+    text.append(label, meta);
+    item.append(text, remove);
+    watchChips.set(key, item);
   }
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'btn-ghost compact-btn notify-watch-remove';
-  remove.textContent = '移除';
-  remove.setAttribute('aria-label', `从关注列表移除 ${channel.name || channel.channel_id}`);
-  remove.disabled = busy || !settings;
-  remove.addEventListener('click', () => {
-    watchDraft = removeWatch(watchDraft, watchKey(channel));
-    render();
-  });
-  const text = document.createElement('span');
-  text.className = 'notify-watch-text';
-  text.append(label, meta);
-  item.append(text, remove);
+  const live = (status?.watch?.live || []).includes(key);
+  const badge = item.querySelector('.notify-watch-live');
+  badge.hidden = !live;
+  item.querySelector('.notify-watch-remove').disabled = busy || !settings;
   return item;
+}
+
+function watchOption(channel) {
+  const key = watchKey(channel);
+  let li = watchOptions.get(key);
+  if (!li) {
+    li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'notify-watch-option';
+    const name = document.createElement('span');
+    name.className = 'notify-watch-name';
+    name.textContent = channel.name || channel.channel_id;
+    const meta = document.createElement('span');
+    meta.className = 'notify-watch-meta notify-mono';
+    meta.textContent = `${WATCH_PLATFORMS[channel.platform]} · ${channel.channel_id}`;
+    btn.append(name, meta);
+    btn.setAttribute('aria-label', `关注 ${channel.name || channel.channel_id}（${WATCH_PLATFORMS[channel.platform]}）`);
+    btn.addEventListener('click', () => {
+      if (addToWatch(channel)) $('notify-watch-search')?.focus();
+    });
+    li.append(btn);
+    watchOptions.set(key, li);
+  }
+  li.firstChild.disabled = busy || !settings;
+  return li;
+}
+
+// After 移除, keep keyboard users in the list: next chip's 移除, else the
+// previous one, else the search box.
+function removeFromWatch(key) {
+  const index = watchDraft.findIndex(channel => watchKey(channel) === key);
+  watchDraft = removeWatch(watchDraft, key);
+  watchChips.delete(key);
+  render();
+  const next = watchDraft[index] || watchDraft[index - 1];
+  const target = next ? watchChips.get(watchKey(next))?.querySelector('.notify-watch-remove') : $('notify-watch-search');
+  target?.focus();
 }
 
 function addToWatch(channel) {
@@ -171,38 +250,28 @@ function addToWatch(channel) {
 function renderWatch() {
   const listEl = $('notify-watch-list');
   if (!listEl) return;
-  listEl.replaceChildren(...watchDraft.map(watchChip));
+  const disabled = busy || !settings;
+  for (const id of ['notify-watch-search', 'notify-watch-platform', 'notify-watch-id', 'notify-watch-name', 'notify-watch-add']) {
+    const el = $(id);
+    if (el) el.disabled = disabled;
+  }
+  // Only rebuild when something the list shows changed (F1): typing in other
+  // fields and status polls must not move focus.
+  const query = $('notify-watch-search')?.value || '';
+  const sig = JSON.stringify([watchDraft, settings?.watch_candidates || [], query, status?.watch?.live || [], disabled]);
+  if (sig === watchSig) return;
+  watchSig = sig;
+  reconcileChildren(listEl, watchDraft.map(watchChip));
   const empty = $('notify-watch-empty');
   if (empty) empty.hidden = watchDraft.length > 0;
   const count = $('notify-watch-count');
   if (count) count.textContent = `${watchDraft.length} 个频道`;
   const results = $('notify-watch-results');
   if (results) {
-    const matches = filterCandidates(settings?.watch_candidates || [], $('notify-watch-search')?.value, watchDraft);
-    results.replaceChildren(...matches.map(channel => {
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'notify-watch-option';
-      btn.disabled = busy || !settings;
-      const name = document.createElement('span');
-      name.className = 'notify-watch-name';
-      name.textContent = channel.name || channel.channel_id;
-      const meta = document.createElement('span');
-      meta.className = 'notify-watch-meta notify-mono';
-      meta.textContent = `${WATCH_PLATFORMS[channel.platform]} · ${channel.channel_id}`;
-      btn.append(name, meta);
-      btn.setAttribute('aria-label', `关注 ${channel.name || channel.channel_id}（${WATCH_PLATFORMS[channel.platform]}）`);
-      btn.addEventListener('click', () => addToWatch(channel));
-      li.append(btn);
-      return li;
-    }));
+    const matches = filterCandidates(settings?.watch_candidates || [], query, watchDraft);
+    reconcileChildren(results, matches.map(watchOption));
     const none = $('notify-watch-no-results');
     if (none) none.hidden = matches.length > 0;
-  }
-  for (const id of ['notify-watch-search', 'notify-watch-platform', 'notify-watch-id', 'notify-watch-name', 'notify-watch-add']) {
-    const el = $(id);
-    if (el) el.disabled = busy || !settings;
   }
 }
 
@@ -214,23 +283,30 @@ function renderStatus() {
   const node = s.node_id || '本节点';
   const now = Date.now() / 1000;
   if (s.authority === 'primary') rows.push(row('发送节点', `${node}（本节点）`));
-  else if (s.authority === 'delegate') rows.push(row('发送节点', `${node}（代发：活跃节点未配置完整）`));
+  else if (s.authority === 'delegate') rows.push(row('发送节点', `${node}（代发：活跃节点通知设置不完整）`));
   else if (s.authority === 'no_quorum_fallback') rows.push(row('发送节点', `${node}（无多数派代发）`));
   else if (s.authority_node_id) rows.push(row('发送节点', s.authority_node_id));
   else rows.push(row('发送节点', '暂无（等待选举）'));
 
   const gw = s.gateway || {};
+  const enabled = Boolean(settings?.config?.enabled);
   const keepOnline = settings?.config?.qq?.keep_online !== false;
   if (gw.state === 'failed') rows.push(row('QQ 网关', `已停止 · ${gw.reason || '机器人不可用'}`, { dot: 'notify-dot-danger', title: '修改凭据并保存后重试' }));
   else if (gw.state === 'online') rows.push(row('QQ 网关', `已连接 · ${formatDuration(now - gw.since)}`, { dot: 'status-live' }));
   else if (gw.state === 'connecting' || gw.state === 'offline') rows.push(row('QQ 网关', '未连接 · 正在重连', { dot: 'status-scheduled', title: gw.reason || '' }));
   else if (s.authority !== 'primary' && s.authority_node_id) rows.push(row('QQ 网关', '由发送节点保持'));
-  else rows.push(row('QQ 网关', keepOnline ? '未连接' : '已关闭（未保持在线）', { dot: 'status-offline' }));
+  else if (!enabled) rows.push(row('QQ 网关', '未启用'));
+  else if (!keepOnline) rows.push(row('QQ 网关', '已关闭（未保持在线）'));
+  else rows.push(row('QQ 网关', '未连接', { dot: 'status-offline' }));
 
-  const out = s.last_outcome;
+  const out = senderOutcome(s);
   const modeText = { passive: '被动回复', active: '主动消息', wakeup: '召回消息' };
   rows.push(row('送达方式', out?.ok ? (modeText[out.mode] || '—') : '—'));
-  if (!out) rows.push(row('上次发送', '尚未发送'));
+  if (!out) {
+    const senderNode = s.sender?.node;
+    const isSender = s.authority === 'primary';
+    rows.push(row('上次发送', isSender || !s.sender ? '尚未发送' : senderNode ? `暂无记录（发送节点 ${senderNode}）` : '—'));
+  }
   else {
     const from = out.node_id && out.node_id !== s.node_id ? `（来自 ${out.node_id}）` : '';
     const test = out.test ? '（测试）' : '';
@@ -241,18 +317,70 @@ function renderStatus() {
       const [short] = errorCopy(out.code, out.reason);
       rows.push(row('错误', `${short}${out.code ? ` ${out.code}` : ''}`));
     }
-    if (out.trace_id) rows.push(row('Trace ID', out.trace_id, { title: out.trace_id }));
+    if (out.trace_id) rows.push(traceRow(out.trace_id));
+  }
+  const stale = staleLocalFailure(s);
+  if (stale) {
+    const [short] = errorCopy(stale.code, stale.reason);
+    rows.push(row('本节点上次', `失败 · ${formatUtc8(stale.at)} · ${short}${stale.code ? ` ${stale.code}` : ''}`));
+    if (stale.trace_id && stale.trace_id !== out?.trace_id) rows.push(traceRow(stale.trace_id));
   }
   rows.push(row('未送达', `${Number(s.undelivered) || 0} 条`));
   const quota = s.quota || {};
   rows.push(row('召回额度', quota.wakeups_left == null ? '未知（等待管理员消息）' : `剩余 ${quota.wakeups_left} / 4`));
-  if (Array.isArray(s.nodes) && s.nodes.length) {
+  if (hasNodeCredentials(s)) rows.push(credentialRow(s));
+  else if (Array.isArray(s.nodes) && s.nodes.length) {
     const capable = s.nodes.filter(n => n.notify_capable);
     const missing = s.nodes.filter(n => !n.notify_capable).map(n => n.node_id);
     const text = `${capable.length} / ${s.nodes.length}${missing.length ? ` · ${missing.join('、')} 未配置完整` : ''}`;
     rows.push(row('可发送节点', text, { badge: missing.length ? 'sync-warning' : '' }));
   }
+  // Rebuild only when the text changed; the gateway uptime ticks per minute.
+  const sig = rows.map(r => r.textContent).join('\n');
+  if (sig === statusSig) return;
+  statusSig = sig;
   box.replaceChildren(...rows);
+}
+
+function credentialRow(s) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cluster-node-meta-row notify-cred-row';
+  const label = document.createElement('span');
+  label.className = 'cluster-node-meta-label';
+  label.textContent = '凭据同步';
+  const list = document.createElement('ul');
+  list.className = 'cluster-node-meta-value notify-cred-list';
+  const rowsData = credentialRows(s, { pending: pendingUnbind, localUnbound: settings && !settings.openid_set, cleared: clearedAt });
+  for (const r of rowsData) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'notify-cred-node';
+    name.textContent = r.local ? `${r.node_id}（本节点）` : r.node_id;
+    li.append(name);
+    for (const b of [r.secret, r.openid]) {
+      if (!b) continue;
+      const badge = document.createElement('span');
+      badge.className = `cluster-badge${b.tone ? ` ${b.tone}` : ''}`;
+      badge.textContent = b.tone === 'sync-warning' && b.text.endsWith('未同步') ? b.text.replace('未同步', '⚠ 未同步') : b.text;
+      li.append(badge);
+    }
+    list.append(li);
+  }
+  wrap.append(label, list);
+  return wrap;
+}
+
+function traceRow(id) {
+  return row('Trace ID', middleTruncate(id, 16), { title: id, valueClass: 'notify-trace', copy: id });
+}
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showNotification(done, 'success');
+  } catch {
+    showNotification('复制失败，请手动选择', 'error');
+  }
 }
 
 function renderBind() {
@@ -264,15 +392,18 @@ function renderBind() {
     box.dataset.state = view.state;
     $('notify-bind-code').textContent = view.code;
     setBadge($('notify-bind-badge'), view.badge, view.tone);
-    $('notify-bind-text').textContent = view.text;
+    const temp = view.state === 'waiting' && settings?.config?.qq?.keep_online === false ? '将临时连接 QQ 网关，绑定完成后断开。' : '';
+    $('notify-bind-text').textContent = temp ? `${view.text}${temp}` : view.text;
     $('notify-bind-cancel').hidden = !view.cancel;
   }
   const waiting = view.state === 'waiting';
   const btn = $('notify-bind-btn');
   if (btn && !btn.classList.contains('is-loading')) {
     btn.textContent = waiting ? '重新生成' : '自动获取';
-    btn.disabled = busy || !settings?.config?.qq?.app_id || !settings?.app_secret_configured;
-    btn.title = btn.disabled ? '请先保存 AppID 和 AppSecret' : '生成配对码，在 QQ 向机器人发送后自动填入 openid';
+    const gate = openidGate(status);
+    const temp = settings?.config?.qq?.keep_online === false ? '将临时连接 QQ 网关，绑定完成后断开。' : '';
+    btn.disabled = busy || !gate.enabled || !settings?.config?.qq?.app_id || !appSecretSet(settings);
+    btn.title = !gate.enabled ? gate.hint : btn.disabled ? '请先保存 AppID 和 AppSecret' : `生成配对码，在 QQ 向机器人发送后自动完成绑定${temp ? `。${temp}` : ''}`;
   }
   if (waiting && !bindTimer) {
     bindTimer = setInterval(() => {
@@ -293,7 +424,7 @@ function render() {
   panel.dataset.state = st.key;
   setBadge($('notify-state-badge'), st.badge, st.tone);
   const node = status?.node_id || '本节点';
-  const summary = {
+  let summary = {
     loading: '正在读取通知设置…',
     'load-error': `无法读取通知设置：${loadError?.message || ''}`,
     off: '未启用。填写机器人凭据并开启后，集群节点故障时会私信管理员。',
@@ -307,49 +438,74 @@ function render() {
     fallback: `集群暂无多数派，本节点 ${node} 临时代发（消息带「无多数派」标记）。`,
     electing: '暂无发送节点，通知会在选出后补发。',
     failed: status?.authority === 'primary' ? `本节点 ${node} 是当前发送节点。` : `本节点 ${node}。`,
+    'node-unready': `本节点缺少 ${(st.lacks || []).join(' / ')}，接管发送后将无法送达通知。`,
+    'no-sender': '没有配置完整的节点，通知将记为未送达。',
   }[st.key];
-  $('notify-summary').textContent = summary || '';
+  const unbindText = unbindSummary();
+  if (unbindText) summary = unbindText;
+  const summaryEl = $('notify-summary');
+  if (summaryEl.textContent !== (summary || '')) summaryEl.textContent = summary || '';
 
-  let alert = '';
-  let tone = 'warn';
-  if (st.key === 'incomplete') alert = '本节点无法发送通知。填写缺少的项目并保存。';
+  let alert = null;   // { lead, text, tone, action }
+  if (st.key === 'incomplete') alert = { lead: '本节点无法发送通知。', text: '填写缺少的项目并保存。', tone: 'warn' };
   else if (st.key === 'gateway-failed') {
-    tone = 'danger';
-    alert = `QQ 网关已停止（${status?.gateway?.reason || '机器人不可用'}），不会自动重连。请在 QQ 开放平台检查机器人状态，修改凭据并保存后重试。`;
-  } else if (st.key === 'gateway-down') alert = 'QQ 网关未连接，正在重连。断开期间只能用主动消息或召回额度发送，可能送达失败。';
-  else if (st.key === 'failed') {
-    tone = 'danger';
-    const out = status?.last_outcome || {};
-    const code = isBadCredentials(status) && !out.code ? 100016 : out.code;
+    alert = { lead: `QQ 网关已停止（${status?.gateway?.reason || '机器人不可用'}），不会自动重连。`, text: '请在 QQ 开放平台检查机器人状态，修改凭据并保存后重试。', tone: 'danger', action: true };
+  } else if (st.key === 'gateway-down') alert = { lead: 'QQ 网关未连接，正在重连。', text: '断开期间只能用主动消息或召回额度发送，可能送达失败。', tone: 'warn' };
+  else if (st.key === 'node-unready') {
+    const fix = (st.lacks || []).includes('AppSecret') ? '请在本节点填写 AppSecret。' : 'openid 正在同步；如长时间未同步，请重新保存或「自动获取」。';
+    alert = { lead: '本节点未配置完整。', text: `如果它成为发送节点，通知会记为未送达。${fix}`, tone: 'warn' };
+  } else if (st.key === 'no-sender') {
+    const n = Number(status?.undelivered) || 0;
+    alert = { lead: '所有节点都缺少凭据，通知无法发送。', text: `已记为未送达 ${n} 条。请在至少一个节点填写 AppSecret 并绑定管理员 openid。`, tone: n > 0 ? 'danger' : 'warn' };
+  } else if (st.key === 'failed') {
+    const out = senderOutcome(status) || {};
+    const bad = isBadCredentials(status);
+    const code = bad && !out.code ? (localOutcome(status)?.code || 100016) : out.code;
     const [short, hint] = errorCopy(code, out.reason || status?.last_reason?.reason);
-    alert = `${short}${code ? `（${code}）` : ''}。通知无法送达，转播不受影响。${hint}`;
+    alert = { lead: `${short}${code ? `（${code}）` : ''}。`, text: `通知无法送达，转播不受影响。${hint}`, tone: 'danger', action: bad };
   }
-  const alertEl = $('notify-alert');
-  if (alert !== lastAlert) {
-    alertEl.textContent = alert;
-    alertEl.dataset.tone = tone;
-    alertEl.hidden = !alert;
-    lastAlert = alert;
-  }
+  if (refusal) alert = refusal.banner;
+  renderAlert(alert);
 
-  const secretSet = Boolean(settings?.app_secret_configured);
+  const secretSet = appSecretSet(settings);
   setBadge($('notify-app-secret-state'), settings ? (secretSet ? '已设置' : '未设置') : '读取中', secretSet ? 'active' : '');
   $('notify-clear-app-secret').hidden = !secretSet;
   const secretInput = $('notify-app-secret');
   secretInput.placeholder = secretSet ? '已设置（留空则不变）' : '填写 AppSecret';
   secretInput.title = secretSet ? '已保存；输入新值后保存可替换' : '';
 
+  // 管理员 openid: write-only (§16.2). The value never comes from the API.
+  const openidSet = Boolean(settings?.openid_set);
+  setBadge($('notify-openid-state'), settings ? (openidSet ? '已绑定' : '未绑定') : '读取中', settings ? (openidSet ? 'active' : 'sync-warning') : '');
+  $('notify-clear-openid').hidden = !openidSet;
+  const openidInput = $('notify-admin-openid');
+  openidInput.placeholder = openidSet ? '已绑定（留空则不变）' : '点「自动获取」或填写 openid';
+  openidInput.title = openidSet ? '已保存；输入新值后保存可替换' : '';
+  const gate = openidGate(status);
+  const ownerHint = $('notify-openid-owner');
+  if (ownerHint) { ownerHint.textContent = gate.hint; ownerHint.hidden = !gate.hint; }
+  const meta = $('notify-openid-meta');
+  const metaText = typedOpenid() && openidSet ? '保存后替换当前绑定'
+    : openidSet && settings?.openid_bound_at ? `绑定于 ${formatUtc8(settings.openid_bound_at)}` : '';
+  meta.textContent = metaText;
+  meta.hidden = !metaText;
+
   const disabled = !settings || busy;
-  for (const id of ['notify-enabled', 'notify-app-secret', 'notify-commands', 'notify-watch-enabled', ...Object.values(FIELDS)]) {
+  for (const id of ['notify-enabled', 'notify-app-secret', 'notify-admin-openid', 'notify-clear-openid', 'notify-commands', 'notify-watch-enabled', 'notify-bind-any', ...Object.values(FIELDS)]) {
     const el = $(id);
     if (el) el.disabled = disabled;
+  }
+  for (const id of ['notify-admin-openid', 'notify-clear-openid']) {
+    const el = $(id);
+    if (!gate.enabled) el.disabled = true;
+    el.title = gate.enabled ? (id === 'notify-admin-openid' ? openidInput.title : '') : gate.hint;
   }
   const dirty = isDirty();
   $('notify-dirty').hidden = !dirty;
   const save = $('notify-save-btn');
   if (!save.classList.contains('is-loading')) save.disabled = disabled || !dirty;
   const test = $('notify-test-btn');
-  const canTest = settings?.config?.qq?.app_id && secretSet && settings?.config?.qq?.admin_openid;
+  const canTest = settings?.config?.qq?.app_id && secretSet && openidSet;
   if (!test.classList.contains('is-loading')) {
     test.disabled = disabled || !canTest;
     test.title = canTest ? '向管理员发送一条测试私信，会占用共享发送额度' : '请先保存 AppID、AppSecret 和管理员 openid';
@@ -357,6 +513,38 @@ function render() {
   renderStatus();
   renderBind();
   renderWatch();
+}
+
+function renderAlert(alert) {
+  const el = $('notify-alert');
+  const key = alert ? JSON.stringify(alert) : '';
+  if (key === lastAlert) return;
+  lastAlert = key;
+  el.hidden = !alert;
+  if (!alert) { el.replaceChildren(); return; }
+  el.dataset.tone = alert.tone;
+  const lead = document.createElement('strong');
+  lead.textContent = alert.lead;
+  const parts = [lead, document.createTextNode(alert.text)];
+  if (alert.action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-ghost compact-btn notify-alert-action';
+    const action = alert.action === true ? { label: '重新填写', target: 'notify-app-secret' } : alert.action;
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      const input = actionTarget(action.target);
+      input?.scrollIntoView({ block: 'center' });
+      input?.focus();
+    });
+    parts.push(btn);
+  }
+  el.replaceChildren(...parts);
+}
+
+function actionTarget(target) {
+  if (target === 'credentials') return !$('notify-app-id').value.trim() ? $('notify-app-id') : $('notify-app-secret');
+  return $(target);
 }
 
 function setResult(text) {
@@ -406,6 +594,7 @@ export async function refreshNotifyStatus() {
     const st = await getJson('/api/notify/status');
     status = st.data;
     statusAt = Date.now();
+    updateUnbindProgress();
     const bindState = status?.bind?.state || 'idle';
     if (bindState === 'bound' && lastBindState === 'waiting') {
       showNotification('已获取管理员 openid', 'success');
@@ -422,14 +611,12 @@ export async function refreshNotifyStatus() {
 async function save() {
   const form = readForm();
   const secret = $('notify-app-secret').value.trim();
-  const { errors, warnings } = validateForm(form, {
-    secretConfigured: settings?.app_secret_configured,
-    secretEntered: Boolean(secret),
-  });
+  const openid = typedOpenid();
+  const { errors, warnings } = validateNow();
   showFieldErrors(errors, warnings);
   if (Object.keys(errors).length) {
     const first = Object.keys(errors)[0];
-    $(FIELDS[first] || FIELDS.token_url)?.focus();
+    (first === 'admin_openid' ? $('notify-admin-openid') : $(FIELDS[first] || FIELDS.token_url))?.focus();
     showNotification('通知设置保存失败: 请检查标红的项目', 'error');
     return;
   }
@@ -440,6 +627,10 @@ async function save() {
     body.app_secret = secret;
     body.expected_secret_revision = settings.secret_revision;
   }
+  if (openid) {
+    body.admin_openid = openid;
+    body.expected_openid_revision = settings.openid_revision;
+  }
   busy = true;
   const btn = $('notify-save-btn');
   btn.textContent = '正在保存…';
@@ -447,14 +638,18 @@ async function save() {
   setButtonLoading(btn, null, true);
   try {
     const result = await putJson('/api/notify', body);
+    refusal = null;
     $('notify-app-secret').value = '';
     applySettings(result.data, { force: true });
-    showNotification('通知设置已保存', 'success');
+    if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
+    showNotification(openid ? '管理员 openid 已绑定' : '通知设置已保存', 'success');
     setResult('');
   } catch (error) {
-    const message = error.status === 409 ? '配置已被其他操作修改，请重新加载后再保存' : error.message;
-    showNotification(`通知设置保存失败: ${message}`, 'error');
+    handleRefusal(error, openid ? 'openid' : 'config');
+    showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
+    // §16.4: the typed openid never outlives the request, success or not.
+    $('notify-admin-openid').value = '';
     busy = false;
     btn.textContent = '保存通知设置';
     btn.removeAttribute('aria-busy');
@@ -470,15 +665,82 @@ async function clearSecret() {
   render();
   try {
     const result = await putJson('/api/notify', { clear_app_secret: true, expected_secret_revision: settings.secret_revision });
+    refusal = null;
     applySettings(result.data, { force: !isDirty() });
     showNotification('AppSecret 已清除', 'success');
   } catch (error) {
-    showNotification(`通知设置保存失败: ${error.message}`, 'error');
+    handleRefusal(error, 'config');
+    showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
     busy = false;
     render();
     $('notify-app-secret').focus();
   }
+}
+
+// Coded refusal → banner, refresh, recovery focus (§16.11). The typed openid
+// is cleared in every case; other dirty fields stay.
+// Recovery buttons move focus only; nothing is unbound or saved by them.
+// loadNotifySettings keeps dirty form edits (force only when clean).
+function handleRefusal(error, route = 'openid') {
+  refusal = notifyRefusal(error, status, { route });
+  if (!refusal) return;
+  $('notify-admin-openid').value = '';
+  if (refusal.kind === 'revision') loadNotifySettings();
+  else refreshNotifyStatus();
+}
+
+// Unbind on all nodes (§16.9). The route is the contract's DELETE; the body
+// carries the revision so a concurrent bind wins over a stale unbind.
+const UNBIND = { method: deleteJson, path: '/api/notify/openid' };
+
+async function unbindOpenid() {
+  if (!confirm('确定要在所有节点上解除管理员 openid 绑定吗？解除后所有节点都无法发送通知，需要重新「自动获取」或填写。离线的节点会在上线后清除。')) return;
+  const clustered = hasNodeCredentials(status);
+  const before = clustered ? status.nodes.filter(n => n.openid_set && !n.is_local).map(n => n.node_id) : [];
+  busy = true;
+  render();
+  try {
+    const result = await UNBIND.method(UNBIND.path, { expected_openid_revision: settings.openid_revision });
+    refusal = null;
+    if (result?.data) applySettings(result.data, { force: !isDirty() });
+    else settings = { ...settings, openid_set: false, openid_bound_at: null };
+    pendingUnbind = new Set(before);
+    showNotification(before.length ? '已在本节点解除绑定，正在同步到其他节点…' : '管理员 openid 已解除绑定', 'success');
+  } catch (error) {
+    handleRefusal(error);
+    showNotification(`解除绑定失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
+  } finally {
+    busy = false;
+    render();
+    refreshNotifyStatus();
+  }
+}
+
+// Track unbind progress from fresh status; returns the summary override.
+function updateUnbindProgress() {
+  if (!pendingUnbind.size || !hasNodeCredentials(status)) return;
+  for (const n of status.nodes) {
+    if (pendingUnbind.has(n.node_id) && !n.openid_set) {
+      pendingUnbind.delete(n.node_id);
+      clearedAt.set(n.node_id, Date.now());
+      if (!pendingUnbind.size) unbindDone = true;
+    }
+  }
+}
+let unbindDone = false;
+
+function unbindSummary() {
+  if (!hasNodeCredentials(status) || !settings || settings.openid_set) return '';
+  const holders = status.nodes.filter(n => n.openid_set && !n.is_local);
+  if (!holders.length) {
+    if (unbindDone) { unbindDone = false; return '已在所有节点解除绑定'; }
+    return '';
+  }
+  const offline = holders.filter(n => n.fresh === false).length;
+  if (offline === holders.length) return `${offline} 个节点离线，上线后会自动清除`;
+  const total = status.nodes.length;
+  return `正在所有节点解除绑定（${total - holders.length}/${total}）`;
 }
 
 async function sendTest() {
@@ -518,7 +780,7 @@ async function startBind() {
   btn.textContent = '正在生成…';
   try {
     const mode = $('notify-bind-any')?.checked ? 'any' : 'code';
-    const replace = Boolean(settings?.config?.qq?.admin_openid);
+    const replace = Boolean(settings?.openid_set);
     if (replace && !confirm('已绑定管理员 openid。重新绑定成功后会替换它，确定吗？')) return;
     const result = await postJson('/api/notify/bind', { mode, replace });
     status = { ...(status || {}), bind: result.data };
@@ -526,9 +788,9 @@ async function startBind() {
     lastBindState = 'waiting';
     setResult('');
   } catch (error) {
-    // 409 names the node that owns the QQ gateway.
-    setResult(error.message);
-    showNotification(error.message, 'warning');
+    handleRefusal(error);
+    setResult(refusal ? refusal.banner.lead : error.message);
+    showNotification(refusal ? refusal.banner.lead : error.message, 'warning');
   } finally {
     setButtonLoading(btn, null, false);
     btn.classList.remove('is-loading');
@@ -555,13 +817,15 @@ export function initNotifySettings() {
   panel.addEventListener('change', () => render());
   for (const id of Object.values(FIELDS)) {
     $(id)?.addEventListener('blur', () => {
-      const { errors, warnings } = validateForm(readForm(), {
-        secretConfigured: settings?.app_secret_configured,
-        secretEntered: Boolean($('notify-app-secret').value.trim()),
-      });
+      const { errors, warnings } = validateNow();
       showFieldErrors(errors, warnings);
     });
   }
+  $('notify-admin-openid')?.addEventListener('blur', () => {
+    const { errors, warnings } = validateNow();
+    showFieldErrors(errors, warnings);
+  });
+  $('notify-clear-openid')?.addEventListener('click', unbindOpenid);
   $('notify-save-btn')?.addEventListener('click', save);
   $('notify-test-btn')?.addEventListener('click', sendTest);
   $('notify-clear-app-secret')?.addEventListener('click', clearSecret);

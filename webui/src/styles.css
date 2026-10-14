@@ -2365,6 +2365,8 @@ html:not(.app-ready) #main-page {
   .notify-settings input[type="text"],
   .notify-settings input[type="number"],
   .notify-settings input[type="password"],
+  .notify-settings input[type="search"],
+  .notify-settings select,
   .notify-settings .notify-actions > button {
     min-height: 44px;
   }
@@ -2395,7 +2397,7 @@ html:not(.app-ready) #main-page {
 
 /* Admin openid binding (自动获取). Same tokens and badges as the rest of the
    panel; wraps like the other rows and keeps 44px targets on phones. */
-.notify-settings .notify-openid-row > input { flex: 1 1 12rem; }
+.notify-settings .notify-openid-row > input { flex: 1 1 16rem; }
 .notify-settings .notify-bind-any {
   display: flex;
   align-items: flex-start;
@@ -2467,27 +2469,27 @@ html:not(.app-ready) #main-page {
 .notify-settings .notify-toggle-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   min-height: 44px;
 }
 .notify-settings .notify-watch-list,
 .notify-settings .notify-watch-results {
   list-style: none;
-  margin: 8px 0 0;
+  margin: var(--sp-2) 0 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .notify-settings .notify-watch-item,
 .notify-settings .notify-watch-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--sp-2);
   min-height: 44px;
-  padding: 6px 10px;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
-  border-radius: 8px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
   min-width: 0;
 }
 .notify-settings .notify-watch-option {
@@ -2499,7 +2501,7 @@ html:not(.app-ready) #main-page {
 }
 .notify-settings .notify-watch-option:hover:not(:disabled),
 .notify-settings .notify-watch-option:focus-visible {
-  border-color: var(--accent, #3b82f6);
+  border-color: var(--brand);
 }
 .notify-settings .notify-watch-text {
   display: flex;
@@ -2516,8 +2518,8 @@ html:not(.app-ready) #main-page {
   min-width: 0;
 }
 .notify-settings .notify-watch-meta {
-  font-size: 0.85em;
-  opacity: 0.75;
+  font-size: var(--fs-xs);
+  color: var(--text-mute);
 }
 .notify-settings .notify-watch-remove {
   flex: none;
@@ -2526,21 +2528,75 @@ html:not(.app-ready) #main-page {
 .notify-settings .notify-watch-results:empty {
   display: none;
 }
+.notify-settings .notify-watch-empty {
+  margin: var(--sp-2) 0 0;
+}
+.notify-settings .notify-watch-picker {
+  margin-top: var(--sp-3);
+}
 .notify-settings .notify-watch-manual {
   display: grid;
   grid-template-columns: minmax(110px, 140px) minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 8px 12px;
+  gap: var(--sp-2) var(--sp-3);
   align-items: end;
-  margin-top: 8px;
+  margin-top: var(--sp-2);
 }
 .notify-settings .notify-watch-add {
   min-height: 44px;
 }
-@media (max-width: 720px) {
+@media (max-width: 900px) {
+  .notify-settings .notify-watch-manual {
+    grid-template-columns: minmax(110px, 140px) minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
   .notify-settings .notify-watch-manual {
     grid-template-columns: minmax(0, 1fr);
   }
   .notify-settings .notify-watch-add {
     width: 100%;
   }
+}
+
+/* Trace ID: click to copy (F9) and the banner's 重新填写 (F10). */
+.notify-settings .notify-copy {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: copy;
+  text-align: left;
+}
+.notify-settings .notify-copy:hover { color: var(--text); }
+.notify-settings .notify-copy:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+.notify-settings .notify-alert-action {
+  margin-left: var(--sp-2);
+}
+.notify-settings .notify-openid-row { flex-wrap: wrap; }
+
+/* 凭据同步 (§16.6): per-node credential booleans, no values. */
+.notify-settings .notify-cred-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.notify-settings .notify-cred-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+.notify-settings .notify-cred-node {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+@media (max-width: 560px) {
+  .notify-settings .notify-cred-node { flex-basis: 100%; }
 }

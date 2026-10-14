@@ -213,7 +213,7 @@ async function readManagementResponse(response) {
   }
 
   if (!response.ok) {
-    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status });
+    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status, body: result });
   }
   if (!result) {
     throw new Error('服务器返回空响应');
@@ -259,7 +259,7 @@ async function readJsonApiResponse(response) {
   }
 
   if (!response.ok) {
-    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status });
+    throw Object.assign(new Error(result?.message || formatHttpError(response, bodyText)), { status: response.status, body: result });
   }
   if (!result) {
     throw new Error('服务器返回空响应');

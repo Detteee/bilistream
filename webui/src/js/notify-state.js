@@ -18,17 +18,62 @@ export function errorCopy(code, reason = '') {
   if (BAD_CREDENTIALS.includes(n)) return ['凭据无效', 'AppID 或 AppSecret 无效。请在 QQ 开放平台核对后重新填写 AppSecret。'];
   if (n === 401 || (n >= 11241 && n <= 11244) || n === 11251) return ['鉴权失败', '正在重新获取令牌；如持续出现，请检查 AppSecret。'];
   if (n === 40034105) return ['主动消息不可用', 'QQ 已限制主动推送。管理员给机器人发一条消息后，可在回复窗口内送达。'];
-  if (n === 40054013) return ['管理员已拒收', '管理员关闭了该机器人的主动消息，请在 QQ 中重新允许。'];
+  if (n === 40054013) return ['主动消息已关闭', '管理员在 QQ 中关闭了「允许主动发送」，请重新打开。'];
   if (n === 40054004) return ['未添加机器人', '管理员尚未添加该机器人，请先在 QQ 中添加。'];
-  if (n === 40034122 || n === 40034123) return ['召回额度已用完', '本周期的召回消息已用完，等待管理员发消息或下个周期。'];
+  if (n === 40034122 || n === 40034123) return ['召回额度已用完', '本周期的召回消息已用完。管理员发来消息或进入下个周期后恢复。'];
   if (n === 429 || n === 40034100) return ['触发频率限制', '已暂停发送至少 60 秒。'];
-  if ([40034006, 40054007, 40054018, 304003, 22006].includes(n)) return ['内容被拒', '消息内容被 QQ 拒绝，已改用精简文本。'];
+  if ([40034006, 40054007, 40054018, 304003, 22006].includes(n)) return ['内容未通过审核', '消息内容被 QQ 拒绝，已改用精简文本。'];
   if (!code) return [reason || '无法连接 QQ', '网络异常，正在重试。'];
   return [reason || 'QQ 返回错误', ''];
 }
 
 export function isBadCredentials(status) {
-  return Boolean(status?.bad_credentials) || BAD_CREDENTIALS.includes(Number(status?.last_outcome?.code));
+  return Boolean(status?.bad_credentials) || BAD_CREDENTIALS.includes(Number(localOutcome(status)?.code));
+}
+
+// This node's own last attempt. `local_last_send` is the new name; older
+// backends send it as `last_outcome`.
+export function localOutcome(status) {
+  return status?.local_last_send ?? status?.last_outcome ?? null;
+}
+
+// The outcome the badge and 上次发送 row use: the sender node's last send
+// (`sender.last_send`, mode in `via`) when the backend reports it, otherwise
+// this node's own. Normalised to { ok, at, mode, code, reason, trace_id, node_id }.
+export function senderOutcome(status) {
+  if (status && 'sender' in status && status.sender) {
+    const last = status.sender.last_send;
+    if (!last) return null;
+    const local = localOutcome(status);
+    const same = local && local.at === last.at && local.node_id === status.sender.node;
+    return {
+      ok: Boolean(last.ok), at: last.at, mode: last.via ?? last.mode ?? null, code: last.code ?? null,
+      reason: last.reason ?? (same ? local.reason : null) ?? null,
+      trace_id: last.trace_id ?? (same ? local.trace_id : null) ?? null,
+      node_id: status.sender.node || '',
+    };
+  }
+  return localOutcome(status);
+}
+
+// A local failure worth a detail row: this node failed and that failure is
+// not the outcome already shown (it is older than the sender's last send, or
+// came from a different node).
+export function staleLocalFailure(status) {
+  const local = localOutcome(status);
+  const shown = senderOutcome(status);
+  if (!local || local.ok || shown === local) return null;
+  if (shown && shown.at === local.at && shown.node_id === local.node_id) return null;
+  return local;
+}
+
+// `abcdefgh…wxyz` keeping the start and end, for long opaque ids.
+export function middleTruncate(text, max = 16) {
+  const value = String(text ?? '');
+  if (value.length <= max) return value;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
 }
 
 const UTC8 = new Intl.DateTimeFormat('zh-CN', {
@@ -45,9 +90,9 @@ export function formatDuration(secs) {
   const s = Math.max(0, Math.floor(secs));
   if (s < 60) return `${s} 秒`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分`;
+  if (m < 60) return `${m} 分钟`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时 ${m % 60} 分`;
+  if (h < 24) return `${h} 小时 ${m % 60} 分钟`;
   return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
 }
 
@@ -62,7 +107,6 @@ export function configToForm(config = {}) {
   return {
     enabled: Boolean(config.enabled),
     app_id: qq.app_id || '',
-    admin_openid: qq.admin_openid || '',
     token_url: qq.token_url && qq.token_url !== DEFAULTS.token_url ? qq.token_url : '',
     api_base: qq.api_base && qq.api_base !== DEFAULTS.api_base ? qq.api_base : '',
     confirm_secs: String(config.confirm_secs ?? DEFAULTS.confirm_secs),
@@ -145,7 +189,6 @@ export function formToPatch(form, baseline) {
     critical_cooldown_secs: intOr(f.critical_cooldown_mins, DEFAULTS.critical_cooldown_secs / 60) * 60,
     qq: {
       app_id: f.app_id.trim(),
-      admin_openid: f.admin_openid.trim(),
       token_url: f.token_url.trim() || DEFAULTS.token_url,
       api_base: f.api_base.trim() || DEFAULTS.api_base,
     },
@@ -179,16 +222,19 @@ export function sameForm(a, b) {
 
 // §10 validation. Returns { field: message } for blocking errors and
 // { warnings } for non-blocking ones.
-export function validateForm(form, { secretConfigured = false, secretEntered = false } = {}) {
+// The admin openid is write-only (§16): it is never part of `form`; the typed
+// text comes in as `openidText` and is only checked, never echoed.
+export function validateForm(form, { secretConfigured = false, secretEntered = false, openidSet = false, openidText = '' } = {}) {
   const errors = {};
   const warnings = {};
   const appId = form.app_id.trim();
   if (appId && !/^\d{5,20}$/.test(appId)) errors.app_id = 'AppID 应为数字';
   else if (form.enabled && !appId) warnings.app_id = '启用通知前请填写 AppID';
   if (form.enabled && !secretConfigured && !secretEntered) warnings.app_secret = '启用通知前请填写 AppSecret';
-  const openid = form.admin_openid.trim();
+  const openid = String(openidText || '').trim();
   if (openid && !/^[0-9A-Za-z]{1,128}$/.test(openid)) errors.admin_openid = 'openid 只能包含字母和数字';
-  else if (openid && !/^[0-9A-Fa-f]{32}$/.test(openid)) warnings.admin_openid = 'openid 通常是 32 位十六进制，请确认没有多余字符';
+  else if (openid && !/^[0-9A-Fa-f]{32}$/.test(openid)) warnings.admin_openid = 'openid 通常为 32 位十六进制字符，请检查是否有多余字符';
+  else if (form.enabled && !openidSet && !openid) warnings.admin_openid = '启用通知前请绑定管理员 openid';
   const ranges = [
     ['confirm_secs', 0, 600],
     ['recovery_hold_secs', 0, 1800],
@@ -214,26 +260,43 @@ export function validateForm(form, { secretConfigured = false, secretEntered = f
 
 // §5 state selection. `settings` is GET /api/notify data, `status` is
 // GET /api/notify/status data.
+export function noCapableNode(status) {
+  if (status && 'warning' in status) return status.warning === 'no_capable_node';
+  return hasNodeCredentials(status) && !status.nodes.some(n => nodeReady(n));
+}
+
 export function selectState({ loading = false, loadError = null, settings = null, status = null } = {}) {
   if (loading && !settings) return { key: 'loading', badge: '读取中', tone: '' };
   if (loadError && !settings) return { key: 'load-error', badge: '读取失败', tone: 'unhealthy' };
   const cfg = settings?.config || {};
   const qq = cfg.qq || {};
-  const secret = Boolean(settings?.app_secret_configured);
+  const secret = appSecretSet(settings);
   const missing = [];
   if (!qq.app_id) missing.push('AppID');
   if (!secret) missing.push('AppSecret');
-  if (!qq.admin_openid) missing.push('管理员 openid');
+  if (!settings?.openid_set) missing.push('管理员 openid');
   if (!cfg.enabled) {
     return missing.length
       ? { key: 'off', badge: '未启用', tone: 'draining', missing }
       : { key: 'off-configured', badge: '已关闭', tone: 'draining', missing };
   }
   if (missing.length) return { key: 'incomplete', badge: '未配置', tone: 'sync-warning', missing };
-  const outcome = status?.last_outcome;
-  if (isBadCredentials(status) || (outcome && !outcome.ok) || Number(status?.undelivered) > 0) {
-    return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
+  const outcome = senderOutcome(status);
+  const qqFailure = isBadCredentials(status) || (outcome && !outcome.ok);
+  if (qqFailure) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
+  // `status.warning` (1a) is the source of truth so the panel and the QQ alert
+  // agree; the per-node check is only a fallback when the field is absent.
+  if (noCapableNode(status)) return { key: 'no-sender', badge: '无法发送', tone: 'unhealthy', missing };
+  // §16.7, only once the backend reports per-node credentials (1b).
+  if (hasNodeCredentials(status)) {
+    const nodes = status.nodes;
+    const self = nodes.find(n => n.is_local);
+    if (self && !nodeReady(self)) {
+      const lacks = [!self.appsecret_set && 'AppSecret', !self.openid_set && '管理员 openid'].filter(Boolean);
+      return { key: 'node-unready', badge: '本节点未就绪', tone: 'sync-warning', missing, lacks };
+    }
   }
+  if (Number(status?.undelivered) > 0) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
   if (status?.gateway?.state === 'failed') return { key: 'gateway-failed', badge: '网关已停止', tone: 'unhealthy', missing };
   if (status?.authority === 'no_quorum_fallback') return { key: 'fallback', badge: '无多数派', tone: 'sync-warning', missing };
   if (status?.authority === 'delegate') return { key: 'delegate', badge: '代发', tone: 'sync-warning', missing };
@@ -245,6 +308,103 @@ export function selectState({ loading = false, loadError = null, settings = null
   }
   if (status?.authority_node_id) return { key: 'standby', badge: '待命', tone: '', missing };
   return { key: 'electing', badge: '等待选举', tone: 'sync-warning', missing };
+}
+
+// 1b feature detection (§16.10). Today's `nodes` entries already exist for
+// 可发送节点, so a non-empty array is not enough: the entries must carry the
+// boolean credential fields.
+export function hasNodeCredentials(status) {
+  const nodes = status?.nodes;
+  return Array.isArray(nodes) && nodes.length > 0
+    && nodes.every(n => typeof n?.openid_set === 'boolean' && typeof n?.appsecret_set === 'boolean');
+}
+
+function nodeReady(node) {
+  return node.appsecret_set === true && node.openid_set === true && node.notify_capable !== false;
+}
+
+// 凭据同步 rows (§16.6/16.9). `pending` is the set of node ids that still had
+// the openid when an unbind was confirmed; `localUnbound` is true when this
+// node has no openid (after a reload the server may still be clearing peers).
+// Each row: { node_id, local, secret: {text, tone}, openid: {text, tone} }.
+export function credentialRows(status, { pending = new Set(), localUnbound = false, cleared = new Map(), now = Date.now() } = {}) {
+  if (!hasNodeCredentials(status)) return [];
+  return status.nodes.map(n => {
+    const secret = n.appsecret_set ? { text: 'AppSecret 已同步', tone: 'active' } : { text: 'AppSecret 未设置', tone: 'sync-warning' };
+    let openid;
+    const unbinding = pending.has(n.node_id) || localUnbound;
+    if (n.openid_set && unbinding) {
+      openid = n.fresh === false ? { text: '等待节点上线后清除', tone: '' } : { text: '解绑中…', tone: 'sync-warning' };
+    } else if (n.openid_set) openid = { text: 'openid 已同步', tone: 'active' };
+    else if (cleared.has(n.node_id) && now - cleared.get(n.node_id) < 10_000) openid = { text: '已清除', tone: '' };
+    else if (localUnbound) openid = null;   // whole cluster unbound on purpose: nothing to flag
+    else openid = { text: 'openid 未同步', tone: 'sync-warning' };
+    return { node_id: n.node_id, local: Boolean(n.is_local), secret, openid };
+  });
+}
+
+// Single writer (§16.11): only the sender-authority node changes the openid.
+// `openid_writer` absent (sparse /status, older backend) means unknown: keep
+// the controls enabled and let the server's 409 answer. Null means no writer.
+export function openidGate(status) {
+  if (!status || !('openid_writer' in status)) return { enabled: true, hint: '' };
+  const writer = status.openid_writer;
+  if (writer?.is_local) return { enabled: true, hint: handoffHint(status) };
+  if (writer?.node_id) {
+    return { enabled: false, owner: writer.node_id, hint: `请在 ${writer.node_id} 上绑定或解绑。只有当前发送节点可以修改管理员 openid，修改后会自动同步到本节点。` };
+  }
+  return { enabled: false, hint: `暂无可写节点。${noWriterReason(status)}` };
+}
+
+// gateway_owner is informational and can lag ~30 s after a handoff: a
+// mismatch only adds a hint; the server's no_writer refusal decides.
+export function isHandoff(status) {
+  const w = status?.openid_writer?.node_id;
+  const g = status?.gateway_owner?.node_id;
+  return Boolean(w && g && w !== g);
+}
+
+function handoffHint(status) {
+  return isHandoff(status) ? '发送节点切换中，绑定可能暂时失败。' : '';
+}
+
+export function noWriterReason(status) {
+  if (isHandoff(status)) return '发送节点切换中，请稍后重试。';
+  if (status?.authority === 'no_quorum_fallback') return '当前为无多数派代发，暂不能修改绑定。';
+  if (status?.authority === 'none' && Array.isArray(status?.nodes) && status.nodes.length > 1) return '集群暂无多数派，暂不能修改绑定。';
+  if (status?.worker_running !== false && (status?.enabled === false || status?.credentials_ready === false)) return '请先启用通知并保存 AppID 和 AppSecret。';
+  return '请稍后重试。';
+}
+
+// One parser for every notify refusal: {success:false, message, data:{code,…}}.
+// Returns { kind, owner?, banner: {lead, text, tone}, focus? } or null when the
+// error is not a coded refusal (callers fall back to the message).
+export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
+  const data = error?.body?.data;
+  const code = data && typeof data === 'object' ? data.code : null;
+  switch (code) {
+    case 'not_owner':
+      return { kind: 'not_owner', owner: data.owner || null, banner: { lead: '本节点不是发送节点，未修改管理员 openid。', text: data.owner ? `请在 ${data.owner} 上绑定或解绑。` : '请在当前发送节点上绑定或解绑。', tone: 'warn' } };
+    case 'revision_conflict':
+      return { kind: 'revision', banner: route === 'config'
+        ? { lead: '设置已在其他地方更新，已刷新，请检查后重新保存。', text: '', tone: 'warn' }
+        : { lead: '绑定状态已在其他地方更新，已刷新，请重试。', text: '', tone: 'warn' } };
+    case 'no_writer':
+      return { kind: 'no_writer', banner: { lead: '暂无可写节点。', text: noWriterReason(status), tone: 'warn' } };
+    case 'already_bound':
+      return { kind: 'already_bound', banner: { lead: '已绑定，请先解除绑定再重新绑定。', text: '', tone: 'warn', action: { label: '去解除绑定', target: 'notify-clear-openid' } } };
+    case 'credentials_missing':
+      return { kind: 'credentials_missing', banner: { lead: '请先填写并保存 AppID 与 AppSecret。', text: '', tone: 'warn', action: { label: '去填写', target: 'credentials' } } };
+    case 'bad_credentials':
+      return { kind: 'bad_credentials', banner: { lead: '凭据无效。', text: '请检查 AppID 和 AppSecret 后重新填写。', tone: 'danger', action: { label: '重新填写', target: 'notify-app-secret' } } };
+    default:
+      return null;
+  }
+}
+
+// AppSecret flag: `appsecret_set`, with the deprecated name as fallback.
+export function appSecretSet(settings) {
+  return Boolean(settings?.appsecret_set ?? settings?.app_secret_configured);
 }
 
 // Bind box view model from status.bind (+ seconds since it was fetched).
