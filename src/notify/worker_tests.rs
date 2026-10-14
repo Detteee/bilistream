@@ -1805,3 +1805,97 @@ async fn bind_on_a_then_failover_to_b_sends_without_a_rebind() {
     assert_eq!(b.ledger.undelivered_pending(), 0);
     assert_eq!(stored_openid(&store_b).as_deref(), Some(OPENID));
 }
+
+#[tokio::test]
+async fn logged_in_status_carries_live_event_fields_without_ledger_ids() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, OPENID);
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    assert!(
+        worker.live_term.is_some(),
+        "the single node holds the gateway"
+    );
+    worker.on_live_signal(
+        crate::notify::live_events::LiveSignal::Started(
+            crate::notify::live_events::LiveStartInfo {
+                stream_key: "YT:UC1".into(),
+                platform: "YouTube".into(),
+                channel: "ch".into(),
+                title: "t".into(),
+            },
+        ),
+        now,
+    );
+    worker.passive = Some(PassiveTarget {
+        msg_id: "ROBOT1.0_msgidSAMPLE0000000000000000".into(),
+        received_at: now,
+        replies_used: 0,
+    });
+    worker.ledger.record_admin_message(now);
+    // Active refused, passive accepted (mock replies in order).
+    mock.script([(200, json!({"code": 40034105, "message": "no"}))]);
+    worker.deliver_live(now + 1).await;
+    let sent = mock.messages();
+    assert_eq!(sent.len(), 2);
+    assert!(sent[0].1.get("msg_id").is_none() && sent[0].1.get("is_wakeup").is_none());
+    assert_eq!(sent[1].1["msg_id"], "ROBOT1.0_msgidSAMPLE0000000000000000");
+    let status = worker.status(now + 2, &single_node());
+    assert_eq!(status["live_events_enabled"], true);
+    assert_eq!(status["pending_live_events"], json!([]));
+    assert_eq!(status["active_push"]["last_result"], "no_permission");
+    for key in [
+        "wakeup_remaining",
+        "wakeup_reserve",
+        "wakeup_next_close_at",
+        "passive_window_open",
+    ] {
+        assert!(status["quota"].get(key).is_some(), "{key}");
+    }
+    let text = status.to_string();
+    for needle in [
+        OPENID,
+        "ROBOT1.0_msgidSAMPLE",
+        "last_admin_msg_id",
+        "passive_replies_used",
+        "wakeup_periods_used",
+    ] {
+        assert!(!text.contains(needle), "{needle} leaked");
+    }
+    // Delivered stays delivered across a restart from the persisted state.
+    worker.save_state(now + 3);
+    if let Some(task) = worker.save_task.take() {
+        task.await.unwrap();
+    }
+    let mut again = Worker::new(Arc::clone(&store), "solo".into());
+    again.apply_digest(&single_node(), false, now + 10);
+    assert!(
+        again.live_term > worker.live_term,
+        "a restart takes a new term"
+    );
+    again.deliver_live(now + 10).await;
+    assert_eq!(mock.messages().len(), 2, "no resend after restart");
+}
+
+#[tokio::test]
+async fn a_non_holder_records_the_broadcast_but_never_sends() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, OPENID);
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.on_live_signal(
+        crate::notify::live_events::LiveSignal::Started(Default::default()),
+        now,
+    );
+    worker.on_live_signal(crate::notify::live_events::LiveSignal::Ended, now + 60);
+    assert_eq!(worker.ledger.live.broadcast.generation, 1);
+    assert!(worker.ledger.live.broadcast.ended_at.is_some());
+    // No apply_digest yet: no gateway, no term.
+    worker.deliver_live(now + 61).await;
+    assert!(mock.messages().is_empty());
+}

@@ -153,12 +153,40 @@ pub fn watch_candidates(cfg: Option<&crate::config::Config>) -> Vec<Value> {
         .collect()
 }
 
+/// Addendum A/C/D read-only fields on GET /api/notify, copied by name from
+/// the worker status (never the ledger itself). `config.live_events_enabled`
+/// is always present: `NotifyConfig` serializes every field.
+pub(crate) fn live_events_view(view: &mut Value, status: &Value) {
+    let pending = status
+        .get("pending_live_events")
+        .cloned()
+        .filter(Value::is_array)
+        .unwrap_or_else(|| json!([]));
+    view["pending_live_events"] = pending;
+    let quota = status.get("quota");
+    for (key, fallback) in [
+        ("wakeup_remaining", json!(0)),
+        (
+            "wakeup_reserve",
+            json!(notify::live_events::WAKEUP_RESERVE_FOR_ALERTS),
+        ),
+        ("wakeup_next_close_at", Value::Null),
+        ("passive_window_open", json!(false)),
+    ] {
+        view[key] = quota
+            .and_then(|quota| quota.get(key))
+            .cloned()
+            .unwrap_or(fallback);
+    }
+}
+
 pub async fn get_notify() -> Response {
     let cfg = crate::config::load_config().await.ok();
     let result = crate::storage::global().and_then(|store| settings_view(&store));
     match result {
         Ok(mut view) => {
             view["watch_candidates"] = json!(watch_candidates(cfg.as_ref()));
+            live_events_view(&mut view, &notify::status_view());
             if let Some(cfg) = cfg.as_ref() {
                 let status = notify::status_view();
                 let digest = notify::authority::read_digest(cfg, crate::storage::now());
@@ -607,6 +635,44 @@ fn sender_view(node: Option<&str>, digest: &notify::observer::ClusterDigest, now
     json!({ "node": node, "last_send": last_send })
 }
 
+/// This node's ledger joined with fresh peer heartbeats.
+fn joined_ledger(digest: &notify::observer::ClusterDigest, now: u64) -> notify::NotifyLedger {
+    let mut ledger = notify::SHARED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ledger
+        .clone();
+    for peer in &digest.peer_ledgers {
+        let mut peer = peer.clone();
+        peer.clamp_future(now);
+        ledger.join(&peer);
+    }
+    ledger
+}
+
+/// `nodes[].active_push` (Addendum E rev 2 item 10), logged-in only.
+pub(crate) fn with_active_push(
+    nodes: Vec<Value>,
+    ledger: &notify::NotifyLedger,
+    now: u64,
+) -> Vec<Value> {
+    nodes
+        .into_iter()
+        .map(|mut node| {
+            let push = node
+                .get("node_id")
+                .and_then(Value::as_str)
+                .and_then(|id| ledger.live.active_push.get(id))
+                .map(|push| push.view(now))
+                .unwrap_or_else(notify::live_events::ActivePush::empty_view);
+            if let Some(object) = node.as_object_mut() {
+                object.insert("active_push".into(), push);
+            }
+            node
+        })
+        .collect()
+}
+
 /// Addendum C fields from the worker status and the heartbeat digest.
 fn readiness_view(
     status: &Value,
@@ -646,9 +712,18 @@ pub async fn notify_status() -> Response {
                 .map(|node| node.id.clone())
         };
         let sender = sender_view(authority_node.as_deref(), &digest, now);
+        let ledger = joined_ledger(&digest, now);
+        let nodes = with_active_push(nodes, &ledger, now);
+        let sender_push = authority_node
+            .as_deref()
+            .and_then(|node| ledger.live.active_push.get(node))
+            .map(|push| push.view(now))
+            .unwrap_or_else(notify::live_events::ActivePush::empty_view);
         if let Some(object) = status.as_object_mut() {
             object.insert("authority_node_id".into(), json!(authority_node));
             object.insert("nodes".into(), json!(nodes));
+            // Addendum E rev 2: the current sender's copy at the top level.
+            object.insert("active_push".into(), sender_push);
             object.remove("writer_openid_set");
             if let Some(set) = writer_openid {
                 object.insert("writer_openid_set".into(), json!(set));
@@ -764,6 +839,74 @@ mod tests {
     }
 
     const OPENID: &str = "SAMPLE0OPENID0VALUE0ABCDEF012345";
+
+    #[test]
+    fn fresh_config_always_sends_live_events_enabled_true_and_the_budget() {
+        let (_root, store) = temp_store();
+        let mut view = settings_view(&store).unwrap();
+        assert_eq!(view["config"]["live_events_enabled"], json!(true));
+        // Worker stopped: the read-only fields are still present.
+        live_events_view(&mut view, &json!({"worker": "stopped"}));
+        assert_eq!(view["pending_live_events"], json!([]));
+        assert_eq!(view["wakeup_remaining"], json!(0));
+        assert_eq!(view["wakeup_reserve"], json!(2));
+        assert_eq!(view["wakeup_next_close_at"], Value::Null);
+        assert_eq!(view["passive_window_open"], json!(false));
+        // Copied by name from a running worker's status, nothing else.
+        let status = json!({
+            "pending_live_events": ["live_end"],
+            "quota": {"wakeup_remaining": 3, "wakeup_reserve": 2,
+                      "wakeup_next_close_at": 1_800_086_400u64, "passive_window_open": true,
+                      "admin_last_message_at": 1_800_000_000u64},
+        });
+        let mut view = settings_view(&store).unwrap();
+        live_events_view(&mut view, &status);
+        assert_eq!(view["pending_live_events"], json!(["live_end"]));
+        assert_eq!(view["wakeup_remaining"], json!(3));
+        assert_eq!(view["passive_window_open"], json!(true));
+        assert!(view.get("admin_last_message_at").is_none());
+        // Saved off, it reads back off; a stored record without the key is true.
+        let patch = UpdateNotify {
+            config: Some(json!({"live_events_enabled": false})),
+            expected_revision: Some(view["revision"].as_u64().unwrap()),
+            ..Default::default()
+        };
+        update(&store, patch).unwrap();
+        assert_eq!(
+            settings_view(&store).unwrap()["config"]["live_events_enabled"],
+            json!(false)
+        );
+        let legacy: crate::notify::NotifyConfig = serde_json::from_str("{}").unwrap();
+        assert!(legacy.live_events_enabled);
+    }
+
+    #[test]
+    fn nodes_get_their_own_active_push_and_unknown_nodes_read_null() {
+        let mut ledger = crate::notify::NotifyLedger::default();
+        ledger.live.active_push.insert(
+            "jp".into(),
+            crate::notify::live_events::ActivePush {
+                last_result: Some("rate_limited".into()),
+                last_at: 1_800_000_000,
+                refused_since: Some(1_800_000_000),
+                month: crate::notify::live_events::shanghai_month(1_800_000_000),
+                month_sent: 3,
+            },
+        );
+        let nodes = with_active_push(
+            vec![json!({"node_id": "jp"}), json!({"node_id": "ny"})],
+            &ledger,
+            1_800_000_100,
+        );
+        assert_eq!(nodes[0]["active_push"]["last_result"], "rate_limited");
+        assert_eq!(nodes[0]["active_push"]["month_sent"], 3);
+        assert_eq!(
+            nodes[0]["active_push"]["refused_since"],
+            "2027-01-15T16:00:00+08:00"
+        );
+        assert_eq!(nodes[1]["active_push"]["last_result"], Value::Null);
+        assert_eq!(nodes[1]["active_push"]["month_sent"], 0);
+    }
 
     fn writer_ok() -> Result<(), Refusal> {
         Ok(())

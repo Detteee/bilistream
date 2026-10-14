@@ -604,6 +604,15 @@ fn log_ffmpeg_loop_exit(
     }
 }
 
+/// Display name for the 开播 notice's 来源.
+fn live_platform_name(code: &str) -> &'static str {
+    match code {
+        "YT" => "YouTube",
+        "TW" => "Twitch",
+        _ => "Niconico",
+    }
+}
+
 impl StreamPlatform {
     fn code(self) -> &'static str {
         match self {
@@ -1668,6 +1677,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 tracing::error!("B站直播标题变更失败: {}", e);
                             }
                         }
+                        // 开播 notice (Addendum A): recorded under the broadcast
+                        // counter; the QQ gateway holder sends it.
+                        bilistream::notify::live_started(
+                            bilistream::notify::live_events::LiveStartInfo {
+                                stream_key: format!("{platform}:{channel_id}"),
+                                platform: live_platform_name(platform).to_string(),
+                                channel: channel_name.clone(),
+                                title: title_str.to_string(),
+                            },
+                        );
                         tracing::info!(
                             "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
                             safe_text(&area_name, 32),
@@ -1934,6 +1953,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         }
                         end_announce = announce;
                         source_ended = true;
+                        // 下播 notice at once, on the same signal as 切换.
+                        bilistream::notify::live_ended();
                         (false, None)
                     }
                     RefetchStep::NewBroadcast => {
@@ -2165,7 +2186,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             ffmpeg_loop_exit_reason,
                             current_end_signals(session_generation, node_active),
                         );
-                        end_announce = stream_end.mark_ended(signals).unwrap_or(false);
+                        let ended = stream_end.mark_ended(signals);
+                        end_announce = ended.unwrap_or(false);
+                        if ended.is_some() {
+                            bilistream::notify::live_ended();
+                        }
                     }
                     if bili_live {
                         tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");

@@ -13,6 +13,7 @@ pub mod event;
 pub mod format;
 pub mod ledger;
 pub mod live;
+pub mod live_events;
 pub mod observer;
 pub mod openid_sync;
 pub mod policy;
@@ -47,6 +48,8 @@ pub enum Command {
     /// A one-shot event. Dropped when the channel is full.
     #[allow(dead_code)]
     Event(event::AlertEvent),
+    /// 开播/下播 from the streaming runtime.
+    Live(live_events::LiveSignal),
 }
 
 pub(crate) const COMMAND_CAPACITY: usize = 64;
@@ -169,6 +172,17 @@ fn shared() -> std::sync::MutexGuard<'static, Shared> {
 /// The heartbeat worker recomputed cluster status. Coalescing, never blocks.
 pub fn cluster_changed() {
     WAKE.notify_one();
+}
+
+/// Successful start-live (Addendum A). Never waits; a stopped notifier
+/// ignores it.
+pub fn live_started(info: live_events::LiveStartInfo) {
+    let _ = send_command(Command::Live(live_events::LiveSignal::Started(info)));
+}
+
+/// 直播结束 on the active node (the same signal as the status page's 切换).
+pub fn live_ended() {
+    let _ = send_command(Command::Live(live_events::LiveSignal::Ended));
 }
 
 /// Ledger to advertise in this node's heartbeat snapshot.

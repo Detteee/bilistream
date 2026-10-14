@@ -260,9 +260,156 @@ pub struct Worker {
     node_names: HashMap<String, String>,
     capable_nodes: (usize, usize),
     save_task: Option<tokio::task::JoinHandle<()>>,
+    /// Gateway-holder term while this node holds the gateway (Addendum E
+    /// rule 8); `None` stops every live-event retry at once.
+    live_term: Option<u64>,
+}
+
+/// Rule 11's "wait for the local commit": the state record is written
+/// synchronously (off the async thread) before a live-event send.
+struct StoreCommit {
+    store: Arc<Store>,
+    last_outcome: Option<LastOutcome>,
+    settings: String,
+}
+
+#[async_trait::async_trait]
+impl super::live_events::LiveCommit for StoreCommit {
+    async fn commit(&self, ledger: &NotifyLedger) -> std::io::Result<()> {
+        let state = PersistedState {
+            ledger: ledger.clone(),
+            last_outcome: self.last_outcome.clone(),
+            settings: self.settings.clone(),
+        };
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || store::save_state(&store, &state).map(|_| ()))
+            .await
+            .map_err(|_| std::io::Error::other("state write task failed"))?
+    }
 }
 
 impl Worker {
+    /// A new gateway holder takes the next term; losing it drops the term.
+    fn update_live_term(&mut self) {
+        if self.gateway_owner {
+            if self.live_term.is_none() {
+                let term = self.ledger.live.term + 1;
+                self.ledger.live.term = term;
+                self.live_term = Some(term);
+                self.dirty = true;
+            }
+        } else {
+            self.live_term = None;
+        }
+    }
+
+    /// The streaming runtime's 开播/下播 signal (recorded on any node; the
+    /// gateway holder sends after the heartbeat carries it).
+    pub fn on_live_signal(&mut self, signal: super::live_events::LiveSignal, now: u64) {
+        use super::live_events::LiveSignal;
+        let changed = match signal {
+            LiveSignal::Started(info) => {
+                let before = self.ledger.live.broadcast.generation;
+                let generation = self.ledger.live.start(&info, now);
+                if generation != before {
+                    tracing::info!("QQ 开播通知: 第 {} 场直播开始", generation);
+                }
+                generation != before
+            }
+            LiveSignal::Ended => self.ledger.live.end(now),
+        };
+        if changed {
+            self.ledger.touch(&self.node_id, now);
+            self.dirty = true;
+            self.save_state(now);
+        }
+    }
+
+    /// Addendum E ladder for due 开播/下播 notices (gateway holder only).
+    async fn deliver_live(&mut self, now: u64) {
+        let term = self
+            .live_term
+            .filter(|_| self.gateway_owner && self.capable());
+        if term.is_none() || self.ledger.live.due_kinds().is_empty() {
+            return;
+        }
+        let Some(sink) = self.sink() else {
+            return;
+        };
+        // Older background saves land first so they never overwrite a record.
+        if let Some(task) = self.save_task.take() {
+            let _ = task.await;
+        }
+        let commit = StoreCommit {
+            store: Arc::clone(&self.store),
+            last_outcome: self.last_outcome.clone(),
+            settings: self.settings_fp.clone(),
+        };
+        let mut passive = self.passive.take();
+        let report = {
+            let mut driver = super::live_events::Driver {
+                ledger: &mut self.ledger,
+                passive: passive.as_mut(),
+                term,
+                node: &self.node_id,
+                enabled: self.cfg.live_events_enabled,
+                now,
+            };
+            super::live_events::drive(&mut driver, &sink, &commit).await
+        };
+        self.passive = passive;
+        self.apply_live_report(&report, now);
+    }
+
+    fn apply_live_report(&mut self, report: &super::live_events::DriveReport, now: u64) {
+        if let Some((code, since, month_sent)) = report.refusal_began {
+            tracing::warn!(
+                "QQ 主动推送被拒绝 (code {})，自 {} 起；本月已送达主动推送 {} 条",
+                code,
+                super::live_events::rfc3339(since),
+                month_sent
+            );
+        }
+        for (kind, channel) in &report.delivered {
+            let month_sent = self
+                .ledger
+                .live
+                .active_push
+                .get(&self.node_id)
+                .map(|push| push.month_sent)
+                .unwrap_or(0);
+            tracing::info!(
+                "QQ {}通知已送达 ({})；本月主动推送 {} 条",
+                if *kind == super::live_events::LiveKind::LiveStart {
+                    "开播"
+                } else {
+                    "下播"
+                },
+                channel.as_str(),
+                month_sent
+            );
+            self.outcome(true, now, Some(channel.as_str()), None, None, None, false);
+        }
+        if !report.skipped.is_empty() {
+            self.outcome(
+                false,
+                now,
+                None,
+                None,
+                Some("额度不足，已挂起".into()),
+                None,
+                false,
+            );
+            if let Some(outcome) = self.last_outcome.as_mut() {
+                outcome.status = Some("skipped_quota".into());
+            }
+        }
+        if report.changed {
+            self.ledger.touch(&self.node_id, now);
+            self.dirty = true;
+        }
+    }
+
     pub fn new(store: Arc<Store>, node_id: String) -> Self {
         let mut persisted = store::load_state(&store);
         let (gateway_tx, gateway_rx) = mpsc::channel(GATEWAY_EVENTS);
@@ -323,6 +470,7 @@ impl Worker {
             node_names: HashMap::new(),
             capable_nodes: (0, 0),
             save_task: None,
+            live_term: None,
         };
         worker.reload_settings();
         worker
@@ -504,6 +652,11 @@ impl Worker {
         if self.binder.waiting(now) {
             deadline = deadline.min(now + 1);
         }
+        if self.live_term.is_some() {
+            if let Some(at) = self.ledger.live.next_retry_at() {
+                deadline = deadline.min(at.max(now + 1));
+            }
+        }
         deadline
     }
 
@@ -561,6 +714,7 @@ impl Worker {
         self.channel_live(now, &seen);
         self.manage_gateway(now);
         self.deliver(now, &digest).await;
+        self.deliver_live(now).await;
         self.publish(now, &digest);
         if self.dirty && now.saturating_sub(self.saved_at) >= STATE_SAVE_SECS {
             self.save_state(now);
@@ -616,6 +770,7 @@ impl Worker {
             self.lost_primary_at = Some(now);
         }
         self.gateway_owner = primary;
+        self.update_live_term();
         self.owner_hint = if digest.enabled {
             digest.owner.clone()
         } else {
@@ -1057,6 +1212,7 @@ impl Worker {
             trace_id,
             node_id: self.node_id.clone(),
             test,
+            status: None,
         });
     }
 
@@ -1114,6 +1270,10 @@ impl Worker {
                 self.manage_gateway(now);
             }
             Command::Event(event) => self.tracker.on_event(event, &self.policy),
+            Command::Live(signal) => {
+                self.on_live_signal(signal, now);
+                self.deliver_live(now).await;
+            }
         }
         let digest = self.digest(now);
         self.publish(now, &digest);
@@ -1325,6 +1485,8 @@ impl Worker {
                         if let Some(cmd) = commands::parse(&content) {
                             self.answer_command(cmd, now).await;
                         }
+                        // A new passive window: pending 开播/下播 go out now.
+                        self.deliver_live(now).await;
                     } else {
                         tracing::debug!("QQ 网关收到绑定窗口外的消息，已忽略");
                     }
@@ -1566,6 +1728,10 @@ impl Worker {
                 "wakeups_left": ledger.wakeups_left(now),
                 "admin_last_message_at": ledger.wakeup.admin_last_c2c_at,
                 "passive_window": self.passive.as_ref().is_some_and(|p| p.usable(now)),
+                "wakeup_remaining": ledger.wakeups_left(now).unwrap_or(0),
+                "wakeup_reserve": super::live_events::WAKEUP_RESERVE_FOR_ALERTS,
+                "wakeup_next_close_at": super::live_events::wakeup_next_close_at(ledger, now),
+                "passive_window_open": self.passive.as_ref().is_some_and(|p| p.usable(now)),
             },
             "modes": {
                 "active_unavailable": ledger.modes.active_unavailable(now),
@@ -1580,6 +1746,14 @@ impl Worker {
             "capable_nodes": self.capable_nodes.0,
             "cluster_nodes": self.capable_nodes.1,
             "commands_enabled": self.cfg.commands_enabled,
+            "live_events_enabled": self.cfg.live_events_enabled,
+            "pending_live_events": ledger.live.pending(),
+            "active_push": ledger
+                .live
+                .active_push
+                .get(&self.node_id)
+                .map(|push| push.view(now))
+                .unwrap_or_else(super::live_events::ActivePush::empty_view),
             "watch": {
                 "enabled": self.cfg.watch.enabled,
                 "channels": self.cfg.watch.channels.len(),

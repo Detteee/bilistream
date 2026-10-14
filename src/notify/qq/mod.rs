@@ -307,5 +307,48 @@ impl Sink for QqSink {
     }
 }
 
+/// 开播/下播 requests (Addendum E): one plain request per channel, with
+/// one re-auth. The ladder itself lives in `live_events`.
+#[async_trait::async_trait]
+impl super::live_events::LiveTransport for QqSink {
+    async fn send(&self, request: super::live_events::LiveSend<'_>) -> ApiResult {
+        let unsent = ApiResult {
+            ok: false,
+            http_status: 0,
+            code: None,
+            trace_id: None,
+        };
+        let mut reauthed = false;
+        loop {
+            let token = match self.token().await {
+                Ok(token) => token,
+                Err(_) => return unsent,
+            };
+            let message = C2cMessage {
+                openid: &self.target.openid,
+                content: request.text,
+                markdown: false,
+                mode: request.mode,
+                msg_id: request.msg_id,
+                event_id: None,
+                msg_seq: request.msg_seq,
+            };
+            let call = api::send_c2c(&self.http, &self.target.api_base, &token, &message);
+            // A timeout is an ambiguous result like a network error.
+            let result = match tokio::time::timeout(std::time::Duration::from_secs(20), call).await
+            {
+                Ok(result) => result,
+                Err(_) => unsent.clone(),
+            };
+            if !result.ok && result.class() == ErrorClass::NeedsReauth && !reauthed {
+                reauthed = true;
+                self.tokens.invalidate(&token).await;
+                continue;
+            }
+            return result;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

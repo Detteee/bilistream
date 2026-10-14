@@ -67,6 +67,13 @@ pub struct NotifyLedger {
     /// no trace or message ids. Joined by max per node (order-independent).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub last_send: BTreeMap<String, LastSend>,
+    /// 开播/下播 broadcast, delivery records, gateway term and `active_push`
+    /// (Addendum A/E). No ids, no msg_id, no openid.
+    #[serde(
+        default,
+        skip_serializing_if = "super::live_events::LiveLedger::is_empty"
+    )]
+    pub live: super::live_events::LiveLedger,
     /// This node's id, used as the counter key. Never serialized or joined.
     #[serde(skip)]
     pub local: String,
@@ -447,6 +454,7 @@ impl NotifyLedger {
         {
             self.last_reason = None;
         }
+        self.live.clamp_future(now);
         if self.updated_at > limit {
             self.updated_at = 0;
             self.author.clear();
@@ -500,6 +508,7 @@ impl NotifyLedger {
         }
         join_max(&mut self.last_send, &other.last_send);
         self.trim_last_send();
+        self.live.join(&other.live);
     }
 }
 

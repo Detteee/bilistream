@@ -627,6 +627,9 @@ pub struct LastOutcome {
     pub node_id: String,
     #[serde(default)]
     pub test: bool,
+    /// `skipped_quota` for a held 开播/下播 notice (not a failure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -504,6 +504,44 @@ mod tests {
     }
 
     #[test]
+    fn public_payload_has_no_live_event_budget_or_active_push() {
+        let mut ledger = crate::notify::NotifyLedger::default();
+        ledger.live.start(
+            &crate::notify::live_events::LiveStartInfo {
+                stream_key: "YT:UC1".into(),
+                platform: "YouTube".into(),
+                channel: "SecretChannelName".into(),
+                title: "t".into(),
+            },
+            1_700_000_000,
+        );
+        ledger
+            .live
+            .active_push
+            .insert("ny".into(), Default::default());
+        ledger.record_admin_message(1_700_000_000);
+        let mut node = sample_node();
+        node.notify = Some(ledger);
+        let mut cluster = sample_cluster();
+        cluster.nodes = vec![node];
+        let json =
+            serde_json::to_string(&PublicStatus::build(Some(&sample_status()), &cluster)).unwrap();
+        for leaked in [
+            "pending_live_events",
+            "quota",
+            "wakeup",
+            "passive",
+            "active_push",
+            "month_sent",
+            "live_event_delivery",
+            "SecretChannelName",
+            "notify",
+        ] {
+            assert!(!json.contains(leaked), "public payload leaked {leaked}");
+        }
+    }
+
+    #[test]
     fn stopped_and_stale_nodes_do_not_advertise_old_publishing_metrics() {
         let mut node = sample_node();
         node.active_stream = Some(ClusterStreamIdentity {

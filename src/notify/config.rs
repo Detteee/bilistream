@@ -43,6 +43,8 @@ pub struct NotifyConfig {
     /// Answer the bound admin's read-only commands (status/event/quota/help)
     /// with passive replies.
     pub commands_enabled: bool,
+    /// 本直播间开播/下播 notices (Addendum A/D). Absent reads as true.
+    pub live_events_enabled: bool,
     /// 开播通知关注列表.
     pub watch: WatchConfig,
     pub qq: QqNotifyConfig,
@@ -109,6 +111,7 @@ impl Default for NotifyConfig {
             no_quorum_grace_secs: 120,
             strict_single_sender: false,
             commands_enabled: true,
+            live_events_enabled: true,
             watch: WatchConfig::default(),
             qq: QqNotifyConfig::default(),
         }
