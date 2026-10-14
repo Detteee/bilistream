@@ -588,8 +588,24 @@ export function activePushView(status, { available = true } = {}) {
     case 'ok': return { segments: ['可用', formatPushTime(p.last_at), month], tone: '' };
     case 'no_permission': return { segments: ['受限（无主动消息权限）', `自 ${formatPushTime(p.refused_since)}`], tone: 'warn' };
     case 'rate_limited': return { segments: ['受限（频率限制）', `自 ${formatPushTime(p.refused_since)}`, month], tone: 'warn' };
+    // An unknown (future) last_result shows — like null, and like null it
+    // counts as "not ok": the 备用 budget keeps its warn tone/suffix while the
+    // passive hint stays hidden. Intentional (§17.8); do not map it to ok.
     default: return { segments: ['—'], tone: '' };
   }
+}
+
+// Signature of a rendered status row tree: every child node including bare
+// text nodes (a dot followed by "已连接 · 2 小时 3 分钟"), plus each element's
+// class, data-tone and title, plus the full textContent as a backstop. So
+// renderStatus() rebuilds the 发送状态 rows only when what the user sees
+// changes, and the 10 s tick still moves the uptime / relative times.
+export function nodeSignature(node) {
+  if (!node) return '';
+  if (node.nodeType === 3) return `#${node.textContent ?? node.nodeValue ?? ''}`;
+  const kids = [...(node.childNodes || node.children || [])];
+  const own = [node.className || '', node.dataset?.tone || '', node.title || ''].join('|');
+  return `${own}:${node.textContent || ''}[${kids.map(nodeSignature).join(',')}]`;
 }
 
 export const LIVE_EVENTS_HINT = '占用 QQ 发送额度，故障提醒优先';

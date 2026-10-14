@@ -9,7 +9,7 @@ import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, removeWatch, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
-  createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
+  createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey, nodeSignature,
 } from './notify-state.js';
 
 const FIELDS = {
@@ -384,8 +384,9 @@ function renderStatus() {
     const text = `${capable.length} / ${s.nodes.length}${missing.length ? ` · ${missing.join('、')} 未配置完整` : ''}`;
     rows.push(row('可发送节点', text, { badge: missing.length ? 'sync-warning' : '' }));
   }
-  // Rebuild only when the text changed; the gateway uptime ticks per minute.
-  const sig = rows.map(r => r.textContent).join('\n');
+  // Rebuild only when the rendered rows change (text, tone, class or title);
+  // the 10 s tick re-runs this but leaves the DOM alone when nothing moved.
+  const sig = rows.map(nodeSignature).join('\n');
   if (sig === statusSig) return;
   statusSig = sig;
   box.replaceChildren(...rows);

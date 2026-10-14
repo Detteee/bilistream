@@ -191,6 +191,7 @@ function showNotice(text, tone = '', nodes = null) {
 let retentionSeen = [];
 function resetRetention() {
   retentionSeen = [];
+  eventsRetention = null;
   applyRetention(null);
 }
 function applyRetention(data) {
@@ -202,6 +203,14 @@ function applyRetention(data) {
     n.textContent = text || '';
     n.hidden = !text;
   }
+}
+// Events-only reload (filter change): replace the old /events contribution so
+// W15/W16 reflect the latest response, keeping the other modules' hints.
+let eventsRetention = null;
+function reloadEventsRetention(data) {
+  if (eventsRetention) retentionSeen = retentionSeen.filter(d => d !== eventsRetention);
+  eventsRetention = data || null;
+  applyRetention(data);
 }
 function applyMissing(missing) {
   const info = missingNodeText(missing);
@@ -889,7 +898,7 @@ async function refresh({ force = false } = {}) {
     $('analytics-coverage').textContent = '尚未开始记录';
     const since = Number.isFinite(status?.recording_since) ? formatAbsolute(status.recording_since) : '现在';
     emptyAll(`尚无历史数据。本节点从 ${since} 开始记录推流历史，第一场转播结束后这里会出现统计。「推流质量 · 实时」和「最近事件」现在就可用。`);
-    history('events', eventParams(r)).then(d => live() && renderEvents(d), e => live() && setError('events', e));
+    history('events', eventParams(r)).then(d => { if (live()) { reloadEventsRetention(d); renderEvents(d); } }, e => live() && setError('events', e));
     done();
     return;
   }
@@ -937,7 +946,7 @@ async function refresh({ force = false } = {}) {
     if (prefs.quality === 'range') renderQualityRange(stats, r);
     view.stats = stats;
   }, error => { if (live()) { setError('audience', error); if (prefs.quality === 'range') setError('quality', error); } });
-  eventsJob.then(data => { if (live()) { applyRetention(data); renderEvents(data); } }, error => fail(['events'], error));
+  eventsJob.then(data => { if (live()) { eventsRetention = data; applyRetention(data); renderEvents(data); } }, error => fail(['events'], error));
   Promise.allSettled([summaryJob, sessionsJob, statsJob, eventsJob]).then(() => {
     done();
     if (live() && failures >= 3) showNotice('无法读取统计数据：多个模块加载失败。实时数据不受影响。', 'danger');
@@ -1002,7 +1011,7 @@ function bindControls() {
     if (id) openDetail(id);
   });
   $('analytics-event-filter').addEventListener('change', async () => {
-    try { renderEvents(await history('events', eventParams(view.range))); } catch (error) { setError('events', error); }
+    try { const d = await history('events', eventParams(view.range)); reloadEventsRetention(d); renderEvents(d); } catch (error) { setError('events', error); }
   });
   for (const input of root.querySelectorAll('input[name="analytics-quality"]')) {
     input.checked = input.value === prefs.quality;

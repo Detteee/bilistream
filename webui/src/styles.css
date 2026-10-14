@@ -2716,6 +2716,8 @@ html.light-theme .analytics {
 .analytics .analytics-notice { margin-bottom: var(--sp-4); }
 .analytics .analytics-notice[data-tone="warn"] { border-left-color: var(--warn); }
 .analytics .analytics-notice[data-tone="danger"] { border-left-color: var(--danger); }
+/* W15/W16 retention notices: explicitly neutral, independent of .hint defaults. */
+.analytics .analytics-notice[data-tone="info"] { border-left-color: var(--line); background: var(--surface-3); color: var(--text-dim); }
 
 /* KPI tiles extend .discovery-tile (styles.css:1168). */
 .analytics .analytics-kpis {
