@@ -2465,6 +2465,13 @@ html:not(.app-ready) #main-page {
   .notify-settings .notify-bind-code { font-size: var(--fs-xl); }
 }
 
+/* QQ 通知 §16.x: 可发送节点 gaps wrap only between nodes. */
+.notify-settings .notify-gaps { color: var(--warn); }
+/* Inline text so the ・/； separators read as text, not flex items. */
+.notify-settings .notify-status-value.notify-gaps { display: block; text-align: right; }
+.notify-settings .notify-gap { white-space: nowrap; }
+.notify-settings #notify-openid-owner[data-tone="info"] { color: var(--text-mute); }
+
 /* QQ 通知 §17: 通知类型 budget line. Text only; tone via data-tone. */
 .notify-settings .notify-budget { margin: var(--sp-1) 0 0; }
 .notify-settings .notify-budget-seg { white-space: nowrap; }

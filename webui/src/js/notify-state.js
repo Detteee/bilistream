@@ -50,7 +50,7 @@ export function senderOutcome(status) {
       ok: Boolean(last.ok), at: last.at, mode: last.via ?? last.mode ?? null, code: last.code ?? null,
       reason: last.reason ?? (same ? local.reason : null) ?? null,
       trace_id: last.trace_id ?? (same ? local.trace_id : null) ?? null,
-      node_id: status.sender.node || '',
+      node_id: typeof status.sender.node === 'string' ? status.sender.node.trim() : '',
       ...(last.status ? { status: last.status } : {}),
     };
   }
@@ -229,7 +229,7 @@ export function sameForm(a, b) {
 // { warnings } for non-blocking ones.
 // The admin openid is write-only (§16): it is never part of `form`; the typed
 // text comes in as `openidText` and is only checked, never echoed.
-export function validateForm(form, { secretConfigured = false, secretEntered = false, openidSet = false, openidText = '' } = {}) {
+export function validateForm(form, { secretConfigured = false, secretEntered = false, openidSet = false, openidText = '', openidPending = false } = {}) {
   const errors = {};
   const warnings = {};
   const appId = form.app_id.trim();
@@ -239,7 +239,8 @@ export function validateForm(form, { secretConfigured = false, secretEntered = f
   const openid = String(openidText || '').trim();
   if (openid && !/^[0-9A-Za-z]{1,128}$/.test(openid)) errors.admin_openid = 'openid 只能包含字母和数字';
   else if (openid && !/^[0-9A-Fa-f]{32}$/.test(openid)) warnings.admin_openid = 'openid 通常为 32 位十六进制字符，请检查是否有多余字符';
-  else if (form.enabled && !openidSet && !openid) warnings.admin_openid = '启用通知前请绑定管理员 openid';
+  // §16.x: while the writer's openid is syncing here, nothing is missing.
+  else if (form.enabled && !openidSet && !openidPending && !openid) warnings.admin_openid = '启用通知前请绑定管理员 openid';
   const ranges = [
     ['confirm_secs', 0, 600],
     ['recovery_hold_secs', 0, 1800],
@@ -279,7 +280,7 @@ export function selectState({ loading = false, loadError = null, settings = null
   const missing = [];
   if (!qq.app_id) missing.push('AppID');
   if (!secret) missing.push('AppSecret');
-  if (!settings?.openid_set) missing.push('管理员 openid');
+  if (!settings?.openid_set && !openidPending(settings, status)) missing.push('管理员 openid');
   if (!cfg.enabled) {
     return missing.length
       ? { key: 'off', badge: '未启用', tone: 'draining', missing }
@@ -296,9 +297,18 @@ export function selectState({ loading = false, loadError = null, settings = null
   if (hasNodeCredentials(status)) {
     const nodes = status.nodes;
     const self = nodes.find(n => n.is_local);
-    if (self && !nodeReady(self)) {
-      const lacks = [!self.appsecret_set && 'AppSecret', !self.openid_set && '管理员 openid'].filter(Boolean);
-      return { key: 'node-unready', badge: '本节点未就绪', tone: 'sync-warning', missing, lacks };
+    // §16.x B1: a pending openid (writer has it, sync on its way) is not
+    // missing. Only AppID / AppSecret can make a pending node 未就绪.
+    const pending = openidPending(settings, status);
+    if (self && (pending ? true : !nodeReady(self))) {
+      const lacks = [
+        self.appid_set === false && 'AppID',
+        !self.appsecret_set && 'AppSecret',
+        !pending && !self.openid_set && '管理员 openid',
+      ].filter(Boolean);
+      if (lacks.length || (!pending && !nodeReady(self))) {
+        return { key: 'node-unready', badge: '本节点未就绪', tone: 'sync-warning', missing, lacks };
+      }
     }
   }
   if (Number(status?.undelivered) > 0) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
@@ -332,7 +342,7 @@ function nodeReady(node) {
 // the openid when an unbind was confirmed; `localUnbound` is true when this
 // node has no openid (after a reload the server may still be clearing peers).
 // Each row: { node_id, local, secret: {text, tone}, openid: {text, tone} }.
-export function credentialRows(status, { pending = new Set(), localUnbound = false, cleared = new Map(), now = Date.now() } = {}) {
+export function credentialRows(status, { pending = new Set(), localUnbound = false, cleared = new Map(), now = Date.now(), writerSet = undefined } = {}) {
   if (!hasNodeCredentials(status)) return [];
   return status.nodes.map(n => {
     const secret = n.appsecret_set ? { text: 'AppSecret 已同步', tone: 'active' } : { text: 'AppSecret 未设置', tone: 'sync-warning' };
@@ -342,6 +352,7 @@ export function credentialRows(status, { pending = new Set(), localUnbound = fal
       openid = n.fresh === false ? { text: '等待节点上线后清除', tone: '' } : { text: '解绑中…', tone: 'sync-warning' };
     } else if (n.openid_set) openid = { text: 'openid 已同步', tone: 'active' };
     else if (cleared.has(n.node_id) && now - cleared.get(n.node_id) < 10_000) openid = { text: '已清除', tone: '' };
+    else if (writerSet === true) openid = { text: 'openid 待同步', tone: '' };   // §16.x: on its way
     else if (localUnbound) openid = null;   // whole cluster unbound on purpose: nothing to flag
     else openid = { text: 'openid 未同步', tone: 'sync-warning' };
     return { node_id: n.node_id, local: Boolean(n.is_local), secret, openid };
@@ -355,8 +366,8 @@ export function openidGate(status) {
   if (!status || !('openid_writer' in status)) return { enabled: true, hint: '' };
   const writer = status.openid_writer;
   if (writer?.is_local) return { enabled: true, hint: handoffHint(status) };
-  if (writer?.node_id) {
-    return { enabled: false, owner: writer.node_id, hint: `请在 ${writer.node_id} 上绑定或解绑。只有当前发送节点可以修改管理员 openid，修改后会自动同步到本节点。` };
+  if (typeof writer?.node_id === 'string' && writer.node_id.trim()) {
+    return { enabled: false, owner: writer.node_id.trim(), hint: `请在 ${writer.node_id.trim()} 上绑定或解绑。只有当前发送节点可以修改管理员 openid，修改后会自动同步到本节点。` };
   }
   return { enabled: false, hint: `暂无可写节点。${noWriterReason(status)}` };
 }
@@ -563,7 +574,8 @@ export function pendingLiveNote(source, senderNode = '', localNode = '') {
   const list = Array.isArray(source?.pending_live_events) ? source.pending_live_events : [];
   const names = ['live_start', 'live_end'].filter(k => list.includes(k)).map(k => PENDING_LABELS[k]);
   if (!names.length) return '';
-  const from = senderNode && senderNode !== localNode ? `（来自 ${senderNode}）` : '';
+  const sender = typeof senderNode === 'string' ? senderNode.trim() : '';
+  const from = sender && sender !== localNode ? `（来自 ${sender}）` : '';
   return `${names.join('/')}通知待补发，管理员下次给机器人发消息时一并送达。${from}`;
 }
 
@@ -572,7 +584,7 @@ export function liveEventsGate(status) {
   if (!status || !('openid_writer' in status)) return { enabled: true, hint: '' };
   const writer = status.openid_writer;
   if (writer?.is_local) return { enabled: true, hint: '' };
-  if (writer?.node_id) return { enabled: false, hint: `请在 ${writer.node_id} 上修改。只有当前发送节点可以保存通知设置。` };
+  if (typeof writer?.node_id === 'string' && writer.node_id.trim()) return { enabled: false, hint: `请在 ${writer.node_id.trim()} 上修改。只有当前发送节点可以保存通知设置。` };
   return { enabled: false, hint: `暂无可写节点。${noWriterReason(status)}` };
 }
 
@@ -592,4 +604,68 @@ export function liveEventsFieldError(error) {
   const data = error?.body?.data;
   return data?.code === 'invalid_field' && data.field === 'live_events_enabled'
     ? '开播/下播开关的值无效，请刷新后重试。' : '';
+}
+
+// ---------------------------------------------------------------------------
+// §16.x Non-sending node state (Addendum C)
+
+// `writer_openid_set` from fresh /status when it carries the key, else from
+// GET /api/notify. Absent (no writer, older or stale writer) → undefined.
+export function writerOpenidSet(settings, status) {
+  if (status && 'writer_openid_set' in status) return status.writer_openid_set;
+  if (settings && 'writer_openid_set' in settings) return settings.writer_openid_set;
+  return undefined;
+}
+
+// This node has no openid yet, but the writer has one: it is on its way.
+export function openidPending(settings, status) {
+  return Boolean(settings) && !settings.openid_set && writerOpenidSet(settings, status) === true;
+}
+
+// Writer name for copy, or '' when unknown (handoff: all three can be null,
+// missing or blank at once). Only non-empty trimmed strings count.
+export function writerName(status) {
+  for (const v of [status?.openid_writer?.node_id, status?.sender?.node, status?.authority_node_id]) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+// Badge + hint for 管理员 openid. Never carries the openid itself.
+export function openidView(settings, status) {
+  if (!settings) return { badge: '读取中', tone: '', pending: false, hint: null };
+  if (settings.openid_set) return { badge: '已绑定', tone: 'active', pending: false, hint: null };
+  if (openidPending(settings, status)) {
+    const w = writerName(status);
+    return w
+      ? { badge: `已在 ${w} 绑定 · 待同步`, tone: '', pending: true, hint: `openid 在发送节点 ${w} 上绑定，会自动同步到本节点。` }
+      : { badge: '已在发送节点绑定 · 待同步', tone: '', pending: true, hint: 'openid 在发送节点上绑定，会自动同步到本节点。' };
+  }
+  return { badge: '未绑定', tone: 'sync-warning', pending: false, hint: null };
+}
+
+const GAP_COPY = {
+  openid_pending: '缺 openid（待同步）', openid: '缺 openid', appsecret: '缺 AppSecret', appid: '缺 AppID', stale: '心跳超时',
+};
+
+// Addendum C readiness: every node carries a `missing` array.
+export function hasReadiness(status) {
+  const nodes = status?.nodes;
+  return Array.isArray(nodes) && nodes.length > 0 && nodes.every(n => Array.isArray(n?.missing));
+}
+
+// 可发送节点 row from nodes[].missing (fixed codes only). Unknown codes →
+// 配置不完整 (once per node). Returns { text, warn } or null.
+export function readinessRow(status) {
+  if (!hasReadiness(status)) return null;
+  const ready = status.nodes.filter(n => n.missing.length === 0);
+  const gaps = status.nodes.filter(n => n.missing.length).map(n => {
+    const parts = [];
+    for (const code of n.missing) {
+      const text = GAP_COPY[code] || '配置不完整';
+      if (!parts.includes(text)) parts.push(text);
+    }
+    return `${n.node_id} ${parts.join('、')}`;
+  });
+  return { count: `${ready.length} / ${status.nodes.length}`, gaps, warn: gaps.length > 0 };
 }

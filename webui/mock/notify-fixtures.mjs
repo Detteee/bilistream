@@ -5,7 +5,14 @@
 // The ledger (last_admin_msg_id, last_admin_at, passive_replies_used) and the
 // admin openid are never part of any response.
 // legacy: a backend older than §17 — no live_events_enabled and none of the new fields.
-export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy'];
+// ny-*: seen from ny, a non-sending node, with jp as the writer (§16.x,
+// Addendum C): bound, pending (jp bound, ny not yet), appsecret (ca lacks
+// its AppSecret), stale (ca heartbeat timed out), old (no readiness fields).
+// ny-handoff: mid gateway handoff — openid_writer, sender and authority_node_id
+// are all null while ny is still pending.
+// ny-pending-appsecret: ny pending and also missing its own AppSecret.
+export const NY_MODES = ['ny-bound', 'ny-pending', 'ny-appsecret', 'ny-stale', 'ny-old', 'ny-handoff', 'ny-pending-appsecret'];
+export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES];
 
 export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   const config = {
@@ -38,13 +45,37 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       undelivered: 0, ...(legacy() ? {} : { pending_live_events: pending() }), quota: { wakeups_left: budget().wakeup_remaining ?? null, ...budget() },
     };
   };
+  const ny = () => NY_MODES.includes(mode);
+  const nyOpenid = () => !['ny-pending', 'ny-handoff', 'ny-pending-appsecret'].includes(mode);
+  const nyNodes = () => {
+    const node = (node_id, extra = {}) => ({ node_id, is_local: node_id === 'ny', fresh: true, notify_capable: true,
+      appid_set: true, appsecret_set: true, openid_set: true, missing: [], ...extra });
+    if (mode === 'ny-old') return [{ node_id: 'jp', notify_capable: true }, { node_id: 'ny', is_local: true, notify_capable: true }, { node_id: 'ca', notify_capable: true }];
+    const ca = mode === 'ny-appsecret' ? node('ca', { appsecret_set: false, notify_capable: false, missing: ['appsecret'] })
+      : mode === 'ny-stale' ? node('ca', { fresh: false, notify_capable: false, missing: ['stale'] }) : node('ca');
+    const nyNode = mode === 'ny-pending-appsecret' ? node('ny', { openid_set: false, appsecret_set: false, notify_capable: false, missing: ['appsecret', 'openid_pending'] })
+      : mode === 'ny-pending' || mode === 'ny-handoff' ? node('ny', { openid_set: false, notify_capable: false, missing: ['openid_pending'] }) : node('ny');
+    return [node('jp'), nyNode, ca];
+  };
+  const nySettings = base => ({ ...base, openid_set: nyOpenid(), ...(mode === 'ny-pending-appsecret' ? { appsecret_set: false } : {}), ...(mode === 'ny-old' ? {} : { writer_openid_set: true }) });
+  const nyStatus = () => {
+    const t = now();
+    return {
+      node_id: 'ny', authority: 'none', authority_node_id: 'jp', gateway: {},
+      openid_writer: { node_id: 'jp', is_local: false }, gateway_owner: { node_id: 'jp' },
+      sender: { node: 'jp', last_send: { ok: true, via: 'passive', at: t - 300 } }, local_last_send: null,
+      undelivered: 0, nodes: nyNodes(), ...(mode === 'ny-old' ? {} : { writer_openid_set: true }),
+      pending_live_events: [], quota: budget(),
+      ...(mode === 'ny-handoff' ? { authority_node_id: null, openid_writer: null, gateway_owner: null, sender: null } : {}),
+    };
+  };
   return {
     setMode(next) { if (!NOTIFY_MODES.includes(next)) return false; mode = next; return true; },
     // Returns [httpStatus, body] or null when the path is not a notify route.
     route(method, path, body = {}) {
-      if (path === '/api/notify/status' && method === 'GET') return [200, { success: true, data: status() }];
+      if (path === '/api/notify/status' && method === 'GET') return [200, { success: true, data: ny() ? nyStatus() : status() }];
       if (path !== '/api/notify') return null;
-      if (method === 'GET') return [200, { success: true, data: settings() }];
+      if (method === 'GET') return [200, { success: true, data: ny() ? nySettings(settings()) : settings() }];
       if (method === 'PUT') {
         if (body.expected_revision != null && body.expected_revision !== revision) return [409, { success: false, message: '设置已更新', data: { code: 'revision_conflict' } }];
         const patch = body.config || {};

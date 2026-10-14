@@ -8,7 +8,7 @@ import { LIVE_EVENTS_TICK_MS, renderLiveEventsInto } from './live-events-view.js
 import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
-  middleTruncate, removeWatch, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
+  middleTruncate, removeWatch, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
   createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey,
 } from './notify-state.js';
 
@@ -94,6 +94,7 @@ function validateNow() {
     secretEntered: Boolean($('notify-app-secret')?.value.trim()),
     openidSet: Boolean(settings?.openid_set),
     openidText: typedOpenid(),
+    openidPending: openidPending(settings, status),
   });
 }
 
@@ -368,8 +369,11 @@ function renderStatus() {
   const pending = pendingLiveNote(pendingSrc, s.sender?.node || '', s.node_id || '');
   if (pending && liveEventsSupported(settings?.config)) rows.push(row('待补发', pending));
   rows.push(row('未送达', `${Number(s.undelivered) || 0} 条`));
+  const readiness = readinessRow(s);
+  if (readiness) rows.push(readinessRowEl(readiness));
   if (hasNodeCredentials(s)) rows.push(credentialRow(s));
-  else if (Array.isArray(s.nodes) && s.nodes.length) {
+  // Addendum C supersedes the older notify_capable summary.
+  else if (!readiness && Array.isArray(s.nodes) && s.nodes.length) {
     const capable = s.nodes.filter(n => n.notify_capable);
     const missing = s.nodes.filter(n => !n.notify_capable).map(n => n.node_id);
     const text = `${capable.length} / ${s.nodes.length}${missing.length ? ` · ${missing.join('、')} 未配置完整` : ''}`;
@@ -382,6 +386,30 @@ function renderStatus() {
   box.replaceChildren(...rows);
 }
 
+// §16.x 可发送节点: count, then one nowrap span per node gap joined by ；.
+function readinessRowEl(r) {
+  const wrap = row('可发送节点', '');
+  wrap.classList.add('notify-readiness-row');
+  const v = wrap.lastChild;
+  v.replaceChildren();
+  const count = document.createElement('span');
+  count.textContent = r.count;
+  v.append(count);
+  if (r.gaps.length) {
+    v.classList.add('notify-gaps');
+    v.dataset.tone = 'warn';
+    v.append(document.createTextNode(' · '));
+    r.gaps.forEach((gap, i) => {
+      if (i) v.append(document.createTextNode('；'));
+      const span = document.createElement('span');
+      span.className = 'notify-gap';
+      span.textContent = gap;
+      v.append(span);
+    });
+  }
+  return wrap;
+}
+
 function credentialRow(s) {
   const wrap = document.createElement('div');
   wrap.className = 'cluster-node-meta-row notify-cred-row';
@@ -390,7 +418,7 @@ function credentialRow(s) {
   label.textContent = '凭据同步';
   const list = document.createElement('ul');
   list.className = 'cluster-node-meta-value notify-cred-list';
-  const rowsData = credentialRows(s, { pending: pendingUnbind, localUnbound: settings && !settings.openid_set, cleared: clearedAt });
+  const rowsData = credentialRows(s, { pending: pendingUnbind, localUnbound: settings && !settings.openid_set && !openidPending(settings, s), cleared: clearedAt, writerSet: writerOpenidSet(settings, s) });
   for (const r of rowsData) {
     const li = document.createElement('li');
     const name = document.createElement('span');
@@ -492,7 +520,10 @@ function render() {
     alert = { lead: `QQ 网关已停止（${status?.gateway?.reason || '机器人不可用'}），不会自动重连。`, text: '请在 QQ 开放平台检查机器人状态，修改凭据并保存后重试。', tone: 'danger', action: true };
   } else if (st.key === 'gateway-down') alert = { lead: 'QQ 网关未连接，正在重连。', text: '断开期间只能用主动消息或召回额度发送，可能送达失败。', tone: 'warn' };
   else if (st.key === 'node-unready') {
-    const fix = (st.lacks || []).includes('AppSecret') ? '请在本节点填写 AppSecret。' : 'openid 正在同步；如长时间未同步，请重新保存或「自动获取」。';
+    const lacks = st.lacks || [];
+    const fix = lacks.includes('AppSecret') ? '请在本节点填写 AppSecret。'
+      : lacks.includes('AppID') ? '请在本节点填写 AppID。'
+      : 'openid 正在同步；如长时间未同步，请重新保存或「自动获取」。';
     alert = { lead: '本节点未配置完整。', text: `如果它成为发送节点，通知会记为未送达。${fix}`, tone: 'warn' };
   } else if (st.key === 'no-sender') {
     const n = Number(status?.undelivered) || 0;
@@ -520,14 +551,23 @@ function render() {
 
   // 管理员 openid: write-only (§16.2). The value never comes from the API.
   const openidSet = Boolean(settings?.openid_set);
-  setBadge($('notify-openid-state'), settings ? (openidSet ? '已绑定' : '未绑定') : '读取中', settings ? (openidSet ? 'active' : 'sync-warning') : '');
+  const ov = openidView(settings, status);
+  setBadge($('notify-openid-state'), ov.badge, ov.tone);
   $('notify-clear-openid').hidden = !openidSet;
   const openidInput = $('notify-admin-openid');
   openidInput.placeholder = openidSet ? '已绑定（留空则不变）' : '点「自动获取」或填写 openid';
   openidInput.title = openidSet ? '已保存；输入新值后保存可替换' : '';
   const gate = openidGate(status);
   const ownerHint = $('notify-openid-owner');
-  if (ownerHint) { ownerHint.textContent = gate.hint; ownerHint.hidden = !gate.hint; }
+  // §16.x: while pending, the sync hint replaces 「请在 X 上绑定或解绑…」, and
+  // 自动获取 (with its options) is hidden; nothing needs doing on this node.
+  const ownerText = ov.pending ? ov.hint : gate.hint;
+  if (ownerHint) {
+    if (ownerHint.textContent !== ownerText) ownerHint.textContent = ownerText;
+    ownerHint.hidden = !ownerText;
+    ownerHint.dataset.tone = ov.pending ? 'info' : 'warn';
+  }
+  for (const id of ['notify-bind-btn', 'notify-bind-any-row']) { const el = $(id); if (el) el.hidden = ov.pending; }
   const meta = $('notify-openid-meta');
   const metaText = typedOpenid() && openidSet ? '保存后替换当前绑定'
     : openidSet && settings?.openid_bound_at ? `绑定于 ${formatUtc8(settings.openid_bound_at)}` : '';
@@ -801,7 +841,8 @@ function updateUnbindProgress() {
 let unbindDone = false;
 
 function unbindSummary() {
-  if (!hasNodeCredentials(status) || !settings || settings.openid_set) return '';
+  // §16.x: a pending node is waiting for a bind, not watching an unbind.
+  if (!hasNodeCredentials(status) || !settings || settings.openid_set || openidPending(settings, status)) return '';
   const holders = status.nodes.filter(n => n.openid_set && !n.is_local);
   if (!holders.length) {
     if (unbindDone) { unbindDone = false; return '已在所有节点解除绑定'; }
