@@ -126,6 +126,10 @@ pub struct MemCluster {
     /// mid-round: that push answers `MembershipChanged`, the next
     /// `changing` reads fail, and the new revision adds the given member.
     pub change_on_push: Mutex<Option<ChangeOnPush>>,
+    /// `false`: a single-node install (R4-1).
+    pub clustered: Mutex<bool>,
+    /// `members()` reads (any peer activity starts with one).
+    pub member_reads: Mutex<u32>,
 }
 
 impl MemCluster {
@@ -143,6 +147,8 @@ impl MemCluster {
             pushes: Mutex::new(Default::default()),
             changing: Mutex::new(0),
             change_on_push: Mutex::new(None),
+            clustered: Mutex::new(true),
+            member_reads: Mutex::new(0),
         })
     }
 
@@ -198,7 +204,12 @@ use super::store::OpenidCopy;
 
 #[async_trait::async_trait]
 impl PeerLink for MemLink {
+    fn clustered(&self) -> bool {
+        *self.cluster.clustered.lock().unwrap()
+    }
+
     fn members(&self) -> std::io::Result<(u64, Vec<String>)> {
+        *self.cluster.member_reads.lock().unwrap() += 1;
         {
             let mut changing = self.cluster.changing.lock().unwrap();
             if *changing > 0 {

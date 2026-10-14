@@ -709,3 +709,70 @@ async fn binds_during_a_round_merge_into_one_bounded_follow_up_with_the_latest_s
     assert!(coalescer.request());
     assert!(!coalescer.finish_round());
 }
+
+/// R4-1: on a single-node install a bind and an unbind skip the push
+/// quietly: no warning (in particular not "本节点已不在当前成员清单") and
+/// no peer calls, through both the production link and the test link.
+#[tokio::test]
+async fn a_single_node_bind_and_unbind_skip_the_push_without_a_warning_or_peer_calls() {
+    use tracing::instrument::WithSubscriber;
+    let a = temp();
+    // Production link on a fresh, never-clustered store.
+    let signed = SignedLink::new(Arc::clone(&a.1), "a".into());
+    assert!(!signed.clustered());
+    let cluster = MemCluster::new(&[("a", a.1.clone())]);
+    *cluster.clustered.lock().unwrap() = false;
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+    async {
+        let revision = bind(&a.1, "a", OPENID, Some(0));
+        push_round(&a.1, &signed, FAST).await;
+        push_round(&a.1, &cluster.link("a"), FAST).await;
+        unbind(&a.1, "a", revision);
+        push_round(&a.1, &signed, FAST).await;
+        push_round(&a.1, &cluster.link("a"), FAST).await;
+    }
+    .with_subscriber(dispatch)
+    .await;
+    let text = logs.text();
+    assert!(!text.contains("WARN"), "no warning: {text}");
+    assert!(!text.contains("成员清单"));
+    assert!(!text.contains(OPENID));
+    assert_eq!(*cluster.member_reads.lock().unwrap(), 0);
+    assert!(cluster.pushes.lock().unwrap().is_empty(), "zero peer calls");
+    assert!(
+        !load_openid(&a.1).unwrap().is_set(),
+        "the local unbind stands"
+    );
+}
+
+/// A panicking round clears the running flag, so a later bind still
+/// starts a round instead of only setting "push again".
+#[tokio::test]
+async fn a_panicking_round_does_not_block_later_pushes() {
+    let coalescer: &'static PushCoalescer = Box::leak(Box::new(PushCoalescer::new()));
+    assert!(coalescer.request());
+    let crashed = tokio::spawn(async move {
+        coalescer
+            .drive(|| async { panic!("synthetic round failure") })
+            .await;
+    })
+    .await;
+    assert!(crashed.unwrap_err().is_panic());
+    // A new bind after the crash starts a fresh loop that really runs.
+    let (a, b) = (temp(), temp());
+    let cluster = MemCluster::new(&[("a", a.1.clone()), ("b", b.1.clone())]);
+    bind(&a.1, "a", OPENID, Some(0));
+    assert!(coalescer.request(), "running flag was reset");
+    let rounds = std::sync::atomic::AtomicU32::new(0);
+    coalescer
+        .drive(|| async {
+            rounds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            push_round(&a.1, &cluster.link("a"), FAST).await;
+        })
+        .await;
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(value(&b.1).as_deref(), Some(OPENID));
+    // And a normal finish leaves it idle too.
+    assert!(coalescer.request());
+    assert!(!coalescer.finish_round());
+}

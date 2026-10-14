@@ -67,6 +67,12 @@ pub trait PeerLink: Send + Sync {
         copy: &OpenidCopy,
     ) -> Result<PushAck, LinkError>;
     async fn pull(&self, revision: u64, node: &str) -> Result<OpenidCopy, LinkError>;
+    /// Whether this node is in (or was removed from) a managed cluster.
+    /// `false` on a single-node install: there is nobody to push to, so a
+    /// bind or unbind skips the push quietly (R4-1).
+    fn clustered(&self) -> bool {
+        true
+    }
 }
 
 /// Unbind is "retried until acked"; a member still offline after the last
@@ -364,6 +370,15 @@ fn open<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, LinkError> {
 
 #[async_trait]
 impl PeerLink for SignedLink {
+    fn clustered(&self) -> bool {
+        use crate::cluster::membership::{Lifecycle, Membership};
+        // Managed: push. Left: push_all stops with the "removed" warning.
+        // Standalone and the pre-join states have no members at all.
+        Membership::new(Arc::clone(&self.store))
+            .local()
+            .is_ok_and(|local| matches!(local.lifecycle, Lifecycle::Managed | Lifecycle::Left))
+    }
+
     fn members(&self) -> io::Result<(u64, Vec<String>)> {
         let (revision, members) = current_members(&self.store)?;
         Ok((
@@ -461,17 +476,45 @@ impl PushCoalescer {
     }
 
     /// Run rounds until no follow-up is owed. Call only after `request()`
-    /// returned `true`.
+    /// returned `true`. If a round panics (or the task is cancelled), the
+    /// guard clears the running flag, so the next request starts a new loop
+    /// instead of only setting "push again" forever.
     pub async fn drive<F, Fut>(&self, mut round: F)
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
+        let mut guard = RunningGuard {
+            coalescer: self,
+            armed: true,
+        };
         loop {
             round().await;
             if !self.finish_round() {
+                // finish_round already cleared `running`; a new loop may
+                // start right away, so the guard must not touch it again.
+                guard.armed = false;
                 break;
             }
+        }
+    }
+}
+
+struct RunningGuard<'a> {
+    coalescer: &'a PushCoalescer,
+    armed: bool,
+}
+
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let mut state = self
+                .coalescer
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            state.running = false;
+            state.again = false;
         }
     }
 }
@@ -507,6 +550,16 @@ fn log_round(result: &io::Result<PushReport>) {
     }
 }
 
+/// One push round with its log line. On a single-node install there is no
+/// one to push to: nothing is called and nothing is logged (R4-1).
+pub async fn push_round(store: &Store, link: &dyn PeerLink, policy: RetryPolicy) {
+    if !link.clustered() {
+        return;
+    }
+    let result = push_all(store, link, policy).await;
+    log_round(&result);
+}
+
 /// After a bind, a change or an unbind on the writer: push in the
 /// background. Without a managed membership this does nothing. A request
 /// during a running round merges into one follow-up round.
@@ -524,8 +577,7 @@ pub fn spawn_push(store: Arc<Store>, local: String) {
                 let local = local.clone();
                 async move {
                     let link = SignedLink::new(Arc::clone(&store), local);
-                    let result = push_all(&store, &link, RetryPolicy::PRODUCTION).await;
-                    log_round(&result);
+                    push_round(&store, &link, RetryPolicy::PRODUCTION).await;
                 }
             })
             .await;
