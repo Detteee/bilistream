@@ -19,10 +19,12 @@ const DAY: i64 = 86_400;
 const T0: i64 = 1_791_000_000;
 
 fn tmp(name: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "bilistream-history-{name}-{}-{}",
+        "bilistream-history-{name}-{}-{}-{}",
         std::process::id(),
-        crate::storage::now()
+        crate::storage::now(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -30,10 +32,14 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 fn writer(name: &str) -> (Writer, std::path::PathBuf) {
+    writer_node(name, "local")
+}
+
+fn writer_node(name: &str, node: &str) -> (Writer, std::path::PathBuf) {
     let dir = tmp(name);
     let path = dir.join("history.sqlite");
     let conn = schema::open_rw(&path).unwrap();
-    let mut w = Writer::new(conn, "local", 7);
+    let mut w = Writer::new(conn, node, 7);
     w.apply(&ev(T0 - 10, EventKind::ProcessStarted { version: "test" }))
         .unwrap();
     w.set_secrets(vec!["SYNTHKEY-0123456789".into()]);
@@ -974,7 +980,14 @@ async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
         let data = api::answer(&cfg, name, &window, &peers, &local, now)
             .await
             .unwrap();
-        assert_eq!(data["missing_nodes"][0]["node_id"], "sg-3", "{name}");
+        assert!(
+            data["missing_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["node_id"] == "sg-3"),
+            "{name}"
+        );
     }
     // Unknown node → 400.
     let mut unknown = window.clone();
@@ -1344,6 +1357,7 @@ fn peer_body_must_be_a_valid_history_query() {
     }
     type Edit = Box<dyn Fn(&mut Query)>;
     let edits: Vec<Edit> = vec![
+        Box::new(|q| q.from = i64::MIN),
         Box::new(|q| q.from = q.to),
         Box::new(|q| q.to = T0 + DAY),
         Box::new(|q| q.limit = 0),
@@ -1681,5 +1695,562 @@ async fn offline_smaller_peer_is_only_in_missing_nodes() {
         assert!(data.get("partial_nodes").is_none(), "{name}");
         assert_eq!(data["clamped_to_days"], json!(90), "{name}");
         assert_eq!(missing_ids(&data), vec!["tokyo-1", "sg-3"], "{name}");
+    }
+}
+
+// ----------------------------------------- continuation correctness fixes
+
+fn exited(w: &mut Writer, seq: u64, run: u64, at: i64, success: bool, counted_failure: bool) {
+    w.apply(&ev(
+        at,
+        EventKind::FfmpegExited {
+            seq,
+            run,
+            code: Some(if success { 0 } else { 1 }),
+            success,
+            counted_failure,
+            diagnostic: counted_failure.then(|| "connection reset".into()),
+        },
+    ))
+    .unwrap();
+}
+
+#[test]
+fn kpis_count_run_time_completed_runs_and_all_notification_attempts() {
+    let (mut w, _) = writer("metric-runs");
+    session(&mut w, 1, T0, None);
+    exited(&mut w, 1, 10, T0 + 100, false, true);
+    w.apply(&ev(T0 + 160, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    exited(&mut w, 1, 11, T0 + 600, true, false);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    for (at, ok) in [(T0 + 150, false), (T0 + 160, true)] {
+        w.apply(&ev(
+            at,
+            EventKind::NotifySent {
+                key: "test".into(),
+                phase: "firing",
+                ok,
+                code: None,
+                suppressed: 0,
+                undelivered: 0,
+            },
+        ))
+        .unwrap();
+    }
+    let parts = query::summary(&w.conn, &q(T0, T0 + 601), "local", T0 + 1000).unwrap();
+    let out = query::render_summary(&parts, &[]);
+    assert_eq!(out["kpis"]["live_secs"], 600);
+    assert_eq!(parts.kpis.down_secs, 60);
+    assert_eq!(out["kpis"]["availability"], 0.9, "540 / 600, not 600 / 660");
+    assert_eq!(
+        out["kpis"]["success_rate"], 0.5,
+        "one clean and one failed run in one session"
+    );
+    assert_eq!(out["reliability"]["clean"], 1);
+    assert_eq!(out["reliability"]["counted_failures"], 1);
+    assert_eq!(out["kpis"]["notify_sent"], 2);
+    assert_eq!(out["kpis"]["notify_failed"], 1);
+    assert_eq!(parts.buckets.iter().map(|b| b.notify_sent).sum::<i64>(), 2);
+    assert_eq!(
+        parts.buckets.iter().map(|b| b.notify_failed).sum::<i64>(),
+        1
+    );
+
+    let clipped = query::summary(&w.conn, &q(T0 + 50, T0 + 200), "local", T0 + 1000).unwrap();
+    assert_eq!(clipped.kpis.live_secs, 150);
+    assert_eq!(clipped.kpis.down_secs, 60);
+    assert_eq!(
+        clipped.kpis.sessions, 0,
+        "an overlapping session is not a new start"
+    );
+    assert_eq!(clipped.buckets.iter().map(|b| b.sessions).sum::<i64>(), 0);
+    let after_failure =
+        query::summary(&w.conn, &q(T0 + 110, T0 + 200), "local", T0 + 1000).unwrap();
+    assert_eq!(after_failure.kpis.failures, 0);
+    assert_eq!(after_failure.kpis.recover_n, 0);
+    assert!(after_failure
+        .buckets
+        .iter()
+        .all(|b| b.failures == 0 && b.recover_n == 0));
+}
+
+#[test]
+fn starts_are_half_open_and_appear_only_in_their_start_bucket() {
+    let (mut w, _) = writer("metric-starts");
+    session(&mut w, 1, T0 - 100, None);
+    end(&mut w, 1, T0 + 400, EndReason::SourceEnded);
+    session(&mut w, 2, T0 + 3600, None);
+    end(&mut w, 2, T0 + 4000, EndReason::SourceEnded);
+    session(&mut w, 3, T0 + 7200, None);
+    let mut window = q(T0, T0 + 7200);
+    window.bucket = Some("hour".into());
+    let parts = query::summary(&w.conn, &window, "local", T0 + 7300).unwrap();
+    assert_eq!(parts.kpis.sessions, 1);
+    assert_eq!(
+        parts
+            .buckets
+            .iter()
+            .map(|b| (b.start, b.sessions))
+            .collect::<Vec<_>>(),
+        vec![(T0, 0), (T0 + 3600, 1)]
+    );
+    assert_eq!(parts.kpis.live_secs, 800, "duration still includes overlap");
+}
+
+#[test]
+fn availability_and_recovery_do_not_use_the_fifty_gap_display_cap() {
+    let (mut w, _) = writer("metric-many-gaps");
+    session(&mut w, 1, T0, None);
+    for i in 0..60u64 {
+        exited(&mut w, 1, 10 + i, T0 + i as i64 * 20 + 10, false, true);
+        w.apply(&ev(
+            T0 + (i + 1) as i64 * 20,
+            EventKind::FfmpegStarted {
+                seq: 1,
+                run: 11 + i,
+            },
+        ))
+        .unwrap();
+    }
+    exited(&mut w, 1, 70, T0 + 1210, true, false);
+    end(&mut w, 1, T0 + 1210, EndReason::SourceEnded);
+    assert_eq!(sessions(&w, T0 + 1300).items[0].gaps.len(), 50);
+    let parts = query::summary(&w.conn, &q(T0, T0 + 1300), "local", T0 + 1300).unwrap();
+    assert_eq!(parts.kpis.down_secs, 600);
+    assert_eq!(parts.kpis.recover_n, 60);
+    assert_eq!(parts.kpis.recover_sum, 600);
+    assert_eq!(
+        query::render_summary(&parts, &[])["kpis"]["availability"],
+        json!(610.0 / 1210.0)
+    );
+}
+
+#[test]
+fn non_failure_gaps_and_unrecovered_tails_are_downtime_but_not_recovery() {
+    let (mut w, _) = writer("metric-open-tail");
+    session(&mut w, 1, T0, None);
+    exited(&mut w, 1, 10, T0 + 100, false, false);
+    w.apply(&ev(T0 + 160, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    exited(&mut w, 1, 11, T0 + 200, false, true);
+    let open = query::summary(&w.conn, &q(T0, T0 + 300), "local", T0 + 300).unwrap();
+    assert_eq!(open.kpis.live_secs, 300);
+    assert_eq!(
+        open.kpis.down_secs, 160,
+        "includes both the non-failure gap and open tail"
+    );
+    assert_eq!(open.kpis.recover_n, 0);
+    end(&mut w, 1, T0 + 400, EndReason::Aborted);
+    let closed = query::summary(&w.conn, &q(T0, T0 + 500), "local", T0 + 500).unwrap();
+    assert_eq!(closed.kpis.down_secs, 260);
+    assert_eq!(
+        closed.kpis.recover_n, 0,
+        "session end is not a recovered push"
+    );
+    assert!(closed.buckets.iter().all(|b| b.recover_n == 0));
+}
+
+#[test]
+fn delayed_exit_classification_keeps_the_captured_process_exit_time() {
+    let (mut w, _) = writer("delayed-exit-classification");
+    session(&mut w, 1, T0, None);
+    let exited_at = T0 + 100;
+    // Source/B站 checks finish later while the writer keeps receiving its
+    // own heartbeat. The exit event carries the time captured after wait.
+    w.heartbeat((T0 + 200) as u64).unwrap();
+    exited(&mut w, 1, 10, exited_at, false, true);
+    w.apply(&ev(T0 + 220, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    exited(&mut w, 1, 11, T0 + 600, true, false);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    let end: i64 = w
+        .conn
+        .query_row("SELECT ended_at FROM runs WHERE run=10", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(end, exited_at);
+    let parts = query::summary(&w.conn, &q(T0, T0 + 601), "local", T0 + 601).unwrap();
+    assert_eq!(parts.kpis.down_secs, 120);
+    assert_eq!(parts.kpis.recover_sum, 120);
+    assert_eq!(parts.kpis.recover_n, 1);
+    assert_eq!(
+        query::render_summary(&parts, &[])["kpis"]["availability"],
+        0.8
+    );
+}
+
+#[test]
+fn reliability_excludes_open_unclassified_and_planned_terminal_runs() {
+    let (mut w, _) = writer("metric-planned");
+    session(&mut w, 1, T0, None);
+    exited(&mut w, 1, 10, T0 + 100, false, true);
+    w.apply(&ev(T0 + 160, EventKind::FfmpegStarted { seq: 1, run: 11 }))
+        .unwrap();
+    exited(&mut w, 1, 11, T0 + 400, true, false);
+    end(&mut w, 1, T0 + 400, EndReason::SourceEnded);
+    for (seq, reason) in [
+        (2, EndReason::ClusterHandoff),
+        (3, EndReason::IntentionalRestart),
+    ] {
+        let start = T0 + seq as i64 * 200 + 100;
+        session(&mut w, seq, start, None);
+        exited(&mut w, seq, seq * 10, start + 100, true, false);
+        end(&mut w, seq, start + 100, reason);
+    }
+    session(&mut w, 4, T0 + 900, None);
+    end(&mut w, 4, T0 + 950, EndReason::ProcessRestart);
+    session(&mut w, 5, T0 + 960, None);
+    let parts = query::summary(&w.conn, &q(T0, T0 + 1000), "local", T0 + 1000).unwrap();
+    let out = query::render_summary(&parts, &[]);
+    assert_eq!((parts.clean, parts.planned, parts.kpis.failures), (1, 2, 1));
+    assert_eq!(out["kpis"]["success_rate"], 0.5);
+}
+
+struct NoLocalHistory;
+
+impl Peers for NoLocalHistory {
+    fn fetch<'a>(
+        &'a self,
+        node: &'a str,
+        req: &'a PeerRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, super::MissingNode>> + Send + 'a>,
+    > {
+        Box::pin(async move { Ok(api::empty_parts(req, node)) })
+    }
+}
+
+#[tokio::test]
+async fn absent_local_history_keeps_real_peer_sessions_summary_and_samples() {
+    let now = T0 + 1000;
+    let (mut w, path) = writer("peer-only-data");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    raw(&w, T0 + 10, 321.0);
+    drop(w);
+    let peer = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
+    let mut cfg = cluster_cfg();
+    cfg.cluster.peers.truncate(1);
+    for scope in ["cluster", "tokyo-1"] {
+        let window = params(&[
+            ("from", &T0.to_string()),
+            ("to", &now.to_string()),
+            ("scope", scope),
+        ]);
+        let sessions = api::answer(&cfg, "sessions", &window, &peer, &NoLocalHistory, now)
+            .await
+            .unwrap();
+        assert_eq!(sessions["items"].as_array().unwrap().len(), 1);
+        let summary = api::answer(&cfg, "summary", &window, &peer, &NoLocalHistory, now)
+            .await
+            .unwrap();
+        assert_eq!(summary["kpis"]["live_secs"], 600);
+        let stats = api::answer(&cfg, "stats", &window, &peer, &NoLocalHistory, now)
+            .await
+            .unwrap();
+        assert!(stats["series"]["bitrate"]["mean"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(321.0)));
+        assert!(stats["missing_nodes"].as_array().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn mixed_retention_keeps_peer_samples_on_the_coordinator_grid() {
+    let now = T0 + 1000;
+    let (w, path) = writer("mixed-grid");
+    let recent = (now - 10 * DAY).div_euclid(60) * 60;
+    let expired = (now - 40 * DAY).div_euclid(60) * 60;
+    for (at, value) in [(recent, 987.0), (expired, 123.0)] {
+        w.conn.execute("INSERT INTO samples_1m (metric,node,bucket,min,max,sum,count) VALUES (1,'tokyo-1',?1,?2,?2,?2,1)", rusqlite::params![at, value]).unwrap();
+    }
+    drop(w);
+    let mut cfg = cluster_cfg();
+    cfg.cluster.peers.truncate(1);
+    let mut small_cfg = cfg.clone();
+    small_cfg.history.retention.rollup_days = 30;
+    let peer = MixedPeers {
+        small: std::sync::Mutex::new(schema::open_ro(&path).unwrap()),
+        small_cfg,
+        now,
+        offline: vec![],
+    };
+    let from = now - 60 * DAY;
+    let window = params(&[
+        ("from", &from.to_string()),
+        ("to", &now.to_string()),
+        ("max_points", "1000"),
+    ]);
+    let stats = api::answer(&cfg, "stats", &window, &peer, &NoLocalHistory, now)
+        .await
+        .unwrap();
+    let (step, _) = query::stats_layout(from, now, "1m", 1000);
+    let i = ((recent - from) / step) as usize;
+    assert_eq!(stats["ts"][i], from + i as i64 * step);
+    assert_eq!(stats["series"]["bitrate"]["mean"][i], 987.0);
+    assert!(
+        !stats["series"]["bitrate"]["mean"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(123.0)),
+        "policy still clamps SQL reads"
+    );
+    assert_eq!(
+        stats["partial_nodes"],
+        json!([{"node":"tokyo-1","clamped_to_days":30}])
+    );
+    assert_eq!(stats["missing_nodes"], json!([]));
+}
+
+#[tokio::test]
+async fn shorter_raw_retention_uses_rollups_and_a_nonduplicated_raw_tail() {
+    let now = T0 + 1000;
+    let (w, path) = writer("mixed-raw-grid");
+    let old = (now - 2 * DAY + 600).div_euclid(60) * 60;
+    let recent = now - 600;
+    raw(&w, old, 17.0);
+    raw(&w, recent, 29.0);
+    maintain::rollup_1m(&w.conn, now).unwrap();
+    maintain::prune_raw(&w.conn, now, 1).unwrap();
+    drop(w);
+    let mut cfg = cluster_cfg();
+    cfg.cluster.peers.truncate(1);
+    let mut small_cfg = cfg.clone();
+    small_cfg.history.retention.raw_days = 1;
+    let peer = MixedPeers {
+        small: std::sync::Mutex::new(schema::open_ro(&path).unwrap()),
+        small_cfg,
+        now,
+        offline: vec![],
+    };
+    let from = now - 2 * DAY;
+    let window = params(&[("from", &from.to_string()), ("to", &now.to_string())]);
+    let data = api::answer(&cfg, "stats", &window, &peer, &NoLocalHistory, now)
+        .await
+        .unwrap();
+    let (step, _) = query::stats_layout(from, now, "raw", 1000);
+    assert_eq!(data["resolution"], "1m");
+    assert_eq!(
+        data["series"]["bitrate"]["mean"][((old - from) / step) as usize],
+        17.0
+    );
+    assert_eq!(
+        data["series"]["bitrate"]["mean"][((recent - from) / step) as usize],
+        29.0
+    );
+    assert_eq!(data["missing_nodes"], json!([]));
+    assert!(
+        data.get("partial_nodes").is_none(),
+        "all requested coverage is available at coarser resolution"
+    );
+    let mut req = PeerRequest {
+        name: "stats".into(),
+        query: q(from, now),
+    };
+    req.query.tier = Some("raw".into());
+    api::check_peer_request(&mut req, &peer.small_cfg, now).unwrap();
+    let parts = query::stats(&peer.small.lock().unwrap(), &req.query, "raw", None).unwrap();
+    assert_eq!(
+        parts.series["bitrate"]
+            .iter()
+            .flatten()
+            .map(|cell| cell.3)
+            .sum::<i64>(),
+        2,
+        "a retained raw sample must not also be counted through its rollup"
+    );
+}
+
+#[test]
+fn empty_legacy_stats_parts_never_define_the_merge_grid() {
+    let (w, _) = writer("empty-stats-order");
+    raw(&w, T0, 123.0);
+    let part = query::stats(&w.conn, &q(T0, T0 + 60), "raw", None).unwrap();
+    for parts in [
+        vec![query::StatsParts::default(), part.clone()],
+        vec![part.clone(), query::StatsParts::default()],
+    ] {
+        assert_eq!(query::merge_stats(parts), Some(part.clone()));
+    }
+}
+
+#[tokio::test]
+async fn incompatible_legacy_peer_grid_is_reported_as_missing() {
+    let now = T0 + 1000;
+    let mut cfg = cluster_cfg();
+    cfg.cluster.peers.truncate(1);
+    let mut part = query::empty_stats(&q(T0 + 500, now), "raw");
+    part.series.get_mut("bitrate").unwrap()[0] = Some((987.0, 987.0, 987.0, 1));
+    let peers = MockPeers(HashMap::from([(
+        "tokyo-1".into(),
+        Ok(serde_json::to_value(part).unwrap()),
+    )]));
+    let window = params(&[("from", &T0.to_string()), ("to", &now.to_string())]);
+    let data = api::answer(&cfg, "stats", &window, &peers, &NoLocalHistory, now)
+        .await
+        .unwrap();
+    assert_eq!(data["missing_nodes"][0]["node_id"], "tokyo-1");
+    assert_eq!(data["missing_nodes"][0]["reason"], "error");
+}
+
+#[test]
+fn session_stats_and_online_peak_respect_session_and_range_boundaries() {
+    let (mut w, _) = writer("session-stat-boundary");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 10,
+        EventKind::StatsSample {
+            seq: 1,
+            bitrate_kbps: (100.0, 100.0, 100.0),
+            fps: None,
+            speed: None,
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(
+        T0 + 10,
+        EventKind::BiliCounts {
+            online: Some(900),
+            watched: None,
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(
+        T0 + 30,
+        EventKind::BiliCounts {
+            online: Some(200),
+            watched: None,
+        },
+    ))
+    .unwrap();
+    end(&mut w, 1, T0 + 100, EndReason::SourceEnded);
+    let id = sessions(&w, T0 + 101).items[0].id.clone();
+    session(&mut w, 2, T0 + 100, None);
+    w.apply(&ev(
+        T0 + 110,
+        EventKind::StatsSample {
+            seq: 2,
+            bitrate_kbps: (800.0, 800.0, 800.0),
+            fps: None,
+            speed: None,
+        },
+    ))
+    .unwrap();
+    let mut qq = q(T0, T0 + 200);
+    qq.session = Some(id);
+    let stats = query::render_stats(&query::stats(&w.conn, &qq, "raw", None).unwrap());
+    let means = stats["series"]["bitrate"]["mean"].as_array().unwrap();
+    assert!(means.contains(&json!(100.0)));
+    assert!(
+        !means.contains(&json!(800.0)),
+        "a session query never includes its neighbour's samples"
+    );
+    let summary = query::summary(&w.conn, &q(T0 + 20, T0 + 100), "local", T0 + 200).unwrap();
+    assert_eq!(
+        summary.kpis.online_peak,
+        Some(200.0),
+        "an earlier session peak outside the range is excluded"
+    );
+    let edge = query::render_stats(&query::stats(&w.conn, &q(T0, T0 + 10), "raw", None).unwrap());
+    assert!(
+        edge["series"]["bitrate"]["mean"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(Value::is_null),
+        "stats use a half-open interval"
+    );
+}
+
+#[tokio::test]
+async fn short_coordinator_retention_does_not_truncate_a_longer_peer() {
+    let now = T0 + 1000;
+    let old = (now - 5 * DAY).div_euclid(60) * 60;
+    let recent = (now - 3600).div_euclid(60) * 60;
+    let (mut local_writer, local_path) = writer("inverse-retention-local");
+    session(&mut local_writer, 1, old, None);
+    end(&mut local_writer, 1, old + 900, EndReason::SourceEnded);
+    session(&mut local_writer, 2, recent, None);
+    end(&mut local_writer, 2, recent + 300, EndReason::SourceEnded);
+    raw(&local_writer, recent + 10, 321.0);
+    maintain::rollup_1m(&local_writer.conn, now).unwrap();
+    drop(local_writer);
+    let (mut peer_writer, peer_path) = writer_node("inverse-retention-peer", "tokyo-1");
+    session(&mut peer_writer, 1, old, None);
+    end(&mut peer_writer, 1, old + 600, EndReason::SourceEnded);
+    raw(&peer_writer, old + 10, 987.0);
+    maintain::rollup_1m(&peer_writer.conn, now).unwrap();
+    drop(peer_writer);
+    let mut cfg = cluster_cfg();
+    cfg.cluster.peers.truncate(1);
+    cfg.history.retention.rollup_days = 1;
+    let mut peer_cfg = cfg.clone();
+    peer_cfg.history.retention.rollup_days = 7;
+    let peer = MixedPeers {
+        small: std::sync::Mutex::new(schema::open_ro(&peer_path).unwrap()),
+        small_cfg: peer_cfg,
+        now,
+        offline: vec![],
+    };
+    let local = LocalConn(
+        std::sync::Mutex::new(schema::open_ro(&local_path).unwrap()),
+        now,
+    );
+    for scope in ["cluster", "tokyo-1"] {
+        let window = params(&[
+            ("from", &(now - 7 * DAY).to_string()),
+            ("to", &now.to_string()),
+            ("scope", scope),
+        ]);
+        let summary = api::answer(&cfg, "summary", &window, &peer, &local, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            summary["kpis"]["live_secs"],
+            if scope == "cluster" { 900 } else { 600 }
+        );
+        assert!(
+            summary["buckets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|b| b["start"].as_i64().unwrap() % (6 * 3600) == 0),
+            "all sources retain the requested six-hour buckets"
+        );
+        let sessions = api::answer(&cfg, "sessions", &window, &peer, &local, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            sessions["items"].as_array().unwrap().len(),
+            if scope == "cluster" { 2 } else { 1 }
+        );
+        assert!(sessions["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["node"] == "tokyo-1" && s["started_at"] == old));
+        let stats = api::answer(&cfg, "stats", &window, &peer, &local, now)
+            .await
+            .unwrap();
+        assert!(stats["series"]["bitrate"]["mean"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(987.0)));
+        assert_eq!(stats["ts"][0], now - 7 * DAY);
+        for data in [summary, sessions, stats] {
+            assert_eq!(data["missing_nodes"], json!([]));
+            assert!(data.get("partial_nodes").is_none());
+            if scope == "cluster" {
+                assert_eq!(data["clamped_to_days"], 1);
+                assert_eq!(data["clamp_scope"], "local");
+            } else {
+                assert!(
+                    data.get("clamped_to_days").is_none(),
+                    "remote scope never inherits local retention metadata"
+                );
+                assert!(data.get("clamp_scope").is_none());
+            }
+        }
     }
 }

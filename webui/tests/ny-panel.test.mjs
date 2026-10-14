@@ -29,7 +29,7 @@ test('the user\'s case: ny pending while jp is bound — no 未绑定, no 请在
   assert.ok(validateForm(form, { secretConfigured: true }).warnings.admin_openid, 'still warns when nothing is pending');
   const ny = credentialRows(status, { writerSet: true }).find(r => r.node_id === 'ny');
   assert.deepEqual(ny.openid, { text: 'openid 待同步', tone: '' });
-  assert.deepEqual(readinessRow(status), { count: '2 / 3', gaps: ['ny 缺 openid（待同步）'], warn: true });
+  assert.deepEqual(readinessRow(status), { count: '2 / 3', gaps: ['ny 缺 openid（待同步）'], warn: false }, 'F rev 3: pending gaps are neutral');
 });
 
 test('bound ny: 已绑定, no pending hint, all nodes ready', () => {

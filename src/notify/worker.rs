@@ -198,6 +198,11 @@ pub struct Worker {
     secret_rev: Option<u64>,
     /// Sealed `notify-openid` (never printed).
     openid: OpenidState,
+    /// Addendum F set metadata, the openid's AppID check, and the greatest
+    /// generation fresh peers report (behind = never the sender).
+    cred_meta: super::credentials::CredentialsMeta,
+    openid_rebind: bool,
+    cluster_generation: u64,
     policy: PolicyConfig,
     tracker: Tracker,
     ledger: NotifyLedger,
@@ -220,6 +225,8 @@ pub struct Worker {
     owner_hint: Option<String>,
     /// The single openid writer (`authority::openid_writer`).
     writer: Option<NodeRef>,
+    /// Fixed diagnostic code, only while no openid writer exists.
+    sender_block_reason: Option<&'static str>,
     /// The node holding (or entitled to hold) the QQ gateway session, as
     /// `/status.gateway_owner` shows it. Informational, except that bind
     /// refuses while it is another node than the writer (O6).
@@ -423,6 +430,9 @@ impl Worker {
             node_id,
             cfg: NotifyConfig::default(),
             cfg_rev: None,
+            cred_meta: Default::default(),
+            openid_rebind: false,
+            cluster_generation: 0,
             secret: None,
             secret_rev: None,
             openid: OpenidState::default(),
@@ -447,6 +457,7 @@ impl Worker {
             gateway_owner: false,
             owner_hint: None,
             writer: None,
+            sender_block_reason: None,
             gateway_holder: None,
             gateway_blocker: None,
             no_capable_node: false,
@@ -517,46 +528,74 @@ impl Worker {
     /// Load `notify-config` / `notify-secrets` / `notify-openid` when their
     /// revisions moved.
     pub fn reload_settings(&mut self) {
-        let config = store::load_config(&self.store);
-        let secret = store::load_secret(&self.store);
-        let openid = store::load_openid(&self.store);
+        // Addendum F rule 8: seed generation 1 from local credentials.
+        if let Err(error) = super::credentials::seed_if_needed(
+            &self.store,
+            &self.node_id,
+            now_secs(),
+            self.gateway.is_some(),
+        ) {
+            tracing::warn!("QQ 通知凭据同步初始化失败 ({:?})", error.kind());
+        }
+        match store::load_settings(&self.store) {
+            Ok(snapshot) => self.apply_settings_snapshot(snapshot),
+            Err(error) => tracing::warn!("QQ 通知设置读取失败 ({:?})", error.kind()),
+        }
+    }
+
+    /// Apply one fully parsed committed set. No field may be re-read from
+    /// the live store while an AppID/binding save can be committing.
+    fn apply_settings_snapshot(&mut self, snapshot: store::SettingsSnapshot) {
+        let meta = snapshot.credentials;
+        if meta != self.cred_meta {
+            // Re-check the openid against the AppID it was bound under.
+            self.openid.record_revision = None;
+            self.cred_meta = meta;
+        }
+        let (cfg, revision) = snapshot.config;
+        let (secret, secret_revision) = snapshot.secret;
+        let mut openid = snapshot.openid;
         // Any save of the settings or the secret clears `bad_credentials`
         // (contract: "clears on the next successful READY or on a save").
         let mut saved = false;
         let mut credentials_changed = false;
-        if let Ok((cfg, revision)) = config {
-            if revision != self.cfg_rev {
-                saved = true;
-                credentials_changed |= cfg.qq != self.cfg.qq;
-                self.policy = PolicyConfig::from_config(&cfg);
-                self.http = build_http(&cfg);
-                self.cfg = cfg;
-                self.cfg_rev = revision;
-            }
+        if revision != self.cfg_rev {
+            saved = true;
+            credentials_changed |= cfg.qq != self.cfg.qq;
+            self.policy = PolicyConfig::from_config(&cfg);
+            self.http = build_http(&cfg);
+            self.cfg = cfg;
+            self.cfg_rev = revision;
         }
-        if let Ok((value, revision)) = secret {
-            if revision != self.secret_rev {
-                saved = true;
-                credentials_changed = true;
-                self.secret = value;
-                self.secret_rev = revision;
-            }
+        if secret_revision != self.secret_rev {
+            saved = true;
+            credentials_changed = true;
+            self.secret = secret;
+            self.secret_rev = secret_revision;
         }
-        match openid {
-            Ok(state) if state.record_revision != self.openid.record_revision => {
-                if state.openid != self.openid.openid {
-                    self.next_send_at = 0;
-                }
-                if !state.is_set()
-                    && matches!(self.binder.state(), super::bind::BindState::Bound { .. })
-                {
-                    // Unbound after a bind: the bind view goes back to idle.
-                    self.binder.cancel();
-                }
-                self.openid = state;
+        let rebind = self
+            .cred_meta
+            .openid_rebind(openid.is_set(), &self.cfg.qq.app_id);
+        if rebind {
+            openid.openid = None;
+            openid.bound_at = None;
+            openid.via = None;
+        }
+        if rebind != self.openid_rebind {
+            self.openid.record_revision = None;
+            self.openid_rebind = rebind;
+        }
+        if openid.record_revision != self.openid.record_revision {
+            if openid.openid != self.openid.openid {
+                self.next_send_at = 0;
             }
-            Ok(_) => {}
-            Err(error) => tracing::warn!("QQ 通知管理员 openid 读取失败: {}", error),
+            if !openid.is_set()
+                && matches!(self.binder.state(), super::bind::BindState::Bound { .. })
+            {
+                // Unbound after a bind: the bind view goes back to idle.
+                self.binder.cancel();
+            }
+            self.openid = openid;
         }
         if saved {
             // Stop refusing calls and retry a gateway that stopped for good.
@@ -568,6 +607,13 @@ impl Worker {
             // New credentials or endpoints: forget the old token and session.
             self.tokens = Arc::new(TokenCache::default());
             self.gateway = None;
+            // A cancelled task may already have queued C2C/READY/Closed
+            // events. A fresh channel also rejects later sends from that
+            // old task; draining alone would leave that race open.
+            (self.gateway_tx, self.gateway_rx) = mpsc::channel(GATEWAY_EVENTS);
+            self.gateway_state = ("off", now_secs(), None);
+            self.binder.cancel();
+            self.passive = None;
         }
         // Sticky mode facts belong to one bot and one admin. Reset them only
         // when those really changed, including while this process was down;
@@ -610,7 +656,16 @@ impl Worker {
     }
 
     fn capable(&self) -> bool {
-        self.cfg.enabled && self.credentials_ready() && self.openid.is_set()
+        self.cfg.enabled
+            && self.credentials_ready()
+            && self.openid.is_set()
+            && !self.credentials_behind()
+    }
+
+    /// Addendum F rule 9: a node that has not received the cluster's set
+    /// generation yet is never the sender.
+    fn credentials_behind(&self) -> bool {
+        self.cluster_generation > self.cred_meta.generation
     }
 
     fn openid_value(&self) -> Option<&str> {
@@ -695,10 +750,21 @@ impl Worker {
         let Ok((revision, _)) = super::openid_sync::current_members(&self.store) else {
             return;
         };
+        let store = Arc::clone(&self.store);
+        let node = self.node_id.clone();
+        self.maybe_pull_at(now, revision, move || {
+            super::openid_sync::spawn_pull(store, node)
+        });
+    }
+
+    /// The pull decision with the start injected (F1 worker-level test).
+    /// Addendum F rule 9: a node that just became a full member (new
+    /// revision) pulls the whole set right away.
+    pub(crate) fn maybe_pull_at(&mut self, now: u64, revision: u64, start: impl FnOnce()) {
         let writer_local = self.writer.as_ref().is_some_and(|writer| writer.is_local);
         if let Some(mark) = next_pull(self.pull_key, revision, writer_local, now) {
             self.pull_key = Some(mark);
-            super::openid_sync::spawn_pull(Arc::clone(&self.store), self.node_id.clone());
+            start();
         } else if let Some(mark) = self.pull_key.as_mut() {
             // Losing the writer role updates the mark without a pull.
             mark.writer_local = writer_local;
@@ -724,6 +790,7 @@ impl Worker {
     /// Everything that does not touch the network. Separate for tests.
     pub fn apply_digest(&mut self, digest: &ClusterDigest, membership_blocked: bool, now: u64) {
         let before = self.ledger.clone();
+        self.cluster_generation = authority::latest_generation(digest, self.cred_meta.generation);
         for peer in &digest.peer_ledgers {
             // A peer with a fast clock must not poison the shared state.
             let mut peer = peer.clone();
@@ -749,7 +816,9 @@ impl Worker {
                     if node.id == digest.local {
                         self.capable()
                     } else {
-                        node.notify_capable
+                        node.fresh
+                            && node.notify_capable
+                            && authority::credentials_current(node, self.cluster_generation)
                     }
                 })
                 .count();
@@ -760,8 +829,19 @@ impl Worker {
         // The QQ gateway follows the sender authority (= the openid writer):
         // the owner, or the delegate while one sends for an owner without
         // the openid. One session per bot, on the node that can bind.
-        self.writer = authority::openid_writer(digest, membership_blocked, self.capable())
-            .map(|(node_id, is_local)| NodeRef { node_id, is_local });
+        self.writer = authority::openid_writer(
+            digest,
+            membership_blocked,
+            self.capable(),
+            self.cred_meta.generation,
+        )
+        .map(|(node_id, is_local)| NodeRef { node_id, is_local });
+        if !self.writer.as_ref().is_some_and(|writer| writer.is_local) && self.binder.waiting(now) {
+            // Hysteresis may retain the old gateway, never its right to bind.
+            self.binder.cancel();
+        }
+        self.sender_block_reason =
+            authority::sender_block_reason(digest, membership_blocked, self.writer.is_some());
         let primary =
             self.writer.as_ref().is_some_and(|writer| writer.is_local) && self.credentials_ready();
         if primary {
@@ -782,12 +862,13 @@ impl Worker {
             digest,
             membership_blocked,
             capable: self.capable(),
+            local_generation: self.cred_meta.generation,
             strict_single_sender: self.cfg.strict_single_sender,
             no_quorum_grace_secs: self.cfg.no_quorum_grace_secs,
             last_authority_seen: self.last_authority_seen,
         });
         if matches!(self.authority, Authority::Primary | Authority::Delegate)
-            || authority::peer_has_authority(digest)
+            || authority::peer_has_authority(digest, self.cred_meta.generation)
         {
             self.last_authority_seen = now;
         }
@@ -1052,10 +1133,12 @@ impl Worker {
     /// 1a gate). Resolved items are held, as for any undeliverable send.
     /// Returns true when it handled the batch.
     fn count_unconfigured(&mut self, now: u64, digest: &ClusterDigest) -> bool {
-        let peer_capable = digest
-            .nodes
-            .iter()
-            .any(|node| node.id != digest.local && node.fresh && node.notify_capable);
+        let peer_capable = digest.nodes.iter().any(|node| {
+            node.id != digest.local
+                && node.fresh
+                && node.notify_capable
+                && authority::credentials_current(node, self.cluster_generation)
+        });
         let orphaned = self.cfg.enabled
             && !self.capable()
             && !peer_capable
@@ -1424,6 +1507,23 @@ impl Worker {
 
     pub async fn handle_gateway_event(&mut self, event: GatewayEvent) {
         let now = now_secs();
+        let connection = self.gateway_tx.clone();
+        match store::load_settings(&self.store) {
+            Ok(snapshot) => self.apply_settings_snapshot(snapshot),
+            Err(error) => {
+                self.binder.cancel();
+                tracing::warn!("QQ 网关事件暂未处理：通知设置读取失败 ({:?})", error.kind());
+                return;
+            }
+        }
+        if !connection.same_channel(&self.gateway_tx) {
+            // This event was received just before a credential save/reload;
+            // it belongs to the channel that the reload has now retired.
+            tracing::debug!("QQ 网关旧连接事件已忽略");
+            let digest = self.digest(now);
+            self.publish(now, &digest);
+            return;
+        }
         match event {
             GatewayEvent::Ready => {
                 self.gateway_state = ("online", now, None);
@@ -1614,9 +1714,14 @@ impl Worker {
         event_id: Option<&str>,
         at: u64,
     ) {
+        if !self.binding_writer_current(now_secs()) {
+            self.binder.cancel();
+            tracing::debug!("QQ 绑定窗口已取消：本节点已不是可写节点");
+            return;
+        }
         // Save first, sealed in `notify-openid`: the binding must survive a
-        // failed reply. The pairing itself is the newest intent, so it takes
-        // the next openid_revision without a revision check.
+        // failed reply. A concurrent bind/unbind or credential change wins
+        // over this connection's captured revision.
         let write = OpenidWrite {
             change: OpenidChange::Set {
                 value: zeroize::Zeroizing::new(openid.to_string()),
@@ -1625,11 +1730,34 @@ impl Worker {
                     BindVia::FriendAdd => "friend_add",
                 },
             },
-            expected: None,
+            expected: Some(self.openid.revision),
             writer: self.node_id.clone(),
             now: at,
         };
-        match store::write_openid(&self.store, write) {
+        let expected_generation = self.cred_meta.generation;
+        let expected_appid = self.cfg.qq.app_id.trim().to_string();
+        let expected_secret = self.secret_rev;
+        match store::write_openid_with(&self.store, write, move |tx| {
+            let meta = super::credentials::load_meta_tx(tx)?;
+            let config = tx.read(store::CONFIG_RECORD)?;
+            let appid = config
+                .as_ref()
+                .and_then(|doc| doc.value.pointer("/qq/app_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let secret_revision = tx.read(store::SECRETS_RECORD)?.map(|doc| doc.revision);
+            if meta.generation != expected_generation
+                || appid != expected_appid
+                || secret_revision != expected_secret
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "机器人凭据已更新，请重新绑定",
+                ));
+            }
+            Ok(())
+        }) {
             Ok(revision) => {
                 tracing::info!(
                     "QQ 通知管理员 openid 已绑定 (openid=<set>, revision {})",
@@ -1639,7 +1767,11 @@ impl Worker {
                 // 1b: every current member gets the new value.
                 super::openid_sync::spawn_push(Arc::clone(&self.store), self.node_id.clone());
             }
-            Err(error) => tracing::warn!("QQ 通知 openid 保存失败: {}", error),
+            Err(error) => {
+                self.binder.cancel();
+                tracing::warn!("QQ 通知 openid 保存失败 ({:?})", error.kind());
+                return;
+            }
         }
         if via == BindVia::Message {
             self.ledger.record_admin_message(at);
@@ -1686,6 +1818,29 @@ impl Worker {
         }
     }
 
+    /// A queued message can arrive before the next ordinary cluster tick.
+    /// Re-read that authority immediately before the binding transaction;
+    /// never hold a cluster guard while the store commits.
+    fn binding_writer_current(&self, now: u64) -> bool {
+        if !self.writer.as_ref().is_some_and(|writer| writer.is_local)
+            || !self.gateway_owner
+            || !self.credentials_ready()
+            || self.gateway_blocker.is_some()
+            || self
+                .gateway_holder
+                .as_ref()
+                .is_some_and(|holder| !holder.is_local)
+        {
+            return false;
+        }
+        let digest = self.digest(now);
+        let blocked =
+            digest.enabled && crate::cluster::membership::membership_block_reason().is_some();
+        authority::openid_writer(&digest, blocked, self.capable(), self.cred_meta.generation)
+            .is_some_and(|(_, is_local)| is_local)
+            && authority::may_identify(&digest).is_ok()
+    }
+
     fn publish(&self, now: u64, digest: &ClusterDigest) {
         let status = self.status(now, digest);
         self.publish_status(status);
@@ -1709,6 +1864,8 @@ impl Worker {
             "gateway_owner": self.gateway_holder,
             "owner_node": self.owner_hint,
             "cluster_enabled": digest.enabled,
+            "cluster_quorum": !digest.enabled || digest.quorum,
+            "sender_block_reason": self.sender_block_reason,
             "gateway": {
                 "state": self.gateway_state.0,
                 "since": self.gateway_state.1,
@@ -1764,7 +1921,7 @@ impl Worker {
 
     fn publish_status(&self, status: serde_json::Value) {
         let signature = format!(
-            "{}|{:?}|{}|{}|{}|{:?}|{:?}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{:?}",
             self.gateway_state.0,
             self.binder.state(),
             self.authority.as_str(),
@@ -1774,6 +1931,8 @@ impl Worker {
             self.writer,
             self.openid.revision,
             self.bad_credentials,
+            status["cluster_quorum"],
+            self.sender_block_reason,
         );
         {
             let mut shared = super::shared();
@@ -1786,6 +1945,8 @@ impl Worker {
             shared.appsecret_set = self.secret.is_some();
             shared.appid_set = !self.cfg.qq.app_id.trim().is_empty();
             shared.openid_set = self.openid.is_set();
+            shared.credentials_generation = self.cred_meta.generation;
+            shared.openid_rebind = self.openid_rebind;
         }
         let mut last = self.signature.lock().unwrap_or_else(|e| e.into_inner());
         if *last != signature {

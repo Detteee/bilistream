@@ -41,6 +41,22 @@ pub fn execution_primary(digest: &ClusterDigest, membership_blocked: bool) -> bo
     !membership_blocked && (!digest.enabled || digest.fence_block.is_none())
 }
 
+/// The worker's committed local value overrides its older heartbeat copy.
+pub fn latest_generation(digest: &ClusterDigest, local_generation: u64) -> u64 {
+    digest
+        .nodes
+        .iter()
+        .filter(|node| node.id != digest.local && node.fresh)
+        .filter_map(|node| node.credentials_generation)
+        .fold(local_generation, u64::max)
+}
+
+/// Unknown is a legacy peer; a known older generation is never eligible.
+pub fn credentials_current(node: &NodeSlot, latest: u64) -> bool {
+    node.credentials_generation
+        .is_none_or(|generation| generation >= latest)
+}
+
 /// The single openid writer (contract "Single writer" / "Writer edge
 /// cases", Architect 17:43 and 18:12): the node with SENDER AUTHORITY, the
 /// same node `/status.authority_node_id` names.
@@ -60,25 +76,28 @@ pub fn openid_writer(
     digest: &ClusterDigest,
     membership_blocked: bool,
     local_capable: bool,
+    local_generation: u64,
 ) -> Option<(String, bool)> {
     let local = || Some((digest.local.clone(), true));
     if !digest.enabled {
         return local();
     }
-    if membership_blocked || !digest.quorum || digest.handoff_pending {
+    if common_writer_block(digest, membership_blocked).is_some() {
         return None;
     }
     let owner_id = digest.owner.as_deref()?;
+    let latest = latest_generation(digest, local_generation);
+    let local_current = local_generation >= latest;
     let local_primary = execution_primary(digest, membership_blocked);
     let owner_capable = if local_primary {
-        local_capable
+        local_capable && local_current
     } else {
         let owner = digest.node(owner_id)?;
         if owner.id == digest.local || !owner.fresh || owner.draining {
             // Not executing here, and the owner is not a live peer.
             return None;
         }
-        owner.notify_capable || owner.notify_authority
+        credentials_current(owner, latest) && (owner.notify_capable || owner.notify_authority)
     };
     let owner = || {
         if local_primary {
@@ -98,17 +117,62 @@ pub fn openid_writer(
         .filter(|node| node.id != owner_id && !node.draining)
         .filter(|node| {
             if node.id == digest.local {
-                local_capable && !digest.local_draining
+                local_capable && local_current && !digest.local_draining
             } else {
-                node.fresh && node.notify_capable
+                node.fresh && node.notify_capable && credentials_current(node, latest)
             }
         })
         .map(|node| node.id.as_str())
         .min();
     match delegate {
         Some(id) => Some((id.to_string(), id == digest.local)),
-        None => owner(),
+        None if local_primary && local_current => owner(),
+        None if !local_primary
+            && digest
+                .node(owner_id)
+                .is_some_and(|node| credentials_current(node, latest)) =>
+        {
+            owner()
+        }
+        None => None,
     }
+}
+
+fn common_writer_block(digest: &ClusterDigest, membership_blocked: bool) -> Option<&'static str> {
+    if membership_blocked {
+        Some("membership_change")
+    } else if digest.enabled && !digest.quorum {
+        Some("no_quorum")
+    } else if digest.handoff_pending {
+        Some("handoff")
+    } else {
+        None
+    }
+}
+
+/// Stable, value-free diagnostics for a missing writer. A standby's stream
+/// fence is expected and must never be reported as a notification failure.
+pub fn sender_block_reason(
+    digest: &ClusterDigest,
+    membership_blocked: bool,
+    writer_exists: bool,
+) -> Option<&'static str> {
+    if writer_exists {
+        return None;
+    }
+    common_writer_block(digest, membership_blocked).or_else(|| {
+        let owner_available = digest.owner.as_ref().is_some_and(|id| {
+            id == &digest.local
+                || digest
+                    .node(id)
+                    .is_some_and(|node| node.fresh && !node.draining)
+        });
+        Some(if owner_available {
+            "execution_blocked"
+        } else {
+            "owner_unavailable"
+        })
+    })
 }
 
 pub struct DecideInput<'a> {
@@ -116,6 +180,7 @@ pub struct DecideInput<'a> {
     pub membership_blocked: bool,
     /// Enabled, AppID + AppSecret + admin openid present on this node.
     pub capable: bool,
+    pub local_generation: u64,
     pub strict_single_sender: bool,
     pub no_quorum_grace_secs: u64,
     /// Latest time this node saw any node (itself included) with authority.
@@ -124,7 +189,8 @@ pub struct DecideInput<'a> {
 
 pub fn decide(input: &DecideInput<'_>) -> Authority {
     let digest = input.digest;
-    if !input.capable {
+    let latest = latest_generation(digest, input.local_generation);
+    if !input.capable || input.local_generation < latest {
         return Authority::None;
     }
     if execution_primary(digest, input.membership_blocked) {
@@ -149,7 +215,10 @@ pub fn decide(input: &DecideInput<'_>) -> Authority {
     let lowest = digest
         .nodes
         .iter()
-        .filter(|node| node.id == digest.local || (node.fresh && node.notify_capable))
+        .filter(|node| {
+            node.id == digest.local
+                || (node.fresh && node.notify_capable && credentials_current(node, latest))
+        })
         .map(|node| node.id.as_str())
         .min();
     if lowest == Some(digest.local.as_str()) {
@@ -162,6 +231,7 @@ pub fn decide(input: &DecideInput<'_>) -> Authority {
 /// Full-scope stand-in for a fresh primary that cannot send.
 fn delegate(input: &DecideInput<'_>) -> Option<Authority> {
     let digest = input.digest;
+    let latest = latest_generation(digest, input.local_generation);
     if !digest.enabled
         || !digest.quorum
         || input.membership_blocked
@@ -171,25 +241,35 @@ fn delegate(input: &DecideInput<'_>) -> Option<Authority> {
         return None;
     }
     let owner = digest.node(digest.owner.as_deref()?)?;
-    if owner.id == digest.local || !owner.fresh || owner.notify_capable || owner.notify_authority {
+    if owner.id == digest.local
+        || !owner.fresh
+        || owner.draining
+        || (credentials_current(owner, latest) && (owner.notify_capable || owner.notify_authority))
+    {
         return None;
     }
     let lowest = digest
         .nodes
         .iter()
         .filter(|node| node.id != owner.id && !node.draining)
-        .filter(|node| node.id == digest.local || (node.fresh && node.notify_capable))
+        .filter(|node| {
+            node.id == digest.local
+                || (node.fresh && node.notify_capable && credentials_current(node, latest))
+        })
         .map(|node| node.id.as_str())
         .min()?;
     (lowest == digest.local).then_some(Authority::Delegate)
 }
 
 /// Does any fresh peer currently advertise authority?
-pub fn peer_has_authority(digest: &ClusterDigest) -> bool {
-    digest
-        .nodes
-        .iter()
-        .any(|node| node.id != digest.local && node.fresh && node.notify_authority)
+pub fn peer_has_authority(digest: &ClusterDigest, local_generation: u64) -> bool {
+    let latest = latest_generation(digest, local_generation);
+    digest.nodes.iter().any(|node| {
+        node.id != digest.local
+            && node.fresh
+            && node.notify_authority
+            && credentials_current(node, latest)
+    })
 }
 
 /// May this node IDENTIFY/RESUME a QQ gateway session now? (contract line
@@ -261,6 +341,8 @@ pub fn read_digest(cfg: &Config, now: u64) -> ClusterDigest {
                 appsecret_set: node.notify_appsecret_set,
                 appid_set: node.notify_appid_set,
                 openid_set: node.notify_openid_set,
+                credentials_generation: node.notify_credentials_generation,
+                openid_rebind: node.notify_openid_rebind,
             }
         })
         .collect();
@@ -291,7 +373,13 @@ pub fn read_digest(cfg: &Config, now: u64) -> ClusterDigest {
         owner: state.active_owner.clone(),
         quorum: crate::cluster::state_has_fresh_quorum(&state, cfg, now),
         fence_block: crate::cluster::state_monitoring_block_reason(&state, cfg, now),
-        handoff_pending: state.local_execution_held || state.pending_handoff_source.is_some(),
+        // A normal demotion permanently holds streaming execution until
+        // promotion. That standby may still be the QQ delegate. Only an
+        // owner awaiting activation, or an actual pending handoff, blocks
+        // notification authority; the streaming fence remains unchanged.
+        handoff_pending: state.pending_handoff_source.is_some()
+            || (state.local_execution_held
+                && state.active_owner.as_deref() == Some(cfg.cluster.node_id.as_str())),
         local_draining: state.local_draining,
         peer_count: cfg
             .cluster
@@ -349,6 +437,7 @@ mod tests {
             digest: d,
             membership_blocked: false,
             capable,
+            local_generation: 0,
             strict_single_sender: strict,
             no_quorum_grace_secs: 120,
             last_authority_seen: last_seen,
@@ -494,13 +583,196 @@ mod tests {
         assert_eq!(run(&b2, 9_990, false, true), Authority::None);
     }
 
+    fn demoted_cluster(local: &str, now: u64) -> Config {
+        use crate::cluster::{empty_node, ClusterHealth, ClusterState, PeerOwnerView};
+        let mut cfg = crate::cluster::tests::test_config(local, 0);
+        let members = ["ca", "jp", "ny"];
+        cfg.cluster.peers = members
+            .iter()
+            .filter(|id| **id != local)
+            .map(|id| crate::config::ClusterPeer {
+                node_id: (*id).into(),
+                name: (*id).into(),
+                api_url: "http://127.0.0.1:9".into(),
+                priority: 0,
+            })
+            .collect();
+        let mut state = ClusterState {
+            active_owner: Some("ca".into()),
+            // This is the lasting state written by an ordinary demotion.
+            local_execution_held: local != "ca",
+            ..Default::default()
+        };
+        for id in members {
+            let mut snapshot = empty_node(id, id, "", 0, id == local, now);
+            snapshot.last_seen = Some(now);
+            snapshot.health = ClusterHealth::healthy();
+            snapshot.notify_capable = id == "jp";
+            snapshot.notify_gateway_held = Some(false);
+            state.nodes.insert(id.into(), snapshot);
+            if id != local {
+                state.peer_heartbeat_acks.insert(id.into(), now);
+                state.peer_owner_views.insert(
+                    id.into(),
+                    PeerOwnerView {
+                        owner: Some("ca".into()),
+                        received_at: now,
+                        members: members.iter().map(|id| (*id).to_string()).collect(),
+                        confirmed_by_heartbeat: true,
+                    },
+                );
+            }
+        }
+        *crate::cluster::cluster_state_write() = state;
+        cfg
+    }
+
+    #[test]
+    fn a_normally_demoted_owner_stays_stream_fenced_but_is_the_unique_notification_delegate() {
+        let _guard = crate::cluster::tests::ClusterStateGuard::new();
+        let now = 10_000;
+        let mut senders = Vec::new();
+        for local in ["ca", "jp", "ny"] {
+            let cfg = demoted_cluster(local, now);
+            let digest = read_digest(&cfg, now);
+            assert!(digest.quorum);
+            assert!(!digest.handoff_pending);
+            let capable = local == "jp";
+            senders.push(run(&digest, now, false, capable));
+            let writer = openid_writer(&digest, false, capable, 0);
+            assert_eq!(writer, Some(("jp".into(), capable)));
+            assert_eq!(sender_block_reason(&digest, false, writer.is_some()), None);
+            if local != "ca" {
+                assert!(
+                    digest.fence_block.is_some(),
+                    "standby must remain stream-fenced"
+                );
+                assert!(crate::cluster::cluster_state_read().local_execution_held);
+            }
+        }
+        assert_eq!(
+            senders,
+            vec![Authority::None, Authority::Delegate, Authority::None]
+        );
+
+        let cfg = demoted_cluster("jp", now);
+        crate::cluster::cluster_state_write()
+            .nodes
+            .get_mut("ca")
+            .unwrap()
+            .notify_gateway_held = Some(true);
+        assert_eq!(
+            may_identify(&read_digest(&cfg, now)),
+            Err("ca".into()),
+            "old gateway must close first"
+        );
+    }
+
+    #[test]
+    fn a_real_pending_handoff_and_lost_quorum_still_block_the_demoted_delegate() {
+        let _guard = crate::cluster::tests::ClusterStateGuard::new();
+        let now = 10_000;
+        let cfg = demoted_cluster("jp", now);
+        for (owner, held, source) in [
+            ("jp", true, None),
+            ("jp", false, Some("ca")),
+            ("ca", true, Some("ny")),
+        ] {
+            {
+                let mut state = crate::cluster::cluster_state_write();
+                state.active_owner = Some(owner.into());
+                state.local_execution_held = held;
+                state.pending_handoff_source = source.map(str::to_string);
+            }
+            let digest = read_digest(&cfg, now);
+            assert!(digest.quorum);
+            assert!(digest.handoff_pending);
+            assert_eq!(run(&digest, now, false, true), Authority::None);
+            assert_eq!(openid_writer(&digest, false, true, 0), None);
+            assert_eq!(sender_block_reason(&digest, false, false), Some("handoff"));
+        }
+        let cfg = demoted_cluster("jp", now);
+        crate::cluster::cluster_state_write()
+            .peer_heartbeat_acks
+            .clear();
+        let digest = read_digest(&cfg, now);
+        assert!(!digest.quorum);
+        assert_eq!(run(&digest, now, false, true), Authority::None);
+        assert_eq!(openid_writer(&digest, false, true, 0), None);
+        assert_eq!(
+            sender_block_reason(&digest, false, false),
+            Some("no_quorum")
+        );
+        assert_eq!(
+            sender_block_reason(&digest, true, false),
+            Some("membership_change")
+        );
+    }
+
     #[test]
     fn a_fresh_peer_with_authority_is_seen() {
         let mut d = digest("b", vec![node("a", true), node("b", true)], Some("x"));
-        assert!(!peer_has_authority(&d));
+        assert!(!peer_has_authority(&d, 0));
         d.nodes[0].notify_authority = true;
-        assert!(peer_has_authority(&d));
+        assert!(peer_has_authority(&d, 0));
         d.nodes[0].fresh = false;
-        assert!(!peer_has_authority(&d));
+        assert!(!peer_has_authority(&d, 0));
+    }
+
+    #[test]
+    fn known_older_generations_cannot_block_the_current_delegate_but_legacy_peers_remain_eligible()
+    {
+        let mut senders = Vec::new();
+        for local in ["a", "b", "c"] {
+            let mut nodes = vec![node("a", true), node("b", true), node("c", true)];
+            for slot in &mut nodes {
+                slot.credentials_generation = Some(if slot.id == "c" { 3 } else { 2 });
+            }
+            nodes[0].notify_authority = true;
+            if local == "c" {
+                // The local commit is newer than its last heartbeat.
+                nodes[2].credentials_generation = Some(1);
+            }
+            let d = digest(local, nodes, (local != "a").then_some("standby"));
+            let generation = if local == "c" { 3 } else { 2 };
+            assert_eq!(
+                openid_writer(&d, false, true, generation),
+                Some(("c".into(), local == "c"))
+            );
+            assert!(!peer_has_authority(&d, generation));
+            senders.push(decide(&DecideInput {
+                digest: &d,
+                membership_blocked: false,
+                capable: true,
+                local_generation: generation,
+                strict_single_sender: false,
+                no_quorum_grace_secs: 120,
+                last_authority_seen: d.now,
+            }));
+        }
+        assert_eq!(
+            senders,
+            vec![Authority::None, Authority::None, Authority::Delegate]
+        );
+
+        let mut nodes = vec![node("a", true), node("b", true), node("c", true)];
+        nodes[0].credentials_generation = Some(2);
+        nodes[1].credentials_generation = None;
+        let mut d = digest("c", nodes, Some("standby"));
+        assert_eq!(openid_writer(&d, false, true, 3), Some(("b".into(), false)));
+        d.nodes[0].draining = true;
+        assert_eq!(openid_writer(&d, false, true, 3), None);
+        assert_eq!(
+            decide(&DecideInput {
+                digest: &d,
+                membership_blocked: false,
+                capable: true,
+                local_generation: 3,
+                strict_single_sender: false,
+                no_quorum_grace_secs: 120,
+                last_authority_seen: d.now,
+            }),
+            Authority::None
+        );
     }
 }

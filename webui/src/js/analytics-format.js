@@ -390,8 +390,11 @@ export function historyQuery(params) {
 }
 const posInt = n => Number.isInteger(n) && n > 0;
 // W15: the server clamped the requested range to its retention.
-export function clampNoticeText(days) {
-  return posInt(days) ? `所选范围超出保留期，仅显示最近 ${days} 天` : null;
+export function clampNoticeText(days, scope = null) {
+  if (!posInt(days)) return null;
+  return scope === 'local'
+    ? `本节点仅含最近 ${days} 天，其他节点按各自保留期显示。`
+    : `所选范围超出保留期，仅显示最近 ${days} 天`;
 }
 // W16: some nodes keep less history than the range covers.
 export function partialNodesText(list) {
@@ -404,15 +407,28 @@ export function partialNodesText(list) {
 // wins, and per node the smallest day count wins (first-seen node order).
 export function mergeRetention(datas) {
   let clamp = null;
+  let scope = null;
   const nodes = new Map();
   for (const d of datas || []) {
     if (!d || typeof d !== 'object') continue;
-    if (posInt(d.clamped_to_days)) clamp = clamp == null ? d.clamped_to_days : Math.min(clamp, d.clamped_to_days);
+    if (posInt(d.clamped_to_days)) {
+      clamp = clamp == null ? d.clamped_to_days : Math.min(clamp, d.clamped_to_days);
+      if (d.clamp_scope === 'local') scope = 'local';
+    }
     for (const p of Array.isArray(d.partial_nodes) ? d.partial_nodes : []) {
       if (!p || typeof p.node !== 'string' || !p.node || !posInt(p.clamped_to_days)) continue;
       nodes.set(p.node, nodes.has(p.node) ? Math.min(nodes.get(p.node), p.clamped_to_days) : p.clamped_to_days);
     }
   }
-  return { clamped: clampNoticeText(clamp), partial: partialNodesText([...nodes].map(([node, clamped_to_days]) => ({ node, clamped_to_days }))) };
+  return { clamped: clampNoticeText(clamp, scope), partial: partialNodesText([...nodes].map(([node, clamped_to_days]) => ({ node, clamped_to_days }))) };
 }
 export const EVENTS_EMPTY = '暂无事件记录';
+// Keep isolated observations visible without drawing across unrecorded
+// intervals. uPlot's point filter takes source-column indices.
+export function isolatedPointIndices(values = []) {
+  const indices = [];
+  for (let i = 0; i < values.length; i++) {
+    if (Number.isFinite(values[i]) && !Number.isFinite(values[i - 1]) && !Number.isFinite(values[i + 1])) indices.push(i);
+  }
+  return indices.length ? indices : null;
+}

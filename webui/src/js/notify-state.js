@@ -278,9 +278,12 @@ export function selectState({ loading = false, loadError = null, settings = null
   const qq = cfg.qq || {};
   const secret = appSecretSet(settings);
   const missing = [];
-  if (!qq.app_id) missing.push('AppID');
-  if (!secret) missing.push('AppSecret');
-  if (!settings?.openid_set && !openidPending(settings, status)) missing.push('管理员 openid');
+  // §16.y: a pending credential never counts as missing; a rebind is handled
+  // as 本节点未就绪 below (room ruling), not as 未配置.
+  const rebind = openidRebind(settings, status);
+  if (!appIdSet(settings) && !credentialPending(settings, status, 'appid')) missing.push('AppID');
+  if (!secret && !credentialPending(settings, status, 'appsecret')) missing.push('AppSecret');
+  if (!settings?.openid_set && !rebind && !credentialPending(settings, status, 'openid')) missing.push('管理员 openid');
   if (!cfg.enabled) {
     return missing.length
       ? { key: 'off', badge: '未启用', tone: 'draining', missing }
@@ -292,21 +295,28 @@ export function selectState({ loading = false, loadError = null, settings = null
   if (qqFailure) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
   // `status.warning` (1a) is the source of truth so the panel and the QQ alert
   // agree; the per-node check is only a fallback when the field is absent.
-  if (noCapableNode(status)) return { key: 'no-sender', badge: '无法发送', tone: 'unhealthy', missing };
+  // §16.y: a rebind (every node lost its openid with the AppID change) is
+  // reported as 本节点未就绪 with the rebind hint, not as 无法发送.
+  if (!rebind && noCapableNode(status)) return { key: 'no-sender', badge: '无法发送', tone: 'unhealthy', missing };
   // §16.7, only once the backend reports per-node credentials (1b).
   if (hasNodeCredentials(status)) {
     const nodes = status.nodes;
     const self = nodes.find(n => n.is_local);
     // §16.x B1: a pending openid (writer has it, sync on its way) is not
     // missing. Only AppID / AppSecret can make a pending node 未就绪.
-    const pending = openidPending(settings, status);
-    if (self && (pending ? true : !nodeReady(self))) {
+    const pending = credentialPending(settings, status, 'openid');
+    const anyPending = pending || credentialPending(settings, status, 'appid') || credentialPending(settings, status, 'appsecret');
+    if (self && (anyPending || rebind ? true : !nodeReady(self))) {
       const lacks = [
-        self.appid_set === false && 'AppID',
-        !self.appsecret_set && 'AppSecret',
-        !pending && !self.openid_set && '管理员 openid',
+        self.appid_set === false && !credentialPending(settings, status, 'appid') && 'AppID',
+        !self.appsecret_set && !credentialPending(settings, status, 'appsecret') && 'AppSecret',
+        rebind ? '管理员 openid（需重新绑定）' : (!pending && !self.openid_set && '管理员 openid'),
       ].filter(Boolean);
-      if (lacks.length || (!pending && !nodeReady(self))) {
+      // C1 (room ruling): while pending, nodeReady() is not called as-is (its
+      // openid_set check would bring back 未就绪); only notify_capable:false
+      // counts, and only when some code on the node is not a pending one.
+      const capableGap = anyPending && self.notify_capable === false && !onlyPendingCodes(self);
+      if (lacks.length || capableGap || (!anyPending && !nodeReady(self))) {
         return { key: 'node-unready', badge: '本节点未就绪', tone: 'sync-warning', missing, lacks };
       }
     }
@@ -322,7 +332,7 @@ export function selectState({ loading = false, loadError = null, settings = null
     return { key: 'sender', badge: '已连接', tone: 'active', missing };
   }
   if (status?.authority_node_id) return { key: 'standby', badge: '待命', tone: '', missing };
-  return { key: 'electing', badge: '等待选举', tone: 'sync-warning', missing };
+  return { key: 'electing', badge: senderBlockView(status)?.badge || '等待选举', tone: 'sync-warning', missing };
 }
 
 // 1b feature detection (§16.10). Today's `nodes` entries already exist for
@@ -345,17 +355,24 @@ function nodeReady(node) {
 export function credentialRows(status, { pending = new Set(), localUnbound = false, cleared = new Map(), now = Date.now(), writerSet = undefined } = {}) {
   if (!hasNodeCredentials(status)) return [];
   return status.nodes.map(n => {
-    const secret = n.appsecret_set ? { text: 'AppSecret 已同步', tone: 'active' } : { text: 'AppSecret 未设置', tone: 'sync-warning' };
+    const codes = Array.isArray(n.missing) ? n.missing : [];
+    const secret = codes.includes('appsecret_pending') ? { text: 'AppSecret 待同步', tone: '' }
+      : n.appsecret_set ? { text: 'AppSecret 已同步', tone: 'active' } : { text: 'AppSecret 未设置', tone: 'sync-warning' };
+    const appid = codes.includes('appid_pending') ? { text: 'AppID 待同步', tone: '' } : null;
+    // N3: a silent node (fresh:false or a stale code) is marked 离线.
+    const offline = n.fresh === false || codes.includes('stale');
     let openid;
     const unbinding = pending.has(n.node_id) || localUnbound;
     if (n.openid_set && unbinding) {
       openid = n.fresh === false ? { text: '等待节点上线后清除', tone: '' } : { text: '解绑中…', tone: 'sync-warning' };
     } else if (n.openid_set) openid = { text: 'openid 已同步', tone: 'active' };
+    else if (codes.includes('openid_rebind')) openid = { text: 'openid 需重新绑定', tone: 'sync-warning' };
+    else if (codes.includes('openid_pending')) openid = { text: 'openid 待同步', tone: '' };
     else if (cleared.has(n.node_id) && now - cleared.get(n.node_id) < 10_000) openid = { text: '已清除', tone: '' };
     else if (writerSet === true) openid = { text: 'openid 待同步', tone: '' };   // §16.x: on its way
     else if (localUnbound) openid = null;   // whole cluster unbound on purpose: nothing to flag
     else openid = { text: 'openid 未同步', tone: 'sync-warning' };
-    return { node_id: n.node_id, local: Boolean(n.is_local), secret, openid };
+    return { node_id: n.node_id, local: Boolean(n.is_local), offline, appid, secret, openid };
   });
 }
 
@@ -384,11 +401,29 @@ function handoffHint(status) {
   return isHandoff(status) ? '发送节点切换中，绑定可能暂时失败。' : '';
 }
 
+const SENDER_BLOCKS = {
+  membership_change: { badge: '成员变更中', reason: '集群成员变更尚未完成' },
+  no_quorum: { badge: '无多数派', reason: '集群暂无多数派' },
+  handoff: { badge: '切换中', reason: '发送节点切换中' },
+  owner_unavailable: { badge: '等待活跃节点', reason: '活跃节点尚未就绪' },
+  execution_blocked: { badge: '等待发送节点', reason: '发送条件尚未满足' },
+};
+// These are explicit backend diagnostics, not an inference from authority or
+// peer count. Older backends and unknown future codes keep generic copy.
+export function senderBlockView(status) {
+  const code = status?.cluster_quorum === false ? 'no_quorum' : status?.sender_block_reason;
+  return Object.hasOwn(SENDER_BLOCKS, code) ? SENDER_BLOCKS[code] : null;
+}
+
 export function noWriterReason(status) {
   if (isHandoff(status)) return '发送节点切换中，请稍后重试。';
   if (status?.authority === 'no_quorum_fallback') return '当前为无多数派代发，暂不能修改绑定。';
-  if (status?.authority === 'none' && Array.isArray(status?.nodes) && status.nodes.length > 1) return '集群暂无多数派，暂不能修改绑定。';
+  const block = senderBlockView(status);
+  if (block) return `${block.reason}，暂不能修改绑定。`;
   if (status?.worker_running !== false && (status?.enabled === false || status?.credentials_ready === false)) return '请先启用通知并保存 AppID 和 AppSecret。';
+  // No authority also covers a fenced owner, handoff or membership hold.
+  // Peer count alone cannot establish a quorum failure.
+  if (status?.authority === 'none') return '发送节点尚未就绪，请稍后重试。';
   return '请稍后重试。';
 }
 
@@ -411,11 +446,35 @@ export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
       return { kind: 'already_bound', banner: { lead: '已绑定，请先解除绑定再重新绑定。', text: '', tone: 'warn', action: { label: '去解除绑定', target: 'notify-clear-openid' } } };
     case 'credentials_missing':
       return { kind: 'credentials_missing', banner: { lead: '请先填写并保存 AppID 与 AppSecret。', text: '', tone: 'warn', action: { label: '去填写', target: 'credentials' } } };
+    // §16.y / F rev 2: stale page or concurrent save. Same copy and 刷新 button
+    // for the 409 and for 400 base_generation_required. Never auto-retried.
+    case 'credentials_conflict':
+    case 'base_generation_required':
+    case 'credentials_holder_moved':
+      return { kind: 'credentials_conflict', banner: { lead: `${CONFLICT_TEXT}。`, text: '', tone: 'warn', action: { label: '刷新', target: 'refresh' } } };
+    case 'credentials_holder_unreachable':
+      return { kind: 'holder_down', banner: { lead: `${HOLDER_DOWN_TEXT}。`, text: '', tone: 'warn' } };
     case 'bad_credentials':
       return { kind: 'bad_credentials', banner: { lead: '凭据无效。', text: '请检查 AppID 和 AppSecret 后重新填写。', tone: 'danger', action: { label: '重新填写', target: 'notify-app-secret' } } };
     default:
+      // L3 / N2 (spec 9bfa97aa): an uncoded 503 on the settings and 清除 routes is
+      // the holder being down; on the bind route it keeps 「通知服务未启动」 (§16.11).
+      if (route === 'config' && error?.status === 503) return { kind: 'holder_down', banner: { lead: `${HOLDER_DOWN_TEXT}。`, text: '', tone: 'warn' } };
       return null;
   }
+}
+// N1: one copy of each string (used by notifyRefusal and exported for tests).
+export const CONFLICT_TEXT = '配置已在其他节点更新，请刷新后重试';
+export const HOLDER_DOWN_TEXT = '发送节点暂时无法连接，未保存任何更改，请稍后重试';
+
+// L1 (§16.y spec 58926f9b): a refused save or 清除 (409, 400, 503) that carried a
+// typed AppSecret gets a second banner line in the same tone; the caller moves
+// focus to the AppSecret field. No typed AppSecret: banner unchanged.
+export const SECRET_NOT_SAVED = 'AppSecret 未保存，请重新填写。';
+const SECRET_LOST_KINDS = new Set(['credentials_conflict', 'holder_down']);
+export function secretLostRefusal(refusal, secretTyped) {
+  if (!refusal || !secretTyped || !SECRET_LOST_KINDS.has(refusal.kind)) return refusal;
+  return { ...refusal, banner: { ...refusal.banner, note: SECRET_NOT_SAVED }, focus: 'notify-app-secret' };
 }
 
 // AppSecret flag: `appsecret_set`, with the deprecated name as fallback.
@@ -686,6 +745,14 @@ export function writerName(status) {
 export function openidView(settings, status) {
   if (!settings) return { badge: '读取中', tone: '', pending: false, hint: null };
   if (settings.openid_set) return { badge: '已绑定', tone: 'active', pending: false, hint: null };
+  // §16.y: rebind is a warning with the bind controls shown, never pending.
+  if (openidRebind(settings, status)) return { badge: '需重新绑定', tone: 'sync-warning', pending: false, rebind: true, hint: rebindHint(status, settings) };
+  if (credentialPending(settings, status, 'openid') && !openidPending(settings, status)) {
+    const w = writerName(status);
+    return w
+      ? { badge: `已在 ${w} 绑定 · 待同步`, tone: '', pending: true, hint: `openid 在发送节点 ${w} 上绑定，会自动同步到本节点。` }
+      : { badge: '已在发送节点绑定 · 待同步', tone: '', pending: true, hint: 'openid 在发送节点上绑定，会自动同步到本节点。' };
+  }
   if (openidPending(settings, status)) {
     const w = writerName(status);
     return w
@@ -696,7 +763,8 @@ export function openidView(settings, status) {
 }
 
 const GAP_COPY = {
-  openid_pending: '缺 openid（待同步）', openid: '缺 openid', appsecret: '缺 AppSecret', appid: '缺 AppID', stale: '心跳超时',
+  openid_pending: '缺 openid（待同步）', appid_pending: '缺 AppID（待同步）', appsecret_pending: '缺 AppSecret（待同步）',
+  openid_rebind: '需重新绑定 openid', openid: '缺 openid', appsecret: '缺 AppSecret', appid: '缺 AppID', stale: '心跳超时',
 };
 
 // Addendum C readiness: every node carries a `missing` array.
@@ -710,13 +778,178 @@ export function hasReadiness(status) {
 export function readinessRow(status) {
   if (!hasReadiness(status)) return null;
   const ready = status.nodes.filter(n => n.missing.length === 0);
-  const gaps = status.nodes.filter(n => n.missing.length).map(n => {
+  // B1: segments per node, one per code, so the row can wrap at 、.
+  const segments = status.nodes.filter(n => n.missing.length).map(n => {
     const parts = [];
     for (const code of n.missing) {
       const text = GAP_COPY[code] || '配置不完整';
       if (!parts.includes(text)) parts.push(text);
     }
-    return `${n.node_id} ${parts.join('、')}`;
+    return { node: n.node_id, parts };
   });
-  return { count: `${ready.length} / ${status.nodes.length}`, gaps, warn: gaps.length > 0 };
+  const gaps = segments.map(g => `${g.node} ${g.parts.join('、')}`);
+  // F rev 3 / room ruling: gaps made only of *_pending codes are neutral 待同步.
+  const warn = status.nodes.some(n => n.missing.some(c => !PENDING_CODES.includes(c)));
+  return Object.defineProperty({ count: `${ready.length} / ${status.nodes.length}`, gaps, warn }, 'segments', { value: segments });
+}
+
+// ---------------------------------------------------------------------------
+// §16.y Synced credential set (Addendum F rev 2)
+
+// F backend: GET /api/notify carries a numeric `credentials_generation`.
+// Older backends: today's per-node behaviour, nothing inferred (§16.y).
+export function credentialsSync(settings) {
+  return Number.isInteger(settings?.credentials_generation) && settings.credentials_generation >= 0;
+}
+// `base_generation` for a save: the generation from the last GET, or
+// undefined on an older backend (the only case where it is omitted).
+export function baseGeneration(settings) {
+  return credentialsSync(settings) ? settings.credentials_generation : undefined;
+}
+// AppID flag. Under F the value is write-only and never read; `appid_set`
+// wins, then (older backends) whether config carries an AppID at all.
+export function appIdSet(settings) {
+  const qq = settings?.config?.qq;
+  if (typeof qq?.appid_set === 'boolean') return qq.appid_set;          // F rev 3 rule 16
+  if (typeof settings?.appid_set === 'boolean') return settings.appid_set;
+  return Boolean(String(qq?.app_id ?? '').trim());                      // older backend
+}
+// F rev 3: `config.qq.app_id_hint` (last 4 only, or null). Older backends that
+// still return `app_id` get the last 4 derived here. Never more than 4 chars.
+export function appIdHint(settings) {
+  const qq = settings?.config?.qq;
+  const last4 = v => { const t = String(v).trim(); return t ? [...t].slice(-4).join('') : null; };
+  if (qq && 'app_id_hint' in qq) return typeof qq.app_id_hint === 'string' ? last4(qq.app_id_hint) : null;
+  if (typeof qq?.app_id === 'string') return last4(qq.app_id);
+  return null;
+}
+// F rev 4: short AppIDs have no hint even when saved. The set flag decides
+// whether the label says 已设置; only an available hint uses monospace.
+export function appIdLine(settings) {
+  const set = appIdSet(settings);
+  const hint = set ? appIdHint(settings) : null;
+  return { text: hint ? `…${hint}` : set ? '已设置' : '未设置', mono: Boolean(hint) };
+}
+
+export const PENDING_CODES = Object.freeze(['appid_pending', 'appsecret_pending', 'openid_pending']);
+function localNode(status) {
+  return Array.isArray(status?.nodes) ? status.nodes.find(n => n?.is_local) || null : null;
+}
+function localMissing(status) {
+  const self = localNode(status);
+  return Array.isArray(self?.missing) ? self.missing : [];
+}
+// Codes are only read when the backend reports them; never inferred.
+export function credentialPending(settings, status, key) {
+  // openid keeps the §16.x rule (writer_openid_set decides); the code is only
+  // used when no writer flag is reported at all.
+  if (key === 'openid') return openidPending(settings, status)
+    || (writerOpenidSet(settings, status) === undefined && !settings?.openid_set && localMissing(status).includes('openid_pending'));
+  return localMissing(status).includes(`${key}_pending`);
+}
+// openid_rebind: the AppID changed, the old openid is void. Warn, not pending.
+export function openidRebind(settings, status) {
+  return settings?.openid_rebind === true || localMissing(status).includes('openid_rebind');
+}
+// C1 (room ruling): every code on this node is a pending one.
+export function onlyPendingCodes(node) {
+  const m = Array.isArray(node?.missing) ? node.missing : [];
+  return m.length > 0 && m.every(c => PENDING_CODES.includes(c));
+}
+
+// Credential badge for AppID / AppSecret while a synced value is on its way.
+// Returns { badge, tone: '' } or null. Never carries a value.
+export function pendingCredentialBadge(settings, status, key) {
+  if (!credentialPending(settings, status, key)) return null;
+  const w = writerName(status);
+  return { badge: w ? `已在 ${w} 保存 · 待同步` : '已在其他节点保存 · 待同步', tone: '' };
+}
+
+export function rebindHint(status, settings = null) {
+  const w = writerName(status);
+  const hint = appIdHint(settings);
+  const lead = hint ? `AppID 已更换（当前 …${hint}），原管理员 openid 已失效。` : 'AppID 已更换，原管理员 openid 已失效。';
+  return w ? `${lead}请在发送节点 ${w} 上重新「自动获取」。` : `${lead}请在发送节点上重新「自动获取」。`;
+}
+
+export const APPSECRET_HELP_SYNC = 'AppSecret 加密保存，不会显示。保存后会同步到所有节点。';
+export const APPID_HELP_SYNC = '保存后会同步到所有节点；更换 AppID 需要重新绑定管理员 openid。';
+export const APPID_EMPTY = 'AppID 不能为空';
+// F rev 3 rule 16 (§16.y rev 3): the AppID input is write-only; blank or
+// whitespace-only = unchanged, so the key is omitted from the PUT and "" is
+// never sent. 「AppID 不能为空」 shows only when no AppID is saved yet
+// (appid_set false, nothing pending) and the input is blank or whitespace
+// while AppSecret or 启用 is being saved.
+export function appIdEmpty(settings, typed, { secretEntered = false, enabled = false, status = null } = {}) {
+  if (String(typed ?? '').trim()) return false;
+  if (appIdSet(settings) || credentialPending(settings, status, 'appid')) return false;
+  return secretEntered || enabled;
+}
+
+// PUT /api/notify bodies (F rev 2). Every credential write carries a
+// top-level base_generation when the backend reports credentials_generation;
+// on an older backend it is omitted. Values only travel in the request.
+export function saveBody(settings, patch, { secret = '', openid = '' } = {}) {
+  const body = { config: patch, expected_revision: settings.revision };
+  const base = baseGeneration(settings);
+  if (base !== undefined) body.base_generation = base;
+  if (secret) {
+    body.app_secret = secret;
+    body.expected_secret_revision = settings.secret_revision;
+  }
+  if (openid) {
+    body.admin_openid = openid;
+    body.expected_openid_revision = settings.openid_revision;
+  }
+  return body;
+}
+// N1: under F the AppSecret is one synced set, so 清除 affects every node.
+export function clearSecretConfirm(settings) {
+  return credentialsSync(settings)
+    ? '将清除所有节点的 AppSecret，QQ 通知将停止，直到重新填写。'
+    : '确定要清除本节点保存的 AppSecret 吗？清除后本节点无法发送通知；如果它是发送节点，通知将无法送达，直到重新填写。';
+}
+// N2: the AppID input is blanked only on an F rev 3 backend (appid_set present);
+// an older backend keeps showing its AppID as before.
+export function appIdWriteOnly(settings) {
+  return typeof settings?.config?.qq?.appid_set === 'boolean' || typeof settings?.appid_set === 'boolean';
+}
+// §16.y 清除 (spec 2931bccf): the AppSecret field is disabled while busy, so
+// success focus moves only after the finally render has re-enabled it.
+// A refusal leaves focus to the refusal handler (L1: only when one was typed).
+export async function clearSecretFlow({ setBusy, render, request, onSuccess, onError, secretInput }) {
+  setBusy(true);
+  render();
+  let ok = false;
+  try {
+    onSuccess(await request());
+    ok = true;
+  } catch (error) {
+    onError(error);
+  } finally {
+    const input = secretInput();
+    if (input) input.value = '';
+    setBusy(false);
+    render();
+  }
+  if (ok) secretInput()?.focus();
+}
+export function clearSecretBody(settings) {
+  const body = { clear_app_secret: true, expected_secret_revision: settings.secret_revision };
+  const base = baseGeneration(settings);
+  if (base !== undefined) body.base_generation = base;
+  return body;
+}
+
+export const LOCAL_SETTINGS_PENDING_TEXT = '机器人凭据已保存，本节点设置暂未保存，请重试。';
+// The holder has committed the credentials, but local preferences may still
+// need saving. Keep only those preference edits against the returned baseline;
+// a retry must not resubmit the committed AppID or AppSecret.
+export function pendingSettingsForm(settings, previous, submitted) {
+  if (settings?.local_settings_pending !== true) return null;
+  const next = configToForm(settings.config);
+  if (appIdWriteOnly(settings)) next.app_id = '';
+  const draft = mergeDraft(previous, next, submitted, Object.keys(next));
+  draft.app_id = next.app_id;
+  return draft;
 }

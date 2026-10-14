@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 import { activePushView, nodeSignature } from '../src/js/notify-state.js';
+import { mergeRetention } from '../src/js/analytics-format.js';
 
 const src = name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8');
 const n = (className, text, extra = {}, children = []) => ({ className, textContent: text, title: extra.title || '', dataset: extra.tone ? { tone: extra.tone } : {}, children });
@@ -30,10 +32,28 @@ test('N2: renderStatus skips the DOM rebuild when the signature is unchanged', a
 
 test('N3: events-only reloads refresh W15/W16', async () => {
   const js = await src('js/analytics.js');
-  assert.match(js, /history\('events', eventParams\(r\)\)\.then\(d => \{ if \(live\(\)\) \{ reloadEventsRetention\(d\); renderEvents\(d\);/);
-  assert.match(js, /const d = await history\('events', eventParams\(view\.range\)\); reloadEventsRetention\(d\); renderEvents\(d\);/);
-  assert.match(js, /eventsRetention = data; applyRetention\(data\);/);
-  assert.match(js, /retentionSeen = retentionSeen\.filter\(d => d !== eventsRetention\)/);
+  const notices = new Map();
+  let change;
+  let response = { clamped_to_days: 14, partial_nodes: [{ node: 'ny', clamped_to_days: 7 }] };
+  const context = vm.createContext({
+    AbortController, mergeRetention, mounted: true, eventsController: null, view: { range: {} },
+    $: id => {
+      if (id === 'analytics-event-filter') return { addEventListener: (_event, fn) => { change = fn; } };
+      if (!notices.has(id)) notices.set(id, { textContent: '', hidden: true });
+      return notices.get(id);
+    },
+    history: async () => response, eventParams: r => r, renderEvents() {}, setError: (_key, e) => { throw e; },
+  });
+  const helpers = js.slice(js.indexOf('let retentionSeen ='), js.indexOf('function applyMissing('));
+  const handler = js.slice(js.indexOf("  $('analytics-event-filter').addEventListener"), js.indexOf("  for (const input of root.querySelectorAll('input[name=\"analytics-quality\"]'))"));
+  vm.runInContext(`${helpers}\n${handler}`, context);
+  await change();
+  assert.match(notices.get('analytics-clamp-notice').textContent, /14 天/);
+  assert.match(notices.get('analytics-partial-notice').textContent, /ny.*7 天/);
+  response = {};
+  await change();
+  assert.equal(notices.get('analytics-clamp-notice').hidden, true);
+  assert.equal(notices.get('analytics-partial-notice').hidden, true);
 });
 
 test('N4: explicit neutral rule for the info notice using CSS variables', async () => {

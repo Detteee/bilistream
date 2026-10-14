@@ -73,6 +73,20 @@ pub trait PeerLink: Send + Sync {
     fn clustered(&self) -> bool {
         true
     }
+    /// Addendum F rule 7: the peer's heartbeat advertises
+    /// `credentials_sync`. Others get the copy without the set.
+    fn credentials_sync(&self, _node: &str) -> bool {
+        true
+    }
+    /// Addendum F rule 2: forward a credential save to the gateway holder.
+    async fn forward(
+        &self,
+        _revision: u64,
+        _node: &str,
+        _save: &super::credentials::CredentialSave,
+    ) -> Result<super::credentials::SaveOutcome, super::credentials::SaveError> {
+        Err(super::credentials::SaveError::HolderUnreachable)
+    }
 }
 
 /// Unbind is "retried until acked"; a member still offline after the last
@@ -157,7 +171,14 @@ pub async fn push_all(
         let copy = store::export_copy(store)?;
         let mut still = Vec::new();
         for node in targets {
-            match link.push(revision, &node, &copy).await {
+            let result = if copy.credentials.is_some() && !link.credentials_sync(&node) {
+                let mut plain = copy.clone();
+                plain.credentials = None;
+                link.push(revision, &node, &plain).await
+            } else {
+                link.push(revision, &node, &copy).await
+            };
+            match result {
                 Ok(_) => acked.push(node),
                 // Includes `MembershipChanged`: the next attempt re-reads.
                 Err(_) => still.push(node),
@@ -231,9 +252,24 @@ pub fn serve_pull(
     store: &Store,
     from: &str,
     members: &[String],
+    credentials_sync: bool,
 ) -> Result<OpenidCopy, ServeRefusal> {
     check_member(from, members)?;
-    store::export_copy(store).map_err(|_| ServeRefusal::Store)
+    let mut copy = store::export_copy(store).map_err(|_| ServeRefusal::Store)?;
+    if !credentials_sync {
+        // The same capability projection as push: old peers reject unknown
+        // fields and must never receive an AppSecret they cannot sync.
+        copy.credentials = None;
+    }
+    Ok(copy)
+}
+
+pub fn peer_supports_credentials(node: &str) -> bool {
+    crate::cluster::cluster_state_read()
+        .nodes
+        .get(node)
+        .and_then(|status| status.notify_credentials_sync)
+        .unwrap_or(false)
 }
 
 /// Addendum C transport rule, sending side: the openid goes to a member
@@ -314,6 +350,20 @@ impl SignedLink {
         route: crate::cluster::peer_auth::RoutePolicy,
         body: Vec<u8>,
     ) -> Result<Vec<u8>, LinkError> {
+        let (status, body) = self.call_status(revision, node, route, body).await?;
+        if !(200..300).contains(&status) {
+            return Err(LinkError::Refused);
+        }
+        Ok(body)
+    }
+
+    async fn call_status(
+        &self,
+        revision: u64,
+        node: &str,
+        route: crate::cluster::peer_auth::RoutePolicy,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<u8>), LinkError> {
         let (now, _) = current_members(&self.store).map_err(|_| LinkError::MembershipChanged)?;
         if now != revision {
             return Err(LinkError::MembershipChanged);
@@ -344,10 +394,46 @@ impl SignedLink {
             crate::cluster::peer_call::PeerCallError::Unreachable(_) => LinkError::Unreachable,
             crate::cluster::peer_call::PeerCallError::Refused(_) => LinkError::Refused,
         })?;
-        if !(200..300).contains(&response.status) {
-            return Err(LinkError::Refused);
+        Ok((response.status, response.body))
+    }
+}
+
+/// A forwarded save's answer: 2xx with the outcome, 409 with a fixed code,
+/// anything else "unreachable" (nothing is applied locally either way).
+pub(crate) fn forward_reply(
+    status: u16,
+    body: &[u8],
+) -> Result<super::credentials::SaveOutcome, super::credentials::SaveError> {
+    use super::credentials::SaveError;
+    #[derive(Deserialize)]
+    struct Reply {
+        data: Option<serde_json::Value>,
+    }
+    let data = serde_json::from_slice::<Reply>(body)
+        .ok()
+        .and_then(|reply| reply.data);
+    match status {
+        200..=299 => data
+            .and_then(|data| serde_json::from_value(data).ok())
+            .ok_or(SaveError::HolderUnreachable),
+        409 => {
+            let code = data
+                .as_ref()
+                .and_then(|d| d.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let current = data
+                .as_ref()
+                .and_then(|d| d.get("current_generation"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            Err(match code {
+                "credentials_conflict" => SaveError::Conflict { current },
+                _ => SaveError::HolderMoved,
+            })
         }
-        Ok(response.body)
+        400 => Err(SaveError::Invalid),
+        _ => Err(SaveError::HolderUnreachable),
     }
 }
 
@@ -407,6 +493,31 @@ impl PeerLink for SignedLink {
             )
             .await?;
         open(&reply)
+    }
+
+    fn credentials_sync(&self, node: &str) -> bool {
+        peer_supports_credentials(node)
+    }
+
+    async fn forward(
+        &self,
+        revision: u64,
+        node: &str,
+        save: &super::credentials::CredentialSave,
+    ) -> Result<super::credentials::SaveOutcome, super::credentials::SaveError> {
+        use super::credentials::SaveError;
+        let body =
+            zeroize::Zeroizing::new(serde_json::to_vec(save).map_err(|_| SaveError::Invalid)?);
+        let (status, reply) = self
+            .call_status(
+                revision,
+                node,
+                crate::cluster::peer_call::routes::NOTIFY_CREDENTIALS_SAVE,
+                body.to_vec(),
+            )
+            .await
+            .map_err(|_| SaveError::HolderUnreachable)?;
+        forward_reply(status, &reply)
     }
 
     async fn pull(&self, revision: u64, node: &str) -> Result<OpenidCopy, LinkError> {
@@ -476,9 +587,13 @@ impl PushCoalescer {
     }
 
     /// Run rounds until no follow-up is owed. Call only after `request()`
-    /// returned `true`. If a round panics (or the task is cancelled), the
-    /// guard clears the running flag, so the next request starts a new loop
-    /// instead of only setting "push again" forever.
+    /// returned `true`.
+    ///
+    /// F2 (Clerk, 1b gate): a round that panics is caught. The "push again"
+    /// flag set during it is kept, and a new round starts right away, so a
+    /// bind/unbind/credential save that arrived meanwhile is still pushed.
+    /// Without the flag the loop ends and the next request starts a new
+    /// one. If the task itself is cancelled, the guard clears both flags.
     pub async fn drive<F, Fut>(&self, mut round: F)
     where
         F: FnMut() -> Fut,
@@ -489,7 +604,11 @@ impl PushCoalescer {
             armed: true,
         };
         loop {
-            round().await;
+            let caught =
+                futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(round())).await;
+            if caught.is_err() {
+                tracing::warn!("QQ 通知同步本轮异常结束，有待推送的变更时会立即重新推送");
+            }
             if !self.finish_round() {
                 // finish_round already cleared `running`; a new loop may
                 // start right away, so the guard must not touch it again.

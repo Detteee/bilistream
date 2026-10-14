@@ -292,10 +292,16 @@ async fn wakeup_keeps_the_alert_reserve_and_then_the_notice_waits() {
     assert_eq!(ledger.wakeups_left(NOW), Some(2), "reserve untouched");
     // A failover alert could still use those periods.
     assert!(ledger.wakeup_available(NOW));
-    // Nothing more while no window is open.
-    run(&mut ledger, None, Some(1), NOW + 600, &qq, &commit).await;
+    // Nothing more while no window is open and the periodic active retry
+    // (rev 5 item 21) is not due yet.
+    run(&mut ledger, None, Some(1), NOW + 300, &qq, &commit).await;
     assert_eq!(qq.count(), 1);
-    // The admin writes: the pending note goes out once, as a passive reply.
+    // The admin writes: active is tried first again (still refused), then
+    // the held note goes out once as a passive reply.
+    qq.replies
+        .lock()
+        .unwrap()
+        .push_back(code(CODE_NO_PERMISSION));
     let mut target = admin_window(&mut ledger, NOW + 3 * 3600);
     let report = run(
         &mut ledger,
@@ -310,7 +316,8 @@ async fn wakeup_keeps_the_alert_reserve_and_then_the_notice_waits() {
         report.delivered,
         vec![(LiveKind::LiveStart, Channel::Passive)]
     );
-    let text = qq.text(1);
+    assert_eq!(qq.modes(), vec!["active", "active", "passive"]);
+    let text = qq.text(2);
     assert!(text.starts_with("（补发）开播 · 周末杂谈"), "{text}");
     assert!(ledger.live.pending().is_empty());
     run(
@@ -322,7 +329,7 @@ async fn wakeup_keeps_the_alert_reserve_and_then_the_notice_waits() {
         &commit,
     )
     .await;
-    assert_eq!(qq.count(), 2);
+    assert_eq!(qq.count(), 3);
 }
 
 #[tokio::test]
@@ -609,6 +616,7 @@ fn live_join_is_commutative_associative_and_idempotent() {
         seq: 0,
         attempts: 1,
         first_at: NOW,
+        held: false,
     };
     let mut a = started();
     a.live
@@ -697,4 +705,169 @@ fn texts_carry_no_links_or_revenue() {
         render(LiveKind::LiveEnd, &broadcast, false),
         "下播 · 本场 47分 · 来源 某频道"
     );
+}
+
+/// M1 (rule 17): an unknown definite 4xx on the active send is not a
+/// fallback trigger; it counts toward the 3 attempts in 2 minutes first.
+#[tokio::test]
+async fn an_unknown_4xx_on_active_counts_toward_the_retry_limit_before_falling_back() {
+    let mut ledger = started();
+    let mut target = admin_window(&mut ledger, NOW - 60);
+    // 40034005 is a passive-closed code: on active it is "other" too.
+    let qq = FakeQq::script([code(11_111), code(40034005), code(22_222), ok()]);
+    let commit = FakeCommit::default();
+    run(&mut ledger, Some(&mut target), Some(1), NOW, &qq, &commit).await;
+    assert_eq!(qq.modes(), vec!["active"], "no fallback on the first 4xx");
+    assert_eq!(
+        state(&ledger, LiveKind::LiveStart),
+        Some(DeliveryState::Sending)
+    );
+    assert_eq!(target.replies_used, 0, "passive budget untouched");
+    for at in [NOW + 20, NOW + 60] {
+        run(&mut ledger, Some(&mut target), Some(1), at, &qq, &commit).await;
+    }
+    assert_eq!(qq.modes(), vec!["active", "active", "active", "passive"]);
+    assert_eq!(
+        state(&ledger, LiveKind::LiveStart),
+        Some(DeliveryState::Delivered)
+    );
+    // Not a refusal: active_push is unchanged.
+    assert!(!ledger.live.active_push.contains_key("a"));
+}
+
+/// L1 (rev 5 item 20): a source switch during one Bilibili broadcast sends
+/// no second 开播, and exactly one 下播 when the broadcast ends.
+#[tokio::test]
+async fn a_source_switch_mid_broadcast_is_the_same_broadcast() {
+    let mut ledger = started();
+    let qq = FakeQq::default();
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(qq.count(), 1);
+    let generation = ledger.live.broadcast.generation;
+    assert_eq!(ledger.live.start(&info("TW:other"), NOW + 600), generation);
+    assert_eq!(
+        ledger.live.broadcast.stream_key, "YT:UC1",
+        "first source kept"
+    );
+    run(&mut ledger, None, Some(1), NOW + 601, &qq, &commit).await;
+    assert_eq!(qq.count(), 1, "no second 开播");
+    assert!(ledger.live.end(NOW + 3600));
+    assert!(!ledger.live.end(NOW + 3601), "ends once");
+    run(&mut ledger, None, Some(1), NOW + 3602, &qq, &commit).await;
+    run(&mut ledger, None, Some(1), NOW + 3700, &qq, &commit).await;
+    assert_eq!(qq.count(), 2);
+    assert!(qq.text(1).starts_with("下播"));
+    // After it ended, a start is a new broadcast again.
+    assert_eq!(
+        ledger.live.start(&info("TW:other"), NOW + 7200),
+        generation + 1
+    );
+}
+
+/// L2 (rev 5 item 21): once an active send is accepted again, a held
+/// notice goes back to active first without waiting for the admin.
+#[tokio::test]
+async fn a_held_notice_goes_active_first_once_active_works_again() {
+    let mut ledger = started();
+    let qq = FakeQq::script([code(CODE_NO_PERMISSION)]);
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(ledger.live.pending(), vec!["live_start"]);
+    assert_eq!(
+        ledger.live.next_retry_at(),
+        Some(NOW + PENDING_ACTIVE_RETRY_SECS)
+    );
+    // Not due yet, and no active success seen: nothing.
+    run(&mut ledger, None, Some(1), NOW + 60, &qq, &commit).await;
+    assert_eq!(qq.count(), 1);
+    // Another active send on this node was accepted.
+    let push = ledger.live.active_push.get_mut("a").unwrap();
+    push.last_result = Some("ok".into());
+    push.last_at = NOW + 61;
+    let report = run(&mut ledger, None, Some(1), NOW + 62, &qq, &commit).await;
+    assert_eq!(
+        report.delivered,
+        vec![(LiveKind::LiveStart, Channel::Active)]
+    );
+    assert_eq!(qq.modes(), vec!["active", "active"]);
+    assert!(qq.text(1).starts_with("（补发）开播"));
+    assert!(ledger.live.pending().is_empty());
+}
+
+/// L2 failure path: the periodic active retry of a held notice is refused
+/// again; it never spends a wakeup and stays held.
+#[tokio::test]
+async fn a_refused_periodic_retry_keeps_the_notice_held_without_a_wakeup() {
+    let mut ledger = started();
+    ledger.record_admin_message(NOW - 60);
+    let wakeups = ledger.wakeups_left(NOW);
+    // Active refused, then the wakeup fallback is refused too.
+    let qq = FakeQq::script([code(CODE_NO_PERMISSION), code(40054010)]);
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(qq.modes(), vec!["active", "wakeup"]);
+    assert_eq!(ledger.live.pending(), vec!["live_start"]);
+    let qq2 = FakeQq::script([code(CODE_NO_PERMISSION)]);
+    let later = NOW + PENDING_ACTIVE_RETRY_SECS + 5;
+    run(&mut ledger, None, Some(1), later, &qq2, &commit).await;
+    assert_eq!(qq2.modes(), vec!["active"], "no second wakeup");
+    assert_eq!(ledger.live.pending(), vec!["live_start"]);
+    assert!(ledger.wakeups_left(later) >= wakeups.map(|w| w.saturating_sub(1)));
+}
+
+/// Nit (rev 5 item 23): a failed `delivered` write keeps the notice
+/// delivered in memory and never sends it twice in this term.
+#[tokio::test]
+async fn a_failed_delivered_write_does_not_resend() {
+    let mut ledger = started();
+    let qq = FakeQq::default();
+    // Commit 1 = sending, commit 2 = delivered (fails).
+    let commit = FakeCommit {
+        fail: vec![2],
+        ..Default::default()
+    };
+    let report = run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(
+        report.delivered,
+        vec![(LiveKind::LiveStart, Channel::Active)]
+    );
+    assert_eq!(
+        state(&ledger, LiveKind::LiveStart),
+        Some(DeliveryState::Delivered)
+    );
+    run(&mut ledger, None, Some(1), NOW + 30, &qq, &commit).await;
+    assert_eq!(qq.count(), 1);
+}
+
+/// E rev 6 item 25 / Clerk (a): an unclear active retry on a held 开播
+/// keeps it held and never spends a wakeup, so the periods kept for
+/// alerts stay untouched across cycles.
+#[tokio::test]
+async fn an_unclear_active_retry_on_a_held_notice_stays_held_without_a_wakeup() {
+    let mut ledger = started();
+    // Day 2 after the admin's message: three periods open, two reserved.
+    ledger.record_admin_message(NOW - 2 * 86_400);
+    assert_eq!(ledger.wakeups_left(NOW), Some(3));
+    // Active refused, the one usable wakeup refused too: held.
+    let qq = FakeQq::script([code(CODE_NO_PERMISSION), code(40054010)]);
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(qq.modes(), vec!["active", "wakeup"]);
+    assert_eq!(ledger.live.pending(), vec!["live_start"]);
+    let left = ledger.wakeups_left(NOW);
+    // Periodic active retry: unclear three times within the window.
+    let start = NOW + PENDING_ACTIVE_RETRY_SECS + 1;
+    let qq2 = FakeQq::script([network(), server_error(), network()]);
+    for at in [start, start + 20, start + 60] {
+        run(&mut ledger, None, Some(1), at, &qq2, &commit).await;
+    }
+    assert_eq!(qq2.modes(), vec!["active", "active", "active"]);
+    assert_eq!(ledger.live.pending(), vec!["live_start"], "still held");
+    assert_eq!(ledger.wakeups_left(start + 60), left, "no wakeup spent");
+    assert!(ledger.live.delivery[&LiveKind::LiveStart].held);
+    // A later cycle (another term after a failover) still never wakes.
+    run(&mut ledger, None, Some(2), start + 61, &qq2, &commit).await;
+    assert!(!qq2.modes().contains(&"wakeup"));
+    assert!(ledger.wakeups_left(start + 61) >= Some(2), "reserve intact");
 }

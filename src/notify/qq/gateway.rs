@@ -178,7 +178,7 @@ pub enum Next {
     Resume,
     /// 4006/4007/4008/4900–4913, op 9: the session is dead, identify anew.
     Reidentify,
-    /// 4004: the token was rejected; fetch a new one and identify.
+    /// 4004 or an OpenAPI authentication refusal: fetch a new token and identify.
     ReauthReidentify,
     /// 4013/4014 (no C2C intent), 4914 (bot offline), 4915 (banned):
     /// reconnecting cannot help. Stop and show the reason.
@@ -192,6 +192,9 @@ pub struct Ended {
     pub bad_credentials: bool,
     /// READY/RESUMED was seen in this session.
     pub ready: bool,
+    /// Only a WebSocket 4004 counts toward the bad-credentials latch. An
+    /// HTTP token refusal during discovery is retried with backoff.
+    gateway_auth_rejected: bool,
     /// Wait at least this long before the next attempt (token 100001).
     pub min_backoff: Option<Duration>,
 }
@@ -203,6 +206,7 @@ impl Ended {
             reason: reason.into(),
             bad_credentials: false,
             ready: false,
+            gateway_auth_rejected: false,
             min_backoff: None,
         }
     }
@@ -228,7 +232,7 @@ fn is_bad_credential(code: Option<i64>) -> bool {
 }
 
 /// What a failed token (or gateway-URL) request means for the session.
-fn token_failure(code: Option<i64>, reason: String) -> Ended {
+fn token_failure(http_status: u16, code: Option<i64>, reason: String) -> Ended {
     if is_bad_credential(code) {
         Ended::bad_credentials(reason)
     } else if code == Some(100001) {
@@ -236,6 +240,8 @@ fn token_failure(code: Option<i64>, reason: String) -> Ended {
             min_backoff: Some(TOKEN_THROTTLE_BACKOFF),
             ..Ended::new(Next::Resume, reason)
         }
+    } else if super::errors::classify(http_status, code) == super::errors::ErrorClass::NeedsReauth {
+        Ended::new(Next::ReauthReidentify, reason)
     } else {
         Ended::new(Next::Resume, reason)
     }
@@ -248,7 +254,10 @@ pub const AUTH_REJECTIONS_FATAL: u8 = 2;
 /// Map a close code to the next step.
 pub fn classify_close(code: u16) -> Ended {
     match code {
-        4004 => Ended::new(Next::ReauthReidentify, "网关鉴权失败 (4004)"),
+        4004 => Ended {
+            gateway_auth_rejected: true,
+            ..Ended::new(Next::ReauthReidentify, "网关鉴权失败 (4004)")
+        },
         4006..=4008 | 4900..=4913 => Ended::new(Next::Reidentify, format!("网关会话失效 ({code})")),
         4013 | 4014 => Ended::new(
             Next::Fatal,
@@ -272,7 +281,7 @@ pub async fn run(params: GatewayParams, events: mpsc::Sender<GatewayEvent>) {
     loop {
         let started = std::time::Instant::now();
         let mut ended = session(&params, &events, &mut resume, &mut seen).await;
-        if ended.next == Next::ReauthReidentify && !ended.ready {
+        if ended.gateway_auth_rejected && !ended.ready {
             // The token cache is cleared below, so the next session fetches a
             // fresh token: a second rejection is not a stale token.
             auth_rejections += 1;
@@ -352,11 +361,11 @@ async fn session(
     // The token's business code is the primary bad-credentials signal.
     let token = match token(params).await {
         Ok(token) => token,
-        Err(error) => return token_failure(error.code, error.reason),
+        Err(error) => return token_failure(error.http_status, error.code, error.reason),
     };
     let url = match super::api::gateway_url(&params.http, &params.api_base, &token).await {
         Ok(url) => url,
-        Err(result) => return token_failure(result.code, result.reason()),
+        Err(result) => return token_failure(result.http_status, result.code, result.reason()),
     };
     if !allowed_url(&url) {
         return Ended::new(Next::Resume, "网关地址不是 wss");

@@ -2220,6 +2220,7 @@ html:not(.app-ready) #main-page {
 .notify-settings .notify-alert[data-tone="danger"] { border-left-color: var(--danger); }
 .notify-settings .notify-alert[data-tone="warn"] { border-left-color: var(--warn); }
 .notify-settings .notify-alert strong { color: var(--text); }
+.notify-settings .notify-alert-note { margin-top: var(--sp-1); }
 
 .notify-settings .notify-section {
   margin-top: var(--sp-4);
@@ -2466,7 +2467,7 @@ html:not(.app-ready) #main-page {
 }
 
 /* QQ 通知 §16.x: 可发送节点 gaps wrap only between nodes. */
-.notify-settings .notify-gaps { color: var(--warn); }
+.notify-settings .notify-gaps[data-tone="warn"] { color: var(--warn); }
 /* Inline text so the ・/； separators read as text, not flex items. */
 .notify-settings .notify-status-value.notify-gaps { display: block; text-align: right; }
 .notify-settings .notify-gap { white-space: nowrap; }
@@ -2620,6 +2621,14 @@ html:not(.app-ready) #main-page {
 @media (max-width: 560px) {
   .notify-settings .notify-cred-node { flex-basis: 100%; }
 }
+/* §16.6 / N3: a silent node in 凭据同步 reads muted with 离线. */
+.notify-settings .notify-cred-list li.is-offline .notify-cred-node { color: var(--text-mute); }
+.notify-settings .notify-cred-offline { color: var(--text-mute); }
+/* F rev 2: 「AppID 不能为空」 is a warn, not a danger. */
+.notify-settings .settings-help-text.is-invalid[data-tone="warn"] { color: var(--warn); }
+/* F rev 3: 当前 AppID hint — muted, last 4 in monospace. */
+.notify-settings .notify-appid-current { color: var(--text-mute); }
+.notify-settings .notify-appid-tail { font-family: var(--font-mono); }
 
 /* ===========================================================================
    12b. Analytics (统计, #view-analytics). Scoped to .analytics; tokens only.

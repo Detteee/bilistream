@@ -15,7 +15,15 @@ export const NY_MODES = ['ny-bound', 'ny-pending', 'ny-appsecret', 'ny-stale', '
 // push-*: Addendum E rev 2 top-level active_push on /status (low budget so the
 // warn rule is visible): ok, no_permission, rate_limited, null (no result yet).
 export const PUSH_MODES = ['push-ok', 'push-no-permission', 'push-rate-limited', 'push-null'];
-export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES, ...PUSH_MODES];
+// cred-*: §16.y / Addendum F rev 2, seen from ny (jp is the sender and writer).
+// ok (all synced), appid-pending, appsecret-pending, joining (rule 9: all three
+// pending, not capable), rebind (AppID changed, openid void on every node),
+// offline (ca silent: N3 离线), conflict (PUT → 409 credentials_conflict),
+// basegen (PUT → 400 base_generation_required), holder-down (PUT → 503).
+// F responses carry only *_set flags, credentials_generation and codes, never
+// the AppID, AppSecret or openid value.
+export const CRED_MODES = ['cred-ok', 'cred-appid-pending', 'cred-appsecret-pending', 'cred-joining', 'cred-rebind', 'cred-offline', 'cred-conflict', 'cred-basegen', 'cred-holder-down'];
+export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES, ...PUSH_MODES, ...CRED_MODES];
 
 export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   const config = {
@@ -49,11 +57,43 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       undelivered: 0, ...(legacy() ? {} : { pending_live_events: pending() }), quota: { wakeups_left: budget().wakeup_remaining ?? null, ...budget() },
     };
   };
-  const ny = () => NY_MODES.includes(mode);
+  const cred = () => CRED_MODES.includes(mode);
+  const ny = () => NY_MODES.includes(mode) || cred();
+  let generation = 7;
+  let lastPut = null;
+  const credNy = () => {
+    switch (mode) {
+      case 'cred-appid-pending': return { appid_set: false, notify_capable: false, missing: ['appid_pending'] };
+      case 'cred-appsecret-pending': return { appsecret_set: false, notify_capable: false, missing: ['appsecret_pending'] };
+      case 'cred-joining': return { appid_set: false, appsecret_set: false, openid_set: false, notify_capable: false, missing: ['appid_pending', 'appsecret_pending', 'openid_pending'] };
+      case 'cred-rebind': return { openid_set: false, notify_capable: false, missing: ['openid_rebind'] };
+      default: return {};
+    }
+  };
+  const credSettings = base => {
+    const { app_id, ...rest } = base.config.qq;   // write-only under F: never echoed
+    const n = credNy();
+    const has = n.appid_set ?? true;
+    // F rev 3 rule 16: appid_set + last-4 hint only.
+    const qq = { ...rest, appid_set: has, app_id_hint: has ? String(app_id).slice(-4) : null };
+    return {
+      ...base, config: { ...base.config, qq }, credentials_generation: generation,
+      appid_set: n.appid_set ?? true, appsecret_set: n.appsecret_set ?? true,
+      openid_set: n.openid_set ?? true, openid_rebind: mode === 'cred-rebind',
+      writer_openid_set: mode !== 'cred-rebind',
+      ...(mode === 'cred-rebind' || mode === 'cred-joining' ? { openid_bound_at: null } : {}),
+    };
+  };
   const nyOpenid = () => !['ny-pending', 'ny-handoff', 'ny-pending-appsecret'].includes(mode);
   const nyNodes = () => {
     const node = (node_id, extra = {}) => ({ node_id, is_local: node_id === 'ny', fresh: true, notify_capable: true,
       appid_set: true, appsecret_set: true, openid_set: true, missing: [], ...extra });
+    if (cred()) {
+      const ca = mode === 'cred-offline' ? node('ca', { fresh: false, notify_capable: false, missing: ['stale'] })
+        : mode === 'cred-rebind' ? node('ca', { openid_set: false, notify_capable: false, missing: ['openid_rebind'] }) : node('ca');
+      const jp = mode === 'cred-rebind' ? node('jp', { openid_set: false, notify_capable: false, missing: ['openid_rebind'] }) : node('jp');
+      return [jp, node('ny', credNy()), ca].map(n => ({ ...n, credentials_generation: generation - (n.node_id === 'ny' && /pending|joining/.test(mode) ? 1 : 0) }));
+    }
     if (mode === 'ny-old') return [{ node_id: 'jp', notify_capable: true }, { node_id: 'ny', is_local: true, notify_capable: true }, { node_id: 'ca', notify_capable: true }];
     const ca = mode === 'ny-appsecret' ? node('ca', { appsecret_set: false, notify_capable: false, missing: ['appsecret'] })
       : mode === 'ny-stale' ? node('ca', { fresh: false, notify_capable: false, missing: ['stale'] }) : node('ca');
@@ -68,7 +108,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       node_id: 'ny', authority: 'none', authority_node_id: 'jp', gateway: {},
       openid_writer: { node_id: 'jp', is_local: false }, gateway_owner: { node_id: 'jp' },
       sender: { node: 'jp', last_send: { ok: true, via: 'passive', at: t - 300 } }, local_last_send: null,
-      undelivered: 0, nodes: nyNodes(), ...(mode === 'ny-old' ? {} : { writer_openid_set: true }),
+      undelivered: 0, nodes: nyNodes(), ...(mode === 'ny-old' ? {} : { writer_openid_set: mode !== 'cred-rebind' }),
       pending_live_events: [], quota: budget(),
       ...(mode === 'ny-handoff' ? { authority_node_id: null, openid_writer: null, gateway_owner: null, sender: null } : {}),
     };
@@ -85,6 +125,8 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
     }
   };
   return {
+    // Test hook: shape of the last F save (never the values).
+    lastPut: () => lastPut,
     setMode(next) { if (!NOTIFY_MODES.includes(next)) return false; mode = next; return true; },
     // Returns [httpStatus, body] or null when the path is not a notify route.
     route(method, path, body = {}) {
@@ -93,7 +135,16 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
         return [200, { success: true, data: { ...(ny() ? nyStatus() : status()), ...(push ? { active_push: push } : {}) } }];
       }
       if (path !== '/api/notify') return null;
-      if (method === 'GET') return [200, { success: true, data: ny() ? nySettings(settings()) : settings() }];
+      if (method === 'GET') return [200, { success: true, data: cred() ? credSettings(settings()) : ny() ? nySettings(settings()) : settings() }];
+      if (method === 'PUT' && cred()) {
+        lastPut = { keys: Object.keys(body).sort(), base_generation: body.base_generation, has_app_secret: 'app_secret' in body, app_id_in_patch: Boolean(body.config?.qq && 'app_id' in body.config.qq) };
+        // F rev 2: all-or-nothing; any refusal applies nothing.
+        if (mode === 'cred-holder-down') return [503, { success: false, message: 'holder unreachable', data: { code: 'credentials_holder_unreachable' } }];
+        if (mode === 'cred-basegen' || body.base_generation == null) return [400, { success: false, message: 'base_generation required', data: { code: 'base_generation_required' } }];
+        if (mode === 'cred-conflict' || body.base_generation !== generation) return [409, { success: false, message: 'stale', data: { code: 'credentials_conflict', current_generation: generation + 1 } }];
+        if (body.config?.qq && 'app_id' in body.config.qq && !String(body.config.qq.app_id).trim()) return [400, { success: false, message: 'AppID 不能为空', data: { code: 'credentials_invalid' } }];
+        if (body.config?.qq?.app_id || body.app_secret) generation += 1;
+      }
       if (method === 'PUT') {
         if (body.expected_revision != null && body.expected_revision !== revision) return [409, { success: false, message: '设置已更新', data: { code: 'revision_conflict' } }];
         const patch = body.config || {};
@@ -102,7 +153,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
         }
         for (const [k, v] of Object.entries(patch)) config[k] = v && typeof v === 'object' && !Array.isArray(v) ? { ...config[k], ...v } : v;
         revision += 1;
-        return [200, { success: true, data: settings() }];
+        return [200, { success: true, data: cred() ? credSettings(settings()) : settings() }];
       }
       return null;
     },

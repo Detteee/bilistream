@@ -207,7 +207,7 @@ fn a_stale_node_is_stale_never_able_to_send_and_never_the_sender() {
     // Failover: tk owns but lacks the openid; the stale ny must not become
     // the delegate sender / writer / gateway holder.
     let d = digest("tk", "tk", nodes.clone());
-    let picked = authority::openid_writer(&d, false, false);
+    let picked = authority::openid_writer(&d, false, false, 0);
     assert_ne!(picked.as_ref().map(|(id, _)| id.as_str()), Some("ny"));
     // Seen from a third node: a stale owner with openid_set is no writer.
     let third = vec![
@@ -216,7 +216,7 @@ fn a_stale_node_is_stale_never_able_to_send_and_never_the_sender() {
         slot("tk", true, (true, true, false)),
     ];
     let d = digest("x", "ny", third);
-    assert_eq!(authority::openid_writer(&d, false, true), None);
+    assert_eq!(authority::openid_writer(&d, false, true, 0), None);
     // And a fresh delegate is picked instead of the stale one.
     let with_fresh = vec![
         slot("tk", true, (true, true, false)),
@@ -225,7 +225,7 @@ fn a_stale_node_is_stale_never_able_to_send_and_never_the_sender() {
     ];
     let d = digest("tk", "tk", with_fresh);
     assert_eq!(
-        authority::openid_writer(&d, false, false).map(|(id, _)| id),
+        authority::openid_writer(&d, false, false, 0).map(|(id, _)| id),
         Some("zz".to_string())
     );
 }
@@ -258,14 +258,25 @@ fn no_secret_material_in_the_readiness_json() {
         "appsecret_set",
         "openid_set",
         "missing",
+        // Addendum F rule 4: per-node sync state (a number, no value).
+        "credentials_generation",
     ];
     for node in &view_ {
         for key in node.as_object().unwrap().keys() {
             assert!(allowed.contains(&key.as_str()), "{key}");
         }
         for code in node["missing"].as_array().unwrap() {
-            assert!(["appid", "appsecret", "openid_pending", "openid", "stale"]
-                .contains(&code.as_str().unwrap()));
+            assert!([
+                "appid",
+                "appsecret",
+                "openid_pending",
+                "openid",
+                "stale",
+                "appid_pending",
+                "appsecret_pending",
+                "openid_rebind"
+            ]
+            .contains(&code.as_str().unwrap()));
         }
     }
 }

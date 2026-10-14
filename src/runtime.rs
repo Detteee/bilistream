@@ -605,12 +605,24 @@ fn log_ffmpeg_loop_exit(
 }
 
 /// Display name for the 开播 notice's 来源.
-fn live_platform_name(code: &str) -> &'static str {
+/// Addendum E rev 5 item 23: an unknown code shows as itself, never as a
+/// known platform name.
+fn live_platform_name(code: &str) -> String {
     match code {
-        "YT" => "YouTube",
-        "TW" => "Twitch",
-        _ => "Niconico",
+        "YT" => "YouTube".to_string(),
+        "TW" => "Twitch".to_string(),
+        "NC" => "Niconico".to_string(),
+        other => other.to_string(),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn an_unknown_platform_code_is_shown_raw() {
+    assert_eq!(live_platform_name("YT"), "YouTube");
+    assert_eq!(live_platform_name("NC"), "Niconico");
+    assert_eq!(live_platform_name("BL"), "BL");
+    assert_eq!(live_platform_name(""), "");
 }
 
 impl StreamPlatform {
@@ -1682,7 +1694,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         bilistream::notify::live_started(
                             bilistream::notify::live_events::LiveStartInfo {
                                 stream_key: format!("{platform}:{channel_id}"),
-                                platform: live_platform_name(platform).to_string(),
+                                platform: live_platform_name(platform),
                                 channel: channel_name.clone(),
                                 title: title_str.to_string(),
                             },
@@ -1916,6 +1928,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
                 // The supervisor owns child exit diagnostics. None can also
                 // mean declined startup or an intentional/obsolete session.
+                let ffmpeg_exit_at = bilistream::storage::now();
                 let ffmpeg_exit_failed = exit_status.is_none_or(|status| !status.success());
 
                 // Check if stream is still live before restarting
@@ -1986,7 +1999,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 );
                 cluster::record_stream_exit(!count_ffmpeg_exit_failure);
                 if let (Some(guard), Some(run)) = (&history_session, session) {
-                    guard.run_exited(
+                    guard.run_exited_at(
+                        ffmpeg_exit_at,
                         run.id(),
                         exit_status.and_then(|status| status.code()),
                         !ffmpeg_exit_failed,

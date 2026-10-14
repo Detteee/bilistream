@@ -26,6 +26,9 @@ pub const WAKEUP_RESERVE_FOR_ALERTS: usize = 2;
 pub const AMBIGUOUS_MAX_ATTEMPTS: u32 = 3;
 /// …within this window from the first one.
 pub const AMBIGUOUS_WINDOW_SECS: u64 = 120;
+/// Addendum E rev 5 item 21: a held (`pending`) notice tries active again
+/// at most this often, or at once after an active send was accepted.
+pub const PENDING_ACTIVE_RETRY_SECS: u64 = 600;
 /// Delay before attempt 2 and 3, counted from the first attempt.
 const AMBIGUOUS_RETRY_AT: [u64; 3] = [0, 20, 60];
 /// QQ refused the active message for good (no permission / rate limited).
@@ -110,6 +113,11 @@ pub struct DeliveryRecord {
     /// First active attempt (start of the 2-minute window).
     #[serde(default)]
     pub first_at: u64,
+    /// E rev 6 item 25: this notice was held (`pending`) once. From then
+    /// on it never uses a wakeup, so it can never touch the periods kept
+    /// for alerts, even after an unclear active retry on a later cycle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 impl DeliveryRecord {
@@ -129,7 +137,9 @@ impl DeliveryRecord {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Broadcast {
     pub generation: u64,
-    /// `platform:channel` of the source; a different one is a new broadcast.
+    /// `platform:channel` of the first source. Addendum E rev 5 item 20: a
+    /// different source while the Bilibili broadcast is open is NOT a new
+    /// broadcast; this keeps the source the 开播 named.
     #[serde(default)]
     pub stream_key: String,
     #[serde(default)]
@@ -248,8 +258,10 @@ impl LiveLedger {
     /// Successful start-live on the streaming node. Returns the generation.
     pub fn start(&mut self, info: &LiveStartInfo, now: u64) -> u64 {
         let open = self.broadcast.generation > 0 && self.broadcast.ended_at.is_none();
-        if open && self.broadcast.stream_key == info.stream_key {
-            // Restart or failover re-calling start-live: same broadcast.
+        if open {
+            // The counter follows the Bilibili broadcast (rev 5 item 20): a
+            // restart, a failover or a source switch while it is open is the
+            // same broadcast, so no second 开播 and one 下播 at its end.
             return self.broadcast.generation;
         }
         self.broadcast = Broadcast {
@@ -295,16 +307,21 @@ impl LiveLedger {
             .collect()
     }
 
-    /// When the worker must wake for an ambiguous retry.
+    /// When the worker must wake for an ambiguous retry or a held notice's
+    /// periodic active retry.
     pub fn next_retry_at(&self) -> Option<u64> {
         self.delivery
             .values()
-            .filter(|record| {
-                record.state == DeliveryState::Sending
-                    && record.channel == Channel::Active
-                    && record.attempts < AMBIGUOUS_MAX_ATTEMPTS
+            .filter_map(|record| match record.state {
+                DeliveryState::Sending
+                    if record.channel == Channel::Active
+                        && record.attempts < AMBIGUOUS_MAX_ATTEMPTS =>
+                {
+                    Some(retry_at(record))
+                }
+                DeliveryState::Pending => Some(record.at + PENDING_ACTIVE_RETRY_SECS),
+                _ => None,
             })
-            .map(retry_at)
             .min()
     }
 
@@ -542,12 +559,19 @@ pub fn quota_view(
 enum Next {
     Done,
     Wait,
-    Active { attempts: u32, first_at: u64 },
+    Active {
+        attempts: u32,
+        first_at: u64,
+    },
     From(Channel),
     PendingRetry,
+    /// A held notice retried active first (rev 5 item 21).
+    PendingActive,
 }
 
-fn next_step(record: Option<&DeliveryRecord>, term: u64, now: u64) -> Next {
+/// `active_ok_at`: when this node's last active send was accepted (0 =
+/// never, or refused since).
+fn next_step(record: Option<&DeliveryRecord>, term: u64, now: u64, active_ok_at: u64) -> Next {
     let Some(record) = record else {
         return Next::Active {
             attempts: 0,
@@ -556,6 +580,14 @@ fn next_step(record: Option<&DeliveryRecord>, term: u64, now: u64) -> Next {
     };
     match record.state {
         DeliveryState::Delivered | DeliveryState::Off => Next::Done,
+        // Rev 5 item 21: held notices go back to active first once an
+        // active send works again, and otherwise every 10 minutes.
+        DeliveryState::Pending
+            if active_ok_at > record.at
+                || now.saturating_sub(record.at) >= PENDING_ACTIVE_RETRY_SECS =>
+        {
+            Next::PendingActive
+        }
         DeliveryState::Pending => Next::PendingRetry,
         DeliveryState::Refused => Next::From(after(record.channel)),
         DeliveryState::Sending => {
@@ -576,7 +608,11 @@ fn next_step(record: Option<&DeliveryRecord>, term: u64, now: u64) -> Next {
             }
             if record.term == term {
                 // Same term, non-active channel still `sending`: the result
-                // was ambiguous; never spend that budget twice. Move on.
+                // was ambiguous (a timeout or network error on passive or
+                // wakeup). Addendum E rev 5 item 22 allows moving on to the
+                // next channel: that may duplicate the notice if the first
+                // request did land, which is accepted (a lost notice is
+                // worse), and we never spend the same budget twice.
                 return Next::From(after(record.channel));
             }
             // Older term crashed mid passive/wakeup: retry active first (free),
@@ -613,6 +649,7 @@ impl Driver<'_> {
             seq: 0,
             attempts,
             first_at,
+            held: false,
         }
     }
 
@@ -683,11 +720,46 @@ pub async fn drive(
             }
             continue;
         }
+        // A held notice retried this round: its fallback never spends a
+        // wakeup again (only passive, else back to pending).
+        let mut from_pending = driver
+            .ledger
+            .live
+            .delivery
+            .get(&kind)
+            .is_some_and(|record| record.held);
         // At most a handful of steps: active ×3, passive, wakeup, pending.
         for _ in 0..8 {
-            let step = next_step(driver.ledger.live.delivery.get(&kind), term, driver.now);
+            let active_ok_at = driver
+                .ledger
+                .live
+                .active_push
+                .get(driver.node)
+                .filter(|push| push.last_result.as_deref() == Some("ok"))
+                .map(|push| push.last_at)
+                .unwrap_or(0);
+            let step = next_step(
+                driver.ledger.live.delivery.get(&kind),
+                term,
+                driver.now,
+                active_ok_at,
+            );
+            let step = match step {
+                Next::PendingActive => {
+                    from_pending = true;
+                    Next::Active {
+                        attempts: 0,
+                        first_at: driver.now,
+                    }
+                }
+                Next::PendingRetry => {
+                    from_pending = true;
+                    step
+                }
+                other => other,
+            };
             let channel = match step {
-                Next::Done | Next::Wait => break,
+                Next::Done | Next::Wait | Next::PendingActive => break,
                 Next::Active { .. } => Channel::Active,
                 Next::From(channel) => channel,
                 Next::PendingRetry => {
@@ -716,21 +788,25 @@ pub async fn drive(
                 }
                 (channel, _) => (channel, 0, driver.now),
             };
-            let channel =
-                if channel == Channel::Wakeup && !wakeup_allowed(driver.ledger, driver.now) {
-                    Channel::None
-                } else {
-                    channel
-                };
+            let channel = if channel == Channel::Wakeup
+                && (from_pending || !wakeup_allowed(driver.ledger, driver.now))
+            {
+                Channel::None
+            } else {
+                channel
+            };
             if channel == Channel::None {
-                let record = driver.record(DeliveryState::Pending, Channel::None, 0, driver.now);
+                let mut record =
+                    driver.record(DeliveryState::Pending, Channel::None, 0, driver.now);
+                record.held = true;
                 driver.ledger.live.write(kind, record);
                 report.skipped.push(kind);
                 report.changed = true;
                 break;
             }
             // Rule 11: commit `sending` before the request, or do not send.
-            let sending = driver.record(DeliveryState::Sending, channel, attempts, first_at);
+            let mut sending = driver.record(DeliveryState::Sending, channel, attempts, first_at);
+            sending.held = from_pending;
             let previous = driver.ledger.live.delivery.get(&kind).cloned();
             driver.ledger.live.write(kind, sending);
             report.changed = true;
@@ -748,9 +824,10 @@ pub async fn drive(
                 tracing::warn!("QQ {}通知未发送：发送记录写入失败，稍后重试", kind.label());
                 break;
             }
-            let catch_up = previous
-                .as_ref()
-                .is_some_and(|record| record.state == DeliveryState::Pending);
+            let catch_up = from_pending
+                || previous
+                    .as_ref()
+                    .is_some_and(|record| record.state == DeliveryState::Pending);
             let text = render(kind, &broadcast, catch_up);
             let (mode, msg_id, seq) = match channel {
                 Channel::Passive => {
@@ -783,7 +860,15 @@ pub async fn drive(
                 Channel::Wakeup if reached => driver.ledger.record_wakeup(driver.now),
                 _ => {}
             }
-            let got = answer(&result);
+            let mut got = answer(&result);
+            if channel == Channel::Active && matches!(got, Answer::Refused | Answer::PassiveClosed)
+            {
+                // M1 / rule 17: on the active channel only 40034105 and
+                // 40034100 trigger the fallback. Any other definite error
+                // (an unknown 4xx code …) counts toward the same 3 attempts
+                // in 2 minutes, like an ambiguous result.
+                got = Answer::Ambiguous;
+            }
             if channel == Channel::Active {
                 driver.note_active(got, &mut report, result.code);
                 if got == Answer::RateLimited {
@@ -822,13 +907,21 @@ pub async fn drive(
                 }
                 _ => DeliveryState::Refused,
             };
-            let done = driver.record(state, channel, attempts, first_at);
+            let mut done = driver.record(state, channel, attempts, first_at);
+            done.held = from_pending;
             driver.ledger.live.write(kind, done);
             if state == DeliveryState::Delivered {
                 report.delivered.push((kind, channel));
                 // Best effort: a lost `delivered` write only risks a rare
-                // duplicate from the next holder (rule 13).
-                let _ = commit.commit(driver.ledger).await;
+                // duplicate from the next holder (rule 13). Rev 5 item 23:
+                // WARN with the generation and kind only.
+                if commit.commit(driver.ledger).await.is_err() {
+                    tracing::warn!(
+                        "QQ 直播通知送达记录写入失败 (generation {}, kind {})",
+                        broadcast.generation,
+                        kind.as_str()
+                    );
+                }
                 break;
             }
             // Refused (or ambiguous passive/wakeup): the next channel

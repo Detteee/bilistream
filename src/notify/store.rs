@@ -14,7 +14,8 @@
 //!   repeats alerts nor forgets spent budgets.
 //!
 //! None of them is in `storage::NAMES` (so never in backups or legacy
-//! exports) or `MANAGED_RECORDS`, and nothing syncs them between nodes.
+//! exports) or `MANAGED_RECORDS`. AppID, AppSecret and binding metadata
+//! synchronize only through the notifier's signed member channel.
 
 use super::config::NotifyConfig;
 use super::ledger::NotifyLedger;
@@ -29,6 +30,44 @@ pub const SECRETS_RECORD: &str = "notify-secrets";
 pub const OPENID_RECORD: &str = "notify-openid";
 pub const STATE_RECORD: &str = "notify-state";
 pub const MAX_SECRET_LEN: usize = 256;
+
+/// Config, secret, recipient and association must be consumed from one
+/// committed generation; individual reads are only for single-record work.
+pub(crate) fn settings_records(
+    store: &Store,
+) -> io::Result<std::collections::HashMap<String, Document>> {
+    let names = [
+        CONFIG_RECORD,
+        SECRETS_RECORD,
+        OPENID_RECORD,
+        super::credentials::CREDENTIALS_RECORD,
+    ];
+    let mut records = store.read_many(&names)?;
+    if records.get(CONFIG_RECORD).is_some_and(has_plain_openid) {
+        migrate_plain_openid(store)?;
+        records = store.read_many(&names)?;
+    }
+    Ok(records)
+}
+
+pub struct SettingsSnapshot {
+    pub config: (NotifyConfig, Option<u64>),
+    pub secret: (Option<AppSecret>, Option<u64>),
+    pub openid: OpenidState,
+    pub credentials: super::credentials::CredentialsMeta,
+}
+
+pub fn load_settings(store: &Store) -> io::Result<SettingsSnapshot> {
+    let mut records = settings_records(store)?;
+    Ok(SettingsSnapshot {
+        config: parse_config(records.remove(CONFIG_RECORD))?,
+        secret: parse_secret(records.remove(SECRETS_RECORD))?,
+        openid: parse_openid(records.remove(OPENID_RECORD))?,
+        credentials: super::credentials::parse_meta(
+            records.remove(super::credentials::CREDENTIALS_RECORD),
+        )?,
+    })
+}
 
 /// The QQ AppSecret. Never printed, zeroed on drop.
 #[derive(Clone)]
@@ -218,6 +257,14 @@ pub struct OpenidWrite {
 /// `revision = current + 1`. Clearing an unset openid changes nothing.
 /// Returns the logical revision afterwards.
 fn write_openid_tx(tx: &mut Transaction<'_>, write: &OpenidWrite) -> io::Result<u64> {
+    write_openid_tx_with_generation(tx, write, true)
+}
+
+fn write_openid_tx_with_generation(
+    tx: &mut Transaction<'_>,
+    write: &OpenidWrite,
+    bump_credentials: bool,
+) -> io::Result<u64> {
     let current = parse_openid(tx.read(OPENID_RECORD)?)?;
     if let Some(expected) = write.expected {
         if expected != current.revision {
@@ -244,12 +291,29 @@ fn write_openid_tx(tx: &mut Transaction<'_>, write: &OpenidWrite) -> io::Result<
     let value =
         serde_json::to_value(&doc).map_err(|_| io::Error::other("管理员 openid 无法保存"))?;
     tx.write(OPENID_RECORD, value)?;
+    if bump_credentials && matches!(write.change, OpenidChange::Set { .. }) {
+        // Addendum F: remember the AppID this openid is bound under.
+        super::credentials::note_bind_tx(tx, &write.writer, write.now)?;
+    }
     Ok(doc.revision)
 }
 
 /// Bind, a typed openid or an unbind on its own (one transaction).
 pub fn write_openid(store: &Store, write: OpenidWrite) -> io::Result<u64> {
-    store.transaction(move |tx| write_openid_tx(tx, &write))
+    write_openid_with(store, write, |_| Ok(()))
+}
+
+/// Recheck a gateway binding's credential snapshot in the same transaction
+/// as its recipient write. An AppID/secret change must win over an event
+/// received on the old connection, even if it committed after event intake.
+pub(crate) fn write_openid_with<F>(store: &Store, write: OpenidWrite, before: F) -> io::Result<u64>
+where
+    F: FnOnce(&mut Transaction<'_>) -> io::Result<()> + Send + 'static,
+{
+    store.transaction(move |tx| {
+        before(tx)?;
+        write_openid_tx(tx, &write)
+    })
 }
 
 /// Move a plain `qq.admin_openid` out of `notify-config` into the sealed
@@ -322,6 +386,10 @@ pub struct OpenidCopy {
     pub revision: u64,
     #[serde(default)]
     pub writer: String,
+    /// Addendum F: the synced AppID/AppSecret set. Only sent to peers that
+    /// advertise `credentials_sync` (older nodes refuse unknown fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<super::credentials::CredentialsCopy>,
 }
 
 impl Drop for OpenidCopy {
@@ -337,6 +405,7 @@ impl std::fmt::Debug for OpenidCopy {
             .field("openid", &if self.openid.is_empty() { "" } else { "<set>" })
             .field("revision", &self.revision)
             .field("writer", &self.writer)
+            .field("credentials", &self.credentials)
             .finish()
     }
 }
@@ -353,7 +422,19 @@ const COPY_VIA: [&str; 3] = ["manual", "message", "friend_add"];
 
 /// This node's record as a peer copy.
 pub fn export_copy(store: &Store) -> io::Result<OpenidCopy> {
-    let state = load_openid(store)?;
+    export_copy_with(store, || Ok(()))
+}
+
+/// All exported fields come from one committed snapshot. `after_snapshot`
+/// lets a regression commit a concurrent update after that read, before
+/// projection, without making any field come from the later generation.
+pub(crate) fn export_copy_with(
+    store: &Store,
+    after_snapshot: impl FnOnce() -> io::Result<()>,
+) -> io::Result<OpenidCopy> {
+    let mut snapshot = settings_records(store)?;
+    after_snapshot()?;
+    let state = parse_openid(snapshot.remove(OPENID_RECORD))?;
     Ok(OpenidCopy {
         state: if state.is_set() {
             CopyState::Bound
@@ -369,6 +450,7 @@ pub fn export_copy(store: &Store) -> io::Result<OpenidCopy> {
         via: state.via.clone(),
         revision: state.revision,
         writer: state.writer.clone(),
+        credentials: super::credentials::export_snapshot(&snapshot)?,
     })
 }
 
@@ -379,6 +461,8 @@ pub struct CopyOutcome {
     pub applied: bool,
     /// Local logical revision afterwards.
     pub revision: u64,
+    /// Addendum F rev 2 item 12: the holder re-stamped its seed (push).
+    pub restamped: bool,
 }
 
 fn invalid_copy() -> io::Error {
@@ -389,6 +473,40 @@ fn invalid_copy() -> io::Error {
 /// `(openid_revision, writer_node_id)`, in one transaction. An `unbound`
 /// copy that wins clears the local value (unbind propagation).
 pub fn accept_copy(store: &Store, copy: &OpenidCopy) -> io::Result<CopyOutcome> {
+    let holder = super::local_gateway_held().then(super::local_node_id);
+    let outcome = accept_copy_as(store, copy, holder.as_deref(), crate::storage::now())?;
+    if outcome.restamped {
+        // Rev 2 item 12: the holder kept its values; push them.
+        if let (Ok(global), Some(local)) = (crate::storage::global(), holder) {
+            super::openid_sync::spawn_push(global, local);
+        }
+    }
+    Ok(outcome)
+}
+
+/// `accept_copy` with the holder role and clock passed in (tests).
+pub fn accept_copy_as(
+    store: &Store,
+    copy: &OpenidCopy,
+    holder: Option<&str>,
+    now: u64,
+) -> io::Result<CopyOutcome> {
+    accept_copy_as_with(store, copy, holder, now, |_| Ok(()))
+}
+
+/// Apply the holder's copy with an optional local settings write in the
+/// same transaction. A cache failure after a forwarded commit must roll
+/// back the complete local copy, without undoing the holder's commit.
+pub(crate) fn accept_copy_as_with<F>(
+    store: &Store,
+    copy: &OpenidCopy,
+    holder: Option<&str>,
+    now: u64,
+    after: F,
+) -> io::Result<CopyOutcome>
+where
+    F: FnOnce(&mut Transaction<'_>) -> io::Result<()> + Send + 'static,
+{
     match copy.state {
         CopyState::Bound => {
             super::config::validate_openid(&copy.openid).map_err(|_| invalid_copy())?;
@@ -406,42 +524,86 @@ pub fn accept_copy(store: &Store, copy: &OpenidCopy) -> io::Result<CopyOutcome> 
     if copy.writer.len() > 128 || copy.writer.chars().any(char::is_control) {
         return Err(invalid_copy());
     }
-    if copy.revision == 0 {
-        // "Never written": nothing to adopt.
-        return Ok(CopyOutcome {
-            applied: false,
-            revision: load_openid(store)?.revision,
-        });
-    }
     let copy = copy.clone();
+    let holder = holder.map(str::to_string);
     store.transaction(move |tx| {
         let current = parse_openid(tx.read(OPENID_RECORD)?)?;
-        if copy.key() <= (current.revision, current.writer.as_str()) {
-            return Ok(CopyOutcome {
-                applied: false,
-                revision: current.revision,
-            });
-        }
-        let bound = copy.state == CopyState::Bound;
-        let doc = OpenidDoc {
-            admin_openid: if bound {
-                copy.openid.clone()
-            } else {
-                String::new()
-            },
-            bound_at: if bound { copy.bound_at } else { None },
-            via: if bound { copy.via.clone() } else { None },
-            revision: copy.revision,
-            writer: copy.writer.clone(),
+        let current_appid = super::credentials::binding_appid_tx(tx, current.is_set())?;
+        // Addendum F: the set rides in the same transaction, so the openid
+        // and the AppID it belongs to never land apart.
+        let set = match copy.credentials.as_ref() {
+            Some(set) => super::credentials::accept_tx(
+                tx,
+                set,
+                holder.as_deref(),
+                copy.state == CopyState::Bound,
+                now,
+            )?,
+            None => Default::default(),
         };
-        let value =
-            serde_json::to_value(&doc).map_err(|_| io::Error::other("管理员 openid 无法保存"))?;
-        tx.write(OPENID_RECORD, value)?;
-        Ok(CopyOutcome {
-            applied: true,
-            revision: copy.revision,
-        })
+        let credentials = set.applied;
+        let restamped = set.restamped;
+        // revision 0 = "never written": nothing to adopt.
+        let outcome =
+            if copy.revision == 0 || copy.key() <= (current.revision, current.writer.as_str()) {
+                // New credentials cannot relabel a retained, higher-revision
+                // openid as belonging to their AppID. A mismatch is rebind.
+                super::credentials::associate_binding_tx(tx, &current_appid)?;
+                CopyOutcome {
+                    applied: credentials,
+                    revision: current.revision,
+                    restamped,
+                }
+            } else {
+                let bound = copy.state == CopyState::Bound;
+                let doc = OpenidDoc {
+                    admin_openid: if bound {
+                        copy.openid.clone()
+                    } else {
+                        String::new()
+                    },
+                    bound_at: if bound { copy.bound_at } else { None },
+                    via: if bound { copy.via.clone() } else { None },
+                    revision: copy.revision,
+                    writer: copy.writer.clone(),
+                };
+                let value = serde_json::to_value(&doc)
+                    .map_err(|_| io::Error::other("管理员 openid 无法保存"))?;
+                tx.write(OPENID_RECORD, value)?;
+                let appid = copy
+                    .credentials
+                    .as_ref()
+                    .filter(|set| set.usable())
+                    .map(|set| set.openid_appid.as_str())
+                    .unwrap_or_default();
+                // Even an older credential generation can carry the winning
+                // binding revision. Keep that binding's actual association.
+                // A legacy bound copy has no association proof: on F data it
+                // stays unready until an explicit bind confirms the AppID.
+                super::credentials::associate_binding_tx(tx, appid)?;
+                CopyOutcome {
+                    applied: true,
+                    revision: copy.revision,
+                    restamped,
+                }
+            };
+        after(tx)?;
+        Ok(outcome)
     })
+}
+
+/// Addendum F: an AppID change clears the openid in the same transaction
+/// (and the same set generation). Bumps `openid_revision`.
+pub(crate) fn clear_openid_tx(tx: &mut Transaction<'_>, writer: &str, now: u64) -> io::Result<u64> {
+    write_openid_tx(
+        tx,
+        &OpenidWrite {
+            change: OpenidChange::Clear,
+            expected: None,
+            writer: writer.to_string(),
+            now,
+        },
+    )
 }
 
 /// A node that leaves the membership deletes its copy (contract: "a
@@ -478,13 +640,24 @@ pub fn load_config(store: &Store) -> io::Result<(NotifyConfig, Option<u64>)> {
             None => return Ok((NotifyConfig::default(), None)),
         }
     }
+    parse_config(Some(doc))
+}
+
+fn parse_config(doc: Option<Document>) -> io::Result<(NotifyConfig, Option<u64>)> {
+    let Some(doc) = doc else {
+        return Ok((NotifyConfig::default(), None));
+    };
     let cfg = serde_json::from_value(doc.value)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "通知设置记录无效"))?;
     Ok((cfg, Some(doc.revision)))
 }
 
 pub fn load_secret(store: &Store) -> io::Result<(Option<AppSecret>, Option<u64>)> {
-    let Some(doc) = store.read(SECRETS_RECORD)? else {
+    parse_secret(store.read(SECRETS_RECORD)?)
+}
+
+fn parse_secret(doc: Option<Document>) -> io::Result<(Option<AppSecret>, Option<u64>)> {
+    let Some(doc) = doc else {
         return Ok((None, None));
     };
     let revision = doc.revision;
@@ -532,7 +705,7 @@ pub struct SavedRevisions {
     pub openid: Option<u64>,
 }
 
-fn secret_value(secret: Option<&str>) -> io::Result<Value> {
+pub(crate) fn secret_value(secret: Option<&str>) -> io::Result<Value> {
     let doc = SecretsDoc {
         qq: QqSecrets {
             app_secret: secret.unwrap_or_default().to_string(),
@@ -582,6 +755,43 @@ pub(crate) fn save_settings_with<F>(
 where
     F: FnOnce(&mut Transaction<'_>) -> io::Result<()> + Send + 'static,
 {
+    save_all_with(
+        store,
+        config,
+        secret,
+        expected_secret,
+        openid,
+        None,
+        between,
+        |_| Ok(()),
+    )
+    .map(|(saved, _)| saved)
+}
+
+/// Addendum F credential part of a settings save: the request, the
+/// committing node and the clock.
+pub type CredentialsStep = (super::credentials::CredentialSave, String, u64);
+
+/// Addendum F rev 2 item 15: config, AppSecret, the synced AppID/AppSecret
+/// set (with the openid clearing an AppID change causes) and the openid
+/// write commit in ONE transaction under one generation, or nothing does.
+/// `between` runs after the config write; `after` runs last (tests inject
+/// a failure there). A credentials refusal carries `SaveFailed`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn save_all_with<F, G>(
+    store: &Store,
+    config: Option<(&NotifyConfig, u64)>,
+    secret: SecretChange,
+    expected_secret: u64,
+    openid: Option<OpenidWrite>,
+    credentials: Option<CredentialsStep>,
+    between: F,
+    after: G,
+) -> io::Result<(SavedRevisions, Option<super::credentials::SaveOutcome>)>
+where
+    F: FnOnce(&mut Transaction<'_>) -> io::Result<()> + Send + 'static,
+    G: FnOnce(&mut Transaction<'_>) -> io::Result<()> + Send + 'static,
+{
     let config = match config {
         Some((cfg, expected)) => Some((
             serde_json::to_value(cfg).map_err(|_| io::Error::other("通知设置无法保存"))?,
@@ -600,13 +810,28 @@ where
             saved.config = Some(cas(tx, "config", CONFIG_RECORD, expected, value)?);
         }
         between(tx)?;
+        let binding = openid
+            .as_ref()
+            .is_some_and(|write| matches!(write.change, OpenidChange::Set { .. }));
+        let outcome = match credentials.as_ref() {
+            Some((save, node, now)) => Some(super::credentials::apply_save_tx_with_binding(
+                tx, save, node, *now, binding,
+            )?),
+            None => None,
+        };
         if let Some(value) = secret {
             saved.secret = Some(cas(tx, "secret", SECRETS_RECORD, expected_secret, value)?);
         }
         if let Some(write) = openid.as_ref() {
-            saved.openid = Some(write_openid_tx(tx, write)?);
+            let bump_credentials = !outcome.as_ref().is_some_and(|outcome| outcome.changed);
+            saved.openid = Some(write_openid_tx_with_generation(
+                tx,
+                write,
+                bump_credentials,
+            )?);
         }
-        Ok(saved)
+        after(tx)?;
+        Ok((saved, outcome))
     })
 }
 

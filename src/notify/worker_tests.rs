@@ -79,6 +79,75 @@ fn single_node() -> ClusterDigest {
     }
 }
 
+#[test]
+fn a_worker_applies_one_credential_snapshot_and_uses_its_new_generation_before_heartbeat() {
+    use crate::webui::api::notify::{
+        apply_update_with, credential_part, strip_credentials, UpdateNotify,
+    };
+    crate::install_crypto_provider();
+    const NEW_OPENID: &str = "SYNTHETICNEWBOTOPENID000000000001";
+    let (_temp, store) = store();
+    let mut config = NotifyConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    config.qq.app_id = "1234567890".into();
+    store::save_config(&store, &config, None).unwrap();
+    store::save_secret(&store, Some("synthetic-old-secret"), None).unwrap();
+    set_openid(&store, OPENID);
+    crate::notify::credentials::seed_if_needed(&store, "b", 100, false).unwrap();
+    let captured = store::load_settings(&store).unwrap();
+    let mut update: UpdateNotify = serde_json::from_value(json!({
+        "config": {"qq": {"app_id": "9876543210"}},
+        "app_secret": "synthetic-new-secret",
+        "admin_openid": NEW_OPENID,
+        "expected_openid_revision": captured.openid.revision,
+        "base_generation": captured.credentials.generation,
+    }))
+    .unwrap();
+    let save = credential_part(&store, &update).unwrap().unwrap();
+    strip_credentials(&mut update);
+    apply_update_with(
+        &store,
+        &update,
+        "b",
+        &|| Ok(()),
+        Some((save, "b".into(), 101)),
+        |_| Ok(()),
+    )
+    .unwrap();
+    let mut worker = Worker::new(store, "b".into());
+    // The store changed after capture, but applying that captured snapshot
+    // must never mix its old bot with the newer recipient or secret.
+    worker.apply_settings_snapshot(captured);
+    assert_eq!(worker.cfg.qq.app_id, "1234567890");
+    assert_eq!(
+        worker.secret.as_ref().unwrap().expose(),
+        "synthetic-old-secret"
+    );
+    assert_eq!(worker.openid.openid.as_ref().unwrap().expose(), OPENID);
+    assert_eq!(worker.cred_meta.generation, 1);
+    worker.reload_settings();
+    assert_eq!(worker.cfg.qq.app_id, "9876543210");
+    assert_eq!(
+        worker.secret.as_ref().unwrap().expose(),
+        "synthetic-new-secret"
+    );
+    assert_eq!(worker.openid.openid.as_ref().unwrap().expose(), NEW_OPENID);
+    assert_eq!(worker.cred_meta.generation, 2);
+    let mut nodes = vec![slot("a", true, "healthy"), slot("b", true, "healthy")];
+    for node in &mut nodes {
+        node.credentials_generation = Some(1);
+        node.notify_capable = true;
+    }
+    nodes[0].notify_authority = true;
+    let digest = cluster("b", "a", nodes);
+    worker.apply_digest(&digest, false, 102);
+    assert_eq!(worker.authority, Authority::Delegate);
+    assert_eq!(worker.writer.as_ref().unwrap().node_id, "b");
+    assert_eq!(worker.capable_nodes, (1, 2));
+}
+
 #[tokio::test]
 async fn bind_by_code_saves_openid_and_replies_passively() {
     crate::install_crypto_provider();
@@ -179,6 +248,302 @@ async fn friend_add_binds_only_in_any_mode() {
         .await;
     assert_eq!(stored_openid(&store).as_deref(), Some(OPENID));
     assert_eq!(mock.messages()[0].1["event_id"], "FRIEND_ADD:1");
+}
+
+#[tokio::test]
+async fn losing_the_writer_cancels_binding_during_gateway_hysteresis() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    for friend_add in [false, true] {
+        let (_temp, store) = store();
+        configure(&store, &mock, "");
+        let (mut cfg, revision) = store::load_config(&store).unwrap();
+        cfg.qq.keep_online = true;
+        store::save_config(&store, &cfg, revision).unwrap();
+        let mut worker = Worker::new(Arc::clone(&store), "a".into());
+        let now = now_secs();
+        let nodes = || {
+            ["a", "b"]
+                .into_iter()
+                .map(|id| {
+                    let mut node = slot(id, true, "healthy");
+                    node.notify_capable = false;
+                    node
+                })
+                .collect()
+        };
+        worker.apply_digest(&cluster("a", "a", nodes()), false, now);
+        worker.start_bind(BindMode::Any, false, now).unwrap();
+        worker.gateway = Some(GatewayTask(tokio::spawn(std::future::pending())));
+        let before = store::load_settings(&store).unwrap();
+
+        worker.apply_digest(&cluster("a", "b", nodes()), false, now + 1);
+        worker.manage_gateway(now + 1);
+        assert!(
+            worker.gateway.is_some(),
+            "the old connection is still in its 30 s grace"
+        );
+        assert_eq!(worker.binder.view(now + 1, "a")["state"], "idle");
+        let event = if friend_add {
+            GatewayEvent::FriendAdd {
+                openid: OPENID.into(),
+                event_id: Some("late-friend".into()),
+                at: now + 1,
+            }
+        } else {
+            GatewayEvent::C2c {
+                openid: OPENID.into(),
+                msg_id: "late-message".into(),
+                content: "hi".into(),
+                at: now + 1,
+            }
+        };
+        worker.handle_gateway_event(event).await;
+        let after = store::load_settings(&store).unwrap();
+        assert_eq!(after.openid, before.openid);
+        assert_eq!(after.credentials, before.credentials);
+        assert!(
+            mock.messages().is_empty(),
+            "a retired writer never acknowledges a bind"
+        );
+        assert_eq!(worker.binder.view(now + 1, "a")["state"], "idle");
+    }
+}
+
+#[tokio::test]
+async fn a_binding_rechecks_the_real_handoff_before_the_next_worker_tick() {
+    let _guard = crate::cluster::tests::ClusterStateGuard::new();
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, "");
+    let mut worker = Worker::new(Arc::clone(&store), "a".into());
+    worker.cluster_cfg = Some(crate::cluster::tests::test_config("a", 0));
+    *crate::cluster::cluster_state_write() = crate::cluster::ClusterState {
+        active_owner: Some("a".into()),
+        ..Default::default()
+    };
+    let now = now_secs();
+    let digest = worker.digest(now);
+    worker.apply_digest(&digest, false, now);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    // The cluster changes while the worker is awaiting the gateway event.
+    // Its cached writer is still local; finish_bind must read the real gate.
+    crate::cluster::cluster_state_write().pending_handoff_source = Some("b".into());
+    assert!(worker.writer.as_ref().unwrap().is_local);
+    worker
+        .handle_gateway_event(GatewayEvent::C2c {
+            openid: OPENID.into(),
+            msg_id: "handoff-message".into(),
+            content: "hi".into(),
+            at: now,
+        })
+        .await;
+    assert_eq!(stored_openid(&store), None);
+    assert_eq!(worker.binder.view(now, "a")["state"], "idle");
+    assert!(mock.messages().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_binding_transaction_never_reports_bound_or_sends_an_acknowledgement() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (temp, store) = store();
+    configure(&store, &mock, "");
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    let before = store::load_settings(&store).unwrap();
+    // Fail the actual SQLite write after event matching, with the normal
+    // Store transaction/rollback path and no fake persistence implementation.
+    let sql = rusqlite::Connection::open(temp.0.join("data/bilistream.db")).unwrap();
+    sql.execute_batch("CREATE TRIGGER refuse_binding BEFORE INSERT ON documents WHEN NEW.name='notify-openid' BEGIN SELECT RAISE(ABORT, 'synthetic binding write failure'); END;").unwrap();
+    worker
+        .handle_gateway_event(GatewayEvent::C2c {
+            openid: OPENID.into(),
+            msg_id: "failed-bind".into(),
+            content: "hi".into(),
+            at: now,
+        })
+        .await;
+    let after = store::load_settings(&store).unwrap();
+    assert_eq!(after.openid, before.openid);
+    assert_eq!(after.credentials, before.credentials);
+    assert_eq!(worker.status(now, &single_node())["bind"]["state"], "idle");
+    assert!(mock.messages().is_empty());
+    assert!(worker.passive.is_none());
+    assert_eq!(worker.ledger.wakeup.admin_last_c2c_at, None);
+
+    sql.execute_batch("DROP TRIGGER refuse_binding;").unwrap();
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    worker
+        .handle_gateway_event(GatewayEvent::C2c {
+            openid: OPENID.into(),
+            msg_id: "successful-bind".into(),
+            content: "hi".into(),
+            at: now,
+        })
+        .await;
+    assert_eq!(stored_openid(&store).as_deref(), Some(OPENID));
+    assert_eq!(mock.messages().len(), 1);
+    assert_eq!(worker.status(now, &single_node())["bind"]["state"], "bound");
+}
+
+#[tokio::test]
+async fn a_credential_commit_after_matching_a_bind_message_wins_the_transaction() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, "");
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    assert!(matches!(
+        worker.binder.on_message(OPENID, "hi", now),
+        BindDecision::Bind { .. }
+    ));
+    super::super::credentials::apply_save(
+        &store,
+        &super::super::credentials::CredentialSave {
+            base_generation: Some(worker.cred_meta.generation),
+            appid: Some("9876543210".into()),
+            appsecret: Some("synthetic-replacement-secret".into()),
+            ..Default::default()
+        },
+        "solo",
+        now,
+    )
+    .unwrap();
+    let committed = store::load_settings(&store).unwrap();
+    // Event matching already happened with the old in-memory settings.
+    // The transactional check must not bind that recipient under the new bot.
+    worker
+        .finish_bind(OPENID, BindVia::Message, Some("stale-match"), None, now)
+        .await;
+    let after = store::load_settings(&store).unwrap();
+    assert_eq!(after.credentials, committed.credentials);
+    assert_eq!(after.openid, committed.openid);
+    assert_eq!(stored_openid(&store), None);
+    assert_eq!(worker.binder.view(now, "solo")["state"], "idle");
+    assert!(mock.messages().is_empty());
+}
+
+#[tokio::test]
+async fn binding_remains_available_while_notifications_are_disabled() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, "");
+    let (mut cfg, revision) = store::load_config(&store).unwrap();
+    cfg.enabled = false;
+    store::save_config(&store, &cfg, revision).unwrap();
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    assert_eq!(worker.authority, Authority::None);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    worker
+        .handle_gateway_event(GatewayEvent::FriendAdd {
+            openid: OPENID.into(),
+            event_id: Some("disabled-bind".into()),
+            at: now,
+        })
+        .await;
+    assert_eq!(stored_openid(&store).as_deref(), Some(OPENID));
+    assert_eq!(worker.binder.view(now, "solo")["state"], "bound");
+    assert_eq!(mock.messages().len(), 1);
+    assert_eq!(mock.messages()[0].1["event_id"], "disabled-bind");
+}
+
+#[tokio::test]
+async fn changing_credentials_retires_queued_and_inflight_events_from_the_old_gateway() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, "");
+    let mut worker = Worker::new(Arc::clone(&store), "solo".into());
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    worker.passive = Some(PassiveTarget {
+        msg_id: "old-bot-message".into(),
+        received_at: now,
+        replies_used: 0,
+    });
+    let old_connection = worker.gateway_tx.clone();
+    old_connection
+        .try_send(GatewayEvent::C2c {
+            openid: OPENID.into(),
+            msg_id: "already-received".into(),
+            content: "hi".into(),
+            at: now,
+        })
+        .unwrap();
+    let in_flight = worker.gateway_rx.recv().await.unwrap();
+    old_connection.try_send(GatewayEvent::Ready).unwrap();
+    old_connection
+        .try_send(GatewayEvent::Closed {
+            reason: "old connection failure".into(),
+            fatal: true,
+            bad_credentials: true,
+        })
+        .unwrap();
+    old_connection
+        .try_send(GatewayEvent::FriendAdd {
+            openid: OPENID.into(),
+            event_id: Some("queued-friend".into()),
+            at: now,
+        })
+        .unwrap();
+    super::super::credentials::apply_save(
+        &store,
+        &super::super::credentials::CredentialSave {
+            base_generation: Some(worker.cred_meta.generation),
+            appid: Some("9876543210".into()),
+            appsecret: Some("synthetic-replacement-secret".into()),
+            ..Default::default()
+        },
+        "solo",
+        now,
+    )
+    .unwrap();
+    // The old event was selected just before the settings reload command.
+    worker.handle_gateway_event(in_flight).await;
+    assert!(old_connection.is_closed());
+    assert!(
+        worker.gateway_rx.try_recv().is_err(),
+        "queued events were retired with the receiver"
+    );
+    assert!(
+        old_connection.try_send(GatewayEvent::Ready).is_err(),
+        "late old-task sends cannot enter the new channel"
+    );
+    assert!(!worker.bad_credentials);
+    assert_eq!(worker.gateway_state.0, "off");
+    assert!(worker.passive.is_none());
+    assert_eq!(worker.binder.view(now, "solo")["state"], "idle");
+    assert_eq!(stored_openid(&store), None);
+    assert!(mock.messages().is_empty());
+
+    // A new admin-started window on the new channel still binds normally.
+    worker.apply_digest(&single_node(), false, now);
+    worker.start_bind(BindMode::Any, false, now).unwrap();
+    worker
+        .gateway_tx
+        .try_send(GatewayEvent::C2c {
+            openid: OPENID.into(),
+            msg_id: "new-bot-message".into(),
+            content: "hi".into(),
+            at: now,
+        })
+        .unwrap();
+    let current = worker.gateway_rx.recv().await.unwrap();
+    worker.handle_gateway_event(current).await;
+    assert_eq!(stored_openid(&store).as_deref(), Some(OPENID));
+    assert_eq!(worker.cred_meta.openid_appid, "9876543210");
+    assert_eq!(mock.messages().len(), 1);
 }
 
 #[tokio::test]
@@ -1102,6 +1467,63 @@ fn three_nodes_without_openid() -> Vec<NodeSlot> {
 /// Same rule the PUT/DELETE handlers apply (`notify::check_writer`).
 fn put_allowed(worker: &Worker) -> Result<(), Refusal> {
     crate::notify::writer_allows(worker.writer.as_ref(), "修改管理员 openid")
+}
+
+#[test]
+fn writer_diagnostics_distinguish_handoff_and_missing_quorum_without_flagging_a_standby() {
+    crate::install_crypto_provider();
+    let (_temp, store) = store();
+    let mut worker = Worker::new(store, "b".into());
+    let now = now_secs();
+    let mut digest = cluster(
+        "b",
+        "a",
+        vec![slot("a", true, "healthy"), slot("b", true, "healthy")],
+    );
+    worker.apply_digest(&digest, false, now);
+    let status = worker.status(now, &digest);
+    assert_eq!(status["cluster_quorum"], true);
+    assert!(status["sender_block_reason"].is_null());
+    assert_eq!(status["openid_writer"]["node_id"], "a");
+
+    digest.handoff_pending = true;
+    worker.apply_digest(&digest, false, now);
+    let status = worker.status(now, &digest);
+    assert_eq!(status["cluster_quorum"], true);
+    assert_eq!(status["sender_block_reason"], "handoff");
+    assert!(status["openid_writer"].is_null());
+
+    digest.handoff_pending = false;
+    digest.quorum = false;
+    worker.apply_digest(&digest, false, now);
+    let status = worker.status(now, &digest);
+    assert_eq!(status["cluster_quorum"], false);
+    assert_eq!(status["sender_block_reason"], "no_quorum");
+    worker.apply_digest(&digest, true, now);
+    assert_eq!(
+        worker.status(now, &digest)["sender_block_reason"],
+        "membership_change"
+    );
+
+    digest.quorum = true;
+    digest.owner = Some("b".into());
+    digest.fence_block = Some("synthetic local execution block".into());
+    worker.apply_digest(&digest, false, now);
+    assert_eq!(
+        worker.status(now, &digest)["sender_block_reason"],
+        "execution_blocked"
+    );
+    digest.owner = None;
+    worker.apply_digest(&digest, false, now);
+    assert_eq!(
+        worker.status(now, &digest)["sender_block_reason"],
+        "owner_unavailable"
+    );
+
+    worker.apply_digest(&single_node(), false, now);
+    let status = worker.status(now, &single_node());
+    assert_eq!(status["cluster_quorum"], true);
+    assert!(status["sender_block_reason"].is_null());
 }
 
 /// (a) A fresh 3-node cluster with no openid anywhere: the authority node

@@ -231,6 +231,57 @@ async fn missing_hello_times_out_and_reconnects() {
 }
 
 #[tokio::test]
+async fn discovery_auth_refusals_refresh_the_cached_token_and_reach_ready() {
+    crate::install_crypto_provider();
+    for (status, body, refusals) in [
+        (401, json!({}), 1),
+        (200, json!({"code": 11242}), 1),
+        // Two rejected discovery tokens must not trip the WebSocket 4004
+        // latch: the fresh token can still make the bot available again.
+        (401, json!({}), 2),
+    ] {
+        let mock = MockQq::start().await;
+        let server = ws_server(vec![Script::Session {
+            frames: vec![],
+            close: 4914,
+        }])
+        .await;
+        let expected: Vec<_> = (0..=refusals)
+            .map(|index| format!("QQBot synthetic-discovery-token-{index}"))
+            .collect();
+        {
+            let mut state = mock.state.lock().unwrap();
+            state.gateway_url = Some(server.url.clone());
+            for index in 0..=refusals {
+                let token = format!("synthetic-discovery-token-{index}");
+                state
+                    .token_replies
+                    .push_back((200, json!({"access_token": token, "expires_in": 7200})));
+                if index < refusals {
+                    state
+                        .gateway_refusals
+                        .insert(format!("QQBot {token}"), (status, body.clone()));
+                }
+            }
+        }
+        let (events, task) = collect_until_fatal(params(&mock, Arc::default())).await;
+        task.abort();
+        assert!(events.contains(&GatewayEvent::Ready), "{events:?}");
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            GatewayEvent::Closed {
+                bad_credentials: true,
+                ..
+            }
+        )));
+        let state = mock.state.lock().unwrap();
+        assert_eq!(state.token_calls, refusals + 1);
+        assert_eq!(state.gateway_tokens, expected);
+        assert_eq!(*server.ops.lock().unwrap(), vec![2]);
+    }
+}
+
+#[tokio::test]
 async fn concurrent_token_requests_fetch_once() {
     crate::install_crypto_provider();
     let mock = MockQq::start().await;

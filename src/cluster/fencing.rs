@@ -490,6 +490,9 @@ pub(crate) async fn collect_local_snapshot(
         notify_appsecret_set: Some(crate::notify::local_credential_flags().0),
         notify_appid_set: Some(crate::notify::local_appid_set()),
         notify_openid_set: Some(crate::notify::local_credential_flags().1),
+        notify_credentials_sync: Some(true),
+        notify_credentials_generation: Some(crate::notify::local_credentials_sync().0),
+        notify_openid_rebind: Some(crate::notify::local_credentials_sync().1),
         bili_live: crate::history::live_book::heartbeat_book(),
     }
 }

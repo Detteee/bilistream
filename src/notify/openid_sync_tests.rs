@@ -265,7 +265,7 @@ async fn a_removed_member_can_neither_push_nor_pull_and_loses_its_copy() {
         Err(ServeRefusal::NotMember)
     );
     assert_eq!(
-        serve_pull(&b.1, "x", &members).map(|_| ()),
+        serve_pull(&b.1, "x", &members, true).map(|_| ()),
         Err(ServeRefusal::NotMember)
     );
     assert_eq!(
@@ -751,13 +751,15 @@ async fn a_single_node_bind_and_unbind_skip_the_push_without_a_warning_or_peer_c
 async fn a_panicking_round_does_not_block_later_pushes() {
     let coalescer: &'static PushCoalescer = Box::leak(Box::new(PushCoalescer::new()));
     assert!(coalescer.request());
-    let crashed = tokio::spawn(async move {
+    // F2: the panic is caught inside `drive`; with no follow-up owed the
+    // loop ends and leaves the coalescer idle.
+    tokio::spawn(async move {
         coalescer
             .drive(|| async { panic!("synthetic round failure") })
             .await;
     })
-    .await;
-    assert!(crashed.unwrap_err().is_panic());
+    .await
+    .unwrap();
     // A new bind after the crash starts a fresh loop that really runs.
     let (a, b) = (temp(), temp());
     let cluster = MemCluster::new(&[("a", a.1.clone()), ("b", b.1.clone())]);

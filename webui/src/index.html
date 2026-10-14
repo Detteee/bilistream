@@ -1935,11 +1935,18 @@
                 </div>
                 <div class="cluster-settings-fields">
                   <div class="control-group cluster-settings-field-wide">
-                    <label for="notify-app-id">AppID</label>
+                    <div class="credential-heading">
+                      <label for="notify-app-id">AppID</label>
+                      <div class="credential-state">
+                        <span class="cluster-badge" id="notify-app-id-state" role="status" hidden>读取中</span>
+                      </div>
+                    </div>
                     <input type="text" id="notify-app-id" class="notify-mono" inputmode="numeric"
                       autocomplete="off" spellcheck="false" placeholder="QQ 开放平台的机器人 AppID"
-                      aria-describedby="notify-app-id-error">
+                      aria-describedby="notify-app-id-current notify-app-id-error notify-app-id-help">
                     <small class="settings-help-text is-invalid" id="notify-app-id-error" hidden></small>
+                    <small class="settings-help-text notify-appid-current" id="notify-app-id-current" hidden></small>
+                    <small class="settings-help-text" id="notify-app-id-help" hidden></small>
                   </div>
                   <div class="control-group cluster-settings-field-wide">
                     <div class="credential-heading">

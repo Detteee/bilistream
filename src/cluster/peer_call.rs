@@ -140,6 +140,10 @@ pub(crate) mod routes {
     /// Batch 1b: a joining node or a new writer pulls a member's record once.
     pub(crate) const NOTIFY_OPENID_PULL: RoutePolicy =
         route("GET", "/api/cluster/v1/notify/openid", 0, 4096);
+    /// Addendum F: a member forwards an AppID/AppSecret save to the gateway
+    /// holder (same path as the openid route, `PUT`).
+    pub(crate) const NOTIFY_CREDENTIALS_SAVE: RoutePolicy =
+        route("PUT", "/api/cluster/v1/notify/openid", 4096, 4096);
     /// Unauthenticated bootstrap: identity proof and password-gated pairing.
     pub(crate) const HELLO: RoutePolicy = route(
         "POST",
@@ -190,6 +194,7 @@ const TABLE: &[(RoutePolicy, RouteClass)] = &[
     (routes::FORWARD, RouteClass::PeerOnly),
     (routes::NOTIFY_OPENID_PUSH, RouteClass::PeerOnly),
     (routes::NOTIFY_OPENID_PULL, RouteClass::PeerOnly),
+    (routes::NOTIFY_CREDENTIALS_SAVE, RouteClass::PeerOnly),
     (routes::DRAIN, RouteClass::Control),
     (routes::AUTO_FAILOVER, RouteClass::Control),
     (routes::FAILOVER, RouteClass::Control),

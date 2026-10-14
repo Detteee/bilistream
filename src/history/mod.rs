@@ -312,15 +312,27 @@ impl SessionGuard {
         emit(EventKind::FfmpegStarted { seq: self.seq, run });
     }
 
-    pub fn run_exited(&self, run: u64, code: Option<i32>, success: bool, counted_failure: bool) {
-        emit(EventKind::FfmpegExited {
-            seq: self.seq,
-            run,
-            code,
-            success,
-            counted_failure,
-            diagnostic: None,
-        });
+    /// Classification may require source rechecks; keep the actual wait
+    /// completion time so those checks are recorded as downtime.
+    pub fn run_exited_at(
+        &self,
+        at: u64,
+        run: u64,
+        code: Option<i32>,
+        success: bool,
+        counted_failure: bool,
+    ) {
+        emit_at(
+            at,
+            EventKind::FfmpegExited {
+                seq: self.seq,
+                run,
+                code,
+                success,
+                counted_failure,
+                diagnostic: None,
+            },
+        );
     }
 
     pub fn finish(mut self, reason: EndReason) {

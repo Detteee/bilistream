@@ -17,6 +17,12 @@ test('W15: clamp notice only when clamped_to_days is present', () => {
   assert.equal(mergeRetention([{ clamped_to_days: 90 }, { clamped_to_days: 60 }]).clamped, '所选范围超出保留期，仅显示最近 60 天');
 });
 
+test('a local-only clamp never claims older peer history was removed', () => {
+  const { clamped } = mergeRetention([{ clamped_to_days: 1, clamp_scope: 'local' }]);
+  assert.equal(clamped, '本节点仅含最近 1 天，其他节点按各自保留期显示。');
+  assert.doesNotMatch(clamped, /仅显示最近/);
+});
+
 test('W16: partial notice only when partial_nodes is non-empty; nodes joined with 、', () => {
   assert.equal(partialNodesText(undefined), null);
   assert.equal(partialNodesText([]), null);

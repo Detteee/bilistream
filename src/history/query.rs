@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 const DAY: i64 = 86_400;
 pub(crate) const MAX_POINTS: usize = 2000;
+pub(crate) const MAX_RANGE_DAYS: u64 = 90;
 const DEFAULT_POINTS: usize = 1000;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -54,6 +55,16 @@ pub(crate) struct Query {
     /// `parse` only; never sent to or read from a peer.
     #[serde(skip)]
     pub clamped_to_days: Option<u64>,
+    /// Node-local read limits must not change the coordinator's chart grid,
+    /// summary buckets or the preceding comparison period.
+    #[serde(skip)]
+    pub query_from: Option<i64>,
+    #[serde(skip)]
+    pub retained_from: Option<i64>,
+    /// First complete minute covered by raw retention on this node. Older
+    /// intervals use rollups, even when the coordinator requested raw data.
+    #[serde(skip)]
+    pub raw_from: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -166,6 +177,9 @@ pub(crate) fn parse(
         tier: None,
         around: None,
         clamped_to_days,
+        query_from: None,
+        retained_from: None,
+        raw_from: None,
     })
 }
 
@@ -174,6 +188,8 @@ pub(crate) fn parse(
 pub(crate) fn clamp_peer(q: &mut Query, rollup_days: u64) -> Option<u64> {
     let days = rollup_days.max(1);
     let floor = q.to - days as i64 * DAY;
+    q.query_from.get_or_insert(q.from);
+    q.retained_from = Some(floor);
     (q.from < floor).then(|| {
         q.from = floor;
         days
@@ -185,7 +201,7 @@ pub(crate) fn clamp_peer(q: &mut Query, rollup_days: u64) -> Option<u64> {
 /// is a 400 before the database is opened.
 pub(crate) fn validate_peer(q: &Query, now: i64) -> Result<(), BadRequest> {
     let bad = |m: &str| Err(BadRequest(m.into()));
-    if q.from >= q.to || q.to > now + 600 {
+    if q.from >= q.to || q.to > now + 600 || q.to.checked_sub(q.from).is_none() {
         return bad("range");
     }
     if !(-720..=840).contains(&q.tz_offset_min) {
@@ -341,20 +357,22 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 struct RunRow {
     started_at: i64,
     ended_at: Option<i64>,
+    success: Option<bool>,
     counted_failure: bool,
     diagnostic: Option<String>,
 }
 
 fn runs_of(conn: &Connection, session: i64) -> rusqlite::Result<Vec<RunRow>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT started_at,ended_at,coalesce(counted_failure,0),diagnostic FROM runs WHERE session_id=?1 ORDER BY started_at,id",
+        "SELECT started_at,ended_at,success,coalesce(counted_failure,0),diagnostic FROM runs WHERE session_id=?1 ORDER BY started_at,id",
     )?;
     let rows = stmt.query_map([session], |r| {
         Ok(RunRow {
             started_at: r.get(0)?,
             ended_at: r.get(1)?,
-            counted_failure: r.get::<_, i64>(2)? != 0,
-            diagnostic: r.get(3)?,
+            success: r.get(2)?,
+            counted_failure: r.get::<_, i64>(3)? != 0,
+            diagnostic: r.get(4)?,
         })
     })?;
     rows.collect()
@@ -416,11 +434,16 @@ fn median_bitrate(conn: &Connection, session: i64) -> rusqlite::Result<Option<f6
     Ok(Some(m.round()))
 }
 
-fn online_peak(conn: &Connection, session: i64) -> rusqlite::Result<Option<f64>> {
+fn online_peak(
+    conn: &Connection,
+    session: i64,
+    from: i64,
+    to: i64,
+) -> rusqlite::Result<Option<f64>> {
     conn.query_row(
-        "SELECT max(m) FROM (SELECT max(max) AS m FROM samples_raw WHERE metric=10 AND session_id=?1
-         UNION ALL SELECT max(max) FROM samples_1m WHERE metric=10 AND session_id=?1)",
-        [session],
+        "SELECT max(m) FROM (SELECT max(max) AS m FROM samples_raw WHERE metric=10 AND session_id=?1 AND ts>=?2 AND ts<?3
+         UNION ALL SELECT max(max) FROM samples_1m WHERE metric=10 AND session_id=?1 AND bucket>=?2 AND bucket<?3)",
+        params![session, from, to],
         |r| r.get(0),
     )
 }
@@ -453,7 +476,7 @@ pub(crate) fn live_row(conn: &Connection, key: &str) -> rusqlite::Result<Option<
 }
 
 fn bili_item(conn: &Connection, row: &Row) -> rusqlite::Result<BiliItem> {
-    let online_peak = online_peak(conn, row.id)?;
+    let online_peak = online_peak(conn, row.id, i64::MIN, i64::MAX)?;
     let mut item = BiliItem {
         state: if row.ended_at.is_none() {
             "pending"
@@ -926,10 +949,49 @@ pub(crate) struct StatsParts {
 pub(crate) fn stats_layout(from: i64, to: i64, tier: &str, max_points: usize) -> (i64, usize) {
     let base = if tier == "raw" { 10 } else { 60 };
     let points = max_points.clamp(2, MAX_POINTS) as i64;
-    let span = (to - from).max(1);
-    let step = base.max((span + points - 2) / (points - 1));
+    let span = to.saturating_sub(from).max(1);
+    let step = base.max(span.saturating_add(points - 2) / (points - 1));
     let n = (span / step + 1).min(points) as usize;
     (step, n)
+}
+
+pub(crate) fn empty_stats(q: &Query, tier: &str) -> StatsParts {
+    let start = q.query_from.unwrap_or(q.from);
+    let (step, n) = stats_layout(start, q.to, tier, q.max_points);
+    let metrics: Vec<String> = if q.metrics.is_empty() {
+        super::event::METRICS
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
+    } else {
+        q.metrics.clone()
+    };
+    StatsParts {
+        resolution: tier.into(),
+        start,
+        step,
+        n,
+        series: metrics
+            .into_iter()
+            .map(|name| (name, vec![None; n]))
+            .collect(),
+    }
+}
+
+/// Old peers may send an absent store as a default part. It has no grid
+/// and must never become the layout for populated nodes.
+pub(crate) fn stats_matches_query(p: &StatsParts, q: &Query) -> bool {
+    if p.n == 0 {
+        return p.series.is_empty();
+    }
+    let tier = q.tier.as_deref().unwrap_or("raw");
+    let start = q.query_from.unwrap_or(q.from);
+    let (step, n) = stats_layout(start, q.to, tier, q.max_points);
+    matches!(p.resolution.as_str(), "raw" | "1m")
+        && p.start == start
+        && p.step == step
+        && p.n == n
+        && p.series.values().all(|v| v.len() == n)
 }
 
 pub(crate) fn stats(
@@ -938,64 +1000,65 @@ pub(crate) fn stats(
     tier: &str,
     node: Option<&str>,
 ) -> rusqlite::Result<StatsParts> {
-    let (step, n) = stats_layout(q.from, q.to, tier, q.max_points);
-    let (table, col) = if tier == "raw" {
-        ("samples_raw", "ts")
+    let mut out = empty_stats(q, tier);
+    let ranges = if tier == "raw" {
+        let raw_from = q.raw_from.unwrap_or(q.from).max(q.from).min(q.to);
+        if raw_from > q.from {
+            out.resolution = "1m".into();
+        }
+        vec![
+            ("samples_1m", "bucket", q.from, raw_from),
+            ("samples_raw", "ts", raw_from, q.to),
+        ]
     } else {
-        ("samples_1m", "bucket")
+        vec![("samples_1m", "bucket", q.from, q.to)]
     };
-    let metrics: Vec<String> = if q.metrics.is_empty() {
-        super::event::METRICS
-            .iter()
-            .map(|(n, _)| n.to_string())
-            .collect()
-    } else {
-        q.metrics.clone()
-    };
-    let mut series = BTreeMap::new();
-    for name in metrics {
-        let Some(id) = metric_id(&name) else { continue };
-        let mut col_data: Vec<Option<Cell>> = vec![None; n];
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {col},min,max,sum,count FROM {table} WHERE metric=?1 AND {col}>=?2 AND {col}<=?3 AND (?4 IS NULL OR node=?4)"
-        ))?;
-        let rows = stmt.query_map(params![id, q.from, q.to, node], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, f64>(1)?,
-                r.get::<_, f64>(2)?,
-                r.get::<_, f64>(3)?,
-                r.get::<_, i64>(4)?,
-            ))
-        })?;
-        for row in rows {
-            let (ts, min, max, sum, count) = row?;
-            let i = ((ts - q.from) / step) as usize;
-            if i >= n {
+    for (name, col_data) in &mut out.series {
+        let Some(id) = metric_id(name) else { continue };
+        for &(table, col, from, to) in &ranges {
+            if from >= to {
                 continue;
             }
-            col_data[i] = Some(match col_data[i] {
-                None => (min, max, sum, count),
-                Some((a, b, c, d)) => (a.min(min), b.max(max), c + sum, d + count),
-            });
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {col},min,max,sum,count FROM {table} WHERE metric=?1 AND {col}>=?2 AND {col}<?3 AND (?4 IS NULL OR node=?4)
+                 AND (?5 IS NULL OR session_id=(SELECT id FROM sessions WHERE eid=?5))"
+            ))?;
+            let rows = stmt.query_map(params![id, from, to, node, q.session], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, f64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (ts, min, max, sum, count) = row?;
+                let i = ((ts - out.start) / out.step) as usize;
+                if i >= out.n {
+                    continue;
+                }
+                col_data[i] = Some(match col_data[i] {
+                    None => (min, max, sum, count),
+                    Some((a, b, c, d)) => (a.min(min), b.max(max), c + sum, d + count),
+                });
+            }
         }
-        series.insert(name, col_data);
     }
-    Ok(StatsParts {
-        resolution: tier.into(),
-        start: q.from,
-        step,
-        n,
-        series,
-    })
+    Ok(out)
 }
 
 pub(crate) fn merge_stats(parts: Vec<StatsParts>) -> Option<StatsParts> {
-    let mut iter = parts.into_iter();
+    let mut iter = parts.into_iter().filter(|p| p.n > 0);
     let mut out = iter.next()?;
     for p in iter {
         if p.step != out.step || p.start != out.start || p.n != out.n {
-            continue;
+            // The coordinator validates each source first and reports it in
+            // missing_nodes. Never claim a mismatched part was merged.
+            return None;
+        }
+        if p.resolution == "1m" {
+            out.resolution = p.resolution;
         }
         for (name, col) in p.series {
             let mine = out
@@ -1059,7 +1122,8 @@ pub(crate) struct KpiParts {
     pub live_secs: i64,
     pub down_secs: i64,
     pub sessions: i64,
-    pub failed_sessions: i64,
+    #[serde(default)]
+    pub clean_runs: i64,
     pub failures: i64,
     pub recover_sum: i64,
     pub recover_n: i64,
@@ -1110,8 +1174,8 @@ pub(crate) fn bucket_size(q: &Query) -> i64 {
         Some("hour") => 3600,
         Some("6h") => 6 * 3600,
         Some("day") => DAY,
-        _ if q.to - q.from <= 2 * DAY => 3600,
-        _ if q.to - q.from <= 14 * DAY => 6 * 3600,
+        _ if q.to - q.query_from.unwrap_or(q.from) <= 2 * DAY => 3600,
+        _ if q.to - q.query_from.unwrap_or(q.from) <= 14 * DAY => 6 * 3600,
         _ => DAY,
     }
 }
@@ -1128,9 +1192,8 @@ struct SumSession {
     platform: String,
     started: i64,
     ended: Option<i64>,
-    failures: i64,
     end_reason: Option<String>,
-    gaps: Vec<(i64, i64, String)>,
+    runs: Vec<RunRow>,
     fails: Vec<(i64, Option<String>)>,
     live_key: Option<String>,
     online_peak: Option<f64>,
@@ -1143,7 +1206,7 @@ fn load_sessions(
     now: i64,
 ) -> rusqlite::Result<Vec<SumSession>> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {SESSION_COLS} FROM sessions WHERE started_at<?2 AND coalesce(ended_at, ?3)>?1"
+        "SELECT {SESSION_COLS} FROM sessions WHERE started_at<?2 AND coalesce(ended_at, ?3)>=?1"
     ))?;
     let rows: Vec<Row> = stmt
         .query_map(params![from, to, now], row)?
@@ -1152,22 +1215,69 @@ fn load_sessions(
     for r in rows {
         let runs = runs_of(conn, r.id)?;
         out.push(SumSession {
-            gaps: gaps(&runs, r.ended_at),
             fails: runs
                 .iter()
                 .filter(|x| x.counted_failure)
                 .filter_map(|x| x.ended_at.map(|e| (e, x.diagnostic.clone())))
                 .collect(),
-            online_peak: online_peak(conn, r.id)?,
+            online_peak: online_peak(conn, r.id, from, to)?,
+            runs,
             platform: r.platform,
             started: r.started_at,
             ended: r.ended_at,
-            failures: r.failures,
             end_reason: r.end_reason,
             live_key: r.live_key,
         });
     }
     Ok(out)
+}
+
+/// Runs can overlap in an incomplete/crash-recovered record. Count their
+/// union inside this session, including the running tail up to now.
+fn pushing_secs(s: &SumSession, from: i64, to: i64, now: i64) -> i64 {
+    let from = from.max(s.started);
+    let to = to.min(s.ended.unwrap_or(now)).min(now);
+    let mut through = from;
+    let mut total = 0;
+    for run in &s.runs {
+        let start = run.started_at.max(through);
+        let end = run.ended_at.unwrap_or(to).min(to);
+        total += (end - start).max(0);
+        through = through.max(end);
+    }
+    total
+}
+
+/// A session ending is not a recovery. Only a subsequent run closes a
+/// counted-failure recovery interval; do not use the capped display gaps.
+fn recoveries(s: &SumSession) -> impl Iterator<Item = (i64, i64)> + '_ {
+    s.runs.windows(2).filter_map(|runs| {
+        let end = runs[0].ended_at?;
+        let next = runs[1].started_at;
+        (runs[0].counted_failure && next >= end).then_some((end, next))
+    })
+}
+
+fn completed_runs(s: &SumSession, from: i64, to: i64) -> (i64, i64) {
+    let mut clean = 0;
+    let mut planned = 0;
+    for (i, run) in s.runs.iter().enumerate() {
+        let Some(end) = run.ended_at else { continue };
+        if end < from || end >= to || run.counted_failure {
+            continue;
+        }
+        let terminal_planned = i + 1 == s.runs.len()
+            && matches!(
+                s.end_reason.as_deref(),
+                Some("intentional_restart" | "cluster_handoff")
+            );
+        if terminal_planned {
+            planned += 1;
+        } else if run.success == Some(true) {
+            clean += 1;
+        }
+    }
+    (clean, planned)
 }
 
 pub(crate) fn key_hash(key: &str) -> String {
@@ -1186,22 +1296,20 @@ fn kpis(
     let mut k = KpiParts::default();
     for s in list {
         let end = s.ended.unwrap_or(now);
-        k.live_secs += clip(s.started, end, from, to);
-        k.sessions += 1;
-        k.failed_sessions += (s.failures > 0) as i64;
+        let duration = clip(s.started, end, from, to);
+        k.live_secs += duration;
+        k.down_secs += duration - pushing_secs(s, from, to, now);
+        k.sessions += (s.started >= from && s.started < to) as i64;
+        k.clean_runs += completed_runs(s, from, to).0;
         k.failures += s
             .fails
             .iter()
             .filter(|(at, _)| *at >= from && *at < to)
             .count() as i64;
-        for (a, b, kind) in &s.gaps {
-            if kind == "failed" {
-                let d = clip(*a, *b, from, to);
-                k.down_secs += d;
-                if *a >= from && *a < to {
-                    k.recover_sum += b - a;
-                    k.recover_n += 1;
-                }
+        for (a, b) in recoveries(s) {
+            if a >= from && a < to {
+                k.recover_sum += b - a;
+                k.recover_n += 1;
             }
         }
         if let Some(p) = s.online_peak {
@@ -1225,7 +1333,7 @@ fn kpis(
         }
     }
     let (sent, failed): (i64, i64) = conn.query_row(
-        "SELECT coalesce(sum(ok),0), coalesce(sum(1-ok),0) FROM notify_sends WHERE at>=?1 AND at<?2",
+        "SELECT count(*), coalesce(sum(1-ok),0) FROM notify_sends WHERE at>=?1 AND at<?2",
         params![from, to],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -1255,6 +1363,8 @@ pub(crate) fn summary(
     }
     while start < q.to && buckets.len() < 400 {
         let end = start + size;
+        let from = start.max(q.from);
+        let to = end.min(q.to);
         let mut b = BucketParts {
             start,
             live_secs: ["YT", "TW", "NC"]
@@ -1264,23 +1374,18 @@ pub(crate) fn summary(
             ..Default::default()
         };
         for s in &list {
-            let d = clip(
-                s.started,
-                s.ended.unwrap_or(now),
-                start.max(q.from),
-                end.min(q.to),
-            );
+            let d = clip(s.started, s.ended.unwrap_or(now), from, to);
             if d > 0 {
                 *b.live_secs.entry(s.platform.clone()).or_default() += d;
-                b.sessions += 1;
             }
+            b.sessions += (s.started >= from && s.started < to) as i64;
             b.failures += s
                 .fails
                 .iter()
-                .filter(|(at, _)| *at >= start && *at < end)
+                .filter(|(at, _)| *at >= from && *at < to)
                 .count() as i64;
-            for (a, z, kind) in &s.gaps {
-                if kind == "failed" && *a >= start && *a < end {
+            for (a, z) in recoveries(s) {
+                if a >= from && a < to {
                     b.recover_sum += z - a;
                     b.recover_n += 1;
                 }
@@ -1288,9 +1393,8 @@ pub(crate) fn summary(
         }
         for (at, ok) in &sends {
             if *at >= start && *at < end {
-                if *ok {
-                    b.notify_sent += 1;
-                } else {
+                b.notify_sent += 1;
+                if !ok {
                     b.notify_failed += 1;
                 }
             }
@@ -1299,9 +1403,15 @@ pub(crate) fn summary(
         start = end;
     }
     let k = kpis(conn, &list, q.from, q.to, now)?;
-    let span = q.to - q.from;
-    let prev_list = load_sessions(conn, q.from - span, q.from, now)?;
-    let prev_kpis = kpis(conn, &prev_list, q.from - span, q.from, now)?;
+    let prev_to = q.query_from.unwrap_or(q.from);
+    let span = q.to - prev_to;
+    let prev_from = (prev_to - span).max(q.retained_from.unwrap_or(i64::MIN));
+    let prev_list = if prev_from < prev_to {
+        load_sessions(conn, prev_from, prev_to, now)?
+    } else {
+        Vec::new()
+    };
+    let prev_kpis = kpis(conn, &prev_list, prev_from, prev_to, now)?;
     let mut reasons: BTreeMap<String, i64> = BTreeMap::new();
     for s in &list {
         for (at, diag) in &s.fails {
@@ -1312,22 +1422,8 @@ pub(crate) fn summary(
             }
         }
     }
-    let planned = list
-        .iter()
-        .filter(|s| {
-            matches!(
-                s.end_reason.as_deref(),
-                Some("intentional_restart" | "cluster_handoff")
-            )
-        })
-        .count() as i64;
-    let clean = list
-        .iter()
-        .filter(|s| {
-            s.failures == 0
-                && !matches!(s.end_reason.as_deref(), Some("aborted" | "process_restart"))
-        })
-        .count() as i64;
+    let clean = k.clean_runs;
+    let planned = list.iter().map(|s| completed_runs(s, q.from, q.to).1).sum();
     let mut calendar = Vec::new();
     if q.calendar || q.bucket.as_deref() == Some("day") {
         let today = align(now, DAY, off);
@@ -1362,7 +1458,7 @@ pub(crate) fn summary(
         failures: k.failures,
         down_secs: k.down_secs,
         last_seen_at: last_seen,
-        oldest_at: oldest,
+        oldest_at: oldest.map(|at| at.max(q.retained_from.unwrap_or(i64::MIN))),
     }];
     Ok(SummaryParts {
         buckets,
@@ -1380,7 +1476,7 @@ fn merge_kpis(into: &mut KpiParts, k: KpiParts) {
     into.live_secs += k.live_secs;
     into.down_secs += k.down_secs;
     into.sessions += k.sessions;
-    into.failed_sessions += k.failed_sessions;
+    into.clean_runs += k.clean_runs;
     into.failures += k.failures;
     into.recover_sum += k.recover_sum;
     into.recover_n += k.recover_n;
@@ -1441,11 +1537,11 @@ fn render_kpis(k: &KpiParts) -> serde_json::Value {
     let max_online = k.lives.values().filter_map(|l| l.max_online).max();
     serde_json::json!({
         "live_secs": k.live_secs,
-        "availability": (k.live_secs + k.down_secs > 0).then(|| k.live_secs as f64 / (k.live_secs + k.down_secs) as f64),
+        "availability": (k.live_secs > 0).then(|| (k.live_secs - k.down_secs) as f64 / k.live_secs as f64),
         "sessions": k.sessions,
         "failures": k.failures,
         "recover_secs_avg": (k.recover_n > 0).then(|| k.recover_sum / k.recover_n),
-        "success_rate": (k.sessions > 0).then(|| (k.sessions - k.failed_sessions) as f64 / k.sessions as f64),
+        "success_rate": (k.clean_runs + k.failures > 0).then(|| k.clean_runs as f64 / (k.clean_runs + k.failures) as f64),
         "notify_sent": k.notify_sent,
         "notify_failed": k.notify_failed,
         "watched": sum(|l| l.watched),

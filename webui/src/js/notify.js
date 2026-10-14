@@ -9,7 +9,9 @@ import {
   DEFAULTS, WATCH_PLATFORMS, addWatch, bindView, configToForm, errorCopy, filterCandidates,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, removeWatch, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
-  createSeq, liveRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderOutcome, staleLocalFailure, validateForm, watchKey, nodeSignature,
+  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, watchKey, nodeSignature,
+  credentialsSync, baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, appIdWriteOnly, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
+  APPSECRET_HELP_SYNC, APPID_HELP_SYNC, APPID_EMPTY, pendingSettingsForm, LOCAL_SETTINGS_PENDING_TEXT,
 } from './notify-state.js';
 
 const FIELDS = {
@@ -89,13 +91,21 @@ function isDirty() {
 }
 
 function validateNow() {
-  return validateForm(readForm(), {
+  const form = readForm();
+  const result = validateForm(form, {
     secretConfigured: appSecretSet(settings),
     secretEntered: Boolean($('notify-app-secret')?.value.trim()),
     openidSet: Boolean(settings?.openid_set),
     openidText: typedOpenid(),
     openidPending: openidPending(settings, status),
   });
+  // §16.y: under F the AppID is write-only (blank = unchanged), so the
+  // 启用前请填写 hint only applies when no AppID exists or is on its way.
+  if (appIdSet(settings) || credentialPending(settings, status, 'appid')) delete result.warnings.app_id;
+  if (appIdEmpty(settings, $('notify-app-id')?.value, { secretEntered: Boolean($('notify-app-secret')?.value.trim()), enabled: form.enabled, status })) {
+    result.errors.app_id = APPID_EMPTY;
+  }
+  return result;
 }
 
 function showFieldErrors(errors, warnings) {
@@ -117,6 +127,8 @@ function showFieldErrors(errors, warnings) {
     const text = errors[key] || warnings[key] || '';
     el.textContent = text;
     el.hidden = !text;
+    // F rev 2: 「AppID 不能为空」 is shown in warn, not danger.
+    if (text === APPID_EMPTY) el.dataset.tone = 'warn'; else delete el.dataset.tone;
   }
   const hosts = $('notify-hosts-error');
   if (hosts) {
@@ -403,14 +415,20 @@ function readinessRowEl(r) {
   v.append(count);
   if (r.gaps.length) {
     v.classList.add('notify-gaps');
-    v.dataset.tone = 'warn';
+    // F rev 3: gaps made only of *_pending codes are neutral 待同步.
+    if (r.warn) v.dataset.tone = 'warn';
     v.append(document.createTextNode(' · '));
-    r.gaps.forEach((gap, i) => {
+    // B1: one nowrap span per code (the first carries the node name), joined
+    // by 、 text so a multi-code gap wraps instead of widening the panel.
+    r.segments.forEach((g, i) => {
       if (i) v.append(document.createTextNode('；'));
-      const span = document.createElement('span');
-      span.className = 'notify-gap';
-      span.textContent = gap;
-      v.append(span);
+      g.parts.forEach((part, j) => {
+        if (j) v.append(document.createTextNode('、'));
+        const span = document.createElement('span');
+        span.className = 'notify-gap';
+        span.textContent = j ? part : `${g.node} ${part}`;
+        v.append(span);
+      });
     });
   }
   return wrap;
@@ -431,7 +449,15 @@ function credentialRow(s) {
     name.className = 'notify-cred-node';
     name.textContent = r.local ? `${r.node_id}（本节点）` : r.node_id;
     li.append(name);
-    for (const b of [r.secret, r.openid]) {
+    // N3: a silent node is muted and marked 离线 (§16.6).
+    if (r.offline) {
+      li.classList.add('is-offline');
+      const off = document.createElement('span');
+      off.className = 'cluster-badge notify-cred-offline';
+      off.textContent = '离线';
+      li.append(off);
+    }
+    for (const b of [r.appid, r.secret, r.openid]) {
       if (!b) continue;
       const badge = document.createElement('span');
       badge.className = `cluster-badge${b.tone ? ` ${b.tone}` : ''}`;
@@ -476,7 +502,7 @@ function renderBind() {
     btn.textContent = waiting ? '重新生成' : '自动获取';
     const gate = openidGate(status);
     const temp = settings?.config?.qq?.keep_online === false ? '将临时连接 QQ 网关，绑定完成后断开。' : '';
-    btn.disabled = busy || !gate.enabled || !settings?.config?.qq?.app_id || !appSecretSet(settings);
+    btn.disabled = busy || !gate.enabled || !appIdSet(settings) || !appSecretSet(settings);
     btn.title = !gate.enabled ? gate.hint : btn.disabled ? '请先保存 AppID 和 AppSecret' : `生成配对码，在 QQ 向机器人发送后自动完成绑定${temp ? `。${temp}` : ''}`;
   }
   if (waiting && !bindTimer) {
@@ -498,6 +524,7 @@ function render() {
   panel.dataset.state = st.key;
   setBadge($('notify-state-badge'), st.badge, st.tone);
   const node = status?.node_id || '本节点';
+  const senderBlock = senderBlockView(status);
   let summary = {
     loading: '正在读取通知设置…',
     'load-error': `无法读取通知设置：${loadError?.message || ''}`,
@@ -510,7 +537,7 @@ function render() {
     delegate: `活跃节点缺少通知设置，本节点 ${node} 代为发送（消息带「代发」标记）。`,
     'gateway-failed': `QQ 网关已停止：${status?.gateway?.reason || ''}`,
     fallback: `集群暂无多数派，本节点 ${node} 临时代发（消息带「无多数派」标记）。`,
-    electing: '暂无发送节点，通知会在选出后补发。',
+    electing: senderBlock ? `${senderBlock.reason}，暂时没有发送节点。` : '暂无发送节点，通知会在选出后补发。',
     failed: status?.authority === 'primary' ? `本节点 ${node} 是当前发送节点。` : `本节点 ${node}。`,
     'node-unready': `本节点缺少 ${(st.lacks || []).join(' / ')}，接管发送后将无法送达通知。`,
     'no-sender': '没有配置完整的节点，通知将记为未送达。',
@@ -527,7 +554,8 @@ function render() {
   } else if (st.key === 'gateway-down') alert = { lead: 'QQ 网关未连接，正在重连。', text: '断开期间只能用主动消息或召回额度发送，可能送达失败。', tone: 'warn' };
   else if (st.key === 'node-unready') {
     const lacks = st.lacks || [];
-    const fix = lacks.includes('AppSecret') ? '请在本节点填写 AppSecret。'
+    const fix = lacks.includes('管理员 openid（需重新绑定）') ? rebindHint(status, settings)
+      : lacks.includes('AppSecret') ? '请在本节点填写 AppSecret。'
       : lacks.includes('AppID') ? '请在本节点填写 AppID。'
       : 'openid 正在同步；如长时间未同步，请重新保存或「自动获取」。';
     alert = { lead: '本节点未配置完整。', text: `如果它成为发送节点，通知会记为未送达。${fix}`, tone: 'warn' };
@@ -541,15 +569,54 @@ function render() {
     const [short, hint] = errorCopy(code, out.reason || status?.last_reason?.reason);
     alert = { lead: `${short}${code ? `（${code}）` : ''}。`, text: `通知无法送达，转播不受影响。${hint}`, tone: 'danger', action: bad };
   }
+  if (settings?.local_settings_pending === true) alert = { lead: LOCAL_SETTINGS_PENDING_TEXT, text: '', tone: 'warn' };
   if (refusalSrc) {
-    refusal = liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq);
+    refusal = secretLostRefusal(liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq), refusalSrc.secretTyped);
     if (!refusal) refusalSrc = null;
   }
   if (refusal) alert = refusal.banner;
   renderAlert(alert);
 
   const secretSet = appSecretSet(settings);
-  setBadge($('notify-app-secret-state'), settings ? (secretSet ? '已设置' : '未设置') : '读取中', secretSet ? 'active' : '');
+  const sync = credentialsSync(settings);
+  // §16.y: a synced value on its way is a neutral 待同步 badge, never 未设置.
+  const secretPending = pendingCredentialBadge(settings, status, 'appsecret');
+  if (secretPending) setBadge($('notify-app-secret-state'), secretPending.badge, secretPending.tone);
+  else setBadge($('notify-app-secret-state'), settings ? (secretSet ? '已设置' : '未设置') : '读取中', secretSet ? 'active' : '');
+  const appIdState = $('notify-app-id-state');
+  if (appIdState) {
+    const pend = pendingCredentialBadge(settings, status, 'appid');
+    if (sync) setBadge(appIdState, pend ? pend.badge : appIdSet(settings) ? '已设置' : '未设置', pend ? pend.tone : appIdSet(settings) ? 'active' : '');
+    appIdState.hidden = !sync;
+  }
+  const appIdInput = $('notify-app-id');
+  const writeOnly = appIdWriteOnly(settings);
+  const appIdPlaceholder = !writeOnly ? 'QQ 开放平台的机器人 AppID' : appIdSet(settings) ? '已设置（留空则不变）' : '填写 AppID';
+  // F rev 4: no hint may mean a saved short AppID, so read the set flag too.
+  const current = $('notify-app-id-current');
+  if (current && settings) {
+    const line = appIdLine(settings);
+    const key = line.text;
+    if (current.dataset.key !== key || !current.childNodes.length) {
+      current.dataset.key = key;
+      const tail = document.createElement('span');
+      tail.className = line.mono ? 'notify-appid-tail' : '';
+      tail.textContent = line.text;
+      current.replaceChildren(document.createTextNode('当前 AppID：'), tail);
+    }
+    // §16.y rev 3: no hint line at all while this node's AppID is syncing.
+    // N2: an older backend shows the AppID in the input itself.
+    current.hidden = !writeOnly || credentialPending(settings, status, 'appid');
+  }
+  if (appIdInput.placeholder !== appIdPlaceholder) appIdInput.placeholder = appIdPlaceholder;
+  const appIdHelp = $('notify-app-id-help');
+  if (appIdHelp) { appIdHelp.hidden = !sync; appIdHelp.textContent = sync ? APPID_HELP_SYNC : ''; }
+  const secretHelp = $('notify-app-secret-help');
+  if (secretHelp) {
+    secretHelp.dataset.help ??= secretHelp.textContent;
+    const text = sync ? APPSECRET_HELP_SYNC : secretHelp.dataset.help;
+    if (secretHelp.textContent !== text) secretHelp.textContent = text;
+  }
   $('notify-clear-app-secret').hidden = !secretSet;
   const secretInput = $('notify-app-secret');
   secretInput.placeholder = secretSet ? '已设置（留空则不变）' : '填写 AppSecret';
@@ -567,7 +634,9 @@ function render() {
   const ownerHint = $('notify-openid-owner');
   // §16.x: while pending, the sync hint replaces 「请在 X 上绑定或解绑…」, and
   // 自动获取 (with its options) is hidden; nothing needs doing on this node.
-  const ownerText = ov.pending ? ov.hint : gate.hint;
+  // §16.y: rebind shows its own warn hint; the bind controls stay visible
+  // and the writer gate still decides whether they are enabled here.
+  const ownerText = ov.pending || ov.rebind ? ov.hint : gate.hint;
   if (ownerHint) {
     if (ownerHint.textContent !== ownerText) ownerHint.textContent = ownerText;
     ownerHint.hidden = !ownerText;
@@ -595,7 +664,7 @@ function render() {
   const save = $('notify-save-btn');
   if (!save.classList.contains('is-loading')) save.disabled = disabled || !dirty;
   const test = $('notify-test-btn');
-  const canTest = settings?.config?.qq?.app_id && secretSet && openidSet;
+  const canTest = appIdSet(settings) && secretSet && openidSet;
   if (!test.classList.contains('is-loading')) {
     test.disabled = disabled || !canTest;
     test.title = canTest ? '向管理员发送一条测试私信，会占用共享发送额度' : '请先保存 AppID、AppSecret 和管理员 openid';
@@ -617,6 +686,12 @@ function renderAlert(alert) {
   const lead = document.createElement('strong');
   lead.textContent = alert.lead;
   const parts = [lead, document.createTextNode(alert.text)];
+  if (alert.note) {
+    const note = document.createElement('div');
+    note.className = 'notify-alert-note';
+    note.textContent = alert.note;
+    parts.push(note);
+  }
   if (alert.action) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -624,6 +699,8 @@ function renderAlert(alert) {
     const action = alert.action === true ? { label: '重新填写', target: 'notify-app-secret' } : alert.action;
     btn.textContent = action.label;
     btn.addEventListener('click', () => {
+      // §16.y 刷新: reload settings (typed fields are kept), never re-save.
+      if (action.target === 'refresh') { clearRefusal(); loadNotifySettings(); return; }
       const input = actionTarget(action.target);
       input?.scrollIntoView({ block: 'center' });
       input?.focus();
@@ -680,6 +757,9 @@ function applySettings(data, { force }) {
   const previous = baseline;
   settings = data;
   baseline = configToForm(data.config);
+  // F rev 3: the AppID is write-only; its value never goes in the input.
+  // N2: only when the backend reports appid_set; older backends unchanged.
+  if (appIdWriteOnly(data)) baseline.app_id = '';
   if (force || !previous) fillForm(baseline);
   else {
     // Keep the draft but take server-side changes (e.g. a bound openid).
@@ -730,16 +810,11 @@ async function save() {
   }
   if (!form.enabled && baseline?.enabled && status?.authority === 'primary'
     && !confirm('关闭后集群节点故障将不再发送 QQ 私信，确定吗？')) return;
-  const body = { config: formToPatch(form, baseline), expected_revision: settings.revision };
-  if (secret) {
-    body.app_secret = secret;
-    body.expected_secret_revision = settings.secret_revision;
-  }
-  if (openid) {
-    body.admin_openid = openid;
-    body.expected_openid_revision = settings.openid_revision;
-  }
+  // One PUT for the whole save (F rev 2: all-or-nothing), base_generation
+  // on every save whenever the backend reports a generation.
+  const body = saveBody(settings, formToPatch(form, baseline), { secret, openid });
   busy = true;
+  render();
   const btn = $('notify-save-btn');
   btn.textContent = '正在保存…';
   btn.setAttribute('aria-busy', 'true');
@@ -749,18 +824,24 @@ async function save() {
     clearRefusal();
     liveEventsError = '';
     $('notify-app-secret').value = '';
+    const pendingDraft = pendingSettingsForm(result.data, baseline, form);
     applySettings(result.data, { force: true });
+    if (pendingDraft) fillForm(pendingDraft);
     if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
-    showNotification(openid ? '管理员 openid 已绑定' : '通知设置已保存', 'success');
+    showNotification(pendingDraft ? LOCAL_SETTINGS_PENDING_TEXT : openid ? '管理员 openid 已绑定' : '通知设置已保存', pendingDraft ? 'warning' : 'success');
     setResult('');
   } catch (error) {
-    handleRefusal(error, openid ? 'openid' : 'config');
+    // This is the settings PUT even when it also carries an openid. Only
+    // the dedicated bind route keeps legacy uncoded-503 behavior.
+    handleRefusal(error, 'config');
     liveEventsError = liveEventsFieldError(error);
     if (liveEventsError) $('notify-live-events')?.focus();
     showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
     // §16.4: the typed openid never outlives the request, success or not.
     $('notify-admin-openid').value = '';
+    // §16.y: nor the typed AppSecret (cleared after every request).
+    $('notify-app-secret').value = '';
     busy = false;
     btn.textContent = '保存通知设置';
     btn.removeAttribute('aria-busy');
@@ -771,22 +852,22 @@ async function save() {
 }
 
 async function clearSecret() {
-  if (!confirm('确定要清除本节点保存的 AppSecret 吗？清除后本节点无法发送通知；如果它是发送节点，通知将无法送达，直到重新填写。')) return;
-  busy = true;
-  render();
-  try {
-    const result = await putJson('/api/notify', { clear_app_secret: true, expected_secret_revision: settings.secret_revision });
-    clearRefusal();
-    applySettings(result.data, { force: !isDirty() });
-    showNotification('AppSecret 已清除', 'success');
-  } catch (error) {
-    handleRefusal(error, 'config');
-    showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
-  } finally {
-    busy = false;
-    render();
-    $('notify-app-secret').focus();
-  }
+  if (!confirm(clearSecretConfirm(settings))) return;
+  await clearSecretFlow({
+    setBusy: value => { busy = value; },
+    render,
+    request: () => putJson('/api/notify', clearSecretBody(settings)),
+    onSuccess: result => {
+      clearRefusal();
+      applySettings(result.data, { force: !isDirty() });
+      showNotification('AppSecret 已清除', 'success');
+    },
+    onError: error => {
+      handleRefusal(error, 'config');
+      showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
+    },
+    secretInput: () => $('notify-app-secret'),
+  });
 }
 
 // Coded refusal → banner, refresh, recovery focus (§16.11). The typed openid
@@ -794,12 +875,16 @@ async function clearSecret() {
 // Recovery buttons move focus only; nothing is unbound or saved by them.
 // loadNotifySettings keeps dirty form edits (force only when clean).
 function handleRefusal(error, route = 'openid') {
-  refusal = notifyRefusal(error, status, { route });
+  const secretTyped = Boolean(($('notify-app-secret')?.value || '').trim());
+  refusal = secretLostRefusal(notifyRefusal(error, status, { route }), secretTyped);
   // R1: statuses from requests started up to now are not fresh for this refusal.
   // L3: snapshot the credentials so a credential hint survives unrelated edits.
-  refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds() } : null;
+  refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds(), secretTyped } : null;
   if (!refusal) return;
   $('notify-admin-openid').value = '';
+  // L1: the AppSecret field is cleared either way; focus moves only when one was typed.
+  $('notify-app-secret').value = '';
+  if (refusal.focus) queueMicrotask(() => $(refusal?.focus || '')?.focus());
   if (refusal.kind === 'revision') loadNotifySettings();
   else refreshNotifyStatus();
 }

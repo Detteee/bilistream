@@ -89,6 +89,15 @@ pub struct ClusterNodeSnapshot {
     pub notify_appid_set: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_openid_set: Option<bool>,
+    /// Addendum F: this node takes the synced credential set on the openid
+    /// route; its set generation; its openid is bound under another AppID.
+    /// Never any value. `None` = an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_credentials_sync: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_credentials_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_openid_rebind: Option<bool>,
     /// The B站 live book (`history::live_book`, analytics design §17): which
     /// `live_key` the shared room is in. Peer heartbeat only; stripped from
     /// `/api/cluster/status`. Older nodes neither send nor read it.

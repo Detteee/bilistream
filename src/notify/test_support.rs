@@ -17,8 +17,12 @@ pub struct MockState {
     /// Scripted replies for message calls; empty → success.
     pub replies: VecDeque<(u16, Value)>,
     pub token_reply: Option<(u16, Value)>,
+    pub token_replies: VecDeque<(u16, Value)>,
     /// What `/gateway` returns; defaults to a closed loopback port.
     pub gateway_url: Option<String>,
+    /// Token-specific discovery refusals and observed Authorization values.
+    pub gateway_refusals: std::collections::HashMap<String, (u16, Value)>,
+    pub gateway_tokens: Vec<String>,
 }
 
 pub struct MockQq {
@@ -67,10 +71,14 @@ async fn token(
 ) -> (axum::http::StatusCode, Json<Value>) {
     let mut state = state.lock().unwrap();
     state.token_calls += 1;
-    let (status, body) = state.token_reply.clone().unwrap_or((
-        200,
-        json!({"access_token": "synthetic-token", "expires_in": "7200"}),
-    ));
+    let (status, body) = state
+        .token_replies
+        .pop_front()
+        .or_else(|| state.token_reply.clone())
+        .unwrap_or((
+            200,
+            json!({"access_token": "synthetic-token", "expires_in": "7200"}),
+        ));
     (
         axum::http::StatusCode::from_u16(status).unwrap(),
         Json(body),
@@ -94,14 +102,28 @@ async fn message(
     )
 }
 
-async fn gateway(State(state): State<Arc<Mutex<MockState>>>) -> Json<Value> {
+async fn gateway(
+    State(state): State<Arc<Mutex<MockState>>>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let mut state = state.lock().unwrap();
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    state.gateway_tokens.push(token.clone());
+    if let Some((status, body)) = state.gateway_refusals.get(&token) {
+        return (
+            axum::http::StatusCode::from_u16(*status).unwrap(),
+            Json(body.clone()),
+        );
+    }
     let url = state
-        .lock()
-        .unwrap()
         .gateway_url
         .clone()
         .unwrap_or_else(|| "ws://127.0.0.1:9/".to_string());
-    Json(json!({ "url": url }))
+    (axum::http::StatusCode::OK, Json(json!({ "url": url })))
 }
 
 /// In-process stand-in for the signed peer channel (batch 1b tests): every
@@ -130,6 +152,11 @@ pub struct MemCluster {
     pub clustered: Mutex<bool>,
     /// `members()` reads (any peer activity starts with one).
     pub member_reads: Mutex<u32>,
+    /// Addendum F: nodes on an older build (no `credentials_sync`); they
+    /// refuse a copy that carries the set, as `deny_unknown_fields` does.
+    pub legacy: Mutex<std::collections::HashSet<String>>,
+    /// Addendum F: the node that holds the QQ gateway.
+    pub holder: Mutex<Option<String>>,
 }
 
 impl MemCluster {
@@ -149,6 +176,8 @@ impl MemCluster {
             change_on_push: Mutex::new(None),
             clustered: Mutex::new(true),
             member_reads: Mutex::new(0),
+            legacy: Mutex::new(Default::default()),
+            holder: Mutex::new(None),
         })
     }
 
@@ -267,9 +296,44 @@ impl PeerLink for MemLink {
             return Err(LinkError::Unreachable);
         }
         let members = self.cluster.members.lock().unwrap().clone();
+        if copy.credentials.is_some() && self.cluster.legacy.lock().unwrap().contains(node) {
+            return Err(LinkError::Refused);
+        }
         let body = serde_json::to_vec(copy).unwrap();
         super::openid_sync::serve_push(&self.cluster.store(node), &self.local, &members, &body)
             .map_err(|_| LinkError::Refused)
+    }
+
+    fn credentials_sync(&self, node: &str) -> bool {
+        !self.cluster.legacy.lock().unwrap().contains(node)
+    }
+
+    async fn forward(
+        &self,
+        revision: u64,
+        node: &str,
+        save: &super::credentials::CredentialSave,
+    ) -> Result<super::credentials::SaveOutcome, super::credentials::SaveError> {
+        use super::credentials::{ForwardRefusal, SaveError};
+        if revision != *self.cluster.revision.lock().unwrap() || !self.cluster.reachable(node) {
+            return Err(SaveError::HolderUnreachable);
+        }
+        let members = self.cluster.members.lock().unwrap().clone();
+        let holds = self.cluster.holder.lock().unwrap().as_deref() == Some(node);
+        let body = serde_json::to_vec(save).unwrap();
+        super::credentials::serve_forward(
+            &self.cluster.store(node),
+            &self.local,
+            &members,
+            &body,
+            holds,
+            node,
+            1_791_702_400,
+        )
+        .map_err(|refusal| match refusal {
+            ForwardRefusal::NotMember => SaveError::HolderUnreachable,
+            ForwardRefusal::Save(error) => error,
+        })
     }
 
     async fn pull(&self, revision: u64, node: &str) -> Result<OpenidCopy, LinkError> {
@@ -280,8 +344,14 @@ impl PeerLink for MemLink {
             return Err(LinkError::Unreachable);
         }
         let members = self.cluster.members.lock().unwrap().clone();
-        let copy = super::openid_sync::serve_pull(&self.cluster.store(node), &self.local, &members)
-            .map_err(|_| LinkError::Refused)?;
+        let supported = !self.cluster.legacy.lock().unwrap().contains(&self.local);
+        let copy = super::openid_sync::serve_pull(
+            &self.cluster.store(node),
+            &self.local,
+            &members,
+            supported,
+        )
+        .map_err(|_| LinkError::Refused)?;
         // Through JSON, as on the wire.
         Ok(serde_json::from_slice(&serde_json::to_vec(&copy).unwrap()).unwrap())
     }

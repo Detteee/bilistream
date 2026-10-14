@@ -217,6 +217,9 @@ mod tests {
             notify_appsecret_set: None,
             notify_appid_set: None,
             notify_openid_set: None,
+            notify_credentials_sync: None,
+            notify_credentials_generation: None,
+            notify_openid_rebind: None,
             bili_live: None,
         }
     }

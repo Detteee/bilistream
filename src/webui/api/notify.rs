@@ -21,8 +21,26 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[path = "notify_forward.rs"]
+pub(crate) mod forwarded;
+
+/// Stable code on a 503 that carries none of its own (never a bare 503).
+pub const UNAVAILABLE_CODE: &str = "notify_unavailable";
+
 fn reply(status: StatusCode, data: Option<Value>, message: impl Into<String>) -> Response {
     let message = message.into();
+    let data = if status == StatusCode::SERVICE_UNAVAILABLE {
+        match data {
+            Some(Value::Object(mut map)) => {
+                map.entry("code").or_insert_with(|| json!(UNAVAILABLE_CODE));
+                Some(Value::Object(map))
+            }
+            None => Some(json!({ "code": UNAVAILABLE_CODE })),
+            other => other,
+        }
+    } else {
+        data
+    };
     (
         status,
         Json(ApiResponse {
@@ -74,10 +92,31 @@ fn openid_view(openid: &store::OpenidState) -> Value {
     })
 }
 
+/// F rev 3 rule 16: the last 4 characters of the AppID, the only part of
+/// it ever returned. `None` when unset, and also for an AppID of 4
+/// characters or fewer, where "the last 4" would be the whole value.
+pub fn app_id_hint(appid: &str) -> Option<String> {
+    let chars: Vec<char> = appid.trim().chars().collect();
+    (chars.len() > 4).then(|| chars[chars.len() - 4..].iter().collect())
+}
+
 fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
-    let (config, revision) = store::load_config(store)?;
-    let (secret, secret_revision) = store::load_secret(store)?;
-    let openid = store::load_openid(store)?;
+    let settings = store::load_settings(store)?;
+    let credentials_view = notify::credentials::view_settings(&settings);
+    let (config, revision) = settings.config;
+    let (secret, secret_revision) = settings.secret;
+    let openid = settings.openid;
+    // F rule 16: the AppID is write-only like the AppSecret. The config
+    // goes out with `qq.appid_set` and never with `qq.app_id`.
+    let appid = config.qq.app_id.trim().to_string();
+    let appid_set = !appid.is_empty();
+    let mut config =
+        serde_json::to_value(&config).map_err(|_| std::io::Error::other("通知设置无法读取"))?;
+    if let Some(qq) = config.get_mut("qq").and_then(Value::as_object_mut) {
+        qq.remove("app_id");
+        qq.insert("appid_set".into(), json!(appid_set));
+        qq.insert("app_id_hint".into(), json!(app_id_hint(&appid)));
+    }
     let mut view = json!({
         "config": config,
         "revision": revision.unwrap_or(0),
@@ -88,6 +127,13 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
     });
     if let (Some(view), Value::Object(extra)) = (view.as_object_mut(), openid_view(&openid)) {
         view.extend(extra);
+    }
+    // Addendum F: generation and flags only, never a value.
+    if let (Some(view), Value::Object(extra)) = (view.as_object_mut(), credentials_view) {
+        view.extend(extra);
+    }
+    if view["openid_rebind"] == json!(true) {
+        view["openid_set"] = json!(false);
     }
     Ok(view)
 }
@@ -219,6 +265,9 @@ pub struct UpdateNotify {
     pub admin_openid: Option<String>,
     /// The `openid_revision` from GET; required with `admin_openid`.
     pub expected_openid_revision: Option<u64>,
+    /// Addendum F: the `credentials_generation` from GET. A stale value is
+    /// 409 `credentials_conflict` when the AppID or AppSecret changes.
+    pub base_generation: Option<u64>,
 }
 
 impl UpdateNotify {
@@ -240,6 +289,8 @@ pub enum UpdateError {
     Status(StatusCode, String),
     /// 409 with `data.code`.
     Refused(Refusal),
+    /// Addendum F refusal (`credentials_conflict` …).
+    Credentials(notify::credentials::SaveError),
 }
 
 impl UpdateError {
@@ -247,6 +298,7 @@ impl UpdateError {
         match self {
             UpdateError::Status(status, message) => reply(status, None, message),
             UpdateError::Refused(refusal) => refused(refusal),
+            UpdateError::Credentials(error) => credentials_refused(error),
         }
     }
 
@@ -255,12 +307,16 @@ impl UpdateError {
         match self {
             UpdateError::Status(status, _) => *status,
             UpdateError::Refused(_) => StatusCode::CONFLICT,
+            UpdateError::Credentials(error) => credentials_status(*error),
         }
     }
 }
 
 /// Store errors: a stale revision is a `revision_conflict` refusal.
 fn store_error(error: std::io::Error) -> UpdateError {
+    if let Some(failed) = notify::credentials::save_failed(&error) {
+        return UpdateError::Credentials(failed);
+    }
     match store::revision_conflict(&error) {
         Some(conflict) => UpdateError::Refused(Refusal::revision_conflict(conflict.current)),
         None => UpdateError::Status(io_status(&error), error.to_string()),
@@ -288,12 +344,57 @@ fn merge(target: &mut Value, patch: &Value) {
 /// Check order (contract): body validation (400), writer (409 `no_writer` /
 /// `not_owner`), then revisions (409 `revision_conflict`). Config, AppSecret
 /// and openid then land in ONE store transaction (review L7): all or none.
+#[cfg(test)]
 pub fn apply_update(
     store: &crate::storage::Store,
     update: &UpdateNotify,
     node_id: &str,
     writer: &dyn Fn() -> Result<(), Refusal>,
 ) -> Result<Value, UpdateError> {
+    apply_update_with(store, update, node_id, writer, None, |_| Ok(()))
+}
+
+/// Sentinel that rolls a dry-run transaction back after every check.
+#[derive(Debug)]
+struct DryRun;
+impl std::fmt::Display for DryRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("dry run")
+    }
+}
+impl std::error::Error for DryRun {}
+
+/// Every check of `apply_update` (validation, writer, revisions) inside a
+/// transaction that is then rolled back. Nothing is written.
+pub fn check_update(
+    store: &crate::storage::Store,
+    update: &UpdateNotify,
+    node_id: &str,
+    writer: &dyn Fn() -> Result<(), Refusal>,
+) -> Result<(), UpdateError> {
+    let result = apply_update_with(store, update, node_id, writer, None, |_| {
+        Err(std::io::Error::other(DryRun))
+    });
+    match result {
+        Err(UpdateError::Status(_, message)) if message == "dry run" => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Ok(()),
+    }
+}
+
+/// `apply_update` plus the Addendum F credential part, all in ONE store
+/// transaction (rev 2 item 15). `after` runs last inside it (tests).
+pub fn apply_update_with<G>(
+    store: &crate::storage::Store,
+    update: &UpdateNotify,
+    node_id: &str,
+    writer: &dyn Fn() -> Result<(), Refusal>,
+    credentials: Option<store::CredentialsStep>,
+    after: G,
+) -> Result<Value, UpdateError>
+where
+    G: FnOnce(&mut crate::storage::Transaction<'_>) -> std::io::Result<()> + Send + 'static,
+{
     let bad = |message: &str| UpdateError::Status(StatusCode::BAD_REQUEST, message.to_string());
     let secret = update
         .app_secret
@@ -305,7 +406,23 @@ pub fn apply_update(
     }) {
         return Err(bad("AppSecret 格式无效"));
     }
-    let patch = update.config.as_ref().filter(|patch| !patch.is_null());
+    // F rule 16: `qq.app_id: null` means unchanged and the read-only
+    // `qq.appid_set` is ignored.
+    let cleaned = update
+        .config
+        .as_ref()
+        .filter(|patch| !patch.is_null())
+        .map(|patch| {
+            let mut patch = patch.clone();
+            if let Some(qq) = patch.get_mut("qq").and_then(Value::as_object_mut) {
+                qq.remove("appid_set");
+                if qq.get("app_id").is_some_and(Value::is_null) {
+                    qq.remove("app_id");
+                }
+            }
+            patch
+        });
+    let patch = cleaned.as_ref();
     if patch.is_some_and(|patch| patch.pointer("/qq/admin_openid").is_some()) {
         // The old unsealed path; the value is never echoed.
         return Err(bad("请在管理员 openid 输入框中填写"));
@@ -355,12 +472,15 @@ pub fn apply_update(
         writer: node_id.to_string(),
         now: crate::storage::now(),
     });
-    store::save_settings(
+    store::save_all_with(
         store,
         next.as_ref().map(|(cfg, expected)| (cfg, *expected)),
         secret_change,
         update.expected_secret_revision.unwrap_or(0),
         openid_write,
+        credentials,
+        |_| Ok(()),
+        after,
     )
     .map_err(store_error)?;
     settings_view(store).map_err(store_error)
@@ -374,6 +494,113 @@ async fn local_node_id() -> String {
         .map(|cfg| cfg.cluster.node_id)
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| "local".to_string())
+}
+
+pub(crate) fn credentials_status(error: notify::credentials::SaveError) -> StatusCode {
+    use notify::credentials::SaveError;
+    match error {
+        SaveError::Conflict { .. } | SaveError::HolderMoved => StatusCode::CONFLICT,
+        SaveError::Invalid => StatusCode::BAD_REQUEST,
+        SaveError::HolderUnreachable => StatusCode::SERVICE_UNAVAILABLE,
+        SaveError::Store => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn credentials_refused(error: notify::credentials::SaveError) -> Response {
+    use notify::credentials::SaveError;
+    let status = credentials_status(error);
+    let mut data = json!({ "code": error.code() });
+    if let SaveError::Conflict { current } = error {
+        data["current_generation"] = json!(current);
+    }
+    reply(status, Some(data), error.message())
+}
+
+/// Rule 1 (switch `REQUIRE_BASE_GENERATION`): 400 for a save or 清除
+/// without a top-level `base_generation`.
+pub(crate) fn base_generation_required() -> Response {
+    reply(
+        StatusCode::BAD_REQUEST,
+        Some(json!({ "code": "base_generation_required" })),
+        "Reload the settings and save again.",
+    )
+}
+
+/// Addendum F: split the AppID/AppSecret part out of a settings update.
+/// `None` when the update changes neither. The AppID counts as changed
+/// only when it differs from the saved one.
+pub fn credential_part(
+    store: &crate::storage::Store,
+    update: &UpdateNotify,
+) -> std::io::Result<Option<notify::credentials::CredentialSave>> {
+    let (current, _) = store::load_config(store)?;
+    // F rule 16: absent or null = unchanged; an explicitly empty value is
+    // still a 400 (the AppID cannot be cleared, rev 2 item 14).
+    let appid = update
+        .config
+        .as_ref()
+        .and_then(|patch| patch.pointer("/qq/app_id"))
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_str().unwrap_or(" ").trim().to_string())
+        .filter(|appid| appid.is_empty() || *appid != current.qq.app_id.trim());
+    let save = notify::credentials::CredentialSave {
+        base_generation: update.base_generation,
+        appid,
+        appsecret: update
+            .app_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        clear_appsecret: update.clear_app_secret,
+    };
+    Ok(save.is_change().then_some(save))
+}
+
+/// Remove the parts `credential_part` took, so `apply_update` saves only
+/// the rest of the settings. Returns whether anything else is left.
+pub(crate) fn strip_credentials(update: &mut UpdateNotify) -> bool {
+    if let Some(Value::Object(qq)) = update.config.as_mut().and_then(|patch| patch.get_mut("qq")) {
+        qq.remove("app_id");
+    }
+    // Only the credential values: the openid in the same PUT is still
+    // saved with the rest (wiping it here would drop it silently).
+    if let Some(secret) = update.app_secret.as_mut() {
+        zeroize::Zeroize::zeroize(secret);
+    }
+    update.app_secret = None;
+    update.clear_app_secret = false;
+    let config_rest = match update.config.as_ref() {
+        None | Some(Value::Null) => false,
+        Some(Value::Object(patch)) => patch
+            .iter()
+            .any(|(key, value)| key != "qq" || value.as_object().is_none_or(|qq| !qq.is_empty())),
+        // Retain malformed config for validation; it cannot silently vanish
+        // just because this PUT also includes valid credentials.
+        Some(_) => true,
+    };
+    if !config_rest {
+        // A credentials-only PUT (no config, `{}` or `{"qq":{}}`) saves no
+        // settings, so it needs no `expected_revision`.
+        update.config = None;
+    }
+    config_rest
+        || update
+            .admin_openid
+            .as_deref()
+            .is_some_and(|openid| !openid.trim().is_empty())
+}
+
+/// The gateway holder from this node's heartbeat view.
+async fn current_holder(local: &str) -> notify::credentials::Holder {
+    let Ok(cfg) = crate::config::load_config().await else {
+        return notify::credentials::Holder::Nobody;
+    };
+    if !cfg.cluster.enabled {
+        return notify::credentials::Holder::Nobody;
+    }
+    let digest = notify::authority::read_digest(&cfg, crate::storage::now());
+    notify::credentials::pick_holder(local, notify::local_gateway_held(), &digest.nodes)
 }
 
 pub(crate) async fn update_notify(
@@ -402,10 +629,108 @@ pub(crate) async fn update_notify(
     let push_store = Arc::clone(&store);
     let push_node = node_id.clone();
     let mut update = update;
+    // Addendum F: the AppID/AppSecret go to the gateway holder first. If
+    // that fails nothing else is saved; the values are never echoed.
+    let credentials = match credential_part(&store, &update) {
+        Ok(part) => part,
+        Err(error) => {
+            update.wipe();
+            return reply(io_status(&error), None, error.to_string());
+        }
+    };
+    let mut credentials_pushed = false;
+    let mut local_credentials: Option<store::CredentialsStep> = None;
+    if let Some(save) = credentials {
+        if let Err(error) = notify::credentials::validate_save(&save) {
+            update.wipe();
+            return credentials_refused(error);
+        }
+        if notify::credentials::base_generation_missing(
+            &save,
+            notify::credentials::REQUIRE_BASE_GENERATION,
+        ) {
+            update.wipe();
+            return base_generation_required();
+        }
+        strip_credentials(&mut update);
+        let holder = current_holder(&node_id).await;
+        match holder {
+            notify::credentials::Holder::Local | notify::credentials::Holder::Nobody => {
+                // Rev 2 item 15: committed with the rest in ONE transaction.
+                local_credentials = Some((save, node_id.clone(), crate::storage::now()));
+                credentials_pushed = true;
+            }
+            notify::credentials::Holder::Peer(ref peer) => {
+                // Validate and pin local preferences before the holder
+                // commits. Only credential-only revision bumps may rebase.
+                let check_store = Arc::clone(&store);
+                let check_node = node_id.clone();
+                let check_peer = peer.clone();
+                let checked = tokio::task::spawn_blocking(move || {
+                    let result =
+                        forwarded::prepare(&check_store, &update, &check_node, &check_peer);
+                    update.wipe();
+                    result
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    Err(UpdateError::Status(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "通知设置保存失败".to_string(),
+                    ))
+                });
+                let settings = match checked {
+                    Ok(settings) => settings,
+                    Err(error) => return error.into_response(),
+                };
+                let link =
+                    notify::openid_sync::SignedLink::new(Arc::clone(&store), node_id.clone());
+                let outcome = notify::credentials::save(
+                    &store,
+                    &link,
+                    &holder,
+                    &save,
+                    &node_id,
+                    crate::storage::now(),
+                )
+                .await;
+                drop(save);
+                let outcome = match outcome {
+                    Ok(outcome) => outcome,
+                    Err(error) => return credentials_refused(error),
+                };
+                tracing::info!(
+                    "QQ 通知机器人凭据已由节点 {} 保存 (generation {})",
+                    peer,
+                    outcome.generation
+                );
+                let completed =
+                    forwarded::complete(Arc::clone(&store), &link, peer, outcome, settings, |_| {
+                        Ok(())
+                    })
+                    .await;
+                if completed.cache_ready {
+                    let _ = notify::send_command(Command::Reload);
+                } else {
+                    tracing::warn!(
+                        "QQ 通知凭据已保存，本节点同步待重试 (generation {})",
+                        outcome.generation
+                    );
+                    notify::openid_sync::spawn_pull(store, node_id);
+                }
+                return completed.into_response(cleared);
+            }
+        }
+    }
     let result = tokio::task::spawn_blocking(move || {
-        let result = apply_update(&store, &update, &node_id, &|| {
-            notify::check_writer("修改管理员 openid")
-        });
+        let result = apply_update_with(
+            &store,
+            &update,
+            &node_id,
+            &|| notify::check_writer("修改管理员 openid"),
+            local_credentials,
+            |_| Ok(()),
+        );
         update.wipe();
         result
     })
@@ -419,8 +744,8 @@ pub(crate) async fn update_notify(
     match result {
         Ok(view) => {
             let _ = notify::send_command(Command::Reload);
-            if openid_changed {
-                // 1b: the new value goes to every current member.
+            if openid_changed || credentials_pushed {
+                // 1b / F: the new set goes to every current member.
                 notify::openid_sync::spawn_push(push_store, push_node);
             }
             reply(
@@ -603,8 +928,9 @@ pub(crate) async fn peer_openid_pull(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    let credentials_sync = notify::openid_sync::peer_supports_credentials(&from);
     let result = tokio::task::spawn_blocking(move || {
-        notify::openid_sync::serve_pull(&store, &from, &members)
+        notify::openid_sync::serve_pull(&store, &from, &members, credentials_sync)
     })
     .await
     .unwrap_or(Err(notify::openid_sync::ServeRefusal::Store));
@@ -614,6 +940,57 @@ pub(crate) async fn peer_openid_pull(
             reply(StatusCode::OK, data, "")
         }
         Err(refusal) => peer_refusal(refusal),
+    }
+}
+
+/// `PUT /api/cluster/v1/notify/openid` (peer-only, signed, Addendum F): a
+/// member forwards an AppID/AppSecret save to this node, the gateway
+/// holder. Answers `{generation, changed, openid_cleared}` or a fixed
+/// code; never a value.
+pub(crate) async fn peer_credentials_save(
+    peer: Option<Extension<crate::cluster::peer_call::AuthenticatedNode>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (from, store, members) = match peer_context(peer, &headers) {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let local = local_node_id().await;
+    let holds = matches!(
+        current_holder(&local).await,
+        notify::credentials::Holder::Local | notify::credentials::Holder::Nobody
+    );
+    let body = zeroize::Zeroizing::new(body.to_vec());
+    let push_store = Arc::clone(&store);
+    let push_node = local.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        notify::credentials::serve_forward(
+            &store,
+            &from,
+            &members,
+            &body,
+            holds,
+            &local,
+            crate::storage::now(),
+        )
+    })
+    .await
+    .unwrap_or(Err(notify::credentials::ForwardRefusal::Save(
+        notify::credentials::SaveError::Store,
+    )));
+    match result {
+        Ok(outcome) => {
+            if outcome.changed {
+                let _ = notify::send_command(Command::Reload);
+                notify::openid_sync::spawn_push(push_store, push_node);
+            }
+            reply(StatusCode::OK, Some(json!(outcome)), "")
+        }
+        Err(notify::credentials::ForwardRefusal::NotMember) => {
+            peer_refusal(notify::openid_sync::ServeRefusal::NotMember)
+        }
+        Err(notify::credentials::ForwardRefusal::Save(error)) => credentials_refused(error),
     }
 }
 
@@ -695,10 +1072,12 @@ pub async fn notify_status() -> Response {
     if let Ok(cfg) = crate::config::load_config().await {
         let now = crate::storage::now();
         let digest = notify::authority::read_digest(&cfg, now);
+        let local_generation = notify::local_credentials_sync().0;
+        let latest = notify::authority::latest_generation(&digest, local_generation);
         let local_authority = matches!(
             status.get("authority").and_then(Value::as_str),
             Some("primary" | "delegate")
-        );
+        ) && local_generation >= latest;
         let fallback =
             status.get("authority").and_then(Value::as_str) == Some("no_quorum_fallback");
         let (nodes, writer_openid) = readiness_view(&status, &digest, local_authority);
@@ -708,7 +1087,12 @@ pub async fn notify_status() -> Response {
             digest
                 .nodes
                 .iter()
-                .find(|node| node.id != digest.local && node.fresh && node.notify_authority)
+                .find(|node| {
+                    node.id != digest.local
+                        && node.fresh
+                        && node.notify_authority
+                        && notify::authority::credentials_current(node, latest)
+                })
                 .map(|node| node.id.clone())
         };
         let sender = sender_view(authority_node.as_deref(), &digest, now);
@@ -920,6 +1304,7 @@ mod tests {
         match error {
             UpdateError::Refused(refusal) => refusal,
             UpdateError::Status(status, message) => panic!("{status}: {message}"),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -939,7 +1324,19 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(view["config"]["qq"]["app_id"], "1234567890");
+        // F rule 16: write-only; only the flag goes out.
+        assert!(view["config"]["qq"].get("app_id").is_none());
+        assert_eq!(view["config"]["qq"]["appid_set"], true);
+        assert_eq!(view["config"]["qq"]["app_id_hint"], "7890");
+        assert!(!view.to_string().contains("1234567890"));
+        assert_eq!(
+            crate::notify::store::load_config(&store)
+                .unwrap()
+                .0
+                .qq
+                .app_id,
+            "1234567890"
+        );
         assert_eq!(view["config"]["confirm_secs"], 90);
         assert_eq!(view["config"]["cooldown_secs"], 1800);
         assert_eq!(view["appsecret_set"], true);
@@ -1020,7 +1417,7 @@ mod tests {
         let (root, store) = temp_store();
         let bad = |body: UpdateNotify| match update(&store, body).unwrap_err() {
             UpdateError::Status(status, message) => (status, message),
-            UpdateError::Refused(refusal) => panic!("{refusal:?}"),
+            other => panic!("{other:?}"),
         };
         // The old nested path is refused (and the value never echoed).
         let (status, message) = bad(UpdateNotify {
@@ -1231,5 +1628,43 @@ mod tests {
             notify_cancel_bind(Extension(Arc::clone(&auth)), generation(), headers).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    async fn body(response: Response) -> (StatusCode, Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// Every 503 from PUT /api/notify carries a stable JSON code: the
+    /// holder-unreachable refusal (a save, an openid save with credentials,
+    /// 清除) is `credentials_holder_unreachable`; any other 503 gets
+    /// `notify_unavailable`, never a bare 503.
+    #[tokio::test]
+    async fn every_503_is_json_with_a_stable_code() {
+        use crate::notify::credentials::SaveError;
+        let (status, json) = body(credentials_refused(SaveError::HolderUnreachable)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["success"], false);
+        assert_eq!(json["data"]["code"], "credentials_holder_unreachable");
+        let (status, json) = body(reply(StatusCode::SERVICE_UNAVAILABLE, None, "x")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["data"]["code"], UNAVAILABLE_CODE);
+        let (_, json) = body(reply(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some(json!({"code": "own"})),
+            "x",
+        ))
+        .await;
+        assert_eq!(json["data"]["code"], "own", "an existing code is kept");
+        let (status, json) =
+            body(UpdateError::Credentials(SaveError::HolderUnreachable).into_response()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["data"]["code"], "credentials_holder_unreachable");
+        // Non-503 replies are unchanged.
+        let (_, json) = body(reply(StatusCode::OK, None, "")).await;
+        assert!(json["data"].is_null());
     }
 }

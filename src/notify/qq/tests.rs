@@ -58,8 +58,10 @@ async fn active_send_succeeds_and_charges_the_budget() {
     assert_eq!(ledger.active_day.values().map(|c| c.count).sum::<u32>(), 1);
 }
 
+/// Addendum E rule 1 / rule 18: fault alerts go active first, even with a
+/// passive window open; the passive slot is kept for later.
 #[tokio::test]
-async fn passive_window_is_used_first() {
+async fn active_goes_first_even_with_a_passive_window_open() {
     let mock = MockQq::start().await;
     let sink = sink(&mock);
     let mut ledger = NotifyLedger::default();
@@ -80,79 +82,90 @@ async fn passive_window_is_used_first() {
         .await;
     assert!(matches!(
         outcome,
-        SendOutcome::Delivered {
-            mode: "passive",
-            ..
-        }
+        SendOutcome::Delivered { mode: "active", .. }
     ));
-    assert_eq!(mock.messages()[0].1["msg_id"], "m-1");
-    assert_eq!(mock.messages()[0].1["msg_seq"], 1);
-    assert_eq!(passive.replies_used, 1);
-    assert_eq!(ledger.active_day.values().map(|c| c.count).sum::<u32>(), 0);
+    let sent = mock.messages();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0]
+        .1
+        .get("msg_id")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(sent[0]
+        .1
+        .get("event_id")
+        .is_none_or(serde_json::Value::is_null));
+    assert_eq!(passive.replies_used, 0, "passive slot untouched");
 }
 
+/// 40034105 and 40034100 on the active send fall back to the passive reply.
 #[tokio::test]
-async fn active_unavailable_falls_through_to_one_wakeup_for_critical() {
+async fn active_refusal_or_rate_limit_falls_back_to_the_passive_window() {
+    for refusal in [(400, 40034105), (429, 40034100)] {
+        let mock = MockQq::start().await;
+        mock.script([(refusal.0, json!({"code": refusal.1}))]);
+        let sink = sink(&mock);
+        let mut ledger = NotifyLedger::default();
+        let mut passive = PassiveTarget {
+            msg_id: "m-1".into(),
+            received_at: 990,
+            replies_used: 0,
+        };
+        let outcome = sink
+            .send(
+                &message(false),
+                &mut DeliveryContext {
+                    ledger: &mut ledger,
+                    passive: Some(&mut passive),
+                    now: 1_000,
+                },
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                SendOutcome::Delivered {
+                    mode: "passive",
+                    ..
+                }
+            ),
+            "code {}",
+            refusal.1
+        );
+        let sent = mock.messages();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1].1["msg_id"], "m-1");
+        assert_eq!(passive.replies_used, 1);
+    }
+}
+
+/// Any other active error is not a fallback trigger: it keeps the retry
+/// backoff and spends neither the passive slot nor a wakeup.
+#[tokio::test]
+async fn other_active_errors_retry_without_spending_passive_or_wakeup() {
     let mock = MockQq::start().await;
-    mock.script([(400, json!({"code": 40034105, "message": "no active"}))]);
+    mock.script([(502, json!({}))]);
     let sink = sink(&mock);
     let mut ledger = NotifyLedger::default();
     ledger.record_admin_message(900);
+    let mut passive = PassiveTarget {
+        msg_id: "m-1".into(),
+        received_at: 990,
+        replies_used: 0,
+    };
     let outcome = sink
         .send(
             &message(true),
             &mut DeliveryContext {
                 ledger: &mut ledger,
-                passive: None,
+                passive: Some(&mut passive),
                 now: 1_000,
             },
         )
         .await;
-    assert!(
-        matches!(outcome, SendOutcome::Delivered { mode: "wakeup", .. }),
-        "{outcome:?}"
-    );
-    assert_eq!(mock.messages()[1].1["is_wakeup"], true);
-    // The recall carries the 「please reply」 line with the next recall date.
-    let content = mock.messages()[1].1["content"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(content.contains("召回消息还剩 3 次（下次 "), "{content}");
-    assert!(!mock.messages()[0].1["content"]
-        .as_str()
-        .unwrap()
-        .contains("召回"));
-    assert!(ledger.modes.active_unavailable(1_000));
-    assert!(!ledger.wakeup_available(1_001));
-}
-
-#[tokio::test]
-async fn warnings_never_spend_a_wakeup() {
-    let mock = MockQq::start().await;
-    mock.script([(400, json!({"code": 40034105}))]);
-    let sink = sink(&mock);
-    let mut ledger = NotifyLedger::default();
-    ledger.record_admin_message(900);
-    let outcome = sink
-        .send(
-            &message(false),
-            &mut DeliveryContext {
-                ledger: &mut ledger,
-                passive: None,
-                now: 1_000,
-            },
-        )
-        .await;
-    assert!(matches!(
-        outcome,
-        SendOutcome::Undeliverable {
-            bad_credentials: false,
-            ..
-        }
-    ));
+    assert!(matches!(outcome, SendOutcome::Retry { .. }));
     assert_eq!(mock.messages().len(), 1);
-    assert!(ledger.wakeup_available(1_001));
+    assert_eq!(passive.replies_used, 0);
+    assert!(ledger.wakeup_available(1_000));
 }
 
 #[tokio::test]

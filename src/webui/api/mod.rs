@@ -60,8 +60,8 @@ pub use crop::*;
 pub use manage::*;
 pub use notify::{get_notify, notify_status};
 pub(crate) use notify::{
-    notify_bind, notify_cancel_bind, notify_test, notify_unbind, peer_openid_pull,
-    peer_openid_push, update_notify,
+    notify_bind, notify_cancel_bind, notify_test, notify_unbind, peer_credentials_save,
+    peer_openid_pull, peer_openid_push, update_notify,
 };
 pub use setup::*;
 pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};
@@ -493,6 +493,9 @@ mod tests {
             notify_appsecret_set: None,
             notify_appid_set: None,
             notify_openid_set: None,
+            notify_credentials_sync: None,
+            notify_credentials_generation: None,
+            notify_openid_rebind: None,
             bili_live: None,
         }
     }

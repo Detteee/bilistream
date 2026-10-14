@@ -198,14 +198,14 @@ test('credentialRows shows booleans only and the unbind progress', () => {
   assert.doesNotMatch(JSON.stringify(rows), /[0-9A-F]{16,}/, 'no id-like values');
 });
 
-import { appSecretSet, isHandoff, notifyRefusal, openidGate } from '../src/js/notify-state.js';
+import { appSecretSet, isHandoff, notifyRefusal, openidGate, senderBlockView } from '../src/js/notify-state.js';
 
 test('openidGate: local, remote, null with reasons, and absent', () => {
   assert.deepEqual(openidGate({ openid_writer: { node_id: 'a', is_local: true } }), { enabled: true, hint: '' });
   const remote = openidGate({ openid_writer: { node_id: 'tokyo-1', is_local: false } });
   assert.equal(remote.enabled, false);
   assert.match(remote.hint, /^请在 tokyo-1 上绑定或解绑。/);
-  assert.match(openidGate({ openid_writer: null, authority: 'none', nodes: [{}, {}] }).hint, /集群暂无多数派/);
+  assert.equal(openidGate({ openid_writer: null, authority: 'none', nodes: [{}, {}] }).hint, '暂无可写节点。发送节点尚未就绪，请稍后重试。');
   assert.match(openidGate({ openid_writer: null, authority: 'no_quorum_fallback' }).hint, /无多数派代发/);
   assert.match(openidGate({ openid_writer: null, enabled: false }).hint, /请先启用通知/);
   assert.match(openidGate({ openid_writer: null }).hint, /^暂无可写节点。请稍后重试。$/);
@@ -216,6 +216,27 @@ test('openidGate: local, remote, null with reasons, and absent', () => {
   assert.deepEqual(openidGate(handoff), { enabled: true, hint: '发送节点切换中，绑定可能暂时失败。' }, 'handoff hints, never disables');
   assert.equal(isHandoff({ openid_writer: { node_id: 'b', is_local: true }, gateway_owner: null }), false);
   assert.deepEqual(openidGate({ openid_writer: { node_id: 'solo', is_local: true }, gateway_owner: null }), { enabled: true, hint: '' }, 'single node, cluster off');
+});
+
+test('no writer: only explicit diagnostics explain quorum, handoff and membership waits', () => {
+  const legacy = { openid_writer: null, authority: 'none', nodes: [{ fresh: true }, { fresh: true }, { fresh: true }] };
+  assert.equal(senderBlockView(legacy), null);
+  assert.doesNotMatch(openidGate(legacy).hint, /多数派/);
+  for (const [data, badge, hint] of [
+    [{ cluster_quorum: false }, '无多数派', '集群暂无多数派'],
+    [{ sender_block_reason: 'no_quorum' }, '无多数派', '集群暂无多数派'],
+    [{ cluster_quorum: true, sender_block_reason: 'handoff' }, '切换中', '发送节点切换中'],
+    [{ cluster_quorum: true, sender_block_reason: 'membership_change' }, '成员变更中', '集群成员变更尚未完成'],
+    [{ cluster_quorum: true, sender_block_reason: 'owner_unavailable' }, '等待活跃节点', '活跃节点尚未就绪'],
+    [{ cluster_quorum: true, sender_block_reason: 'execution_blocked' }, '等待发送节点', '发送条件尚未满足'],
+  ]) {
+    const status = { ...legacy, ...data };
+    assert.equal(selectState({ settings: full, status }).badge, badge);
+    assert.equal(openidGate(status).hint, `暂无可写节点。${hint}，暂不能修改绑定。`);
+    assert.equal(openidGate(status).enabled, false, 'diagnostics never relax the writer gate');
+  }
+  assert.equal(senderBlockView({ cluster_quorum: true, sender_block_reason: 'future_code' }), null);
+  assert.equal(selectState({ settings: full, status: { ...legacy, cluster_quorum: true, sender_block_reason: null } }).badge, '等待选举');
 });
 
 test('notifyRefusal branches on data.code for every refusal', () => {
@@ -286,8 +307,8 @@ test('B2: writer refusals follow fresh status and drop when controls re-enable',
   assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'b' }), 'openid', remote).kind, 'not_owner');
   assert.equal(liveRefusal(err({ code: 'not_owner', owner: 'b' }), 'openid', local), null);
   assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', local), null);
-  const quorum = { openid_writer: null, authority: 'none', nodes: [{}, {}] };
-  assert.match(liveRefusal(err({ code: 'no_writer' }), 'openid', quorum).banner.text, /集群暂无多数派/);
+  const noAuthority = { openid_writer: null, authority: 'none', nodes: [{}, {}] };
+  assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', noAuthority).banner.text, '发送节点尚未就绪，请稍后重试。');
   assert.equal(liveRefusal(err({ code: 'no_writer' }), 'openid', {}).kind, 'no_writer', 'unknown writer keeps the banner');
   assert.equal(liveRefusal(err({ code: 'bad_credentials' }), 'openid', local).kind, 'bad_credentials');
 });

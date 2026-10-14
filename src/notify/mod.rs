@@ -9,6 +9,7 @@ pub mod authority;
 pub mod bind;
 pub mod commands;
 pub mod config;
+pub mod credentials;
 pub mod event;
 pub mod format;
 pub mod ledger;
@@ -74,6 +75,10 @@ pub struct Shared {
     pub appsecret_set: bool,
     pub appid_set: bool,
     pub openid_set: bool,
+    /// Addendum F: this node's credential set generation, and whether its
+    /// stored openid is bound under another AppID (never the values).
+    pub credentials_generation: u64,
+    pub openid_rebind: bool,
 }
 
 /// `{node_id, is_local}` as `/status` shows `openid_writer` and
@@ -202,6 +207,17 @@ pub fn local_capable() -> bool {
 pub fn local_credential_flags() -> (bool, bool) {
     let shared = shared();
     (shared.appsecret_set, shared.openid_set)
+}
+
+/// `(credentials_generation, openid_rebind)` on this node (Addendum F).
+pub fn local_credentials_sync() -> (u64, bool) {
+    let shared = shared();
+    (shared.credentials_generation, shared.openid_rebind)
+}
+
+/// This node's id as the worker last saw it.
+pub fn local_node_id() -> String {
+    shared().ledger.local.clone()
 }
 
 /// This node has a saved AppID (Addendum C).

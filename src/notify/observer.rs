@@ -29,6 +29,10 @@ pub struct NodeSlot {
     pub appsecret_set: Option<bool>,
     pub appid_set: Option<bool>,
     pub openid_set: Option<bool>,
+    /// Addendum F: the peer's set generation and `openid_rebind`; `None`
+    /// from an older node.
+    pub credentials_generation: Option<u64>,
+    pub openid_rebind: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]

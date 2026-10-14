@@ -27,7 +27,7 @@ pub struct QqTarget {
 impl std::fmt::Debug for QqTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QqTarget")
-            .field("app_id", &self.app_id)
+            .field("app_id_set", &!self.app_id.is_empty())
             .field("secret", &self.secret)
             .field("api_base", &self.api_base)
             .finish_non_exhaustive()
@@ -199,11 +199,54 @@ impl QqSink {
 
 #[async_trait::async_trait]
 impl Sink for QqSink {
-    /// passive window → active → wakeup (critical only) → undeliverable.
+    /// Addendum E rule 1 / rule 18: active first → passive window → wakeup
+    /// (critical only) → undeliverable. Only 40034105 (no permission, or the
+    /// sticky "active unavailable" fact), 40034100 (rate limited) or the
+    /// other "mode unavailable" codes move on to passive; any other active
+    /// error keeps the existing retry backoff and spends no passive or
+    /// wakeup budget.
     async fn send(&self, message: &Rendered, ctx: &mut DeliveryContext<'_>) -> SendOutcome {
         let now = ctx.now;
         let mut last: Option<ApiResult> = None;
         let mut reasons: Vec<String> = Vec::new();
+        let mut active_budget_out = false;
+        let mut rate_limited: Option<String> = None;
+
+        if ctx.ledger.modes.admin_rejected() {
+            reasons.push("管理员已关闭「允许主动发送」".to_string());
+        } else if ctx.ledger.modes.active_unavailable(now) {
+            reasons.push("主动消息无权限".to_string());
+        } else if !ctx.ledger.active_budget_left(now) {
+            active_budget_out = true;
+        } else {
+            // Charged per attempt: a timed-out send may still have landed.
+            ctx.ledger.record_active(now);
+            match self
+                .attempt(message, QqMode::Active, None, 0, None, ctx)
+                .await
+            {
+                Attempt::Done(
+                    SendOutcome::Retry {
+                        reason,
+                        code: Some(40034100),
+                        ..
+                    },
+                    _,
+                ) => {
+                    // Active rate limit: a fallback trigger (rule 2).
+                    reasons.push(reason.clone());
+                    rate_limited = Some(reason);
+                }
+                Attempt::Done(outcome, _) => return outcome,
+                Attempt::NextMode(result) => {
+                    if result.code == Some(40034105) {
+                        ctx.ledger.modes.active_unavailable_at = now.max(1);
+                    }
+                    reasons.push(result.reason());
+                    last = Some(result);
+                }
+            }
+        }
 
         let passive = ctx
             .passive
@@ -241,32 +284,13 @@ impl Sink for QqSink {
             }
         }
 
-        if ctx.ledger.modes.admin_rejected() {
-            reasons.push("管理员已关闭「允许主动发送」".to_string());
-        } else if ctx.ledger.modes.active_unavailable(now) {
-            reasons.push("主动消息无权限".to_string());
-        } else if !ctx.ledger.active_budget_left(now) {
+        if active_budget_out {
+            // The shared active budget refills; no passive slot was open.
             return SendOutcome::Retry {
                 reason: "共享发送额度暂时用完".to_string(),
                 code: None,
                 trace_id: None,
             };
-        } else {
-            // Charged per attempt: a timed-out send may still have landed.
-            ctx.ledger.record_active(now);
-            match self
-                .attempt(message, QqMode::Active, None, 0, None, ctx)
-                .await
-            {
-                Attempt::Done(outcome, _) => return outcome,
-                Attempt::NextMode(result) => {
-                    if result.code == Some(40034105) {
-                        ctx.ledger.modes.active_unavailable_at = now.max(1);
-                    }
-                    reasons.push(result.reason());
-                    last = Some(result);
-                }
-            }
         }
 
         if message.critical && ctx.ledger.wakeup_available(now) {
@@ -293,6 +317,15 @@ impl Sink for QqSink {
             reasons.push("召回额度已用完".to_string());
         }
 
+        if let Some(reason) = rate_limited {
+            // Nothing else was open: the active limit lifts, so retry with
+            // the existing backoff instead of giving the alert up.
+            return SendOutcome::Retry {
+                reason,
+                code: Some(40034100),
+                trace_id: last.and_then(|result| result.trace_id),
+            };
+        }
         reasons.dedup();
         SendOutcome::Undeliverable {
             reason: if reasons.is_empty() {

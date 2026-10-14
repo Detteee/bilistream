@@ -16,14 +16,12 @@ import {
   ringArcs, biliTotals, biliStateLabel, aggregateAudience, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, heatLevel, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
-  historyQuery, mergeRetention, EVENTS_EMPTY,
+  mergeRetention, EVENTS_EMPTY, isolatedPointIndices,
 } from './analytics-format.js';
+import { createHistoryClient, historyStateNotice, localHistoryScope } from './analytics-history.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DAY = 86400;
-const FRESH_MS = 30_000;
-const STALE_MS = 600_000;
-const CACHE_MAX = 20;
 const AUDIENCE_HINT = '数据来自 B 站非公开接口，可能缺失。在线人数有上限，仅供参考。';
 const NOT_SUPPORTED = '当前后端版本不支持统计，请升级 bilistream。';
 
@@ -36,7 +34,10 @@ let liveTimer = 0;
 let liveInFlight = false;
 let hoverPause = false;
 let themeObserver = null;
-const cache = new Map();
+let historyClient = null;
+let refreshController = null;
+let detailController = null;
+let eventsController = null;
 const charts = new Map();
 const view = { status: null, sessions: [], range: null, eventsCursor: null, detailId: null };
 
@@ -138,32 +139,15 @@ function resolvedRange() {
 function scopeParam() {
   return prefs.scope ? { scope: prefs.scope } : {};
 }
-const query = historyQuery;
 class NotSupported extends Error {}
 
-// Stale-while-revalidate (W14 P5): fresh 30 s, stale ≤ 10 min (render, then
-// revalidate), at most 20 entries. Keys round `to` to the minute so a preset
-// keeps its key for a while.
-async function history(name, params, onRevalidated) {
-  const path = `/api/history/${name}?${query(params)}`;
-  const hit = cache.get(path);
-  const age = hit ? Date.now() - hit.at : Infinity;
-  const fetchFresh = () => deps.getJson(path).then(result => {
-    const data = result?.data ?? null;
-    cache.delete(path);
-    cache.set(path, { at: Date.now(), data });
-    while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
-    return data;
-  }, error => {
+async function history(name, params, options) {
+  try {
+    return await historyClient.request(name, params, options);
+  } catch (error) {
     if (error?.status === 404) throw new NotSupported(NOT_SUPPORTED);
     throw error;
-  });
-  if (hit && age < FRESH_MS) return hit.data;
-  if (hit && age < STALE_MS && onRevalidated) {
-    fetchFresh().then(onRevalidated, () => {});
-    return hit.data;
   }
-  return fetchFresh();
 }
 function roundedRange(r) {
   return { from: Math.floor(r.from / 60) * 60, to: Math.floor(r.to / 60) * 60 };
@@ -486,7 +470,9 @@ function uplotOptions(series, span, width) {
     scales[scale] = {};
     axes.push({ ...axis, scale, side: index === 0 ? 3 : 1, size: 56, grid: index === 0 ? axis.grid : { show: false },
       values: (u, splits) => splits.map(v => formatCount(v)) });
-    uSeries.push({ label: s.label, scale, stroke: color, width: 1.5, points: { show: false }, spanGaps: false });
+    uSeries.push({ label: s.label, scale, stroke: color, width: 1.5,
+      points: { show: false, size: 4, fill: color, filter: (u, i) => isolatedPointIndices(u.data[i]) },
+      spanGaps: false });
     if (s.band) {
       uSeries.push({ label: `${s.label} 最小`, scale, stroke: 'transparent', points: { show: false } });
       uSeries.push({ label: `${s.label} 最大`, scale, stroke: 'transparent', points: { show: false } });
@@ -688,14 +674,15 @@ function renderCalendar(summary) {
 // ---------- 8 节点对比 ----------
 function renderNodes(summary) {
   const nodes = Array.isArray(summary?.per_node) ? summary.per_node : [];
-  const cluster = nodes.length > 1;
-  moduleEl('nodes').hidden = !cluster;
+  const nodeIds = view.status?.cluster_nodes || nodes.map(n => n.node_id);
+  const cluster = nodeIds.length > 1;
+  moduleEl('nodes').hidden = !cluster || !nodes.length;
   const scope = $('analytics-scope');
   scope.hidden = !cluster;
   if (cluster) {
     const keep = prefs.scope;
-    scope.replaceChildren(new Option('全部节点', ''), ...nodes.map(n => new Option(n.node_id, n.node_id)));
-    scope.value = nodes.some(n => n.node_id === keep) ? keep : '';
+    scope.replaceChildren(new Option('全部节点', ''), ...nodeIds.map(id => new Option(id, id)));
+    scope.value = nodeIds.includes(keep) ? keep : '';
   }
   if (!cluster) return;
   const missing = new Map((summary.missing_nodes || []).map(m => [m.node_id, missingNodeText([m]).nodes[0]]));
@@ -776,7 +763,15 @@ function renderEvents(data, append = false) {
     more.type = 'button';
     more.addEventListener('click', async () => {
       more.disabled = true;
-      try { renderEvents(await history('events', eventParams(view.range, view.eventsCursor)), true); } catch (error) { more.disabled = false; more.textContent = `加载失败：${errorText(error)}`; }
+      const controller = eventsController;
+      try {
+        const data = await history('events', eventParams(view.range, view.eventsCursor), { signal: controller?.signal });
+        if (mounted && controller === eventsController) { applyRetention(data); renderEvents(data, true); }
+      } catch (error) {
+        if (!mounted || controller !== eventsController || error?.name === 'AbortError') return;
+        more.disabled = false;
+        more.textContent = `加载失败：${errorText(error)}`;
+      }
     });
     bodyOf('events').append(more);
   }
@@ -785,6 +780,8 @@ function renderEvents(data, append = false) {
 
 // ---------- 单场详情 ----------
 async function openDetail(id) {
+  detailController?.abort();
+  const controller = detailController = new AbortController();
   const dialog = $('analytics-detail');
   view.detailId = id;
   const body = $('analytics-detail-body');
@@ -794,10 +791,10 @@ async function openDetail(id) {
   $('analytics-detail-title').focus();
   try {
     const [res, stats] = await Promise.all([
-      history('sessions', { id, ...scopeParam() }),
-      history('stats', { session: id, metrics: 'bitrate,fps,speed,online,watched', max_points: Math.min(2000, Math.max(240, body.clientWidth || 600)), ...scopeParam() }),
+      history('sessions', { id, ...scopeParam() }, { signal: controller.signal }),
+      history('stats', { session: id, metrics: 'bitrate,fps,speed,online,watched', max_points: Math.min(2000, Math.max(240, body.clientWidth || 600)), ...scopeParam() }, { signal: controller.signal }),
     ]);
-    if (String(view.detailId) !== String(id)) return;
+    if (!mounted || controller !== detailController || String(view.detailId) !== String(id)) return;
     const s = res?.items?.[0];
     if (!s) { body.replaceChildren(el('div', 'empty-state', '未找到该场转播。')); return; }
     const now = Date.now() / 1000;
@@ -835,6 +832,7 @@ async function openDetail(id) {
     prev.setAttribute('aria-label', neighbourLabel('上一场', titleOf(res.prev_id)));
     next.setAttribute('aria-label', neighbourLabel('下一场', titleOf(res.next_id)));
   } catch (error) {
+    if (!mounted || controller !== detailController || error?.name === 'AbortError') return;
     body.replaceChildren(el('div', 'empty-state', `加载失败：${errorText(error)}`));
   }
 }
@@ -863,10 +861,16 @@ function restoreOrder() {
 
 async function refresh({ force = false } = {}) {
   if (!mounted) return;
+  refreshController?.abort();
+  eventsController?.abort();
+  const controller = refreshController = new AbortController();
+  const eventController = eventsController = new AbortController();
   const gen = ++generation;
-  if (force) cache.clear();
+  if (force) historyClient.clear();
   const r = resolvedRange();
   view.range = r;
+  view.sessions = [];
+  view.stats = null;
   const live = () => mounted && gen === generation;
   const button = $('analytics-refresh-btn');
   button.disabled = true;
@@ -877,7 +881,7 @@ async function refresh({ force = false } = {}) {
 
   let status;
   try {
-    status = await history('status', {});
+    status = await history('status', {}, { signal: controller.signal });
   } catch (error) {
     if (!live()) return;
     done();
@@ -894,63 +898,116 @@ async function refresh({ force = false } = {}) {
   view.status = status;
   $('analytics-retention').textContent = retentionLine(status?.retention);
   const scopeLabel = prefs.scope || '全部节点';
-  if (!Number.isFinite(status?.oldest_at)) {
-    $('analytics-coverage').textContent = '尚未开始记录';
-    const since = Number.isFinite(status?.recording_since) ? formatAbsolute(status.recording_since) : '现在';
-    emptyAll(`尚无历史数据。本节点从 ${since} 开始记录推流历史，第一场转播结束后这里会出现统计。「推流质量 · 实时」和「最近事件」现在就可用。`);
-    history('events', eventParams(r)).then(d => { if (live()) { reloadEventsRetention(d); renderEvents(d); } }, e => live() && setError('events', e));
-    done();
-    return;
-  }
+  // /status describes only this node. Always request the selected scope,
+  // including on a new standby or a node whose local recording is disabled.
   restoreOrder();
-  const coverageFrom = Math.max(r.from, status.oldest_at);
-  $('analytics-coverage').textContent = coverageLine(coverageFrom, r.to, scopeLabel, localHourOffset());
+  let oldest = localHistoryScope(status, prefs.scope) ? status?.oldest_at : null;
+  const paintCoverage = () => {
+    $('analytics-coverage').textContent = Number.isFinite(oldest)
+      ? coverageLine(Math.max(r.from, oldest), r.to, scopeLabel, localHourOffset())
+      : '此范围暂无记录';
+  };
+  paintCoverage();
   const span = roundedRange(r);
   const bucket = bucketFor(r).bucket;
   const width = Math.min(2000, Math.max(240, Math.round(bodyOf('audience')?.clientWidth || 800)));
   const tz = -new Date().getTimezoneOffset();
-  const again = () => { if (live()) refresh(); };
-
-  const summaryJob = history('summary', { ...span, bucket, tz_offset_min: tz, calendar: 1, ...scopeParam() }, again);
-  const sessionsJob = history('sessions', { ...span, limit: 500, ...scopeParam() }, again);
-  const statsJob = history('stats', { ...span, metrics: 'bitrate,fps,speed,online,watched', max_points: width, ...scopeParam() }, again);
-  const eventsJob = history('events', eventParams(r), again);
   let failures = 0;
-  const fail = (keys, error) => {
-    if (!live()) return;
-    failures++;
-    keys.forEach(key => setError(key, error));
+  let hasData = false;
+  let hasMissing = false;
+  let scopedStats = null;
+  let scopedSessions = null;
+  const responses = new Map();
+  const stale = new Set();
+  const staleNote = (keys, error) => {
+    for (const key of keys) {
+      const body = bodyOf(key);
+      if (!body) continue;
+      body.querySelector('.analytics-stale')?.remove();
+      const note = el('p', 'hint analytics-stale', error
+        ? `刷新失败：${errorText(error)}。当前显示缓存数据。`
+        : '当前显示缓存数据，正在刷新…');
+      note.dataset.tone = 'warn';
+      note.setAttribute('role', 'status');
+      body.append(note);
+    }
   };
-
-  summaryJob.then(summary => {
+  const meta = (name, data) => {
+    responses.set(name, data);
+    const missing = [...new Map([...responses.values()].flatMap(d => d?.missing_nodes || []).map(n => [n.node_id, n])).values()];
+    hasMissing = missing.length > 0;
+    if (hasMissing) applyMissing(missing);
+    else showNotice('');
+    retentionSeen = [...responses.values()];
+    applyRetention(null);
+    hasData = [...responses.values()].some(d => (d?.items?.length || 0) > 0
+      || (d?.kpis?.live_secs || 0) > 0 || (d?.kpis?.notify_sent || 0) > 0
+      || Object.values(d?.series || {}).some(s => s.mean?.some(Number.isFinite)));
+  };
+  const paintStats = stats => {
     if (!live()) return;
+    scopedStats = stats;
+    meta('stats', stats);
+    renderAudience(stats, r);
+    if (prefs.quality === 'range') renderQualityRange(stats, r);
+    view.stats = stats;
+  };
+  const paintSummary = summary => {
+    if (!live()) return;
+    oldest = summary?.coverage?.from;
+    paintCoverage();
     renderKpis(summary, r);
     renderHours(summary, r);
     renderReliability(summary);
     renderCalendar(summary);
     renderNodes(summary);
-    applyMissing(summary?.missing_nodes);
-    applyRetention(summary);
-  }, error => fail(['hours', 'reliability', 'calendar'], error));
-  sessionsJob.then(data => {
+    meta('summary', summary);
+    if (scopedSessions) renderStrips(scopedSessions, r, oldest);
+  };
+  const paintSessions = data => {
     if (!live()) return;
     view.sessions = Array.isArray(data?.items) ? data.items : [];
-    renderStrips(view.sessions, r, status.oldest_at);
-    applyMissing(data?.missing_nodes);
-    applyRetention(data);
-  }, error => fail(['strip', 'audience'], error));
-  Promise.all([sessionsJob, statsJob]).then(([, stats]) => {
-    if (!live()) return;
-    applyRetention(stats);
-    renderAudience(stats, r);
-    if (prefs.quality === 'range') renderQualityRange(stats, r);
-    view.stats = stats;
-  }, error => { if (live()) { setError('audience', error); if (prefs.quality === 'range') setError('quality', error); } });
-  eventsJob.then(data => { if (live()) { eventsRetention = data; applyRetention(data); renderEvents(data); } }, error => fail(['events'], error));
-  Promise.allSettled([summaryJob, sessionsJob, statsJob, eventsJob]).then(() => {
+    scopedSessions = view.sessions;
+    renderStrips(view.sessions, r, oldest);
+    meta('sessions', data);
+    if (scopedStats) renderAudience(scopedStats, r);
+  };
+  const load = (name, params, keys, paint, signal = controller.signal) => {
+    const current = () => live() && !signal.aborted;
+    return history(name, params, {
+      signal,
+      onCached: data => { if (current()) { stale.add(name); paint(data); staleNote(keys); } },
+    }).then(data => {
+      if (!current()) return;
+      stale.delete(name);
+      paint(data);
+      keys.forEach(key => bodyOf(key)?.querySelector('.analytics-stale')?.remove());
+    }, error => {
+      if (!current() || error?.name === 'AbortError') return;
+      failures++;
+      if (stale.has(name)) staleNote(keys, error);
+      else keys.forEach(key => setError(key, error));
+      if (name === 'summary' && !stale.has(name)) renderKpis(null, r, true);
+    });
+  };
+  await Promise.allSettled([
+    load('summary', { ...span, bucket, tz_offset_min: tz, calendar: 1, ...scopeParam() }, ['hours', 'reliability', 'calendar', 'nodes'], paintSummary),
+    load('sessions', { ...span, limit: 500, ...scopeParam() }, ['strip'], paintSessions),
+    load('stats', { ...span, metrics: 'bitrate,fps,speed,online,watched', max_points: width, ...scopeParam() }, ['audience', ...(prefs.quality === 'range' ? ['quality'] : [])], paintStats),
+    load('events', eventParams(r), ['events'], data => {
+      eventsRetention = data;
+      meta('events', data);
+      renderEvents(data);
+    }, eventController.signal),
+  ]);
+  if (live()) {
     done();
-    if (live() && failures >= 3) showNotice('无法读取统计数据：多个模块加载失败。实时数据不受影响。', 'danger');
-  });
+    if (failures >= 3) showNotice('无法读取统计数据：多个模块加载失败。实时数据不受影响。', 'danger');
+    else if (!failures && !hasMissing) {
+      const notice = historyStateNotice(status, prefs.scope, hasData);
+      if (notice) showNotice(notice.text, notice.tone);
+    }
+  }
 }
 
 function selectRange(range) {
@@ -1011,7 +1068,14 @@ function bindControls() {
     if (id) openDetail(id);
   });
   $('analytics-event-filter').addEventListener('change', async () => {
-    try { const d = await history('events', eventParams(view.range)); reloadEventsRetention(d); renderEvents(d); } catch (error) { setError('events', error); }
+    eventsController?.abort();
+    const controller = eventsController = new AbortController();
+    try {
+      const d = await history('events', eventParams(view.range), { signal: controller.signal });
+      if (mounted && controller === eventsController) { reloadEventsRetention(d); renderEvents(d); }
+    } catch (error) {
+      if (mounted && controller === eventsController && error?.name !== 'AbortError') setError('events', error);
+    }
   });
   for (const input of root.querySelectorAll('input[name="analytics-quality"]')) {
     input.checked = input.value === prefs.quality;
@@ -1034,7 +1098,12 @@ function bindControls() {
   root.addEventListener('focusout', e => { if (chartTarget(e.target)) hoverPause = false; });
   const dialog = $('analytics-detail');
   $('analytics-detail-close').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => { view.detailId = null; destroyChartsIn($('analytics-detail-body')); });
+  dialog.addEventListener('close', () => {
+    detailController?.abort();
+    detailController = null;
+    view.detailId = null;
+    destroyChartsIn($('analytics-detail-body'));
+  });
   dialog.addEventListener('keydown', event => {
     if (event.target.closest?.('.analytics-uplot')) return;
     if (event.key === 'ArrowLeft' && !$('analytics-detail-prev').disabled) $('analytics-detail-prev').click();
@@ -1045,6 +1114,7 @@ function bindControls() {
 export function mountAnalytics(container, injected) {
   if (!root) {
     deps = injected;
+    historyClient = createHistoryClient((path, options) => deps.getJson(path, options));
     root = container;
     bindControls();
   }
@@ -1061,6 +1131,9 @@ export function unmountAnalytics() {
   if (!mounted) return;
   mounted = false;
   generation++;
+  refreshController?.abort();
+  eventsController?.abort();
+  detailController?.abort();
   clearInterval(liveTimer);
   clearInterval(autoTimer);
   liveTimer = autoTimer = 0;

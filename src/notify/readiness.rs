@@ -52,6 +52,68 @@ pub fn missing(fresh: bool, flags: LocalFlags, writer_openid: Option<bool>) -> V
     codes
 }
 
+/// Addendum F view of one node: its set generation (`None` = older node)
+/// and `openid_rebind`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SyncState {
+    pub generation: Option<u64>,
+    pub rebind: bool,
+}
+
+/// What the cluster as a whole has: the greatest generation and whether
+/// any fresh node has an AppID / AppSecret at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClusterHas {
+    pub generation: u64,
+    pub appid: bool,
+    pub appsecret: bool,
+}
+
+/// Addendum F rule 6 on top of `missing`: `appid_pending` /
+/// `appsecret_pending` when the cluster has the value but this node is
+/// missing it or has not received this generation; `openid_rebind` when the
+/// openid was bound under another AppID. `appid` / `appsecret` stay for "the
+/// cluster has no value at all".
+pub fn missing_synced(
+    fresh: bool,
+    flags: LocalFlags,
+    writer_openid: Option<bool>,
+    sync: SyncState,
+    cluster: ClusterHas,
+) -> Vec<&'static str> {
+    if !fresh {
+        return vec!["stale"];
+    }
+    let behind = sync.generation.is_some_and(|g| g < cluster.generation);
+    let mut codes = Vec::new();
+    if !flags.0 || behind {
+        if cluster.appid && (behind || sync.generation.is_some()) {
+            codes.push("appid_pending");
+        } else if !flags.0 {
+            codes.push("appid");
+        }
+    }
+    if !flags.1 || behind {
+        if cluster.appsecret && (behind || sync.generation.is_some()) {
+            codes.push("appsecret_pending");
+        } else if !flags.1 {
+            codes.push("appsecret");
+        }
+    }
+    if sync.rebind {
+        codes.push("openid_rebind");
+    } else if !flags.2 {
+        codes.push(
+            if writer_openid == Some(true) || (behind && cluster.generation > 0) {
+                "openid_pending"
+            } else {
+                "openid"
+            },
+        );
+    }
+    codes
+}
+
 fn slot_flags(node: &NodeSlot) -> LocalFlags {
     (
         node.appid_set.unwrap_or(false),
@@ -78,6 +140,39 @@ pub fn view(
     if !digest.enabled {
         return (Vec::new(), writer_openid);
     }
+    let local_sync = {
+        let (generation, rebind) = super::local_credentials_sync();
+        SyncState {
+            generation: Some(generation),
+            rebind,
+        }
+    };
+    let sync_of = |node: &NodeSlot| {
+        if node.id == digest.local {
+            local_sync
+        } else {
+            SyncState {
+                generation: node.credentials_generation,
+                rebind: node.openid_rebind.unwrap_or(false),
+            }
+        }
+    };
+    let mut cluster = ClusterHas {
+        generation: super::authority::latest_generation(digest, local_sync.generation.unwrap_or(0)),
+        ..Default::default()
+    };
+    for node in &digest.nodes {
+        let is_local = node.id == digest.local;
+        if !(is_local || node.fresh) {
+            continue;
+        }
+        let flags = if is_local { local } else { slot_flags(node) };
+        cluster.appid |= flags.0;
+        cluster.appsecret |= flags.1;
+        cluster.generation = cluster
+            .generation
+            .max(sync_of(node).generation.unwrap_or(0));
+    }
     let nodes = digest
         .nodes
         .iter()
@@ -85,16 +180,27 @@ pub fn view(
             let is_local = node.id == digest.local;
             let fresh = is_local || node.fresh;
             let flags = if is_local { local } else { slot_flags(node) };
+            let sync = sync_of(node);
+            let current = if is_local {
+                local_sync.generation.unwrap_or(0) >= cluster.generation
+            } else {
+                super::authority::credentials_current(node, cluster.generation)
+            };
             json!({
                 "node_id": node.id,
                 "is_local": is_local,
-                "notify_capable": fresh && if is_local { local_capable } else { node.notify_capable },
-                "notify_authority": fresh && if is_local { local_authority } else { node.notify_authority },
+                "notify_capable": fresh && current && if is_local { local_capable } else { node.notify_capable },
+                "notify_authority": fresh && current && if is_local { local_authority } else { node.notify_authority },
                 "fresh": fresh,
                 "appid_set": flags.0,
                 "appsecret_set": flags.1,
                 "openid_set": flags.2,
-                "missing": missing(fresh, flags, writer_openid),
+                "credentials_generation": sync.generation,
+                "missing": if cluster.generation == 0 {
+                    missing(fresh, flags, writer_openid)
+                } else {
+                    missing_synced(fresh, flags, writer_openid, sync, cluster)
+                },
             })
         })
         .collect();
