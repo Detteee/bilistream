@@ -8,6 +8,9 @@
     "check": "node build.mjs --check",
     "test": "node --test tests/*.test.mjs"
   },
+  "dependencies": {
+    "uplot": "1.6.32"
+  },
   "devDependencies": {
     "esbuild": "0.28.2"
   }

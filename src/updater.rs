@@ -302,6 +302,7 @@ fn install_staged_update(
         binary,
         "webui/dist/index.html",
         "webui/dist/js/main.js",
+        "webui/dist/js/analytics.js",
         "webui/public-dist/index.html",
     ] {
         if !root.join(required).is_file() || fs::metadata(root.join(required))?.len() == 0 {
@@ -418,6 +419,7 @@ mod tests {
                 "bilistream",
                 "webui/dist/index.html",
                 "webui/dist/js/main.js",
+                "webui/dist/js/analytics.js",
                 "webui/public-dist/index.html",
             ] {
                 let path = root.join(name);
@@ -479,6 +481,20 @@ mod tests {
         assert!(install_staged_update(&package, &target, "bilistream").is_err());
         assert_eq!(fs::read(target.join("bilistream")).unwrap(), b"old binary");
         assert!(!target.join("bilistream.old").exists());
+    }
+
+    #[test]
+    fn package_without_analytics_chunk_is_refused() {
+        let fixture = Fixture::new();
+        let package = fixture.package();
+        let target = fixture.0.join("installed");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("bilistream"), b"old binary").unwrap();
+        fs::remove_file(package.join("webui/dist/js/analytics.js")).unwrap();
+        let err = install_staged_update(&package, &target, "bilistream").unwrap_err();
+        assert!(err.to_string().contains("更新包不完整"));
+        assert!(err.to_string().contains("webui/dist/js/analytics.js"));
+        assert_eq!(fs::read(target.join("bilistream")).unwrap(), b"old binary");
     }
 
     #[test]

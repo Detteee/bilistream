@@ -2,7 +2,9 @@
 
 import { isDashboardVisible } from './dom.js';
 import { state, isViewActive, invalidateManagedData } from './state.js';
-import { ensureWebUiAccess } from './api.js';
+import { ensureWebUiAccess, getJson } from './api.js';
+import { formatNetworkRate, formatSpeedRatio, formatFps } from './format.js';
+import { createAnalyticsLoader } from './analytics-loader.js';
 import { configureEventStream, initEventStream } from './events.js';
 import { startLogRefresh, initLogControls, refreshLogs } from './logs.js';
 import { initManagementControls, loadManagementListsOnce } from './manage.js';
@@ -41,8 +43,18 @@ import {
   setOnAir,
 } from './overview.js';
 
-const VIEW_IDS = ['overview', 'manage', 'settings', 'logs'];
+const VIEW_IDS = ['overview', 'manage', 'settings', 'logs', 'analytics'];
 const viewsLoaded = new Set();
+
+// 统计 is a lazy chunk (W14 P1). It must not import stateful app modules, so
+// the few it needs are injected here.
+const analytics = createAnalyticsLoader({
+  importer: () => import('./analytics.js'),
+  getView: () => document.getElementById('view-analytics'),
+  deps: { getJson, isDashboardVisible, formatNetworkRate, formatSpeedRatio, formatFps },
+  reload: () => window.location.reload(),
+  isActive: () => isViewActive('analytics'),
+});
 
 function loadViewData(name) {
   switch (name) {
@@ -59,6 +71,9 @@ function loadViewData(name) {
       break;
     case 'logs':
       refreshLogs();
+      break;
+    case 'analytics':
+      analytics.mount();
       break;
   }
 }
@@ -88,10 +103,15 @@ function activateView(name, options = {}) {
     // Storage can be unavailable in private windows; navigation still works.
   }
 
+  if (name !== 'analytics') analytics.unmount();
+  document.getElementById(`tab-${name}`)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  markNavOverflow();
+
   if (!viewsLoaded.has(name)) {
     viewsLoaded.add(name);
     loadViewData(name);
-  } else if (options.reload || name === 'overview') {
+  } else if (options.reload || name === 'overview' || name === 'analytics') {
+    // 统计 refetches on every activation, like 日志.
     // The Holodex panel catches up every time the overview comes back.
     loadViewData(name);
   }
@@ -99,10 +119,28 @@ function activateView(name, options = {}) {
   else stopHolodexDurationTicker();
 }
 
+// R4: mark which edges of the scrolling tab row are clipped (edge fade in CSS).
+function markNavOverflow() {
+  const nav = document.querySelector('.tabbar__inner');
+  if (!nav) return;
+  const max = nav.scrollWidth - nav.clientWidth - 1;
+  const x = nav.scrollLeft;
+  nav.dataset.overflow = max <= 0 ? '' : x <= 0 ? 'end' : x >= max ? 'start' : 'both';
+}
+
 function initViewRouter() {
   const tabs = Array.from(document.querySelectorAll('.tab[data-view]'));
+  const nav = document.querySelector('.tabbar__inner');
+  nav?.addEventListener('scroll', markNavOverflow, { passive: true });
+  window.addEventListener('resize', markNavOverflow);
 
   tabs.forEach((tab, index) => {
+    if (tab.dataset.view === 'analytics') {
+      // P4: start fetching the chunk on intent; import() is memoised.
+      for (const type of ['pointerenter', 'focus', 'touchstart']) {
+        tab.addEventListener(type, analytics.prefetch, { once: true, passive: true });
+      }
+    }
     tab.addEventListener('click', () => activateView(tab.dataset.view));
     tab.addEventListener('keydown', event => {
       const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
@@ -146,6 +184,9 @@ function bindEventStream() {
       refreshStatus();
     },
     onHolodex: maybeLoadHolodexStreams,
+    onHistory: () => {
+      if (isViewActive('analytics')) analytics.refreshIfVisible();
+    },
     onCluster: () => {
       refreshClusterStatus();
       if (isViewActive('settings')) refreshMembership();
@@ -193,6 +234,7 @@ function boot() {
       if (isViewActive('logs')) {
         refreshLogs();
       }
+      if (isViewActive('analytics')) analytics.refreshIfVisible();
       refreshStatus();
       maybeLoadHolodexStreams();
     } else {

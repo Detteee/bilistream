@@ -2,7 +2,12 @@
 // no uPlot. History timestamps from /api/history/* are unix seconds; every
 // helper here takes seconds unless its name says otherwise.
 
-import { localHourOffset } from './format.js';
+// Self-contained on purpose: this file is bundled into the lazy analytics.js
+// chunk, and importing an app module that main.js also uses would make
+// esbuild emit a third shared chunk, which build.mjs rejects.
+export function localHourOffset(date = new Date()) {
+  return Math.round(-date.getTimezoneOffset() / 60);
+}
 
 export const DASH = '--';
 
@@ -189,4 +194,185 @@ export function ringArcs(ok, fail, circumference = 100) {
   const okLen = +((good / total) * circumference).toFixed(3);
   const failLen = +(circumference - okLen).toFixed(3);
   return { rate: good / total, ok: `${okLen} ${+(circumference - okLen).toFixed(3)}`, fail: `${failLen} ${okLen}`, failOffset: -okLen };
+}
+
+// ---------------------------------------------------------------------------
+// Bilibili audience (W3 "Audience caveats", implement.md Phase 1 step 5).
+
+// StopLiveData fields kept by the backend. Everything else in the reply
+// (HamsterRmb and any future field) is dropped. LiveTime is kept raw only and
+// never used for duration.
+export const STOP_LIVE_DATA_FIELDS = Object.freeze({
+  LiveTime: 'live_time', AddFans: 'add_fans', NewFansClub: 'new_fans_club',
+  DanmuNum: 'danmu', MaxOnline: 'max_online', WatchedCount: 'watched',
+});
+// Count fields the UI shows as session totals (max_online is separate: it is
+// shown only when present, marked 未验证).
+export const BILI_TOTAL_KEYS = Object.freeze(['watched', 'danmu', 'add_fans', 'new_fans_club']);
+const EMPTY_TOTALS = Object.freeze({ watched: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null });
+
+// Mirrors the backend rule for a raw StopLiveData reply: valid only when
+// code == 0 and no kept field is negative (an unknown live_key answers code 0
+// with -999999 sentinels); -101 = not logged in. A failed reply yields NULL
+// totals. Used by the mock and as the reference for Scout's parser tests.
+export function stopLiveDataToBili(reply) {
+  const data = reply && typeof reply.data === 'object' && reply.data ? reply.data : {};
+  const kept = {};
+  for (const [field, key] of Object.entries(STOP_LIVE_DATA_FIELDS)) {
+    if (field in data) kept[key] = data[field];
+  }
+  const values = Object.values(kept);
+  const valid = reply?.code === 0 && values.every(v => isNum(v) && v >= 0);
+  if (!valid) return { state: 'failed', ...EMPTY_TOTALS };
+  const out = { state: 'ok' };
+  for (const key of [...BILI_TOTAL_KEYS, 'max_online']) out[key] = isNum(kept[key]) ? kept[key] : null;
+  return out;
+}
+
+// Defensive reading of `sessions[].bili` from /api/history/sessions. Totals
+// are trusted only for state 'ok' with no negative or non-numeric count; any
+// sentinel (-999999) or other negative turns the whole summary into a failed
+// one, so the UI never prints a raw sentinel. online_peak comes from our own
+// danmaku samples, so it survives a failed or pending summary.
+export function biliTotals(bili) {
+  if (!bili || typeof bili !== 'object') return { state: 'none', online_peak: null, ...EMPTY_TOTALS };
+  const peak = isNum(bili.online_peak) && bili.online_peak >= 0 ? bili.online_peak : null;
+  const fields = [...BILI_TOTAL_KEYS, 'max_online'];
+  const bad = fields.some(key => bili[key] != null && !(isNum(bili[key]) && bili[key] >= 0));
+  const state = ['pending', 'ok', 'failed', 'skipped'].includes(bili.state) ? bili.state : 'failed';
+  if (state !== 'ok' || bad) return { state: state === 'ok' ? 'failed' : state, online_peak: peak, ...EMPTY_TOTALS };
+  const out = { state, online_peak: peak };
+  for (const key of fields) out[key] = isNum(bili[key]) ? bili[key] : null;
+  return out;
+}
+
+// Sub-label for a totals tile: pending → 结束后汇总; no key → 无 B 站汇总.
+export function biliStateLabel(state) {
+  if (state === 'pending') return '结束后汇总';
+  if (state === 'skipped') return '无 B 站汇总';
+  return '';
+}
+
+// Range totals over sessions. A field is summed only over sessions whose
+// summary is valid; with none it stays null (`--`). max_online is the largest
+// present value, or null so the 最大在线 tile is omitted.
+export function aggregateAudience(sessions) {
+  const list = (Array.isArray(sessions) ? sessions : []).map(s => biliTotals(s?.bili));
+  const ok = list.filter(t => t.state === 'ok');
+  const sum = key => {
+    const vals = ok.map(t => t[key]).filter(isNum);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+  };
+  const peaks = list.map(t => t.online_peak).filter(isNum);
+  const maxes = ok.map(t => t.max_online).filter(isNum);
+  return {
+    sessions: list.length, summarized: ok.length, pending: list.filter(t => t.state === 'pending').length,
+    online_peak: peaks.length ? Math.max(...peaks) : null,
+    watched: sum('watched'), danmu: sum('danmu'), add_fans: sum('add_fans'), new_fans_club: sum('new_fans_club'),
+    max_online: maxes.length ? Math.max(...maxes) : null,
+  };
+}
+
+// Session duration from bilistream's own start/end times (never LiveTime).
+// An open session runs to `nowSec`.
+export function sessionDuration(session, nowSec = Date.now() / 1000) {
+  const start = session?.started_at;
+  if (!isNum(start)) return null;
+  const end = isNum(session.ended_at) ? session.ended_at : nowSec;
+  return Math.max(0, end - start);
+}
+
+export function formatSessionDuration(secs) {
+  if (!isNum(secs)) return DASH;
+  const total = Math.max(0, Math.round(secs));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60);
+  if (h) return `${h} 小时 ${m} 分`;
+  if (m) return `${m} 分钟`;
+  return `${total} 秒`;
+}
+
+// Tier the server should answer with (design §9, W3): raw only when the range
+// is ≤ 3 days AND lies entirely inside retention.raw_days; otherwise 1-minute
+// rollups. Used for the caption until stats.resolution arrives, and to flag a
+// server answer that disagrees.
+export function expectedResolution(from, to, retention, nowSec = Date.now() / 1000) {
+  const rawDays = retention?.raw_days;
+  if (!isNum(from) || !isNum(to) || !isNum(rawDays) || !(to > from)) return '1m';
+  return to - from <= 3 * DAY && from >= nowSec - rawDays * DAY ? 'raw' : '1m';
+}
+
+// Custom range from two <input type="date"> values (local days, end day
+// inclusive). Errors use the W5 copy.
+export function customRange(fromDate, toDate, rollupDays, nowSec = Math.floor(Date.now() / 1000)) {
+  const parse = text => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text || '');
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() / 1000 : NaN;
+  };
+  const from = parse(fromDate);
+  const endDay = parse(toDate);
+  if (!isNum(from) || !isNum(endDay)) return { error: '请选择开始日期和结束日期' };
+  const to = Math.min(nowSec, endDay + DAY);
+  if (!(to > from)) return { error: '开始日期须早于结束日期' };
+  const limit = isNum(rollupDays) ? rollupDays : 90;
+  if (to - from > limit * DAY || from < nowSec - limit * DAY) return { error: `最长 ${limit} 天（按当前保留设置）` };
+  return { preset: 'custom', from, to };
+}
+
+// Partial-data line (W4/W9). `detail` is server text and goes only into title.
+const MISSING_REASON = { timeout: '未响应', unreachable: '无法连接', auth_failed: '节点认证失败', unsupported: '版本过旧，不支持统计', error: '读取失败' };
+export function missingNodeText(missing) {
+  const list = Array.isArray(missing) ? missing.filter(m => m && m.node_id) : [];
+  if (!list.length) return null;
+  const groups = new Map();
+  for (const m of list) {
+    const copy = MISSING_REASON[m.reason] || '读取失败';
+    if (!groups.has(copy)) groups.set(copy, []);
+    groups.get(copy).push(m);
+  }
+  const parts = [...groups].map(([copy, nodes]) => `${nodes.map(n => n.node_id).join('、')} ${copy}`);
+  return {
+    text: `部分数据缺失：${parts.join('；')}，以下统计不含这些节点。`,
+    nodes: list.map(m => ({ node_id: String(m.node_id), reason: MISSING_REASON[m.reason] || '读取失败', title: typeof m.detail === 'string' ? m.detail : '' })),
+  };
+}
+
+// 4 heat levels relative to the busiest day in the window.
+export function heatLevel(secs, max) {
+  if (!isNum(secs) || secs <= 0 || !isNum(max) || max <= 0) return 0;
+  return Math.max(1, Math.min(4, Math.ceil((secs / max) * 4)));
+}
+
+const PLATFORM_KEY = { YT: 'youtube', TW: 'twitch', NC: 'niconico' };
+const PLATFORM_NAME = { YT: 'YouTube', TW: 'Twitch', NC: 'Niconico' };
+export function platformKey(code) { return PLATFORM_KEY[code] || 'niconico'; }
+export function platformName(code) { return PLATFORM_NAME[code] || String(code || DASH); }
+
+// Failure-reason labels (W5 推流可靠性).
+const REASON_LABEL = {
+  connection_reset: '连接被重置', low_speed: '推流速度过低', stats_stalled: '统计停止更新', timestamp_frozen: '时间戳冻结',
+  http_403: 'HTTP 403', bili_warning: 'B站 房间警告', bili_cut_off: 'B站 切断直播', start_failed: '开播失败',
+  failover: '节点故障转移', api_unavailable: '外部 API 不可用',
+};
+export function reasonLabel(cls) { return REASON_LABEL[cls] || '其他'; }
+
+// 结束原因 (单场详情). Codes from design.md §5.4 (SessionGuard mapping) and
+// §5.5 (crash close); wording from webui-design.md W5 推流可靠性 terms
+// (正常结束 / 异常退出 / 计划内重启 / 交接（不计入）). Unknown → 其他, never raw.
+const END_REASON_LABEL = Object.freeze({
+  source_ended: '正常结束（源已下播）',
+  bili_stopped: '正常结束（B站 已下播）',
+  user_stop: '正常结束（手动停止）',
+  intentional_restart: '计划内重启',
+  cluster_handoff: '节点交接（不计入）',
+  process_restart: '异常退出（进程重启）',
+  aborted: '异常退出（中断）',
+});
+export function endReasonLabel(code) {
+  if (code === null || code === undefined || code === '') return DASH;
+  return Object.hasOwn(END_REASON_LABEL, code) ? END_REASON_LABEL[code] : '其他';
+}
+
+// ◀/▶ accessible name (W10): 「上一场：{标题}」, falling back to the bare word.
+export function neighbourLabel(word, title) {
+  return typeof title === 'string' && title.trim() ? `${word}：${title.trim()}` : word;
 }

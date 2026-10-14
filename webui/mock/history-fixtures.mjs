@@ -1,3 +1,4 @@
+import { stopLiveDataToBili } from '../src/js/analytics-format.js';
 // Synthetic /api/history/* responses for the 统计 view. Shapes follow
 // Architect's contract (.trellis/tasks/10-11-analytics-dashboard/design.md §9).
 // All data is fake, deterministic for a given `now`, and labelled 示例.
@@ -56,17 +57,36 @@ function allSessions(now) {
       out.push({
         id, eid: `local-${id}`, node: id % 5 === 0 ? 'tokyo-1' : 'local', ...ch,
         title: `${ch.channel_name} | 示例直播 ${id}`, started_at, ended_at, duration_secs: dur,
-        end_reason: live ? null : failures ? 'failed' : 'source_ended', runs: restarts + 1, restarts, failures, stuck: 0, gaps,
+        end_reason: live ? null : failures ? (id % 2 ? 'aborted' : 'process_restart') : CLEAN_END[id % CLEAN_END.length], runs: restarts + 1, restarts, failures, stuck: 0, gaps,
         median_bitrate_kbps: 5800 + Math.floor(rand() * 600),
-        bili: live ? { state: 'pending', watched: null, online_peak: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null }
-          : rand() < 0.1 ? { state: 'failed', watched: null, online_peak: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null }
-          : { state: 'ok', watched: 800 + Math.floor(rand() * 4000), online_peak: 40 + Math.floor(rand() * 300), danmu: Math.floor(rand() * 2500), add_fans: Math.floor(rand() * 60), new_fans_club: Math.floor(rand() * 6), max_online: null },
+        bili: mockBili(live, rand),
       });
       id++;
     }
   }
   return out.reverse();
 }
+
+// sessions[].bili as the backend stores it (design §9): StopLiveData totals go
+// through the same allowlist/validity rule as the backend (stopLiveDataToBili),
+// so a sentinel reply becomes a failed summary with NULL totals. online_peak
+// comes from our own danmaku samples and is set even while pending or failed.
+// No revenue field exists anywhere.
+function mockBili(live, rand) {
+  const online_peak = 40 + Math.floor(rand() * 300);
+  if (live) return { state: 'pending', online_peak, watched: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null };
+  const roll = rand();
+  if (roll < 0.05) return { state: 'skipped', online_peak, watched: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null };
+  const reply = roll < 0.12
+    ? { code: 0, data: { LiveTime: -999999, AddFans: -999999, NewFansClub: 0, DanmuNum: 0, MaxOnline: 0, WatchedCount: 1167856 } }
+    : { code: 0, data: { LiveTime: 3600, AddFans: Math.floor(rand() * 60), NewFansClub: Math.floor(rand() * 6), DanmuNum: Math.floor(rand() * 2500), WatchedCount: 800 + Math.floor(rand() * 4000), ...(rand() < 0.3 ? { MaxOnline: online_peak + Math.floor(rand() * 50) } : {}) } };
+  return { ...stopLiveDataToBili(reply), online_peak };
+}
+
+// Only the seven backend end_reason codes (design.md §5.4/§5.5). Counted
+// failures end as aborted / process_restart; others rotate through the rest.
+export const END_REASONS = Object.freeze(['source_ended', 'bili_stopped', 'user_stop', 'intentional_restart', 'cluster_handoff', 'process_restart', 'aborted']);
+const CLEAN_END = ['source_ended', 'source_ended', 'bili_stopped', 'user_stop', 'intentional_restart', 'cluster_handoff'];
 
 const overlaps = (s, from, to) => s.started_at < to && (s.ended_at ?? to) > from;
 
@@ -75,12 +95,14 @@ function kpis(list, from, to) {
   const failures = list.reduce((n, s) => n + s.failures, 0);
   const done = list.filter(s => s.bili?.state === 'ok');
   const sum = key => done.length ? done.reduce((n, s) => n + s.bili[key], 0) : null;
+  const peaks = list.map(s => s.bili?.online_peak).filter(Number.isFinite);
+  const maxes = done.map(s => s.bili.max_online).filter(Number.isFinite);
   return {
     live_secs: live, availability: list.length ? 1 - failures * 45 / Math.max(1, live) : null, sessions: list.length, failures,
     recover_secs_avg: failures ? 45 : null, success_rate: list.length ? (list.length - failures) / list.length : null,
     notify_sent: failures, notify_failed: 0,
-    watched: sum('watched'), online_peak: done.length ? Math.max(...done.map(s => s.bili.online_peak)) : null,
-    danmu: sum('danmu'), add_fans: sum('add_fans'), new_fans_club: sum('new_fans_club'), max_online: null,
+    watched: sum('watched'), online_peak: peaks.length ? Math.max(...peaks) : null,
+    danmu: sum('danmu'), add_fans: sum('add_fans'), new_fans_club: sum('new_fans_club'), max_online: maxes.length ? Math.max(...maxes) : null,
   };
 }
 
@@ -151,7 +173,7 @@ function eventsResponse(q, now, partial) {
   const items = [];
   let id = 1000;
   for (const s of allSessions(now)) {
-    if (s.ended_at) items.push({ id: id++, eid: `ev-${id}`, at: s.ended_at, node: s.node, kind: 'stream.ended', title: `转播结束：${s.channel_name}`, detail: `时长 ${Math.round(s.duration_secs / 60)} 分钟`, severity: 'info' });
+    if (s.ended_at) items.push({ id: id++, eid: `ev-${id}`, at: s.ended_at, node: s.node, kind: 'stream.ended', session_id: s.id, title: `转播结束：${s.channel_name}`, detail: `时长 ${Math.round(s.duration_secs / 60)} 分钟`, severity: 'info' });
     for (const [a, , kind] of s.gaps) {
       items.push({ id: id++, eid: `ev-${id}`, at: a, node: s.node, kind: kind === 'failed' ? 'stream.failed' : 'stream.reconnecting', title: kind === 'failed' ? `转播失败：${s.channel_name}` : `重新连接：${s.channel_name}`, detail: 'ffmpeg 退出（示例）', severity: kind === 'failed' ? 'error' : 'warn' });
       if (kind === 'failed') items.push({ id: id++, eid: `ev-${id}`, at: a + 5, node: s.node, kind: 'notify.sent', title: `QQ 告警已送达：转播失败 ${s.channel_name}`, detail: '', severity: 'info' });
@@ -162,7 +184,7 @@ function eventsResponse(q, now, partial) {
   const kinds = q.kind ? q.kind.split(',') : null;
   const list = items
     .filter(e => e.at >= q.from && e.at <= q.to && (!kinds || kinds.some(k => e.kind === k || e.kind.startsWith(`${k}.`))))
-    .filter(e => !q.severity || e.severity === q.severity)
+    .filter(e => !q.severity || q.severity.split(',').includes(e.severity))
     .sort((a, b) => b.at - a.at || b.id - a.id);
   const paged = page(list, q, 20);
   return paged && { ...paged, missing_nodes: partial ? MISSING : [] };

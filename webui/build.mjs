@@ -21,6 +21,28 @@ export function validatePublicModules(inputs) {
   }
 }
 
+// The one runtime import a page bundle may have: the admin main.js loading the
+// 统计 chunk with import('./analytics.js'). Everything else stays a single
+// self-contained file, and the admin page has exactly these two outputs.
+export const LAZY_CHUNKS = new Map([['dist', 'dist/js/analytics.js']]);
+
+export function validateRuntimeImports(destination, outputs) {
+  const lazy = LAZY_CHUNKS.get(destination);
+  const main = `${destination}/js/main.js`;
+  for (const [name, output] of Object.entries(outputs)) {
+    for (const dependency of output.imports || []) {
+      if (name !== main || dependency.kind !== 'dynamic-import' || dependency.path !== lazy) {
+        throw new Error(`Page bundles must not depend on runtime JavaScript imports: ${name} → ${dependency.path}`);
+      }
+    }
+  }
+  const expected = [main, ...(lazy ? [lazy] : [])].sort();
+  const produced = Object.keys(outputs).sort();
+  if (JSON.stringify(produced) !== JSON.stringify(expected)) {
+    throw new Error(`Unexpected page bundle outputs for ${destination}: ${produced.join(', ')}`);
+  }
+}
+
 async function filesIn(directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -36,25 +58,31 @@ export async function generateAssets() {
   const outputs = new Map();
   const reports = [];
   for (const [source, destination] of [['src', 'dist'], ['public-src', 'public-dist']]) {
+    // Admin only: ESM splitting so the 统计 view (analytics.js + uPlot) is a
+    // lazy chunk. No hash in the names: the server serves every file under
+    // /_assets/<snapshot hash>/, so a relative import() stays in one version.
+    const admin = source === 'src';
     const result = await build({
       absWorkingDir: root,
-      entryPoints: [`${source}/js/main.js`],
-      outfile: `${destination}/js/main.js`,
+      entryPoints: { main: `${source}/js/main.js` },
+      outdir: `${destination}/js`,
+      splitting: admin, entryNames: '[name]', chunkNames: '[name]',
       bundle: true, minify: true, format: 'esm', target: targets,
       charset: 'utf8', legalComments: 'eof', write: false, metafile: true,
       logLevel: 'silent',
     });
     if (result.warnings.length) throw new Error(result.warnings.map(w => w.text).join('\n'));
-    if (Object.values(result.metafile.outputs).some(output => output.imports.length)) {
-      throw new Error('Page bundles must not depend on runtime JavaScript imports');
-    }
+    validateRuntimeImports(destination, result.metafile.outputs);
     const inputs = Object.keys(result.metafile.inputs).map(path => path.replaceAll('\\', '/'));
     if (source === 'public-src') {
       validatePublicModules(inputs);
     }
-    const bundled = result.outputFiles[0].contents;
-    outputs.set(`${destination}/js/main.js`, bundled);
-    reports.push({ page: destination, modules: inputs.length, bytes: bundled.length, gzip: gzipSync(bundled).length });
+    for (const file of result.outputFiles) {
+      const name = relative(root, file.path).replaceAll('\\', '/');
+      outputs.set(name, file.contents);
+      const modules = Object.keys(result.metafile.outputs[name]?.inputs || {}).length;
+      reports.push({ page: name, modules, bytes: file.contents.length, gzip: gzipSync(file.contents).length });
+    }
     for (const path of await filesIn(join(root, source))) {
       const name = relative(join(root, source), path).replaceAll('\\', '/');
       const extension = extname(name);
@@ -78,7 +106,7 @@ export async function generateAssets() {
       outputs.set(`${destination}/${name}`, bytes);
     }
   }
-  for (const name of ['dist/index.html', 'public-dist/index.html', 'dist/js/theme.js']) {
+  for (const name of ['dist/index.html', 'public-dist/index.html', 'dist/js/theme.js', 'dist/js/main.js', 'dist/js/analytics.js', 'public-dist/js/main.js']) {
     if (!outputs.has(name)) throw new Error(`Missing required UI source for ${name}`);
   }
   return { outputs, reports };
@@ -117,7 +145,7 @@ async function main() {
       await writeFile(path, bytes);
     }
   }
-  for (const report of reports) console.log(`${report.page}: ${report.modules} modules → main.js, ${report.bytes} bytes (${report.gzip} gzip)`);
+  for (const report of reports) console.log(`${report.page}: ${report.modules} modules, ${report.bytes} bytes (${report.gzip} gzip)`);
 }
 
 if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {

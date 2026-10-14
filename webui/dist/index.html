@@ -94,6 +94,11 @@
       <path d="m6 9 6 6 6-6" />
     </symbol>
 
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <path
+        d="M4 3a1 1 0 0 1 1 1v15h15a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm4 9a1 1 0 0 1 1 1v3a1 1 0 1 1-2 0v-3a1 1 0 0 1 1-1Zm4-4a1 1 0 0 1 1 1v7a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1Zm4 2a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0v-5a1 1 0 0 1 1-1Zm4-5a1 1 0 0 1 1 1v10a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1Z" />
+    </symbol>
+
     <symbol id="i-terminal" viewBox="0 0 24 24">
       <path
         d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2.7 4.3a1 1 0 0 0 0 1.4L8.6 11.6 6.7 13.5a1 1 0 1 0 1.4 1.4l2.6-2.6a1 1 0 0 0 0-1.4L8.1 8.3a1 1 0 0 0-1.4 0ZM13 14a1 1 0 1 0 0 2h4a1 1 0 1 0 0-2h-4Z" />
@@ -521,6 +526,11 @@
           aria-controls="view-logs">
           <svg aria-hidden="true"><use href="#i-terminal" /></svg>
           <span>日志</span>
+        </button>
+        <button class="tab" id="tab-analytics" data-view="analytics" type="button" role="tab" aria-selected="false"
+          aria-controls="view-analytics">
+          <svg aria-hidden="true"><use href="#i-chart" /></svg>
+          <span>统计</span>
         </button>
       </div>
     </nav>
@@ -2247,6 +2257,140 @@
             </div>
           </div>
         </section>
+      </section>
+
+      <section class="view analytics" id="view-analytics" role="tabpanel" aria-labelledby="tab-analytics" tabindex="-1">
+        <section class="panel analytics-wide" data-module="overview" aria-labelledby="analytics-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-title">
+              <svg aria-hidden="true"><use href="#i-chart" /></svg>
+              统计
+            </h2>
+            <span class="panel__sub" id="analytics-coverage">尚未开始记录</span>
+            <div class="panel__actions">
+              <div class="analytics-range" role="radiogroup" aria-label="时间范围">
+                <label><input type="radio" name="analytics-range" value="24h"><span>24 小时</span></label>
+                <label><input type="radio" name="analytics-range" value="7d" checked><span>7 天</span></label>
+                <label><input type="radio" name="analytics-range" value="30d"><span>30 天</span></label>
+                <label><input type="radio" name="analytics-range" value="custom"><span>自定义</span></label>
+              </div>
+              <select id="analytics-scope" class="analytics-scope" aria-label="统计范围" hidden>
+                <option value="">全部节点</option>
+              </select>
+              <select id="analytics-autorefresh" class="analytics-scope" aria-label="自动刷新">
+                <option value="0" selected>自动刷新：关</option>
+                <option value="60">每 1 分钟</option>
+                <option value="300">每 5 分钟</option>
+              </select>
+              <button id="analytics-refresh-btn" class="btn-ghost icon-btn compact-btn" type="button" aria-label="刷新统计">
+                <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+          <div class="panel__body">
+            <div class="analytics-custom" id="analytics-custom" hidden>
+              <label class="control-group">开始日期<input type="date" id="analytics-from"></label>
+              <label class="control-group">结束日期<input type="date" id="analytics-to"></label>
+              <button class="btn-secondary compact-btn" type="button" id="analytics-apply">应用</button>
+              <span class="settings-help-text" id="analytics-custom-error" role="alert"></span>
+            </div>
+            <div class="hint analytics-notice" id="analytics-notice" role="status" hidden></div>
+            <div class="analytics-kpis" id="analytics-kpis" aria-label="关键指标" aria-busy="true">
+              <div class="empty-state">正在加载…</div>
+            </div>
+            <small class="settings-help-text analytics-retention" id="analytics-retention"></small>
+          </div>
+        </section>
+        <section class="panel analytics-wide" data-module="strip" data-empty="开始记录后，每个频道会显示一条转播状态条。" aria-labelledby="analytics-strip-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-strip-title">转播状态</h2>
+            <span class="panel__sub" id="analytics-strip-sub">按频道</span>
+          </div>
+          <div class="panel__body" id="analytics-strip-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel analytics-wide" data-module="hours" data-empty="暂无推流记录。转播开始后，这里按时间显示推流时长。" aria-labelledby="analytics-hours-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-hours-title">推流时长</h2>
+            <span class="panel__sub" id="analytics-hours-sub">按来源平台</span>
+          </div>
+          <div class="panel__body" id="analytics-hours-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel" data-module="audience" data-empty="转播开始后，这里显示 B 站在线人数和看过人数；每场结束后补充弹幕、新增粉丝等汇总。" aria-labelledby="analytics-audience-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-audience-title">观众</h2>
+            <span class="panel__sub" id="analytics-audience-sub">B站 直播间 · 按场次</span>
+            <div class="panel__actions"><select id="analytics-aud-session" class="analytics-scope" aria-label="选择场次"><option value="">全部场次（本范围）</option></select><button class="btn-secondary compact-btn analytics-detail-open" type="button" id="analytics-aud-detail" hidden>查看本场详情</button></div>
+          </div>
+          <div class="panel__body" id="analytics-audience-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel" data-module="quality" data-empty="" aria-labelledby="analytics-quality-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-quality-title">推流质量</h2>
+            <span class="panel__sub" id="analytics-quality-sub">最近 60 秒 · 悬停时暂停</span>
+            <div class="panel__actions"><div class="analytics-range" role="radiogroup" aria-label="推流质量范围"><label><input type="radio" name="analytics-quality" value="live" checked><span>实时</span></label><label><input type="radio" name="analytics-quality" value="range"><span>本范围</span></label></div></div>
+          </div>
+          <div class="panel__body" id="analytics-quality-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel" data-module="reliability" data-empty="暂无推流会话。转播结束后显示成功率和故障原因。" aria-labelledby="analytics-reliability-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-reliability-title">推流可靠性</h2>
+            <span class="panel__sub" id="analytics-reliability-sub"></span>
+          </div>
+          <div class="panel__body" id="analytics-reliability-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel" data-module="calendar" data-empty="记录满一天后显示开播日历。" aria-labelledby="analytics-calendar-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-calendar-title">开播日历</h2>
+            <span class="panel__sub" id="analytics-calendar-sub">近 13 周 · 每日推流时长</span>
+          </div>
+          <div class="panel__body" id="analytics-calendar-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel analytics-wide" data-module="nodes" data-empty="" aria-labelledby="analytics-nodes-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-nodes-title">节点对比</h2>
+            <span class="panel__sub" id="analytics-nodes-sub"></span>
+          </div>
+          <div class="panel__body" id="analytics-nodes-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <section class="panel analytics-wide" data-module="events" data-empty="此时间范围内没有事件。" aria-labelledby="analytics-events-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="analytics-events-title">最近事件</h2>
+            <span class="panel__sub" id="analytics-events-sub"></span>
+            <div class="panel__actions"><select id="analytics-event-filter" class="analytics-scope" aria-label="事件筛选"><option value="anomaly" selected>仅异常</option><option value="all">全部事件</option></select></div>
+          </div>
+          <div class="panel__body" id="analytics-events-body" aria-busy="true">
+            <div class="empty-state">正在加载…</div>
+          </div>
+        </section>
+        <dialog class="analytics-detail-dialog" id="analytics-detail" aria-labelledby="analytics-detail-title">
+          <section class="panel">
+            <div class="panel__head">
+              <h2 class="panel__title" id="analytics-detail-title" tabindex="-1">单场详情</h2>
+              <div class="panel__actions">
+                <button class="btn-ghost compact-btn analytics-detail-close" type="button" id="analytics-detail-close">关闭</button>
+              </div>
+            </div>
+            <div class="panel__body" id="analytics-detail-body"></div>
+            <div class="analytics-detail-nav">
+              <button class="btn-secondary compact-btn" type="button" id="analytics-detail-prev">◀ 上一场</button>
+              <button class="btn-secondary compact-btn" type="button" id="analytics-detail-next">下一场 ▶</button>
+            </div>
+          </section>
+        </dialog>
       </section>
     </main>
 

@@ -2600,3 +2600,475 @@ html:not(.app-ready) #main-page {
 @media (max-width: 560px) {
   .notify-settings .notify-cred-node { flex-basis: 100%; }
 }
+
+/* ===========================================================================
+   12b. Analytics (统计, #view-analytics). Scoped to .analytics; tokens only.
+   Spec: webui-design.md W6–W7a. R1–R3 live in responsive.css.
+   =========================================================================== */
+
+/* Chart platform palette. The global --youtube/--twitch/--niconico (shared.css)
+   stay for 总览 badges; charts use these calmer variants. Hue is kept, saturation
+   lowered so large filled areas sit with the Catppuccin-style surfaces.
+   Solid = lines, legend dots, segment caps; fills mix --chart-fill with the panel. */
+.analytics {
+  --chart-youtube: #cf6d76;
+  --chart-twitch: #a593d9;
+  --chart-niconico: #7a869c;
+  --chart-fill: 84%;
+}
+html.light-theme .analytics {
+  --chart-youtube: #c1625e;
+  --chart-twitch: #5d538d;
+  --chart-niconico: #5e6b78;
+  --chart-fill: 90%;
+}
+
+/* Layout: same two-column auto-fill as #view-settings (styles.css:883). */
+#view-analytics.is-active {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr));
+  align-items: start;
+}
+.analytics .analytics-wide { grid-column: 1 / -1; }
+.analytics > .panel,
+.analytics .panel__body,
+.analytics figure { min-width: 0; }
+.analytics figure { margin: 0; }
+
+/* Head: range control + scope + refresh wrap as one group. */
+.analytics .panel__head { flex-wrap: wrap; row-gap: var(--sp-2); }
+.analytics .panel__actions { flex-wrap: wrap; justify-content: flex-end; }
+.analytics .analytics-scope { width: auto; min-width: 9rem; }
+
+/* Segmented range control: radios styled like .btn-secondary / .btn-primary. */
+.analytics .analytics-range {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+}
+.analytics .analytics-range label { position: relative; display: inline-flex; }
+.analytics .analytics-range input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.analytics .analytics-range span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.analytics .analytics-range input:checked + span {
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand-hi);
+}
+.analytics .analytics-range input:focus-visible + span {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.analytics .analytics-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.analytics input[type="date"] {
+  min-height: 38px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Coverage / partial-data notice reuses .hint; semantic left rule. */
+.analytics .analytics-notice { margin-bottom: var(--sp-4); }
+.analytics .analytics-notice[data-tone="warn"] { border-left-color: var(--warn); }
+.analytics .analytics-notice[data-tone="danger"] { border-left-color: var(--danger); }
+
+/* KPI tiles extend .discovery-tile (styles.css:1168). */
+.analytics .analytics-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: var(--sp-3);
+}
+.analytics .analytics-kpi {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  min-width: 0;
+}
+.analytics .analytics-kpi-value {
+  color: var(--text);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.analytics .analytics-kpi-value small {
+  margin-left: 2px;
+  color: var(--text-mute);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.analytics .analytics-kpi-delta {
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.analytics .analytics-kpi-delta[data-tone="good"] { color: var(--ok); }
+.analytics .analytics-kpi-delta[data-tone="bad"] { color: var(--danger); }
+
+/* Charts share the .hours-chart grammar (styles.css:1038-1150). */
+.analytics .analytics-chart { display: grid; gap: var(--sp-2); }
+.analytics .analytics-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  list-style: none;
+}
+.analytics .analytics-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.analytics .analytics-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 3px;
+  background: var(--swatch, var(--brand));
+}
+
+/* Stacked column timeline. --n = bucket count. */
+.analytics .analytics-bars {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  align-items: end;
+  gap: 2px;
+  height: 160px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.analytics .analytics-bar {
+  display: flex;
+  flex-direction: column-reverse;
+  height: 100%;
+  justify-content: flex-start;
+}
+.analytics .analytics-bar > span {
+  display: block;
+  width: 100%;
+  max-width: 28px;
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--swatch) var(--chart-fill), transparent);
+  box-shadow: inset 0 1px 0 var(--swatch); /* solid cap keeps segments crisp */
+}
+.analytics .analytics-bar > span + span { margin-bottom: 1px; } /* 1px panel gap between stacked segments */
+.analytics .analytics-bar > span:last-child { border-radius: 3px 3px 0 0; }
+.analytics .analytics-axis {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.analytics .analytics-axis span { white-space: nowrap; overflow: visible; }
+
+/* Calendar heatmap: 7 rows (一..日) × weeks. */
+.analytics .analytics-heatmap {
+  display: grid;
+  grid-template-columns: auto repeat(var(--weeks), 14px);
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 14px);
+  gap: 3px;
+  justify-content: start;
+}
+.analytics .analytics-heat-day {
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  padding-right: var(--sp-1);
+  align-self: center;
+}
+.analytics .analytics-heat {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--surface-4);
+}
+.analytics .analytics-heat[data-level="1"] { background: color-mix(in srgb, var(--brand) 28%, var(--surface-4)); }
+.analytics .analytics-heat[data-level="2"] { background: color-mix(in srgb, var(--brand) 50%, var(--surface-4)); }
+.analytics .analytics-heat[data-level="3"] { background: color-mix(in srgb, var(--brand) 74%, var(--surface-4)); }
+.analytics .analytics-heat[data-level="4"] { background: var(--brand); }
+.analytics .analytics-heat[data-fail] { box-shadow: inset 0 0 0 2px var(--danger); }
+.analytics .analytics-heat[data-gap] {
+  background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line) 3px 4px);
+}
+
+/* Success ring + legend. */
+.analytics .analytics-rate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-5);
+}
+.analytics .analytics-ring { width: 128px; height: 128px; flex: 0 0 128px; }
+.analytics .analytics-ring circle { fill: none; stroke-width: 12; }
+.analytics .analytics-ring .ring-track { stroke: var(--surface-4); }
+.analytics .analytics-ring .ring-ok { stroke: var(--ok); }
+.analytics .analytics-ring .ring-fail { stroke: var(--danger); }
+.analytics .analytics-ring text {
+  fill: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.analytics .analytics-ring .ring-sub { fill: var(--text-mute); font-size: 11px; font-weight: 500; }
+.analytics .analytics-rate .cluster-node-meta { flex: 1 1 12rem; min-width: 0; }
+
+/* Horizontal bars (failure reasons). */
+.analytics .analytics-hbars { display: grid; gap: var(--sp-2); list-style: none; }
+.analytics .analytics-hbar {
+  display: grid;
+  grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) 2.5rem;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.analytics .analytics-hbar-label { color: var(--text-dim); overflow-wrap: anywhere; }
+.analytics .analytics-hbar-track {
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-4);
+  overflow: hidden;
+}
+.analytics .analytics-hbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--swatch, var(--danger));
+}
+.analytics .analytics-hbar-count {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ffmpeg sparklines. */
+.analytics .analytics-sparks { display: grid; gap: var(--sp-3); }
+.analytics .analytics-spark-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.analytics .analytics-spark-row > span:first-child { color: var(--text-mute); }
+.analytics .analytics-spark { width: 100%; height: 36px; overflow: visible; }
+.analytics .analytics-spark path { fill: none; stroke: var(--swatch, var(--brand)); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.analytics .analytics-spark .spark-area { fill: color-mix(in srgb, var(--swatch, var(--brand)) 14%, transparent); stroke: none; }
+.analytics .analytics-spark .spark-limit { stroke: var(--warn); stroke-dasharray: 3 3; stroke-width: 1; }
+.analytics .analytics-spark-value {
+  min-width: 5.5rem;
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.analytics .analytics-spark-value small { display: block; color: var(--text-mute); font-weight: 500; }
+
+/* Node table; becomes cards on phones (see R-rules at the end). */
+.analytics .analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.analytics .analytics-table th {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--text-mute);
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.analytics .analytics-table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  color: var(--text-dim);
+  text-align: right;
+}
+.analytics .analytics-table th:first-child,
+.analytics .analytics-table td:first-child { text-align: left; }
+.analytics .analytics-table td:first-child { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.analytics .analytics-table tr:last-child td { border-bottom: 0; }
+
+/* Recent events. */
+.analytics .analytics-events { display: grid; list-style: none; }
+.analytics .analytics-event {
+  display: grid;
+  grid-template-columns: 7.5rem auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-3);
+  padding-block: var(--sp-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  font-size: var(--fs-sm);
+}
+.analytics .analytics-event:last-child { border-bottom: 0; }
+.analytics .analytics-event time { color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.analytics .analytics-event .status-indicator { align-self: center; }
+.analytics .analytics-event-title { color: var(--text); font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.analytics .analytics-event-title small { display: block; color: var(--text-mute); font-weight: 400; }
+.analytics .status-indicator.analytics-dot-danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+/* Data-table fallback under every chart (pattern: .hours-chart-table). */
+.analytics .analytics-data summary { color: var(--text-mute); font-size: var(--fs-xs); cursor: pointer; }
+.analytics .analytics-data table {
+  margin-top: var(--sp-2);
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.analytics .analytics-data th,
+.analytics .analytics-data td { padding: 1px var(--sp-3) 1px 0; text-align: right; }
+.analytics .analytics-data-scroll { max-width: 100%; overflow-x: auto; }
+
+.analytics .analytics-section { margin-top: var(--sp-4); }
+
+/* KPI sparkline (Grafana Stat "graph mode: area"). */
+.analytics .analytics-kpi-spark { height: 22px; margin-top: var(--sp-1); }
+
+/* Per-channel relay status strip (Uptime Kuma HeartbeatBar). */
+.analytics .analytics-strips { display: grid; gap: var(--sp-3); list-style: none; }
+.analytics .analytics-strip-row {
+  display: grid;
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) 6.5rem;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.analytics .analytics-strip-name { color: var(--text); font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.analytics .analytics-strip-name small,
+.analytics .analytics-strip-sum small { display: block; color: var(--text-mute); font-weight: 400; }
+.analytics .analytics-strip {
+  display: grid;
+  grid-template-columns: repeat(48, minmax(0, 1fr));
+  gap: 2px;
+  height: 22px;
+}
+.analytics .analytics-strip-cell { border-radius: 2px; background: var(--surface-4); }
+.analytics .analytics-strip-cell[data-state="live"] { background: var(--ok); }
+.analytics .analytics-strip-cell[data-state="warn"] { background: var(--warn); }
+.analytics .analytics-strip-cell[data-state="fail"] { background: var(--danger); }
+.analytics .analytics-strip-cell[data-state="gap"] {
+  background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line-strong) 3px 4px);
+}
+.analytics .analytics-strip-sum { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.analytics .analytics-legend .analytics-strip-cell { height: 10px; }
+
+/* "正在转播" value: dot + text without overlap. */
+.analytics .analytics-meta-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.analytics .analytics-meta-value > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.analytics .analytics-more { margin-top: var(--sp-2); }
+
+/* Audience stat tiles (smaller sibling of the KPI tile). */
+.analytics .analytics-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5rem), 1fr));
+  gap: var(--sp-2);
+}
+.analytics .analytics-stat { display: grid; gap: 1px; min-width: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--surface-3); }
+.analytics .analytics-stat-name, .analytics .analytics-stat-sub { color: var(--text-mute); font-size: var(--fs-xs); }
+.analytics .analytics-stat-value { color: var(--text); font-size: var(--fs-lg); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
+.analytics .analytics-stat-value small { margin-left: 2px; color: var(--text-mute); font-size: var(--fs-xs); font-weight: 600; }
+.analytics .analytics-caption { color: var(--text-mute); font-size: var(--fs-xs); }
+.analytics .analytics-retention { display: block; margin-top: var(--sp-3); }
+
+.analytics .analytics-platform-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--swatch);
+  vertical-align: 1px;
+}
+
+/* W7a: --swatch comes from attributes, never from inline style attributes (CSP style-src 'self'). */
+.analytics [data-platform="youtube"] { --swatch: var(--chart-youtube); }
+.analytics [data-platform="twitch"] { --swatch: var(--chart-twitch); }
+.analytics [data-platform="niconico"] { --swatch: var(--chart-niconico); }
+.analytics [data-tone="ok"] { --swatch: var(--ok); }
+.analytics [data-tone="warn"] { --swatch: var(--warn); }
+.analytics [data-tone="danger"] { --swatch: var(--danger); }
+.analytics [data-tone="brand"] { --swatch: var(--brand); }
+.analytics [data-tone="teal"] { --swatch: var(--teal); }
+
+/* uPlot mount: fixed height so the layout doesn't jump when the canvas mounts. */
+.analytics .analytics-uplot { width: 100%; height: 180px; min-width: 0; }
+.analytics .analytics-uplot:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* 12b · uPlot (ported from uplot@1.6.32/dist/uPlot.min.css, token-based; legend rules omitted). */
+.analytics .uplot, .analytics .uplot *, .analytics .uplot *::before, .analytics .uplot *::after { box-sizing: border-box; }
+.analytics .uplot { font-family: var(--font-sans); line-height: 1.5; width: min-content; }
+.analytics .u-wrap { position: relative; user-select: none; }
+.analytics .u-over, .analytics .u-under { position: absolute; }
+.analytics .u-under { overflow: hidden; }
+.analytics .uplot canvas { display: block; position: relative; width: 100%; height: 100%; }
+.analytics .u-axis { position: absolute; }
+.analytics .u-select { position: absolute; pointer-events: none; background: color-mix(in srgb, var(--brand) 16%, transparent); }
+.analytics .u-cursor-x, .analytics .u-cursor-y { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; }
+.analytics .u-hz .u-cursor-x, .analytics .u-vt .u-cursor-y { height: 100%; border-right: 1px dashed var(--line-strong); }
+.analytics .u-hz .u-cursor-y, .analytics .u-vt .u-cursor-x { width: 100%; border-bottom: 1px dashed var(--line-strong); }
+.analytics .u-cursor-pt { position: absolute; top: 0; left: 0; border-radius: 50%; border: 0 solid; pointer-events: none; will-change: transform; background-clip: padding-box !important; }
+.analytics .u-axis.u-off, .analytics .u-select.u-off, .analytics .u-cursor-x.u-off,
+.analytics .u-cursor-y.u-off, .analytics .u-cursor-pt.u-off { display: none; }
+
+/* Chunk-load failure (W14 P1): the whole view is replaced by one error panel. */
+.analytics .analytics-chunk-error { grid-column: 1 / -1; }
+.analytics .analytics-chunk-error .panel__body { display: grid; gap: var(--sp-3); justify-items: start; }
+.analytics .analytics-reload-btn { min-height: 44px; }
+.analytics .analytics-module-retry { min-height: 44px; margin-top: var(--sp-2); }
+.analytics .analytics-detail-nav { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: space-between; }
+.analytics .analytics-detail-nav button { min-height: 44px; }
+.analytics .analytics-detail-dialog .analytics-stats { margin-block: var(--sp-3); }
+.analytics .analytics-detail-dialog {
+  width: min(760px, calc(100vw - 2 * var(--sp-4)));
+  max-height: calc(100vh - 2 * var(--sp-4));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  overflow: auto;
+}
+.analytics .analytics-detail-dialog::backdrop { background: color-mix(in srgb, #000 55%, transparent); }
+.analytics .analytics-detail-dialog > .panel { border: 0; }
+.analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
+.analytics .analytics-detail-open { min-height: 44px; }

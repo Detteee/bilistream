@@ -151,3 +151,68 @@
 @media (prefers-reduced-motion: reduce) {
   .t-digit-group .t-digit { animation: none !important; }
 }
+
+/* 12b. Analytics R1–R3 (webui-design.md W11) */
+/* R1 ≤900: node table becomes stacked cards (labels from data-label). */
+@media (max-width: 900px) {
+  .analytics .analytics-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .analytics .analytics-table,
+  .analytics .analytics-table tbody,
+  .analytics .analytics-table tr,
+  .analytics .analytics-table td { display: block; width: 100%; }
+  .analytics .analytics-table tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+    gap: var(--sp-1) var(--sp-3);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-2);
+    border-radius: var(--r-md);
+    background: var(--surface-3);
+  }
+  .analytics .analytics-table td { padding: 0; border: 0; text-align: left; }
+  .analytics .analytics-table td:first-child { grid-column: 1 / -1; }
+  .analytics .analytics-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--text-mute);
+    font-size: var(--fs-xs);
+  }
+}
+/* R2 ≤700: strip rows put name+summary on one line, strip below. */
+@media (max-width: 700px) {
+  .analytics .analytics-strip-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .analytics .analytics-strip { grid-column: 1 / -1; grid-row: 2; }
+  .analytics .analytics-event { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .analytics .analytics-event time { grid-column: 1 / -1; }
+}
+/* R3 ≤560: controls full-width, 44px tap targets, heatmap scrolls inside itself. */
+@media (max-width: 560px) {
+  .analytics .panel__actions { width: 100%; justify-content: flex-start; }
+  .analytics .analytics-range { flex: 1 1 100%; }
+  .analytics .analytics-range label { flex: 1 1 0; }
+  .analytics .analytics-range span { min-height: 44px; width: 100%; justify-content: center; padding: 0 var(--sp-2); }
+  .analytics .analytics-scope { flex: 1 1 8rem; min-height: 44px; }
+  .analytics .icon-btn,
+  .analytics .analytics-more { min-height: 44px; min-width: 44px; }
+  .analytics .analytics-data summary { min-height: 44px; display: flex; align-items: center; }
+  .analytics .analytics-heatmap-wrap { overflow-x: auto; }
+  .analytics .analytics-hbar { grid-template-columns: minmax(0, 1fr) 2.5rem; }
+  .analytics .analytics-hbar-track { grid-column: 1 / -1; grid-row: 2; }
+  .analytics .analytics-logs-btn,
+  .analytics .analytics-detail-close { min-height: 44px; min-width: 44px; }
+}
+
+/* R4: keep the last tab (统计) reachable on phones (W1, W11). */
+@media (max-width: 560px) {
+  .tabbar .tab { padding-inline: var(--sp-3); gap: var(--sp-1); }
+}
+@media (max-width: 480px) {
+  .tabbar .tab svg { display: none; }
+}
+@media (max-width: 380px) {
+  .tabbar .tab { padding-inline: var(--sp-2); }
+}
+/* Edge fade only while content is clipped (data-overflow set by main.js). */
+.tabbar__inner[data-overflow="end"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.tabbar__inner[data-overflow="start"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+.tabbar__inner[data-overflow="both"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }

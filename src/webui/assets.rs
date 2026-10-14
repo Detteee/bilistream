@@ -14,6 +14,7 @@ pub(crate) const BUNDLED_ASSETS: &[(&str, &[u8])] = &[
     asset!("webui/dist/shared.css"),
     asset!("webui/dist/responsive.css"),
     asset!("webui/dist/js/main.js"),
+    asset!("webui/dist/js/analytics.js"),
     asset!("webui/dist/js/theme.js"),
     asset!("webui/dist/icon.png"),
     asset!("webui/dist/icon-blue.png"),
