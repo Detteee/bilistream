@@ -3,8 +3,56 @@
 
 use super::ledger::NotifyLedger;
 
+/// Identity of one logical message. It travels separately from the rendered
+/// text and credentials; each actual C2C request (including retries) records
+/// this context once at the transport boundary.
+#[derive(Clone, Debug)]
+pub struct AttemptContext {
+    pub key: String,
+    pub dedup: String,
+    pub phase: &'static str,
+    pub test: bool,
+    pub suppressed: u32,
+    pub undelivered: u32,
+}
+
+impl AttemptContext {
+    pub fn new(key: impl Into<String>, dedup: impl Into<String>, phase: &'static str) -> Self {
+        Self {
+            key: key.into(),
+            dedup: dedup.into(),
+            phase,
+            test: false,
+            suppressed: 0,
+            undelivered: 0,
+        }
+    }
+
+    pub(crate) fn event(
+        &self,
+        mode: &'static str,
+        ok: bool,
+        code: Option<i64>,
+        trace_id: Option<String>,
+    ) -> crate::events::EventKind {
+        crate::events::EventKind::NotifySent {
+            key: crate::logging::safe_text(&self.key, 120),
+            dedup: crate::logging::safe_text(&self.dedup, 512),
+            phase: self.phase,
+            mode: Some(mode),
+            ok,
+            code,
+            trace_id,
+            test: self.test,
+            suppressed: self.suppressed,
+            undelivered: self.undelivered,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Rendered {
+    pub attempt: AttemptContext,
     pub text: String,
     /// Fallback body when QQ rejects the content.
     pub minimal: String,

@@ -15,7 +15,8 @@ pub enum Authority {
     Primary,
     /// The execution primary has no complete notifier settings (for example
     /// the openid was bound on the old owner): the lowest fresh capable node
-    /// sends everything in its place, labelled （代发）. Needs a quorum.
+    /// is the notification sender. Needs a quorum; user-facing messages name
+    /// the sender without distinguishing it from an execution-owner sender.
     Delegate,
     /// No-quorum fallback: may only send the collapsed 「失去多数派」 message
     /// and its resolution.
@@ -39,6 +40,46 @@ impl Authority {
 /// binding works before an openid exists.
 pub fn execution_primary(digest: &ClusterDigest, membership_blocked: bool) -> bool {
     !membership_blocked && (!digest.enabled || digest.fence_block.is_none())
+}
+
+/// The cluster-history recorder uses the execution election without QQ
+/// credentials, enabled switches, gateway leases or per-bot generations.
+/// During a quorum gap the lowest fresh, non-draining member records only
+/// its observed partition after the same grace used by the notifier.
+pub fn recorder(
+    digest: &ClusterDigest,
+    membership_blocked: bool,
+    now: u64,
+    last_quorum_seen: u64,
+    grace_secs: u64,
+) -> Authority {
+    if membership_blocked || digest.handoff_pending {
+        return Authority::None;
+    }
+    if execution_primary(digest, membership_blocked) {
+        return Authority::Primary;
+    }
+    if !digest.enabled
+        || digest.quorum
+        || digest.peer_count == 0
+        || digest.local_draining
+        || now.saturating_sub(last_quorum_seen) < grace_secs
+    {
+        return Authority::None;
+    }
+    let lowest = digest
+        .nodes
+        .iter()
+        .filter(|node| !node.draining)
+        .filter(|node| node.id == digest.local || node.fresh)
+        .filter(|node| digest.members.is_empty() || digest.members.contains(&node.id))
+        .map(|node| node.id.as_str())
+        .min();
+    if lowest == Some(digest.local.as_str()) {
+        Authority::Fallback
+    } else {
+        Authority::None
+    }
 }
 
 /// The worker's committed local value overrides its older heartbeat copy.

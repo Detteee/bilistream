@@ -2,7 +2,8 @@
 //!
 //! Pure. The worker reads a small digest from the cluster state under a
 //! read guard (see `authority::read_digest`) and asks this module which
-//! conditions hold right now. Nothing here is edge-triggered.
+//! conditions hold right now. `Edges` separately derives history facts from
+//! that same digest; it never drives the notification policy.
 
 use super::event::{reason_text, Condition, EventKind};
 use crate::cluster::SelfCheckState;
@@ -61,6 +62,103 @@ pub struct ClusterDigest {
 impl ClusterDigest {
     pub fn node(&self, id: &str) -> Option<&NodeSlot> {
         self.nodes.iter().find(|node| node.id == id)
+    }
+}
+
+/// Recorder-local history baseline. A new recorder term starts with current
+/// levels rather than inventing transitions across a period it did not own.
+#[derive(Default)]
+pub struct Edges {
+    nodes: BTreeMap<String, (crate::events::NodeState, String)>,
+    owner: Option<Option<String>>,
+    quorum: Option<bool>,
+}
+
+impl Edges {
+    /// Carry a failure observed during the execution handoff into this new
+    /// recorder term. Node levels still start as initial observations.
+    pub fn seed_previous_owner(&mut self, previous: &str) {
+        self.owner = Some(Some(previous.to_string()));
+    }
+
+    pub fn has_removed_members(&self, digest: &ClusterDigest) -> bool {
+        !digest.members.is_empty() && self.nodes.keys().any(|id| !digest.members.contains(id))
+    }
+
+    pub fn observe(
+        &mut self,
+        digest: &ClusterDigest,
+        ever_healthy: &HashSet<String>,
+        minority: bool,
+    ) -> Vec<crate::events::EventKind> {
+        use crate::events::{EventKind as Fact, NodeState};
+        let mut events = Vec::new();
+        let mut current = BTreeMap::new();
+        for node in &digest.nodes {
+            if !digest.members.is_empty() && !digest.members.contains(&node.id) {
+                continue;
+            }
+            let (state, reason) = if node.draining || node.reason == "draining" {
+                (NodeState::Draining, "draining")
+            } else if node.reason == "waiting_for_heartbeat" && !ever_healthy.contains(&node.id) {
+                (NodeState::Unknown, "waiting_for_heartbeat")
+            } else if minority && node.id != digest.local && (!node.fresh || node.stale) {
+                // A minority cannot tell a remote crash from its own partition.
+                (NodeState::Unknown, "unreachable_without_quorum")
+            } else if node.stale || !node.fresh || DOWN_REASONS.contains(&node.reason.as_str()) {
+                (NodeState::Down, node.reason.as_str())
+            } else if node.healthy {
+                (NodeState::Up, "healthy")
+            } else {
+                (NodeState::Degraded, node.reason.as_str())
+            };
+            current.insert(
+                node.id.clone(),
+                (state, crate::logging::safe_text(reason, 80)),
+            );
+        }
+        // Cluster-disabled installs have no heartbeat slots, but the running
+        // local process is a real observation, independent of QQ settings.
+        if !digest.enabled && current.is_empty() {
+            current.insert(digest.local.clone(), (NodeState::Up, "healthy".into()));
+        }
+        for member in &digest.members {
+            current
+                .entry(member.clone())
+                .or_insert((NodeState::Unknown, "waiting_for_heartbeat".into()));
+        }
+        for (id, (state, reason)) in &current {
+            if self.nodes.get(id) != Some(&(*state, reason.clone())) {
+                events.push(Fact::NodeState {
+                    node_id: id.clone(),
+                    state: *state,
+                    reason: reason.clone(),
+                    initial: !self.nodes.contains_key(id),
+                    minority,
+                });
+            }
+        }
+        let owner = if digest.enabled {
+            digest.owner.clone()
+        } else {
+            Some(digest.local.clone())
+        };
+        if self.owner.as_ref() != Some(&owner) {
+            let previous = self.owner.as_ref().and_then(|owner| owner.as_deref());
+            events.push(Fact::OwnerChanged {
+                from: previous.map(str::to_string),
+                to: owner.clone(),
+                failover: failover(previous, digest).is_some(),
+            });
+        }
+        let quorum = !digest.enabled || digest.quorum;
+        if self.quorum != Some(quorum) {
+            events.push(Fact::QuorumChanged { has_quorum: quorum });
+        }
+        self.nodes = current;
+        self.owner = Some(owner);
+        self.quorum = Some(quorum);
+        events
     }
 }
 

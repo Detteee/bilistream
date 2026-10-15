@@ -2,6 +2,7 @@
 //! node (`data/history.sqlite`), one writer thread, read-only API queries.
 //! Never synced, never backed up, never in `/status` or logs with secrets.
 
+pub(crate) mod bili;
 pub(crate) mod capture;
 pub(crate) mod enrich;
 pub mod event;
@@ -14,17 +15,25 @@ pub(crate) mod writer;
 #[cfg(test)]
 mod tests;
 
+use bili::summary_sync;
+#[cfg(test)]
+pub(crate) use bili::{note_live_key_unavailable, room_key_or_note};
+pub use bili::{on_bili_started, on_bili_stopped};
 use event::Event;
 pub use event::{BiliTotals, EndReason, EventKind, Severity};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc, oneshot};
 
 const QUEUE: usize = 1024;
 const BATCH_ROWS: usize = 200;
+// Keep crash duration within 15 s even between runs or without bitrate samples.
+// Persistence stays on the writer thread and does not depend on sample_secs.
+const HEARTBEAT_SECS: u64 = 10;
 
 /// `missing_nodes` item (design §8, normative shape).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,17 +56,34 @@ pub(crate) struct Shared {
     pub dropped: AtomicU64,
     pub status: Mutex<WriterStatus>,
     pub cfg: Mutex<crate::config::HistoryConfig>,
+    pub secrets: Mutex<Option<Vec<String>>>,
+    pub enabled: bool,
 }
 
 struct Handle {
-    tx: SyncSender<Event>,
     shared: Arc<Shared>,
+    flush: mpsc::Sender<oneshot::Sender<bool>>,
 }
 
 static HANDLE: OnceLock<Handle> = OnceLock::new();
 static SEQ: AtomicU64 = AtomicU64::new(0);
 /// Seq of the open relay session (0 = none), read by the sampler.
 static OPEN_SEQ: AtomicU64 = AtomicU64::new(0);
+static OPEN_ROOM: AtomicU64 = AtomicU64::new(0);
+static BILI_SAMPLE_SECS: AtomicU64 = AtomicU64::new(5);
+
+pub fn bili_sample_secs() -> u64 {
+    BILI_SAMPLE_SECS.load(Ordering::Relaxed)
+}
+
+/// Snapshot the relay identity while observing room counts. The sequence is
+/// read twice so a simultaneous room/session switch cannot mix identities.
+pub fn open_session_seq(room: u64) -> Option<u64> {
+    let before = OPEN_SEQ.load(Ordering::Acquire);
+    let observed_room = OPEN_ROOM.load(Ordering::Acquire);
+    let after = OPEN_SEQ.load(Ordering::Acquire);
+    (before != 0 && before == after && room == observed_room).then_some(before)
+}
 
 fn now() -> u64 {
     crate::storage::now()
@@ -67,19 +93,44 @@ pub(crate) fn shared() -> Option<Arc<Shared>> {
     HANDLE.get().map(|h| Arc::clone(&h.shared))
 }
 
+pub fn recording_enabled() -> bool {
+    HANDLE.get().is_some_and(|h| h.shared.enabled)
+}
+
 /// Never blocks or awaits. A full queue drops and counts.
 pub fn emit(kind: EventKind) {
-    emit_at(now(), kind);
+    crate::events::emit(kind);
 }
 
 pub fn emit_at(at: u64, kind: EventKind) {
-    let Some(handle) = HANDLE.get() else { return };
-    match handle.tx.try_send(Event { at, kind }) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
-            handle.shared.dropped.fetch_add(1, Ordering::Relaxed);
-        }
+    crate::events::emit_at(at, kind);
+}
+
+/// Commit facts already queued before graceful shutdown. This control queue
+/// is separate from nonblocking producer dispatch and has a bounded wait.
+pub async fn flush(timeout: Duration) -> bool {
+    let Some(handle) = HANDLE.get() else {
+        return true;
+    };
+    if !handle.shared.enabled {
+        return true;
     }
+    request_flush(&handle.flush, timeout).await
+}
+
+pub(crate) async fn request_flush(
+    sender: &mpsc::Sender<oneshot::Sender<bool>>,
+    timeout: Duration,
+) -> bool {
+    tokio::time::timeout(timeout, async {
+        let (ack, received) = oneshot::channel();
+        if sender.send(ack).await.is_err() {
+            return false;
+        }
+        received.await.unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 pub(crate) fn boot_id() -> i64 {
@@ -102,9 +153,8 @@ fn secrets_of(cfg: &crate::config::Config) -> Vec<String> {
     out
 }
 
-/// Starts the writer thread, sampler and B站 summary sync. A no-op when
-/// `history.enabled=false` or when already started. History is never
-/// worth failing startup for: errors are logged once.
+/// Register before the process bus is sealed. Database I/O stays on the
+/// dedicated writer thread, independently of the WebUI serving future.
 pub async fn start() {
     if HANDLE.get().is_some() {
         return;
@@ -112,9 +162,6 @@ pub async fn start() {
     let Ok(cfg) = crate::config::load_config().await else {
         return;
     };
-    if !cfg.history.enabled {
-        return;
-    }
     let dir = match crate::storage::global() {
         Ok(store) => store.data_dir().to_path_buf(),
         Err(_) => return,
@@ -125,14 +172,8 @@ pub async fn start() {
     } else {
         "local".to_string()
     };
-    let conn = match schema::open_rw(&path) {
-        Ok(conn) => conn,
-        Err(error) => {
-            tracing::warn!("统计数据库无法打开，统计已停用: {error}");
-            return;
-        }
-    };
     capture::set_enabled(cfg.history.capture);
+    BILI_SAMPLE_SECS.store(cfg.history.bili_sample_secs.clamp(5, 60), Ordering::Relaxed);
     let shared = Arc::new(Shared {
         path,
         recording_since: now(),
@@ -142,30 +183,59 @@ pub async fn start() {
             ..Default::default()
         }),
         cfg: Mutex::new(cfg.history.clone()),
+        secrets: Mutex::new(None),
+        enabled: cfg.history.enabled,
     });
-    let (tx, rx) = std::sync::mpsc::sync_channel(QUEUE);
-    let mut writer = writer::Writer::new(conn, &node, boot_id());
-    writer.set_secrets(secrets_of(&cfg));
+    let (flush, flush_rx) = mpsc::channel(1);
     if HANDLE
         .set(Handle {
-            tx,
             shared: Arc::clone(&shared),
+            flush,
         })
         .is_err()
     {
         return;
     }
+    let rx = crate::events::register("history", QUEUE, |_| {
+        HANDLE.get().is_some_and(|h| h.shared.enabled)
+    });
+    if !cfg.history.enabled {
+        set_state(&shared, "disabled", None);
+        return;
+    }
+    set_state(&shared, "starting", None);
     let thread_shared = Arc::clone(&shared);
     let spawned = std::thread::Builder::new()
         .name("history-writer".into())
-        .spawn(move || run_writer(writer, rx, thread_shared, true));
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let conn = schema::open_rw(&thread_shared.path)?;
+                let mut writer = writer::Writer::new(conn, &node, boot_id());
+                writer.set_secrets(secrets_of(&cfg));
+                live_book::restore(writer::load_live_book(&writer.conn)?);
+                run_writer(writer, rx, flush_rx, Arc::clone(&thread_shared), true);
+                Ok::<(), rusqlite::Error>(())
+            }));
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!("统计数据库无法打开，统计已停用: {error}");
+                    set_state(&thread_shared, "error", Some(error.to_string()));
+                }
+                Err(_) => {
+                    set_state(
+                        &thread_shared,
+                        "error",
+                        Some("writer thread stopped".into()),
+                    );
+                    tracing::warn!("统计写入线程已停止");
+                }
+            }
+        });
     if spawned.is_err() {
         set_state(&shared, "error", Some("writer thread".into()));
         return;
     }
-    emit(EventKind::ProcessStarted {
-        version: env!("CARGO_PKG_VERSION"),
-    });
     tokio::spawn(sampler());
     tokio::spawn(summary_sync());
 }
@@ -180,82 +250,195 @@ fn set_state(shared: &Shared, state: &'static str, error: Option<String>) {
 
 /// Updates writer-side secrets after a config change.
 pub fn refresh_config(cfg: &crate::config::Config) {
+    BILI_SAMPLE_SECS.store(cfg.history.bili_sample_secs.clamp(5, 60), Ordering::Relaxed);
     if let Some(shared) = shared() {
         *shared.cfg.lock().unwrap_or_else(|e| e.into_inner()) = cfg.history.clone();
         capture::set_enabled(cfg.history.capture);
+        shared
+            .secrets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(secrets_of(cfg));
     }
-    SECRETS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .replace(secrets_of(cfg));
 }
 
-static SECRETS: Mutex<Option<Vec<String>>> = Mutex::new(None);
+fn flush_queued(w: &mut writer::Writer, rx: &mut Receiver<Arc<Event>>, shared: &Shared) -> bool {
+    if let Some(secrets) = shared
+        .secrets
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        w.set_secrets(secrets);
+    }
+    // All facts emitted before the control request are either already
+    // committed or in this FIFO prefix. A live background producer cannot
+    // extend this barrier indefinitely by appending more events.
+    let mut remaining = rx.len();
+    while remaining > 0 {
+        let retention = shared
+            .cfg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retention
+            .clone();
+        match maintain::configure_limits(&w.conn, &retention)
+            .and_then(|_| maintain::admit_write(&w.conn, &retention))
+        {
+            Ok(true) => {}
+            result => {
+                let error = result.err().map(|error| error.to_string());
+                set_state(
+                    shared,
+                    if error.is_some() { "error" } else { "paused" },
+                    error,
+                );
+                return false;
+            }
+        }
+        let mut batch = Vec::with_capacity(remaining.min(BATCH_ROWS));
+        for _ in 0..remaining.min(BATCH_ROWS) {
+            match rx.try_recv() {
+                Ok(event) => batch.push(event),
+                Err(_) => break,
+            }
+        }
+        if batch.is_empty() {
+            break;
+        }
+        remaining -= batch.len();
+        if let Err(error) = w.commit_refs(batch.iter().map(AsRef::as_ref)) {
+            shared
+                .dropped
+                .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            set_state(shared, "error", Some(error.to_string()));
+            return false;
+        }
+        let mut status = shared.status.lock().unwrap_or_else(|e| e.into_inner());
+        status.state = "running";
+        status.last_batch_at = Some(now());
+        status.last_error = None;
+    }
+    remaining == 0 && shared.dropped.load(Ordering::Relaxed) == 0
+}
 
 pub(crate) fn run_writer(
     mut w: writer::Writer,
-    rx: Receiver<Event>,
+    mut rx: Receiver<Arc<Event>>,
+    mut flush_rx: Receiver<oneshot::Sender<bool>>,
     shared: Arc<Shared>,
     publish: bool,
 ) {
-    let mut last_hb = now();
-    let mut last_maint = now();
-    let mut last_pub = 0u64;
-    let mut pending_pub = false;
-    loop {
-        let mut batch = Vec::new();
-        match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(ev) => {
-                batch.push(ev);
-                while batch.len() < BATCH_ROWS {
-                    match rx.try_recv() {
-                        Ok(ev) => batch.push(ev),
-                        Err(_) => break,
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            set_state(&shared, "error", Some("writer timer unavailable".into()));
+            return;
+        }
+    };
+    runtime.block_on(async {
+        let mut last_hb = now();
+        let mut last_maint = now();
+        let mut last_pub = 0u64;
+        let mut pending_pub = false;
+        loop {
+            let mut batch = Vec::new();
+            let next = tokio::select! {
+                biased;
+                Some(ack) = flush_rx.recv() => {
+                    let _ = ack.send(flush_queued(&mut w, &mut rx, &shared));
+                    continue;
+                },
+                next = tokio::time::timeout(Duration::from_secs(1), rx.recv()) => next,
+            };
+            match next {
+                Ok(Some(ev)) => {
+                    batch.push(ev);
+                    while batch.len() < BATCH_ROWS {
+                        match rx.try_recv() {
+                            Ok(ev) => batch.push(ev),
+                            Err(_) => break,
+                        }
                     }
                 }
+                Err(_) => {}
+                Ok(None) => break,
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-        if let Some(secrets) = SECRETS.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            w.set_secrets(secrets);
-        }
-        let t = now();
-        if !batch.is_empty() {
-            match w.commit(&batch) {
-                Ok(_) => {
-                    let mut s = shared.status.lock().unwrap_or_else(|e| e.into_inner());
-                    s.state = "running";
-                    s.last_batch_at = Some(t);
-                    pending_pub = true;
-                }
-                Err(error) => set_state(&shared, "error", Some(error.to_string())),
+            if let Some(secrets) = shared
+                .secrets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                w.set_secrets(secrets);
             }
-        }
-        // SSE `history` hint, at most one per 5 s.
-        if publish && pending_pub && t >= last_pub + 5 {
-            crate::webui::events::publish(crate::webui::events::HISTORY);
-            last_pub = t;
-            pending_pub = false;
-        }
-        if t >= last_hb + 30 {
-            let _ = w.heartbeat(t);
-            last_hb = t;
-        }
-        if t >= last_maint + 60 {
+            let t = now();
             let retention = shared
                 .cfg
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .retention
                 .clone();
-            if let Err(error) = maintain::tick(&w.conn, t as i64, &retention) {
-                tracing::debug!("统计维护失败: {error}");
+            // Apply changed limits before every batch. A pinned WAL pauses
+            // all history mutations, including maintenance and heartbeats.
+            let admitted = maintain::configure_limits(&w.conn, &retention)
+                .and_then(|_| maintain::admit_write(&w.conn, &retention));
+            match admitted {
+                Ok(true) => {}
+                result => {
+                    shared
+                        .dropped
+                        .fetch_add(batch.len() as u64, Ordering::Relaxed);
+                    let error = result.err().map(|e| e.to_string());
+                    set_state(
+                        &shared,
+                        if error.is_some() { "error" } else { "paused" },
+                        error,
+                    );
+                    continue;
+                }
             }
-            last_maint = t;
+            if !batch.is_empty() {
+                match w.commit_refs(batch.iter().map(AsRef::as_ref)) {
+                    Ok(_) => {
+                        let mut s = shared.status.lock().unwrap_or_else(|e| e.into_inner());
+                        s.state = "running";
+                        s.last_batch_at = Some(t);
+                        s.last_error = None;
+                        pending_pub = true;
+                    }
+                    Err(error) => {
+                        shared
+                            .dropped
+                            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+                        set_state(&shared, "error", Some(error.to_string()));
+                        // A full file can recover by pruning closed history.
+                        last_maint = 0;
+                    }
+                }
+            }
+            // SSE `history` hint, at most one per 5 s.
+            if publish && pending_pub && t >= last_pub + 5 {
+                crate::webui::events::publish(crate::webui::events::HISTORY);
+                last_pub = t;
+                pending_pub = false;
+            }
+            if t >= last_hb + HEARTBEAT_SECS {
+                let _ = w.heartbeat(t);
+                last_hb = t;
+            }
+            if t >= last_maint + 60 {
+                if let Err(error) = maintain::tick(&w.conn, t as i64, &retention) {
+                    tracing::debug!("统计维护失败: {error}");
+                }
+                last_maint = t;
+            }
         }
-    }
-    set_state(&shared, "stopped", None);
+        set_state(&shared, "stopped", None);
+    });
 }
 
 // ------------------------------------------------------------ relay hooks
@@ -275,11 +458,23 @@ impl SessionGuard {
         channel_name: &str,
         title: Option<&str>,
     ) -> Self {
+        Self::start_with_area(cfg, platform, channel_id, channel_name, title, None)
+    }
+
+    pub fn start_with_area(
+        cfg: &crate::config::Config,
+        platform: &str,
+        channel_id: &str,
+        channel_name: &str,
+        title: Option<&str>,
+        area_v2: Option<u64>,
+    ) -> Self {
         refresh_config(cfg);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
         let room = cfg.bililive.room.max(0) as u64;
         let live_key = live_book::merged(cfg)
             .open_key(room)
+            .filter(|mark| !live_book::needs_revalidation(room, &mark.live_key))
             .map(|m| m.live_key.clone());
         let platform: &'static str = match platform {
             "TW" => "TW",
@@ -293,14 +488,20 @@ impl SessionGuard {
             channel_name: crate::logging::safe_text(channel_name, 80),
             title: title.map(|t| crate::logging::safe_text(t, 160)),
             live_key: live_key.clone(),
+            area_v2,
+            room,
         });
-        OPEN_SEQ.store(seq, Ordering::Relaxed);
+        OPEN_SEQ.store(0, Ordering::Release);
+        OPEN_ROOM.store(room, Ordering::Release);
+        OPEN_SEQ.store(seq, Ordering::Release);
         if live_key.is_none() && HANDLE.get().is_some() {
             // Read-only GetInfo fallback, once per session start, off the
             // stream path.
             let cfg = cfg.clone();
+            let generation = bili::room_generation(room);
             tokio::spawn(async move {
-                if let Some(key) = adopt_room_live_key(&cfg).await {
+                if let Some(key) = bili::adopt_room_live_key_for_observation(&cfg, generation).await
+                {
                     emit(EventKind::SessionLiveKey { seq, live_key: key });
                 }
             });
@@ -310,6 +511,10 @@ impl SessionGuard {
 
     pub fn run_started(&self, run: u64) {
         emit(EventKind::FfmpegStarted { seq: self.seq, run });
+    }
+
+    pub fn seq(&self) -> u64 {
+        self.seq
     }
 
     /// Classification may require source rechecks; keep the actual wait
@@ -322,6 +527,18 @@ impl SessionGuard {
         success: bool,
         counted_failure: bool,
     ) {
+        self.run_exited_with_diagnostic_at(at, run, code, success, counted_failure, None);
+    }
+
+    pub fn run_exited_with_diagnostic_at(
+        &self,
+        at: u64,
+        run: u64,
+        code: Option<i32>,
+        success: bool,
+        counted_failure: bool,
+        diagnostic: Option<&str>,
+    ) {
         emit_at(
             at,
             EventKind::FfmpegExited {
@@ -330,7 +547,7 @@ impl SessionGuard {
                 code,
                 success,
                 counted_failure,
-                diagnostic: None,
+                diagnostic: diagnostic.map(|d| crate::logging::safe_text(d, 100)),
             },
         );
     }
@@ -389,178 +606,5 @@ async fn sampler() {
             fps: stats.push_fps,
             speed: crate::plugins::ffmpeg::get_ffmpeg_speed(),
         });
-    }
-}
-
-// --------------------------------------------------------- B站 live hooks
-
-fn local_node(cfg: &crate::config::Config) -> String {
-    if cfg.cluster.enabled {
-        cfg.cluster.node_id.clone()
-    } else {
-        "local".into()
-    }
-}
-
-/// `startLive` returned `data.live_key`: into the book (and so into the
-/// next heartbeat) and the local `bili_lives`.
-pub fn on_bili_started(cfg: &crate::config::Config, live_key: &str) {
-    if live_key.is_empty() || HANDLE.get().is_none() {
-        return;
-    }
-    let room = cfg.bililive.room.max(0) as u64;
-    live_book::record_started(room, live_key, &local_node(cfg), now());
-    emit(EventKind::BiliLiveStarted {
-        live_key: live_key.to_string(),
-        room,
-    });
-}
-
-/// GetInfo fallback: only when the book has no open key for the room.
-async fn adopt_room_live_key(cfg: &crate::config::Config) -> Option<String> {
-    let room = cfg.bililive.room.max(0) as u64;
-    if let Some(mark) = live_book::merged(cfg).open_key(room) {
-        return Some(mark.live_key.clone());
-    }
-    let reply = match crate::plugins::bilibili::bili_room_info(cfg).await {
-        Ok(reply) => reply,
-        Err(_) => {
-            note_live_key_unavailable("getinfo_failed");
-            return None;
-        }
-    };
-    capture::room_info(&reply);
-    let key = room_key_or_note(&reply)?;
-    live_book::record_started(room, &key, &format!("getinfo:{}", local_node(cfg)), now());
-    emit(EventKind::BiliLiveStarted {
-        live_key: key.clone(),
-        room,
-    });
-    Some(key)
-}
-
-/// Design §11: a missing `live_key` is logged by reason only, never with
-/// any value from the reply. The session keeps `live_key` NULL, so its
-/// StopLiveData totals stay NULL.
-pub(crate) fn note_live_key_unavailable(reason: &str) {
-    tracing::info!("live_key unavailable ({reason})");
-}
-
-/// `parse_room_live_key`, logging the miss.
-pub(crate) fn room_key_or_note(reply: &serde_json::Value) -> Option<String> {
-    let key = enrich::parse_room_live_key(reply);
-    if key.is_none() {
-        note_live_key_unavailable("getinfo_no_key");
-    }
-    key
-}
-
-static FETCHING: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-/// The B站 live session ended (stopLive OK, or the room went offline):
-/// mark the book, then fetch StopLiveData once (+1 retry), deduped.
-/// Closing the relay session never waits for this.
-pub fn on_bili_stopped(cfg: &crate::config::Config) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    let cfg = cfg.clone();
-    tokio::spawn(async move {
-        let room = cfg.bililive.room.max(0) as u64;
-        let key = match live_book::merged(&cfg).latest(room) {
-            Some(mark) if mark.stopped_at.is_none() => Some(mark.live_key.clone()),
-            Some(_) => None,
-            None => adopt_room_live_key(&cfg).await,
-        };
-        let Some(key) = key else { return };
-        {
-            let mut fetching = FETCHING.lock().unwrap_or_else(|e| e.into_inner());
-            if fetching.contains(&key) {
-                return;
-            }
-            fetching.push(key.clone());
-            if fetching.len() > 16 {
-                fetching.remove(0);
-            }
-        }
-        live_book::set_stopped(room, &key, now());
-        emit(EventKind::BiliLiveStopped {
-            live_key: key.clone(),
-            room,
-        });
-        if !cfg.history.bili_stop_summary {
-            return;
-        }
-        let me = local_node(&cfg);
-        live_book::set_summary(
-            room,
-            &key,
-            live_book::SummaryPhase::Claimed,
-            &me,
-            now(),
-            None,
-        );
-        if cfg.cluster.enabled {
-            tokio::time::sleep(Duration::from_secs(
-                cfg.cluster.heartbeat_interval_secs.max(1),
-            ))
-            .await;
-            if live_book::should_back_off(&live_book::merged(&cfg), room, &key, &me) {
-                return;
-            }
-        }
-        let fetch_cfg = cfg.clone();
-        let fetch_key = key.clone();
-        let totals = enrich::fetch_with_retry(
-            || {
-                let cfg = fetch_cfg.clone();
-                let key = fetch_key.clone();
-                async move { crate::plugins::bilibili::bili_stop_live_data(&cfg, &key).await }
-            },
-            enrich::FIRST_DELAY,
-            enrich::RETRY_DELAY,
-        )
-        .await;
-        let phase = if totals.is_some() {
-            live_book::SummaryPhase::Done
-        } else {
-            live_book::SummaryPhase::Failed
-        };
-        live_book::set_summary(room, &key, phase, &me, now(), totals.clone());
-        emit(EventKind::BiliLiveSummary {
-            live_key: key,
-            totals,
-        });
-    });
-}
-
-/// Every 60 s: totals another node fetched (book `Done`) are joined into
-/// this node's `bili_lives`, so its sessions show them too.
-async fn summary_sync() {
-    let mut applied: Vec<String> = Vec::new();
-    loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        let Ok(cfg) = crate::config::load_config().await else {
-            continue;
-        };
-        if !cfg.cluster.enabled {
-            continue;
-        }
-        let book = live_book::merged(&cfg);
-        for mark in &book.entries {
-            if mark.summary.phase == live_book::SummaryPhase::Done
-                && mark.summary.totals.is_some()
-                && !applied.contains(&mark.live_key)
-            {
-                applied.push(mark.live_key.clone());
-                emit(EventKind::BiliLiveSummary {
-                    live_key: mark.live_key.clone(),
-                    totals: mark.summary.totals.clone(),
-                });
-            }
-        }
-        if applied.len() > 64 {
-            applied.drain(..32);
-        }
     }
 }

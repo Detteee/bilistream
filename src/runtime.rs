@@ -9,18 +9,21 @@ use bilistream::cluster::{self, ClusterStreamIdentity};
 use bilistream::config::{load_config, save_config, Config};
 use bilistream::logging::{safe_diagnostic, safe_text};
 use bilistream::plugins::bilibili::get_thumbnail;
+use bilistream::plugins::danmaku::warning::{
+    canonical_channel_id, log_warning_mark, warning_tracker, BroadcastSource, SourceObservation,
+    WarningSnapshot,
+};
 use bilistream::plugins::Niconico as NiconicoClient;
 use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
     announce_room_lock, bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area,
     bilibili, check_area_id_with_title, clear_config_updated, clear_manual_restart,
-    clear_manual_stop, clear_warning_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg,
-    get_aliases, get_area_name, get_bili_live_status, get_bili_live_time, get_bili_room_lock,
-    get_puuid, is_config_updated, is_danmaku_commands_enabled, is_danmaku_running,
-    is_ffmpeg_running, niconico_channel_identity, niconico_configured,
-    resolve_playable_priority_channel, run_danmaku, send_danmaku, set_manual_restart,
-    should_skip_due_to_warned, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    clear_manual_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
+    get_area_name, get_bili_live_status, get_bili_live_time, get_bili_room_lock, get_puuid,
+    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
+    niconico_channel_identity, niconico_configured, resolve_playable_priority_channel, run_danmaku,
+    send_danmaku, set_manual_restart, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     stop_restart_generation, store_prefetched_playable_stream, streamlink_ingest,
     take_prefetched_playable_stream, timed_room_lock_wait, wait_config_update_or_timeout,
     was_manual_restart, was_manual_stop, FfmpegCacheOptions, FfmpegSource, FfmpegStreamIdentity,
@@ -29,6 +32,7 @@ use bilistream::plugins::{
 use chrono::{DateTime, Local, NaiveDateTime};
 use regex::Regex;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::{error::Error, time::Duration};
@@ -53,7 +57,42 @@ const MESSAGE_UPDATE_TIME_THRESHOLD_MINUTES: i64 = 5;
 // Track last video/stream ID for cover change detection (works across platforms)
 static LAST_VIDEO_ID: Mutex<Option<String>> = Mutex::new(None);
 // Track last banned keyword warning to prevent spam
-static LAST_BANNED_KEYWORD_WARNING: Mutex<Option<String>> = Mutex::new(None);
+static LAST_BANNED_KEYWORD_WARNING: Mutex<VecDeque<BannedNotice>> = Mutex::new(VecDeque::new());
+
+struct BannedNotice {
+    platform: StreamPlatform,
+    channel_id: String,
+    content: String,
+}
+
+fn remember_banned_notice(
+    notices: &mut VecDeque<BannedNotice>,
+    stream: &StreamCandidate,
+    keyword: &str,
+    title: &str,
+) -> bool {
+    let content = format!("{keyword}:{title}");
+    if let Some(previous) = notices
+        .iter_mut()
+        .find(|notice| notice.platform == stream.platform && notice.channel_id == stream.channel_id)
+    {
+        if previous.content == content {
+            return false;
+        }
+        previous.content = content;
+        return true;
+    }
+    // Two YouTube IDs, two Twitch IDs and one Niconico source per pass.
+    if notices.len() == 5 {
+        notices.pop_front();
+    }
+    notices.push_back(BannedNotice {
+        platform: stream.platform,
+        channel_id: stream.channel_id.clone(),
+        content,
+    });
+    true
+}
 
 fn recover_mutex_lock<'a, T>(lock: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
     lock.lock().unwrap_or_else(|poisoned| {
@@ -109,6 +148,8 @@ async fn wait_out_bili_room_lock(room: i32) -> bool {
     if room <= 0 {
         return false;
     }
+    let warnings = warning_tracker();
+    let mut warning = warnings.snapshot_event();
     let lock = match get_bili_room_lock(room).await {
         Ok(lock) => lock,
         Err(error) => {
@@ -119,6 +160,17 @@ async fn wait_out_bili_room_lock(room: i32) -> bool {
     let Some(wait) = timed_room_lock_wait(&lock) else {
         return false;
     };
+    let title = if warning.has_source() {
+        None
+    } else {
+        get_bili_live_status(room)
+            .await
+            .ok()
+            .map(|status| status.title)
+    };
+    if let Some(name) = warnings.mark_timed_event(&mut warning, title.as_deref()) {
+        log_warning_mark(&name);
+    }
     announce_room_lock(room, &lock);
     crate::webui::state::update_status_cache_with(|status| {
         status.bilibili.apply_room_lock(&lock);
@@ -567,10 +619,15 @@ fn should_auto_stop_after_end(live_hours: i64) -> bool {
     live_hours >= AUTO_STOP_AFTER_HOURS
 }
 
-fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>) {
+fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>, priority: bool) {
     tracing::info!(
-        "{identity} 源直播可用；标题={}",
-        safe_text(title.unwrap_or("无标题"), 80)
+        "{identity} 源直播可用；标题={}；选台原因={}",
+        safe_text(title.unwrap_or("无标题"), 80),
+        if priority {
+            "可用优先频道"
+        } else {
+            "普通候选按 Niconico > YouTube > Twitch 排序"
+        }
     );
 }
 
@@ -652,7 +709,41 @@ struct StreamCandidate {
 
 impl StreamCandidate {
     fn is_playable(&self) -> bool {
-        self.is_live && (self.m3u8_url.is_some() || self.piped_ingest.is_some())
+        self.is_live
+            && (self.m3u8_url.as_ref().is_some_and(|url| !url.is_empty())
+                || self.piped_ingest.is_some())
+    }
+
+    fn source_identity(&self) -> BroadcastSource {
+        BroadcastSource::new(
+            self.platform.code(),
+            &self.channel_name,
+            &self.channel_id,
+            self.stream_id.as_deref(),
+        )
+    }
+
+    fn from_status(
+        platform: StreamPlatform,
+        name: &str,
+        id: &str,
+        area: u64,
+        status: SourceStatus,
+    ) -> Self {
+        let (is_live, topic, title, m3u8_url, _, stream_id) = status;
+        Self {
+            platform,
+            is_live,
+            topic,
+            title,
+            m3u8_url,
+            stream_id,
+            piped_ingest: None,
+            channel_name: name.to_owned(),
+            channel_id: canonical_channel_id(platform.code(), id),
+            area_v2: area,
+            is_priority: false,
+        }
     }
 
     fn ffmpeg_source(&self) -> Option<FfmpegSource> {
@@ -723,6 +814,251 @@ type SourceStatus = (
 
 const OFFLINE_SOURCE_STATUS: SourceStatus = (false, None, None, None, None, None);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChannelProbe {
+    platform: StreamPlatform,
+    channel_name: String,
+    channel_id: String,
+}
+
+#[derive(Default)]
+struct SourceProbePlan {
+    channels: Vec<ChannelProbe>,
+    youtube: Option<usize>,
+    twitch: Option<usize>,
+    priority_youtube: Option<usize>,
+    priority_twitch: Option<usize>,
+}
+
+impl SourceProbePlan {
+    fn add(
+        &mut self,
+        enabled: bool,
+        platform: StreamPlatform,
+        name: &str,
+        id: &str,
+    ) -> Option<usize> {
+        let id = canonical_channel_id(platform.code(), id);
+        if !enabled || id.is_empty() {
+            return None;
+        }
+        if let Some(index) = self
+            .channels
+            .iter()
+            .position(|probe| probe.platform == platform && probe.channel_id == id)
+        {
+            return Some(index);
+        }
+        self.channels.push(ChannelProbe {
+            platform,
+            channel_name: name.to_owned(),
+            channel_id: id,
+        });
+        Some(self.channels.len() - 1)
+    }
+
+    fn for_config(cfg: &Config) -> Self {
+        let mut plan = Self::default();
+        plan.youtube = plan.add(
+            cfg.youtube.enable_monitor,
+            StreamPlatform::Youtube,
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+        );
+        plan.priority_youtube = plan.add(
+            cfg.priority_channel.enabled,
+            StreamPlatform::Youtube,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+        );
+        plan.twitch = plan.add(
+            cfg.twitch.enable_monitor,
+            StreamPlatform::Twitch,
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+        );
+        plan.priority_twitch = plan.add(
+            cfg.priority_channel.enabled,
+            StreamPlatform::Twitch,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.twitch_channel_id,
+        );
+        plan
+    }
+}
+
+enum ProbedClient {
+    Youtube(YoutubeClient),
+    Twitch(TwitchClient),
+}
+
+struct ProbedSource {
+    channel: ChannelProbe,
+    client: Option<ProbedClient>,
+    status: Result<SourceStatus, String>,
+}
+
+/// The plan is the sole owner of per-pass provider checks and prefetch takes.
+/// Keep errors intact until warning-release evidence has been evaluated.
+async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<ProbedSource>> {
+    let mut probes = Vec::with_capacity(plan.channels.len());
+    for channel in &plan.channels {
+        let client = match channel.platform {
+            StreamPlatform::Youtube => Ok(ProbedClient::Youtube(YoutubeClient::new(
+                &channel.channel_name,
+                &channel.channel_id,
+                cfg.youtube.proxy.clone(),
+            ))),
+            StreamPlatform::Twitch => TwitchClient::new(
+                &channel.channel_id,
+                cfg.twitch.proxy_region.clone(),
+                cfg.twitch.proxy.clone(),
+            )
+            .map(ProbedClient::Twitch)
+            .map_err(|error| error.to_string()),
+            StreamPlatform::Niconico => unreachable!("Niconico uses its listing/ingest path"),
+        };
+        let (client, status) = match client {
+            Ok(client) => {
+                let platform = match channel.platform {
+                    StreamPlatform::Youtube => PriorityChannelPlatform::Youtube,
+                    _ => PriorityChannelPlatform::Twitch,
+                };
+                let warning = warning_tracker().snapshot();
+                let source = BroadcastSource::new(
+                    channel.platform.code(),
+                    &channel.channel_name,
+                    &channel.channel_id,
+                    None,
+                );
+                let held = warning.holds(&source);
+                let status = if held {
+                    match channel.platform {
+                        StreamPlatform::Youtube => {
+                            bilistream::plugins::youtube::get_youtube_warning_status(
+                                &channel.channel_id,
+                                warning.episode_id_for(&source),
+                            )
+                            .await
+                            .map(|status| {
+                                (
+                                    status.is_live,
+                                    status.topic,
+                                    status.title,
+                                    None,
+                                    status.scheduled_start,
+                                    status.video_id,
+                                )
+                            })
+                            .map_err(|error| error.to_string())
+                        }
+                        _ => bilistream::plugins::twitch::get_twitch_warning_status(
+                            &channel.channel_id,
+                        )
+                        .await
+                        .map(|(is_live, topic, title, id)| (is_live, topic, title, None, None, id))
+                        .map_err(|error| error.to_string()),
+                    }
+                } else if let Some(status) =
+                    take_prefetched_source_status(platform, &channel.channel_id)
+                {
+                    Ok(status)
+                } else {
+                    match &client {
+                        ProbedClient::Youtube(client) => {
+                            client.get_status().await.map_err(|error| error.to_string())
+                        }
+                        ProbedClient::Twitch(client) => {
+                            client.get_status().await.map_err(|error| error.to_string())
+                        }
+                    }
+                };
+                (Some(client), status)
+            }
+            Err(error) => (None, Err(error)),
+        };
+        if let Err(error) = &status {
+            tracing::warn!(
+                "{} 频道 {} 状态检查失败；{}",
+                channel.platform.code(),
+                safe_text(&channel.channel_name, 64),
+                safe_diagnostic(error)
+            );
+        }
+        if is_config_updated() || !bilistream::config::config_is_current(cfg) {
+            return None;
+        }
+        probes.push(ProbedSource {
+            channel: channel.clone(),
+            client,
+            status,
+        });
+    }
+    Some(probes)
+}
+
+fn probed_status(probes: &[ProbedSource], index: Option<usize>) -> SourceStatus {
+    index
+        .and_then(|index| probes.get(index))
+        .and_then(|probe| probe.status.as_ref().ok())
+        .cloned()
+        .unwrap_or(OFFLINE_SOURCE_STATUS)
+}
+
+fn source_observation(
+    platform: StreamPlatform,
+    name: &str,
+    id: &str,
+    status: &SourceStatus,
+) -> SourceObservation {
+    SourceObservation::new(
+        BroadcastSource::new(platform.code(), name, id, status.5.as_deref()),
+        status.0,
+        status.4.is_some()
+            || (platform == StreamPlatform::Youtube
+                && status.5.as_ref().is_some_and(|id| !id.is_empty())),
+    )
+}
+
+/// Priority is an overlay on this choice only; an ineligible/unplayable
+/// priority result must leave its ordinary platform's fallback in place.
+fn overlay_priority(
+    mut ordinary: StreamCandidate,
+    mut priority: StreamCandidate,
+) -> StreamCandidate {
+    if priority.is_playable() {
+        priority.is_priority = true;
+        priority
+    } else {
+        ordinary.is_priority = false;
+        ordinary
+    }
+}
+
+fn priority_area(platform: StreamPlatform, cfg: &Config) -> u64 {
+    let (target, priority, area) = match platform {
+        StreamPlatform::Youtube => (
+            &cfg.youtube.channel_id,
+            &cfg.priority_channel.youtube_channel_id,
+            cfg.youtube.area_v2,
+        ),
+        StreamPlatform::Twitch => (
+            &cfg.twitch.channel_id,
+            &cfg.priority_channel.twitch_channel_id,
+            cfg.twitch.area_v2,
+        ),
+        StreamPlatform::Niconico => return cfg.niconico.area_v2,
+    };
+    if !target.is_empty()
+        && canonical_channel_id(platform.code(), target)
+            == canonical_channel_id(platform.code(), priority)
+    {
+        area
+    } else {
+        cfg.priority_channel.default_area
+    }
+}
+
 /// Use the URL the priority monitor already confirmed, if it matches this
 /// channel. Avoids a second yt-dlp/streamlink fetch right after a switch.
 fn take_prefetched_source_status(
@@ -754,18 +1090,19 @@ enum SourceClient<'a> {
 
 fn selected_source_client<'a>(
     selected: &StreamCandidate,
-    yt: &'a Option<YoutubeClient>,
-    tw: &'a Option<TwitchClient>,
+    probes: &'a [ProbedSource],
     nico: &'a Option<NiconicoClient>,
-    priority_yt: &'a Option<YoutubeClient>,
-    priority_tw: &'a Option<TwitchClient>,
 ) -> Option<SourceClient<'a>> {
-    match (selected.platform, selected.is_priority) {
-        (StreamPlatform::Youtube, true) => priority_yt.as_ref().map(SourceClient::Youtube),
-        (StreamPlatform::Youtube, false) => yt.as_ref().map(SourceClient::Youtube),
-        (StreamPlatform::Twitch, true) => priority_tw.as_ref().map(SourceClient::Twitch),
-        (StreamPlatform::Twitch, false) => tw.as_ref().map(SourceClient::Twitch),
-        (StreamPlatform::Niconico, _) => nico.as_ref().map(SourceClient::Niconico),
+    if selected.platform == StreamPlatform::Niconico {
+        return nico.as_ref().map(SourceClient::Niconico);
+    }
+    let probe = probes.iter().find(|probe| {
+        probe.channel.platform == selected.platform
+            && probe.channel.channel_id == selected.channel_id
+    })?;
+    match probe.client.as_ref()? {
+        ProbedClient::Youtube(client) => Some(SourceClient::Youtube(client)),
+        ProbedClient::Twitch(client) => Some(SourceClient::Twitch(client)),
     }
 }
 
@@ -803,15 +1140,91 @@ async fn fetch_bili_live_status_logged(
     }
 }
 
+fn report_danmaku_selection(
+    cfg: &Config,
+    probes: &[ProbedSource],
+    yt: &StreamCandidate,
+    tw: &StreamCandidate,
+    nico: &StreamCandidate,
+    keywords: &[String],
+    warning: &WarningSnapshot,
+) {
+    use bilistream::plugins::danmaku::{pending_target_request, report_target_decision};
+    let Some(request) = pending_target_request(cfg) else {
+        return;
+    };
+    let selected = select_stream(yt, tw, nico);
+    let enabled = match request.source.platform.as_str() {
+        "YT" => cfg.youtube.enable_monitor,
+        "TW" => cfg.twitch.enable_monitor,
+        _ => false,
+    };
+    let probe = probes.iter().find(|probe| {
+        probe.channel.platform.code() == request.source.platform
+            && probe.channel.channel_id == request.source.channel_id
+    });
+    let reason = if warning.holds(&request.source) {
+        "请求频道仍因警告/切断临时跳过"
+    } else if !enabled {
+        "请求平台的普通监控未启用"
+    } else if let Some(probe) = probe {
+        match &probe.status {
+            Err(_) => "请求频道状态检查失败",
+            Ok(status) if !status.0 => "请求频道未直播",
+            Ok(status)
+                if bilistream::plugins::banned_keywords::streaming_banned_hit(
+                    status.1.as_deref(),
+                    status.2.as_deref(),
+                    keywords,
+                )
+                .is_some() =>
+            {
+                "请求频道标题/游戏包含禁用关键词"
+            }
+            Ok(status) if status.3.as_ref().is_none_or(|url| url.is_empty()) => {
+                "请求频道暂无可播放的流地址"
+            }
+            Ok(_)
+                if selected.as_ref().is_some_and(|stream| {
+                    stream.platform.code() == request.source.platform
+                        && stream.channel_id == request.source.channel_id
+                }) =>
+            {
+                "请求频道是本轮最高可用候选"
+            }
+            Ok(_) if selected.is_some() => "自动排序选择了更高优先级的可用频道",
+            Ok(_) => "请求频道未通过防撞车检查",
+        }
+    } else {
+        "请求频道尚未进入本轮检查"
+    };
+    report_target_decision(
+        &request,
+        selected
+            .as_ref()
+            .map(StreamCandidate::source_identity)
+            .as_ref(),
+        reason,
+    );
+}
+
 /// Marks a candidate offline when its channel was previously stopped due to a
 /// warning/cut-off, announcing the skip once via danmaku.
-async fn skip_stream_if_previously_warned(stream: &mut StreamCandidate, cfg: &Config) {
-    if !stream.is_live || !should_skip_due_to_warning(&stream.channel_name) {
+async fn skip_stream_if_previously_warned(
+    stream: &mut StreamCandidate,
+    cfg: &Config,
+    warnings: &bilistream::plugins::danmaku::warning::WarningTracker,
+) {
+    let source = stream.source_identity();
+    if !exclude_warned_stream(stream, &warnings.snapshot()) {
         return;
     }
 
-    if should_skip_due_to_warned(&stream.channel_name) {
-        tracing::warn!("⚠️ 跳过频道 {} - 之前因警告/切断停止", stream.channel_name);
+    if warnings.take_skip_log(&source) {
+        tracing::warn!(
+            "⚠️ 跳过频道 {} - 之前因警告/切断停止",
+            safe_text(&stream.channel_name, 64)
+        );
         if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
             enable_danmaku_commands(true);
             if let Err(e) = send_danmaku(
@@ -831,32 +1244,25 @@ async fn skip_stream_if_previously_warned(stream: &mut StreamCandidate, cfg: &Co
     stream.is_live = false;
 }
 
-/// A live priority stream is still live; this only answers whether we may yank
-/// the current restream onto it. Titles that hit `streaming_banned_keywords`
-/// would be skipped by the main loop anyway, so auto-switch must not force them.
-fn priority_live_for_switch(
-    is_live: bool,
-    topic: Option<&str>,
-    title: Option<&str>,
-    keywords: &[String],
-    platform: &str,
-    channel_name: &str,
-) -> bool {
-    if !is_live {
-        return false;
+fn exclude_warned_stream(stream: &mut StreamCandidate, warning: &WarningSnapshot) -> bool {
+    let skipped = stream.is_live && warning.holds(&stream.source_identity());
+    if skipped {
+        stream.is_live = false;
     }
-    match bilistream::plugins::banned_keywords::streaming_banned_hit(topic, title, keywords) {
-        Some(keyword) => {
-            tracing::warn!(
-                "优先频道 {} 的{}直播标题/分区包含不支持的关键词: {}，不强制切换",
-                channel_name,
-                platform,
-                keyword
-            );
-            false
-        }
-        None => true,
+    skipped
+}
+
+fn exclude_banned_stream(stream: &mut StreamCandidate, keywords: &[String]) -> Option<String> {
+    if !stream.is_live {
+        return None;
     }
+    let keyword = bilistream::plugins::banned_keywords::streaming_banned_hit(
+        stream.topic.as_deref(),
+        stream.title.as_deref(),
+        keywords,
+    )?;
+    stream.is_live = false;
+    Some(keyword)
 }
 
 /// Marks a candidate offline when its title/topic contains a banned streaming
@@ -866,15 +1272,7 @@ async fn skip_stream_if_banned_keyword(
     keywords: &[String],
     cfg: &Config,
 ) {
-    if !stream.is_live {
-        return;
-    }
-
-    let Some(keyword) = bilistream::plugins::banned_keywords::streaming_banned_hit(
-        stream.topic.as_deref(),
-        stream.title.as_deref(),
-        keywords,
-    ) else {
+    let Some(keyword) = exclude_banned_stream(stream, keywords) else {
         return;
     };
     let default_title = "无标题".to_string();
@@ -885,13 +1283,7 @@ async fn skip_stream_if_banned_keyword(
     let should_warn = {
         let mut last_warning =
             recover_mutex_lock(&LAST_BANNED_KEYWORD_WARNING, "last banned keyword warning");
-        let current_warning = format!("{}:{}:{}", platform, keyword, title_str);
-        if last_warning.as_ref() != Some(&current_warning) {
-            *last_warning = Some(current_warning);
-            true
-        } else {
-            false
-        }
+        remember_banned_notice(&mut last_warning, stream, &keyword, title_str)
     };
 
     if should_warn {
@@ -1058,6 +1450,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         if cfg.youtube.channel_id.is_empty()
             && cfg.twitch.channel_id.is_empty()
             && !niconico_configured(&cfg.niconico)
+            && (!cfg.priority_channel.enabled
+                || (cfg.priority_channel.youtube_channel_id.is_empty()
+                    && cfg.priority_channel.twitch_channel_id.is_empty()))
         {
             tracing::error!("❌ YouTube、Twitch 和 Niconico 配置均为空");
             tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
@@ -1073,156 +1468,31 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        // Check YouTube status (only if enabled)
-        let (yt_live, mut yt_is_live, yt_area, yt_title, yt_m3u8_url, scheduled_start, yt_video_id) =
-            if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
-                let yt_live = YoutubeClient::new(
-                    &cfg.youtube.channel_name,
-                    &cfg.youtube.channel_id,
-                    cfg.youtube.proxy.clone(),
-                );
-                let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
-                    if let Some(status) = take_prefetched_source_status(
-                        PriorityChannelPlatform::Youtube,
-                        &cfg.youtube.channel_id,
-                    ) {
-                        status
-                    } else {
-                        yt_live.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
-                    };
-                let max_scheduled_start = Local::now() + Duration::from_secs(2 * 24 * 60 * 60);
-                if scheduled_start
-                    .as_ref()
-                    .is_some_and(|start| start > &max_scheduled_start)
-                {
-                    scheduled_start = None;
-                }
-                (
-                    Some(yt_live),
-                    yt_is_live,
-                    yt_area,
-                    yt_title,
-                    yt_m3u8_url,
-                    scheduled_start,
-                    yt_video_id,
-                )
-            } else {
-                (None, false, None, None, None, None, None)
-            };
-
-        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+        let warnings = warning_tracker();
+        let warning_before_probe = warnings.snapshot();
+        let probe_plan = SourceProbePlan::for_config(&cfg);
+        let Some(probes) = probe_sources(&cfg, &probe_plan).await else {
             clear_config_updated();
-            tracing::info!("🔄 YouTube状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
-        }
-        // Check priority channel's YouTube status (only if enabled and not already configured)
-        let priority_yt_live = if cfg.priority_channel.enabled
-            && !cfg.priority_channel.youtube_channel_id.is_empty()
-            && !cfg.priority_channel.channel_name.is_empty()
-        {
-            Some(YoutubeClient::new(
-                &cfg.priority_channel.channel_name,
-                &cfg.priority_channel.youtube_channel_id,
-                cfg.youtube.proxy.clone(),
-            ))
-        } else {
-            None
         };
+        let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
+            probed_status(&probes, probe_plan.youtube);
+        if scheduled_start
+            .as_ref()
+            .is_some_and(|start| start > &(Local::now() + Duration::from_secs(2 * 24 * 60 * 60)))
+        {
+            scheduled_start = None;
+        }
         let (
             priority_yt_is_live,
             priority_yt_area,
             priority_yt_title,
             priority_yt_m3u8_url,
-            _priority_scheduled_start,
+            _,
             priority_yt_video_id,
-        ) = if let Some(ref client) = priority_yt_live {
-            if cfg.youtube.channel_name == cfg.priority_channel.channel_name {
-                if let Some(status) = take_prefetched_source_status(
-                    PriorityChannelPlatform::Youtube,
-                    &cfg.priority_channel.youtube_channel_id,
-                ) {
-                    status
-                } else {
-                    (
-                        yt_is_live,
-                        yt_area.clone(),
-                        yt_title.clone(),
-                        yt_m3u8_url.clone(),
-                        scheduled_start,
-                        yt_video_id.clone(),
-                    )
-                }
-            } else if let Some(status) = take_prefetched_source_status(
-                PriorityChannelPlatform::Youtube,
-                &cfg.priority_channel.youtube_channel_id,
-            ) {
-                status
-            } else {
-                // Only check priority channel separately if not already configured
-                client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
-            }
-        } else {
-            (false, None, None, None, None, None)
-        };
-
-        // Check Twitch status (only if enabled)
-        let (tw_live, mut tw_is_live, tw_area, tw_title, tw_m3u8_url, tw_stream_id) =
-            if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-                match TwitchClient::new(
-                    &cfg.twitch.channel_id,
-                    cfg.twitch.proxy_region.clone(),
-                    cfg.twitch.proxy.clone(),
-                ) {
-                    Ok(tw_live) => {
-                        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) =
-                            if let Some(status) = take_prefetched_source_status(
-                                PriorityChannelPlatform::Twitch,
-                                &cfg.twitch.channel_id,
-                            ) {
-                                status
-                            } else {
-                                tw_live.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
-                            };
-                        (
-                            Some(tw_live),
-                            tw_is_live,
-                            tw_area,
-                            tw_title,
-                            tw_m3u8_url,
-                            tw_stream_id,
-                        )
-                    }
-                    Err(e) => {
-                        tracing::warn!("Twitch 客户端初始化失败: {}", e);
-                        (None, false, None, None, None, None)
-                    }
-                }
-            } else {
-                (None, false, None, None, None, None)
-            };
-
-        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
-            clear_config_updated();
-            tracing::info!("🔄 Twitch状态检查期间检测到配置更新，重新加载配置并检查频道状态");
-            continue 'outer;
-        }
-        // Check priority channel's Twitch status (only if enabled and not already configured)
-        let priority_tw_live =
-            if cfg.priority_channel.enabled && !cfg.priority_channel.twitch_channel_id.is_empty() {
-                match TwitchClient::new(
-                    &cfg.priority_channel.twitch_channel_id,
-                    cfg.twitch.proxy_region.clone(),
-                    cfg.twitch.proxy.clone(),
-                ) {
-                    Ok(client) => Some(client),
-                    Err(e) => {
-                        tracing::warn!("优先频道 Twitch 客户端初始化失败: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+        ) = probed_status(&probes, probe_plan.priority_youtube);
+        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) =
+            probed_status(&probes, probe_plan.twitch);
         let (
             priority_tw_is_live,
             priority_tw_area,
@@ -1230,59 +1500,75 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             priority_tw_m3u8_url,
             _,
             priority_tw_stream_id,
-        ) = if let Some(ref client) = priority_tw_live {
-            if cfg.twitch.channel_name == cfg.priority_channel.channel_name {
-                if let Some(status) = take_prefetched_source_status(
-                    PriorityChannelPlatform::Twitch,
-                    &cfg.priority_channel.twitch_channel_id,
-                ) {
-                    status
-                } else {
-                    (
-                        tw_is_live,
-                        tw_area.clone(),
-                        tw_title.clone(),
-                        tw_m3u8_url.clone(),
-                        None,
-                        tw_stream_id.clone(),
-                    )
-                }
-            } else if let Some(status) = take_prefetched_source_status(
-                PriorityChannelPlatform::Twitch,
-                &cfg.priority_channel.twitch_channel_id,
-            ) {
-                status
-            } else {
-                // Only check priority channel separately if not already configured
-                client.get_status().await.unwrap_or(OFFLINE_SOURCE_STATUS)
-            }
-        } else {
-            (false, None, None, None, None, None)
-        };
+        ) = probed_status(&probes, probe_plan.priority_twitch);
 
         let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
             Some(NiconicoClient::new(&cfg.niconico))
         } else {
             None
         };
-        let (nico_is_live, nico_title, nico_scheduled_start, nico_stream_id) =
-            if nico_live.is_some() {
-                let (is_live, _, title, _, scheduled_start, stream_id) =
-                    bilistream::plugins::niconico_live::monitor_status(&cfg.niconico, false)
-                        .await
-                        .unwrap_or(OFFLINE_SOURCE_STATUS);
-                (is_live, title, scheduled_start, stream_id)
-            } else {
-                (false, None, None, None)
-            };
+        let nico_status = if nico_live.is_some() {
+            Some(bilistream::plugins::niconico_live::monitor_status(&cfg.niconico, false).await)
+        } else {
+            None
+        };
+        let (nico_is_live, _, nico_title, _, nico_scheduled_start, nico_stream_id) = nico_status
+            .as_ref()
+            .and_then(|status| status.as_ref().ok())
+            .cloned()
+            .unwrap_or(OFFLINE_SOURCE_STATUS);
 
-        if is_config_updated() {
+        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
-            tracing::info!("🔄 Niconico状态检查期间检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
         }
-
         let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
+        let mut observations = Vec::new();
+        for (index, platform, name, id) in [
+            (
+                probe_plan.youtube,
+                StreamPlatform::Youtube,
+                &cfg.youtube.channel_name,
+                &cfg.youtube.channel_id,
+            ),
+            (
+                probe_plan.priority_youtube,
+                StreamPlatform::Youtube,
+                &cfg.priority_channel.channel_name,
+                &cfg.priority_channel.youtube_channel_id,
+            ),
+            (
+                probe_plan.twitch,
+                StreamPlatform::Twitch,
+                &cfg.twitch.channel_name,
+                &cfg.twitch.channel_id,
+            ),
+            (
+                probe_plan.priority_twitch,
+                StreamPlatform::Twitch,
+                &cfg.priority_channel.channel_name,
+                &cfg.priority_channel.twitch_channel_id,
+            ),
+        ] {
+            if let Some(status) = index.and_then(|index| probes[index].status.as_ref().ok()) {
+                observations.push(source_observation(platform, name, id, status));
+            }
+        }
+        if let Some(Ok(status)) = &nico_status {
+            observations.push(source_observation(
+                StreamPlatform::Niconico,
+                &nico_channel_name,
+                &nico_channel_id,
+                status,
+            ));
+        }
+        if let Some(release) = bilistream::config::with_current_config(&cfg, || {
+            warnings.observe_sources(&warning_before_probe, &observations)
+        })
+        .flatten()
+        {
+            release.log();
+        }
 
         // Get Bilibili status
         let bili_live = match fetch_bili_live_status_logged(cfg.bililive.room).await {
@@ -1379,6 +1665,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 Some(bilistream::PriorityChannelStatus {
                     enabled: cfg.priority_channel.enabled,
                     auto_restart: cfg.priority_channel.auto_restart,
+                    warning_held: bilistream::plugins::danmaku::priority_warning_held(&cfg),
                     channel_name: cfg.priority_channel.channel_name.clone(),
                     is_live,
                     platform,
@@ -1395,90 +1682,62 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         let streaming_banned_keywords =
             bilistream::plugins::banned_keywords::streaming_banned_keywords();
-        let priority_yt_is_live = priority_live_for_switch(
-            priority_yt_is_live,
-            priority_yt_area.as_deref(),
-            priority_yt_title.as_deref(),
-            &streaming_banned_keywords,
-            "YouTube",
-            &cfg.priority_channel.channel_name,
+        let mut yt_stream = StreamCandidate::from_status(
+            StreamPlatform::Youtube,
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            cfg.youtube.area_v2,
+            (
+                yt_is_live,
+                yt_area,
+                yt_title,
+                yt_m3u8_url,
+                None,
+                yt_video_id,
+            ),
         );
-        let priority_tw_is_live = priority_live_for_switch(
-            priority_tw_is_live,
-            priority_tw_area.as_deref(),
-            priority_tw_title.as_deref(),
-            &streaming_banned_keywords,
-            "Twitch",
-            &cfg.priority_channel.channel_name,
+        let mut tw_stream = StreamCandidate::from_status(
+            StreamPlatform::Twitch,
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+            cfg.twitch.area_v2,
+            (
+                tw_is_live,
+                tw_area,
+                tw_title,
+                tw_m3u8_url,
+                None,
+                tw_stream_id,
+            ),
         );
-
-        let mut yt_stream = if priority_yt_is_live {
-            StreamCandidate {
-                platform: StreamPlatform::Youtube,
-                is_live: true,
-                topic: priority_yt_area,
-                title: priority_yt_title,
-                m3u8_url: priority_yt_m3u8_url,
-                piped_ingest: None,
-                stream_id: priority_yt_video_id,
-                channel_name: cfg.priority_channel.channel_name.clone(),
-                channel_id: cfg.priority_channel.youtube_channel_id.clone(),
-                area_v2: if cfg.youtube.channel_name == cfg.priority_channel.channel_name {
-                    cfg.youtube.area_v2
-                } else {
-                    cfg.priority_channel.default_area
-                },
-                is_priority: true,
-            }
-        } else {
-            StreamCandidate {
-                platform: StreamPlatform::Youtube,
-                is_live: yt_is_live,
-                topic: yt_area,
-                title: yt_title,
-                m3u8_url: yt_m3u8_url,
-                piped_ingest: None,
-                stream_id: yt_video_id,
-                channel_name: cfg.youtube.channel_name.clone(),
-                channel_id: cfg.youtube.channel_id.clone(),
-                area_v2: cfg.youtube.area_v2,
-                is_priority: false,
-            }
-        };
-
-        let mut tw_stream = if priority_tw_is_live {
-            StreamCandidate {
-                platform: StreamPlatform::Twitch,
-                is_live: true,
-                topic: priority_tw_area,
-                title: priority_tw_title,
-                m3u8_url: priority_tw_m3u8_url,
-                piped_ingest: None,
-                stream_id: priority_tw_stream_id,
-                channel_name: cfg.priority_channel.channel_name.clone(),
-                channel_id: cfg.priority_channel.twitch_channel_id.clone(),
-                area_v2: if cfg.twitch.channel_name == cfg.priority_channel.channel_name {
-                    cfg.twitch.area_v2
-                } else {
-                    cfg.priority_channel.default_area
-                },
-                is_priority: true,
-            }
-        } else {
-            StreamCandidate {
-                platform: StreamPlatform::Twitch,
-                is_live: tw_is_live,
-                topic: tw_area,
-                title: tw_title,
-                m3u8_url: tw_m3u8_url,
-                piped_ingest: None,
-                stream_id: tw_stream_id,
-                channel_name: cfg.twitch.channel_name.clone(),
-                channel_id: cfg.twitch.channel_id.clone(),
-                area_v2: cfg.twitch.area_v2,
-                is_priority: false,
-            }
-        };
+        let mut priority_yt_stream = StreamCandidate::from_status(
+            StreamPlatform::Youtube,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+            priority_area(StreamPlatform::Youtube, &cfg),
+            (
+                priority_yt_is_live,
+                priority_yt_area,
+                priority_yt_title,
+                priority_yt_m3u8_url,
+                None,
+                priority_yt_video_id,
+            ),
+        );
+        let mut priority_tw_stream = StreamCandidate::from_status(
+            StreamPlatform::Twitch,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.twitch_channel_id,
+            priority_area(StreamPlatform::Twitch, &cfg),
+            (
+                priority_tw_is_live,
+                priority_tw_area,
+                priority_tw_title,
+                priority_tw_m3u8_url,
+                None,
+                priority_tw_stream_id,
+            ),
+        );
 
         let mut nico_stream = StreamCandidate {
             platform: StreamPlatform::Niconico,
@@ -1504,25 +1763,35 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             is_priority: false,
         };
 
-        let priority_platform = if priority_yt_is_live {
-            Some(StreamPlatform::Youtube)
-        } else if priority_tw_is_live {
-            Some(StreamPlatform::Twitch)
-        } else {
-            None
-        };
-
-        // A live priority channel is the only candidate, even if another configured stream is live.
-        if let Some(platform) = priority_platform {
-            yt_stream.is_live = platform == StreamPlatform::Youtube;
-            tw_stream.is_live = platform == StreamPlatform::Twitch;
-            nico_stream.is_live = false;
+        // Observe first, then filter every slot before the priority overlay.
+        // A shared ID has one provider result; the skip logger deduplicates it.
+        for stream in [
+            &mut yt_stream,
+            &mut tw_stream,
+            &mut nico_stream,
+            &mut priority_yt_stream,
+            &mut priority_tw_stream,
+        ] {
+            let was_live = stream.is_live;
+            skip_stream_if_previously_warned(stream, &cfg, &warnings).await;
+            skip_stream_if_banned_keyword(stream, &streaming_banned_keywords, &cfg).await;
+            if stream.platform == StreamPlatform::Youtube {
+                mark_youtube_skipped_live(stream, was_live);
+            }
         }
-
-        yt_is_live = yt_stream.is_live;
-        tw_is_live = tw_stream.is_live;
-
-        if cfg.enable_anti_collision && priority_platform.is_none() {
+        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+            clear_config_updated();
+            continue 'outer;
+        }
+        let needs_refetch =
+            refetch_skipped_youtube(&yt_stream) | refetch_skipped_youtube(&priority_yt_stream);
+        let mut yt_stream = overlay_priority(yt_stream, priority_yt_stream);
+        let mut tw_stream = overlay_priority(tw_stream, priority_tw_stream);
+        let priority_selected = select_stream(&yt_stream, &tw_stream, &nico_stream)
+            .is_some_and(|stream| stream.is_priority);
+        if cfg.enable_anti_collision && !priority_selected {
+            let mut yt_is_live = yt_stream.is_live;
+            let mut tw_is_live = tw_stream.is_live;
             match handle_collisions(&mut yt_is_live, &mut tw_is_live).await? {
                 CollisionResult::Continue => continue 'outer,
                 CollisionResult::Proceed => (),
@@ -1531,43 +1800,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             tw_stream.is_live = tw_is_live;
         }
 
+        if needs_refetch && select_stream(&yt_stream, &tw_stream, &nico_stream).is_none() {
+            continue 'outer;
+        }
+        report_danmaku_selection(
+            &cfg,
+            &probes,
+            &yt_stream,
+            &tw_stream,
+            &nico_stream,
+            &streaming_banned_keywords,
+            &warnings.snapshot(),
+        );
         if yt_stream.is_live || tw_stream.is_live || nico_stream.is_live {
             NO_LIVE.store(false, Ordering::SeqCst);
-            let yt_was_live = yt_stream.is_live;
-
-            // Skip channels previously stopped due to a warning/cut-off.
-            skip_stream_if_previously_warned(&mut yt_stream, &cfg).await;
-            skip_stream_if_previously_warned(&mut tw_stream, &cfg).await;
-            skip_stream_if_previously_warned(&mut nico_stream, &cfg).await;
-
-            // Check if config was updated by danmaku command after warning filtering
-            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
-                clear_config_updated();
-                tracing::info!("🔄 检测到配置更新（弹幕指令），重新加载配置并检查频道状态");
-                continue 'outer;
-            }
-
-            // If both channels are skipped after filtering, continue to next iteration
-            if !yt_stream.is_live && !tw_stream.is_live && !nico_stream.is_live {
-                mark_youtube_skipped_live(&yt_stream, yt_was_live);
-                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
-            }
-
-            skip_stream_if_banned_keyword(&mut yt_stream, &streaming_banned_keywords, &cfg).await;
-            skip_stream_if_banned_keyword(&mut tw_stream, &streaming_banned_keywords, &cfg).await;
-            skip_stream_if_banned_keyword(&mut nico_stream, &streaming_banned_keywords, &cfg).await;
-
-            mark_youtube_skipped_live(&yt_stream, yt_was_live);
-            if refetch_skipped_youtube(&yt_stream) {
-                continue 'outer;
-            }
-
-            if !yt_stream.is_live && !tw_stream.is_live && !nico_stream.is_live {
-                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
-            }
-
             let Some(mut selected_stream) = select_stream(&yt_stream, &tw_stream, &nico_stream)
             else {
                 if yt_stream.is_live && yt_stream.m3u8_url.is_none() {
@@ -1602,8 +1848,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 continue 'outer;
             };
 
-            // Clear warning stop since we have a playable stream candidate.
-            clear_warning_stop();
             if selected_stream.platform == StreamPlatform::Youtube {
                 bilistream::plugins::youtube::clear_skipped_live(&selected_stream.channel_id);
             }
@@ -1620,7 +1864,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 platform,
                 &channel_name,
                 &channel_id,
-            );
+            )
+            .with_episode_id(current_video_id.as_deref());
             let cluster_stream = ClusterStreamIdentity {
                 platform: platform.to_string(),
                 channel_name: channel_name.clone(),
@@ -1638,7 +1883,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
                 changed
             };
-            log_selected_stream(&stream_log, title.as_deref());
+            log_selected_stream(&stream_log, title.as_deref(), selected_stream.is_priority);
 
             if selected_stream.topic.is_some() && title.is_some() {
                 title = selected_stream.stream_title();
@@ -1677,6 +1922,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 enable_danmaku_commands(false);
             }
             // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
+            let mut history_area_v2 = bili_is_live.then_some(bili_area_id);
             if !bili_is_live {
                 tracing::info!("B站未直播");
                 let area_name = area_label(area_v2);
@@ -1684,6 +1930,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Try to start live, but don't crash on error
                 match bili_start_live(&mut cfg, area_v2).await {
                     Ok(_) => {
+                        history_area_v2 = Some(area_v2);
                         if bili_title != cfg_title {
                             if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
                                 tracing::error!("B站直播标题变更失败: {}", e);
@@ -1705,10 +1952,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             area_v2
                         );
                         // Clear banned keyword warning when successfully starting a new stream
-                        *recover_mutex_lock(
+                        recover_mutex_lock(
                             &LAST_BANNED_KEYWORD_WARNING,
                             "last banned keyword warning",
-                        ) = None;
+                        )
+                        .clear();
                     }
                     Err(e) => {
                         let error = e.to_string();
@@ -1776,6 +2024,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     if let Err(e) = update_area(bili_area_id, area_v2).await {
                         tracing::error!("B站分区更新失败: {}", e);
                     } else {
+                        history_area_v2 = Some(area_v2);
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
                             tracing::error!("B站直播标题变更失败: {}", e);
@@ -1793,14 +2042,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                 continue 'outer;
             }
-            let source_client = selected_source_client(
-                &selected_stream,
-                &yt_live,
-                &tw_live,
-                &nico_live,
-                &priority_yt_live,
-                &priority_tw_live,
-            );
+            let source_client = selected_source_client(&selected_stream, &probes, &nico_live);
 
             stream_end.start_session(
                 format!("{platform}:{channel_id}"),
@@ -1856,6 +2098,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // Stop/restart requests from before this session must not
                 // cancel its end-of-stream recheck.
                 session_generation = capture_session_generation();
+                let run_history = ffmpeg::FfmpegRunHistory::default();
                 let session = ffmpeg(
                     cfg.bililive.bili_rtmp_url.clone(),
                     cfg.bililive.bili_rtmp_key.clone(),
@@ -1867,22 +2110,23 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         enabled: cache.enabled,
                         latency_secs: cache.latency_secs,
                     },
-                    stream_log.clone(),
+                    stream_log.clone().with_history(run_history.clone()),
                 )
                 .await;
                 last_session = session;
                 if let Some(run) = session {
-                    history_session
-                        .get_or_insert_with(|| {
-                            crate::history::SessionGuard::start(
-                                &cfg,
-                                platform,
-                                &channel_id,
-                                &channel_name,
-                                Some(&cfg_title),
-                            )
-                        })
-                        .run_started(run.id());
+                    let guard = history_session.get_or_insert_with(|| {
+                        crate::history::SessionGuard::start_with_area(
+                            &cfg,
+                            platform,
+                            &channel_id,
+                            &channel_name,
+                            Some(&cfg_title),
+                            history_area_v2,
+                        )
+                    });
+                    guard.run_started(run.id());
+                    run_history.attach(guard.seq(), run.id());
                 }
 
                 if let (Some(monitor), Some(session)) = (lol_monitor.clone(), session) {
@@ -1897,7 +2141,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     ffmpeg::spawn_session_task(
                         session,
                         monitor_priority_channel_background(
-                            channel_name.clone(),
+                            selected_stream.source_identity(),
                             session,
                             stream_log.session_label(Some(session)),
                         ),
@@ -1999,12 +2243,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 );
                 cluster::record_stream_exit(!count_ffmpeg_exit_failure);
                 if let (Some(guard), Some(run)) = (&history_session, session) {
-                    guard.run_exited_at(
+                    guard.run_exited_with_diagnostic_at(
                         ffmpeg_exit_at,
                         run.id(),
                         exit_status.and_then(|status| status.code()),
                         !ffmpeg_exit_failed,
                         count_ffmpeg_exit_failure,
+                        run_history.diagnostic().as_deref(),
                     );
                 }
 
@@ -2372,13 +2617,32 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     }
 }
 
-fn should_probe_priority(cfg: &Config, current_channel_name: &str) -> bool {
+fn priority_monitor_enabled(cfg: &Config, current_source: &BroadcastSource) -> bool {
     cfg.priority_channel.enabled
         && cfg.priority_channel.auto_restart
         && !cfg.priority_channel.channel_name.is_empty()
-        && cfg.priority_channel.channel_name != current_channel_name
+        && !((current_source.platform == "YT"
+            && !cfg.priority_channel.youtube_channel_id.is_empty()
+            && current_source.channel_id
+                == canonical_channel_id("YT", &cfg.priority_channel.youtube_channel_id))
+            || (current_source.platform == "TW"
+                && !cfg.priority_channel.twitch_channel_id.is_empty()
+                && current_source.channel_id
+                    == canonical_channel_id("TW", &cfg.priority_channel.twitch_channel_id)))
         && (!cfg.priority_channel.youtube_channel_id.is_empty()
             || !cfg.priority_channel.twitch_channel_id.is_empty())
+}
+
+fn priority_is_held(cfg: &Config, warning: &WarningSnapshot) -> bool {
+    bilistream::plugins::danmaku::priority_warning_matches(warning, cfg)
+}
+
+fn should_probe_priority(
+    cfg: &Config,
+    current_source: &BroadcastSource,
+    warning: &WarningSnapshot,
+) -> bool {
+    priority_monitor_enabled(cfg, current_source) && !priority_is_held(cfg, warning)
 }
 
 /// Channels whose go-live ends the main loop's not-live wait: the target, and
@@ -2415,7 +2679,7 @@ async fn wait_priority(delay: Duration, priority_channel_id: &str) {
 /// Each monitor belongs to one FFmpeg session, including its initial delay and
 /// in-flight probes. Shutdown/restart aborts it even when the channel is unchanged.
 async fn monitor_priority_channel_background(
-    current_channel_name: String,
+    current_source: BroadcastSource,
     session: ffmpeg::FfmpegSession,
     context: String,
 ) {
@@ -2433,7 +2697,28 @@ async fn monitor_priority_channel_background(
             }
         };
         let delay = Duration::from_secs(cfg.interval.max(1).saturating_mul(2));
-        if !should_probe_priority(&cfg, &current_channel_name) {
+        if !priority_monitor_enabled(&cfg, &current_source) {
+            wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
+            continue;
+        }
+        let warnings = warning_tracker();
+        let before_probe = warnings.snapshot();
+        if priority_is_held(&cfg, &before_probe) {
+            let observations =
+                bilistream::plugins::priority::observe_priority_sources(&cfg, &before_probe).await;
+            let release = ffmpeg::with_ffmpeg_session(session, || {
+                bilistream::config::with_current_config(&cfg, || {
+                    warnings.observe_sources(&before_probe, &observations)
+                })
+            })
+            .await
+            .flatten()
+            .flatten();
+            if let Some(release) = release {
+                release.log();
+            }
+        }
+        if !should_probe_priority(&cfg, &current_source, &warnings.snapshot()) {
             wait_priority(delay, &cfg.priority_channel.youtube_channel_id).await;
             continue;
         }
@@ -2469,54 +2754,34 @@ async fn monitor_priority_channel_background(
                 }
             }
         }
-        let mut updated_cfg = cfg.clone();
-        updated_cfg.youtube.channel_name = cfg.priority_channel.channel_name.clone();
-        updated_cfg.twitch.channel_name = cfg.priority_channel.channel_name.clone();
-        updated_cfg.youtube.channel_id = cfg.priority_channel.youtube_channel_id.clone();
-        updated_cfg.twitch.channel_id = cfg.priority_channel.twitch_channel_id.clone();
-        updated_cfg.youtube.area_v2 = cfg.priority_channel.default_area;
-        updated_cfg.twitch.area_v2 = cfg.priority_channel.default_area;
-
-        let old_monitored_config_version = cluster::monitored_config_version(&cfg);
+        let transition_cfg = cfg.clone();
         let transition_context = context.clone();
-        // The session lock covers the conditional commit and stop. Failed or
-        // stale preparation leaves the current stream running.
+        // Ownership and current-config checks cover the park + restart signal.
+        // This overlay never writes ordinary channel targets or syncs config.
         if ffmpeg::transition_ffmpeg_session(session, async move {
-            if let Err(error) = bilistream::config::save_config_if_current(&mut updated_cfg).await {
-                tracing::debug!(
-                    "{transition_context} 优先频道切换已取消；{}",
-                    safe_diagnostic(&error.to_string())
+            bilistream::config::with_current_config(&transition_cfg, || {
+                let source = BroadcastSource::new(
+                    match prefetched.platform {
+                        PriorityChannelPlatform::Youtube => "YT",
+                        PriorityChannelPlatform::Twitch => "TW",
+                    },
+                    &transition_cfg.priority_channel.channel_name,
+                    &prefetched.channel_id,
+                    prefetched.stream_id.as_deref(),
                 );
-                return false;
-            }
-            bilistream::config::with_current_config(&updated_cfg, || {
-                store_prefetched_playable_stream(prefetched, &updated_cfg);
+                if warning_tracker().snapshot().holds(&source) {
+                    return false;
+                }
+                store_prefetched_playable_stream(prefetched, &transition_cfg);
                 set_manual_restart();
                 bilistream::plugins::set_config_updated();
-                if old_monitored_config_version != cluster::monitored_config_version(&updated_cfg) {
-                    let sync_cfg = updated_cfg.clone();
-                    let sync_context = transition_context.clone();
-                    // The session is about to stop and abort this monitor. Let the
-                    // sync outlive it, without awaiting peer I/O under the supervisor lock.
-                    tokio::spawn(async move {
-                        if bilistream::config::config_is_current(&sync_cfg) {
-                            let message =
-                                cluster::sync_monitored_config_after_change(&sync_cfg).await;
-                            if !message.is_empty() {
-                                tracing::info!(
-                                    "{sync_context} 优先频道配置同步结果；{}",
-                                    safe_diagnostic(&message)
-                                );
-                            }
-                        }
-                    });
-                }
                 tracing::info!(
-                    "{transition_context} 优先频道目标已更新为 {}，等待新会话启动",
-                    safe_text(&updated_cfg.priority_channel.channel_name, 24)
+                    "{transition_context} 优先频道 {} 已确认可播放，准备重新选台",
+                    safe_text(&transition_cfg.priority_channel.channel_name, 64)
                 );
+                true
             })
-            .is_some()
+            .unwrap_or(false)
         })
         .await
         {
@@ -3142,9 +3407,13 @@ mod tests {
             "example-channel-001",
         );
         tracing::subscriber::with_default(subscriber, || {
-            log_selected_stream(&identity, Some(&"很长的示例直播标题📺".repeat(20)));
-            log_selected_stream(&identity, Some("示例标题\n2026-10-10 ERROR 注入\u{1b}[31m"));
-            log_selected_stream(&identity, Some("示例 token=SYNTHETIC_TITLE_TOKEN"));
+            log_selected_stream(&identity, Some(&"很长的示例直播标题📺".repeat(20)), false);
+            log_selected_stream(
+                &identity,
+                Some("示例标题\n2026-10-10 ERROR 注入\u{1b}[31m"),
+                true,
+            );
+            log_selected_stream(&identity, Some("示例 token=SYNTHETIC_TITLE_TOKEN"), false);
             let context = identity.session_label(None);
             for reason in [
                 FfmpegLoopExitReason::SourceEnded,
@@ -3211,6 +3480,289 @@ mod tests {
             area_v2: 235,
             is_priority: false,
         }
+    }
+
+    #[test]
+    fn probe_plan_deduplicates_ids_in_each_platform_and_ignores_empty_ids() {
+        let mut cfg = test_config();
+        cfg.priority_channel.channel_name = "same display name".into();
+        cfg.youtube.channel_name = cfg.priority_channel.channel_name.clone();
+        cfg.twitch.channel_name = cfg.priority_channel.channel_name.clone();
+        cfg.priority_channel.youtube_channel_id = cfg.youtube.channel_id.clone();
+        cfg.priority_channel.twitch_channel_id = cfg.twitch.channel_id.to_uppercase();
+        let same = SourceProbePlan::for_config(&cfg);
+        assert_eq!(same.channels.len(), 2);
+        assert_eq!(same.youtube, same.priority_youtube);
+        assert_eq!(same.twitch, same.priority_twitch);
+        cfg.priority_channel.youtube_channel_id = "other-youtube-id".into();
+        cfg.priority_channel.twitch_channel_id = "other_twitch_login".into();
+        let distinct = SourceProbePlan::for_config(&cfg);
+        assert_eq!(
+            distinct.channels.len(),
+            4,
+            "same display names do not collapse distinct IDs"
+        );
+        assert_ne!(distinct.youtube, distinct.priority_youtube);
+        assert_ne!(distinct.twitch, distinct.priority_twitch);
+        cfg.priority_channel.youtube_channel_id.clear();
+        cfg.priority_channel.twitch_channel_id.clear();
+        assert_eq!(SourceProbePlan::for_config(&cfg).channels.len(), 2);
+        cfg.youtube.enable_monitor = false;
+        cfg.priority_channel.youtube_channel_id = cfg.youtube.channel_id.clone();
+        let priority_only = SourceProbePlan::for_config(&cfg);
+        assert_eq!(priority_only.youtube, None);
+        assert!(priority_only.priority_youtube.is_some());
+        assert_eq!(priority_only.channels.len(), 2);
+    }
+
+    #[test]
+    fn priority_area_and_shared_client_follow_channel_ids_without_mutating_config() {
+        let mut cfg = test_config();
+        cfg.youtube.area_v2 = 86;
+        cfg.priority_channel.default_area = 329;
+        cfg.priority_channel.channel_name = "另一个显示名".into();
+        cfg.priority_channel.youtube_channel_id = cfg.youtube.channel_id.clone();
+        let before = serde_json::to_value(&cfg).unwrap();
+        let version = cluster::monitored_config_version(&cfg);
+        assert_eq!(priority_area(StreamPlatform::Youtube, &cfg), 86);
+        let ordinary = test_stream_candidate(StreamPlatform::Youtube, true);
+        let mut priority = ordinary.clone();
+        priority.channel_id = cfg.youtube.channel_id.clone();
+        priority.area_v2 = priority_area(StreamPlatform::Youtube, &cfg);
+        let selected = overlay_priority(ordinary, priority);
+        let client = YoutubeClient::new(&cfg.youtube.channel_name, &cfg.youtube.channel_id, None);
+        let probes = vec![ProbedSource {
+            channel: ChannelProbe {
+                platform: StreamPlatform::Youtube,
+                channel_name: cfg.youtube.channel_name.clone(),
+                channel_id: cfg.youtube.channel_id.clone(),
+            },
+            client: Some(ProbedClient::Youtube(client)),
+            status: Ok(OFFLINE_SOURCE_STATUS),
+        }];
+        let Some(SourceClient::Youtube(selected_client)) =
+            selected_source_client(&selected, &probes, &None)
+        else {
+            panic!("shared ID must use the one checked client")
+        };
+        let Some(ProbedClient::Youtube(shared_client)) = probes[0].client.as_ref() else {
+            unreachable!()
+        };
+        assert!(std::ptr::eq(selected_client, shared_client));
+        assert_eq!(selected.area_v2, 86);
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
+        assert_eq!(cluster::monitored_config_version(&cfg), version);
+        cfg.priority_channel.youtube_channel_id = "distinct".into();
+        assert_eq!(priority_area(StreamPlatform::Youtube, &cfg), 329);
+    }
+
+    #[test]
+    fn held_or_url_less_priority_keeps_same_platform_and_niconico_fallbacks() {
+        use bilistream::plugins::danmaku::warning::WarningTracker;
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let mut ordinary = test_stream_candidate(StreamPlatform::Youtube, true);
+        ordinary.channel_id = "ordinary".into();
+        let mut priority = test_stream_candidate(StreamPlatform::Youtube, true);
+        priority.channel_id = "priority".into();
+        priority.channel_name = "示例优先频道 001".into();
+        priority.is_priority = true;
+        let _owner = tracker.own_source(1, priority.source_identity());
+        tracker
+            .mark_event(&mut tracker.capture_event(), None)
+            .unwrap();
+        assert!(exclude_warned_stream(&mut priority, &tracker.snapshot()));
+        let chosen = overlay_priority(ordinary.clone(), priority.clone());
+        assert_eq!(chosen.channel_id, "ordinary");
+        assert!(!chosen.is_priority);
+        assert!(tracker.snapshot().has_hold());
+        priority.is_live = true;
+        priority.m3u8_url = None;
+        let chosen = overlay_priority(ordinary, priority);
+        assert_eq!(chosen.channel_id, "ordinary");
+        assert!(!chosen.is_priority);
+        let tw = test_stream_candidate(StreamPlatform::Twitch, true);
+        let nico = test_stream_candidate(StreamPlatform::Niconico, true);
+        assert_eq!(
+            select_stream(&chosen, &tw, &nico).unwrap().platform,
+            StreamPlatform::Niconico
+        );
+    }
+
+    #[test]
+    fn scheduled_and_id_only_upcoming_results_cannot_clear_the_live_episode_hold() {
+        use bilistream::plugins::danmaku::warning::{SourcePresence, WarningTracker};
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "示例频道 001", "channel-001", Some("live-1"));
+        let _owner = tracker.own_source(1, source.clone());
+        tracker
+            .mark_event(&mut tracker.capture_event(), None)
+            .unwrap();
+        let before = tracker.snapshot();
+        for start in [Some(Local::now() + chrono::Duration::hours(1)), None] {
+            let status = (
+                false,
+                None,
+                Some("下一场预告".into()),
+                None,
+                start,
+                Some("upcoming-2".into()),
+            );
+            let observation = source_observation(
+                StreamPlatform::Youtube,
+                &source.channel_name,
+                &source.channel_id,
+                &status,
+            );
+            assert_eq!(observation.presence, SourcePresence::Inconclusive);
+            assert!(tracker.observe_sources(&before, &[observation]).is_none());
+            assert!(tracker.snapshot().holds(&source));
+        }
+        let offline = source_observation(
+            StreamPlatform::Youtube,
+            &source.channel_name,
+            &source.channel_id,
+            &OFFLINE_SOURCE_STATUS,
+        );
+        assert_eq!(offline.presence, SourcePresence::Offline);
+        assert!(tracker.observe_sources(&before, &[offline]).is_some());
+    }
+
+    #[test]
+    fn shared_youtube_and_twitch_ids_each_emit_one_banned_notice_across_passes() {
+        let mut notices = VecDeque::new();
+        let keywords = vec!["blocked".to_owned()];
+        let mut yt = test_stream_candidate(StreamPlatform::Youtube, true);
+        yt.title = Some("blocked title".into());
+        let mut tw = test_stream_candidate(StreamPlatform::Twitch, true);
+        tw.title = Some("blocked title".into());
+        for expected in [2, 0] {
+            let mut emitted = 0;
+            for mut candidate in [yt.clone(), tw.clone(), yt.clone(), tw.clone()] {
+                let keyword = exclude_banned_stream(&mut candidate, &keywords).unwrap();
+                assert!(!candidate.is_live);
+                emitted += usize::from(remember_banned_notice(
+                    &mut notices,
+                    &candidate,
+                    &keyword,
+                    candidate.title.as_deref().unwrap(),
+                ));
+            }
+            assert_eq!(emitted, expected);
+            assert_eq!(notices.len(), 2);
+        }
+    }
+
+    #[test]
+    fn cut_then_danmaku_twitch_switch_holds_youtube_until_real_push_output() {
+        use bilistream::plugins::danmaku::{
+            warning::WarningTracker, warning_test_support as command,
+        };
+        use bilistream::plugins::danmaku_client::{capture_warning_message, DanmakuMessage};
+        use bilistream::plugins::ffmpeg::warning_test_support::{run, ReaderFixture};
+        use tracing::instrument::WithSubscriber;
+
+        run(async {
+            let _commands = command::SERIAL.lock().await;
+            // Register after the shared producer/test locks; unobserved callers
+            // may already have reached these tracing callsites in this suite.
+            let (dispatch, logs) =
+                bilistream::logging::test_capture::subscriber(tracing::Level::INFO);
+            async {
+                command::reset_trace();
+                let mut cfg = test_config();
+                cfg.cluster.node_id = "ca".into();
+                cfg.youtube.channel_name = "示例频道 001".into();
+                cfg.youtube.channel_id = "UCexample001".into();
+                cfg.youtube.area_v2 = 329;
+                cfg.priority_channel.channel_name = cfg.youtube.channel_name.clone();
+                cfg.priority_channel.youtube_channel_id = cfg.youtube.channel_id.clone();
+                cfg.priority_channel.auto_restart = true;
+                let warnings = std::sync::Arc::new(WarningTracker::default());
+                let old_source = BroadcastSource::new("YT", &cfg.youtube.channel_name, &cfg.youtube.channel_id, Some("yt-episode-1"));
+                let old_owner = warnings.own_source(100, old_source.clone());
+                capture_warning_message(&warnings, &DanmakuMessage {
+                    cmd: "CUT_OFF".into(), info: None,
+                    data: Some(serde_json::json!({"msg": "Stream cut off"})),
+                }).unwrap();
+                assert!(warnings.snapshot().holds(&old_source));
+                drop(old_owner);
+
+                assert_eq!(command::accept_target(&mut cfg, warnings.clone(), "TW", "示例频道 002", "example002", 86).await, 1);
+                assert!(warnings.snapshot().holds(&old_source), "saving another target cannot release the old hold");
+                clear_config_updated(); // the next pass loads the saved target
+                let saved_targets = serde_json::to_value(&cfg).unwrap();
+                let version = cluster::monitored_config_version(&cfg);
+                let a_status = (true, None, Some("示例直播 001".into()), Some("https://example.invalid/a.m3u8".into()), None, Some("yt-episode-1".into()));
+                let b_status = (true, Some("League of Legends".into()), Some("示例直播 002".into()), Some("https://example.invalid/b.m3u8".into()), None, Some("tw-episode-2".into()));
+                let plan = SourceProbePlan::for_config(&cfg);
+                assert_eq!(plan.channels.len(), 2);
+                assert_eq!(plan.youtube, plan.priority_youtube);
+                let probes: Vec<_> = plan.channels.iter().map(|channel| ProbedSource {
+                    channel: channel.clone(), client: None,
+                    status: Ok(if channel.platform == StreamPlatform::Youtube { a_status.clone() } else { b_status.clone() }),
+                }).collect();
+                let mut yt = StreamCandidate::from_status(StreamPlatform::Youtube, &cfg.youtube.channel_name, &cfg.youtube.channel_id, cfg.youtube.area_v2, a_status.clone());
+                let mut priority_yt = StreamCandidate::from_status(StreamPlatform::Youtube, &cfg.priority_channel.channel_name, &cfg.priority_channel.youtube_channel_id, priority_area(StreamPlatform::Youtube, &cfg), a_status);
+                let tw = StreamCandidate::from_status(StreamPlatform::Twitch, &cfg.twitch.channel_name, &cfg.twitch.channel_id, cfg.twitch.area_v2, b_status);
+                let nico = test_stream_candidate(StreamPlatform::Niconico, false);
+                skip_stream_if_previously_warned(&mut yt, &cfg, &warnings).await;
+                skip_stream_if_previously_warned(&mut priority_yt, &cfg, &warnings).await;
+                let yt = overlay_priority(yt, priority_yt);
+                let selected = select_stream(&yt, &tw, &nico).unwrap();
+                assert_eq!(selected.platform, StreamPlatform::Twitch);
+                assert_eq!(selected.channel_name, "示例频道 002");
+                assert_eq!(selected.channel_id, "example002");
+                assert_eq!(selected.area_v2, 86);
+                assert!(warnings.snapshot().holds(&old_source), "selection cannot release");
+                report_danmaku_selection(&cfg, &probes, &yt, &tw, &nico, &[], &warnings.snapshot());
+                log_selected_stream(&FfmpegStreamIdentity::new("ca", "TW", &selected.channel_name, &selected.channel_id), selected.title.as_deref(), selected.is_priority);
+
+                let attempt = ReaderFixture::new(101, selected.source_identity(), warnings.clone()).await;
+                attempt.started(false);
+                assert!(warnings.snapshot().holds(&old_source), "spawning cache cannot release");
+                attempt.feed(true, b"Connection refused\n").await;
+                attempt.finish().await;
+                assert!(warnings.snapshot().holds(&old_source), "failed startup cannot release");
+
+                let pushing = ReaderFixture::new(102, selected.source_identity(), warnings.clone()).await;
+                pushing.started(false);
+                pushing.feed(false, b"frame=60 time=00:00:01.00 bitrate=9000kbits/s speed=1.5x\n").await;
+                pushing.started(true);
+                pushing.feed(true, b"frame=0 time=00:00:00.00 bitrate=0kbits/s speed=0x\n").await;
+                assert!(warnings.snapshot().holds(&old_source), "cache output and zero push samples do not prove pushing");
+                pushing.feed(true, b"frame=120 time=00:00:02.00 bitrate=6000kbits/s speed=1x\nframe=180 time=00:00:03.00 bitrate=6000kbits/s speed=1x\n").await;
+                assert!(!warnings.snapshot().has_hold());
+                assert!(should_probe_priority(&cfg, &selected.source_identity(), &warnings.snapshot()), "the chosen tradeoff allows priority to return after other-channel output");
+                assert_eq!(serde_json::to_value(&cfg).unwrap(), saved_targets);
+                assert_eq!(cluster::monitored_config_version(&cfg), version);
+                pushing.finish().await;
+                command::reset_trace();
+            }.with_subscriber(dispatch).await;
+            let output = logs.text();
+            assert_eq!(output.matches("临时跳过已解除").count(), 1, "{output}");
+            assert_eq!(output.matches("已观察到推流输出").count(), 1, "{output}");
+            let ordered = [
+                "Cut off/Warning",
+                "已标记频道",
+                "弹幕 %转播%",
+                "监听目标已更新",
+                "跳过频道",
+                "选台结果=TW/示例频道 002",
+                "源直播可用",
+                "Connection refused",
+                "已观察到推流输出",
+                "另一频道已确认推流",
+            ];
+            let mut cursor = 0;
+            for text in ordered {
+                cursor += output[cursor..]
+                    .find(text)
+                    .unwrap_or_else(|| panic!("missing/out-of-order {text}: {output}"))
+                    + text.len();
+            }
+            assert!(!output.contains("https://"));
+            println!("{output}");
+        });
     }
 
     #[test]
@@ -4113,41 +4665,21 @@ mod tests {
     }
 
     #[test]
-    fn priority_live_for_switch_rejects_banned_titles() {
-        let keywords = vec!["asmr".to_string(), "just chatting".to_string()];
-
-        assert!(!priority_live_for_switch(
-            true,
-            None,
-            Some("【ASMR】睡眠導入"),
-            &keywords,
-            "YouTube",
-            "priority",
-        ));
-        assert!(!priority_live_for_switch(
-            true,
-            Some("Just Chatting"),
-            Some("雑談"),
-            &keywords,
-            "Twitch",
-            "priority",
-        ));
-        assert!(priority_live_for_switch(
-            true,
-            Some("League of Legends"),
-            Some("ランク"),
-            &keywords,
-            "YouTube",
-            "priority",
-        ));
-        assert!(!priority_live_for_switch(
-            false,
-            None,
-            Some("ランク"),
-            &keywords,
-            "YouTube",
-            "priority",
-        ));
+    fn priority_eligibility_rejects_banned_titles_before_overlay() {
+        let keywords = vec!["asmr".to_owned()];
+        let mut ordinary = test_stream_candidate(StreamPlatform::Youtube, true);
+        ordinary.channel_id = "ordinary".into();
+        let mut priority = test_stream_candidate(StreamPlatform::Youtube, true);
+        priority.channel_id = "priority".into();
+        priority.title = Some("ASMR stream".into());
+        assert_eq!(
+            exclude_banned_stream(&mut priority, &keywords).as_deref(),
+            Some("asmr")
+        );
+        assert!(!priority.is_live);
+        let selected = overlay_priority(ordinary, priority);
+        assert_eq!(selected.channel_id, "ordinary");
+        assert!(!selected.is_priority);
     }
 
     #[test]
@@ -4181,11 +4713,15 @@ mod tests {
             "youtube": {}, "twitch": {}, "enable_lol_monitor": false, "anti_collision_list": {},
             "priority_channel": {"enabled": true, "channel_name": "priority", "youtube_channel_id": "id"}
         })).unwrap();
-        assert!(!should_probe_priority(&cfg, "other"));
+        let warnings = bilistream::plugins::danmaku::warning::WarningTracker::default();
+        let clear = warnings.snapshot();
+        let other = BroadcastSource::new("YT", "priority", "other", None);
+        let current_priority = BroadcastSource::new("YT", "other name", "id", None);
+        assert!(!should_probe_priority(&cfg, &other, &clear));
         cfg.priority_channel.auto_restart = true;
-        assert!(should_probe_priority(&cfg, "other"));
-        assert!(!should_probe_priority(&cfg, "priority"));
+        assert!(should_probe_priority(&cfg, &other, &clear));
+        assert!(!should_probe_priority(&cfg, &current_priority, &clear));
         cfg.priority_channel.enabled = false;
-        assert!(!should_probe_priority(&cfg, "other"));
+        assert!(!should_probe_priority(&cfg, &other, &clear));
     }
 }

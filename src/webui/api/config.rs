@@ -99,6 +99,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
         "enable_youtube_monitor": cfg.enable_youtube_monitor,
         "enable_twitch_monitor": cfg.enable_twitch_monitor,
         "cluster": cfg.cluster.clone(),
+        "history": cfg.history,
         "bilibili": {
             "room": cfg.bililive.room,
             "enable_danmaku_command": cfg.bililive.enable_danmaku_command,
@@ -225,6 +226,87 @@ pub struct UpdateConfigRequest {
     niconico_proxy_keep_password: Option<bool>,
     clear_niconico_proxy: Option<bool>,
     cluster: Option<ClusterConfig>,
+    history: Option<HistoryPatch>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+struct HistoryPatch {
+    enabled: Option<bool>,
+    sample_secs: Option<u64>,
+    bili_sample_secs: Option<u64>,
+    bili_stop_summary: Option<bool>,
+    capture: Option<bool>,
+    retention: Option<HistoryRetentionPatch>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+struct HistoryRetentionPatch {
+    raw_days: Option<u64>,
+    rollup_days: Option<u64>,
+    event_days: Option<u64>,
+    event_rows: Option<u64>,
+    max_mb: Option<u64>,
+}
+
+impl HistoryPatch {
+    fn apply(
+        self,
+        saved: &crate::config::HistoryConfig,
+    ) -> Result<crate::config::HistoryConfig, &'static str> {
+        let mut next = saved.clone();
+        if let Some(value) = self.enabled {
+            next.enabled = value
+        }
+        if let Some(value) = self.sample_secs {
+            next.sample_secs = value
+        }
+        if let Some(value) = self.bili_sample_secs {
+            next.bili_sample_secs = value
+        }
+        if let Some(value) = self.bili_stop_summary {
+            next.bili_stop_summary = value
+        }
+        if let Some(value) = self.capture {
+            next.capture = value
+        }
+        if let Some(p) = self.retention {
+            if let Some(value) = p.raw_days {
+                next.retention.raw_days = value
+            }
+            if let Some(value) = p.rollup_days {
+                next.retention.rollup_days = value
+            }
+            if let Some(value) = p.event_days {
+                next.retention.event_days = value
+            }
+            if let Some(value) = p.event_rows {
+                next.retention.event_rows = value
+            }
+            if let Some(value) = p.max_mb {
+                next.retention.max_mb = value
+            }
+        }
+        if !(5..=60).contains(&next.sample_secs) || !(5..=60).contains(&next.bili_sample_secs) {
+            return Err("统计采样间隔须为 5–60 秒");
+        }
+        if !(1..=90).contains(&next.retention.raw_days)
+            || !(1..=90).contains(&next.retention.rollup_days)
+            || next.retention.raw_days > next.retention.rollup_days
+        {
+            return Err("统计样本保留期须为 1–90 天，原始样本不能长于分钟数据");
+        }
+        if !(1..=3650).contains(&next.retention.event_days)
+            || !(100..=2_000_000).contains(&next.retention.event_rows)
+        {
+            return Err("统计事件保留期须为 1–3650 天，记录上限须为 100–2000000");
+        }
+        if !(16..=65_536).contains(&next.retention.max_mb) {
+            return Err("统计空间上限须为 16–65536 MiB");
+        }
+        Ok(next)
+    }
 }
 
 pub(crate) const EDIT_CONFLICT: &str = "配置已被其他操作修改，请重新加载后再保存";
@@ -290,6 +372,7 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "niconico_proxy": "",
         "clear_niconico_proxy": false,
         "cluster": cfg.cluster,
+        "history": cfg.history,
     })
 }
 
@@ -596,6 +679,19 @@ pub async fn update_config(
     }
     let mut holodex_jwt_saved = false;
 
+    if let Some(history) = payload.history.take() {
+        match history.apply(&cfg.history) {
+            Ok(history) => cfg.history = history,
+            Err(message) => {
+                return Ok(ApiResponse {
+                    success: false,
+                    data: None,
+                    message: Some(message.into()),
+                })
+            }
+        }
+    }
+
     // Update fields
     if let Some(visible) = payload.show_priority_channel {
         cfg.show_priority_channel = visible;
@@ -801,6 +897,7 @@ pub async fn update_config(
 
     // Apply the exact saved config to the cache without re-reading config.json.
     refresh_status_cache_config_from(&cfg);
+    crate::history::refresh_config(&cfg);
     if holodex_monitor_gate_changed {
         crate::webui::state::request_status_refresh();
     }
@@ -823,7 +920,16 @@ pub async fn update_config(
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some(format!("配置已更新{}{}", sync_message, toggle_sync_message)),
+        message: Some(format!(
+            "配置已更新{}{}{}",
+            sync_message,
+            toggle_sync_message,
+            if previous_cfg.history.enabled != cfg.history.enabled {
+                "；统计记录开关将在进程重启后生效"
+            } else {
+                ""
+            }
+        )),
     })
 }
 

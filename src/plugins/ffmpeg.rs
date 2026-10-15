@@ -11,6 +11,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::{watch, Mutex, MutexGuard};
 use tokio::task::JoinHandle;
 
+use super::danmaku::warning::{
+    warning_tracker, BroadcastSource, PushWarningRelease, SourceOwner, WarningRelease,
+    WarningTracker,
+};
 use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
 use crate::logging::{
     exit_status, has_sensitive_data, human_duration, safe_diagnostic, safe_diagnostic_continuation,
@@ -79,6 +83,18 @@ enum StuckReason {
     },
 }
 
+impl StuckReason {
+    fn history_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NoStats { .. } => Some("no_stats"),
+            Self::StreamTimeFrozen { .. } => Some("stream_time_frozen"),
+            Self::LowSpeed { .. } => Some("low_speed"),
+            // An exhausted source draining normally is not a stuck run.
+            Self::IdleDrain { .. } => None,
+        }
+    }
+}
+
 // Global process supervisor
 lazy_static::lazy_static! {
     static ref FFMPEG_SUPERVISOR: Arc<ProcessSupervisor> = Arc::new(ProcessSupervisor::default());
@@ -143,6 +159,78 @@ impl fmt::Display for FfmpegSession {
     }
 }
 
+/// Facts stay with a single child group even after the supervisor removes it.
+/// Runtime attaches its relay identity after a successful spawn and reads the
+/// diagnostic after wait; neither operation needs another supervisor await.
+#[derive(Clone, Default)]
+pub struct FfmpegRunHistory(Arc<StdMutex<RunHistory>>);
+
+#[derive(Default)]
+struct RunHistory {
+    identity: Option<(u64, u64)>,
+    diagnostic: Option<String>,
+    stuck: Option<(u64, &'static str)>,
+    stuck_emitted: bool,
+}
+
+impl RunHistory {
+    fn pending_stuck(&mut self) -> Option<(u64, crate::history::EventKind)> {
+        if self.stuck_emitted {
+            return None;
+        }
+        let (seq, run) = self.identity?;
+        let (at, reason) = self.stuck?;
+        self.stuck_emitted = true;
+        Some((
+            at,
+            crate::history::EventKind::FfmpegStuck { seq, run, reason },
+        ))
+    }
+}
+
+impl FfmpegRunHistory {
+    pub fn attach(&self, seq: u64, run: u64) {
+        let event = {
+            let mut facts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            // A delayed attach can never relabel the facts of another run.
+            if facts
+                .identity
+                .is_some_and(|identity| identity != (seq, run))
+            {
+                return;
+            }
+            facts.identity = Some((seq, run));
+            facts.pending_stuck()
+        };
+        if let Some((at, event)) = event {
+            crate::history::emit_at(at, event);
+        }
+    }
+
+    pub fn diagnostic(&self) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .diagnostic
+            .clone()
+    }
+
+    fn record_diagnostic(&self, class: &str) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).diagnostic = Some(class.to_string());
+    }
+
+    fn record_stuck(&self, at: u64, reason: &'static str) {
+        let event = {
+            let mut facts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            facts.stuck.get_or_insert((at, reason));
+            facts.pending_stuck()
+        };
+        if let Some((at, event)) = event {
+            crate::history::emit_at(at, event);
+        }
+    }
+}
+
 /// Immutable, non-secret identity captured from the selected stream, never
 /// looked up from the next configuration by a delayed child or log writer.
 #[derive(Clone)]
@@ -151,6 +239,9 @@ pub struct FfmpegStreamIdentity {
     platform: String,
     channel: String,
     channel_id: String,
+    history: Option<FfmpegRunHistory>,
+    source: BroadcastSource,
+    warnings: Arc<WarningTracker>,
 }
 
 impl FfmpegStreamIdentity {
@@ -174,7 +265,22 @@ impl FfmpegStreamIdentity {
                 24,
             ),
             channel_id: safe_text(channel_id, usize::MAX),
+            history: None,
+            source: BroadcastSource::new(platform, channel, channel_id, None),
+            warnings: warning_tracker(),
         }
+    }
+
+    pub fn with_history(mut self, history: FfmpegRunHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
+
+    pub(crate) fn with_episode_id(mut self, episode_id: Option<&str>) -> Self {
+        self.source.episode_id = episode_id
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned);
+        self
     }
 
     pub(crate) fn session_label(&self, session: Option<FfmpegSession>) -> String {
@@ -195,14 +301,23 @@ impl fmt::Display for FfmpegStreamIdentity {
 struct SessionLogContext {
     identity: Arc<FfmpegStreamIdentity>,
     session: FfmpegSession,
+    warning_release: Option<PushWarningRelease>,
 }
 
 impl SessionLogContext {
     fn new(identity: FfmpegStreamIdentity, session: FfmpegSession) -> Self {
+        let warning_release = identity.warnings.push_release_token(&identity.source);
         Self {
             identity: Arc::new(identity),
             session,
+            warning_release,
         }
+    }
+
+    fn own_source(&self) -> SourceOwner {
+        self.identity
+            .warnings
+            .own_source(self.session.id(), self.identity.source.clone())
     }
 }
 
@@ -457,6 +572,7 @@ pub struct FfmpegProcess {
     ingest: Option<IngestProcess>,
     pid: Option<u32>,
     cache_dir: Option<PathBuf>,
+    _warning_owner: Option<SourceOwner>,
 }
 
 impl FfmpegProcess {
@@ -522,6 +638,15 @@ pub async fn current_ffmpeg_session() -> Option<FfmpegSession> {
         .await
         .as_ref()
         .map(|process| process.session)
+}
+
+pub(crate) async fn with_ffmpeg_session<T>(
+    session: FfmpegSession,
+    action: impl FnOnce() -> T,
+) -> Option<T> {
+    let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+    matching_process(&mut supervisor, session)?;
+    Some(action())
 }
 
 /// Register work while checking ownership under the supervisor lock.
@@ -619,6 +744,14 @@ async fn spawn_piped_ingest(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    if context
+        .identity
+        .warnings
+        .snapshot()
+        .holds(&context.identity.source)
+    {
+        return None;
+    }
     match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
             let log = ChildLogContext::new(context, ChildRole::Ingest, child.id());
@@ -1978,6 +2111,7 @@ struct StderrReporter {
     suppressed_level: DiagnosticLevel,
     last_diagnostic: String,
     last_summary: Instant,
+    warning_release: Option<WarningRelease>,
 }
 
 impl StderrReporter {
@@ -1991,6 +2125,7 @@ impl StderrReporter {
             suppressed: 0,
             suppressed_level: DiagnosticLevel::Warn,
             last_diagnostic: String::new(),
+            warning_release: None,
         }
     }
 
@@ -2019,6 +2154,13 @@ impl StderrReporter {
         } else {
             safe_diagnostic(line)
         };
+        if level != DiagnosticLevel::Debug {
+            if let (Some(history), Some(class)) = (&self.log.session.identity.history, &class) {
+                // Only the allowlisted native class is retained, never the
+                // raw stderr line, URL, cookie, or a continuation fragment.
+                history.record_diagnostic(class);
+            }
+        }
         if truncated {
             diagnostic.push_str(" …[原始行超过64 KiB，已截断]");
         }
@@ -2131,9 +2273,17 @@ async fn monitor_ffmpeg_stderr(
                     );
                 }
                 reporter.repeat_summary("诊断读取结束", Instant::now());
+                drop(process);
+                if let Some(release) = reporter.warning_release.take() {
+                    release.log();
+                }
                 break;
             }
             Ok(n) => lines.push(&buffer[..n], &mut handle),
+        }
+        drop(process);
+        if let Some(release) = reporter.warning_release.take() {
+            release.log();
         }
     }
 }
@@ -2199,6 +2349,18 @@ fn handle_ffmpeg_stderr_line(
                     || sample.speed.is_some_and(|value| value > 0.0));
             update_stats_display(role, sample);
             reporter.observe_publishing(positive_push_sample);
+            if positive_push_sample {
+                let context = &reporter.log.session;
+                if let Some(token) = &context.warning_release {
+                    if let Some(release) = context
+                        .identity
+                        .warnings
+                        .observe_push(context.session.id(), token)
+                    {
+                        reporter.warning_release = Some(release);
+                    }
+                }
+            }
         }
     } else {
         reporter.diagnostic(line, log_level, truncated, Instant::now());
@@ -2333,6 +2495,17 @@ async fn spawn_direct_ffmpeg(
         }
     }
 
+    if context
+        .identity
+        .warnings
+        .snapshot()
+        .holds(&context.identity.source)
+    {
+        if let Some(mut ingest) = ingest_child {
+            kill_child_tree(&mut ingest).await;
+        }
+        return;
+    }
     match FFMPEG_SUPERVISOR.spawn(&mut cmd) {
         Ok(mut child) => {
             let pid = child.id();
@@ -2361,6 +2534,7 @@ async fn spawn_direct_ffmpeg(
                 ingest: ingest_child,
                 pid,
                 cache_dir: None,
+                _warning_owner: Some(context.own_source()),
             };
             *supervisor = Some(process);
 
@@ -2469,6 +2643,18 @@ async fn spawn_cached_ffmpeg(
         }
     }
 
+    if context
+        .identity
+        .warnings
+        .snapshot()
+        .holds(&context.identity.source)
+    {
+        if let Some(mut ingest) = ingest_child {
+            kill_child_tree(&mut ingest).await;
+        }
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+        return;
+    }
     match FFMPEG_SUPERVISOR.spawn(&mut cache_cmd) {
         Ok(mut cache_child) => {
             let cache_pid = cache_child.id();
@@ -2508,6 +2694,7 @@ async fn spawn_cached_ffmpeg(
                 ingest: ingest_child,
                 pid: cache_pid,
                 cache_dir: Some(cache_dir.clone()),
+                _warning_owner: Some(context.own_source()),
             };
             *supervisor = Some(process);
 
@@ -2564,6 +2751,16 @@ async fn spawn_cached_ffmpeg(
                     .stderr(Stdio::piped());
 
                 let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+                if reader_context
+                    .identity
+                    .warnings
+                    .snapshot()
+                    .holds(&reader_context.identity.source)
+                {
+                    drop(supervisor);
+                    stop_ffmpeg_session(session).await;
+                    return;
+                }
                 let Some(process) = matching_process(&mut supervisor, session) else {
                     return;
                 };
@@ -2656,6 +2853,9 @@ pub async fn ffmpeg(
                 }
             };
             if !crate::cluster::local_monitoring_allowed(&cfg) {
+                return None;
+            }
+            if identity.warnings.snapshot().holds(&identity.source) {
                 return None;
             }
             let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
@@ -2785,6 +2985,11 @@ async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
         let stuck = check_ffmpeg_stuck(timeout_secs);
         drop(supervisor);
         if let Some(reason) = stuck {
+            if let (Some(history), Some(code)) =
+                (&context.identity.history, reason.history_reason())
+            {
+                history.record_stuck(crate::storage::now(), code);
+            }
             log_stuck(&context, reason);
             stop_ffmpeg_session(session).await;
             break;
@@ -2796,11 +3001,285 @@ async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
 }
 
 #[cfg(test)]
+pub(crate) mod warning_test_support {
+    use super::*;
+
+    pub(crate) fn run(test: impl Future<Output = ()>) {
+        super::tests::run_supervisor_test(test);
+    }
+
+    pub(crate) struct ReaderFixture {
+        supervisor: ProcessSupervisor,
+        context: SessionLogContext,
+    }
+
+    impl ReaderFixture {
+        pub(crate) async fn new(
+            session: u64,
+            source: BroadcastSource,
+            warnings: Arc<WarningTracker>,
+        ) -> Self {
+            Self::prepared(session, source, warnings, || {}).await
+        }
+
+        pub(crate) async fn prepared(
+            session: u64,
+            source: BroadcastSource,
+            warnings: Arc<WarningTracker>,
+            before_spawn: impl FnOnce(),
+        ) -> Self {
+            let mut identity = FfmpegStreamIdentity::new(
+                "ca",
+                &source.platform,
+                &source.channel_name,
+                &source.channel_id,
+            )
+            .with_episode_id(source.episode_id.as_deref());
+            identity.warnings = warnings;
+            let context = SessionLogContext::new(identity, FfmpegSession(session));
+            before_spawn();
+            let supervisor = ProcessSupervisor::default();
+            *supervisor.lock().await = Some(FfmpegProcess {
+                session: context.session,
+                log: context.clone(),
+                tasks: SessionTasks::default(),
+                children: Vec::new(),
+                ingest: None,
+                pid: Some(12345),
+                cache_dir: None,
+                _warning_owner: Some(context.own_source()),
+            });
+            Self {
+                supervisor,
+                context,
+            }
+        }
+
+        pub(crate) fn started(&self, push: bool) {
+            self.child(push).started();
+        }
+
+        fn child(&self, push: bool) -> ChildLogContext {
+            ChildLogContext::new(
+                &self.context,
+                ChildRole::Ffmpeg(if push {
+                    FfmpegStatsRole::Push
+                } else {
+                    FfmpegStatsRole::Cache
+                }),
+                Some(12345),
+            )
+        }
+
+        pub(crate) async fn feed(&self, push: bool, bytes: &[u8]) {
+            monitor_ffmpeg_stderr(
+                &self.supervisor,
+                std::io::Cursor::new(bytes),
+                "warning",
+                self.child(push),
+            )
+            .await;
+        }
+
+        pub(crate) async fn finish(&self) {
+            *self.supervisor.lock().await = None;
+            reset_stopped_tracking_state();
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, ReadBuf};
+
+    #[test]
+    fn real_push_reader_cannot_clear_a_newer_same_name_warning_or_a_replaced_session() {
+        use super::warning_test_support::ReaderFixture;
+        run_supervisor_test(async {
+            let warnings = Arc::new(WarningTracker::default());
+            let a = BroadcastSource::new("YT", "示例频道 001", "UCexample001", Some("episode-1"));
+            let a_owner = warnings.own_source(1, a.clone());
+            warnings
+                .mark_event(&mut warnings.capture_event(), None)
+                .unwrap();
+            drop(a_owner);
+            let b = BroadcastSource::new("TW", "示例频道 002", "example002", Some("episode-2"));
+            let newer_warning = warnings.clone();
+            let old = ReaderFixture::prepared(2, b.clone(), warnings.clone(), move || {
+                // The token belongs to A's first warning. A second warning is
+                // received during source preparation before B is registered.
+                newer_warning
+                    .mark_event(
+                        &mut newer_warning.capture_event(),
+                        Some("【转播】示例频道 001"),
+                    )
+                    .unwrap();
+            })
+            .await;
+            old.feed(
+                true,
+                b"frame=120 time=00:00:02.00 bitrate=6000kbits/s speed=1x\n",
+            )
+            .await;
+            assert!(
+                warnings.snapshot().holds(&a),
+                "positive output must compare the warning generation"
+            );
+            old.finish().await;
+            let current = ReaderFixture::new(3, b, warnings.clone()).await;
+            old.feed(
+                true,
+                b"frame=240 time=00:00:04.00 bitrate=6000kbits/s speed=1x\n",
+            )
+            .await;
+            assert!(
+                warnings.snapshot().holds(&a),
+                "an old reader no longer owns the supervisor session"
+            );
+            current
+                .feed(
+                    true,
+                    b"frame=60 time=00:00:01.00 bitrate=6000kbits/s speed=1x\n",
+                )
+                .await;
+            assert!(!warnings.snapshot().has_hold());
+            current.finish().await;
+        });
+    }
+
+    #[test]
+    fn real_push_release_compares_full_raw_names_even_when_log_labels_are_equal() {
+        use super::warning_test_support::ReaderFixture;
+        run_supervisor_test(async {
+            let warnings = Arc::new(WarningTracker::default());
+            let prefix = "示例频道📺".repeat(10);
+            let a = BroadcastSource::new(
+                "YT",
+                &format!("{prefix}甲"),
+                "UCexample001",
+                Some("episode-1"),
+            );
+            let b = BroadcastSource::new(
+                "YT",
+                &format!("{prefix}乙"),
+                "UCexample002",
+                Some("episode-2"),
+            );
+            let display_a =
+                FfmpegStreamIdentity::new("ca", "YT", &a.channel_name, &a.channel_id).to_string();
+            let display_b =
+                FfmpegStreamIdentity::new("ca", "YT", &b.channel_name, &b.channel_id).to_string();
+            assert_eq!(display_a, display_b);
+            let owner = warnings.own_source(1, a.clone());
+            warnings
+                .mark_event(&mut warnings.capture_event(), None)
+                .unwrap();
+            drop(owner);
+            let pushing = ReaderFixture::new(2, b, warnings.clone()).await;
+            pushing
+                .feed(
+                    true,
+                    b"frame=60 time=00:00:01.00 bitrate=6000kbits/s speed=1x\n",
+                )
+                .await;
+            assert!(!warnings.snapshot().holds(&a));
+            pushing.finish().await;
+        });
+    }
+
+    #[test]
+    fn run_diagnostic_capture_keeps_safe_classes_and_original_run_after_teardown() {
+        let first = FfmpegRunHistory::default();
+        let second = FfmpegRunHistory::default();
+        let first_context = SessionLogContext::new(
+            FfmpegStreamIdentity::new("jp", "YT", "甲", "one").with_history(first.clone()),
+            FfmpegSession(1),
+        );
+        let second_context = SessionLogContext::new(
+            FfmpegStreamIdentity::new("jp", "TW", "乙", "two").with_history(second.clone()),
+            FfmpegSession(2),
+        );
+        let mut first_reporter = StderrReporter::new(ChildLogContext::new(
+            &first_context,
+            ChildRole::Ffmpeg(FfmpegStatsRole::Push),
+            Some(1),
+        ));
+        let mut second_reporter = StderrReporter::new(ChildLogContext::new(
+            &second_context,
+            ChildRole::Ffmpeg(FfmpegStatsRole::Push),
+            Some(2),
+        ));
+        handle_ffmpeg_stderr_line(
+            "HTTP error 403 at https://example.invalid/live?token=SYNTHETIC",
+            "info",
+            &mut first_reporter,
+            false,
+        );
+        assert_eq!(first.diagnostic().as_deref(), Some("HTTP 403"));
+        assert_eq!(second.diagnostic(), None);
+        handle_ffmpeg_stderr_line("Broken pipe", "info", &mut second_reporter, false);
+        handle_ffmpeg_stderr_line("Connection timed out", "info", &mut first_reporter, false);
+        drop(first_reporter);
+        drop(first_context);
+        assert_eq!(first.diagnostic().as_deref(), Some("timeout"));
+        assert_eq!(second.diagnostic().as_deref(), Some("broken pipe"));
+    }
+
+    #[test]
+    fn stuck_fact_uses_original_observation_and_is_emitted_once_after_attachment() {
+        let bus = Arc::new(crate::events::Bus::new());
+        let mut rx = bus.register("run-facts", 8, |_| true);
+        bus.seal();
+        crate::events::with_sync_test_bus(bus, || {
+            let history = FfmpegRunHistory::default();
+            history.record_stuck(100, "no_stats");
+            assert!(
+                rx.try_recv().is_err(),
+                "spawn has not attached a relay session yet"
+            );
+            history.attach(9, 3);
+            history.attach(10, 4);
+            history.record_stuck(110, "low_speed");
+        });
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.at, 100);
+        assert!(matches!(
+            event.kind,
+            crate::history::EventKind::FfmpegStuck {
+                seq: 9,
+                run: 3,
+                reason: "no_stats"
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_source_drain_does_not_count_as_a_stuck_run() {
+        assert_eq!(
+            StuckReason::IdleDrain { elapsed_secs: 10 }.history_reason(),
+            None
+        );
+        assert_eq!(
+            StuckReason::NoStats {
+                elapsed_secs: 10,
+                source: "推流"
+            }
+            .history_reason(),
+            Some("no_stats")
+        );
+        assert_eq!(
+            StuckReason::StreamTimeFrozen { elapsed_secs: 10 }.history_reason(),
+            Some("stream_time_frozen")
+        );
+        assert_eq!(
+            StuckReason::LowSpeed { elapsed_secs: 10 }.history_reason(),
+            Some("low_speed")
+        );
+    }
 
     #[derive(Clone, Default)]
     struct TestLogWriter(Arc<StdMutex<Vec<u8>>>);
@@ -2910,6 +3389,7 @@ mod tests {
             ingest: None,
             pid: None,
             cache_dir: None,
+            _warning_owner: None,
         }
     }
 
@@ -3574,7 +4054,7 @@ mod tests {
 
     /// Fencing resets the shared counters, and the process supervisor is global,
     /// so these tests hold the counter lock for the whole runtime.
-    fn run_supervisor_test(test: impl Future<Output = ()>) {
+    pub(super) fn run_supervisor_test(test: impl Future<Output = ()>) {
         let _guard = FFMPEG_COUNTER_TEST_LOCK.lock().unwrap();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -3682,6 +4162,7 @@ mod tests {
                 )),
                 pid: Some(pids[0]),
                 cache_dir: None,
+                _warning_owner: None,
             });
             let (held_tx, held_rx) = tokio::sync::oneshot::channel();
             let preparing = tokio::spawn({
@@ -3722,6 +4203,7 @@ mod tests {
                 ingest: None,
                 pid: Some(pid),
                 cache_dir: None,
+                _warning_owner: None,
             });
             let (held_tx, held_rx) = tokio::sync::oneshot::channel();
             let preparing = tokio::spawn(async move {

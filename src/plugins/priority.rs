@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 
 use super::banned_keywords::streaming_banned_hit;
+use super::danmaku::warning::{
+    canonical_channel_id, BroadcastSource, SourceObservation, WarningSnapshot,
+};
 use super::twitch::{get_twitch_status, Twitch};
 use super::youtube::{get_youtube_channel_metadata, get_youtube_status_ytdlp};
 
@@ -29,6 +32,12 @@ pub enum PriorityChannelPlatform {
 }
 
 impl PriorityChannelPlatform {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Youtube => "YT",
+            Self::Twitch => "TW",
+        }
+    }
     /// Display name used in logs and danmaku.
     pub fn label(self) -> &'static str {
         match self {
@@ -101,7 +110,7 @@ impl PriorityChannelLiveness {
         }
         Some(PrefetchedPlayableStream {
             platform,
-            channel_id: channel_id.to_string(),
+            channel_id: canonical_channel_id(platform.code(), channel_id),
             topic: self.topic.clone(),
             title: self.title.clone(),
             m3u8_url,
@@ -162,7 +171,10 @@ fn take_matching_prefetch(
         *slot = None;
         return None;
     }
-    if stream.platform != platform || stream.channel_id != channel_id {
+    if stream.platform != platform
+        || canonical_channel_id(platform.code(), &stream.channel_id)
+            != canonical_channel_id(platform.code(), channel_id)
+    {
         return None;
     }
     slot.take().map(|(_, stream)| stream)
@@ -261,6 +273,7 @@ fn playable_liveness(
 /// A platform that errors, or that reports live without a URL, is treated as not
 /// switchable, and the next platform still gets its turn.
 pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelLiveness {
+    let keywords = super::banned_keywords::streaming_banned_keywords();
     if !cfg.priority_channel.youtube_channel_id.is_empty() {
         match get_youtube_status_ytdlp(&cfg.priority_channel.youtube_channel_id).await {
             Ok((is_live, topic, title, m3u8_url, _, stream_id)) => {
@@ -272,7 +285,9 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                     m3u8_url,
                     stream_id,
                 ) {
-                    return liveness;
+                    if liveness.banned_streaming_keyword(&keywords).is_none() {
+                        return liveness;
+                    }
                 }
             }
             Err(e) => tracing::warn!("优先频道监控: YouTube 流地址获取失败: {}", e),
@@ -295,7 +310,9 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                         m3u8_url,
                         stream_id,
                     ) {
-                        return liveness;
+                        if liveness.banned_streaming_keyword(&keywords).is_none() {
+                            return liveness;
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("优先频道监控: Twitch 流地址获取失败: {}", e),
@@ -307,9 +324,142 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
     PriorityChannelLiveness::default()
 }
 
+/// Observe both source namespaces while priority is held. No playable URL is
+/// parked and no switch is attempted until this evidence releases the hold.
+pub(crate) async fn observe_priority_sources(
+    cfg: &Config,
+    warning: &WarningSnapshot,
+) -> Vec<SourceObservation> {
+    let mut observations = Vec::with_capacity(2);
+    if !cfg.priority_channel.youtube_channel_id.is_empty() {
+        let source = BroadcastSource::new(
+            "YT",
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+            None,
+        );
+        match super::youtube::get_youtube_warning_status(
+            &cfg.priority_channel.youtube_channel_id,
+            warning.episode_id_for(&source),
+        )
+        .await
+        {
+            Ok(status) => observations.push(SourceObservation::new(
+                BroadcastSource::new(
+                    "YT",
+                    &cfg.priority_channel.channel_name,
+                    &cfg.priority_channel.youtube_channel_id,
+                    status.video_id.as_deref(),
+                ),
+                status.is_live,
+                status.scheduled_start.is_some()
+                    || status.video_id.as_ref().is_some_and(|id| !id.is_empty()),
+            )),
+            Err(error) => tracing::warn!(
+                "优先频道警告复核：YouTube 状态检查失败；{}",
+                crate::logging::safe_diagnostic(&error.to_string())
+            ),
+        }
+    }
+    if !cfg.priority_channel.twitch_channel_id.is_empty() {
+        match super::twitch::get_twitch_warning_status(&cfg.priority_channel.twitch_channel_id)
+            .await
+        {
+            Ok((is_live, _, _, id)) => observations.push(SourceObservation::new(
+                BroadcastSource::new(
+                    "TW",
+                    &cfg.priority_channel.channel_name,
+                    &cfg.priority_channel.twitch_channel_id,
+                    id.as_deref(),
+                ),
+                is_live,
+                false,
+            )),
+            Err(error) => tracing::warn!(
+                "优先频道警告复核：Twitch 状态检查失败；{}",
+                crate::logging::safe_diagnostic(&error.to_string())
+            ),
+        }
+    }
+    observations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn twitch_prefetch_uses_canonical_id_and_is_consumed_only_once() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Twitch,
+            true,
+            None,
+            Some("title".into()),
+            Some("https://example.invalid/live.m3u8".into()),
+            Some("episode".into()),
+        )
+        .unwrap();
+        let prefetched = liveness.prefetched_stream("", "SomeLogin").unwrap();
+        assert_eq!(prefetched.channel_id, "somelogin");
+        let now = Instant::now();
+        let mut slot = Some((now, prefetched));
+        assert!(take_matching_prefetch(
+            &mut slot,
+            PriorityChannelPlatform::Youtube,
+            "somelogin",
+            now,
+            PREFETCH_TTL
+        )
+        .is_none());
+        assert!(take_matching_prefetch(
+            &mut slot,
+            PriorityChannelPlatform::Twitch,
+            "SOMELOGIN",
+            now,
+            PREFETCH_TTL
+        )
+        .is_some());
+        assert!(take_matching_prefetch(
+            &mut slot,
+            PriorityChannelPlatform::Twitch,
+            "somelogin",
+            now,
+            PREFETCH_TTL
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn youtube_prefetch_keeps_case_sensitive_ids_and_expires() {
+        let liveness = playable_liveness(
+            PriorityChannelPlatform::Youtube,
+            true,
+            None,
+            None,
+            Some("https://example.invalid/live.m3u8".into()),
+            None,
+        )
+        .unwrap();
+        let now = Instant::now();
+        let mut slot = Some((now, liveness.prefetched_stream("UCAb", "").unwrap()));
+        assert!(take_matching_prefetch(
+            &mut slot,
+            PriorityChannelPlatform::Youtube,
+            "UCab",
+            now,
+            PREFETCH_TTL
+        )
+        .is_none());
+        assert!(take_matching_prefetch(
+            &mut slot,
+            PriorityChannelPlatform::Youtube,
+            "UCAb",
+            now + PREFETCH_TTL + Duration::from_secs(1),
+            PREFETCH_TTL
+        )
+        .is_none());
+        assert!(slot.is_none());
+    }
 
     #[test]
     fn a_platform_reporting_offline_is_not_switchable() {

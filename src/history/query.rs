@@ -2,7 +2,7 @@
 //! returns mergeable parts; `merge_*` combine nodes for `scope=cluster`.
 //! Parameters are validated and bound, never interpolated into SQL.
 
-use super::event::{metric_id, EndReason};
+use super::event::{metric_id, EndReason, METRICS};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -267,6 +267,8 @@ pub(crate) fn choose_tier(from: i64, to: i64, now: i64, raw_days: u64) -> &'stat
 pub(crate) struct BiliItem {
     pub state: String,
     pub watched: Option<i64>,
+    #[serde(default)]
+    pub watched_source: Option<String>,
     pub online_peak: Option<f64>,
     pub danmu: Option<i64>,
     pub add_fans: Option<i64>,
@@ -283,6 +285,8 @@ pub(crate) struct SessionItem {
     pub channel_id: String,
     pub channel_name: String,
     pub title: Option<String>,
+    #[serde(default)]
+    pub area_v2: Option<u64>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub duration_secs: i64,
@@ -331,9 +335,10 @@ struct Row {
     failures: i64,
     stuck: i64,
     live_key: Option<String>,
+    area_v2: Option<u64>,
 }
 
-const SESSION_COLS: &str = "id,eid,node,platform,channel_id,channel_name,title,started_at,ended_at,end_reason,runs,failures,stuck,live_key";
+const SESSION_COLS: &str = "id,eid,node,platform,channel_id,channel_name,title,started_at,ended_at,end_reason,runs,failures,stuck,live_key,area_v2";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     Ok(Row {
@@ -351,6 +356,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         failures: r.get(11)?,
         stuck: r.get(12)?,
         live_key: r.get(13)?,
+        area_v2: r.get(14)?,
     })
 }
 
@@ -408,14 +414,24 @@ fn gaps(runs: &[RunRow], session_end: Option<i64>) -> Vec<(i64, i64, String)> {
     out
 }
 
-fn median_bitrate(conn: &Connection, session: i64) -> rusqlite::Result<Option<f64>> {
+fn median_bitrate(
+    conn: &Connection,
+    session: i64,
+    from: i64,
+    to: i64,
+) -> rusqlite::Result<Option<f64>> {
     let mut values: Vec<f64> = Vec::new();
-    for table in ["samples_raw", "samples_1m"] {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT sum/count FROM {table} WHERE metric=1 AND session_id=?1 AND count>0"
-        ))?;
+    for (table, col) in [("samples_raw", "ts"), ("samples_1m", "bucket")] {
+        let sql = if table == "samples_raw" {
+            "SELECT b_sum/b_count FROM sample_frames WHERE session_id=?1 AND b_count>0 AND ts>=?2 AND ts<=?3".to_string()
+        } else {
+            format!("SELECT sum/count FROM {table} WHERE metric=1 AND session_id=?1 AND count>0 AND {col}>=?2 AND {col}<=?3")
+        };
+        let mut stmt = conn.prepare_cached(&sql)?;
         values = stmt
-            .query_map([session], |r| r.get::<_, f64>(0))?
+            .query_map(params![session, from.div_euclid(60) * 60, to], |r| {
+                r.get::<_, f64>(0)
+            })?
             .collect::<rusqlite::Result<_>>()?;
         if !values.is_empty() {
             break;
@@ -441,7 +457,7 @@ fn online_peak(
     to: i64,
 ) -> rusqlite::Result<Option<f64>> {
     conn.query_row(
-        "SELECT max(m) FROM (SELECT max(max) AS m FROM samples_raw WHERE metric=10 AND session_id=?1 AND ts>=?2 AND ts<?3
+        "SELECT max(m) FROM (SELECT max(coalesce(o_max,o_sum/o_count)) AS m FROM sample_frames WHERE o_count IS NOT NULL AND session_id=?1 AND ts>=?2 AND ts<?3
          UNION ALL SELECT max(max) FROM samples_1m WHERE metric=10 AND session_id=?1 AND bucket>=?2 AND bucket<?3)",
         params![session, from, to],
         |r| r.get(0),
@@ -475,8 +491,15 @@ pub(crate) fn live_row(conn: &Connection, key: &str) -> rusqlite::Result<Option<
     .optional()
 }
 
-fn bili_item(conn: &Connection, row: &Row) -> rusqlite::Result<BiliItem> {
-    let online_peak = online_peak(conn, row.id, i64::MIN, i64::MAX)?;
+fn bili_item(conn: &Connection, row: &Row, now: i64) -> rusqlite::Result<BiliItem> {
+    // The first minute bucket may begin before the session itself; session
+    // identity makes it safe to include that whole bucket for this detail.
+    let online_peak = online_peak(
+        conn,
+        row.id,
+        row.started_at.div_euclid(60) * 60,
+        row.ended_at.unwrap_or(now).saturating_add(1),
+    )?;
     let mut item = BiliItem {
         state: if row.ended_at.is_none() {
             "pending"
@@ -494,6 +517,7 @@ fn bili_item(conn: &Connection, row: &Row) -> rusqlite::Result<BiliItem> {
                 // Totals only for a valid summary; NULL otherwise.
                 if live.state == "ok" {
                     item.watched = live.watched;
+                    item.watched_source = live.watched.map(|_| "summary".into());
                     item.danmu = live.danmu;
                     item.add_fans = live.add_fans;
                     item.new_fans_club = live.new_fans_club;
@@ -503,16 +527,30 @@ fn bili_item(conn: &Connection, row: &Row) -> rusqlite::Result<BiliItem> {
             None => item.state = "pending".into(),
         }
     }
+    if item.watched.is_none() {
+        item.watched = watched_sample(conn, row.id)?.map(|(_, value)| value);
+        item.watched_source = item.watched.map(|_| "sample".into());
+    }
     Ok(item)
+}
+
+fn watched_sample(conn: &Connection, session: i64) -> rusqlite::Result<Option<(i64, i64)>> {
+    conn.query_row("SELECT watched_at,watched_count FROM sessions WHERE id=?1 AND watched_at IS NOT NULL AND watched_count IS NOT NULL",
+        [session],|r|Ok((r.get(0)?,r.get(1)?))).optional()
 }
 
 fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> {
     let runs = runs_of(conn, row.id)?;
-    let bili = Some(bili_item(conn, &row)?);
+    let bili = Some(bili_item(conn, &row, now)?);
     Ok(SessionItem {
         id: row.eid.clone(),
         gaps: gaps(&runs, row.ended_at),
-        median_bitrate_kbps: median_bitrate(conn, row.id)?,
+        median_bitrate_kbps: median_bitrate(
+            conn,
+            row.id,
+            row.started_at,
+            row.ended_at.unwrap_or(now),
+        )?,
         duration_secs: (row.ended_at.unwrap_or(now) - row.started_at).max(0),
         end_reason: row
             .end_reason
@@ -525,6 +563,7 @@ fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> 
         channel_id: row.channel_id,
         channel_name: row.channel_name,
         title: row.title,
+        area_v2: row.area_v2,
         started_at: row.started_at,
         ended_at: row.ended_at,
         runs: row.runs,
@@ -541,9 +580,9 @@ fn neighbour(
     older: bool,
 ) -> rusqlite::Result<Option<(i64, String)>> {
     let sql = if older {
-        "SELECT started_at,eid FROM sessions WHERE started_at<?1 OR (started_at=?1 AND eid<?2) ORDER BY started_at DESC, eid DESC LIMIT 1"
+        "SELECT started_at,eid FROM sessions WHERE pruned=0 AND (started_at<?1 OR (started_at=?1 AND eid<?2)) ORDER BY started_at DESC, eid DESC LIMIT 1"
     } else {
-        "SELECT started_at,eid FROM sessions WHERE started_at>?1 OR (started_at=?1 AND eid>?2) ORDER BY started_at, eid LIMIT 1"
+        "SELECT started_at,eid FROM sessions WHERE pruned=0 AND (started_at>?1 OR (started_at=?1 AND eid>?2)) ORDER BY started_at, eid LIMIT 1"
     };
     conn.query_row(sql, params![at, eid], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()
@@ -562,7 +601,7 @@ pub(crate) fn sessions(conn: &Connection, q: &Query, now: i64) -> rusqlite::Resu
     if let Some(id) = &q.id {
         let found = conn
             .query_row(
-                &format!("SELECT {SESSION_COLS} FROM sessions WHERE eid=?1"),
+                &format!("SELECT {SESSION_COLS} FROM sessions WHERE eid=?1 AND pruned=0"),
                 [id],
                 row,
             )
@@ -585,7 +624,7 @@ pub(crate) fn sessions(conn: &Connection, q: &Query, now: i64) -> rusqlite::Resu
     let has_cursor = q.cursor.is_some();
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT {SESSION_COLS} FROM sessions
-         WHERE started_at<?2 AND coalesce(ended_at, ?6)>?1
+         WHERE pruned=0 AND started_at<?2 AND coalesce(ended_at, ?6)>?1
            AND (?3 IS NULL OR platform=?3) AND (?4 IS NULL OR channel_id=?4)
            AND (?7=0 OR started_at<?8 OR (started_at=?8 AND eid<?9))
          ORDER BY started_at DESC, eid DESC LIMIT ?5"
@@ -676,6 +715,22 @@ pub(crate) struct EventItem {
     pub title: String,
     pub detail: String,
     pub severity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<NotifyAttempt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NotifyAttempt {
+    pub event_key: String,
+    pub dedup_key: String,
+    pub phase: String,
+    pub mode: Option<String>,
+    pub ok: bool,
+    pub code: Option<i64>,
+    pub trace_id: Option<String>,
+    pub test: bool,
+    pub suppressed: u32,
+    pub undelivered: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -730,6 +785,7 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
                     title: r.get(5)?,
                     detail: r.get(6)?,
                     severity: r.get(7)?,
+                    notify: None,
                 },
                 r.get::<_, Option<String>>(8)?,
             ))
@@ -746,8 +802,8 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
     {
         let mut stmt = conn.prepare_cached(
             "SELECT id,eid,node,channel_id,channel_name,title,started_at,ended_at,end_reason FROM sessions
-             WHERE (started_at>=?1 AND started_at<=?2) OR (ended_at>=?1 AND ended_at<=?2)
-                OR (started_at<?1 AND coalesce(ended_at, ?2)>?2)",
+             WHERE pruned=0 AND ((started_at>=?1 AND started_at<=?2) OR (ended_at>=?1 AND ended_at<=?2)
+                OR (started_at<?1 AND coalesce(ended_at, ?2)>?2))",
         )?;
         type S = (
             i64,
@@ -794,6 +850,7 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
                         title,
                         detail,
                         severity: sev.into(),
+                        notify: None,
                     }
                 };
             all.push(base(
@@ -857,7 +914,7 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
     // QQ sends.
     {
         let mut stmt = conn.prepare_cached(
-            "SELECT eid,at,node,event_key,ok,code FROM notify_sends WHERE at>=?1 AND at<=?2",
+            "SELECT eid,at,node,event_key,ok,code,dedup_key,phase,mode,trace_id,test,suppressed,undelivered FROM notify_sends WHERE at>=?1 AND at<=?2",
         )?;
         let rows = stmt.query_map(params![q.from, q.to], |r| {
             let ok: bool = r.get(4)?;
@@ -880,6 +937,18 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
                 },
                 detail: String::new(),
                 severity: if ok { "info" } else { "warn" }.into(),
+                notify: Some(NotifyAttempt {
+                    event_key: key,
+                    dedup_key: r.get(6)?,
+                    phase: r.get(7)?,
+                    mode: r.get(8)?,
+                    ok,
+                    code,
+                    trace_id: r.get(9)?,
+                    test: r.get(10)?,
+                    suppressed: r.get(11)?,
+                    undelivered: r.get(12)?,
+                }),
             })
         })?;
         if q.subject.is_none() {
@@ -944,6 +1013,8 @@ pub(crate) struct StatsParts {
     pub n: usize,
     /// metric → per bucket (min, max, sum, count).
     pub series: BTreeMap<String, Vec<Option<Cell>>>,
+    #[serde(default)]
+    pub partial_before: Option<i64>,
 }
 
 pub(crate) fn stats_layout(from: i64, to: i64, tier: &str, max_points: usize) -> (i64, usize) {
@@ -975,6 +1046,7 @@ pub(crate) fn empty_stats(q: &Query, tier: &str) -> StatsParts {
             .into_iter()
             .map(|name| (name, vec![None; n]))
             .collect(),
+        partial_before: None,
     }
 }
 
@@ -1001,8 +1073,21 @@ pub(crate) fn stats(
     node: Option<&str>,
 ) -> rusqlite::Result<StatsParts> {
     let mut out = empty_stats(q, tier);
+    out.partial_before = super::maintain::watermark(conn, "samples_pruned_before")?;
+    if q.session.is_some() {
+        out.partial_before = out.partial_before.max(
+            super::maintain::watermark(conn, "legacy_unattributed_before")?.filter(|v| *v > 0),
+        );
+    }
+    let stored_raw_floor = super::maintain::watermark(conn, "raw_pruned_before")?
+        .map(|v| (v + 59).div_euclid(60) * 60);
     let ranges = if tier == "raw" {
-        let raw_from = q.raw_from.unwrap_or(q.from).max(q.from).min(q.to);
+        let raw_from = q
+            .raw_from
+            .unwrap_or(q.from)
+            .max(stored_raw_floor.unwrap_or(q.from))
+            .max(q.from)
+            .min(q.to);
         if raw_from > q.from {
             out.resolution = "1m".into();
         }
@@ -1011,38 +1096,73 @@ pub(crate) fn stats(
             ("samples_raw", "ts", raw_from, q.to),
         ]
     } else {
-        vec![("samples_1m", "bucket", q.from, q.to)]
+        let wm = super::maintain::watermark(conn, "rollup_1m_watermark")?
+            .unwrap_or(conn.query_row(
+                "SELECT coalesce(max(bucket)+60,?1) FROM samples_1m",
+                [q.from],
+                |r| r.get(0),
+            )?)
+            .max(q.from)
+            .min(q.to);
+        vec![
+            ("samples_1m", "bucket", q.from, wm),
+            ("samples_raw", "ts", wm, q.to),
+        ]
     };
-    for (name, col_data) in &mut out.series {
-        let Some(id) = metric_id(name) else { continue };
-        for &(table, col, from, to) in &ranges {
-            if from >= to {
-                continue;
-            }
-            let mut stmt = conn.prepare_cached(&format!(
-                "SELECT {col},min,max,sum,count FROM {table} WHERE metric=?1 AND {col}>=?2 AND {col}<?3 AND (?4 IS NULL OR node=?4)
-                 AND (?5 IS NULL OR session_id=(SELECT id FROM sessions WHERE eid=?5))"
-            ))?;
-            let rows = stmt.query_map(params![id, from, to, node, q.session], |r| {
+    // Scan each retained interval once and return only the requested chart
+    // cells. Pulling every metric row across the SQLite boundary scales with
+    // months of samples even when the caller asks for a thousand points.
+    let metrics = out
+        .series
+        .keys()
+        .filter_map(|name| metric_id(name))
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    if metrics.is_empty() {
+        return Ok(out);
+    }
+    for &(table, col, from, to) in &ranges {
+        if from >= to {
+            continue;
+        }
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT metric,({col}-?5)/?6 AS slot,min(min),max(max),sum(sum),sum(count)
+             FROM {table} WHERE metric IN ({metrics}) AND {col}>=?1 AND {col}<?2 AND (?3 IS NULL OR node=?3)
+             AND (?4 IS NULL OR session_id=(SELECT id FROM sessions WHERE eid=?4 AND pruned=0))
+             GROUP BY metric,slot"
+        ))?;
+        let rows = stmt.query_map(
+            params![from, to, node, q.session, out.start, out.step],
+            |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
-                    r.get::<_, f64>(1)?,
+                    r.get::<_, i64>(1)?,
                     r.get::<_, f64>(2)?,
                     r.get::<_, f64>(3)?,
-                    r.get::<_, i64>(4)?,
+                    r.get::<_, f64>(4)?,
+                    r.get::<_, i64>(5)?,
                 ))
-            })?;
-            for row in rows {
-                let (ts, min, max, sum, count) = row?;
-                let i = ((ts - out.start) / out.step) as usize;
-                if i >= out.n {
-                    continue;
-                }
-                col_data[i] = Some(match col_data[i] {
-                    None => (min, max, sum, count),
-                    Some((a, b, c, d)) => (a.min(min), b.max(max), c + sum, d + count),
-                });
+            },
+        )?;
+        for row in rows {
+            let (metric, slot, min, max, sum, count) = row?;
+            let Some((name, _)) = METRICS.iter().find(|(_, id)| *id == metric) else {
+                continue;
+            };
+            let Some(col_data) = out.series.get_mut(*name) else {
+                continue;
+            };
+            let Ok(i) = usize::try_from(slot) else {
+                continue;
+            };
+            if i >= out.n {
+                continue;
             }
+            col_data[i] = Some(match col_data[i] {
+                None => (min, max, sum, count),
+                Some((a, b, c, d)) => (a.min(min), b.max(max), c + sum, d + count),
+            });
         }
     }
     Ok(out)
@@ -1060,6 +1180,7 @@ pub(crate) fn merge_stats(parts: Vec<StatsParts>) -> Option<StatsParts> {
         if p.resolution == "1m" {
             out.resolution = p.resolution;
         }
+        out.partial_before = out.partial_before.max(p.partial_before);
         for (name, col) in p.series {
             let mine = out
                 .series
@@ -1103,7 +1224,7 @@ pub(crate) fn render_stats(parts: &StatsParts) -> serde_json::Value {
             }),
         );
     }
-    serde_json::json!({ "resolution": parts.resolution, "ts": ts, "series": series })
+    serde_json::json!({ "resolution": parts.resolution, "ts": ts, "series": series, "coverage": {"partial_before":parts.partial_before} })
 }
 
 // ----------------------------------------------------------------- summary
@@ -1111,6 +1232,10 @@ pub(crate) fn render_stats(parts: &StatsParts) -> serde_json::Value {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LiveTotals {
     pub watched: Option<i64>,
+    #[serde(default)]
+    pub watched_source: Option<String>,
+    #[serde(default)]
+    pub watched_at: Option<i64>,
     pub danmu: Option<i64>,
     pub add_fans: Option<i64>,
     pub new_fans_club: Option<i64>,
@@ -1155,10 +1280,30 @@ pub(crate) struct NodeParts {
     pub down_secs: i64,
     pub last_seen_at: Option<i64>,
     pub oldest_at: Option<i64>,
+    #[serde(default)]
+    pub node_observed_secs: Option<i64>,
+    #[serde(default)]
+    pub partial_before: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NodeSegment {
+    pub eid: String,
+    pub observer: String,
+    pub subject: String,
+    pub state: String,
+    pub reason: String,
+    pub started_at: i64,
+    pub last_seen_at: i64,
+    pub ended_at: Option<i64>,
+    pub initial: bool,
+    pub minority: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SummaryParts {
+    #[serde(default)]
+    pub source: Option<String>,
     pub buckets: Vec<BucketParts>,
     pub kpis: KpiParts,
     pub prev_kpis: KpiParts,
@@ -1167,6 +1312,8 @@ pub(crate) struct SummaryParts {
     pub planned: i64,
     pub reasons: BTreeMap<String, i64>,
     pub per_node: Vec<NodeParts>,
+    #[serde(default)]
+    pub node_segments: Vec<NodeSegment>,
 }
 
 pub(crate) fn bucket_size(q: &Query) -> i64 {
@@ -1189,6 +1336,8 @@ fn clip(a: i64, b: i64, from: i64, to: i64) -> i64 {
 }
 
 struct SumSession {
+    id: i64,
+    eid: String,
     platform: String,
     started: i64,
     ended: Option<i64>,
@@ -1206,7 +1355,7 @@ fn load_sessions(
     now: i64,
 ) -> rusqlite::Result<Vec<SumSession>> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {SESSION_COLS} FROM sessions WHERE started_at<?2 AND coalesce(ended_at, ?3)>=?1"
+        "SELECT {SESSION_COLS} FROM sessions WHERE pruned=0 AND started_at<?2 AND coalesce(ended_at, ?3)>=?1"
     ))?;
     let rows: Vec<Row> = stmt
         .query_map(params![from, to, now], row)?
@@ -1215,12 +1364,23 @@ fn load_sessions(
     for r in rows {
         let runs = runs_of(conn, r.id)?;
         out.push(SumSession {
+            id: r.id,
+            eid: r.eid,
             fails: runs
                 .iter()
                 .filter(|x| x.counted_failure)
                 .filter_map(|x| x.ended_at.map(|e| (e, x.diagnostic.clone())))
                 .collect(),
-            online_peak: online_peak(conn, r.id, from, to)?,
+            online_peak: online_peak(
+                conn,
+                r.id,
+                if from <= r.started_at {
+                    r.started_at.div_euclid(60) * 60
+                } else {
+                    from
+                },
+                to.min(r.ended_at.unwrap_or(now).saturating_add(1)),
+            )?,
             runs,
             platform: r.platform,
             started: r.started_at,
@@ -1315,21 +1475,36 @@ fn kpis(
         if let Some(p) = s.online_peak {
             k.online_peak = Some(k.online_peak.map_or(p, |c: f64| c.max(p)));
         }
+        let mut totals = LiveTotals::default();
         if let Some(key) = &s.live_key {
             if let Some(live) = live_row(conn, key)? {
                 if live.state == "ok" {
-                    k.lives.insert(
-                        key_hash(key),
-                        LiveTotals {
-                            watched: live.watched,
-                            danmu: live.danmu,
-                            add_fans: live.add_fans,
-                            new_fans_club: live.new_fans_club,
-                            max_online: live.max_online,
-                        },
-                    );
+                    totals = LiveTotals {
+                        watched: live.watched,
+                        watched_source: live.watched.map(|_| "summary".into()),
+                        watched_at: None,
+                        danmu: live.danmu,
+                        add_fans: live.add_fans,
+                        new_fans_club: live.new_fans_club,
+                        max_online: live.max_online,
+                    };
                 }
             }
+        }
+        if totals.watched.is_none() {
+            if let Some((at, value)) = watched_sample(conn, s.id)? {
+                totals.watched = Some(value);
+                totals.watched_source = Some("sample".into());
+                totals.watched_at = Some(at);
+            }
+        }
+        if totals != LiveTotals::default() {
+            let key = s
+                .live_key
+                .as_ref()
+                .map(|key| key_hash(key))
+                .unwrap_or_else(|| format!("session:{}", s.eid));
+            merge_live(k.lives.entry(key).or_default(), totals);
         }
     }
     let (sent, failed): (i64, i64) = conn.query_row(
@@ -1452,15 +1627,25 @@ pub(crate) fn summary(
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let partial_before = retention_floor(conn)?;
+    let retained_oldest = oldest_at(conn)?.0.or(oldest);
     let per_node = vec![NodeParts {
         node_id: node.to_string(),
         live_secs: k.live_secs,
         failures: k.failures,
-        down_secs: k.down_secs,
+        // Node downtime is filled from recorder observations below. Relay
+        // gaps remain in k.down_secs solely for push availability.
+        down_secs: 0,
         last_seen_at: last_seen,
-        oldest_at: oldest.map(|at| at.max(q.retained_from.unwrap_or(i64::MIN))),
+        oldest_at: retained_oldest.map(|at| {
+            at.max(q.retained_from.unwrap_or(i64::MIN))
+                .max(partial_before.unwrap_or(i64::MIN))
+        }),
+        partial_before,
+        node_observed_secs: None,
     }];
-    Ok(SummaryParts {
+    let mut parts = SummaryParts {
+        source: Some(node.to_string()),
         buckets,
         kpis: k,
         prev_kpis,
@@ -1469,7 +1654,102 @@ pub(crate) fn summary(
         planned,
         reasons,
         per_node,
-    })
+        node_segments: node_segments(conn, q)?,
+    };
+    fill_node_downtime(&mut parts);
+    Ok(parts)
+}
+
+fn node_segments(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<NodeSegment>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT eid,observer,subject,state,reason,max(started_at,?1),min(last_seen_at,?2),
+          CASE WHEN ended_at IS NULL THEN NULL ELSE min(ended_at,?2) END,initial,minority
+         FROM node_segments WHERE started_at<?2 AND coalesce(ended_at,last_seen_at)>?1
+         ORDER BY started_at,eid",
+    )?;
+    let rows = stmt
+        .query_map(params![q.from, q.to], |r| {
+            Ok(NodeSegment {
+                eid: r.get(0)?,
+                observer: r.get(1)?,
+                subject: r.get(2)?,
+                state: r.get(3)?,
+                reason: r.get(4)?,
+                started_at: r.get(5)?,
+                last_seen_at: r.get(6)?,
+                ended_at: r.get(7)?,
+                initial: r.get(8)?,
+                minority: r.get(9)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn interval_union(intervals: &mut [(i64, i64)]) -> i64 {
+    intervals.sort_unstable();
+    let mut through = i64::MIN;
+    let mut total = 0i64;
+    for &(a, b) in intervals.iter() {
+        total = total.saturating_add((b - a.max(through)).max(0));
+        through = through.max(b);
+    }
+    total
+}
+
+fn fill_node_downtime(parts: &mut SummaryParts) {
+    let mut observed: BTreeMap<String, Vec<(i64, i64)>> = BTreeMap::new();
+    let mut down: BTreeMap<String, Vec<(i64, i64)>> = BTreeMap::new();
+    for s in &parts.node_segments {
+        let interval = (s.started_at, s.ended_at.unwrap_or(s.last_seen_at));
+        if s.state != "unknown" {
+            observed
+                .entry(s.subject.clone())
+                .or_default()
+                .push(interval);
+        }
+        if s.state == "down" {
+            down.entry(s.subject.clone()).or_default().push(interval);
+        }
+    }
+    for subject in observed.keys() {
+        if !parts.per_node.iter().any(|n| &n.node_id == subject) {
+            parts.per_node.push(NodeParts {
+                node_id: subject.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    for n in &mut parts.per_node {
+        n.node_observed_secs = observed.get_mut(&n.node_id).map(|v| interval_union(v));
+        n.down_secs = down
+            .get_mut(&n.node_id)
+            .map(|v| interval_union(v))
+            .unwrap_or(0);
+    }
+    parts.per_node.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+}
+
+fn merge_live(into: &mut LiveTotals, incoming: LiveTotals) {
+    // Older peers omit the source field and only send validated summaries.
+    let rank = |l: &LiveTotals| {
+        (
+            l.watched.is_some() && l.watched_source.as_deref() != Some("sample"),
+            l.watched_at,
+            l.watched,
+        )
+    };
+    if rank(&incoming) > rank(into) {
+        into.watched = incoming.watched;
+        into.watched_source = incoming
+            .watched_source
+            .or_else(|| incoming.watched.map(|_| "summary".into()));
+        into.watched_at = incoming.watched_at;
+    }
+    into.danmu = into.danmu.max(incoming.danmu);
+    into.add_fans = into.add_fans.max(incoming.add_fans);
+    into.new_fans_club = into.new_fans_club.max(incoming.new_fans_club);
+    into.max_online = into.max_online.max(incoming.max_online);
 }
 
 fn merge_kpis(into: &mut KpiParts, k: KpiParts) {
@@ -1486,14 +1766,28 @@ fn merge_kpis(into: &mut KpiParts, k: KpiParts) {
         (Some(a), Some(b)) => Some(a.max(b)),
         (a, b) => a.or(b),
     };
-    into.lives.extend(k.lives);
+    for (key, live) in k.lives {
+        merge_live(into.lives.entry(key).or_default(), live);
+    }
 }
 
 pub(crate) fn merge_summary(parts: Vec<SummaryParts>) -> SummaryParts {
     let mut out = SummaryParts::default();
     let mut buckets: BTreeMap<i64, BucketParts> = BTreeMap::new();
     let mut cal: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
+    let mut sources = std::collections::HashSet::new();
+    let mut segments: BTreeMap<String, NodeSegment> = BTreeMap::new();
+    let mut nodes: BTreeMap<String, NodeParts> = BTreeMap::new();
     for p in parts {
+        if let Some(source) = p
+            .source
+            .clone()
+            .or_else(|| (p.per_node.len() == 1).then(|| p.per_node[0].node_id.clone()))
+        {
+            if !sources.insert(source) {
+                continue;
+            }
+        }
         for b in p.buckets {
             let e = buckets.entry(b.start).or_insert_with(|| BucketParts {
                 start: b.start,
@@ -1521,11 +1815,38 @@ pub(crate) fn merge_summary(parts: Vec<SummaryParts>) -> SummaryParts {
         for (k, v) in p.reasons {
             *out.reasons.entry(k).or_default() += v;
         }
-        out.per_node.extend(p.per_node);
+        for n in p.per_node {
+            let existing = nodes.entry(n.node_id.clone()).or_default();
+            existing.node_id = n.node_id;
+            existing.live_secs += n.live_secs;
+            existing.failures += n.failures;
+            existing.last_seen_at = existing.last_seen_at.max(n.last_seen_at);
+            existing.oldest_at = match (existing.oldest_at, n.oldest_at) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            existing.partial_before = existing.partial_before.max(n.partial_before);
+        }
+        for s in p.node_segments {
+            match segments.get_mut(&s.eid) {
+                Some(old)
+                    if s.last_seen_at > old.last_seen_at
+                        || (old.ended_at.is_none() && s.ended_at.is_some()) =>
+                {
+                    *old = s
+                }
+                None => {
+                    segments.insert(s.eid.clone(), s);
+                }
+                _ => {}
+            }
+        }
     }
     out.buckets = buckets.into_values().collect();
     out.calendar = cal.into_iter().map(|(d, (l, f))| (d, l, f)).collect();
-    out.per_node.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    out.per_node = nodes.into_values().collect();
+    out.node_segments = segments.into_values().collect();
+    fill_node_downtime(&mut out);
     out
 }
 
@@ -1535,6 +1856,22 @@ fn render_kpis(k: &KpiParts) -> serde_json::Value {
         (!vals.is_empty()).then(|| vals.iter().sum())
     };
     let max_online = k.lives.values().filter_map(|l| l.max_online).max();
+    let samples = k
+        .lives
+        .values()
+        .filter(|l| l.watched.is_some() && l.watched_source.as_deref() == Some("sample"))
+        .count();
+    let summaries = k
+        .lives
+        .values()
+        .filter(|l| l.watched.is_some() && l.watched_source.as_deref() != Some("sample"))
+        .count();
+    let watched_source = match (samples > 0, summaries > 0) {
+        (true, true) => Some("mixed"),
+        (true, false) => Some("sample"),
+        (false, true) => Some("summary"),
+        _ => None,
+    };
     serde_json::json!({
         "live_secs": k.live_secs,
         "availability": (k.live_secs > 0).then(|| (k.live_secs - k.down_secs) as f64 / k.live_secs as f64),
@@ -1545,6 +1882,7 @@ fn render_kpis(k: &KpiParts) -> serde_json::Value {
         "notify_sent": k.notify_sent,
         "notify_failed": k.notify_failed,
         "watched": sum(|l| l.watched),
+        "watched_source":watched_source,
         "online_peak": k.online_peak,
         "danmu": sum(|l| l.danmu),
         "add_fans": sum(|l| l.add_fans),
@@ -1576,7 +1914,7 @@ pub(crate) fn render_summary(
     let per_node: Vec<_> = p
         .per_node
         .iter()
-        .map(|n| serde_json::json!({"node_id": n.node_id, "live_secs": n.live_secs, "failures": n.failures, "down_secs": n.down_secs, "last_seen_at": n.last_seen_at}))
+        .map(|n| serde_json::json!({"node_id": n.node_id, "live_secs": n.live_secs, "failures": n.failures, "down_secs": n.node_observed_secs.map(|_|n.down_secs), "node_observed_secs":n.node_observed_secs, "last_seen_at": n.last_seen_at}))
         .collect();
     let per_cov: serde_json::Map<String, serde_json::Value> = p
         .per_node
@@ -1584,6 +1922,11 @@ pub(crate) fn render_summary(
         .map(|n| (n.node_id.clone(), serde_json::json!(n.oldest_at)))
         .collect();
     let from = p.per_node.iter().filter_map(|n| n.oldest_at).min();
+    let partial: BTreeMap<_, _> = p
+        .per_node
+        .iter()
+        .filter_map(|n| n.partial_before.map(|at| (n.node_id.clone(), at)))
+        .collect();
     let reasons: Vec<_> = p
         .reasons
         .iter()
@@ -1596,7 +1939,9 @@ pub(crate) fn render_summary(
         "calendar": calendar,
         "reliability": {"clean": p.clean, "counted_failures": p.kpis.failures, "planned": p.planned, "reasons": reasons},
         "per_node": per_node,
-        "coverage": {"from": from, "per_node": per_cov},
+        "coverage": {"from": from, "per_node": per_cov, "partial_before":partial},
+        "node_segments": p.node_segments.iter().rev().take(500).collect::<Vec<_>>(),
+        "node_segments_more": p.node_segments.len()>500,
         "missing_nodes": missing,
     })
 }
@@ -1607,18 +1952,32 @@ pub(crate) fn status_rows(conn: &Connection) -> rusqlite::Result<serde_json::Val
     let count = |t: &str| -> rusqlite::Result<i64> {
         conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
     };
+    // The metric view is a UNION over five projections. Count the occupied
+    // cells in one frame scan instead of expanding every raw metric row.
+    let raw: i64 = conn.query_row(
+        "SELECT coalesce(sum((b_count IS NOT NULL)+(f_count IS NOT NULL)+(s_count IS NOT NULL)+(o_count IS NOT NULL)+(w_count IS NOT NULL)),0) FROM sample_frames",
+        [], |row| row.get(0),
+    )?;
     Ok(serde_json::json!({
         "sessions": count("sessions")?, "runs": count("runs")?, "events": count("events")?,
-        "samples_raw": count("samples_raw")?, "samples_1m": count("samples_1m")?, "notify_sends": count("notify_sends")?,
+        "samples_raw": raw, "samples_1m": count("samples_1m")?, "notify_sends": count("notify_sends")?,
+        "node_segments": count("node_segments")?, "bili_lives":count("bili_lives")?, "boots":count("boots")?,
     }))
 }
 
 pub(crate) fn oldest_at(conn: &Connection) -> rusqlite::Result<(Option<i64>, Option<i64>)> {
     conn.query_row(
-        "SELECT (SELECT min(m) FROM (SELECT min(started_at) m FROM sessions UNION ALL SELECT min(ts) FROM samples_raw
-                 UNION ALL SELECT min(bucket) FROM samples_1m UNION ALL SELECT min(at) FROM events)),
+        "SELECT (SELECT min(m) FROM (SELECT min(started_at) m FROM sessions WHERE pruned=0 UNION ALL SELECT min(ts) FROM sample_frames
+                 UNION ALL SELECT min(bucket) FROM samples_1m UNION ALL SELECT min(at) FROM events UNION ALL SELECT min(at) FROM notify_sends UNION ALL SELECT min(started_at) FROM node_segments)),
                 (SELECT min(started_at) FROM boots)",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+}
+
+pub(crate) fn retention_floor(conn: &Connection) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT max(cast(value AS INTEGER)) FROM meta WHERE key IN ('sessions_pruned_before','events_pruned_before','notify_pruned_before','nodes_pruned_before','samples_pruned_before','bili_pruned_before')",
+        [], |r|r.get(0),
     )
 }

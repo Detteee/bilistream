@@ -342,6 +342,14 @@ pub async fn get_twitch_status(
     get_twitch_status_mode(channel_id, false).await
 }
 
+/// Status-only observation for a held source: no streamlink URL lookup and no
+/// missing/invalid GraphQL shape misreported as offline.
+pub(crate) async fn get_twitch_warning_status(
+    channel_id: &str,
+) -> Result<TwitchGqlStatus, Box<dyn std::error::Error>> {
+    get_twitch_status_mode(channel_id, true).await
+}
+
 /// Reads the GetStreamInfo reply. In strict mode only a returned user whose
 /// `stream` is null or not `live` counts as not live; `data.user == null` or a
 /// reply without the expected shape is an error.
@@ -356,7 +364,13 @@ fn parse_twitch_stream_status(
             .filter(|user| user.is_object())
             .ok_or("Twitch GraphQL returned no user")?;
         match user.get("stream") {
-            Some(stream) if stream.is_null() || stream.is_object() => {}
+            Some(stream) if stream.is_null() => {}
+            Some(stream)
+                if stream.is_object()
+                    && stream
+                        .get("type")
+                        .and_then(|kind| kind.as_str())
+                        .is_some_and(|kind| !kind.trim().is_empty()) => {}
             _ => return Err("Twitch GraphQL reply has no stream field".into()),
         }
     }
@@ -666,10 +680,43 @@ mod tests {
             json!({"data": {"user": null}}),
             json!({"data": {}}),
             json!({"data": {"user": {"other": 1}}}),
+            json!({"data": {"user": {"stream": {}}}}),
+            json!({"data": {"user": {"stream": {"type": null}}}}),
+            json!({"data": {"user": {"stream": {"type": 1}}}}),
+            json!({"data": {"user": {"stream": {"type": " "}}}}),
         ] {
             assert!(parse_twitch_stream_status(&bad, true).is_err(), "{bad}");
             // The lenient callers are unchanged.
             assert!(!parse_twitch_stream_status(&bad, false).unwrap().0);
         }
+    }
+
+    #[test]
+    fn twitch_live_with_missing_or_same_id_keeps_a_warning_until_a_new_stream_id() {
+        use super::super::danmaku::warning::{BroadcastSource, SourceObservation, WarningTracker};
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("TW", "示例频道 001", "SomeLogin", Some("stream-1"));
+        let _owner = tracker.own_source(1, source.clone());
+        tracker
+            .mark_event(&mut tracker.capture_event(), None)
+            .unwrap();
+        let before = tracker.snapshot();
+        for id in [
+            serde_json::Value::Null,
+            json!(""),
+            json!("stream-1"),
+            json!("stream-2"),
+        ] {
+            let payload = json!({"data": {"user": {"stream": {"type": "live", "id": id, "title": "changed title"}}}});
+            let (is_live, _, _, observed_id) = parse_twitch_stream_status(&payload, true).unwrap();
+            let observation = SourceObservation::new(
+                BroadcastSource::new("TW", "示例频道 001", "somelogin", observed_id.as_deref()),
+                is_live,
+                false,
+            );
+            let released = tracker.observe_sources(&before, &[observation]);
+            assert_eq!(released.is_some(), id == json!("stream-2"));
+        }
+        assert!(!tracker.snapshot().has_hold());
     }
 }

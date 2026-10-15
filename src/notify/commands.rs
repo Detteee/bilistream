@@ -116,12 +116,13 @@ fn cut(lines: Vec<String>) -> String {
 }
 
 pub fn reply(cmd: Cmd, view: &View<'_>) -> String {
-    match cmd {
+    let body = match cmd {
         Cmd::Status => status(view),
         Cmd::Event => events(view),
         Cmd::Quota => quota(view),
         Cmd::Help => help(),
-    }
+    };
+    super::format::with_sender(&body, &view.ctx.node_name(&view.ctx.reporter))
 }
 
 fn status(view: &View<'_>) -> String {
@@ -136,11 +137,10 @@ fn status(view: &View<'_>) -> String {
         format!("{head} bilistream 状态 · {word}"),
         format!("时间 {} (UTC+8)", utc8_time(view.now)),
     ];
-    let reporter = ctx.node_name(&ctx.reporter);
     lines.push(match view.digest.owner.as_deref() {
-        Some(owner) => format!("活跃节点 {} · 报告 {reporter}", ctx.node_name(owner)),
-        None if !view.digest.enabled => format!("单节点模式 · 报告 {reporter}"),
-        None => format!("活跃节点 未确定 · 报告 {reporter}"),
+        Some(owner) => format!("转播节点：{}", ctx.node_name(owner)),
+        None if !view.digest.enabled => "单节点模式".to_string(),
+        None => "转播节点尚未确定".to_string(),
     });
     if view.digest.enabled {
         let healthy = view.digest.nodes.iter().filter(|node| node.healthy).count();
@@ -448,7 +448,10 @@ mod tests {
         assert!(reply(Cmd::Help, &v).contains("event："));
         assert!(!reply(Cmd::Help, &v).contains("alert"));
         for cmd in [Cmd::Status, Cmd::Event, Cmd::Quota, Cmd::Help] {
-            assert!(reply(cmd, &v).chars().count() <= MAX_CHARS);
+            let text = reply(cmd, &v);
+            assert!(text.chars().count() <= MAX_CHARS);
+            assert!(text.ends_with("发送节点：osaka-2"));
+            assert_eq!(text.matches("发送节点：").count(), 1);
         }
         assert_eq!(ledger, before);
     }

@@ -629,6 +629,8 @@ pub struct HistoryConfig {
     pub enabled: bool,
     /// ffmpeg sample interval, clamped to 5–60 s.
     pub sample_secs: u64,
+    /// Bilibili count capture interval, clamped to 5–60 s.
+    pub bili_sample_secs: u64,
     /// Fetch B站 StopLiveData once after a live session ends (+1 retry).
     pub bili_stop_summary: bool,
     /// Capture mode (off by default, per node): writes allowlist-redacted
@@ -642,6 +644,7 @@ impl Default for HistoryConfig {
         Self {
             enabled: true,
             sample_secs: 10,
+            bili_sample_secs: 5,
             bili_stop_summary: true,
             capture: false,
             retention: HistoryRetention::default(),

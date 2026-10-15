@@ -1,10 +1,10 @@
 //! Message rendering (design §10, alert format spec
 //! `/workspace/qq-notify-alert-formats.md`).
 //!
-//! - First line = marker, title and subject (`🔴 节点故障 · sg-3`).
+//! - First line states what happened; the footer identifies the sender.
 //! - Plain text by default, at most 500 characters. When too long, lines
-//!   are dropped in a fixed order (§10.2); the first line, the time line and
-//!   the 未送达 line are never dropped.
+//!   are dropped in a fixed order; the first line, delayed-event time,
+//!   sender and 未送达 count are retained.
 //! - Every interpolated value is cleaned: no URLs (`a[.]b`), `<` `>` made
 //!   full-width, Markdown specials made full-width in Markdown bodies, and
 //!   cut by display width (node names to 24 columns).
@@ -27,7 +27,8 @@ const SUMMARY_REASON_COLS: usize = 60;
 const ERROR_HEAD_COLS: usize = 100;
 const ERROR_TAIL_COLS: usize = 40;
 pub const LABEL_FALLBACK: &str = "（无多数派）";
-pub const LABEL_DELEGATE: &str = "（代发）";
+/// Beyond ordinary confirmation/coalescing, show when the queued fact happened.
+const DELAYED_NOTICE_SECS: u64 = 300;
 
 #[derive(Clone, Debug, Default)]
 pub struct RenderContext {
@@ -35,7 +36,7 @@ pub struct RenderContext {
     /// Node id of the sending node.
     pub reporter: String,
     pub active_owner: Option<String>,
-    /// `（无多数派）` / `（代发）`, prefixed to the first line.
+    /// `（无多数派）`, when this sender only observes its partition.
     pub label: Option<String>,
     pub undelivered: u32,
     pub undelivered_reason: Option<String>,
@@ -187,11 +188,14 @@ fn markdown_safe(text: &str) -> String {
         .collect()
 }
 
-/// Delink, full-width `<>`, then `safe_text` (redaction, control chars,
-/// width cut).
+/// Redact before delinking, so removing a URL scheme cannot hide a secret
+/// from the shared sanitizer. Then neutralise tags and fit the text budget.
 pub fn sanitize(raw: &str, cols: usize) -> String {
-    let cleaned = fullwidth_angles(&delink(raw));
-    crate::logging::safe_text(&cleaned, cols)
+    let redacted = crate::logging::safe_text(raw, usize::MAX);
+    let cleaned = fullwidth_angles(&delink(&redacted));
+    // Combining/zero-width characters must not evade QQ's character limit
+    // even when their display width fits in a node-name column budget.
+    truncate_chars(&crate::logging::safe_text(&cleaned, cols), cols)
 }
 
 /// Cut a long error in the middle: the first `head` and last `tail` columns
@@ -261,14 +265,6 @@ fn marker(item: &OutItem) -> &'static str {
     }
 }
 
-fn title(item: &OutItem) -> &'static str {
-    if item.kind == EventKind::NodeDegraded && LATCHED_REASONS.contains(&variant(item)) {
-        "节点自我隔离"
-    } else {
-        item.kind.title()
-    }
-}
-
 fn platform_name(platform: &str) -> &str {
     match platform {
         "youtube" => "YouTube",
@@ -299,26 +295,99 @@ fn subject(item: &OutItem, ctx: &RenderContext) -> String {
     ctx.node_name(&item.node)
 }
 
+fn headline(item: &OutItem, ctx: &RenderContext) -> String {
+    let node = subject(item, ctx);
+    if matches!(item.item, ItemKind::Resolved { .. }) {
+        return match item.kind {
+            EventKind::QuorumLost => format!("{node} 已恢复多数派连接"),
+            EventKind::SelfCheckFailing => format!("{node} 的自检已恢复正常"),
+            EventKind::NodeDown => format!("{node} 已恢复连接"),
+            _ => format!("{node} 的状态已恢复正常"),
+        };
+    }
+    if item.flapping.is_some() {
+        return format!("{node} 的状态反复变化");
+    }
+    match item.kind {
+        EventKind::NodeDown => format!("{node} 已失去连接"),
+        EventKind::NodeDegraded if LATCHED_REASONS.contains(&variant(item)) => {
+            format!("{node} 已暂停转播")
+        }
+        EventKind::NodeDegraded => format!("{node} 运行异常"),
+        EventKind::SelfCheckFailing => format!("{node} 自检未通过"),
+        EventKind::QuorumLost => format!("{node} 无法连接多数节点"),
+        EventKind::Failover => match item.extra.old_owner.as_deref() {
+            Some(old) => format!(
+                "转播节点已从 {} 切换到 {}",
+                ctx.node_name(old),
+                ctx.node_name(&item.node)
+            ),
+            None => format!("{} 已成为转播节点", ctx.node_name(&item.node)),
+        },
+        EventKind::StreamLive => format!("{node} 开播了"),
+        EventKind::Test => "通知测试".into(),
+    }
+}
+
+fn reason_sentence(
+    item: &OutItem,
+    ctx: &RenderContext,
+    cols: usize,
+    include_state: bool,
+) -> Option<String> {
+    if item.kind == EventKind::QuorumLost {
+        let detail = reason(item, ctx, cols)
+            .filter(|detail| detail != "本节点失去多数派")
+            .map(|detail| format!("{}。", detail.trim_end_matches('。')))
+            .unwrap_or_default();
+        return Some(format!("{detail}目前无法确认其他节点的状态。"));
+    }
+    let Some(detail) = reason(item, ctx, cols) else {
+        return include_state.then(|| format!("{}。", headline(item, ctx)));
+    };
+    let detail = detail.trim_end_matches(['。', '.', '；']);
+    let node = ctx.node_name(&item.node);
+    let pause = item.kind == EventKind::NodeDegraded && LATCHED_REASONS.contains(&variant(item));
+    Some(if include_state && pause {
+        format!("{node} 因{detail}暂停了转播。")
+    } else if include_state {
+        format!("{}（{detail}）。", headline(item, ctx))
+    } else if item.kind == EventKind::Failover {
+        let old = item.extra.old_owner.as_deref().map(|id| ctx.node_name(id));
+        match old {
+            Some(old) => format!("{old} {detail}。"),
+            None => format!("{detail}。"),
+        }
+    } else {
+        format!("{detail}。")
+    })
+}
+
+fn occurred_at(item: &OutItem) -> u64 {
+    match item.item {
+        ItemKind::Resolved { duration_secs } => item.incident_at.saturating_add(duration_secs),
+        ItemKind::Alert => item.incident_at,
+    }
+}
+
 fn held_line(item: &OutItem, ctx: &RenderContext) -> String {
     let duration = match item.item {
         ItemKind::Resolved { duration_secs } => duration_text(duration_secs),
         ItemKind::Alert => String::new(),
     };
     format!(
-        "· ✅ {} {} 已恢复（{}，{} 恢复）",
-        title(item),
-        ctx.node_name(&item.node),
+        "· ✅ {}（异常持续 {}，{} 恢复）",
+        headline(item, ctx),
         duration,
-        short_time(item.queued_at, ctx.now)
+        short_time(occurred_at(item), ctx.now)
     )
 }
 
 fn summary_line(item: &OutItem, ctx: &RenderContext) -> String {
     match &item.item {
         ItemKind::Resolved { duration_secs } => format!(
-            "· ✅ {} {} 已恢复（{}）",
-            title(item),
-            ctx.node_name(&item.node),
+            "· ✅ {}，异常持续 {}。",
+            headline(item, ctx),
             duration_text(*duration_secs)
         ),
         ItemKind::Alert if item.kind == EventKind::StreamLive => {
@@ -334,10 +403,10 @@ fn summary_line(item: &OutItem, ctx: &RenderContext) -> String {
                         .join("、")
                 })
                 .unwrap_or_default();
-            format!("· 🟢 开播 {} · 来源 {}", subject(item, ctx), platform)
+            format!("· 🟢 {} 开播了（{}）", subject(item, ctx), platform)
         }
         ItemKind::Alert => {
-            let mut line = format!("· {} {} {}", marker(item), title(item), subject(item, ctx));
+            let mut line = format!("· {} {}", marker(item), headline(item, ctx));
             if item.flapping.is_some() {
                 line.push_str(&format!(
                     "（{} 分钟内出现 {} 次）",
@@ -345,7 +414,7 @@ fn summary_line(item: &OutItem, ctx: &RenderContext) -> String {
                     item.flapping.unwrap_or_default()
                 ));
             } else if let Some(reason) = reason(item, ctx, SUMMARY_REASON_COLS) {
-                line.push_str(&format!(" · {reason}"));
+                line.push_str(&format!("：{reason}"));
             }
             line
         }
@@ -359,51 +428,49 @@ struct Parts {
     body: Vec<String>,
     /// Summary entries (may be cut from 5 to 3).
     items: Vec<String>,
-    owner_full: String,
-    owner_short: String,
+    sender: String,
     undelivered: Option<String>,
     markdown: bool,
 }
 
 impl Parts {
-    fn assemble(&self, body: &[String], max_items: usize, owner: &str) -> String {
-        let mut lines = vec![self.first.clone(), self.time.clone()];
+    fn assemble(&self, body: &[String], max_items: usize) -> String {
+        let mut lines = vec![self.first.clone()];
+        if !self.time.is_empty() {
+            lines.push(self.time.clone());
+        }
         lines.extend(body.iter().cloned());
         lines.extend(self.items.iter().take(max_items).cloned());
         if self.items.len() > max_items {
             lines.push(format!("另有 {} 条", self.items.len() - max_items));
         }
-        lines.push(owner.to_string());
         if let Some(line) = &self.undelivered {
             lines.push(line.clone());
         }
+        lines.push(self.sender.clone());
         decorate(lines, self.markdown)
     }
 
     /// Drop order (spec §10.2): CTA (appended later, only if it fits),
-    /// the raw text in brackets, summary entries 5 → 3, the owner line
-    /// shortened to 「报告 …」, then a hard cut of the middle lines.
+    /// the raw text in brackets, summary entries 5 → 3, then a hard cut of
+    /// the middle lines. The sender and undelivered count always survive.
     fn fit(&self) -> String {
-        let full = self.assemble(&self.body, MAX_LINES, &self.owner_full);
+        let full = self.assemble(&self.body, MAX_LINES);
         if full.chars().count() <= MAX_CHARS {
             return full;
         }
         let stripped: Vec<String> = self.body.iter().map(|line| strip_brackets(line)).collect();
-        let text = self.assemble(&stripped, MAX_LINES, &self.owner_full);
+        let text = self.assemble(&stripped, MAX_LINES);
         if text.chars().count() <= MAX_CHARS {
             return text;
         }
-        let text = self.assemble(&stripped, MIN_LINES, &self.owner_full);
-        if text.chars().count() <= MAX_CHARS {
-            return text;
-        }
-        let text = self.assemble(&stripped, MIN_LINES, &self.owner_short);
+        let text = self.assemble(&stripped, MIN_LINES);
         if text.chars().count() <= MAX_CHARS {
             return text;
         }
         // Hard cut, but only of the middle: the first line, the time and the
         // 未送达 line always survive.
-        let fixed = self.assemble(&[], 0, &self.owner_short);
+        let fixed = self.assemble(&[], 0);
         let fixed_len = fixed.chars().count();
         let mut middle: Vec<String> = stripped.clone();
         middle.extend(self.items.iter().take(MIN_LINES).cloned());
@@ -413,7 +480,7 @@ impl Parts {
         let mut lines: Vec<&str> = fixed.lines().collect();
         let cut_line = format!("{cut}…");
         if budget > 1 {
-            lines.insert(2, &cut_line);
+            lines.insert(if self.time.is_empty() { 1 } else { 2 }, &cut_line);
         }
         let text = lines.join("\n");
         truncate_chars(&text, MAX_CHARS)
@@ -448,6 +515,9 @@ fn decorate_tail(lines: Vec<String>, markdown: bool) -> Vec<String> {
 }
 
 fn truncate_chars(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     if text.chars().count() <= max {
         return text.to_string();
     }
@@ -461,27 +531,20 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 /// One message for a coalesced batch (already sorted worst first).
 pub fn render(batch: &[OutItem], ctx: &RenderContext) -> String {
-    let label = ctx
+    let label = if ctx
         .label
-        .clone()
-        .map(|label| {
-            if label.starts_with('（') {
-                label
-            } else {
-                format!("（{label}）")
-            }
-        })
-        .unwrap_or_default();
+        .as_deref()
+        .is_some_and(|label| label.contains("无多数派"))
+    {
+        LABEL_FALLBACK
+    } else {
+        ""
+    };
     let reporter = ctx.node_name(&ctx.reporter);
     let owner = ctx
         .active_owner
         .as_deref()
         .map(|owner| ctx.node_name(owner));
-    let owner_full = match &owner {
-        Some(owner) => format!("当前活跃节点 {owner} · 报告 {reporter}"),
-        None => format!("报告 {reporter}"),
-    };
-    let owner_short = format!("报告 {reporter}");
     let undelivered = (ctx.undelivered > 0).then(|| {
         let reason = ctx
             .undelivered_reason
@@ -490,30 +553,56 @@ pub fn render(batch: &[OutItem], ctx: &RenderContext) -> String {
             .unwrap_or_default();
         format!("另有 {} 条通知未送达{}", ctx.undelivered, reason)
     });
-    let time = format!("时间 {} (UTC+8)", utc8_time(ctx.now));
+    // QQ already timestamps delivery. Preserve the event time only when a
+    // queued message waited long enough for delivery time to be misleading.
+    let earliest = batch.iter().map(occurred_at).min();
+    let combined =
+        earliest.is_some() && batch.iter().any(|item| Some(occurred_at(item)) != earliest);
+    let delayed = batch
+        .iter()
+        .any(|item| ctx.now.saturating_sub(item.queued_at) >= DELAYED_NOTICE_SECS);
+    let time = earliest
+        .filter(|_| combined || delayed)
+        .map(|at| {
+            let what = if batch
+                .iter()
+                .all(|item| matches!(item.item, ItemKind::Resolved { .. }))
+            {
+                if combined {
+                    "最早恢复于"
+                } else {
+                    "恢复于"
+                }
+            } else if combined {
+                "最早发生于"
+            } else {
+                "发生于"
+            };
+            format!("{what} {} (UTC+8)", utc8_time(at))
+        })
+        .unwrap_or_default();
     let held: Vec<String> = ctx.held.iter().map(|item| held_line(item, ctx)).collect();
     let mut parts = Parts {
         first: String::new(),
         time,
         body: Vec::new(),
         items: Vec::new(),
-        owner_full,
-        owner_short,
+        sender: format!("发送节点：{reporter}"),
         undelivered,
         markdown: ctx.markdown,
     };
     match batch {
         [] if held.is_empty() => return String::new(),
         [] => {
-            parts.first = format!("{label}✅ 已恢复（{} 条）", held.len());
+            parts.first = format!("{label}✅ {} 项异常已恢复", held.len());
             parts.items = held;
         }
         [item] => {
-            single(item, ctx, &label, &reporter, owner.as_deref(), &mut parts);
+            single(item, ctx, label, owner.as_deref(), &mut parts);
             parts.items = held;
         }
         items => {
-            summary(items, ctx, &label, &mut parts);
+            summary(items, ctx, label, &mut parts);
             parts.items.extend(held);
         }
     }
@@ -524,92 +613,71 @@ fn single(
     item: &OutItem,
     ctx: &RenderContext,
     label: &str,
-    reporter: &str,
     owner: Option<&str>,
     parts: &mut Parts,
 ) {
-    let subject = subject(item, ctx);
+    parts.first = format!("{label}{} {}", marker(item), headline(item, ctx));
     match (&item.item, item.kind) {
         (ItemKind::Resolved { duration_secs }, _) => {
-            let mut extra = format!("持续 {}", duration_text(*duration_secs));
+            let mut extra = format!("本次异常持续 {}", duration_text(*duration_secs));
             if item.suppressed > 0 {
                 extra.push_str(&format!("，期间重复 {} 次", item.suppressed));
             }
-            parts.first = format!(
-                "{label}✅ 已恢复 · {} · {}（{}）",
-                title(item),
-                subject,
-                extra
-            );
+            if let Some(owner) =
+                owner.filter(|_| ctx.active_owner.as_deref() != Some(item.node.as_str()))
+            {
+                extra.push_str(&format!("，当前转播节点仍为 {owner}"));
+            }
+            parts.body.push(format!("{extra}。"));
         }
         (_, EventKind::Test) => {
-            parts.first = format!("{label}🧪 通知测试 · {reporter}");
             parts.body = vec!["这是一条 bilistream 测试消息，收到即说明 QQ 通知可用。".to_string()];
-            parts.owner_full = match owner {
-                Some(owner) => format!("发送节点 {reporter} · 当前活跃节点 {owner}"),
-                None => format!("发送节点 {reporter}"),
-            };
-            parts.owner_short = format!("发送节点 {reporter}");
         }
         (_, EventKind::StreamLive) => {
-            parts.first = format!("{label}🟢 开播 · {subject}");
             if let Some(live) = &item.extra.live {
-                parts.body.push(format!(
-                    "来源 {}",
-                    live.platforms
-                        .iter()
-                        .map(|p| platform_name(p))
-                        .collect::<Vec<_>>()
-                        .join("、")
-                ));
+                let platform = live
+                    .platforms
+                    .iter()
+                    .map(|p| platform_name(p))
+                    .collect::<Vec<_>>()
+                    .join("、");
                 if let Some(stream_title) = live.title.as_deref().filter(|t| !t.trim().is_empty()) {
-                    parts
-                        .body
-                        .push(format!("标题 {}", ctx.value(stream_title, DETAIL_COLS)));
+                    parts.body.push(format!(
+                        "{platform} · {}",
+                        ctx.value(stream_title, DETAIL_COLS)
+                    ));
+                } else if !platform.is_empty() {
+                    parts.body.push(platform);
                 }
             }
         }
         (_, EventKind::Failover) => {
-            parts.first = format!("{label}🔴 故障转移 · {subject}");
-            let old = item
-                .extra
-                .old_owner
-                .as_deref()
-                .map(|old| ctx.node_name(old))
-                .unwrap_or_default();
-            if let Some(reason) = reason(item, ctx, DETAIL_COLS) {
-                parts
-                    .body
-                    .push(format!("原因 {old} {reason}").replace("  ", " "));
+            if let Some(reason) = reason_sentence(item, ctx, DETAIL_COLS, false) {
+                parts.body.push(reason);
             }
-            parts
-                .body
-                .push(format!("推流已由 {} 接管", ctx.node_name(&item.node)));
         }
         _ if item.flapping.is_some() => {
-            parts.first = format!(
-                "{label}🟠 节点状态反复 · {} · {}（{} 分钟内出现 {} 次）",
-                title(item),
-                subject,
+            parts.body.push(format!(
+                "{} 分钟内已出现 {} 次异常。",
                 super::policy::FLAP_WINDOW_SECS / 60,
                 item.flapping.unwrap_or_default()
-            );
+            ));
         }
         _ => {
-            let mut first = format!("{label}{} {} · {}", marker(item), title(item), subject);
-            if item.suppressed > 0 {
-                first.push_str(&format!("（期间重复 {} 次）", item.suppressed));
-            }
-            parts.first = first;
-            if let Some(reason) = reason(item, ctx, DETAIL_COLS) {
+            if let Some(reason) = reason_sentence(item, ctx, DETAIL_COLS, false) {
                 let lasted = ctx.now.saturating_sub(item.incident_at);
                 if lasted >= 30 {
                     parts
                         .body
-                        .push(format!("原因 {reason}（已持续 {}）", duration_text(lasted)));
+                        .push(format!("{reason}异常已持续 {}。", duration_text(lasted)));
                 } else {
-                    parts.body.push(format!("原因 {reason}"));
+                    parts.body.push(reason);
                 }
+            }
+            if item.suppressed > 0 {
+                parts
+                    .body
+                    .push(format!("期间重复 {} 次。", item.suppressed));
             }
         }
     }
@@ -646,15 +714,14 @@ fn summary(items: &[OutItem], ctx: &RenderContext, label: &str, parts: &mut Part
             .all(|item| Some(item.node.as_str()) == first_node)
         && alerts.len() >= 2;
     let incident_title = if let Some(item) = failover {
-        format!("故障转移 · {}", subject(item, ctx))
+        headline(item, ctx)
     } else if all_resolved {
-        format!("全部恢复（{} 条）", items.len())
+        format!("{} 项异常已恢复", items.len())
     } else if all_live {
-        format!("开播（{} 个频道）", alerts.len())
+        format!("{} 个关注频道开播了", alerts.len())
     } else if same_node {
         format!(
-            "{} · {}（{} 项）",
-            title(alerts[0]),
+            "{} 有 {} 项异常",
             ctx.node_name(&alerts[0].node),
             alerts.len()
         )
@@ -662,17 +729,32 @@ fn summary(items: &[OutItem], ctx: &RenderContext, label: &str, parts: &mut Part
         format!("集群异常（{} 条）", items.len())
     };
     parts.first = format!("{label}{head_marker} {incident_title}");
-    if let Some(start) = items.iter().map(|item| item.incident_at).min() {
-        if utc8(start, "%Y-%m-%d %H:%M") != utc8(ctx.now, "%Y-%m-%d %H:%M") {
-            parts.time = format!("{} · 开始于 {}", parts.time, short_time(start, ctx.now));
+    let related = failover.and_then(|failover| {
+        items.iter().find(|item| {
+            item.item == ItemKind::Alert
+                && matches!(item.kind, EventKind::NodeDown | EventKind::NodeDegraded)
+                && failover.extra.old_owner.as_deref() == Some(item.node.as_str())
+                && reason(item, ctx, DETAIL_COLS) == reason(failover, ctx, DETAIL_COLS)
+        })
+    });
+    if let Some(item) = related.or(failover.copied()) {
+        if let Some(reason) = reason_sentence(item, ctx, DETAIL_COLS, related.is_some()) {
+            parts.body.push(reason);
         }
     }
-    parts.items = items.iter().map(|item| summary_line(item, ctx)).collect();
+    parts.items = items
+        .iter()
+        .filter(|item| {
+            !failover.is_some_and(|head| std::ptr::eq(*item, *head))
+                && !related.is_some_and(|detail| std::ptr::eq(*item, detail))
+        })
+        .map(|item| summary_line(item, ctx))
+        .collect();
 }
 
 /// Last-resort body when QQ rejects the content (design §7 ContentRejected).
 /// It still carries the 未送达 count, so a delivery always reports it.
-pub fn minimal(batch: &[OutItem], undelivered: u32) -> String {
+pub fn minimal(batch: &[OutItem], ctx: &RenderContext) -> String {
     let critical = batch
         .iter()
         .filter(|item| item.severity() == Severity::Critical && item.item == ItemKind::Alert)
@@ -682,10 +764,24 @@ pub fn minimal(batch: &[OutItem], undelivered: u32) -> String {
         batch.len().max(1),
         critical
     );
-    if undelivered > 0 {
-        text.push_str(&format!("；另有 {undelivered} 条通知未送达"));
+    if batch
+        .iter()
+        .any(|item| item.kind == EventKind::QuorumLost && item.item == ItemKind::Alert)
+    {
+        text.push_str("（无法连接多数节点）");
     }
-    text
+    if ctx.undelivered > 0 {
+        text.push_str(&format!("；另有 {} 条通知未送达", ctx.undelivered));
+    }
+    with_sender(&text, &ctx.node_name(&ctx.reporter))
+}
+
+/// Plain notices and command replies reserve space for the current sender.
+/// Called at rendering time, so a pending notice never keeps a former sender.
+pub fn with_sender(body: &str, sender: &str) -> String {
+    let footer = format!("发送节点：{}", sanitize(sender, NODE_COLS));
+    let body = truncate_chars(body, MAX_CHARS.saturating_sub(footer.chars().count() + 1));
+    format!("{body}\n{footer}")
 }
 
 // ---------------------------------------------------------------------------
@@ -719,7 +815,14 @@ pub fn with_cta(body: &str, cta: Option<&str>, markdown: bool) -> String {
         cta.to_string()
     };
     if body.chars().count() + 1 + line.chars().count() <= MAX_CHARS {
-        format!("{body}\n{line}")
+        match body.rsplit_once('\n') {
+            Some((text, footer))
+                if footer.starts_with("发送节点：") || footer.starts_with("- 发送节点：") =>
+            {
+                format!("{text}\n{line}\n{footer}")
+            }
+            _ => format!("{body}\n{line}"),
+        }
     } else {
         body.to_string()
     }

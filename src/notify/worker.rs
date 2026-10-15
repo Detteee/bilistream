@@ -19,7 +19,7 @@ use super::qq::api::{self, C2cMessage, QqMode};
 use super::qq::gateway::{self, GatewayEvent, GatewayParams};
 use super::qq::token::TokenCache;
 use super::qq::{QqSink, QqTarget};
-use super::sink::{DeliveryContext, PassiveTarget, Rendered, SendOutcome, Sink};
+use super::sink::{AttemptContext, DeliveryContext, PassiveTarget, Rendered, SendOutcome, Sink};
 use super::store::{
     self, AppSecret, LastOutcome, OpenidChange, OpenidState, OpenidWrite, PersistedState,
 };
@@ -93,29 +93,39 @@ impl Drop for GatewayTask {
     }
 }
 
-pub async fn supervise(commands: mpsc::Receiver<Command>, wake: &'static Notify) {
-    supervise_loop(commands, SUPERVISOR_BACKOFF_MIN, move |commands| {
-        Box::pin(async move {
-            let store = match crate::storage::global() {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::warn!("QQ 通知无法打开数据库: {}", error);
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    return false;
-                }
-            };
-            // Load the node id first, so the status never says "local".
-            let node_id = crate::config::load_config()
-                .await
-                .ok()
-                .map(|cfg| cfg.cluster.node_id)
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| "local".to_string());
-            let mut worker = Worker::new(store, node_id);
-            worker.run(commands, wake).await;
-            true
-        })
-    })
+pub async fn supervise(
+    commands: mpsc::Receiver<Command>,
+    events: mpsc::Receiver<Arc<crate::events::Event>>,
+    wake: &'static Notify,
+) {
+    crate::events::wait_sealed().await;
+    supervise_loop(
+        commands,
+        events,
+        SUPERVISOR_BACKOFF_MIN,
+        move |commands, events| {
+            Box::pin(async move {
+                let store = match crate::storage::global() {
+                    Ok(store) => store,
+                    Err(error) => {
+                        tracing::warn!("QQ 通知无法打开数据库: {}", error);
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        return false;
+                    }
+                };
+                // Load the node id first, so the status never says "local".
+                let node_id = crate::config::load_config()
+                    .await
+                    .ok()
+                    .map(|cfg| cfg.cluster.node_id)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| "local".to_string());
+                let mut worker = Worker::new(store, node_id);
+                worker.run(commands, events, wake).await;
+                true
+            })
+        },
+    )
     .await
 }
 
@@ -126,15 +136,19 @@ type RunOnce<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Se
 /// returns `true` when the worker ended normally (channel closed).
 pub(crate) async fn supervise_loop<F>(
     mut commands: mpsc::Receiver<Command>,
+    mut events: mpsc::Receiver<Arc<crate::events::Event>>,
     min_backoff: Duration,
     mut run_once: F,
 ) where
-    F: for<'a> FnMut(&'a mut mpsc::Receiver<Command>) -> RunOnce<'a>,
+    F: for<'a> FnMut(
+        &'a mut mpsc::Receiver<Command>,
+        &'a mut mpsc::Receiver<Arc<crate::events::Event>>,
+    ) -> RunOnce<'a>,
 {
     let mut backoff = min_backoff;
     loop {
         let started = std::time::Instant::now();
-        let run = AssertUnwindSafe(run_once(&mut commands)).catch_unwind();
+        let run = AssertUnwindSafe(run_once(&mut commands, &mut events)).catch_unwind();
         match run.await {
             Ok(true) => return,
             Ok(false) => {}
@@ -271,6 +285,24 @@ pub struct Worker {
     /// Gateway-holder term while this node holds the gateway (Addendum E
     /// rule 8); `None` stops every live-event retry at once.
     live_term: Option<u64>,
+    recorder: Authority,
+    recorder_edges: observer::Edges,
+    recorder_observed_at: Option<u64>,
+    recorder_failover: Option<(String, String, u64)>,
+    last_quorum_seen: u64,
+    /// Only the supervised instance publishes the recovery eligibility lease.
+    running: bool,
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if let Some(at) = self.recorder_observed_at.take() {
+            crate::events::emit_at(at, crate::events::EventKind::RecorderStopped);
+        }
+        if self.running {
+            super::RECORDER_LEASE.store(0, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 
 /// Rule 11's "wait for the local commit": the state record is written
@@ -354,12 +386,19 @@ impl Worker {
             settings: self.settings_fp.clone(),
         };
         let mut passive = self.passive.take();
+        let sender_name = self
+            .node_names
+            .get(&self.node_id)
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&self.node_id);
         let report = {
             let mut driver = super::live_events::Driver {
                 ledger: &mut self.ledger,
                 passive: passive.as_mut(),
                 term,
                 node: &self.node_id,
+                sender_name,
                 enabled: self.cfg.live_events_enabled,
                 now,
             };
@@ -484,12 +523,24 @@ impl Worker {
             capable_nodes: (0, 0),
             save_task: None,
             live_term: None,
+            recorder: Authority::None,
+            recorder_edges: observer::Edges::default(),
+            recorder_observed_at: None,
+            recorder_failover: None,
+            last_quorum_seen: now,
+            running: false,
         };
         worker.reload_settings();
         worker
     }
 
-    async fn run(&mut self, commands: &mut mpsc::Receiver<Command>, wake: &'static Notify) {
+    async fn run(
+        &mut self,
+        commands: &mut mpsc::Receiver<Command>,
+        events: &mut mpsc::Receiver<Arc<crate::events::Event>>,
+        wake: &'static Notify,
+    ) {
+        self.running = true;
         loop {
             let now = now_secs();
             if now.saturating_sub(self.loaded_at) >= CONFIG_RELOAD_SECS
@@ -511,6 +562,12 @@ impl Worker {
                 },
                 Some(event) = self.gateway_rx.recv() => {
                     self.handle_gateway_event(event).await;
+                }
+                Some(event) = events.recv() => {
+                    if let Some(signal) = super::bus::map(&event) {
+                        self.on_live_signal(signal, event.at);
+                        self.deliver_live(now_secs()).await;
+                    }
                 }
             }
         }
@@ -876,9 +933,26 @@ impl Worker {
         }
         self.binder.tick(now);
 
+        // Capture the shared digest's owner transition before recording or
+        // the QQ-enabled early return. The recorder needs the same fact when
+        // a disabled notifier observes a failure during the handoff hold.
+        if digest.enabled && digest.owner.is_some() && digest.owner != self.previous_owner {
+            if let Some((old, new, reason)) =
+                observer::failover(self.previous_owner.as_deref(), digest)
+            {
+                self.recorder_failover = Some((old.clone(), new.clone(), now));
+                if self.cfg.enabled {
+                    self.pending_failover = Some((old, new, reason, now));
+                }
+            }
+            self.previous_owner = digest.owner.clone();
+        } else if !digest.enabled {
+            self.previous_owner = digest.owner.clone();
+        }
+        self.record_digest(digest, membership_blocked, now);
+
         if !self.cfg.enabled {
             self.tracker = Tracker::default();
-            self.previous_owner = digest.owner.clone();
             return;
         }
         let mode = if membership_blocked
@@ -898,18 +972,7 @@ impl Worker {
             let members: HashSet<&str> = digest.members.iter().map(String::as_str).collect();
             self.tracker.forget_nodes(|node| !members.contains(node));
         }
-        // Latch an owner change in any mode (the new owner always starts in
-        // a handoff hold, i.e. Freeze) and announce it once Normal.
-        if digest.enabled && digest.owner.is_some() && digest.owner != self.previous_owner {
-            if let Some((old, new, reason)) =
-                observer::failover(self.previous_owner.as_deref(), digest)
-            {
-                self.pending_failover = Some((old, new, reason, now));
-            }
-            self.previous_owner = digest.owner.clone();
-        } else if !digest.enabled {
-            self.previous_owner = digest.owner.clone();
-        }
+        // Announce a captured owner failure once the handoff hold ends.
         if mode == Mode::Normal {
             if let Some((old, new, reason, seen_at)) = self.pending_failover.take() {
                 if now.saturating_sub(seen_at) <= FAILOVER_LATCH_SECS {
@@ -929,6 +992,61 @@ impl Worker {
         self.tracker.tick(now, &self.policy, &self.ledger);
         if self.ledger != before {
             self.dirty = true;
+        }
+    }
+
+    fn record_digest(&mut self, digest: &ClusterDigest, blocked: bool, now: u64) {
+        if !digest.enabled || digest.quorum {
+            self.last_quorum_seen = now;
+        }
+        let recorder = authority::recorder(
+            digest,
+            blocked,
+            now,
+            self.last_quorum_seen,
+            self.cfg.no_quorum_grace_secs,
+        );
+        if recorder != self.recorder || self.recorder_edges.has_removed_members(digest) {
+            if let Some(at) = self.recorder_observed_at.take() {
+                // Losing authority does not prove the old state continued
+                // until this tick: coverage ends at the last observation.
+                crate::events::emit_at(at, crate::events::EventKind::RecorderStopped);
+            }
+            self.recorder_edges = observer::Edges::default();
+            self.recorder = recorder;
+            if recorder != Authority::None {
+                if let Some((old, new, seen_at)) = self.recorder_failover.take() {
+                    if digest.owner.as_ref() == Some(&new)
+                        && now.saturating_sub(seen_at) <= FAILOVER_LATCH_SECS
+                    {
+                        self.recorder_edges.seed_previous_owner(&old);
+                    }
+                }
+            }
+        }
+        if recorder != Authority::None {
+            for fact in self.recorder_edges.observe(
+                digest,
+                &self.ever_healthy,
+                recorder == Authority::Fallback,
+            ) {
+                crate::events::emit_at(now, fact);
+            }
+            crate::events::emit_at(now, crate::events::EventKind::RecorderHeartbeat);
+            self.recorder_observed_at = Some(now);
+        }
+        if self.running {
+            let role = match recorder {
+                Authority::Primary => 1,
+                Authority::Fallback => 2,
+                _ => 0,
+            };
+            let lease = if role == 0 {
+                0
+            } else {
+                (now.saturating_add(2 * IDLE_TICK_SECS) << 2) | role
+            };
+            super::RECORDER_LEASE.store(lease, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -1054,7 +1172,6 @@ impl Worker {
         }
         let label = match self.authority {
             Authority::Fallback => Some(format::LABEL_FALLBACK.to_string()),
-            Authority::Delegate => Some(format::LABEL_DELEGATE.to_string()),
             _ => None,
         };
         let rendered = self.render(&batch, now, digest.owner.clone(), label);
@@ -1120,7 +1237,12 @@ impl Worker {
                 bad_credentials,
             } => {
                 let reason = self.mask(&reason);
-                tracing::warn!("QQ 通知无法送达: {} (code {:?})", reason, code);
+                tracing::warn!(
+                    "QQ 通知无法送达: {} (code {:?}, trace {:?})",
+                    reason,
+                    code,
+                    trace_id
+                );
                 // Resolved items are not 「未送达」: they wait and ride along
                 // with the next delivered message (spec §5).
                 let (resolved, alerts): (Vec<OutItem>, Vec<OutItem>) = batch
@@ -1235,12 +1357,47 @@ impl Worker {
         }
         let text = format::render(batch, &ctx);
         let markdown = (self.cfg.style == "markdown").then(|| {
-            ctx.markdown = true;
-            format::render(batch, &ctx)
+            let mut markdown_ctx = ctx.clone();
+            markdown_ctx.markdown = true;
+            format::render(batch, &markdown_ctx)
         });
         Rendered {
+            attempt: {
+                let all: Vec<_> = batch.iter().chain(ctx.held.iter()).collect();
+                let keys: std::collections::BTreeSet<_> =
+                    all.iter().map(|item| item.kind.key()).collect();
+                let dedup: std::collections::BTreeSet<_> =
+                    all.iter().map(|item| item.key.as_str()).collect();
+                let test = all.iter().any(|item| item.kind == EventKind::Test);
+                let fire = all.iter().any(|item| item.item == ItemKind::Alert);
+                let resolved = all
+                    .iter()
+                    .any(|item| matches!(item.item, ItemKind::Resolved { .. }));
+                AttemptContext {
+                    key: if keys.len() == 1 {
+                        (*keys.first().expect("one key")).to_string()
+                    } else {
+                        "notify.batch".into()
+                    },
+                    dedup: dedup.into_iter().collect::<Vec<_>>().join("|"),
+                    phase: if test {
+                        "test"
+                    } else if fire && resolved {
+                        "mixed"
+                    } else if resolved {
+                        "resolve"
+                    } else {
+                        "fire"
+                    },
+                    test,
+                    suppressed: all
+                        .iter()
+                        .fold(0u32, |count, item| count.saturating_add(item.suppressed)),
+                    undelivered: ctx.undelivered,
+                }
+            },
             text,
-            minimal: format::minimal(batch, ctx.undelivered),
+            minimal: format::minimal(batch, &ctx),
             markdown,
             // Only critical alerts may spend a 召回 (info/warning never).
             critical: batch.iter().any(|item| {
@@ -1405,11 +1562,6 @@ impl Worker {
             Command::CancelBind => {
                 self.binder.cancel();
                 self.manage_gateway(now);
-            }
-            Command::Event(event) => self.tracker.on_event(event, &self.policy),
-            Command::Live(signal) => {
-                self.on_live_signal(signal, now);
-                self.deliver_live(now).await;
             }
         }
         let digest = self.digest(now);
@@ -1749,6 +1901,12 @@ impl Worker {
                 event_id: None,
                 msg_seq: seq,
             },
+            &AttemptContext::new(
+                "notify.command",
+                format!("notify.command:{cmd:?}"),
+                "command",
+            ),
+            now,
         )
         .await;
         if result.http_status != 0 {
@@ -1852,13 +2010,18 @@ impl Worker {
             &token,
             &C2cMessage {
                 openid,
-                content: "绑定成功",
+                content: &format::with_sender(
+                    "绑定成功",
+                    &self.render_context(at, None, None).node_name(&self.node_id),
+                ),
                 markdown: false,
                 mode: QqMode::Passive,
                 msg_id,
                 event_id,
                 msg_seq: 1,
             },
+            &AttemptContext::new("notify.bind", "notify.bind", "bind"),
+            at,
         )
         .await;
         if let Some(msg_id) = msg_id {
@@ -1930,7 +2093,7 @@ impl Worker {
             .filter(|channel| channel.live_info(&self.live_now).is_some())
             .map(|channel| serde_json::json!({"kind":channel.kind,"name":channel.name}))
             .collect();
-        serde_json::json!({
+        let mut status = serde_json::json!({
             "worker": "running",
             "node_id": self.node_id,
             "enabled": self.cfg.enabled,
@@ -1998,7 +2161,10 @@ impl Worker {
                 "live": live_accounts,
                 "live_entries": live_entries,
             },
-        })
+        });
+        status["dropped"] = super::dropped();
+        status["recorder"] = self.recorder.as_str().into();
+        status
     }
 
     fn publish_status(&self, status: serde_json::Value) {

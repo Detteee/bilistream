@@ -296,6 +296,7 @@ pub struct BackendRuntime {
     monitor: Option<std::thread::JoinHandle<()>>,
     server: tokio::task::JoinHandle<()>,
     dependencies: tokio::task::JoinHandle<()>,
+    _notify_worker: Option<crate::notify::NotifyWorker>,
 }
 
 static SHUTDOWN_REQUEST: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -319,6 +320,11 @@ impl BackendRuntime {
         let listener = bilistream::webui::server::bind_webui(port)
             .await
             .map_err(|e| e.to_string())?;
+        // Register both consumers before allowing any producer to run. Their
+        // lifetime belongs to the backend, independently of listener rebinds.
+        crate::history::start().await;
+        let notify_worker = crate::notify::start();
+        crate::events::seal();
         let (stop_monitor, monitor) =
             spawn_monitor_loop(log_level.to_owned()).map_err(|e| e.to_string())?;
         let server = tokio::spawn(async move {
@@ -338,6 +344,7 @@ impl BackendRuntime {
             monitor: Some(monitor),
             server,
             dependencies,
+            _notify_worker: notify_worker,
         })
     }
 
@@ -351,6 +358,9 @@ impl BackendRuntime {
         }
         self.server.abort();
         let _ = (&mut self.server).await;
+        if !crate::history::flush(Duration::from_secs(2)).await {
+            tracing::warn!("统计数据未能在关闭前完成写入");
+        }
     }
 }
 

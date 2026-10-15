@@ -18,6 +18,8 @@ pub struct MockState {
     pub replies: VecDeque<(u16, Value)>,
     pub token_reply: Option<(u16, Value)>,
     pub token_replies: VecDeque<(u16, Value)>,
+    /// Delay a captured request to exercise cancellation and caller isolation.
+    pub message_delay: std::time::Duration,
     /// What `/gateway` returns; defaults to a closed loopback port.
     pub gateway_url: Option<String>,
     /// Token-specific discovery refusals and observed Authorization values.
@@ -90,12 +92,18 @@ async fn message(
     Path(openid): Path<String>,
     Json(body): Json<Value>,
 ) -> (axum::http::StatusCode, Json<Value>) {
-    let mut state = state.lock().unwrap();
-    state.messages.push((openid, body));
-    let (status, body) = state
-        .replies
-        .pop_front()
-        .unwrap_or((200, json!({"id": "msg-1", "timestamp": 1})));
+    let (status, body, delay) = {
+        let mut state = state.lock().unwrap();
+        state.messages.push((openid, body));
+        let (status, body) = state
+            .replies
+            .pop_front()
+            .unwrap_or((200, json!({"id": "msg-1", "timestamp": 1})));
+        (status, body, state.message_delay)
+    };
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
     (
         axum::http::StatusCode::from_u16(status).unwrap(),
         Json(body),

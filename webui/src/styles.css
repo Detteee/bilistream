@@ -3191,3 +3191,11 @@ html.light-theme .analytics {
 .analytics .analytics-detail-dialog > .panel { border: 0; }
 .analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
 .analytics .analytics-detail-open { min-height: 44px; }
+#priority-warning-row .info-row-view {
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+#priority-warning-row .info-value {
+  color: var(--warn);
+}

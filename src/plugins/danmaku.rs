@@ -1,3 +1,6 @@
+pub(crate) mod warning;
+
+use self::warning::{warning_tracker, BroadcastSource, WarningReleaseReason};
 use super::twitch::get_twitch_status;
 use super::youtube::{get_youtube_area_topic, get_youtube_status};
 use crate::cluster::{monitored_config_version, sync_monitored_config_after_change};
@@ -11,7 +14,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -23,11 +26,8 @@ static DANMAKU_LIFECYCLE: Mutex<()> = Mutex::new(());
 lazy_static! {
     static ref DANMAKU_COMMANDS_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref DANMAKU_STOP_NOTIFY: Notify = Notify::new();
-    static ref WARNING_STOP: AtomicBool = AtomicBool::new(false);
-    static ref LAST_WARNING_CHANNEL: Mutex<Option<String>> = Mutex::new(None);
     static ref CONFIG_UPDATED: AtomicBool = AtomicBool::new(false);
     static ref CONFIG_UPDATE_NOTIFY: Notify = Notify::new();
-    static ref WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 }
 
 pub fn is_danmaku_running() -> bool {
@@ -227,19 +227,116 @@ pub fn get_all_channels(
 }
 
 /// Updates the configuration JSON file with new channel values.
+struct TargetUpdate {
+    changed: bool,
+    previous_version: String,
+    config: Config,
+}
+
 async fn update_config(
     platform: &str,
     channel_name: &str,
     channel_id: &str,
     area_id: u64,
-) -> Result<Option<(String, Config)>, Box<dyn std::error::Error>> {
-    let mut config = load_config().await?;
+) -> Result<TargetUpdate, Box<dyn std::error::Error>> {
+    prepare_target_update(
+        load_config().await?,
+        platform,
+        channel_name,
+        channel_id,
+        area_id,
+        |mut config| async move {
+            save_config(&mut config).await?;
+            Ok(config)
+        },
+    )
+    .await
+}
+
+async fn prepare_target_update<Save, Saved>(
+    mut config: Config,
+    platform: &str,
+    channel_name: &str,
+    channel_id: &str,
+    area_id: u64,
+    save: Save,
+) -> Result<TargetUpdate, Box<dyn std::error::Error>>
+where
+    Save: FnOnce(Config) -> Saved,
+    Saved: Future<Output = Result<Config, Box<dyn std::error::Error>>>,
+{
     let old_monitored_config_version = monitored_config_version(&config);
-    if !apply_danmaku_target(&mut config, platform, channel_name, channel_id, area_id)? {
-        return Ok(None);
+    let changed = apply_danmaku_target(&mut config, platform, channel_name, channel_id, area_id)?;
+    if changed {
+        config = save(config).await?;
     }
-    save_config(&mut config).await?;
-    Ok(Some((old_monitored_config_version, config)))
+    Ok(TargetUpdate {
+        changed,
+        previous_version: old_monitored_config_version,
+        config,
+    })
+}
+
+#[cfg(test)]
+pub(crate) mod warning_test_support {
+    use super::*;
+    pub(crate) static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Fake only config persistence and reply/peer I/O; use the production
+    /// target comparison, result branches and accepted-command effects.
+    pub(crate) async fn accept_target(
+        config: &mut Config,
+        warnings: Arc<warning::WarningTracker>,
+        platform: &str,
+        name: &str,
+        id: &str,
+        area: u64,
+    ) -> usize {
+        let before = warnings.snapshot();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let write_count = writes.clone();
+        let update =
+            prepare_target_update(config.clone(), platform, name, id, area, move |config| {
+                write_count.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Ok(config))
+            })
+            .await;
+        *config = update.as_ref().unwrap().config.clone();
+        let request = TargetRequest {
+            id: NEXT_TARGET_REQUEST.fetch_add(1, Ordering::Relaxed),
+            node: config.cluster.node_id.clone(),
+            source: BroadcastSource::new(platform, name, id, None),
+            area,
+        };
+        let outcome = DanmakuTargetLog {
+            node: request.node.clone(),
+            request_id: request.id,
+            platform: platform.to_owned(),
+            channel: name.to_owned(),
+            area: Some((area, "示例分区".into())),
+            ..Default::default()
+        };
+        finish_target_update(
+            update,
+            outcome,
+            move |_, _, _| async move {
+                if let Some(release) = accept_target_request(&warnings, &before, &request) {
+                    release.log();
+                }
+                String::new()
+            },
+            |_| std::future::ready(()),
+        )
+        .await;
+        writes.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn reset_trace() {
+        *PENDING_TARGET
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        clear_config_updated();
+    }
 }
 
 fn apply_danmaku_target(
@@ -425,6 +522,137 @@ struct DanmakuTargetLog {
     area: Option<(u64, String)>,
     requested_area: Option<u64>,
     forced_without_title: bool,
+    request_id: u64,
+    is_owner: bool,
+    channel_id: String,
+}
+
+static NEXT_TARGET_REQUEST: AtomicU64 = AtomicU64::new(1);
+static PENDING_TARGET: Mutex<Option<PendingTarget>> = Mutex::new(None);
+
+#[derive(Clone)]
+pub(crate) struct TargetRequest {
+    pub id: u64,
+    node: String,
+    pub source: BroadcastSource,
+    area: u64,
+}
+
+struct PendingTarget {
+    request: TargetRequest,
+    last_decision: Option<String>,
+}
+
+fn remember_target_request(request: TargetRequest) {
+    let mut pending = PENDING_TARGET
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if pending
+        .as_ref()
+        .is_none_or(|old| old.request.id <= request.id)
+    {
+        *pending = Some(PendingTarget {
+            request,
+            last_decision: None,
+        });
+    }
+}
+
+fn accept_target_request(
+    warnings: &warning::WarningTracker,
+    before_command: &warning::WarningSnapshot,
+    request: &TargetRequest,
+) -> Option<warning::WarningRelease> {
+    let release = warnings.release_source(
+        before_command,
+        &request.source,
+        WarningReleaseReason::SameChannelCommand,
+    );
+    remember_target_request(request.clone());
+    set_config_updated();
+    release
+}
+
+pub(crate) fn reject_disabled_danmaku_target(node: &str, command: &str) {
+    let parts: Vec<_> = command.split('%').collect();
+    DanmakuTargetLog {
+        node: node.to_owned(),
+        platform: parts.get(2).unwrap_or(&"").to_uppercase(),
+        channel: parts.get(3).unwrap_or(&"").to_string(),
+        request_id: NEXT_TARGET_REQUEST.fetch_add(1, Ordering::Relaxed),
+        ..Default::default()
+    }
+    .reject("换台命令未启用");
+}
+
+/// Observability only: this request never changes rank or ffmpeg ownership.
+pub(crate) fn pending_target_request(cfg: &Config) -> Option<TargetRequest> {
+    let mut pending = PENDING_TARGET
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let request = &pending.as_ref()?.request;
+    let (name, id, area) = match request.source.platform.as_str() {
+        "YT" => (
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            cfg.youtube.area_v2,
+        ),
+        "TW" => (
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+            cfg.twitch.area_v2,
+        ),
+        _ => return None,
+    };
+    if request.source.channel_name != *name
+        || request.source.channel_id != warning::canonical_channel_id(&request.source.platform, id)
+        || request.area != area
+    {
+        *pending = None;
+        return None;
+    }
+    Some(request.clone())
+}
+
+pub(crate) fn report_target_decision(
+    request: &TargetRequest,
+    selected: Option<&BroadcastSource>,
+    reason: &str,
+) {
+    let selected = selected.map_or_else(
+        || "暂无可用频道".to_owned(),
+        |source| {
+            format!(
+                "{}/{}",
+                safe_text(&source.platform, 8),
+                safe_text(&source.channel_name, 64)
+            )
+        },
+    );
+    let decision = format!("{selected}；原因={reason}");
+    {
+        let mut pending = PENDING_TARGET
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(pending) = pending
+            .as_mut()
+            .filter(|pending| pending.request.id == request.id)
+        else {
+            return;
+        };
+        if pending.last_decision.as_deref() == Some(&decision) {
+            return;
+        }
+        pending.last_decision = Some(decision.clone());
+    }
+    tracing::info!(
+        "{} 弹幕 %转播% #{} 选台结果={}；请求={}/{}",
+        safe_text(&request.node, 64),
+        request.id,
+        decision,
+        safe_text(&request.source.platform, 8),
+        safe_text(&request.source.channel_name, 64)
+    );
 }
 
 enum DanmakuTargetOutcome<'a> {
@@ -443,11 +671,16 @@ impl DanmakuTargetLog {
             },
             64,
         );
+        let origin = format!(
+            "弹幕 %转播% #{}（{}）",
+            self.request_id,
+            if self.is_owner { "主播" } else { "观众" }
+        );
         let identity = if self.platform.is_empty() {
-            format!("{node} 弹幕命令")
+            format!("{node} {origin}")
         } else {
             format!(
-                "{node} {}/{}",
+                "{node} {origin} {}/{}",
                 safe_text(&self.platform, 16),
                 safe_text(
                     if self.channel.is_empty() {
@@ -498,12 +731,12 @@ impl DanmakuTargetLog {
 /// Finish the existing config-result branches. The caller supplies its current
 /// update effects and reply transport; reporting never decides those effects.
 async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
-    config_update: Result<Option<(String, Config)>, Box<dyn std::error::Error>>,
+    config_update: Result<TargetUpdate, Box<dyn std::error::Error>>,
     outcome: DanmakuTargetLog,
     after_update: AfterUpdate,
     reply: Reply,
 ) where
-    AfterUpdate: FnOnce(String, Config) -> AfterFuture,
+    AfterUpdate: FnOnce(String, Config, bool) -> AfterFuture,
     AfterFuture: Future<Output = String>,
     Reply: FnOnce(String) -> ReplyFuture,
     ReplyFuture: Future<Output = ()>,
@@ -514,22 +747,36 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
         .map(|(_, name)| name.as_str())
         .unwrap_or_default();
     match config_update {
-        Ok(None) => {
-            let message = format!(
-                "{} 监听对象已是：{} - {}",
-                outcome.platform, outcome.channel, area_name
-            );
-            outcome.emit(DanmakuTargetOutcome::Unchanged);
+        Ok(update) => {
+            // Emit the accepted-save fact before waking selection or waiting
+            // for peers. Acknowledging a target is not proof that it is pushed.
+            outcome.emit(if update.changed {
+                DanmakuTargetOutcome::Updated("")
+            } else {
+                DanmakuTargetOutcome::Unchanged
+            });
+            let changed = update.changed;
+            let sync_message = after_update(update.previous_version, update.config, changed).await;
+            if !sync_message.is_empty() {
+                tracing::info!(
+                    "{} 弹幕 %转播% #{} 目标同步结果{}",
+                    safe_text(&outcome.node, 64),
+                    outcome.request_id,
+                    safe_text(&sync_message, 240)
+                );
+            }
+            let message = if changed {
+                format!(
+                    "更新：{} - {} - {}",
+                    outcome.platform, outcome.channel, area_name
+                )
+            } else {
+                format!(
+                    "{} 监听对象已是：{} - {}",
+                    outcome.platform, outcome.channel, area_name
+                )
+            };
             reply(message).await;
-        }
-        Ok(Some((old_monitored_config_version, updated_config))) => {
-            let sync_message = after_update(old_monitored_config_version, updated_config).await;
-            reply(format!(
-                "更新：{} - {} - {}",
-                outcome.platform, outcome.channel, area_name
-            ))
-            .await;
-            outcome.emit(DanmakuTargetOutcome::Updated(&sync_message));
         }
         Err(error) => {
             outcome.reject(&format!("更新配置时出错: {error}"));
@@ -609,8 +856,12 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     let danmaku_command = normalized_danmaku.replace(" :", "");
     let mut outcome = DanmakuTargetLog {
         node: cfg.cluster.node_id.clone(),
+        request_id: NEXT_TARGET_REQUEST.fetch_add(1, Ordering::Relaxed),
+        is_owner,
         ..Default::default()
     };
+    let warnings = warning_tracker();
+    let warning_before_command = warnings.snapshot();
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
@@ -700,6 +951,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             }
         };
         outcome.channel = resolved_channel_name.clone();
+        outcome.channel_id = warning::canonical_channel_id(&platform, channel_id_str);
 
         let (live_title, live_topic, youtube_video_id) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
@@ -830,17 +1082,41 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             updated_area_id,
         )
         .await;
+        let request = TargetRequest {
+            id: outcome.request_id,
+            node: outcome.node.clone(),
+            source: BroadcastSource::new(
+                &platform,
+                &resolved_channel_name,
+                &outcome.channel_id,
+                None,
+            ),
+            area: updated_area_id,
+        };
         finish_target_update(
             config_update,
             outcome,
-            |old_monitored_config_version, updated_config| async move {
-                // Clear warning flag when user manually changes channel
-                clear_warning_stop();
+            |old_monitored_config_version, updated_config, changed| async move {
+                let release = crate::config::with_current_config(&updated_config, || {
+                    // Also wake a validated no-op: repeating a warned target
+                    // explicitly releases it without a config revision/sync.
+                    accept_target_request(&warnings, &warning_before_command, &request)
+                })
+                .flatten();
+                if let Some(release) = release {
+                    release.log();
+                }
+                if let Some(active) = warnings.active_source() {
+                    report_target_decision(
+                        &request,
+                        Some(&active),
+                        "当前转播继续，下一轮按自动顺序选台",
+                    );
+                }
 
-                // Set config updated flag to skip waiting interval
-                set_config_updated();
-
-                if old_monitored_config_version != monitored_config_version(&updated_config) {
+                if changed
+                    && old_monitored_config_version != monitored_config_version(&updated_config)
+                {
                     sync_monitored_config_after_change(&updated_config).await
                 } else {
                     String::new()
@@ -986,53 +1262,43 @@ pub async fn stop_danmaku() {
 
 /// Set the warning stop flag and store the channel that was stopped
 pub fn set_warning_stop(channel_name: String) {
-    if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
-        *last = Some(channel_name);
-    }
-    WARNING_LOGGED.store(false, Ordering::SeqCst); // Reset logged flag for new warning
-    WARNING_STOP.store(true, Ordering::SeqCst);
+    let warnings = warning_tracker();
+    let mut event = warnings.capture_event();
+    warnings.mark_event(&mut event, Some(&format!("【转播】{channel_name}")));
 }
 
 /// Check if we should skip streaming due to a recent warning
 pub fn should_skip_due_to_warning(channel_name: &str) -> bool {
-    if !WARNING_STOP.load(Ordering::SeqCst) {
-        return false;
-    }
+    warning_tracker().snapshot().holds_name(channel_name)
+}
 
-    if let Ok(last) = LAST_WARNING_CHANNEL.lock() {
-        if let Some(ref last_channel) = *last {
-            return last_channel == channel_name;
-        }
-    }
-    false
+pub(crate) fn priority_warning_held(cfg: &Config) -> bool {
+    priority_warning_matches(&warning_tracker().snapshot(), cfg)
+}
+
+pub(crate) fn priority_warning_matches(warning: &warning::WarningSnapshot, cfg: &Config) -> bool {
+    warning.holds(&BroadcastSource::new(
+        "YT",
+        &cfg.priority_channel.channel_name,
+        &cfg.priority_channel.youtube_channel_id,
+        None,
+    )) || warning.holds(&BroadcastSource::new(
+        "TW",
+        &cfg.priority_channel.channel_name,
+        &cfg.priority_channel.twitch_channel_id,
+        None,
+    ))
 }
 
 /// Check if we should skip streaming due to a recent warning (returns true only on first check for logging)
 pub fn should_skip_due_to_warned(channel_name: &str) -> bool {
-    if !WARNING_STOP.load(Ordering::SeqCst) {
-        return false;
-    }
-
-    if let Ok(last) = LAST_WARNING_CHANNEL.lock() {
-        if let Some(ref last_channel) = *last {
-            if last_channel == channel_name {
-                // Only return true for logging on first check
-                if !WARNING_LOGGED.load(Ordering::SeqCst) {
-                    WARNING_LOGGED.store(true, Ordering::SeqCst);
-                    return true; // First time - should log
-                }
-                return false; // Subsequent times - don't log
-            }
-        }
-    }
-    false
+    warning_tracker().take_skip_log(&BroadcastSource::new("", channel_name, "", None))
 }
 
-/// Clear the warning stop flag (call when user manually changes channel)
+/// Explicit restart clears the process-local hold. Ordinary target edits do not.
 pub fn clear_warning_stop() {
-    WARNING_STOP.store(false, Ordering::SeqCst);
-    if let Ok(mut last) = LAST_WARNING_CHANNEL.lock() {
-        *last = None;
+    if let Some(release) = warning_tracker().clear(WarningReleaseReason::ManualRestart) {
+        release.log();
     }
 }
 
@@ -1140,16 +1406,24 @@ mod tests {
             235
         )
         .unwrap());
-        let rejected: Result<Option<(String, Config)>, Box<dyn std::error::Error>> =
+        let rejected: Result<TargetUpdate, Box<dyn std::error::Error>> =
             Err("保存失败 HTTP 502".into());
         for (result, expected, expected_reply) in [
             (
-                Ok(Some(("previous-version".into(), updated))),
+                Ok(TargetUpdate {
+                    changed: true,
+                    previous_version: "previous-version".into(),
+                    config: updated.clone(),
+                }),
                 "监听目标已更新",
                 "更新：YT - 示例频道001 - 其他单机",
             ),
             (
-                Ok(None),
+                Ok(TargetUpdate {
+                    changed: false,
+                    previous_version: "previous-version".into(),
+                    config: updated,
+                }),
                 "监听目标未变",
                 "YT 监听对象已是：示例频道001 - 其他单机",
             ),
@@ -1167,6 +1441,7 @@ mod tests {
                 area: Some((235, "其他单机".into())),
                 requested_area: Some(107),
                 forced_without_title: false,
+                ..Default::default()
             };
             let effects = Arc::new(Mutex::new(Vec::new()));
             let updated_effects = Arc::clone(&effects);
@@ -1176,21 +1451,21 @@ mod tests {
             finish_target_update(
                 result,
                 context,
-                move |old_version, config| {
+                move |old_version, config, changed| {
                     assert_eq!(old_version, "previous-version");
                     assert_eq!(config.youtube.channel_id, "example_channel_001");
                     assert_eq!(config.youtube.area_v2, 235);
-                    assert!(updated_logs.text().is_empty());
+                    assert!(updated_logs.text().contains(expected));
                     updated_effects.lock().unwrap().push("after-update");
-                    std::future::ready("；已同步到 2 个节点".to_string())
+                    std::future::ready(if changed {
+                        "；已同步到 2 个节点".to_string()
+                    } else {
+                        String::new()
+                    })
                 },
                 move |message| {
                     assert_eq!(message, expected_reply);
-                    let is_updated = expected == "监听目标已更新";
-                    assert_eq!(reply_logs.text().is_empty(), is_updated);
-                    if !is_updated {
-                        assert!(reply_logs.text().contains(expected));
-                    }
+                    assert!(reply_logs.text().contains(expected));
                     reply_effects.lock().unwrap().push("reply");
                     std::future::ready(())
                 },
@@ -1198,8 +1473,16 @@ mod tests {
             .with_subscriber(dispatch)
             .await;
             let output = logs.text();
-            assert_eq!(output.lines().count(), 1, "{output}");
-            assert!(output.contains("ca YT/示例频道001"));
+            assert_eq!(
+                output.lines().count(),
+                if expected == "监听目标已更新" {
+                    2
+                } else {
+                    1
+                },
+                "{output}"
+            );
+            assert!(output.contains("ca 弹幕 %转播% #0（观众） YT/示例频道001"));
             assert!(output.contains("分区=其他单机(235)"));
             assert!(output.contains(expected));
             if expected == "监听目标更新已拒绝" {
@@ -1217,10 +1500,137 @@ mod tests {
                 assert_eq!(*effects.lock().unwrap(), ["after-update", "reply"]);
                 assert!(output.contains("已同步到 2 个节点"));
             } else {
-                assert_eq!(*effects.lock().unwrap(), ["reply"]);
+                assert_eq!(
+                    *effects.lock().unwrap(),
+                    if expected == "监听目标未变" {
+                        vec!["after-update", "reply"]
+                    } else {
+                        vec!["reply"]
+                    }
+                );
                 assert!(!output.contains("已同步到"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn accepted_unchanged_targets_only_release_the_explicit_same_source_without_a_save() {
+        use warning::{BroadcastSource, WarningTracker};
+        let _serial = warning_test_support::SERIAL.lock().await;
+        warning_test_support::reset_trace();
+        let mut cfg = crate::cluster::tests::test_config("ca", 0);
+        cfg.youtube.channel_name = "示例频道 001".into();
+        cfg.youtube.channel_id = "UCexample001".into();
+        cfg.youtube.area_v2 = 329;
+        cfg.twitch.channel_name = "示例频道 002".into();
+        cfg.twitch.channel_id = "example002".into();
+        cfg.twitch.area_v2 = 86;
+        let warnings = Arc::new(WarningTracker::default());
+        let held = BroadcastSource::new(
+            "YT",
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            Some("episode-1"),
+        );
+        let _owner = warnings.own_source(1, held.clone());
+        warnings
+            .mark_event(&mut warnings.capture_event(), None)
+            .unwrap();
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+        async {
+            assert_eq!(
+                warning_test_support::accept_target(
+                    &mut cfg,
+                    warnings.clone(),
+                    "TW",
+                    "示例频道 002",
+                    "example002",
+                    86
+                )
+                .await,
+                0
+            );
+            assert!(warnings.snapshot().holds(&held));
+            assert_eq!(
+                warning_test_support::accept_target(
+                    &mut cfg,
+                    warnings.clone(),
+                    "YT",
+                    "示例频道 001",
+                    "UCexample001",
+                    329
+                )
+                .await,
+                0
+            );
+            assert!(!warnings.snapshot().has_hold());
+        }
+        .with_subscriber(dispatch)
+        .await;
+        let output = logs.text();
+        assert_eq!(output.matches("监听目标未变").count(), 2);
+        assert_eq!(output.matches("临时跳过已解除").count(), 1);
+        assert!(output.contains("弹幕明确重选该频道"));
+        assert!(!output.contains("同步"));
+        warning_test_support::reset_trace();
+    }
+
+    #[tokio::test]
+    async fn same_source_release_uses_raw_id_when_its_display_name_has_changed() {
+        let _serial = warning_test_support::SERIAL.lock().await;
+        warning_test_support::reset_trace();
+        let warnings = Arc::new(warning::WarningTracker::default());
+        let _owner = warnings.own_source(
+            1,
+            BroadcastSource::new("TW", "旧显示名称", "SomeLogin", Some("stream-1")),
+        );
+        warnings
+            .mark_event(&mut warnings.capture_event(), None)
+            .unwrap();
+        let mut cfg = crate::cluster::tests::test_config("ca", 0);
+        cfg.twitch.channel_name = "新显示名称".into();
+        cfg.twitch.channel_id = "somelogin".into();
+        cfg.twitch.area_v2 = 86;
+        assert_eq!(
+            warning_test_support::accept_target(
+                &mut cfg,
+                warnings.clone(),
+                "TW",
+                "新显示名称",
+                "somelogin",
+                86
+            )
+            .await,
+            0
+        );
+        assert!(!warnings.snapshot().has_hold());
+        warning_test_support::reset_trace();
+    }
+
+    #[tokio::test]
+    async fn a_failed_target_save_never_executes_warning_release_effects() {
+        let warnings = Arc::new(warning::WarningTracker::default());
+        let source = BroadcastSource::new("YT", "示例频道 001", "UCexample001", Some("stream-1"));
+        let _owner = warnings.own_source(1, source.clone());
+        warnings
+            .mark_event(&mut warnings.capture_event(), None)
+            .unwrap();
+        let cfg = crate::cluster::tests::test_config("ca", 0);
+        let result =
+            prepare_target_update(cfg, "YT", "示例频道 001", "UCexample001", 329, |_| async {
+                Err("synthetic save failure".into())
+            })
+            .await;
+        finish_target_update(
+            result,
+            DanmakuTargetLog::default(),
+            |_, _, _| async {
+                panic!("a failed write must not run accepted-command effects");
+            },
+            |_| std::future::ready(()),
+        )
+        .await;
+        assert!(warnings.snapshot().holds(&source));
     }
 
     #[test]

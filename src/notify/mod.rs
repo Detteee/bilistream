@@ -7,6 +7,7 @@
 
 pub mod authority;
 pub mod bind;
+pub mod bus;
 pub mod commands;
 pub mod config;
 pub mod credentials;
@@ -29,10 +30,11 @@ pub mod worker;
 pub use config::NotifyConfig;
 pub use ledger::NotifyLedger;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use tokio::sync::{mpsc, oneshot, Notify};
 
-/// Commands from the WebUI and (Phase 3) local event producers.
+/// Commands from the WebUI. Runtime facts use the shared events bus.
 pub enum Command {
     /// Settings or secret changed.
     Reload,
@@ -46,11 +48,6 @@ pub enum Command {
         reply: oneshot::Sender<Result<serde_json::Value, Refusal>>,
     },
     CancelBind,
-    /// A one-shot event. Dropped when the channel is full.
-    #[allow(dead_code)]
-    Event(event::AlertEvent),
-    /// 开播/下播 from the streaming runtime.
-    Live(live_events::LiveSignal),
 }
 
 pub(crate) const COMMAND_CAPACITY: usize = 64;
@@ -58,6 +55,41 @@ pub(crate) const COMMAND_CAPACITY: usize = 64;
 static WAKE: Notify = Notify::const_new();
 /// Replaced when a stopped worker is started again (WebUI rebind).
 static COMMANDS: Mutex<Option<mpsc::Sender<Command>>> = Mutex::new(None);
+static COMMAND_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// A short lease from the existing observer, never a second election.
+static RECORDER_LEASE: AtomicU64 = AtomicU64::new(0);
+
+/// Summary recovery may use the existing recorder only while its digest is
+/// still fresh. Cancellation, a panic, or stalled QQ I/O cannot keep this
+/// permission alive indefinitely.
+pub(crate) fn is_recorder() -> bool {
+    recorder_status() != "none"
+}
+
+/// Actual cached observer role, including freshness, for history diagnostics.
+pub(crate) fn recorder_status() -> &'static str {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let lease = RECORDER_LEASE.load(Ordering::Acquire);
+    if (lease >> 2) <= now {
+        return "none";
+    }
+    match lease & 3 {
+        1 => "primary",
+        2 => "no_quorum_fallback",
+        _ => "none",
+    }
+}
+
+pub fn dropped() -> serde_json::Value {
+    let bus = crate::events::dropped()
+        .into_iter()
+        .find_map(|(name, count)| (name == "notify").then_some(count))
+        .unwrap_or(0);
+    serde_json::json!({"commands": COMMAND_DROPPED.load(Ordering::Relaxed), "events": bus})
+}
 
 /// What other modules (heartbeat snapshot, status API) read.
 #[derive(Default)]
@@ -182,12 +214,18 @@ pub fn cluster_changed() {
 /// Successful start-live (Addendum A). Never waits; a stopped notifier
 /// ignores it.
 pub fn live_started(info: live_events::LiveStartInfo) {
-    let _ = send_command(Command::Live(live_events::LiveSignal::Started(info)));
+    crate::events::emit(crate::events::EventKind::BroadcastStarted {
+        // This is the public upstream platform:id, never a Bilibili key.
+        stream_key: crate::logging::safe_text(&info.stream_key, 128),
+        platform: crate::logging::safe_text(&info.platform, 20),
+        channel: crate::logging::safe_text(&info.channel, 80),
+        title: crate::logging::safe_text(&info.title, 160),
+    });
 }
 
 /// 直播结束 on the active node (the same signal as the status page's 切换).
 pub fn live_ended() {
-    let _ = send_command(Command::Live(live_events::LiveSignal::Ended));
+    crate::events::emit(crate::events::EventKind::BroadcastEnded);
 }
 
 /// Ledger to advertise in this node's heartbeat snapshot.
@@ -236,12 +274,14 @@ pub fn local_authority() -> bool {
 }
 
 pub fn status_view() -> serde_json::Value {
-    let status = shared().status.clone();
+    let mut status = shared().status.clone();
     if status.is_null() {
-        serde_json::json!({"worker": "stopped"})
-    } else {
-        status
+        status = serde_json::json!({"worker": "stopped"});
     }
+    // The worker may be awaiting QQ while intake is saturated. Read counters
+    // here so diagnostics never wait for the next worker publication.
+    status["dropped"] = dropped();
+    status
 }
 
 /// Queue a command for the worker. Fails when the worker is not running or
@@ -251,10 +291,16 @@ pub fn send_command(command: Command) -> Result<(), &'static str> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .ok_or("通知服务未启动")?;
-    sender.try_send(command).map_err(|error| match error {
-        mpsc::error::TrySendError::Full(_) => "通知服务繁忙，请稍后重试",
-        mpsc::error::TrySendError::Closed(_) => "通知服务未运行",
+        .ok_or_else(|| {
+            COMMAND_DROPPED.fetch_add(1, Ordering::Relaxed);
+            "通知服务未启动"
+        })?;
+    sender.try_send(command).map_err(|error| {
+        COMMAND_DROPPED.fetch_add(1, Ordering::Relaxed);
+        match error {
+            mpsc::error::TrySendError::Full(_) => "通知服务繁忙，请稍后重试",
+            mpsc::error::TrySendError::Closed(_) => "通知服务未运行",
+        }
     })?;
     WAKE.notify_one();
     Ok(())
@@ -276,8 +322,9 @@ pub fn start() -> Option<NotifyWorker> {
         return None;
     }
     let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
+    let events = crate::events::register("notify", COMMAND_CAPACITY, bus::wants);
     *slot = Some(sender);
     Some(NotifyWorker(tokio::spawn(worker::supervise(
-        receiver, &WAKE,
+        receiver, events, &WAKE,
     ))))
 }

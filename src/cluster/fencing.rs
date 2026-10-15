@@ -286,10 +286,14 @@ pub(crate) fn fault_fencing_enabled(cfg: &Config) -> bool {
     cfg.cluster.auto_failover
 }
 
-pub(crate) fn latch_local_fault(reason: impl Into<String>) {
+pub(crate) fn latch_local_fault(reason: impl Into<String>) -> bool {
     let mut state = cluster_state_write();
+    let reason = reason.into();
+    let changed =
+        !state.local_fault_latched || state.local_fault_reason.as_deref() != Some(&reason);
     state.local_fault_latched = true;
-    state.local_fault_reason = Some(reason.into());
+    state.local_fault_reason = Some(reason);
+    changed
 }
 
 pub(crate) fn clear_local_fault_latch(state: &mut ClusterState) {
@@ -347,7 +351,7 @@ pub(crate) async fn collect_local_snapshot(
     config_version: String,
 ) -> ClusterNodeSnapshot {
     let network = collect_network_status().await;
-    let mut status = get_status_cache();
+    let mut status = get_status_cache().map(crate::webui::state::StatusData::for_cluster_snapshot);
     if let Some(ref mut status) = status {
         // Config stays on during a restream; the processor that accepts `%转播%` does not.
         status.bilibili.enable_danmaku_command = is_danmaku_commands_enabled();
@@ -437,7 +441,18 @@ pub(crate) async fn collect_local_snapshot(
             external_api_failures,
             failed_restarts
         );
-        latch_local_fault(reason.clone());
+        let newly_latched = latch_local_fault(reason.clone());
+        // latch_local_fault has released its state guard. Recording never
+        // participates in the execution fence or notification decision.
+        if newly_latched {
+            crate::history::emit_at(
+                observed_at,
+                crate::history::EventKind::LocalFault {
+                    reason: reason.clone(),
+                    latched: true,
+                },
+            );
+        }
         fault_latched = true;
         fault_reason = Some(reason);
     }

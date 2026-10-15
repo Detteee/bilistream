@@ -111,10 +111,16 @@ test('watch list: identity, validation, add/remove and patch', () => {
   assert.deepEqual(formToPatch({ ...base, commands_enabled: false }, base), { commands_enabled: false });
 });
 
-test('delegate and stopped gateway states', () => {
+test('eligible senders share the same connection states and neutral wording', () => {
   const settings = { app_secret_configured: true, openid_set: true, config: { enabled: true, qq: { app_id: '1' } } };
-  assert.equal(selectState({ settings, status: { authority: 'delegate' } }).key, 'delegate');
-  assert.equal(selectState({ settings, status: { authority: 'primary', gateway: { state: 'failed' } } }).key, 'gateway-failed');
+  for (const state of ['online', 'offline', 'failed']) {
+    const primary = selectState({ settings, status: { authority: 'primary', gateway: { state } } });
+    const delegate = selectState({ settings, status: { authority: 'delegate', gateway: { state } } });
+    assert.deepEqual(delegate, primary);
+    assert.doesNotMatch(delegate.badge, /代发/);
+  }
+  assert.equal(selectState({ settings, status: { authority: 'delegate', gateway: { state: 'online' } } }).key, 'sender');
+  assert.equal(selectState({ settings, status: { authority: 'delegate', gateway: { state: 'failed' } } }).key, 'gateway-failed');
 });
 
 // Batch 2: the badge follows the sender node's last send (sender.last_send).
@@ -206,7 +212,7 @@ test('openidGate: local, remote, null with reasons, and absent', () => {
   assert.equal(remote.enabled, false);
   assert.match(remote.hint, /^请在 tokyo-1 上绑定或解绑。/);
   assert.equal(openidGate({ openid_writer: null, authority: 'none', nodes: [{}, {}] }).hint, '暂无可写节点。发送节点尚未就绪，请稍后重试。');
-  assert.match(openidGate({ openid_writer: null, authority: 'no_quorum_fallback' }).hint, /无多数派代发/);
+  assert.match(openidGate({ openid_writer: null, authority: 'no_quorum_fallback' }).hint, /无法连接多数节点/);
   assert.match(openidGate({ openid_writer: null, enabled: false }).hint, /请先启用通知/);
   assert.match(openidGate({ openid_writer: null }).hint, /^暂无可写节点。请稍后重试。$/);
   assert.deepEqual(openidGate({ authority: 'none' }), { enabled: true, hint: '' }, 'absent key = unknown, enabled');

@@ -30,14 +30,27 @@ export function createHistoryClient(getJson, {
   }
 
   async function run(job) {
+    // Hold the representation used by this validator, even if another
+    // request evicts it from the LRU while this HTTP request is in flight.
+    const previous = job.epoch === epoch ? cache.get(job.path) : null;
+    let retriedWithoutValidator = false;
     for (let attempt = 0; ; attempt++) {
       if (!job.listeners.size) throw cancelled();
       try {
-        const reply = await getJson(job.path);
-        const data = reply?.data ?? null;
+        const reply = await getJson(job.path, {
+          conditional: true,
+          etag: retriedWithoutValidator ? undefined : previous?.etag,
+        });
+        if (reply?.notModified && !previous) {
+          if (retriedWithoutValidator) throw new Error('统计缓存已失效，请重试');
+          retriedWithoutValidator = true;
+          continue;
+        }
+        const data = reply?.notModified ? previous.data : reply?.data ?? null;
+        const etag = reply?.etag ?? (reply?.notModified ? previous.etag : null);
         if (job.epoch === epoch && job.listeners.size) {
           cache.delete(job.path);
-          cache.set(job.path, { at: now(), data });
+          cache.set(job.path, { at: now(), data, etag });
           while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
         }
         return data;

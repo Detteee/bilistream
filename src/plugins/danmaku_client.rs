@@ -8,14 +8,99 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::time::{interval, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Bytes, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
-use crate::logging::safe_text;
+use crate::logging::{safe_diagnostic, safe_text};
+use crate::plugins::danmaku::warning::{
+    log_warning_mark, warning_tracker, WarningEvent, WarningTracker,
+};
 use crate::plugins::{bili_stop_live, send_danmaku};
+
+pub(crate) fn capture_warning_message(
+    warnings: &WarningTracker,
+    message: &DanmakuMessage,
+) -> Option<WarningEvent> {
+    let cmd = message.cmd.as_str();
+    if !matches!(
+        cmd,
+        "WARNING"
+            | "CUT_OFF"
+            | "CUT_OFF_V2"
+            | "ANCHOR_ECOLOGY_LIVING_DIALOG"
+            | "FULL_SCREEN_MASK_OPEN"
+            | "ROOM_LOCK"
+    ) {
+        return None;
+    }
+    if cmd == "WARNING" {
+        let text = message
+            .data
+            .as_ref()
+            .and_then(|data| data["msg"].as_str())
+            .unwrap_or("No message");
+        warn!("⚠️ Warning: {}", safe_text(text, 160));
+    } else if cmd != "ROOM_LOCK" {
+        let key = if cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
+            "dialog_title"
+        } else if cmd == "FULL_SCREEN_MASK_OPEN" {
+            "title"
+        } else {
+            "msg"
+        };
+        let text = message
+            .data
+            .as_ref()
+            .and_then(|data| data[key].as_str())
+            .unwrap_or("Stream cut off");
+        warn!("✂️ Cut off/Warning: {}", safe_text(text, 160));
+    }
+    let mut event = warnings.capture_event();
+    if cmd != "ROOM_LOCK" {
+        if let Some(name) = warnings.mark_event(&mut event, None) {
+            log_warning_mark(&name);
+        }
+    }
+    Some(event)
+}
+
+/// Complete title-only fallback while retaining the source captured at receipt.
+/// No delayed response may attach itself to a replacement ffmpeg session.
+async fn complete_warning_event(
+    mut event: WarningEvent,
+    room: i32,
+    timed_lock: bool,
+) -> WarningEvent {
+    let warnings = warning_tracker();
+    if timed_lock || !event.has_source() {
+        let title = if event.has_source() {
+            None
+        } else {
+            match crate::plugins::get_bili_live_status(room).await {
+                Ok(status) => Some(status.title),
+                Err(error) => {
+                    error!(
+                        "获取警告时的B站标题失败；{}",
+                        safe_diagnostic(&error.to_string())
+                    );
+                    None
+                }
+            }
+        };
+        let marked = if timed_lock {
+            warnings.mark_timed_event(&mut event, title.as_deref())
+        } else {
+            warnings.mark_event(&mut event, title.as_deref())
+        };
+        if let Some(name) = marked {
+            log_warning_mark(&name);
+        }
+    }
+    event
+}
 
 // Bilibili danmaku protocol constants
 const HEADER_LENGTH: u32 = 16;
@@ -142,6 +227,97 @@ pub struct DanmakuMessage {
     pub data: Option<Value>,
 }
 
+/// One room's last observed values. Identity is captured before any queued
+/// work, not inferred from whichever relay session the writer later sees.
+#[derive(Default)]
+struct AudienceCounts {
+    identity: Option<(u64, u64)>,
+    online: Option<u64>,
+    watched: Option<u64>,
+    emitted: (Option<u64>, Option<u64>),
+    last_emit: Option<Instant>,
+}
+
+fn room_history_event(
+    message: &DanmakuMessage,
+    room: u64,
+    seq: Option<u64>,
+) -> Option<crate::history::EventKind> {
+    use crate::history::EventKind;
+    let data = message.data.as_ref();
+    let (key, fallback) = match message.cmd.as_str() {
+        "WARNING" => ("msg", "直播间警告"),
+        "CUT_OFF" | "CUT_OFF_V2" => ("msg", "直播间切断"),
+        "ANCHOR_ECOLOGY_LIVING_DIALOG" => ("dialog_title", "直播间违规"),
+        "FULL_SCREEN_MASK_OPEN" => ("title", "直播间涉嫌违规"),
+        _ => return None,
+    };
+    let msg = safe_text(
+        data.and_then(|data| data.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or(fallback),
+        160,
+    );
+    Some(if message.cmd == "WARNING" {
+        EventKind::BiliWarning { seq, room, msg }
+    } else {
+        EventKind::BiliCutOff { seq, room, msg }
+    })
+}
+
+impl AudienceCounts {
+    fn observe(
+        &mut self,
+        room: u64,
+        seq: Option<u64>,
+        message: &DanmakuMessage,
+        now: Instant,
+        sample_secs: u64,
+    ) -> Option<crate::history::EventKind> {
+        let identity = seq.map(|seq| (room, seq));
+        if self.identity != identity {
+            self.identity = identity;
+            self.online = None;
+            self.watched = None;
+            self.emitted = (None, None);
+            // Preserve the room's throttle across a relay-session boundary.
+            // Values from the preceding session must never follow it.
+        }
+        let (_, seq) = identity?;
+        let data = message.data.as_ref()?;
+        if let Some(packet_room) = data.get("room_id").or_else(|| data.get("roomid")) {
+            let packet_room = packet_room
+                .as_u64()
+                .or_else(|| packet_room.as_str()?.parse().ok());
+            if packet_room != Some(room) {
+                return None;
+            }
+        }
+        match message.cmd.as_str() {
+            "WATCHED_CHANGE" => self.watched = Some(data.get("num")?.as_u64()?),
+            "ONLINE_RANK_COUNT" => self.online = Some(data.get("online_count")?.as_u64()?),
+            _ => return None,
+        }
+        let values = (self.online, self.watched);
+        if let Some(last) = self.last_emit {
+            let elapsed = now.saturating_duration_since(last);
+            if elapsed < Duration::from_secs(sample_secs.clamp(5, 60))
+                || (values == self.emitted && elapsed < Duration::from_secs(60))
+            {
+                return None;
+            }
+        }
+        self.last_emit = Some(now);
+        self.emitted = values;
+        Some(crate::history::EventKind::BiliCounts {
+            seq,
+            room,
+            online: self.online,
+            watched: self.watched,
+        })
+    }
+}
+
 pub struct BilibiliDanmakuClient {
     config: DanmakuConfig,
     room_id: u64,
@@ -149,6 +325,7 @@ pub struct BilibiliDanmakuClient {
     host_list: Vec<String>,
     app_config: Arc<Config>,
     enable_commands: Arc<AtomicBool>,
+    audience: Mutex<AudienceCounts>,
 }
 
 impl BilibiliDanmakuClient {
@@ -164,6 +341,7 @@ impl BilibiliDanmakuClient {
             host_list: Vec::new(),
             app_config,
             enable_commands,
+            audience: Mutex::new(AudienceCounts::default()),
         }
     }
 
@@ -407,14 +585,81 @@ impl BilibiliDanmakuClient {
     }
 
     async fn handle_message(&self, data: &[u8]) -> Result<()> {
-        for message in decode_danmaku_messages(data)? {
-            self.process_danmaku_command(&message).await;
+        // A preceding command in this frame can await remote work. Capture
+        // every sample first so it cannot inherit a later relay's identity.
+        let at = crate::storage::now();
+        let observed_at = Instant::now();
+        let seq = crate::history::recording_enabled()
+            .then(|| crate::history::open_session_seq(self.room_id))
+            .flatten()
+            .filter(|_| crate::cluster::local_monitoring_allowed(&self.app_config));
+        let messages = decode_danmaku_messages(data)?;
+        self.record_history_messages(
+            &messages,
+            seq,
+            at,
+            observed_at,
+            crate::history::bili_sample_secs(),
+        );
+        let warnings = warning_tracker();
+        let warning_events: Vec<_> = messages
+            .iter()
+            .map(|message| capture_warning_message(&warnings, message))
+            .collect();
+        for (message, warning) in messages.into_iter().zip(warning_events) {
+            self.process_captured_danmaku_command(&message, warning)
+                .await;
         }
         Ok(())
     }
 
+    fn record_history_messages(
+        &self,
+        messages: &[DanmakuMessage],
+        seq: Option<u64>,
+        at: u64,
+        observed_at: Instant,
+        sample_secs: u64,
+    ) {
+        for message in messages {
+            match message.cmd.as_str() {
+                "LIVE" => crate::history::bili::observe_room_status_at(self.room_id, true, at),
+                "PREPARING" => {
+                    crate::history::bili::observe_room_status_at(self.room_id, false, at)
+                }
+                _ => {}
+            }
+            let event = if matches!(message.cmd.as_str(), "WATCHED_CHANGE" | "ONLINE_RANK_COUNT") {
+                self.audience
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .observe(self.room_id, seq, message, observed_at, sample_secs)
+            } else {
+                room_history_event(message, self.room_id, seq)
+            };
+            if let Some(event) = event {
+                crate::history::emit_at(at, event);
+            }
+        }
+    }
+
+    #[cfg(test)]
     async fn process_danmaku_command(&self, message: &DanmakuMessage) {
+        self.process_captured_danmaku_command(
+            message,
+            capture_warning_message(&warning_tracker(), message),
+        )
+        .await;
+    }
+
+    async fn process_captured_danmaku_command(
+        &self,
+        message: &DanmakuMessage,
+        warning: Option<WarningEvent>,
+    ) {
         match message.cmd.as_str() {
+            // Captured as one observation above, before any command awaits.
+            "WATCHED_CHANGE" | "ONLINE_RANK_COUNT" => {}
             "DANMU_MSG" => {
                 if let Some(info) = &message.info {
                     if let Some(info_array) = info.as_array() {
@@ -428,10 +673,6 @@ impl BilibiliDanmakuClient {
                                 danmaku_text.to_string()
                             };
                             let user_info = info_array[2].as_array();
-                            let username = user_info
-                                .and_then(|u| u.get(1))
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("Unknown");
                             let uid = user_info
                                 .and_then(|u| u.first())
                                 .and_then(|n| n.as_u64())
@@ -454,17 +695,11 @@ impl BilibiliDanmakuClient {
                                         true, // is_owner = true
                                     )
                                     .await;
-                                    debug!("主播弹幕命令已处理: {}", safe_text(&danmaku_text, 160));
                                 } else if self.enable_commands.load(Ordering::Relaxed)
                                     && danmaku_text.contains("%转播")
                                 {
                                     // Non-owners can use commands "%转播" only when enabled
                                     let formatted_message = format!(" :{}", danmaku_text);
-                                    debug!(
-                                        "弹幕命令 {}: {}",
-                                        safe_text(username, 48),
-                                        safe_text(&danmaku_text, 160)
-                                    );
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         false, // is_owner = false
@@ -478,17 +713,9 @@ impl BilibiliDanmakuClient {
                                     )
                                     .await;
                                 } else {
-                                    warn!(
-                                        "{} 弹幕换台请求已拒绝：换台命令未启用；用户={}",
-                                        safe_text(
-                                            if self.app_config.cluster.node_id.is_empty() {
-                                                "local"
-                                            } else {
-                                                &self.app_config.cluster.node_id
-                                            },
-                                            64
-                                        ),
-                                        safe_text(username, 48)
+                                    crate::plugins::danmaku::reject_disabled_danmaku_target(
+                                        &self.app_config.cluster.node_id,
+                                        &danmaku_text,
                                     );
                                 }
                             }
@@ -496,98 +723,64 @@ impl BilibiliDanmakuClient {
                     }
                 }
             }
-            "LIVE" => {
-                // if let Some(data) = &message.data {
-                //     let room_id = data["room_id"].as_u64().unwrap_or(0);
-                //     info!("🔴 Live started - Room ID: {}", room_id);
-                // }
-            }
-            "PREPARING" => {
-                // if let Some(data) = &message.data {
-                //     let room_id = data["roomid"].as_str().unwrap_or("unknown");
-                //     info!("⚫ Live stopped - Room ID: {}", room_id);
-                // }
-            }
+            "LIVE" | "PREPARING" => {}
             "WARNING" => {
-                if let Some(data) = &message.data {
-                    let msg = data["msg"].as_str().unwrap_or("No message");
-                    warn!("⚠️ Warning: {}", msg);
-                    let cfg = self.app_config.clone();
+                let cfg = self.app_config.clone();
+                if let Some(warning) = warning {
                     tokio::spawn(async move {
-                        // Get current streaming channel from bili title
-                        match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
-                            Ok(status) => {
-                                let title = status.title;
-                                if title.contains("【转播】") {
-                                    let channel_name = title.split("【转播】").last().unwrap_or("");
-                                    if !channel_name.is_empty() {
-                                        // Set warning flag to prevent restreaming this channel
-                                        crate::plugins::danmaku::set_warning_stop(
-                                            channel_name.to_string(),
-                                        );
-                                        info!(
-                                            "🚫 已标记频道 {} 为警告状态，将跳过转播",
-                                            channel_name
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to get bili live status: {}", e.to_string());
-                            }
+                        let warning =
+                            complete_warning_event(warning, cfg.bililive.room, false).await;
+                        if !warning_tracker().event_is_current(&warning) {
+                            return;
                         }
-
-                        if let Err(e) = bili_stop_live(&cfg).await {
-                            error!("Failed to stop live on warning: {}", e);
+                        if let Err(error) = bili_stop_live(&cfg).await {
+                            error!(
+                                "Failed to stop live on warning: {}",
+                                safe_diagnostic(&error.to_string())
+                            );
                         }
-                        if let Err(e) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                        if !warning_tracker().event_is_current(&warning) {
+                            return;
+                        }
+                        if let Err(error) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
                         {
-                            error!("Failed to send warning danmaku: {}", e.to_string());
+                            error!(
+                                "Failed to send warning danmaku: {}",
+                                safe_diagnostic(&error.to_string())
+                            );
                         }
+                        warning_tracker().finish_unmarked_event(&warning);
                     });
                 }
             }
             "CUT_OFF" | "CUT_OFF_V2" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
-                if let Some(data) = &message.data {
-                    let msg = if message.cmd == "CUT_OFF" || message.cmd == "CUT_OFF_V2" {
-                        data["msg"].as_str().unwrap_or("Stream cut off")
-                    } else if message.cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
-                        data["dialog_title"].as_str().unwrap_or("直播间违规")
-                    } else {
-                        data["title"].as_str().unwrap_or("直播间涉嫌违规")
-                    };
-                    warn!("✂️ Cut off/Warning: {}", msg)
-                };
                 let cfg = self.app_config.clone();
-                tokio::spawn(async move {
-                    // Get current streaming channel from bili title
-                    match crate::plugins::get_bili_live_status(cfg.bililive.room).await {
-                        Ok(status) => {
-                            let title = status.title;
-                            if title.contains("【转播】") {
-                                let channel_name = title.split("【转播】").last().unwrap_or("");
-                                if !channel_name.is_empty() {
-                                    // Set warning flag to prevent restreaming this channel
-                                    crate::plugins::danmaku::set_warning_stop(
-                                        channel_name.to_string(),
-                                    );
-                                    info!("🚫 已标记频道 {} 为警告状态，将跳过转播", channel_name);
-                                }
-                            }
+                if let Some(warning) = warning {
+                    tokio::spawn(async move {
+                        let warning =
+                            complete_warning_event(warning, cfg.bililive.room, false).await;
+                        if !warning_tracker().event_is_current(&warning) {
+                            return;
                         }
-                        Err(e) => {
-                            error!("Failed to get bili live status: {}", e);
+                        if let Err(error) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                        {
+                            error!(
+                                "Failed to send warning danmaku: {}",
+                                safe_diagnostic(&error.to_string())
+                            );
                         }
-                    }
-                    if let Err(e) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
-                    {
-                        error!("Failed to send warning danmaku: {}", e);
-                    }
-
-                    if let Err(e) = bili_stop_live(&cfg).await {
-                        error!("Failed to stop live on warning: {}", e);
-                    }
-                });
+                        if !warning_tracker().event_is_current(&warning) {
+                            return;
+                        }
+                        if let Err(error) = bili_stop_live(&cfg).await {
+                            error!(
+                                "Failed to stop live on warning: {}",
+                                safe_diagnostic(&error.to_string())
+                            );
+                        }
+                        warning_tracker().finish_unmarked_event(&warning);
+                    });
+                }
             }
             "WELCOME_GUARD" => {
                 // if let Some(data) = &message.data {
@@ -664,11 +857,9 @@ impl BilibiliDanmakuClient {
             | "GUARD_HONOR_THOUSAND"
             | "DM_INTERACTION"
             | "ONLINE_RANK_V2"
-            | "ONLINE_RANK_COUNT"
             | "ONLINE_RANK_V3"
             | "RANK_REM"
             | "STOP_LIVE_ROOM_LIST"
-            | "WATCHED_CHANGE"
             | "LIKE_INFO_V3_NOTICE"
             | "LIKE_INFO_V3_UPDATE"
             | "LIKE_INFO_V3_CLICK"
@@ -686,21 +877,33 @@ impl BilibiliDanmakuClient {
             | "RANK_CHANGED_V2"
             | "ENTRY_EFFECT" => {}
             "ROOM_LOCK" => {
-                // The packet carries no duration. room_init.lock_till is the ban end.
-                // This is a room punishment, not a source-channel warning.
+                // The packet carries no duration. Preserve the room_init wait;
+                // only a timed lock also holds this captured source channel.
                 let room_id = self.app_config.bililive.room;
                 warn!("B站房间锁定 ROOM_LOCK");
                 tokio::spawn(async move {
-                    match crate::plugins::get_bili_room_lock(room_id).await {
+                    let mut warning = warning;
+                    match crate::plugins::get_bili_room_lock(room_id)
+                        .await
+                        .map_err(|error| error.to_string())
+                    {
                         Ok(lock) if lock.is_locked => {
                             crate::plugins::announce_room_lock(room_id, &lock);
+                            if crate::plugins::timed_room_lock_wait(&lock).is_some() {
+                                if let Some(event) = warning.take() {
+                                    warning =
+                                        Some(complete_warning_event(event, room_id, true).await);
+                                }
+                            }
                         }
-                        Ok(_) => {
-                            warn!("收到 ROOM_LOCK，但 room_init 显示房间未锁定");
-                        }
-                        Err(error) => {
-                            error!("查询房间锁定状态失败: {}", error);
-                        }
+                        Ok(_) => warn!("收到 ROOM_LOCK，但 room_init 显示房间未锁定"),
+                        Err(error) => error!(
+                            "查询房间锁定状态失败: {}",
+                            safe_diagnostic(&error.to_string())
+                        ),
+                    }
+                    if let Some(warning) = warning {
+                        warning_tracker().finish_unmarked_event(&warning);
                     }
                 });
             }
@@ -812,6 +1015,201 @@ mod tests {
         )
     }
 
+    fn audience_message(cmd: &str, data: Value) -> DanmakuMessage {
+        DanmakuMessage {
+            cmd: cmd.into(),
+            data: Some(data),
+            info: None,
+        }
+    }
+
+    #[test]
+    fn audience_preserves_zero_unknown_fields_and_latest_values_with_room_throttle() {
+        use crate::history::EventKind;
+        let now = Instant::now();
+        let mut counts = AudienceCounts::default();
+        let zero = audience_message("ONLINE_RANK_COUNT", serde_json::json!({"online_count": 0}));
+        assert!(matches!(
+            counts.observe(1, Some(1), &zero, now, 1),
+            Some(EventKind::BiliCounts {
+                online: Some(0),
+                watched: None,
+                ..
+            })
+        ));
+        let watched = audience_message("WATCHED_CHANGE", serde_json::json!({"num": 31}));
+        assert!(counts
+            .observe(1, Some(1), &watched, now + Duration::from_secs(1), 1)
+            .is_none());
+        assert!(counts
+            .observe(1, Some(1), &zero, now + Duration::from_secs(4), 1)
+            .is_none());
+        assert!(matches!(
+            counts.observe(1, Some(1), &zero, now + Duration::from_secs(5), 1),
+            Some(EventKind::BiliCounts {
+                online: Some(0),
+                watched: Some(31),
+                ..
+            })
+        ));
+        for data in [
+            serde_json::json!({}),
+            serde_json::json!({"num": -1}),
+            serde_json::json!({"num": "40"}),
+        ] {
+            assert!(counts
+                .observe(
+                    1,
+                    Some(1),
+                    &audience_message("WATCHED_CHANGE", data),
+                    now + Duration::from_secs(10),
+                    5
+                )
+                .is_none());
+        }
+        assert!(counts
+            .observe(1, Some(1), &zero, now + Duration::from_secs(64), 5)
+            .is_none());
+        assert!(counts
+            .observe(1, Some(1), &zero, now + Duration::from_secs(65), 5)
+            .is_some());
+        let other_room = audience_message(
+            "WATCHED_CHANGE",
+            serde_json::json!({"room_id": 2, "num": 999}),
+        );
+        assert!(counts
+            .observe(1, Some(1), &other_room, now + Duration::from_secs(70), 5)
+            .is_none());
+        // No active relay: don't collect a standby's duplicate room samples.
+        assert!(counts
+            .observe(1, None, &watched, now + Duration::from_secs(71), 5)
+            .is_none());
+        assert!(matches!(
+            counts.observe(1, Some(2), &watched, now + Duration::from_secs(72), 5),
+            Some(EventKind::BiliCounts {
+                seq: 2,
+                online: None,
+                watched: Some(31),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn decoded_counts_keep_observation_identity_when_writer_has_already_started_next_session() {
+        use crate::history::event::Event;
+        use crate::history::{EndReason, EventKind};
+        let client = client_for_messages();
+        let frame = packet(
+            PROTOCOL_COMMAND,
+            br#"{"cmd":"WATCHED_CHANGE","data":{"num":77,"room_id":1}}"#,
+        );
+        let messages = decode_danmaku_messages(&frame).unwrap();
+        let bus = Arc::new(crate::events::Bus::new());
+        let mut rx = bus.register("captured", 8, |_| true);
+        bus.seal();
+        crate::events::with_sync_test_bus(bus, || {
+            client.record_history_messages(&messages, Some(7), 101, Instant::now(), 5);
+        });
+        let observation = rx.try_recv().unwrap();
+        assert_eq!(observation.at, 101);
+        assert!(matches!(
+            observation.kind,
+            EventKind::BiliCounts {
+                seq: 7,
+                room: 1,
+                watched: Some(77),
+                ..
+            }
+        ));
+        let conn = crate::history::schema::open_rw(std::path::Path::new(":memory:")).unwrap();
+        let mut writer = crate::history::writer::Writer::new(conn, "local", 1);
+        let start = |seq| EventKind::SessionStarted {
+            seq,
+            platform: "YT",
+            channel_id: "synthetic".into(),
+            channel_name: "频道".into(),
+            title: None,
+            live_key: None,
+            area_v2: Some(86),
+            room: 1,
+        };
+        writer
+            .commit(&[
+                Event {
+                    at: 100,
+                    kind: start(7),
+                },
+                Event {
+                    at: 105,
+                    kind: EventKind::SessionEnded {
+                        seq: 7,
+                        reason: EndReason::SourceEnded,
+                    },
+                },
+                Event {
+                    at: 105,
+                    kind: start(8),
+                },
+            ])
+            .unwrap();
+        writer.apply(&observation).unwrap();
+        let (seq, room, watched): (u64, u64, f64) = writer.conn.query_row(
+            "SELECT s.seq,s.room,r.max FROM samples_raw r JOIN sessions s ON r.session_id=s.id WHERE r.metric=11", [],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!((seq, room, watched), (7, 1, 77.0));
+        writer
+            .apply(&Event {
+                at: 106,
+                kind: EventKind::BiliCounts {
+                    seq: 8,
+                    room: 2,
+                    online: Some(999),
+                    watched: None,
+                },
+            })
+            .unwrap();
+        let n: u64 = writer
+            .conn
+            .query_row("SELECT count(*) FROM samples_raw", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "an observation of another room cannot attach to this session"
+        );
+    }
+
+    #[test]
+    fn room_warning_and_cut_packets_emit_safe_facts_without_running_commands() {
+        use crate::history::EventKind;
+        let client = client_for_messages();
+        let bus = Arc::new(crate::events::Bus::new());
+        let mut rx = bus.register("room-facts", 8, |_| true);
+        bus.seal();
+        let messages = [
+            audience_message(
+                "WARNING",
+                serde_json::json!({"msg":"断开 rtmp://example.invalid/live?key=SYNTHETIC-RTMP"}),
+            ),
+            audience_message(
+                "ANCHOR_ECOLOGY_LIVING_DIALOG",
+                serde_json::json!({"dialog_title":"直播间违规"}),
+            ),
+        ];
+        crate::events::with_sync_test_bus(bus, || {
+            client.record_history_messages(&messages, Some(11), 123, Instant::now(), 5)
+        });
+        let warning = rx.try_recv().unwrap();
+        let cut = rx.try_recv().unwrap();
+        assert!(
+            matches!(&warning.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg } if !msg.contains("SYNTHETIC-RTMP"))
+        );
+        assert!(
+            matches!(&cut.kind, EventKind::BiliCutOff { seq: Some(11), room: 1, msg } if msg=="直播间违规")
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn decorative_and_incomplete_messages_log_only_safe_debug_types() {
         let client = client_for_messages();
@@ -862,7 +1260,65 @@ mod tests {
         assert!(output.contains(" WARN [danmaku]"));
         assert!(output.contains("换台命令未启用"));
         assert!(!output.contains("监听目标已更新"));
+        assert!(output.contains("弹幕 %转播%"));
+        assert!(!output.contains("示例用户001"));
         assert!(!client.enable_commands.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn warning_followed_by_pending_room_lock_keeps_the_confirmed_stop_eligible() {
+        use crate::plugins::danmaku::warning::BroadcastSource;
+        let warnings = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "示例频道 001", "UCexample001", Some("episode-1"));
+        let _owner = warnings.own_source(1, source.clone());
+        let mut frame = packet(0, br#"{"cmd":"WARNING","data":{"msg":"warning"}}"#);
+        frame.extend(packet(0, br#"{"cmd":"ROOM_LOCK","data":{}}"#));
+        let messages = decode_danmaku_messages(&frame).unwrap();
+        let captured: Vec<_> = messages
+            .iter()
+            .map(|message| capture_warning_message(&warnings, message).unwrap())
+            .collect();
+        assert!(warnings.snapshot().holds(&source));
+        assert!(
+            warnings.event_is_current(&captured[0]),
+            "unconfirmed ROOM_LOCK must not suppress WARNING stop"
+        );
+        warnings.finish_unmarked_event(&captured[1]);
+        assert!(warnings.event_is_current(&captured[0]));
+    }
+
+    #[test]
+    fn an_unknown_warning_source_finishes_after_failed_title_attribution() {
+        use crate::plugins::danmaku::warning::{BroadcastSource, SourceObservation};
+        let warnings = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "示例频道 001", "UCexample001", Some("episode-1"));
+        let owner = warnings.own_source(1, source.clone());
+        warnings
+            .mark_event(&mut warnings.capture_event(), None)
+            .unwrap();
+        drop(owner);
+        let packet = DanmakuMessage {
+            cmd: "CUT_OFF".into(),
+            info: None,
+            data: None,
+        };
+        let mut captured = capture_warning_message(&warnings, &packet).unwrap();
+        assert!(!captured.has_source());
+        assert!(warnings
+            .mark_event(&mut captured, Some("a room title without relay identity"))
+            .is_none());
+        assert!(
+            warnings.event_is_current(&captured),
+            "failed attribution still permits the real warning stop"
+        );
+        warnings.finish_unmarked_event(&captured);
+        let fresh = warnings.snapshot();
+        assert!(
+            warnings
+                .observe_sources(&fresh, &[SourceObservation::new(source, false, false)])
+                .is_some(),
+            "a completed unknown warning must not leave pending_event latched"
+        );
     }
 
     fn packet(protocol: u16, body: &[u8]) -> Vec<u8> {

@@ -9,7 +9,7 @@ use crate::history::query::{
 use crate::history::MissingNode;
 use axum::{
     extract::Query as Params,
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -24,12 +24,22 @@ use std::time::Duration;
 const PEER_TIMEOUT: Duration = Duration::from_secs(3);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const QUERY_ADMISSION_TIMEOUT: Duration = Duration::from_millis(750);
+pub(crate) const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 // Coordinator requests keep their own bound while waiting for the network.
 // Peer reads never acquire this gate: two dashboards must not reserve the
 // permits that their reciprocal peer reads need to finish.
 static COORDINATORS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 static QUERIES: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
+
+fn install_query_deadline(
+    conn: &rusqlite::Connection,
+    deadline: std::time::Instant,
+) -> rusqlite::Result<()> {
+    // SQLite owns this callback while the blocking task is detached from a
+    // cancelled HTTP caller. Cancellation cannot remove the query deadline.
+    conn.progress_handler(1000, Some(move || std::time::Instant::now() >= deadline))
+}
 
 async fn acquire_db_slot(
     queries: &Arc<tokio::sync::Semaphore>,
@@ -52,7 +62,199 @@ async fn admitted_query(
 }
 
 fn ok(data: Value) -> Response {
-    Json(json!({ "success": true, "data": data })).into_response()
+    conditional_ok(data, &HeaderMap::new(), "")
+}
+
+/// Hash the actual merged representation, including peer rows and partial
+/// coverage. A peer commit therefore invalidates an otherwise unchanged
+/// coordinator, and open-session durations also get an honest validator.
+fn conditional_ok(data: Value, headers: &HeaderMap, query_key: &str) -> Response {
+    use sha2::{Digest, Sha256};
+    let bytes = match serde_json::to_vec(&json!({"success":true,"data":data})) {
+        Ok(bytes) if bytes.len() <= MAX_RESPONSE_BYTES => bytes,
+        Ok(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "统计结果过大，请缩小范围或减少记录数",
+            )
+        }
+        Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "统计结果无法编码"),
+    };
+    let mut hash = Sha256::new();
+    hash.update(crate::history::schema::SCHEMA_VERSION.to_be_bytes());
+    hash.update(query_key.as_bytes());
+    hash.update(&bytes);
+    let tag = format!("\"{:x}\"", hash.finalize());
+    let unchanged = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|part| {
+                let part = part.trim();
+                part == "*" || part.strip_prefix("W/").unwrap_or(part) == tag
+            })
+        });
+    let mut response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Response::new(axum::body::Body::from(bytes))
+    };
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&tag).expect("hex ETag is a header value"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    if !unchanged {
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+    }
+    response
+}
+
+#[cfg(test)]
+mod conditional_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn conditional_reply_uses_merged_rows_coverage_and_query_identity() {
+        let original = json!({"items":[{"eid":"a:1:1"}],"missing_nodes":["b"]});
+        let response = conditional_ok(original.clone(), &HeaderMap::new(), "sessions:cluster");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-cache"
+        );
+        let tag = response.headers()[header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mut request = HeaderMap::new();
+        request.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_str(&format!("\"unrelated\", W/{tag}")).unwrap(),
+        );
+        let unchanged = conditional_ok(original.clone(), &request, "sessions:cluster");
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+        assert!(to_bytes(unchanged.into_body(), MAX_RESPONSE_BYTES)
+            .await
+            .unwrap()
+            .is_empty());
+        let peer_arrived = conditional_ok(
+            json!({"items":[{"eid":"a:1:1"},{"eid":"b:2:3"}],"missing_nodes":[]}),
+            &request,
+            "sessions:cluster",
+        );
+        assert_eq!(peer_arrived.status(), StatusCode::OK);
+        assert_ne!(peer_arrived.headers()[header::ETAG], tag);
+        assert_eq!(
+            conditional_ok(original, &request, "sessions:local").status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn response_cap_counts_encoded_bytes_and_never_truncates_json() {
+        let response = conditional_ok(
+            json!({"detail":"界".repeat(MAX_RESPONSE_BYTES/2)}),
+            &HeaderMap::new(),
+            "events",
+        );
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(response.headers().get(header::ETAG).is_none());
+        let bytes = to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["success"], false);
+        assert!(body["message"].as_str().unwrap().contains("缩小范围"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_deadline_survives_caller_cancellation_and_releases_snapshot() {
+        let path = std::env::temp_dir().join(format!(
+            "bilistream-history-cancel-deadline-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let writer = crate::history::schema::open_rw(&path).unwrap();
+        writer.execute("INSERT INTO events(eid,at,node,kind,severity,title,detail) VALUES('initial',1,'local','test','info','','')",[]).unwrap();
+        let queries = Arc::new(tokio::sync::Semaphore::new(1));
+        let worker_queries = Arc::clone(&queries);
+        let worker_path = path.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (begin_tx, begin_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let caller = tokio::spawn(async move {
+            read_database(worker_path,&worker_queries,move |conn| {
+                let conn=conn.unwrap();
+                conn.execute_batch("BEGIN; SELECT count(*) FROM events;")?;
+                let _=ready_tx.send(());
+                begin_rx.recv().unwrap();
+                let result=conn.query_row(
+                    "WITH RECURSIVE work(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM work WHERE n<1000000000) SELECT sum(n) FROM work",
+                    [], |row|row.get::<_,i64>(0),
+                );
+                let _=done_tx.send(result.as_ref().err().and_then(|e|e.sqlite_error_code()));
+                result.map(|value|json!(value))
+            }).await
+        });
+        tokio::time::timeout(Duration::from_secs(1), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(queries.available_permits(), 0);
+        writer.execute("INSERT INTO events(eid,at,node,kind,severity,title,detail) VALUES('newer',2,'local','test','info','','')",[]).unwrap();
+        writer.busy_timeout(Duration::ZERO).unwrap();
+        assert_eq!(
+            writer
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1,
+            "reader pins the earlier committed snapshot"
+        );
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            queries.available_permits(),
+            0,
+            "caller cancellation does not release SQL admission"
+        );
+        begin_tx.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(4), done_rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(rusqlite::ErrorCode::OperationInterrupted)
+        );
+        let released =
+            tokio::time::timeout(Duration::from_secs(1), Arc::clone(&queries).acquire_owned())
+                .await
+                .unwrap()
+                .unwrap();
+        drop(released);
+        assert_eq!(queries.available_permits(), 1);
+        assert_eq!(
+            writer
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            std::fs::metadata(path.with_extension("sqlite-wal"))
+                .unwrap()
+                .len(),
+            0
+        );
+    }
 }
 
 fn fail(status: StatusCode, message: &str) -> Response {
@@ -171,16 +373,20 @@ pub(crate) fn local_parts(
     now: i64,
 ) -> rusqlite::Result<Value> {
     let q = &req.query;
+    // Multi-statement KPI/session reads see one committed database version;
+    // retention must not remove half a session between the row and run reads.
+    let snapshot = conn.unchecked_transaction()?;
     let value = match req.name.as_str() {
-        "summary" => serde_json::to_value(query::summary(conn, q, node, now)?),
-        "sessions" => serde_json::to_value(query::sessions(conn, q, now)?),
-        "events" => serde_json::to_value(query::events(conn, q)?),
+        "summary" => serde_json::to_value(query::summary(&snapshot, q, node, now)?),
+        "sessions" => serde_json::to_value(query::sessions(&snapshot, q, now)?),
+        "events" => serde_json::to_value(query::events(&snapshot, q)?),
         "stats" => {
             let tier = q.tier.clone().unwrap_or_else(|| "raw".into());
-            serde_json::to_value(query::stats(conn, q, &tier, None)?)
+            serde_json::to_value(query::stats(&snapshot, q, &tier, None)?)
         }
         _ => Ok(Value::Null),
     };
+    snapshot.commit()?;
     Ok(value.unwrap_or(Value::Null))
 }
 
@@ -221,19 +427,54 @@ async fn run_local(req: PeerRequest, node: String) -> Result<Value, String> {
     let Some(shared) = crate::history::shared() else {
         return Ok(empty_parts(&req, &node));
     };
-    let permit = acquire_db_slot(&QUERIES).await?;
-    let path = shared.path.clone();
+    read_database(shared.path.clone(), &QUERIES, move |conn| match conn {
+        Some(conn) => local_parts(conn, &req, &node, crate::storage::now() as i64),
+        None => Ok(empty_parts(&req, &node)),
+    })
+    .await
+}
+
+/// Shared execution boundary: the blocking reader owns both its permit and
+/// its SQLite deadline independently of its HTTP caller's lifetime.
+async fn read_database(
+    path: std::path::PathBuf,
+    queries: &Arc<tokio::sync::Semaphore>,
+    read: impl FnOnce(Option<&rusqlite::Connection>) -> rusqlite::Result<Value> + Send + 'static,
+) -> Result<Value, String> {
+    let permit = acquire_db_slot(queries).await?;
+    let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::task::spawn_blocking(move || {
         // The SQL work owns the permit even if its HTTP caller disappears
         // or times out while SQLite is processing the interrupt.
         let _permit = permit;
+        if !path.exists() {
+            return read(None).map_err(|error| error.to_string());
+        }
         let conn = crate::history::schema::open_ro(&path).map_err(|e| e.to_string())?;
+        if std::time::Instant::now() >= deadline {
+            return Err("统计查询超时".into());
+        }
+        install_query_deadline(&conn, deadline).map_err(|error| error.to_string())?;
         let _ = tx.send(conn.get_interrupt_handle());
-        local_parts(&conn, &req, &node, crate::storage::now() as i64).map_err(|e| e.to_string())
+        read(Some(&conn)).map_err(|e| {
+            if e.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted) {
+                "统计查询超时".into()
+            } else {
+                e.to_string()
+            }
+        })
     });
-    let interrupt = rx.await.ok();
-    match tokio::time::timeout(QUERY_TIMEOUT, task).await {
+    let interrupt = tokio::time::timeout(QUERY_TIMEOUT, rx)
+        .await
+        .ok()
+        .and_then(Result::ok);
+    match tokio::time::timeout(
+        deadline.saturating_duration_since(std::time::Instant::now()),
+        task,
+    )
+    .await
+    {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("统计查询失败".into()),
         Err(_) => {
@@ -509,11 +750,15 @@ async fn answer_inner(
     }
 }
 
-async fn handle(name: &str, params: HashMap<String, String>) -> Response {
-    admitted_query(&COORDINATORS, handle_admitted(name, params)).await
+async fn handle(name: &str, params: HashMap<String, String>, headers: HeaderMap) -> Response {
+    admitted_query(&COORDINATORS, handle_admitted(name, params, headers)).await
 }
 
-async fn handle_admitted(name: &str, params: HashMap<String, String>) -> Response {
+async fn handle_admitted(
+    name: &str,
+    params: HashMap<String, String>,
+    headers: HeaderMap,
+) -> Response {
     let cfg = match crate::config::load_config().await {
         Ok(cfg) => cfg,
         Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "读取配置失败"),
@@ -529,25 +774,40 @@ async fn handle_admitted(name: &str, params: HashMap<String, String>) -> Respons
     )
     .await
     {
-        Ok(data) => ok(data),
+        Ok(data) => {
+            let sorted: std::collections::BTreeMap<_, _> = params.iter().collect();
+            conditional_ok(data, &headers, &format!("{name}:{sorted:?}"))
+        }
         Err((status, message)) => fail(status, &message),
     }
 }
 
-pub async fn summary(Params(params): Params<HashMap<String, String>>) -> Response {
-    handle("summary", params).await
+pub async fn summary(
+    Params(params): Params<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    handle("summary", params, headers).await
 }
 
-pub async fn sessions(Params(params): Params<HashMap<String, String>>) -> Response {
-    handle("sessions", params).await
+pub async fn sessions(
+    Params(params): Params<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    handle("sessions", params, headers).await
 }
 
-pub async fn events(Params(params): Params<HashMap<String, String>>) -> Response {
-    handle("events", params).await
+pub async fn events(
+    Params(params): Params<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    handle("events", params, headers).await
 }
 
-pub async fn stats(Params(params): Params<HashMap<String, String>>) -> Response {
-    handle("stats", params).await
+pub async fn stats(
+    Params(params): Params<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    handle("stats", params, headers).await
 }
 
 pub(crate) fn status_value(cfg: &Config) -> Value {
@@ -562,49 +822,61 @@ pub(crate) fn status_value(cfg: &Config) -> Value {
     let retention = json!({
         "raw_days": retention.raw_days, "rollup_days": retention.rollup_days,
         "event_days": retention.event_days, "event_rows": retention.event_rows,
+        "max_mb":retention.max_mb,
     });
-    let recorder = if !cfg.cluster.enabled
-        || crate::cluster::cluster_state_read().active_owner.as_deref()
-            == Some(cfg.cluster.node_id.as_str())
-    {
-        "primary"
-    } else {
-        "none"
-    };
+    let recorder = crate::notify::recorder_status();
+    let mut dropped: std::collections::BTreeMap<&str, u64> =
+        crate::events::dropped().into_iter().collect();
+    *dropped.entry("notify").or_default() +=
+        crate::notify::dropped()["commands"].as_u64().unwrap_or(0);
+    dropped.entry("history").or_default();
     let Some(shared) = crate::history::shared() else {
         return json!({
             "node_id": node, "cluster_nodes": cluster_nodes,
             "enabled": cfg.history.enabled, "schema_version": crate::history::schema::SCHEMA_VERSION, "oldest_at": null,
+            "configured_enabled":cfg.history.enabled,"restart_required":false,
             "recording_since": null, "db_bytes": 0,
             "rows": {"sessions": 0, "runs": 0, "events": 0, "samples_raw": 0, "samples_1m": 0, "notify_sends": 0},
-            "dropped": {"history": 0, "notify": 0},
+            "dropped": dropped,
             "writer": {"state": "stopped", "last_batch_at": null, "last_error": null},
             "retention": retention, "recorder": recorder, "missing_nodes": [],
         });
     };
     let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let wal = shared.path.with_extension("sqlite-wal");
-    let (rows, oldest) = match crate::history::schema::open_ro(&shared.path) {
+    let (rows, oldest, partial_before) = match crate::history::schema::open_ro(&shared.path)
+        .and_then(|conn| {
+            install_query_deadline(&conn, std::time::Instant::now() + QUERY_TIMEOUT)?;
+            Ok(conn)
+        }) {
         Ok(conn) => (
             query::status_rows(&conn).unwrap_or(Value::Null),
             query::oldest_at(&conn).ok().and_then(|o| o.0),
+            query::retention_floor(&conn).ok().flatten(),
         ),
-        Err(_) => (Value::Null, None),
+        Err(_) => (Value::Null, None, None),
     };
     let writer = shared
         .status
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
+    *dropped.entry("history").or_default() +=
+        shared.dropped.load(std::sync::atomic::Ordering::Relaxed);
+    let db_bytes = size(&shared.path) + size(&wal);
     json!({
         "node_id": node, "cluster_nodes": cluster_nodes,
-        "enabled": true,
+        "enabled": shared.enabled,
+        "configured_enabled":cfg.history.enabled,"restart_required":shared.enabled!=cfg.history.enabled,
         "schema_version": crate::history::schema::SCHEMA_VERSION,
         "oldest_at": oldest,
-        "recording_since": shared.recording_since,
-        "db_bytes": size(&shared.path) + size(&wal),
+        "recording_since": shared.enabled.then_some(shared.recording_since),
+        "db_bytes": db_bytes,
+        "wal_bytes":size(&wal),
+        "space_pressure": db_bytes>=cfg.history.retention.max_mb.max(1).saturating_mul(1024*1024),
+        "partial_before":partial_before,
         "rows": rows,
-        "dropped": {"history": shared.dropped.load(std::sync::atomic::Ordering::Relaxed), "notify": 0},
+        "dropped": dropped,
         // Writer errors are SQLite messages; never paths or secrets.
         "writer": {"state": writer.state, "last_batch_at": writer.last_batch_at,
                    "last_error": writer.last_error.map(|e| crate::logging::safe_text(&e, 120))},
@@ -614,7 +886,7 @@ pub(crate) fn status_value(cfg: &Config) -> Value {
     })
 }
 
-pub async fn status() -> Response {
+pub async fn status(headers: HeaderMap) -> Response {
     let cfg = match crate::config::load_config().await {
         Ok(cfg) => cfg,
         Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "读取配置失败"),
@@ -629,7 +901,7 @@ pub async fn status() -> Response {
     })
     .await
     .unwrap_or(Value::Null);
-    ok(value)
+    conditional_ok(value, &headers, "status")
 }
 
 /// Signed peer route: this node's own parts, never fanned out again.

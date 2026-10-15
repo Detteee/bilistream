@@ -85,6 +85,14 @@ fn bili_credential_cookie(credentials: &Credentials) -> String {
     )
 }
 
+/// Both history endpoints read the logged-in account's room. An empty cookie
+/// or a different local room must not consume a shared summary claim.
+pub(crate) fn history_account_ready(cfg: &Config, room: u64) -> bool {
+    room != 0
+        && cfg.bililive.room.max(0) as u64 == room
+        && !cfg.bililive.credentials.sessdata.trim().is_empty()
+}
+
 /// The live-client (version, build) pair changes rarely; cache successful
 /// probes for a day instead of fetching on every stream start.
 static BILI_LIVE_VERSION_CACHE: Mutex<Option<(Instant, (String, i64))>> = Mutex::new(None);
@@ -302,6 +310,10 @@ pub fn announce_room_lock(room: i32, lock: &BiliRoomLock) {
         return;
     }
     tracing::error!("{}", room_lock_log_line(room, lock));
+    crate::history::emit(crate::history::EventKind::RoomLocked {
+        room: room.max(0) as u64,
+        until: lock.lock_till,
+    });
 }
 
 /// Retrieves the room lock from public `room_init`. No credentials.
@@ -324,8 +336,11 @@ pub async fn get_bili_live_status(room: i32) -> Result<BiliLiveStatus, Box<dyn E
     let (raw_client, client) = bili_status_clients()?;
     let url = bili_live_status_url(&raw_client, room).await?;
 
+    let observed_at = crate::storage::now();
     let res: Value = client.get(url).send().await?.json().await?;
-    parse_bili_live_status(&res)
+    let status = parse_bili_live_status(&res)?;
+    observe_live_status_reply(room, &res, observed_at);
+    Ok(status)
 }
 
 /// Cluster health sampling must not wait for the monitor's five retries.
@@ -333,6 +348,7 @@ pub async fn get_bili_live_status(room: i32) -> Result<BiliLiveStatus, Box<dyn E
 pub(crate) async fn get_bili_live_status_once(room: i32) -> Result<BiliLiveStatus, Box<dyn Error>> {
     let (client, _) = bili_status_clients()?;
     let url = bili_live_status_url(&client, room).await?;
+    let observed_at = crate::storage::now();
     let res: Value = client
         .get(url)
         .send()
@@ -340,7 +356,21 @@ pub(crate) async fn get_bili_live_status_once(room: i32) -> Result<BiliLiveStatu
         .error_for_status()?
         .json()
         .await?;
-    parse_bili_live_status(&res)
+    let status = parse_bili_live_status(&res)?;
+    observe_live_status_reply(room, &res, observed_at);
+    Ok(status)
+}
+
+fn observe_live_status_reply(room: i32, reply: &Value, observed_at: u64) {
+    if reply.get("code").and_then(Value::as_i64) != Some(0) {
+        return;
+    }
+    let live = match reply.pointer("/data/live_status").and_then(Value::as_i64) {
+        Some(1) => true,
+        Some(0 | 2) => false,
+        _ => return,
+    };
+    crate::history::bili::observe_room_status_at(room.max(0) as u64, live, observed_at);
 }
 
 async fn bili_live_status_url(
@@ -401,6 +431,22 @@ pub async fn get_bili_live_time(
 ///
 /// * `Result<(), Box<dyn Error>>` - Returns `Ok` if successful, otherwise an error.
 pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
+    let seq = crate::history::open_session_seq(cfg.bililive.room.max(0) as u64);
+    let result = bili_start_live_inner(cfg, area_v2).await;
+    record_start_live_outcome(seq, &result);
+    result
+}
+
+fn record_start_live_outcome(seq: Option<u64>, result: &Result<(), Box<dyn Error>>) {
+    if let Err(error) = result {
+        crate::history::emit(crate::history::EventKind::BiliStartFailed {
+            seq,
+            error: crate::logging::safe_diagnostic(&error.to_string()),
+        });
+    }
+}
+
+async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box<dyn Error>> {
     let secret = "af125a0d5279fd576c1b4418a3e8276d";
     let appkey = "aae92bc66f3edfab"; // BiliTV appkey
     let platform = "pc_link";
@@ -496,7 +542,6 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
                     });
 
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
-                tracing::error!("FACE_AUTH_REQUIRED 完整响应: {:#?}", response);
 
                 if let Some(face_auth_url) = face_auth_url {
                     return Err(format!("FACE_AUTH_REQUIRED:{}", face_auth_url).into());
@@ -512,7 +557,6 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
             }
             _ => {
                 tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
-                tracing::debug!("完整响应: {:#?}", response);
                 return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
             }
         }
@@ -539,12 +583,10 @@ pub async fn bili_start_live(cfg: &mut Config, area_v2: u64) -> Result<(), Box<d
     // 统计: the B站 live session id goes into the cluster live book only
     // (never logged).
     if response["code"].as_i64() == Some(0) {
-        let key = match &response["data"]["live_key"] {
-            Value::String(key) => Some(key.trim().to_string()),
-            Value::Number(key) => Some(key.to_string()),
-            _ => None,
-        };
-        if let Some(key) = key.filter(|k| !k.is_empty() && k != "0") {
+        // Even when startLive omits its key, remember this live transition
+        // before the relay's asynchronous GetInfo fallback captures it.
+        crate::history::bili::observe_room_status(cfg.bililive.room.max(0) as u64, true);
+        if let Some(key) = crate::history::enrich::parse_live_key(&response["data"]["live_key"]) {
             crate::history::on_bili_started(cfg, &key);
         }
     }
@@ -635,7 +677,7 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let (_, client) = bili_room_clients()?;
 
     // Make the POST request to stop the live stream
-    let _res: Value = client
+    let response = client
         .post("https://api.live.bilibili.com/room/v1/Room/stopLive")
         .header("Accept", "application/json, text/plain, */*")
         .header("Cookie", &cookie)
@@ -649,11 +691,9 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
         ))
         .send()
         .await?
-        .json()
-        .await?;
-    // tracing::info!("{:#?}", _res);
-    // Optionally, handle the response if needed
-    // println!("{:#?}", res);
+        .error_for_status()?;
+    let reply: Value = crate::plugins::http::response_json_limited(response).await?;
+    validate_stop_live_reply(&reply)?;
 
     // Reflect the new live state in the WebUI immediately.
     crate::webui::state::update_status_cache_with(|status| {
@@ -663,6 +703,14 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     crate::history::on_bili_stopped(cfg);
     Ok(())
+}
+
+fn validate_stop_live_reply(reply: &Value) -> Result<(), Box<dyn Error>> {
+    match reply.get("code").and_then(Value::as_i64) {
+        Some(0) => Ok(()),
+        Some(code) => Err(format!("B站下播失败 (错误码: {code})").into()),
+        None => Err("B站下播响应缺少状态码".into()),
+    }
 }
 
 /// Error text for history fetches: never the URL (it carries the live key).
@@ -681,6 +729,9 @@ fn safe_fetch_error(error: reqwest::Error) -> String {
 /// 统计: `StopLiveData` for one B站 live session (read-only GET, 10 s).
 /// Returns the raw reply; `history::enrich` applies the allowlist.
 pub(crate) async fn bili_stop_live_data(cfg: &Config, live_key: &str) -> Result<Value, String> {
+    if !history_account_ready(cfg, cfg.bililive.room.max(0) as u64) {
+        return Err("credentials unavailable".into());
+    }
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
     let url = reqwest::Url::parse_with_params(
@@ -688,39 +739,45 @@ pub(crate) async fn bili_stop_live_data(cfg: &Config, live_key: &str) -> Result<
         &[("live_key", live_key)],
     )
     .map_err(|_| "invalid key".to_string())?;
-    client
-        .get(url)
-        .header("Accept", "application/json, text/plain, */*")
-        .header("Cookie", &cookie)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(safe_fetch_error)?
-        .error_for_status()
-        .map_err(safe_fetch_error)?
-        .json()
-        .await
-        .map_err(safe_fetch_error)
+    history_json(
+        client
+            .get(url)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Cookie", &cookie),
+    )
+    .await
 }
 
 /// 统计: read-only `GetInfo` for the account's room, the fallback source
 /// of `live_key` when the cluster live book has none (10 s timeout).
 pub(crate) async fn bili_room_info(cfg: &Config) -> Result<Value, String> {
+    if !history_account_ready(cfg, cfg.bililive.room.max(0) as u64) {
+        return Err("credentials unavailable".into());
+    }
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
-    client
-        .get("https://api.live.bilibili.com/xlive/app-blink/v1/room/GetInfo?platform=pc")
-        .header("Accept", "application/json, text/plain, */*")
-        .header("Cookie", &cookie)
-        .timeout(Duration::from_secs(10))
+    history_json(
+        client
+            .get("https://api.live.bilibili.com/xlive/app-blink/v1/room/GetInfo?platform=pc")
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Cookie", &cookie),
+    )
+    .await
+}
+
+/// The request timeout also covers streaming the bounded response body.
+/// Error classes deliberately omit the URL, cookie, response and live key.
+async fn history_json(request: reqwest::RequestBuilder) -> Result<Value, String> {
+    let response = request
+        .timeout(crate::history::enrich::FETCH_TIMEOUT)
         .send()
         .await
         .map_err(safe_fetch_error)?
         .error_for_status()
-        .map_err(safe_fetch_error)?
-        .json()
+        .map_err(safe_fetch_error)?;
+    crate::plugins::http::response_json_limited(response)
         .await
-        .map_err(safe_fetch_error)
+        .map_err(|_| "invalid json".to_string())
 }
 
 /// `msg/send` codes for "sending too fast". 10031 is documented; 10030 is the
@@ -1497,6 +1554,128 @@ pub async fn get_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn history_requests_require_a_cookie_and_the_configured_room() {
+        let mut cfg = crate::cluster::tests::test_config("a", 0);
+        assert!(!history_account_ready(&cfg, 1));
+        assert_eq!(
+            bili_room_info(&cfg).await.unwrap_err(),
+            "credentials unavailable"
+        );
+        assert_eq!(
+            bili_stop_live_data(&cfg, "synthetic-key")
+                .await
+                .unwrap_err(),
+            "credentials unavailable"
+        );
+        cfg.bililive.credentials.sessdata = "synthetic-cookie".into();
+        assert!(history_account_ready(&cfg, 1));
+        assert!(!history_account_ready(&cfg, 2));
+        cfg.bililive.room = 0;
+        assert!(!history_account_ready(&cfg, 0));
+        cfg.bililive.room = 1;
+        cfg.bililive.credentials.sessdata = " \n".into();
+        assert!(!history_account_ready(&cfg, 1));
+    }
+
+    #[test]
+    fn start_live_outcome_records_failures_from_every_caller_once_with_safe_text() {
+        let bus = std::sync::Arc::new(crate::events::Bus::new());
+        let mut receiver = bus.register("start-live", 8, |_| true);
+        bus.seal();
+        crate::events::with_sync_test_bus(bus, || {
+            record_start_live_outcome(None, &Ok(()));
+            record_start_live_outcome(
+                Some(7),
+                &Err("request failed https://example.invalid?token=SYNTHETIC".into()),
+            );
+        });
+        let event = receiver.try_recv().unwrap();
+        assert!(matches!(
+            &event.kind,
+            crate::history::EventKind::BiliStartFailed { seq: Some(7), error }
+                if error.contains("request failed") && !error.contains("SYNTHETIC")
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn stop_response_must_confirm_success_before_room_is_marked_offline() {
+        assert!(validate_stop_live_reply(&serde_json::json!({"code":0})).is_ok());
+        for reply in [
+            serde_json::json!({"code":-101,"message":"SYNTHETIC-cookie"}),
+            serde_json::json!({}),
+        ] {
+            let error = validate_stop_live_reply(&reply).unwrap_err().to_string();
+            assert!(!error.contains("SYNTHETIC-cookie"));
+        }
+    }
+
+    #[tokio::test]
+    async fn history_http_retry_uses_allowlisted_totals_and_redacted_error_classes() {
+        use axum::{routing::get, Json, Router};
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        crate::install_crypto_provider();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&requests);
+        let app = Router::new()
+            .route("/summary", get(move || {
+                let count = Arc::clone(&count);
+                async move {
+                    let fixture = if count.fetch_add(1, Ordering::Relaxed) == 0 {
+                        include_str!("../history/fixtures/stoplivedata_unknown_key.json")
+                    } else { include_str!("../history/fixtures/stoplivedata_live_session.json") };
+                    Json(serde_json::from_str::<Value>(fixture).unwrap())
+                }
+            }))
+            .route("/unavailable", get(|| async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "SYNTHETIC-private-body") }))
+            .route("/info", get(|| async { Json(serde_json::json!({"code":0,"data":{"live_status":1,"up_session":"synthetic-up-session"}})) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("http://{address}/summary?live_key=SYNTHETIC-KEY");
+        let totals = crate::history::enrich::fetch_with_retry_guarded(
+            || history_json(client.get(&url)),
+            Duration::ZERO,
+            Duration::from_millis(1),
+            || true,
+        )
+        .await;
+        let crate::history::enrich::FetchResult::Finished(Some(totals)) = totals else {
+            panic!("retry did not yield totals");
+        };
+        assert_eq!(totals.watched_count, Some(469));
+        assert_eq!(requests.load(Ordering::Relaxed), 2);
+        let unavailable = history_json(client.get(format!(
+            "http://{address}/unavailable?live_key=SYNTHETIC-KEY"
+        )))
+        .await
+        .unwrap_err();
+        assert_eq!(unavailable, "http 503");
+        let info = history_json(client.get(format!("http://{address}/info")))
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::history::enrich::parse_room_live_key(&info).as_deref(),
+            Some("synthetic-up-session")
+        );
+        let safe_info = crate::history::enrich::redact_room_info(&info).to_string();
+        assert!(!safe_info.contains("synthetic-up-session"));
+        assert_eq!(
+            serde_json::to_value(totals)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            6
+        );
+        server.abort();
+    }
     use chrono::TimeZone;
     use std::sync::atomic::AtomicUsize;
 

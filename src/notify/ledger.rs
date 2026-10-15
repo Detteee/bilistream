@@ -245,12 +245,15 @@ impl NotifyLedger {
 
     /// Charged per attempt, not per success: a timed-out send may have landed.
     pub fn record_active(&mut self, now: u64) {
-        if !self.active_minute.contains(&now) {
-            self.active_minute.push(now);
-        } else {
-            // Two sends in one second: keep the count honest.
-            self.active_minute.push(now + 1);
-        }
+        // The wire format is a set of second stamps. Allocate an unused
+        // nearby stamp for every burst attempt, including after importing a
+        // former sender's ledger. Future stamps count conservatively until
+        // they age out; simply using now + 1 loses the third same-second send.
+        let stamp = (0..=MAX_ACTIVE_MINUTE)
+            .map(|offset| now.saturating_add(offset as u64))
+            .find(|stamp| !self.active_minute.contains(stamp))
+            .unwrap_or(now);
+        self.active_minute.push(stamp);
         self.normalize_minute();
         let today = utc8_day(now);
         let own = self.active_day.entry(self.local.clone()).or_default();
@@ -719,6 +722,37 @@ mod tests {
         assert!(ledger.active_budget_left(now + 86_400));
         ledger.record_rate_limited(now + 86_400);
         assert!(!ledger.active_budget_left(now + 86_430));
+    }
+
+    #[test]
+    fn same_second_bursts_and_sender_handoff_preserve_the_minute_budget() {
+        let now = 1_800_000_000;
+        let mut first = NotifyLedger {
+            local: "a".into(),
+            ..Default::default()
+        };
+        for _ in 0..6 {
+            assert!(first.active_budget_left(now));
+            first.record_active(now);
+        }
+        assert_eq!(first.minute_count(now), 6);
+        let mut next = NotifyLedger {
+            local: "b".into(),
+            ..Default::default()
+        };
+        next.join(&first);
+        for _ in 6..ACTIVE_PER_MINUTE {
+            assert!(next.active_budget_left(now));
+            next.record_active(now);
+        }
+        assert_eq!(next.minute_count(now), ACTIVE_PER_MINUTE);
+        assert_eq!(next.active_today(now), ACTIVE_PER_MINUTE as u32);
+        assert!(!next.active_budget_left(now));
+        first.join(&next);
+        next.join(&first);
+        assert!(!first.active_budget_left(now));
+        assert_eq!(next.minute_count(now), ACTIVE_PER_MINUTE);
+        assert!(next.active_budget_left(now + 60 + ACTIVE_PER_MINUTE as u64));
     }
 
     #[test]

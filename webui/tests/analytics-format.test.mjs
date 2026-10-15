@@ -65,7 +65,7 @@ test('resolution, buckets and preset ranges follow the W9 table', () => {
 });
 
 test('retention line reads the API values', () => {
-  const line = '保留期限：原始采样 7 天 · 每分钟汇总 90 天 · 事件 180 天（最多 200,000 条），可在系统设置中调整。';
+  const line = '保留期限：原始采样 7 天 · 每分钟汇总 90 天 · 事件 180 天（最多 200,000 条）。';
   assert.equal(retentionLine({ raw_days: 7, rollup_days: 90, event_days: 180, event_rows: 200000 }), line);
   assert.match(retentionLine(null), /原始采样 -- 天/);
 });

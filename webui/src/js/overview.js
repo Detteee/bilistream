@@ -9,6 +9,7 @@ import { toggleDanmakuCommand } from './settings.js';
 import { openCropConfig, clearCropConfig, loadCapturedCropFrame, isCropSessionCurrent } from './crop.js';
 import { bindDialog, bindListboxKeyboard } from './dialog.js';
 import { saveBooleanToggle } from './toggle-save.js';
+import { createPriorityWarningControl } from './priority-warning.js';
 import {
   formatHlsCacheStatus,
   getQualityDisplayText,
@@ -60,7 +61,15 @@ const holodexKeepAliveMs = 4 * 60 * 1000;
 const holodexKeepAliveWithoutEventsMs = 60 * 1000;
 const holodexKeepAliveCheckMs = 60 * 1000;
 const monitorToggleSaveDebounceMs = 160;
+let priorityWarningControl = null;
 function initDashboardControls() {
+  priorityWarningControl = createPriorityWarningControl({
+    row: document.getElementById('priority-warning-row'),
+    button: document.getElementById('release-priority-warning-btn'),
+    post: postJsonApi,
+    refresh: refreshStatus,
+    notify: showNotification,
+  });
   document
     .getElementById('startLiveBtn')
     ?.addEventListener('click', startStream);
@@ -1867,6 +1876,7 @@ function updatePriorityToggleAvailability() {
 }
 
 function renderPriorityChannelStatus(priority) {
+  priorityWarningControl?.render(priority);
   const priorityCard = document.getElementById('priority-channel-card');
   const priorityToggle = document.getElementById('priority-toggle');
   const priorityAutoRestartToggle = document.getElementById('priority-auto-restart-toggle');

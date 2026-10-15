@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
-  missingNodeText, heatLevel, biliStateLabel, orDash, STOP_LIVE_DATA_FIELDS,
+  missingNodeText, heatLevel, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
 } from '../src/js/analytics-format.js';
 import {
   createAnalyticsLoader, renderChunkError, CHUNK_ERROR_TITLE, CHUNK_ERROR_BODY, CHUNK_ERROR_BUTTON,
@@ -76,6 +76,32 @@ test('range totals sum only valid summaries; 最大在线 only when present', ()
   ]);
   assert.deepEqual(agg, { sessions: 4, summarized: 2, pending: 1, online_peak: 200, watched: 150, danmu: 10, add_fans: 3, new_fans_club: 1, max_online: 120 });
   assert.equal(aggregateAudience([{ bili: { state: 'failed' } }]).watched, null);
+});
+
+test('watched fallback has explicit sample provenance while summary status and other missing totals remain', () => {
+  for (const state of ['pending', 'failed', 'skipped']) {
+    const sample = biliTotals({ state, watched: 0, watched_source: 'sample', online_peak: 12 });
+    assert.equal(sample.state, state);
+    assert.equal(sample.watched, 0);
+    assert.equal(watchedSourceLabel(sample.watched_source), '最后采样');
+    for (const field of ['danmu', 'add_fans', 'new_fans_club', 'max_online']) assert.equal(sample[field], null);
+    assert.equal(biliTotals({ state, watched: 777 }).watched, null, 'no inferred sample provenance');
+  }
+  assert.equal(biliStateLabel('failed'), '汇总获取失败');
+  const sentinel = biliTotals({ state: 'ok', watched: 1167856, watched_source: 'summary', add_fans: -999999 });
+  assert.equal(sentinel.watched, null);
+  assert.equal(sentinel.state, 'failed');
+  assert.equal(biliTotals({ state: 'failed', watched: -1, watched_source: 'sample' }).watched, null);
+});
+
+test('range audience consumes already deduplicated server totals and labels mixed sample coverage', () => {
+  const result = rangeAudience({ watched: 607, watched_source: 'mixed', danmu: 9, online_peak: 45 });
+  assert.equal(result.watched, 607);
+  assert.equal(watchedSourceLabel(result.watched_source), '汇总与采样合计');
+  assert.equal(result.danmu, 9);
+  assert.equal(result.add_fans, null);
+  assert.equal(rangeAudience({ watched: -999999 }).watched, null);
+  assert.equal(rangeAudience(null).watched, null);
 });
 
 test('custom range: raw samples only when ≤ 3 days and inside retention.raw_days', () => {

@@ -130,10 +130,100 @@ test('clearing cache prevents an old in-flight response replacing a forced refre
   assert.equal(calls, 2);
 });
 
+test('ETag revalidation retains stale rows on 304 and replaces changed peer data on 200', async () => {
+  let now = 0;
+  const requests = [];
+  const replies = [
+    { data: { peers: ['ca'], missing_nodes: ['jp'] }, etag: '"one"' },
+    { notModified: true, etag: '"one"' },
+    { data: { peers: ['ca', 'jp'], missing_nodes: [] }, etag: '"two"' },
+  ];
+  const client = createHistoryClient(async (path, options) => {
+    requests.push({ path, options });
+    return replies.shift();
+  }, { now: () => now });
+  const first = await client.request('summary');
+  now = 31_000;
+  const painted = [];
+  assert.equal(await client.request('summary', {}, { onCached: value => painted.push(value) }), first);
+  assert.deepEqual(painted, [first]);
+  assert.equal(requests[1].options.etag, '"one"');
+  now = 32_000;
+  assert.equal(await client.request('summary'), first, '304 refreshes the cache age');
+  assert.equal(requests.length, 2);
+  now = 62_000;
+  assert.deepEqual(await client.request('summary'), { peers: ['ca', 'jp'], missing_nodes: [] });
+  assert.equal(requests[2].options.etag, '"one"');
+});
+
+test('an old 304 cannot resurrect a cache cleared during revalidation', async () => {
+  let now = 0, calls = 0;
+  const delayed = deferred();
+  const client = createHistoryClient(async (_path, options) => {
+    calls++;
+    if (calls === 1) return { data: 'old', etag: '"old"' };
+    if (calls === 2) {
+      assert.equal(options.etag, '"old"');
+      return delayed.promise;
+    }
+    assert.equal(options.etag, undefined, 'a forced refresh has no old validator');
+    return { data: 'new', etag: '"new"' };
+  }, { now: () => now });
+  await client.request('summary');
+  now = 31_000;
+  const old = client.request('summary');
+  client.clear();
+  assert.equal(await client.request('summary'), 'new');
+  delayed.resolve({ notModified: true, etag: '"old"' });
+  await old;
+  assert.equal(await client.request('summary'), 'new');
+  assert.equal(calls, 3);
+});
+
+test('a 304 without a retained representation retries once without a validator', async () => {
+  const options = [];
+  const client = createHistoryClient(async (_path, request) => {
+    options.push(request);
+    return options.length === 1 ? { notModified: true } : { data: 'fresh', etag: '"fresh"' };
+  });
+  assert.equal(await client.request('sessions'), 'fresh');
+  assert.equal(options.length, 2);
+  assert.equal(options[1].etag, undefined);
+  let attempts = 0;
+  const broken = createHistoryClient(async () => { attempts++; return { notModified: true }; });
+  await assert.rejects(broken.request('events'), /缓存已失效/);
+  assert.equal(attempts, 2);
+});
+
 const source = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
 const refreshSource = source.slice(source.indexOf('async function refresh('), source.indexOf('\nfunction selectRange('));
 const historySource = source.slice(source.indexOf('async function history('), source.indexOf('\nfunction roundedRange('));
 const NOW = 1_790_000_000;
+
+test('node availability uses recorded coverage and leaves zero or unknown coverage empty', () => {
+  const nodeSource = source.slice(source.indexOf('function renderNodes('), source.indexOf('// ---------- 9 最近事件'));
+  const rendered = [];
+  const element = (tag, className = '', textContent = '') => ({
+    tag, className, textContent, dataset: {}, children: [],
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+  });
+  const nodes = [
+    { node_id: 'known', node_observed_secs: 1200, down_secs: 120 },
+    { node_id: 'zero', node_observed_secs: 0, down_secs: 0 },
+    { node_id: 'older-peer', down_secs: 0 },
+    { node_id: 'unknown-down', node_observed_secs: 1200, down_secs: null },
+  ];
+  vm.runInNewContext(`${nodeSource}\nrenderNodes(summary);`, {
+    ...format, summary: { per_node: nodes },
+    view: { status: { cluster_nodes: nodes.map(n => n.node_id) }, range: { from: 0, to: 7 * 86400 } },
+    prefs: { scope: '' }, moduleEl: () => ({}), $: () => element('select'), el: element,
+    Option: function (name, value) { return { name, value }; },
+    setBody: (_name, body) => rendered.push(body), markLoaded() {},
+  });
+  const rows = rendered[0].children[0].children[1].children;
+  assert.deepEqual(rows.map(row => row.children[2].textContent), [format.formatPercent(0.9), format.DASH, format.DASH, format.DASH]);
+});
 
 test('the real uPlot options draw isolated retained samples without joining gaps', () => {
   const optionsSource = source.slice(source.indexOf('function uplotOptions('), source.indexOf('\nfunction mountChart('));

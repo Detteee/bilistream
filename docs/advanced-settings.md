@@ -45,6 +45,12 @@ The tray is the default on Windows; the console Web UI is the default on Linux/m
 
 Visibility and monitoring are independent. Hiding the card preserves an enabled monitor; turn off the card's monitor switch to stop priority scheduling.
 
+Automatic selection checks playable, permitted sources in this order: **priority channel → Niconico → YouTube → Twitch**. When both priority platforms are live, YouTube wins. Priority playback leaves the saved YouTube/Twitch targets and areas intact, so they remain available afterward. A `%转播%` danmaku command updates the named platform's target; the next selection still follows this order. Logs show the command outcome and the source actually selected.
+
+A Bilibili warning, cut or timed room lock temporarily holds the affected channel, including a priority channel. Changing another target or starting an ffmpeg process keeps that hold. It clears when another channel starts pushing successfully, the source is confirmed offline, or the same source starts a new YouTube video/Twitch stream with a new ID. A changed title, scheduled video, unknown ID or failed check keeps the hold.
+
+You can also clear the hold with **重启流**, a bilistream process restart, an explicit danmaku command for that same channel, or the priority card's release action. The card action clears the hold without stopping the current stream; an enabled **自动重启流** can then switch back to a playable priority channel. A timed room lock still waits until its unlock time.
+
 ## YouTube discovery settings
 
 | Setting/source | Purpose |
@@ -58,6 +64,26 @@ Visibility and monitoring are independent. Hiding the card preserves an enabled 
 RSS/WebSub discover video IDs; neither proves that a stream is playable. The Data API classifies them, and playback still needs a usable stream URL. Failed/disabled RSS falls back to uploads polling within the available budget. WebSub failure restores normal polling speed. See [discovery and fallback details](youtube-discovery.md) and [WebSub tunnel setup](websub-tunnel.md).
 
 In a cluster with a usable shared index, the **YouTube index node** handles discovery. Set its keys, RSS and callback there. The **active restream node** may be a different machine. These names describe separate responsibilities.
+
+## Analytics history
+
+Open **统计** to review relay sessions, reconnects, quality and audience curves, cluster changes, and QQ delivery attempts. Select a session for its details or choose a node to narrow a cluster view. Bilibili totals are best effort; unavailable values appear as `--`.
+
+History settings are local to each server. Advanced clients can read them through authenticated `GET /api/config` and save a partial `history` object through `POST /api/config`. The panel has no dedicated history-settings form yet. Changing `enabled` takes effect after restarting bilistream; sampling and retention changes apply while it runs.
+
+| Key under `history` | Default | Purpose |
+| --- | --- | --- |
+| `enabled` | `true` | Record new history after the next process start. Existing history remains available for reads. |
+| `sample_secs` | `10` | Stream-quality sample interval, 5–60 seconds. |
+| `bili_sample_secs` | `5` | Minimum interval for each Bilibili audience counter, 5–60 seconds. |
+| `bili_stop_summary` | `true` | Fetch available Bilibili totals after the broadcast ends. |
+| `retention.raw_days` | `7` | Days of raw samples, 1–90. |
+| `retention.rollup_days` | `90` | Days of minute summaries, 1–90; must be at least `raw_days`. |
+| `retention.event_days` | `180` | Event retention, 1–3650 days. |
+| `retention.event_rows` | `200000` | Retained event-row budget, 100–2000000. |
+| `retention.max_mb` | `512` | History storage budget in MiB, 16–65536. |
+
+Shorter retention removes older history as maintenance runs. Check [data and backups](data-and-upgrades.md#analytics-history) before clearing history or moving a server.
 
 ## Public status page
 

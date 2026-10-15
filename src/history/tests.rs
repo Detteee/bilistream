@@ -18,6 +18,12 @@ const ROOM_GET_INFO: &str = include_str!("fixtures/room_get_info.json");
 const DAY: i64 = 86_400;
 const T0: i64 = 1_791_000_000;
 
+#[path = "completion_tests.rs"]
+mod completion;
+
+#[path = "performance_tests.rs"]
+mod performance;
+
 fn tmp(name: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -57,6 +63,8 @@ fn session(w: &mut Writer, seq: u64, at: i64, live_key: Option<&str>) {
     w.apply(&ev(
         at,
         EventKind::SessionStarted {
+            area_v2: None,
+            room: 1,
             seq,
             platform: "YT",
             channel_id: "UC1".into(),
@@ -113,7 +121,7 @@ fn new_file_is_incremental_vacuum_v1_and_corrupt_file_is_recreated() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, schema::SCHEMA_VERSION);
     assert!(path.with_extension("sqlite.corrupt").exists());
 }
 
@@ -315,6 +323,8 @@ fn online_peak_comes_from_our_samples() {
         w.apply(&ev(
             T0 + 10 * i as i64,
             EventKind::BiliCounts {
+                seq: 1,
+                room: 1,
                 online: Some(v),
                 watched: None,
             },
@@ -393,6 +403,8 @@ fn mark(key: &str, started: u64, phase: SummaryPhase, node: Option<&str>) -> Bil
             node: node.map(str::to_string),
             at: 0,
             totals: None,
+            generation: 0,
+            skipped: false,
         },
     }
 }
@@ -516,6 +528,8 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
     w.apply(&ev(
         T0,
         EventKind::SessionStarted {
+            area_v2: None,
+            room: 1,
             seq: 1,
             platform: "TW",
             channel_id: "c".into(),
@@ -561,7 +575,7 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
 fn raw(w: &Writer, ts: i64, v: f64) {
     w.conn
         .execute(
-            "INSERT INTO samples_raw (metric,node,ts,session_id,min,max,sum,count) VALUES (1,'local',?1,NULL,?2,?2,?2,1)",
+            "INSERT INTO samples_raw (metric,node,ts,session_id,min,max,sum,count) VALUES (1,'local',?1,0,?2,?2,?2,1)",
             rusqlite::params![ts, v],
         )
         .unwrap();
@@ -822,6 +836,10 @@ fn events_filter_by_comma_severity_and_kind_prefix() {
     w.apply(&ev(
         T0 + 50,
         EventKind::NotifySent {
+            dedup: "test-key".into(),
+            mode: Some("active"),
+            trace_id: None,
+            test: false,
             key: "node.down".into(),
             phase: "fire",
             ok: false,
@@ -924,6 +942,7 @@ async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
     // tokyo-1 answers with its own session (same shape a peer route returns).
     let peer_page = query::SessionsPage {
         items: vec![query::SessionItem {
+            area_v2: None,
             id: "tokyo-1:1:1".into(),
             eid: "tokyo-1:1:1".into(),
             node: "tokyo-1".into(),
@@ -1728,6 +1747,10 @@ fn kpis_count_run_time_completed_runs_and_all_notification_attempts() {
         w.apply(&ev(
             at,
             EventKind::NotifySent {
+                dedup: "test-key".into(),
+                mode: Some("active"),
+                trace_id: None,
+                test: false,
                 key: "test".into(),
                 phase: "firing",
                 ok,
@@ -2111,6 +2134,8 @@ fn session_stats_and_online_peak_respect_session_and_range_boundaries() {
     w.apply(&ev(
         T0 + 10,
         EventKind::BiliCounts {
+            seq: 1,
+            room: 1,
             online: Some(900),
             watched: None,
         },
@@ -2119,6 +2144,8 @@ fn session_stats_and_online_peak_respect_session_and_range_boundaries() {
     w.apply(&ev(
         T0 + 30,
         EventKind::BiliCounts {
+            seq: 1,
+            room: 1,
             online: Some(200),
             watched: None,
         },

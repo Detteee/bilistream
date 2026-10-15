@@ -2,6 +2,7 @@ pub mod app_state;
 pub mod cluster;
 pub mod config;
 pub mod deps;
+pub mod events;
 pub mod history;
 pub(crate) mod logging;
 pub mod notify;

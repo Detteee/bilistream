@@ -100,7 +100,7 @@ export function presetRange(preset, nowSec = Math.floor(Date.now() / 1000)) {
 // Retention copy from /api/history/status `retention`.
 export function retentionLine(retention) {
   const r = retention || {};
-  return `保留期限：原始采样 ${orDash(r.raw_days)} 天 · 每分钟汇总 ${orDash(r.rollup_days)} 天 · 事件 ${orDash(r.event_days)} 天（最多 ${orDash(r.event_rows)} 条），可在系统设置中调整。`;
+  return `保留期限：原始采样 ${orDash(r.raw_days)} 天 · 每分钟汇总 ${orDash(r.rollup_days)} 天 · 事件 ${orDash(r.event_days)} 天（最多 ${orDash(r.event_rows)} 条）。`;
 }
 
 export function coverageLine(from, to, scopeLabel = '全部节点', offset = localHourOffset(), nowSec = to) {
@@ -235,21 +235,49 @@ export function stopLiveDataToBili(reply) {
 // one, so the UI never prints a raw sentinel. online_peak comes from our own
 // danmaku samples, so it survives a failed or pending summary.
 export function biliTotals(bili) {
-  if (!bili || typeof bili !== 'object') return { state: 'none', online_peak: null, ...EMPTY_TOTALS };
+  if (!bili || typeof bili !== 'object') return { state: 'none', online_peak: null, watched_source: null, ...EMPTY_TOTALS };
   const peak = isNum(bili.online_peak) && bili.online_peak >= 0 ? bili.online_peak : null;
   const fields = [...BILI_TOTAL_KEYS, 'max_online'];
   const bad = fields.some(key => bili[key] != null && !(isNum(bili[key]) && bili[key] >= 0));
   const state = ['pending', 'ok', 'failed', 'skipped'].includes(bili.state) ? bili.state : 'failed';
-  if (state !== 'ok' || bad) return { state: state === 'ok' ? 'failed' : state, online_peak: peak, ...EMPTY_TOTALS };
-  const out = { state, online_peak: peak };
-  for (const key of fields) out[key] = isNum(bili[key]) ? bili[key] : null;
+  const out = { state: state === 'ok' && bad ? 'failed' : state, online_peak: peak, watched_source: null, ...EMPTY_TOTALS };
+  if (state === 'ok' && !bad) {
+    for (const key of fields) out[key] = isNum(bili[key]) ? bili[key] : null;
+    if (out.watched !== null) out.watched_source = 'summary';
+  }
+  // This provenance is supplied by the history query from room samples.
+  // It never turns a positive field in a rejected provider reply into a total.
+  if (!bad && bili.watched_source === 'sample' && isNum(bili.watched) && bili.watched >= 0) {
+    out.watched = bili.watched;
+    out.watched_source = 'sample';
+  }
   return out;
+}
+
+// Range totals must come from the server, which deduplicates a Bilibili live
+// broadcast relayed by several nodes and includes sessions beyond list limits.
+export function rangeAudience(kpis) {
+  const out = { state: 'range', online_peak: null, watched_source: null, ...EMPTY_TOTALS };
+  for (const key of ['online_peak', ...BILI_TOTAL_KEYS, 'max_online']) {
+    if (isNum(kpis?.[key]) && kpis[key] >= 0) out[key] = kpis[key];
+  }
+  if (out.watched !== null) {
+    out.watched_source = ['sample', 'mixed'].includes(kpis?.watched_source) ? kpis.watched_source : 'summary';
+  }
+  return out;
+}
+
+export function watchedSourceLabel(source) {
+  if (source === 'sample') return '最后采样';
+  if (source === 'mixed') return '汇总与采样合计';
+  return '';
 }
 
 // Sub-label for a totals tile: pending → 结束后汇总; no key → 无 B 站汇总.
 export function biliStateLabel(state) {
   if (state === 'pending') return '结束后汇总';
   if (state === 'skipped') return '无 B 站汇总';
+  if (state === 'failed') return '汇总获取失败';
   return '';
 }
 

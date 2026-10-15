@@ -13,11 +13,23 @@ pub struct StatusData {
     pub priority_channel: Option<PriorityChannelStatus>,
 }
 
+impl StatusData {
+    /// Temporary source holds belong to this process's admin page only.
+    pub(crate) fn for_cluster_snapshot(mut self) -> Self {
+        if let Some(priority) = self.priority_channel.as_mut() {
+            priority.warning_held = false;
+        }
+        self
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PriorityChannelStatus {
     pub enabled: bool,
     #[serde(default)]
     pub auto_restart: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub warning_held: bool,
     pub channel_name: String,
     pub is_live: bool,
     pub platform: Option<String>,
@@ -317,6 +329,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
     if let Some(ref mut priority_status) = cached_status.priority_channel {
         priority_status.enabled = cfg.priority_channel.enabled;
         priority_status.auto_restart = cfg.priority_channel.auto_restart;
+        priority_status.warning_held = crate::plugins::danmaku::priority_warning_held(cfg);
         if !priority_status.enabled {
             priority_status.is_live = false;
             priority_status.platform = None;
@@ -330,6 +343,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
         cached_status.priority_channel = Some(PriorityChannelStatus {
             enabled: cfg.priority_channel.enabled,
             auto_restart: cfg.priority_channel.auto_restart,
+            warning_held: crate::plugins::danmaku::priority_warning_held(cfg),
             channel_name: cfg.priority_channel.channel_name.clone(),
             is_live: false,
             platform: None,
@@ -463,6 +477,66 @@ mod tests {
             cluster: ClusterConfig::default(),
             history: Default::default(),
         }
+    }
+
+    #[test]
+    fn priority_warning_is_admin_only_and_absent_from_heartbeat_serialization() {
+        let priority = PriorityChannelStatus {
+            enabled: true,
+            auto_restart: false,
+            warning_held: true,
+            channel_name: "示例频道 A".into(),
+            is_live: true,
+            platform: Some("youtube".into()),
+            title: Some("示例直播".into()),
+            default_area: 235,
+            default_area_name: Some("其他单机".into()),
+        };
+        let admin = StatusData {
+            priority_channel: Some(priority),
+            ..StatusData::default()
+        };
+        let admin_json = serde_json::to_value(&admin).unwrap();
+        assert_eq!(admin_json["priority_channel"]["warning_held"], true);
+
+        // Exercise the same projection used by collect_local_snapshot, then
+        // encode the real heartbeat envelope, not a hand-built JSON substitute.
+        let mut node = crate::cluster::empty_node("priority-test", "priority-test", "", 0, true, 1);
+        node.status = Some(admin.clone().for_cluster_snapshot());
+        let request = crate::cluster::ClusterHeartbeatRequest { node };
+        let wire = serde_json::to_value(&request).unwrap();
+        let mut expected_priority = admin_json["priority_channel"].clone();
+        expected_priority
+            .as_object_mut()
+            .unwrap()
+            .remove("warning_held");
+        assert_eq!(
+            wire["node"]["status"]["priority_channel"],
+            expected_priority
+        );
+        assert!(!serde_json::to_string(&request)
+            .unwrap()
+            .contains("warning_held"));
+        assert_eq!(
+            serde_json::to_value(&admin).unwrap(),
+            admin_json,
+            "projection must not change local admin state"
+        );
+
+        // Old peers and older admin snapshots omit the new field entirely.
+        let decoded: PriorityChannelStatus = serde_json::from_value(expected_priority).unwrap();
+        assert!(!decoded.warning_held);
+        let heartbeat: crate::cluster::ClusterHeartbeatRequest =
+            serde_json::from_value(wire).unwrap();
+        assert!(
+            !heartbeat
+                .node
+                .status
+                .unwrap()
+                .priority_channel
+                .unwrap()
+                .warning_held
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use super::errors::{classify, describe, ErrorClass};
 use super::token::AccessToken;
+use crate::notify::sink::AttemptContext;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -89,12 +90,18 @@ pub async fn send_c2c(
     api_base: &str,
     token: &AccessToken,
     message: &C2cMessage<'_>,
+    context: &AttemptContext,
+    at: u64,
 ) -> ApiResult {
     let url = format!(
         "{}/v2/users/{}/messages",
         api_base.trim_end_matches('/'),
         safe_segment(message.openid)
     );
+    // Creating/polling the HTTP request is the attempt boundary. A cancelled
+    // future still records an unknown result; token/quota preflights never
+    // create this guard and cannot inflate message-attempt totals.
+    let mut attempt = AttemptRecord::new(context, message.mode.as_str(), at);
     let response = http
         .post(url)
         .timeout(REQUEST_TIMEOUT)
@@ -114,11 +121,20 @@ pub async fn send_c2c(
         }
     };
     let status = response.status().as_u16();
+    let clean_trace = |raw: &str| {
+        let mut clean = raw.to_string();
+        for sensitive in [token.expose(), message.openid] {
+            if !sensitive.is_empty() {
+                clean = clean.replace(sensitive, "<set>");
+            }
+        }
+        crate::logging::safe_text(&clean, 80)
+    };
     let header_trace = response
         .headers()
         .get("x-tps-trace-id")
         .and_then(|value| value.to_str().ok())
-        .map(|value| crate::logging::safe_text(value, 80));
+        .map(clean_trace);
     let body: serde_json::Value = read_json(response).await;
     let code = body
         .get("err_code")
@@ -128,16 +144,55 @@ pub async fn send_c2c(
     let trace_id = header_trace.or_else(|| {
         body.get("trace_id")
             .and_then(|value| value.as_str())
-            .map(|value| crate::logging::safe_text(value, 80))
+            .map(clean_trace)
     });
     // 201/202 are "async success" but may carry an error body instead of
     // the message id.
     let ok = matches!(status, 200..=202) && code.is_none() && body.get("id").is_some();
-    ApiResult {
+    let result = ApiResult {
         ok,
         http_status: status,
         code,
         trace_id,
+    };
+    attempt.complete(&result);
+    result
+}
+
+struct AttemptRecord<'a> {
+    context: &'a AttemptContext,
+    mode: &'static str,
+    at: u64,
+    result: Option<ApiResult>,
+}
+
+impl<'a> AttemptRecord<'a> {
+    fn new(context: &'a AttemptContext, mode: &'static str, at: u64) -> Self {
+        Self {
+            context,
+            mode,
+            at,
+            result: None,
+        }
+    }
+
+    fn complete(&mut self, result: &ApiResult) {
+        self.result = Some(result.clone());
+    }
+}
+
+impl Drop for AttemptRecord<'_> {
+    fn drop(&mut self) {
+        let result = self.result.as_ref();
+        crate::events::emit_at(
+            self.at,
+            self.context.event(
+                self.mode,
+                result.is_some_and(|result| result.ok),
+                result.and_then(|result| result.code),
+                result.and_then(|result| result.trace_id.clone()),
+            ),
+        );
     }
 }
 

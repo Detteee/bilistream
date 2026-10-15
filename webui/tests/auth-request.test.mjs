@@ -65,3 +65,31 @@ test('a stale read after password clear refreshes authority without asking for a
     assert.deepEqual(requests, ['/api/config', '/api/auth', '/api/config']);
   } finally { globalThis.fetch = original; }
 });
+
+test('conditional history reads keep authentication replay and accept bodyless 304', async () => {
+  const original = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (path, options) => {
+    requests.push({ path, options });
+    if (requests.length === 1) return new Response('{}', { status: 401 });
+    if (path === '/api/auth') return Response.json({ required: false, authenticated: true });
+    return new Response(null, { status: 304, headers: { ETag: '"saved"' } });
+  };
+  try {
+    assert.deepEqual(await getJson('/api/history/summary', { conditional: true, etag: '"saved"' }), { notModified: true, etag: '"saved"' });
+    assert.deepEqual(requests.map(r => r.path), ['/api/history/summary', '/api/auth', '/api/history/summary']);
+    assert.equal(requests[2].options.headers.get('If-None-Match'), '"saved"');
+    assert.ok(requests.every(r => !('conditional' in r.options) && !('etag' in r.options)));
+  } finally { globalThis.fetch = original; }
+});
+
+test('conditional 200 returns its validator and preserves ordinary HTTP errors', async () => {
+  const original = globalThis.fetch;
+  let status = 200;
+  globalThis.fetch = async () => Response.json(status === 200 ? { success: true, data: { value: 9 } } : { message: '统计查询繁忙' }, { status, headers: { ETag: '"changed"' } });
+  try {
+    assert.deepEqual(await getJson('/api/history/summary', { conditional: true }), { success: true, data: { value: 9 }, etag: '"changed"' });
+    status = 429;
+    await assert.rejects(getJson('/api/history/summary', { conditional: true }), error => error.status === 429 && error.message === '统计查询繁忙');
+  } finally { globalThis.fetch = original; }
+});

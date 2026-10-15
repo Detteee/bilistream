@@ -13,7 +13,7 @@ import uPlot from 'uplot';
 import {
   DASH, orDash, formatCount, formatHours, formatPercent, formatAbsolute, formatRelative, formatRange,
   formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine, stripCells, sparkPath,
-  ringArcs, biliTotals, biliStateLabel, aggregateAudience, sessionDuration, formatSessionDuration,
+  ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, heatLevel, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
   mergeRetention, EVENTS_EMPTY, isolatedPointIndices,
@@ -39,7 +39,7 @@ let refreshController = null;
 let detailController = null;
 let eventsController = null;
 const charts = new Map();
-const view = { status: null, sessions: [], range: null, eventsCursor: null, detailId: null };
+const view = { status: null, sessions: [], summary: null, range: null, eventsCursor: null, detailId: null };
 
 const prefs = {
   range: readPref('analyticsRange', { preset: '7d' }),
@@ -375,7 +375,8 @@ function audienceTiles(t, { sessions = null, summarizedSub = '' } = {}) {
     tiles.append(tile);
   };
   add('在线峰值', orDash(t.online_peak), '人', '在线（有上限）');
-  add('看过人数', orDash(t.watched), '人', pendingSub || summarizedSub);
+  const watchedSub = [watchedSourceLabel(t.watched_source), pendingSub].filter(Boolean).join(' · ');
+  add('看过人数', orDash(t.watched), '人', watchedSub || summarizedSub);
   add('弹幕', orDash(t.danmu), '条', pendingSub);
   add('新增粉丝', orDash(t.add_fans), '人', pendingSub);
   add('新增粉丝团', orDash(t.new_fans_club), '人', pendingSub);
@@ -397,9 +398,8 @@ function renderAudience(stats, r) {
   let sub = '';
   if (chosen) totals = biliTotals(chosen.bili);
   else {
-    const agg = aggregateAudience(view.sessions);
-    totals = { ...agg, state: agg.summarized ? 'ok' : agg.pending ? 'pending' : 'failed' };
-    sub = agg.summarized ? `${formatCount(agg.summarized)} 场合计` : '';
+    totals = rangeAudience(view.summary?.kpis);
+    sub = '本范围合计';
   }
   const children = [audienceTiles(totals, { summarizedSub: sub })];
   const online = stats?.series?.online;
@@ -687,7 +687,6 @@ function renderNodes(summary) {
   if (!cluster) return;
   const missing = new Map((summary.missing_nodes || []).map(m => [m.node_id, missingNodeText([m]).nodes[0]]));
   const total = nodes.reduce((n, x) => n + (Number(x.live_secs) || 0), 0);
-  const span = view.range.to - view.range.from;
   const table = el('table', 'analytics-table');
   const head = ['节点', '状态', '在线率', '推流时长', '推流占比', '异常重启', '最近心跳'];
   const thead = el('thead');
@@ -700,9 +699,13 @@ function renderNodes(summary) {
     const miss = missing.get(n.node_id);
     const status = el('span', `cluster-badge${miss ? ' sync-warning' : ''}`, miss ? miss.reason : '正常');
     if (miss?.title) status.title = miss.title;
+    const observed = n.node_observed_secs;
+    const availability = Number.isFinite(observed) && observed > 0
+      && Number.isFinite(n.down_secs) && n.down_secs >= 0 && n.down_secs <= observed
+      ? 1 - n.down_secs / observed : null;
     const cells = [
       el('td', '', n.node_id), el('td'),
-      el('td', '', miss ? DASH : formatPercent(span > 0 && Number.isFinite(n.down_secs) ? 1 - n.down_secs / span : null)),
+      el('td', '', miss ? DASH : formatPercent(availability)),
       el('td', '', miss ? DASH : `${formatHours(n.live_secs)} 小时`),
       el('td', '', miss ? DASH : formatPercent(total > 0 ? n.live_secs / total : null)),
       el('td', '', miss ? DASH : orDash(n.failures)),
@@ -870,6 +873,7 @@ async function refresh({ force = false } = {}) {
   const r = resolvedRange();
   view.range = r;
   view.sessions = [];
+  view.summary = null;
   view.stats = null;
   const live = () => mounted && gen === generation;
   const button = $('analytics-refresh-btn');
@@ -954,6 +958,7 @@ async function refresh({ force = false } = {}) {
   };
   const paintSummary = summary => {
     if (!live()) return;
+    view.summary = summary;
     oldest = summary?.coverage?.from;
     paintCoverage();
     renderKpis(summary, r);
@@ -963,6 +968,7 @@ async function refresh({ force = false } = {}) {
     renderNodes(summary);
     meta('summary', summary);
     if (scopedSessions) renderStrips(scopedSessions, r, oldest);
+    if (scopedStats) renderAudience(scopedStats, r);
   };
   const paintSessions = data => {
     if (!live()) return;

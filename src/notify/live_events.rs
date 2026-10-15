@@ -392,61 +392,62 @@ pub fn rfc3339(at: u64) -> String {
     shanghai(at).to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
-fn short_time(at: u64) -> String {
-    shanghai(at).format("%m-%d %H:%M").to_string()
-}
-
-fn duration_text(secs: u64) -> String {
-    let minutes = secs / 60;
-    if minutes >= 60 {
-        format!("{}小时{}分", minutes / 60, minutes % 60)
-    } else {
-        format!("{minutes}分")
-    }
-}
-
-/// qq-notify-alert-formats.md §3.5. No revenue, no totals, no ids.
-pub fn render(kind: LiveKind, broadcast: &Broadcast, catch_up: bool) -> String {
+/// This relay's start/end is distinct from the watched channel's live state.
+/// A held notice retains its event time and names the node sending it now.
+pub fn render(kind: LiveKind, broadcast: &Broadcast, catch_up: bool, sender: &str) -> String {
     let clean = |value: &str, cols: usize| super::format::sanitize(value, cols);
     let platform = clean(&broadcast.platform, 16);
     let channel = clean(&broadcast.channel, NAME_CHARS);
     let source = if channel.is_empty() {
-        platform.clone()
+        "当前频道"
     } else {
-        channel.clone()
+        &channel
     };
-    let (text, at) = match kind {
+    let mut lines = Vec::new();
+    let at = match kind {
         LiveKind::LiveStart => {
             let title = clean(&broadcast.title, TITLE_CHARS);
-            let title = if title.is_empty() {
-                "（无标题）".to_string()
-            } else {
-                title
-            };
-            let from = match (platform.is_empty(), channel.is_empty()) {
-                (false, false) => format!("{platform}/{channel}"),
-                _ => source,
-            };
-            (
-                format!("开播 · {title} · 来源 {from}"),
-                broadcast.started_at,
-            )
+            lines.push(format!("🟢 开始转播 {source}"));
+            match (platform.is_empty(), title.is_empty()) {
+                (false, false) => lines.push(format!("{platform} · {title}")),
+                (false, true) => lines.push(platform),
+                (true, false) => lines.push(title),
+                (true, true) => {}
+            }
+            broadcast.started_at
         }
         LiveKind::LiveEnd => {
             let end = broadcast.ended_at.unwrap_or(broadcast.started_at);
-            let length = duration_text(end.saturating_sub(broadcast.started_at));
-            (format!("下播 · 本场 {length} · 来源 {source}"), end)
+            let length = super::format::duration_text(end.saturating_sub(broadcast.started_at));
+            lines.push("⚪ 本场转播已结束".to_string());
+            // The ledger retains the first source across source switches.
+            // It does not tell us which channel was selected at the end.
+            lines.push(if channel.is_empty() {
+                format!("本场共持续 {length}。")
+            } else {
+                format!("本场从 {channel} 开始，共持续 {length}。")
+            });
+            end
         }
     };
     if catch_up {
-        format!("（补发）{text} · {}", short_time(at))
-    } else {
-        text
+        lines.push(format!(
+            "补发：{}于 {} (UTC+8)",
+            if kind == LiveKind::LiveStart {
+                "开始"
+            } else {
+                "结束"
+            },
+            super::format::utc8_time(at)
+        ));
     }
+    super::format::with_sender(&lines.join("\n"), sender)
 }
 
 /// One C2C request for a live notice.
 pub struct LiveSend<'a> {
+    pub attempt: super::sink::AttemptContext,
+    pub at: u64,
     pub mode: QqMode,
     pub msg_id: Option<&'a str>,
     pub msg_seq: u32,
@@ -518,7 +519,9 @@ pub struct Driver<'a> {
     pub passive: Option<&'a mut PassiveTarget>,
     /// `Some(term)` while this node holds the gateway; `None` stops sending.
     pub term: Option<u64>,
+    /// Stable node id for the ledger and the configured display name for text.
     pub node: &'a str,
+    pub sender_name: &'a str,
     pub enabled: bool,
     pub now: u64,
 }
@@ -828,7 +831,7 @@ pub async fn drive(
                 || previous
                     .as_ref()
                     .is_some_and(|record| record.state == DeliveryState::Pending);
-            let text = render(kind, &broadcast, catch_up);
+            let text = render(kind, &broadcast, catch_up, driver.sender_name);
             let (mode, msg_id, seq) = match channel {
                 Channel::Passive => {
                     let target = driver.passive.as_deref().expect("usable passive target");
@@ -844,6 +847,15 @@ pub async fn drive(
             report.requests.push((kind, channel));
             let result = transport
                 .send(LiveSend {
+                    attempt: super::sink::AttemptContext {
+                        key: format!("bili.{}", kind.as_str()),
+                        dedup: format!("bili.{}:{}", kind.as_str(), broadcast.generation),
+                        phase: kind.as_str(),
+                        test: false,
+                        suppressed: 0,
+                        undelivered: driver.ledger.undelivered_pending(),
+                    },
+                    at: driver.now,
                     mode,
                     msg_id: msg_id.as_deref(),
                     msg_seq: seq,

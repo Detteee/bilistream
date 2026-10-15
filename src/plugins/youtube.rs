@@ -611,6 +611,56 @@ pub async fn get_youtube_channel_metadata(
     ))
 }
 
+/// A held channel still needs live-episode evidence. Metadata avoids playable
+/// prefetch in index mode; without an index only a strict source probe can
+/// distinguish offline from a failed request.
+pub(crate) async fn get_youtube_warning_status(
+    channel_id: &str,
+    held_episode: Option<&str>,
+) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
+    let cfg = load_config().await?;
+    if monitor_mode(&cfg) == MonitorMode::Index {
+        let status = get_youtube_channel_status(channel_id).await?;
+        if !warning_metadata_needs_confirmation(&status, held_episode) {
+            return Ok(status);
+        }
+    }
+    let (is_live, topic, title, _, scheduled_start, video_id) =
+        get_youtube_status_with(channel_id, Probe::Refetch).await?;
+    Ok(youtube_channel_status_from_probe(
+        is_live,
+        topic,
+        title,
+        scheduled_start,
+        video_id,
+    ))
+}
+
+fn warning_metadata_needs_confirmation(
+    status: &YoutubeChannelStatus,
+    held_episode: Option<&str>,
+) -> bool {
+    !status.is_live
+        || matches!(
+            (held_episode.filter(|id| !id.is_empty()), status.video_id.as_deref().filter(|id| !id.is_empty())),
+            (Some(old), Some(observed)) if old != observed
+        )
+}
+
+/// Keep the ID returned by the actual live confirmation. A stale index row
+/// must not label a current URL as a different (possibly older) episode.
+fn confirmed_index_status(status: YoutubeChannelStatus, confirmed: YoutubeStatus) -> YoutubeStatus {
+    let (is_live, _, _, m3u8_url, scheduled_start, confirmed_video_id) = confirmed;
+    (
+        is_live,
+        status.topic,
+        status.title,
+        m3u8_url,
+        scheduled_start,
+        confirmed_video_id,
+    )
+}
+
 /// yt-dlp does not supply Holodex's game/topic. Look it up separately for area
 /// correction without making Holodex a live-status gate when that is disabled.
 pub(crate) async fn get_youtube_area_topic(
@@ -765,7 +815,7 @@ async fn get_youtube_status_with(
         MonitorAction::ConfirmLive => {
             // The index knows the stream; yt-dlp resolves the playable URL and
             // has the final say on whether it is actually live.
-            let (is_live, _, _, m3u8_url, _, _) = get_status_with_yt_dlp(
+            let confirmed = get_status_with_yt_dlp(
                 channel_id,
                 proxy,
                 status.title.clone(),
@@ -776,14 +826,7 @@ async fn get_youtube_status_with(
                 strict,
             )
             .await?;
-            Ok((
-                is_live,
-                status.topic,
-                status.title,
-                m3u8_url,
-                None,
-                status.video_id,
-            ))
+            Ok(confirmed_index_status(status, confirmed))
         }
         MonitorAction::IndexAnswer => match view {
             IndexView::Upcoming => Ok(index_answer(status)),
@@ -950,7 +993,19 @@ async fn get_status_with_yt_dlp(
             )
             .into());
         }
-        return Ok((false, None, None, None, None, video_id)); // Channel is not live and no scheduled time
+        // An explicit offline statement is distinct from a scheduled video ID.
+        return Ok((
+            false,
+            None,
+            None,
+            None,
+            None,
+            if yt_dlp_says_offline(&stderr) {
+                None
+            } else {
+                video_id
+            },
+        ));
     } else if let Some((m3u8_url, has_multiple)) = first_m3u8_url_from_stdout(&stdout) {
         if has_multiple {
             tracing::warn!("Multiple m3u8 URLs found (likely separate video and audio streams)");
@@ -1022,6 +1077,92 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_confirmation_keeps_the_actual_id_instead_of_a_stale_index_id() {
+        let index = YoutubeChannelStatus {
+            is_live: true,
+            title: Some("index title".into()),
+            video_id: Some("old-index-id".into()),
+            ..Default::default()
+        };
+        let fresh = confirmed_index_status(
+            index.clone(),
+            (
+                true,
+                None,
+                None,
+                Some("https://example.invalid/live.m3u8".into()),
+                None,
+                Some("fresh-id".into()),
+            ),
+        );
+        assert_eq!(fresh.5.as_deref(), Some("fresh-id"));
+        let missing = confirmed_index_status(
+            index,
+            (
+                true,
+                None,
+                None,
+                Some("https://example.invalid/live.m3u8".into()),
+                None,
+                None,
+            ),
+        );
+        assert!(
+            missing.5.is_none(),
+            "missing proof must not fall back to an unrelated index ID"
+        );
+    }
+
+    #[test]
+    fn a_live_index_row_cannot_erase_an_authoritative_upcoming_response() {
+        let index = YoutubeChannelStatus {
+            is_live: true,
+            video_id: Some("old-index-id".into()),
+            ..Default::default()
+        };
+        let schedule = Local::now() + chrono::Duration::minutes(5);
+        let upcoming =
+            confirmed_index_status(index, (false, None, None, None, Some(schedule), None));
+        assert!(!upcoming.0);
+        assert_eq!(upcoming.4, Some(schedule));
+        assert!(upcoming.5.is_none());
+    }
+
+    #[test]
+    fn a_changed_or_offline_warning_index_answer_needs_source_confirmation() {
+        let same = YoutubeChannelStatus {
+            is_live: true,
+            video_id: Some("current-id".into()),
+            ..Default::default()
+        };
+        assert!(!warning_metadata_needs_confirmation(
+            &same,
+            Some("current-id")
+        ));
+        let mut changed = same.clone();
+        changed.video_id = Some("older-cached-id".into());
+        assert!(warning_metadata_needs_confirmation(
+            &changed,
+            Some("current-id")
+        ));
+        changed.video_id = Some("new-id".into());
+        assert!(warning_metadata_needs_confirmation(
+            &changed,
+            Some("current-id")
+        ));
+        changed.video_id = None;
+        assert!(!warning_metadata_needs_confirmation(
+            &changed,
+            Some("current-id")
+        ));
+        changed.is_live = false;
+        assert!(warning_metadata_needs_confirmation(
+            &changed,
+            Some("current-id")
+        ));
+    }
     use crate::plugins::holodex::HolodexChannel;
 
     #[test]

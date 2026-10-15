@@ -118,6 +118,8 @@ impl QqSink {
                     event_id: None,
                     msg_seq,
                 },
+                &message.attempt,
+                ctx.now,
             )
             .await;
             tracing::debug!(
@@ -366,7 +368,14 @@ impl super::live_events::LiveTransport for QqSink {
                 event_id: None,
                 msg_seq: request.msg_seq,
             };
-            let call = api::send_c2c(&self.http, &self.target.api_base, &token, &message);
+            let call = api::send_c2c(
+                &self.http,
+                &self.target.api_base,
+                &token,
+                &message,
+                &request.attempt,
+                request.at,
+            );
             // A timeout is an ambiguous result like a network error.
             let result = match tokio::time::timeout(std::time::Duration::from_secs(20), call).await
             {

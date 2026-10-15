@@ -8,6 +8,14 @@ Settings, channels, rules and discovery statistics live in `data/bilistream.db` 
 
 Keep the original key: copying the database alone is not a portable backup. Do not delete database `-wal` or `-shm` files. Images remain in cache directories, and `webui/` contains page assets.
 
+## Analytics history
+
+The **统计** tab reads `history.sqlite` in the same data directory. Each server records its own relay sessions, reconnects, stream quality, Bilibili audience counts and notification attempts. In a cluster, **全部节点** combines the available servers when you open the page; a missing server is named in the partial-data notice. Dates and times use your browser's local time zone.
+
+History is separate from settings and is excluded from downloaded backups and legacy exports. To preserve it when moving a server, stop bilistream and copy its history database together with any matching `-wal` and `-shm` files. To clear it, stop bilistream and remove those history files; the next start creates a new history database. Keep `bilistream.db` and its files intact.
+
+By default, raw samples are retained for 7 days, minute summaries for 90 days, and events for up to 180 days. Bilibili totals depend on the room's login and available upstream data; `--` means a total is unavailable. A missing total does not delay closing a relay session. See [history settings](advanced-settings.md#analytics-history) for retention and recording controls.
+
 ## Back up and restore
 
 Use **System Settings → 数据与备份** to download a password-protected backup. Keep its password separately. A new installation can restore it through **已有备份？直接恢复** in the setup wizard. Backups exclude the panel password and browser login sessions. Restore preserves the destination installation’s password choice; a fresh installation needs local password setup or initial password bootstrap.

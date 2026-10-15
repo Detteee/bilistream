@@ -23,6 +23,11 @@ fn sink(mock: &MockQq) -> QqSink {
 
 fn message(critical: bool) -> Rendered {
     Rendered {
+        attempt: crate::notify::sink::AttemptContext::new(
+            "cluster.node_down",
+            "cluster.node_down:b",
+            "fire",
+        ),
         text: "🔴 节点故障 · b".into(),
         minimal: "节点故障 b".into(),
         markdown: None,

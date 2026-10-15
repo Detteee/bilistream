@@ -86,6 +86,104 @@ pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
     })
 }
 
+#[derive(Deserialize)]
+pub struct ReleasePriorityWarningRequest {
+    channel_name: String,
+}
+
+pub(crate) async fn release_priority_warning(
+    axum::Extension(auth): axum::Extension<std::sync::Arc<crate::webui::listen::AuthState>>,
+    generation: Option<axum::Extension<crate::webui::listen::AuthGeneration>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ReleasePriorityWarningRequest>,
+) -> Result<ApiResponse<serde_json::Value>, StatusCode> {
+    if !auth.browser_mutation_allowed(&headers, generation.map(|axum::Extension(g)| g)) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    use crate::plugins::danmaku::warning::warning_tracker;
+    let warnings = warning_tracker();
+    let before_action = warnings.snapshot();
+    let cfg = load_config()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let release = crate::config::with_current_config(&cfg, || {
+        release_priority_warning_for_config(&warnings, &before_action, &cfg, &payload.channel_name)
+    })
+    .ok_or(StatusCode::CONFLICT)?;
+    let release = match release {
+        Ok(release) => release,
+        Err(message) => {
+            return Ok(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(message.to_owned()),
+            })
+        }
+    };
+    let released = release.is_some();
+    if let Some(release) = release {
+        release.log();
+        // Wake idle selection. This is not a stop/restart request, and with
+        // auto-restart off the currently owned source keeps running.
+        set_config_updated();
+    }
+    refresh_status_cache_config_from(&cfg);
+    Ok(ApiResponse {
+        success: true,
+        data: Some(json!({"released": released})),
+        message: Some(
+            if released {
+                "优先频道的临时跳过已解除"
+            } else {
+                "优先频道当前没有临时跳过"
+            }
+            .to_owned(),
+        ),
+    })
+}
+
+fn release_priority_warning_for_config(
+    warnings: &crate::plugins::danmaku::warning::WarningTracker,
+    before_action: &crate::plugins::danmaku::warning::WarningSnapshot,
+    cfg: &Config,
+    requested_name: &str,
+) -> Result<Option<crate::plugins::danmaku::warning::WarningRelease>, &'static str> {
+    if requested_name.is_empty() || requested_name != cfg.priority_channel.channel_name {
+        return Err("优先频道已变更，请刷新后重试");
+    }
+    use crate::plugins::danmaku::warning::{BroadcastSource, WarningReleaseReason};
+    Ok(warnings
+        .release_name(
+            before_action,
+            requested_name,
+            WarningReleaseReason::PriorityCard,
+        )
+        .or_else(|| {
+            warnings.release_source(
+                before_action,
+                &BroadcastSource::new(
+                    "YT",
+                    requested_name,
+                    &cfg.priority_channel.youtube_channel_id,
+                    None,
+                ),
+                WarningReleaseReason::PriorityCard,
+            )
+        })
+        .or_else(|| {
+            warnings.release_source(
+                before_action,
+                &BroadcastSource::new(
+                    "TW",
+                    requested_name,
+                    &cfg.priority_channel.twitch_channel_id,
+                    None,
+                ),
+                WarningReleaseReason::PriorityCard,
+            )
+        }))
+}
+
 pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
     let Some(screen_session) = current_screen_session() else {
         return Ok(ApiResponse {
@@ -751,6 +849,464 @@ pub async fn toggle_niconico_monitor(
             toggle_sync_message
         )),
     })
+}
+
+#[cfg(test)]
+mod priority_warning_tests {
+    use super::*;
+    use crate::plugins::danmaku::warning::{BroadcastSource, WarningTracker};
+    use std::sync::Arc;
+
+    fn priority_config(auto_restart: bool) -> Config {
+        let mut cfg = crate::cluster::tests::test_config("priority-admin-test", 0);
+        cfg.priority_channel.enabled = true;
+        cfg.priority_channel.auto_restart = auto_restart;
+        cfg.priority_channel.channel_name = "示例频道 A".into();
+        cfg.priority_channel.youtube_channel_id = "UC-held".into();
+        cfg.priority_channel.twitch_channel_id = "held_login".into();
+        cfg
+    }
+
+    #[test]
+    fn priority_release_preserves_current_source_and_saved_targets_in_both_restart_modes() {
+        for auto_restart in [false, true] {
+            let cfg = priority_config(auto_restart);
+            let saved = serde_json::to_value(&cfg).unwrap();
+            let warnings = Arc::new(WarningTracker::default());
+            let held = BroadcastSource::new("YT", "示例频道 A", "UC-held", Some("episode-a"));
+            let _held_owner = warnings.own_source(71, held.clone());
+            let mut event = warnings.capture_event();
+            warnings.mark_event(&mut event, None).unwrap();
+            let running =
+                BroadcastSource::new("TW", "示例频道 B", "other_login", Some("episode-b"));
+            let _running_owner = warnings.own_source(72, running.clone());
+
+            assert!(release_priority_warning_for_config(
+                &warnings,
+                &warnings.snapshot(),
+                &cfg,
+                &cfg.priority_channel.channel_name,
+            )
+            .unwrap()
+            .is_some());
+            assert!(!warnings.snapshot().holds(&held));
+            assert_eq!(warnings.active_source(), Some(running));
+            assert_eq!(serde_json::to_value(&cfg).unwrap(), saved);
+            assert!(
+                release_priority_warning_for_config(
+                    &warnings,
+                    &warnings.snapshot(),
+                    &cfg,
+                    &cfg.priority_channel.channel_name,
+                )
+                .unwrap()
+                .is_none(),
+                "repeating the release is harmless"
+            );
+        }
+    }
+
+    #[test]
+    fn priority_release_rejects_stale_card_names_and_cannot_clear_a_newer_warning() {
+        let mut cfg = priority_config(false);
+        let warnings = Arc::new(WarningTracker::default());
+        let held = BroadcastSource::new("YT", "示例频道 A", "UC-held", Some("episode-a"));
+        let _owner = warnings.own_source(81, held.clone());
+        let mut event = warnings.capture_event();
+        warnings.mark_event(&mut event, None).unwrap();
+        let old_click = warnings.snapshot();
+
+        for requested in ["", "已经更换的频道"] {
+            assert!(
+                release_priority_warning_for_config(&warnings, &old_click, &cfg, requested)
+                    .is_err()
+            );
+            assert!(warnings.snapshot().holds(&held));
+        }
+        cfg.priority_channel.channel_name = "示例频道 B".into();
+        cfg.priority_channel.youtube_channel_id = "UC-other".into();
+        cfg.priority_channel.twitch_channel_id = "other_login".into();
+        assert!(
+            release_priority_warning_for_config(&warnings, &old_click, &cfg, "示例频道 A",)
+                .is_err()
+        );
+        assert!(
+            release_priority_warning_for_config(&warnings, &old_click, &cfg, "示例频道 B",)
+                .unwrap()
+                .is_none(),
+            "the current card cannot clear an unrelated hold"
+        );
+        assert!(warnings.snapshot().holds(&held));
+
+        let cfg = priority_config(false);
+        let mut newer = warnings.capture_event();
+        warnings.mark_event(&mut newer, None).unwrap();
+        assert!(
+            release_priority_warning_for_config(&warnings, &old_click, &cfg, "示例频道 A",)
+                .unwrap()
+                .is_none()
+        );
+        assert!(warnings.snapshot().holds(&held));
+        assert!(release_priority_warning_for_config(
+            &warnings,
+            &warnings.snapshot(),
+            &cfg,
+            "示例频道 A",
+        )
+        .unwrap()
+        .is_some());
+    }
+
+    #[test]
+    fn priority_release_matches_a_changed_alias_by_canonical_provider_id() {
+        for (platform, id) in [("YT", "UC-held"), ("TW", "HELD_LOGIN")] {
+            let cfg = priority_config(false);
+            let warnings = Arc::new(WarningTracker::default());
+            let held = BroadcastSource::new(platform, "频道旧显示名", id, Some("episode-a"));
+            let _owner = warnings.own_source(91, held.clone());
+            let mut event = warnings.capture_event();
+            warnings.mark_event(&mut event, None).unwrap();
+            assert!(release_priority_warning_for_config(
+                &warnings,
+                &warnings.snapshot(),
+                &cfg,
+                "示例频道 A",
+            )
+            .unwrap()
+            .is_some());
+            assert!(!warnings.snapshot().holds(&held));
+            assert_eq!(warnings.active_source(), Some(held));
+        }
+    }
+
+    #[tokio::test]
+    async fn priority_release_route_requires_browser_auth_and_same_origin() {
+        use crate::webui::listen::AuthState;
+        use axum::body::Body;
+        use axum::http::{header, Request};
+        use tower::ServiceExt;
+
+        crate::install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!(
+            "bilistream-priority-auth-{}",
+            crate::cluster::peer_auth::random_id().unwrap(),
+        ));
+        {
+            let store =
+                crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+            let auth = AuthState::open(store, Some("synthetic-priority-password".into())).unwrap();
+            let app = crate::webui::server::build_app(crate::AppState::new(), auth);
+            let login = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/login")
+                        .header(header::HOST, "panel.invalid")
+                        .header(header::ORIGIN, "http://panel.invalid")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"password":"synthetic-priority-password"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(login.status(), StatusCode::OK);
+            let cookie = login.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+            drop(login);
+            for (cookie, origin, bearer, expected) in [
+                (
+                    None,
+                    Some("http://panel.invalid"),
+                    false,
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    Some("bilistream_session=invalid"),
+                    Some("http://panel.invalid"),
+                    false,
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    Some(cookie.as_str()),
+                    Some("http://panel.invalid"),
+                    true,
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    Some(cookie.as_str()),
+                    Some("http://other.invalid"),
+                    false,
+                    StatusCode::FORBIDDEN,
+                ),
+                (Some(cookie.as_str()), None, false, StatusCode::FORBIDDEN),
+            ] {
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri("/api/priority-channel/release-warning")
+                    .header(header::HOST, "panel.invalid")
+                    .header(header::CONTENT_TYPE, "application/json");
+                if let Some(cookie) = cookie {
+                    request = request.header(header::COOKIE, cookie);
+                }
+                if let Some(origin) = origin {
+                    request = request.header(header::ORIGIN, origin);
+                }
+                if bearer {
+                    request = request.header(header::AUTHORIZATION, "Bearer synthetic-peer-token");
+                }
+                let response = app
+                    .clone()
+                    .oneshot(
+                        request
+                            .body(Body::from(r#"{"channel_name":"示例频道 A"}"#))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "origin={origin:?}, bearer={bearer}"
+                );
+            }
+            // Authenticated same-origin traffic reaches the real typed route.
+            // An invalid body stops before process-wide config/hold mutation.
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/priority-channel/release-warning")
+                        .header(header::HOST, "panel.invalid")
+                        .header(header::ORIGIN, "http://panel.invalid")
+                        .header(header::COOKIE, &cookie)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"channel_name":42}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/api/priority-channel/release-warning")
+                        .header(header::COOKIE, &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn priority_release_has_no_public_route() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = crate::webui::public::server::public_router();
+        for path in [
+            "/api/priority-channel/release-warning",
+            "/api/public/priority-channel/release-warning",
+        ] {
+            for (method, expected) in [
+                ("GET", StatusCode::NOT_FOUND),
+                ("POST", StatusCode::METHOD_NOT_ALLOWED),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected, "{method} {path}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn priority_release_router_success_and_stale_credentials_are_isolated() {
+        use std::process::Stdio;
+
+        // The real handler uses process-global config, warning and stop state.
+        // Run it alone so this assertion cannot alter parallel unit tests.
+        let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "webui::api::stream::priority_warning_tests::priority_release_router_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+            .await
+            .expect("isolated admin route fixture timed out")
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("priority release router fixture verified"),
+            "fixture did not run: {stdout}"
+        );
+        std::fs::remove_dir_all(std::env::temp_dir().join(format!("bilistream-unit-store-{pid}")))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "subprocess fixture for priority_release_router_success_and_stale_credentials_are_isolated"]
+    async fn priority_release_router_fixture() {
+        use crate::plugins::danmaku::warning::{warning_tracker, WarningReleaseReason};
+        use crate::webui::listen::{AuthGeneration, AuthState};
+        use axum::body::{to_bytes, Body};
+        use axum::http::{header, HeaderMap, Request};
+        use tower::ServiceExt;
+
+        crate::install_crypto_provider();
+        let store = crate::storage::global().unwrap();
+        store
+            .write(
+                "channels.json",
+                json!({"channels":[{
+                    "name":"示例频道 A", "aliases":[], "riot_puuid":null,
+                    "platforms":{"youtube":"UC-held","twitch":"held_login"}
+                }]}),
+            )
+            .unwrap();
+        let auth =
+            AuthState::open(store.clone(), Some("synthetic-router-password".into())).unwrap();
+        let app = crate::webui::server::build_app(crate::AppState::current(), auth.clone());
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"password":"synthetic-router-password"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = login.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "panel.invalid".parse().unwrap());
+        headers.insert(header::ORIGIN, "http://panel.invalid".parse().unwrap());
+        headers.insert(header::COOKIE, cookie.parse().unwrap());
+
+        let warnings = warning_tracker();
+        let held = BroadcastSource::new("YT", "示例频道 A", "UC-held", Some("episode-a"));
+        let running = BroadcastSource::new("TW", "示例频道 B", "other_login", Some("episode-b"));
+        for auto_restart in [false, true] {
+            let mut cfg = priority_config(auto_restart);
+            cfg.cluster.enabled = false;
+            store
+                .write("config.json", serde_json::to_value(cfg).unwrap())
+                .unwrap();
+            let cfg = load_config().await.unwrap();
+            let saved = store.read("config.json").unwrap().unwrap();
+            let version = monitored_config_version(&cfg);
+            let _ = warnings.clear(WarningReleaseReason::ManualRestart);
+            let _held_owner = warnings.own_source(101, held.clone());
+            let mut event = warnings.capture_event();
+            warnings.mark_event(&mut event, None).unwrap();
+            let _running_owner = warnings.own_source(102, running.clone());
+            crate::plugins::danmaku::clear_config_updated();
+            crate::plugins::ffmpeg::clear_manual_restart();
+            crate::plugins::ffmpeg::clear_manual_stop();
+            let stop_generation = crate::plugins::ffmpeg::stop_restart_generation();
+
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/priority-channel/release-warning")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"channel_name":"示例频道 A"}"#))
+                .unwrap();
+            request.headers_mut().extend(headers.clone());
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let response: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(response["success"], true);
+            assert_eq!(response["data"]["released"], true);
+            assert!(!warnings.snapshot().holds(&held));
+            assert_eq!(warnings.active_source(), Some(running.clone()));
+            assert!(
+                crate::plugins::danmaku::is_config_updated(),
+                "idle selection is woken"
+            );
+            assert!(!crate::plugins::ffmpeg::was_manual_restart());
+            assert!(!crate::plugins::ffmpeg::was_manual_stop());
+            assert_eq!(
+                crate::plugins::ffmpeg::stop_restart_generation(),
+                stop_generation
+            );
+            let after = store.read("config.json").unwrap().unwrap();
+            assert_eq!(after.value, saved.value);
+            assert_eq!(after.revision, saved.revision);
+            assert_eq!(
+                monitored_config_version(&load_config().await.unwrap()),
+                version
+            );
+        }
+
+        // Simulate a request admitted before a credential change: its captured
+        // generation is now stale even though its Origin still matches.
+        let admitted = auth.sessions.snapshot().unwrap().revision;
+        let _held_owner = warnings.own_source(103, held.clone());
+        let mut event = warnings.capture_event();
+        warnings.mark_event(&mut event, None).unwrap();
+        let _running_owner = warnings.own_source(104, running.clone());
+        crate::webui::sessions::reset_password(store.clone()).unwrap();
+        assert_ne!(auth.sessions.snapshot().unwrap().revision, admitted);
+        for generation in [None, Some(axum::Extension(AuthGeneration(admitted)))] {
+            let result = release_priority_warning(
+                axum::Extension(auth.clone()),
+                generation,
+                headers.clone(),
+                Json(ReleasePriorityWarningRequest {
+                    channel_name: "示例频道 A".into(),
+                }),
+            )
+            .await;
+            assert_eq!(result.err(), Some(StatusCode::FORBIDDEN));
+            assert!(warnings.snapshot().holds(&held));
+            assert_eq!(warnings.active_source(), Some(running.clone()));
+        }
+        println!("priority release router fixture verified");
+    }
 }
 
 #[cfg(test)]

@@ -286,6 +286,7 @@ mod tests {
                 default_area_name: Some("测试分区".into()),
                 enabled: true,
                 auto_restart: true,
+                warning_held: false,
                 channel_name: "priority".to_string(),
                 is_live: false,
                 platform: None,

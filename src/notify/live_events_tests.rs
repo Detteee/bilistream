@@ -164,6 +164,7 @@ async fn run(
         passive,
         term,
         node: &node,
+        sender_name: &node,
         enabled: true,
         now,
     };
@@ -187,7 +188,10 @@ async fn active_first_then_never_again_for_the_same_generation() {
     assert_eq!(qq.modes(), vec!["active"]);
     // Plain active: no msg_id, no is_wakeup.
     assert_eq!(qq.msg_id(0), None);
-    assert_eq!(qq.text(0), "开播 · 周末杂谈 · 来源 YouTube/某频道");
+    assert_eq!(
+        qq.text(0),
+        "🟢 开始转播 某频道\nYouTube · 周末杂谈\n发送节点：a"
+    );
     // The sending record was committed before the request, delivered after.
     let committed = commit.snapshots();
     assert_eq!(
@@ -208,7 +212,10 @@ async fn active_first_then_never_again_for_the_same_generation() {
     assert!(!ledger.live.end(NOW + 4 * 3600));
     run(&mut ledger, None, Some(2), NOW + 4 * 3600, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
-    assert_eq!(qq.text(1), "下播 · 本场 3小时12分 · 来源 某频道");
+    assert_eq!(
+        qq.text(1),
+        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 3 小时 12 分钟。\n发送节点：a"
+    );
     run(&mut ledger, None, Some(2), NOW + 4 * 3600 + 5, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
     assert_eq!(ledger.live.start(&info("YT:UC1"), NOW + 5 * 3600), 2);
@@ -318,7 +325,12 @@ async fn wakeup_keeps_the_alert_reserve_and_then_the_notice_waits() {
     );
     assert_eq!(qq.modes(), vec!["active", "active", "passive"]);
     let text = qq.text(2);
-    assert!(text.starts_with("（补发）开播 · 周末杂谈"), "{text}");
+    assert!(
+        text.starts_with("🟢 开始转播 某频道\nYouTube · 周末杂谈"),
+        "{text}"
+    );
+    assert!(text.contains("补发：开始于 "), "{text}");
+    assert!(text.ends_with("发送节点：a"));
     assert!(ledger.live.pending().is_empty());
     run(
         &mut ledger,
@@ -500,6 +512,7 @@ async fn failover_mid_retry_sends_once() {
     let commit_a = FakeCommit::default();
     run(&mut a, None, Some(1), NOW, &qq, &commit_a).await;
     assert_eq!(qq.count(), 1);
+    assert!(qq.text(0).ends_with("发送节点：a"));
     // A loses the gateway: no term, no retry.
     run(&mut a, None, None, NOW + 20, &qq, &commit_a).await;
     assert_eq!(qq.count(), 1);
@@ -514,6 +527,7 @@ async fn failover_mid_retry_sends_once() {
     let commit_b = FakeCommit::default();
     run(&mut b, None, Some(term_b), NOW + 25, &qq, &commit_b).await;
     assert_eq!(qq.count(), 2);
+    assert!(qq.text(1).ends_with("发送节点：b"));
     assert_eq!(
         state(&b, LiveKind::LiveStart),
         Some(DeliveryState::Delivered)
@@ -560,6 +574,7 @@ async fn switch_off_marks_the_notice_off_and_nothing_is_sent() {
         passive: None,
         term: Some(1),
         node: &node,
+        sender_name: &node,
         enabled: false,
         now: NOW,
     };
@@ -695,15 +710,15 @@ async fn ledger_and_records_carry_no_openid_or_msg_id() {
 fn texts_carry_no_links_or_revenue() {
     let mut broadcast = started().live.broadcast;
     broadcast.title = "看 https://example.com 吧".into();
-    let text = render(LiveKind::LiveStart, &broadcast, false);
+    let text = render(LiveKind::LiveStart, &broadcast, false, "a");
     assert!(
         !text.contains("://") && !text.contains("example.com"),
         "{text}"
     );
     broadcast.ended_at = Some(broadcast.started_at + 47 * 60);
     assert_eq!(
-        render(LiveKind::LiveEnd, &broadcast, false),
-        "下播 · 本场 47分 · 来源 某频道"
+        render(LiveKind::LiveEnd, &broadcast, false, "a"),
+        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 47 分钟。\n发送节点：a"
     );
 }
 
@@ -745,7 +760,9 @@ async fn a_source_switch_mid_broadcast_is_the_same_broadcast() {
     run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
     assert_eq!(qq.count(), 1);
     let generation = ledger.live.broadcast.generation;
-    assert_eq!(ledger.live.start(&info("TW:other"), NOW + 600), generation);
+    let mut other = info("TW:other");
+    other.channel = "后来切换的频道".into();
+    assert_eq!(ledger.live.start(&other, NOW + 600), generation);
     assert_eq!(
         ledger.live.broadcast.stream_key, "YT:UC1",
         "first source kept"
@@ -757,7 +774,10 @@ async fn a_source_switch_mid_broadcast_is_the_same_broadcast() {
     run(&mut ledger, None, Some(1), NOW + 3602, &qq, &commit).await;
     run(&mut ledger, None, Some(1), NOW + 3700, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
-    assert!(qq.text(1).starts_with("下播"));
+    let ended = qq.text(1);
+    assert!(ended.starts_with("⚪ 本场转播已结束"));
+    assert!(ended.contains("本场从 某频道 开始，共持续 1 小时 0 分钟。"));
+    assert!(!ended.contains("后来切换的频道") && !ended.contains("某频道 下播"));
     // After it ended, a start is a new broadcast again.
     assert_eq!(
         ledger.live.start(&info("TW:other"), NOW + 7200),
@@ -791,7 +811,8 @@ async fn a_held_notice_goes_active_first_once_active_works_again() {
         vec![(LiveKind::LiveStart, Channel::Active)]
     );
     assert_eq!(qq.modes(), vec!["active", "active"]);
-    assert!(qq.text(1).starts_with("（补发）开播"));
+    assert!(qq.text(1).starts_with("🟢 开始转播 "));
+    assert!(qq.text(1).contains("补发：开始于 "));
     assert!(ledger.live.pending().is_empty());
 }
 

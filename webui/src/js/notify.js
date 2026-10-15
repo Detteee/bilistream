@@ -385,9 +385,8 @@ function renderStatus() {
   const s = status || {};
   const node = s.node_id || '本节点';
   const now = Date.now() / 1000;
-  if (s.authority === 'primary') rows.push(row('发送节点', `${node}（本节点）`));
-  else if (s.authority === 'delegate') rows.push(row('发送节点', `${node}（代发：活跃节点通知设置不完整）`));
-  else if (s.authority === 'no_quorum_fallback') rows.push(row('发送节点', `${node}（无多数派代发）`));
+  if (s.authority === 'primary' || s.authority === 'delegate') rows.push(row('发送节点', `${node}（本节点）`));
+  else if (s.authority === 'no_quorum_fallback') rows.push(row('发送节点', `${node}（无多数派）`));
   else if (s.authority_node_id) rows.push(row('发送节点', s.authority_node_id));
   else rows.push(row('发送节点', '暂无（等待选举）'));
 
@@ -397,7 +396,7 @@ function renderStatus() {
   if (gw.state === 'failed') rows.push(row('QQ 网关', `已停止 · ${gw.reason || '机器人不可用'}`, { dot: 'notify-dot-danger', title: '修改凭据并保存后重试' }));
   else if (gw.state === 'online') rows.push(row('QQ 网关', `已连接 · ${formatDuration(now - gw.since)}`, { dot: 'status-live' }));
   else if (gw.state === 'connecting' || gw.state === 'offline') rows.push(row('QQ 网关', '未连接 · 正在重连', { dot: 'status-scheduled', title: gw.reason || '' }));
-  else if (s.authority !== 'primary' && s.authority_node_id) rows.push(row('QQ 网关', '由发送节点保持'));
+  else if (s.authority !== 'primary' && s.authority !== 'delegate' && s.authority_node_id) rows.push(row('QQ 网关', '由发送节点保持'));
   else if (!enabled) rows.push(row('QQ 网关', '未启用'));
   else if (!keepOnline) rows.push(row('QQ 网关', '已关闭（未保持在线）'));
   else rows.push(row('QQ 网关', '未连接', { dot: 'status-offline' }));
@@ -592,11 +591,10 @@ function render() {
     sender: `本节点 ${node} 是当前发送节点，QQ 网关已连接。`,
     'gateway-down': `本节点 ${node} 是当前发送节点，但 QQ 网关未连接。`,
     standby: `当前由 ${status?.authority_node_id} 发送通知；本节点 ${node} 待命，接管后自动发送。`,
-    delegate: `活跃节点缺少通知设置，本节点 ${node} 代为发送（消息带「代发」标记）。`,
     'gateway-failed': `QQ 网关已停止：${status?.gateway?.reason || ''}`,
-    fallback: `集群暂无多数派，本节点 ${node} 临时代发（消息带「无多数派」标记）。`,
+    fallback: `集群暂无多数派，本节点 ${node} 发送本节点的异常通知，消息会说明「无多数派」。`,
     electing: senderBlock ? `${senderBlock.reason}，暂时没有发送节点。` : '暂无发送节点，通知会在选出后补发。',
-    failed: status?.authority === 'primary' ? `本节点 ${node} 是当前发送节点。` : `本节点 ${node}。`,
+    failed: ['primary', 'delegate'].includes(status?.authority) ? `本节点 ${node} 是当前发送节点。` : `本节点 ${node}。`,
     'node-unready': `本节点缺少 ${(st.lacks || []).join(' / ')}，接管发送后将无法送达通知。`,
     'no-sender': '没有配置完整的节点，通知将记为未送达。',
   }[st.key];

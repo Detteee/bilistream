@@ -288,7 +288,15 @@ async function settleWebUiAuthMutations() {
 }
 
 async function getJson(path, options = {}) {
-  return fetchWithWebUiAuth(path, options, readJsonApiResponse);
+  const { conditional = false, etag, ...request } = options;
+  if (!conditional) return fetchWithWebUiAuth(path, request, readJsonApiResponse);
+  const headers = new Headers(request.headers);
+  if (etag) headers.set('If-None-Match', etag);
+  return fetchWithWebUiAuth(path, { ...request, headers, cache: 'no-cache' }, async response => {
+    const etag = response.headers.get('ETag');
+    if (response.status === 304) return { notModified: true, etag };
+    return { ...await readJsonApiResponse(response), etag };
+  });
 }
 
 function postJson(path, payload, options = {}) {

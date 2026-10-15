@@ -1,8 +1,8 @@
 //! The single writer (design §5.3): maps events to rows, one transaction per
 //! batch. Runs on its own OS thread; tests drive it directly.
 
-use super::event::{EndReason, Event, EventKind};
-use rusqlite::{params, Connection};
+use super::event::{BiliLiveRecord, BiliSummaryPhase, EndReason, Event, EventKind, Severity};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 
 pub(crate) struct Writer {
@@ -14,7 +14,8 @@ pub(crate) struct Writer {
     sessions: HashMap<u64, i64>,
     /// (seq, run) → runs.id
     runs: HashMap<(u64, u64), i64>,
-    /// Session that samples without a seq (B站 counts) attach to.
+    /// Compatibility association for legacy Generic events only. Samples
+    /// always use their captured boot/sequence identity.
     open_session: Option<i64>,
     /// Verbatim secrets (`bili_rtmp_key`, rtmp query) scrubbed from text.
     secrets: Vec<String>,
@@ -46,7 +47,7 @@ impl Writer {
                 out = out.replace(secret.as_str(), "[已隐藏]");
             }
         }
-        out
+        crate::logging::safe_text(&out, 240)
     }
 
     fn eid(&mut self) -> String {
@@ -54,21 +55,43 @@ impl Writer {
         format!("{}:{:x}:{}", self.node, self.boot_id, self.counter)
     }
 
-    /// One transaction for the whole batch. A failing row is skipped so one
-    /// bad event never loses the batch.
+    /// One transaction for the whole batch, including writer-side identity
+    /// maps. A failed write must not leave a run counter or a cached row id
+    /// referring to a row that SQLite rolled back.
+    #[cfg(test)]
     pub(crate) fn commit(&mut self, batch: &[Event]) -> rusqlite::Result<usize> {
+        self.commit_refs(batch.iter())
+    }
+
+    pub(crate) fn commit_refs<'a>(
+        &mut self,
+        batch: impl IntoIterator<Item = &'a Event>,
+    ) -> rusqlite::Result<usize> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let saved_sessions = self.sessions.clone();
+        let saved_runs = self.runs.clone();
+        let saved_open = self.open_session;
+        let saved_counter = self.counter;
         let mut written = 0;
         for event in batch {
-            match self.apply(event) {
-                Ok(()) => written += 1,
-                Err(error) => tracing::debug!("统计事件写入跳过: {error}"),
+            if let Err(error) = self.apply(event) {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                self.sessions = saved_sessions;
+                self.runs = saved_runs;
+                self.open_session = saved_open;
+                self.counter = saved_counter;
+                return Err(error);
             }
+            written += 1;
         }
         match self.conn.execute_batch("COMMIT") {
             Ok(()) => Ok(written),
             Err(error) => {
                 let _ = self.conn.execute_batch("ROLLBACK");
+                self.sessions = saved_sessions;
+                self.runs = saved_runs;
+                self.open_session = saved_open;
+                self.counter = saved_counter;
                 Err(error)
             }
         }
@@ -78,9 +101,56 @@ impl Writer {
         self.sessions.get(&seq).copied()
     }
 
+    fn captured_session(&self, seq: u64, room: u64, at: i64) -> rusqlite::Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM sessions WHERE node=?1 AND boot_id=?2 AND seq=?3 AND room=?4
+             AND started_at<=?5 AND (ended_at IS NULL OR ended_at>=?5)",
+                params![
+                    self.node,
+                    self.boot_id,
+                    seq as i64,
+                    room.min(i64::MAX as u64) as i64,
+                    at
+                ],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    fn record_event(
+        &mut self,
+        at: i64,
+        kind: &str,
+        subject: Option<&str>,
+        severity: Severity,
+        title: &str,
+        detail: &str,
+        sid: Option<i64>,
+    ) -> rusqlite::Result<()> {
+        let eid = self.eid();
+        self.conn.execute(
+            "INSERT INTO events(eid,at,node,kind,subject,severity,title,detail,session_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                eid,
+                at,
+                self.node,
+                kind,
+                subject.map(|s| self.scrub(s)),
+                severity.as_str(),
+                self.scrub(title),
+                self.scrub(detail),
+                sid
+            ],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn apply(&mut self, event: &Event) -> rusqlite::Result<()> {
         let at = event.at as i64;
         match &event.kind {
+            EventKind::BroadcastStarted { .. } | EventKind::BroadcastEnded => {}
             EventKind::ProcessStarted { version } => {
                 self.conn.execute(
                     "INSERT OR REPLACE INTO boots (boot_id, node, started_at, last_seen_at, version) VALUES (?1,?2,?3,?3,?4)",
@@ -95,15 +165,24 @@ impl Writer {
                 channel_name,
                 title,
                 live_key,
+                area_v2,
+                room,
             } => {
                 let eid = self.eid();
                 let platform = match *platform {
                     "YT" | "TW" | "NC" => *platform,
                     _ => "YT",
                 };
+                let previous: i64 = self.conn.query_row(
+                    "SELECT max(coalesce((SELECT cast(value AS INTEGER) FROM meta WHERE key='session_id_highwater'),0),coalesce((SELECT max(id) FROM sessions),0))",
+                    [], |r| r.get(0),
+                )?;
+                let id = previous
+                    .checked_add(1)
+                    .ok_or(rusqlite::Error::InvalidQuery)?;
                 self.conn.execute(
-                    "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,title,started_at,last_seen_at,live_key)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10)",
+                    "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,title,started_at,last_seen_at,live_key,area_v2,room,id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)",
                     params![
                         eid,
                         self.node,
@@ -114,24 +193,31 @@ impl Writer {
                         self.scrub(channel_name),
                         title.as_deref().map(|t| self.scrub(t)),
                         at,
-                        live_key
+                        live_key,
+                        area_v2.map(|v| v.min(i64::MAX as u64) as i64),
+                        (*room).min(i64::MAX as u64) as i64,
+                        id,
                     ],
                 )?;
-                let id = self.conn.last_insert_rowid();
+                self.conn.execute(
+                    "INSERT INTO meta(key,value) VALUES ('session_id_highwater',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [id.to_string()],
+                )?;
                 self.sessions.insert(*seq, id);
                 self.open_session = Some(id);
             }
             EventKind::SessionLiveKey { seq, live_key } => {
-                if let Some(id) = self.session_row(*seq) {
-                    self.conn.execute(
-                        "UPDATE sessions SET live_key=?2 WHERE id=?1 AND live_key IS NULL",
-                        params![id, live_key],
-                    )?;
-                }
+                // GetInfo may finish after this session closes or another
+                // session starts. The captured boot/sequence is authoritative.
+                self.conn.execute(
+                    "UPDATE sessions SET live_key=?4 WHERE node=?1 AND boot_id=?2 AND seq=?3 AND live_key IS NULL AND pruned=0",
+                    params![self.node, self.boot_id, *seq as i64, live_key],
+                )?;
             }
             EventKind::SessionEnded { seq, reason } => {
                 if let Some(id) = self.sessions.remove(seq) {
                     close_session(&self.conn, id, at, *reason)?;
+                    self.runs.retain(|(run_seq, _), _| run_seq != seq);
                     if self.open_session == Some(id) {
                         self.open_session = None;
                     }
@@ -179,7 +265,10 @@ impl Writer {
                 fps,
                 speed,
             } => {
-                let sid = self.session_row(*seq);
+                let Some(id) = self.session_row(*seq) else {
+                    return Ok(());
+                };
+                let sid = Some(id);
                 let (min, mean, max) = *bitrate_kbps;
                 self.sample(1, at, sid, min as f64, max as f64, mean as f64)?;
                 if let Some(fps) = fps {
@@ -200,16 +289,31 @@ impl Writer {
                 }
                 self.bump_boot(at)?;
             }
-            EventKind::BiliCounts { online, watched } => {
-                let sid = self.open_session;
+            EventKind::BiliCounts {
+                seq,
+                room,
+                online,
+                watched,
+            } => {
+                let Some(id) = self.captured_session(*seq, *room, at)? else {
+                    return Ok(());
+                };
+                let sid = Some(id);
                 if let Some(v) = online {
                     let v = *v as f64;
                     self.sample(10, at, sid, v, v, v)?;
                 }
                 if let Some(v) = watched {
-                    let v = *v as f64;
-                    self.sample(11, at, sid, v, v, v)?;
+                    let value = *v as f64;
+                    self.sample(11, at, sid, value, value, value)?;
+                    self.conn.execute(
+                        "UPDATE sessions SET watched_count=?2,watched_at=?3 WHERE id=?1 AND (watched_at IS NULL OR watched_at<=?3)",
+                        params![id,(*v).min(i64::MAX as u64) as i64,at],
+                    )?;
                 }
+            }
+            EventKind::BiliLiveState { record } => {
+                self.persist_live_record(record)?;
             }
             EventKind::BiliLiveStarted { live_key, room } => {
                 self.conn.execute(
@@ -256,24 +360,219 @@ impl Writer {
                 title,
                 detail,
             } => {
-                let eid = self.eid();
-                self.conn.execute(
-                    "INSERT INTO events (eid,at,node,kind,subject,severity,title,detail,session_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                    params![eid, at, self.node, kind, subject.as_deref().map(|s| self.scrub(s)), severity.as_str(), self.scrub(title), self.scrub(detail), self.open_session],
+                self.record_event(
+                    at,
+                    kind,
+                    subject.as_deref(),
+                    *severity,
+                    title,
+                    detail,
+                    self.open_session,
                 )?;
             }
             EventKind::NotifySent {
                 key,
+                dedup,
                 phase,
+                mode,
                 ok,
                 code,
+                trace_id,
+                test,
                 suppressed,
                 undelivered,
             } => {
                 let eid = self.eid();
                 self.conn.execute(
-                    "INSERT INTO notify_sends (eid,at,node,event_key,phase,ok,code,suppressed,undelivered) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                    params![eid, at, self.node, key, phase, *ok, code, suppressed, undelivered],
+                    "INSERT INTO notify_sends (eid,at,node,event_key,phase,ok,code,suppressed,undelivered,dedup_key,mode,trace_id,test) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    params![eid, at, self.node, self.scrub(key), phase, *ok, code, suppressed, undelivered, self.scrub(dedup), mode, trace_id.as_deref().map(|t| self.scrub(t)), *test],
+                )?;
+            }
+            EventKind::FfmpegStuck { seq, run, reason } => {
+                let found: Option<(i64, i64)> = self
+                    .conn
+                    .query_row(
+                        "SELECT r.id,s.id FROM runs r JOIN sessions s ON s.id=r.session_id
+                     WHERE s.node=?1 AND s.boot_id=?2 AND s.seq=?3 AND r.run=?4",
+                        params![self.node, self.boot_id, *seq as i64, *run as i64],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((rid, sid)) = found {
+                    let changed = self.conn.execute(
+                        "UPDATE runs SET stuck_reason=?2 WHERE id=?1 AND (stuck_reason IS NULL OR (stuck_reason='idle_drain' AND ?2<>'idle_drain'))",
+                        params![rid, self.scrub(reason)],
+                    )?;
+                    // idle_drain is the normal end-of-source buffer drain.
+                    if changed > 0 && *reason != "idle_drain" {
+                        self.conn
+                            .execute("UPDATE sessions SET stuck=stuck+1 WHERE id=?1", [sid])?;
+                        self.record_event(
+                            at,
+                            "ffmpeg.stuck",
+                            None,
+                            Severity::Warn,
+                            "推流进度停滞",
+                            reason,
+                            Some(sid),
+                        )?;
+                    }
+                }
+            }
+            EventKind::BiliStartFailed { seq, error } => {
+                self.record_event(
+                    at,
+                    "bili.start_failed",
+                    None,
+                    Severity::Error,
+                    "B站开播失败",
+                    error,
+                    seq.and_then(|s| self.session_row(s)),
+                )?;
+            }
+            EventKind::BiliWarning { seq, room, msg }
+            | EventKind::BiliCutOff { seq, room, msg } => {
+                let cut = matches!(&event.kind, EventKind::BiliCutOff { .. });
+                self.record_event(
+                    at,
+                    if cut { "bili.cut_off" } else { "bili.warning" },
+                    Some(&room.to_string()),
+                    if cut { Severity::Error } else { Severity::Warn },
+                    if cut {
+                        "B站切断推流"
+                    } else {
+                        "B站直播警告"
+                    },
+                    msg,
+                    seq.and_then(|s| self.session_row(s)),
+                )?;
+            }
+            EventKind::RoomLocked { room, until } => {
+                self.record_event(
+                    at,
+                    "bili.room_locked",
+                    Some(&room.to_string()),
+                    Severity::Error,
+                    "B站直播间锁定",
+                    &format!("until={until}"),
+                    None,
+                )?;
+            }
+            EventKind::NodeState {
+                node_id,
+                state,
+                reason,
+                initial,
+                minority,
+            } => {
+                let previous: Option<(i64,String,String,bool)> = self.conn.query_row(
+                    "SELECT id,state,reason,minority FROM node_segments WHERE observer=?1 AND subject=?2 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+                    params![self.node, node_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+                ).optional()?;
+                let same = previous.as_ref().is_some_and(|(_, s, r, m)| {
+                    s == state.as_str() && r == reason && *m == *minority
+                }) && !*initial;
+                if same {
+                    self.conn.execute(
+                        "UPDATE node_segments SET last_seen_at=max(last_seen_at,?2) WHERE id=?1",
+                        params![previous.unwrap().0, at],
+                    )?;
+                } else {
+                    self.conn.execute(
+                        "UPDATE node_segments SET ended_at=CASE WHEN ?3 THEN last_seen_at ELSE max(started_at,?4) END WHERE observer=?1 AND subject=?2 AND ended_at IS NULL",
+                        params![self.node,node_id,*initial,at],
+                    )?;
+                    let eid = self.eid();
+                    self.conn.execute(
+                        "INSERT INTO node_segments(eid,observer,subject,state,reason,started_at,last_seen_at,initial,minority) VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8)",
+                        params![eid,self.node,self.scrub(node_id),state.as_str(),self.scrub(reason),at,*initial,*minority],
+                    )?;
+                    self.record_event(
+                        at,
+                        "cluster.node_state",
+                        Some(node_id),
+                        if *initial
+                            || *minority
+                            || !matches!(
+                                state,
+                                crate::events::NodeState::Down | crate::events::NodeState::Degraded
+                            )
+                        {
+                            Severity::Info
+                        } else {
+                            Severity::Warn
+                        },
+                        &format!("{node_id} · {}", state.as_str()),
+                        reason,
+                        None,
+                    )?;
+                }
+            }
+            EventKind::RecorderHeartbeat => {
+                self.conn.execute("UPDATE node_segments SET last_seen_at=max(last_seen_at,?2) WHERE observer=?1 AND ended_at IS NULL",params![self.node,at])?;
+            }
+            EventKind::RecorderStopped => {
+                self.conn.execute("UPDATE node_segments SET ended_at=last_seen_at WHERE observer=?1 AND ended_at IS NULL",[&self.node])?;
+            }
+            EventKind::OwnerChanged { from, to, failover } => {
+                self.record_event(
+                    at,
+                    "cluster.owner_changed",
+                    to.as_deref(),
+                    if *failover {
+                        Severity::Warn
+                    } else {
+                        Severity::Info
+                    },
+                    if *failover {
+                        "集群故障转移"
+                    } else {
+                        "集群活跃节点变更"
+                    },
+                    &format!(
+                        "{} → {}",
+                        from.as_deref().unwrap_or("—"),
+                        to.as_deref().unwrap_or("—")
+                    ),
+                    None,
+                )?;
+            }
+            EventKind::QuorumChanged { has_quorum } => {
+                self.record_event(
+                    at,
+                    "cluster.quorum",
+                    None,
+                    if *has_quorum {
+                        Severity::Info
+                    } else {
+                        Severity::Warn
+                    },
+                    if *has_quorum {
+                        "集群多数派恢复"
+                    } else {
+                        "集群暂无多数派"
+                    },
+                    "",
+                    None,
+                )?;
+            }
+            EventKind::LocalFault { reason, latched } => {
+                self.record_event(
+                    at,
+                    "cluster.local_fault",
+                    None,
+                    if *latched {
+                        Severity::Warn
+                    } else {
+                        Severity::Info
+                    },
+                    if *latched {
+                        "本节点异常"
+                    } else {
+                        "本节点恢复"
+                    },
+                    reason,
+                    None,
                 )?;
             }
         }
@@ -293,9 +592,62 @@ impl Writer {
             return Ok(());
         }
         self.conn.execute(
-            "INSERT INTO samples_raw (metric,node,ts,session_id,min,max,sum,count) VALUES (?1,?2,?3,?4,?5,?6,?7,1)
-             ON CONFLICT(metric,node,ts) DO UPDATE SET min=min(min,excluded.min), max=max(max,excluded.max), sum=sum+excluded.sum, count=count+1",
-            params![metric, self.node, ts, sid, min, max, mean],
+            "INSERT INTO samples_raw (metric,node,ts,session_id,min,max,sum,count) VALUES (?1,?2,?3,?4,?5,?6,?7,1)",
+            params![metric, self.node, ts, sid.unwrap_or(0), min, max, mean],
+        )?;
+        // A sample delayed beyond the rollup grace is applied to the durable
+        // bucket in the same transaction. Later maintenance starts after the
+        // watermark, so this late observation is neither lost nor counted twice.
+        self.conn.execute(
+            "INSERT INTO samples_1m(metric,node,bucket,session_id,min,max,sum,count)
+             SELECT ?1,?2,?3-?3%60,?4,?5,?6,?7,1
+             WHERE ?3<coalesce((SELECT cast(value AS INTEGER) FROM meta WHERE key='rollup_1m_watermark'),0)
+             ON CONFLICT(bucket,metric,node,session_id) DO UPDATE SET min=min(samples_1m.min,excluded.min),max=max(samples_1m.max,excluded.max),sum=samples_1m.sum+excluded.sum,count=samples_1m.count+1",
+            params![metric,self.node,ts,sid.unwrap_or(0),min,max,mean],
+        )?;
+        Ok(())
+    }
+
+    fn persist_live_record(&self, record: &BiliLiveRecord) -> rusqlite::Result<()> {
+        use super::live_book::{BiliLiveBook, BiliLiveMark};
+        let mut merged = BiliLiveBook::default();
+        let previous = self
+            .conn
+            .query_row(
+                &format!("SELECT {LIVE_RECORD_COLS} FROM bili_lives WHERE live_key=?1"),
+                [&record.live_key],
+                live_record_row,
+            )
+            .optional()?;
+        if let Some(previous) = previous.as_ref().filter(|p| p.room == record.room) {
+            merged
+                .entries
+                .push(BiliLiveMark::from_record(previous.clone()));
+        }
+        merged.join(&BiliLiveBook {
+            entries: vec![BiliLiveMark::from_record(record.clone())],
+        });
+        let record = merged
+            .entries
+            .first()
+            .ok_or(rusqlite::Error::InvalidQuery)?
+            .record();
+        if previous.as_ref() == Some(&record) {
+            return Ok(());
+        }
+        let (phase, state) = match record.summary_phase {
+            BiliSummaryPhase::Pending => ("pending", "pending"),
+            BiliSummaryPhase::Claimed => ("claimed", "pending"),
+            BiliSummaryPhase::Failed => ("failed", "failed"),
+            BiliSummaryPhase::Done => ("done", "ok"),
+            BiliSummaryPhase::Skipped => ("skipped", "skipped"),
+        };
+        let totals = record.totals.as_ref().filter(|_| phase == "done");
+        self.conn.execute(
+            "INSERT INTO bili_lives(live_key,node,room,started_at,ended_at,summary_state,started_by,summary_phase,summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,watched_count,new_fans_club,max_online)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+             ON CONFLICT(live_key) DO UPDATE SET room=excluded.room,started_at=excluded.started_at,ended_at=excluded.ended_at,summary_state=excluded.summary_state,started_by=excluded.started_by,summary_phase=excluded.summary_phase,summary_node=excluded.summary_node,summary_at=excluded.summary_at,summary_generation=excluded.summary_generation,bili_live_time_raw=excluded.bili_live_time_raw,add_fans=excluded.add_fans,danmu_num=excluded.danmu_num,watched_count=excluded.watched_count,new_fans_club=excluded.new_fans_club,max_online=excluded.max_online",
+            params![record.live_key,self.node,record.room as i64,record.started_at as i64,record.stopped_at.map(|t|t as i64),state,self.scrub(&record.started_by),phase,record.summary_node.as_deref().map(|n|self.scrub(n)),record.summary_at as i64,record.summary_generation as i64,totals.and_then(|t|t.live_time_raw),totals.and_then(|t|t.add_fans),totals.and_then(|t|t.danmu_num),totals.and_then(|t|t.watched_count),totals.and_then(|t|t.new_fans_club),totals.and_then(|t|t.max_online)],
         )?;
         Ok(())
     }
@@ -308,7 +660,7 @@ impl Writer {
         Ok(())
     }
 
-    /// Writer heartbeat (30 s): keeps crash-closing accurate when idle.
+    /// Periodic writer heartbeat: advances open sessions/runs even without samples.
     pub(crate) fn heartbeat(&self, at: u64) -> rusqlite::Result<()> {
         let at = at as i64;
         self.bump_boot(at)?;
@@ -326,6 +678,59 @@ impl Writer {
     }
 }
 
+const LIVE_RECORD_COLS: &str = "room,live_key,started_at,started_by,ended_at,summary_phase,summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,watched_count,new_fans_club,max_online,summary_state";
+
+fn live_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BiliLiveRecord> {
+    let state: String = row.get(15)?;
+    let phase: String = row.get(5)?;
+    let summary_phase = match (phase.as_str(), state.as_str()) {
+        (_, "ok") => BiliSummaryPhase::Done,
+        (_, "skipped") => BiliSummaryPhase::Skipped,
+        (_, "failed") => BiliSummaryPhase::Failed,
+        ("claimed", _) => BiliSummaryPhase::Claimed,
+        _ => BiliSummaryPhase::Pending,
+    };
+    let totals = if summary_phase == BiliSummaryPhase::Done {
+        Some(super::event::BiliTotals {
+            live_time_raw: row.get(9)?,
+            add_fans: row.get(10)?,
+            danmu_num: row.get(11)?,
+            watched_count: row.get(12)?,
+            new_fans_club: row.get(13)?,
+            max_online: row.get(14)?,
+        })
+    } else {
+        None
+    };
+    Ok(BiliLiveRecord {
+        room: row.get::<_, i64>(0)?.max(0) as u64,
+        live_key: row.get(1)?,
+        started_at: row.get::<_, i64>(2)?.max(0) as u64,
+        started_by: row.get(3)?,
+        stopped_at: row.get::<_, Option<i64>>(4)?.map(|v| v.max(0) as u64),
+        summary_phase,
+        summary_node: row.get(6)?,
+        summary_at: row.get::<_, i64>(7)?.max(0) as u64,
+        summary_generation: row.get::<_, i64>(8)?.max(0) as u64,
+        totals,
+    })
+}
+
+/// Restore a bounded durable book on the writer thread. It never travels
+/// through admin read APIs and never returns credential material in errors.
+pub(crate) fn load_live_book(
+    conn: &Connection,
+) -> rusqlite::Result<super::live_book::BiliLiveBook> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {LIVE_RECORD_COLS} FROM bili_lives WHERE room>0 ORDER BY started_at DESC,live_key LIMIT ?1"
+    ))?;
+    let entries = stmt
+        .query_map([super::live_book::MAX_ENTRIES as i64], live_record_row)?
+        .map(|r| r.map(super::live_book::BiliLiveMark::from_record))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(super::live_book::BiliLiveBook { entries })
+}
+
 fn close_session(conn: &Connection, id: i64, at: i64, reason: EndReason) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE runs SET ended_at=?2 WHERE session_id=?1 AND ended_at IS NULL",
@@ -339,13 +744,14 @@ fn close_session(conn: &Connection, id: i64, at: i64, reason: EndReason) -> rusq
 }
 
 /// Design §5.5: close this node's rows from older boots. `bili_lives` stay
-/// open (the room can outlive us), but a `pending` summary older than
-/// 10 minutes is marked failed: the in-memory retry did not survive.
+/// open (the room can outlive us). The restored book and claim lease recover
+/// pending summary work; restarting must not turn an unfinished fetch into
+/// a permanent failure.
 pub(crate) fn crash_sweep(
     conn: &Connection,
     node: &str,
     boot_id: i64,
-    now: i64,
+    _now: i64,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE runs SET ended_at=last_seen_at WHERE ended_at IS NULL AND session_id IN (SELECT id FROM sessions WHERE node=?1 AND boot_id<>?2)",
@@ -358,10 +764,6 @@ pub(crate) fn crash_sweep(
     conn.execute(
         "UPDATE node_segments SET ended_at=last_seen_at WHERE observer=?1 AND ended_at IS NULL",
         params![node],
-    )?;
-    conn.execute(
-        "UPDATE bili_lives SET summary_state='failed' WHERE summary_state='pending' AND ended_at IS NOT NULL AND ended_at < ?1",
-        params![now - 600],
     )?;
     Ok(())
 }

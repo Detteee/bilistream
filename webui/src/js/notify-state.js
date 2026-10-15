@@ -273,8 +273,7 @@ export function selectState({ loading = false, loadError = null, settings = null
   if (Number(status?.undelivered) > 0) return { key: 'failed', badge: '发送失败', tone: 'unhealthy', missing };
   if (status?.gateway?.state === 'failed') return { key: 'gateway-failed', badge: '网关已停止', tone: 'unhealthy', missing };
   if (status?.authority === 'no_quorum_fallback') return { key: 'fallback', badge: '无多数派', tone: 'sync-warning', missing };
-  if (status?.authority === 'delegate') return { key: 'delegate', badge: '代发', tone: 'sync-warning', missing };
-  if (status?.authority === 'primary') {
+  if (status?.authority === 'primary' || status?.authority === 'delegate') {
     if (cfg.qq?.keep_online !== false && status?.gateway?.state !== 'online') {
       return { key: 'gateway-down', badge: '网关未连接', tone: 'sync-warning', missing };
     }
@@ -366,7 +365,7 @@ export function senderBlockView(status) {
 
 export function noWriterReason(status) {
   if (isHandoff(status)) return '发送节点切换中，请稍后重试。';
-  if (status?.authority === 'no_quorum_fallback') return '当前为无多数派代发，暂不能修改绑定。';
+  if (status?.authority === 'no_quorum_fallback') return '当前无法连接多数节点，仅发送本节点的异常通知，暂不能修改绑定。';
   const block = senderBlockView(status);
   if (block) return `${block.reason}，暂不能修改绑定。`;
   if (status?.worker_running !== false && (status?.enabled === false || status?.credentials_ready === false)) return '请先启用通知并保存 AppID 和 AppSecret。';

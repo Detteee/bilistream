@@ -83,8 +83,20 @@ impl TokenCache {
         app_id: &str,
         secret: &str,
     ) -> Result<AccessToken, TokenError> {
+        self.get_with_clock(http, token_url, app_id, secret, Instant::now)
+            .await
+    }
+
+    async fn get_with_clock(
+        &self,
+        http: &reqwest::Client,
+        token_url: &str,
+        app_id: &str,
+        secret: &str,
+        clock: impl Fn() -> Instant,
+    ) -> Result<AccessToken, TokenError> {
         let mut guard = self.inner.lock().await;
-        let now = Instant::now();
+        let now = clock();
         if let Some(cached) = guard.as_ref() {
             if now < cached.refresh_at {
                 return Ok(cached.token.clone());
@@ -191,5 +203,76 @@ impl TokenCache {
     pub async fn clear(&self) {
         *self.inner.lock().await = None;
         *self.last_fetch.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::notify::test_support::MockQq;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn independent_caches_keep_the_original_expiry_when_qq_reuses_a_token() {
+        crate::install_crypto_provider();
+        let mock = MockQq::start().await;
+        mock.state.lock().unwrap().token_replies.extend([
+            (
+                200,
+                json!({"access_token":"shared-test-token","expires_in":"120"}),
+            ),
+            (
+                200,
+                json!({"access_token":"shared-test-token","expires_in":105}),
+            ),
+            (
+                200,
+                json!({"access_token":"shared-test-token","expires_in":7200}),
+            ),
+            (
+                200,
+                json!({"access_token":"shared-test-token","expires_in":"7200"}),
+            ),
+            (
+                200,
+                json!({"access_token":"next-test-token","expires_in":7200}),
+            ),
+            (
+                200,
+                json!({"access_token":"next-test-token","expires_in":7200}),
+            ),
+        ]);
+        let a = TokenCache::default();
+        let b = TokenCache::default();
+        let http = reqwest::Client::new();
+        let url = mock.token_url();
+        let epoch = Instant::now();
+        macro_rules! get {
+            ($cache:expr, $offset:expr) => {
+                $cache
+                    .get_with_clock(&http, &url, "test-app", "test-secret", || {
+                        epoch + Duration::from_secs($offset)
+                    })
+                    .await
+                    .unwrap()
+            };
+        }
+        assert_eq!(get!(&a, 0).expose(), "shared-test-token");
+        assert_eq!(get!(&b, 15).expose(), "shared-test-token");
+        // Different caches fetched independently, and both expiries are t=120.
+        assert_eq!(mock.state.lock().unwrap().token_calls, 2);
+        assert_eq!(get!(&a, 89).expose(), "shared-test-token");
+        assert_eq!(get!(&b, 89).expose(), "shared-test-token");
+        assert_eq!(mock.state.lock().unwrap().token_calls, 2);
+        assert_eq!(get!(&a, 91).expose(), "shared-test-token");
+        assert_eq!(get!(&b, 91).expose(), "shared-test-token");
+        let expiry = epoch + Duration::from_secs(120);
+        assert_eq!(a.inner.lock().await.as_ref().unwrap().expires_at, expiry);
+        assert_eq!(b.inner.lock().await.as_ref().unwrap().expires_at, expiry);
+        assert_eq!(mock.state.lock().unwrap().token_calls, 4);
+        // The larger lifetime did not turn the reused token into a new one.
+        assert_eq!(get!(&a, 121).expose(), "next-test-token");
+        assert_eq!(get!(&b, 121).expose(), "next-test-token");
+        assert_eq!(mock.state.lock().unwrap().token_calls, 6);
     }
 }

@@ -254,6 +254,7 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
             status.priority_channel = Some(PriorityChannelStatus {
                 enabled: cfg.priority_channel.enabled,
                 auto_restart: cfg.priority_channel.auto_restart,
+                warning_held: crate::plugins::danmaku::priority_warning_held(cfg),
                 channel_name: cfg.priority_channel.channel_name.clone(),
                 is_live: platform.is_some(),
                 platform,

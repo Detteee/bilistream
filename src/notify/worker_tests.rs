@@ -7,6 +7,9 @@ use serde_json::json;
 
 const OPENID: &str = "E4F0A1B2C3D4E5F60718293A4B5C6D7E";
 
+#[path = "worker_completion_tests.rs"]
+mod completion;
+
 struct Temp(std::path::PathBuf);
 impl Drop for Temp {
     fn drop(&mut self) {
@@ -194,7 +197,7 @@ async fn bind_by_code_saves_openid_and_replies_passively() {
     assert_eq!(messages[0].0, OPENID);
     assert_eq!(
         messages[0].1,
-        json!({"msg_type": 0, "content": "绑定成功", "msg_id": "m-1", "msg_seq": 1})
+        json!({"msg_type": 0, "content": "绑定成功\n发送节点：solo", "msg_id": "m-1", "msg_seq": 1})
     );
     assert_eq!(worker.binder.view(now + 2, "solo")["state"], "bound");
     assert!(worker.capable());
@@ -931,9 +934,13 @@ async fn undeliverable_resolved_items_wait_and_ride_along() {
         last["content"]
             .as_str()
             .unwrap()
-            .contains("· ✅ 节点故障 a 已恢复（8 分钟"),
+            .contains("· ✅ a 已恢复连接（异常持续 8 分钟"),
         "{last}"
     );
+    assert!(last["content"].as_str().unwrap().contains(&format!(
+        "{} 恢复）",
+        format::short_time(now - 120, now + 2)
+    )));
     assert!(worker.held.is_empty());
 }
 
@@ -1044,9 +1051,9 @@ async fn watched_channel_going_live_sends_one_green_notice() {
     let messages = mock.messages();
     assert_eq!(messages.len(), 1);
     let content = messages[0].1["content"].as_str().unwrap();
-    assert!(content.starts_with("🟢 开播 · 主频道\n"), "{content}");
+    assert!(content.starts_with("🟢 主频道 开播了\n"), "{content}");
     assert!(
-        content.contains("来源 YouTube、Twitch"),
+        content.contains("YouTube、Twitch"),
         "send-time sources: {content}"
     );
     assert!(messages[0].1.get("is_wakeup").is_none());
@@ -1302,18 +1309,24 @@ async fn gateway_survives_a_short_sender_flap() {
 #[tokio::test]
 async fn supervisor_restarts_a_panicked_worker_and_keeps_the_channel() {
     let (sender, receiver) = mpsc::channel(4);
+    let (event_tx, event_rx) = mpsc::channel(4);
     let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&runs);
     let task = tokio::spawn(supervise_loop(
         receiver,
+        event_rx,
         Duration::from_millis(10),
-        move |commands| {
+        move |commands, events| {
             let counter = Arc::clone(&counter);
             Box::pin(async move {
                 let run = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if run == 0 {
                     panic!("injected worker panic");
                 }
+                assert!(matches!(
+                    events.recv().await.unwrap().kind,
+                    crate::events::EventKind::BroadcastEnded
+                ));
                 // The second run still receives commands sent after the panic.
                 while let Some(command) = commands.recv().await {
                     if let Command::Test { reply } = command {
@@ -1332,6 +1345,13 @@ async fn supervisor_restarts_a_panicked_worker_and_keeps_the_channel() {
         },
     ));
     tokio::time::sleep(Duration::from_millis(50)).await;
+    event_tx
+        .send(Arc::new(crate::events::Event {
+            at: 7,
+            kind: crate::events::EventKind::BroadcastEnded,
+        }))
+        .await
+        .unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     sender.send(Command::Test { reply: tx }).await.unwrap();
     let report = tokio::time::timeout(Duration::from_secs(2), rx)
@@ -2349,6 +2369,7 @@ async fn bind_on_a_then_failover_to_b_sends_without_a_rebind() {
     let report = push_all(&store_a, &peers.link("a"), fast).await.unwrap();
     assert_eq!(report.acked, vec!["b".to_string()]);
     let sent_by_a = mock.messages().len(); // the passive 「绑定成功」
+    assert_eq!(sent_by_a, 1);
 
     // B: never bound, now holds the sealed copy.
     let mut b = ready_worker(&store_b, "b").await;
@@ -2370,7 +2391,15 @@ async fn bind_on_a_then_failover_to_b_sends_without_a_rebind() {
     assert_eq!(b.authority, Authority::Primary);
     b.deliver(now + 60, &dead).await;
     let messages = mock.messages();
-    assert!(messages.len() > sent_by_a, "B sent without a rebind");
+    assert_eq!(
+        messages.len(),
+        sent_by_a + 1,
+        "B sent the one failover without a rebind"
+    );
+    assert!(messages[sent_by_a].1["content"]
+        .as_str()
+        .unwrap()
+        .contains("转播节点已从 a 切换到 b"));
     assert!(messages[sent_by_a..].iter().all(|(to, _)| to == OPENID));
     assert_eq!(b.ledger.undelivered_pending(), 0);
     assert_eq!(stored_openid(&store_b).as_deref(), Some(OPENID));
