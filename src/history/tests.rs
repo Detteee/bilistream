@@ -60,6 +60,16 @@ fn ev(at: i64, kind: EventKind) -> Event {
 }
 
 fn session(w: &mut Writer, seq: u64, at: i64, live_key: Option<&str>) {
+    session_parts(w, seq, at, live_key, None);
+}
+
+fn session_parts(
+    w: &mut Writer,
+    seq: u64,
+    at: i64,
+    live_key: Option<&str>,
+    source_id: Option<&str>,
+) {
     w.apply(&ev(
         at,
         EventKind::SessionStarted {
@@ -71,6 +81,7 @@ fn session(w: &mut Writer, seq: u64, at: i64, live_key: Option<&str>) {
             channel_name: "示例频道".into(),
             title: Some("示例直播".into()),
             live_key: live_key.map(str::to_string),
+            source_id: source_id.map(str::to_string),
         },
     ))
     .unwrap();
@@ -391,6 +402,43 @@ fn session_adopts_key_from_getinfo_after_start() {
     assert_eq!(key.as_deref(), Some("G1"));
 }
 
+#[test]
+fn audience_broadcast_follows_bilibili_live_or_source_id() {
+    let (mut w, _) = writer("broadcast");
+    session_parts(&mut w, 1, T0, Some("synthetic-live-a"), Some("video-a"));
+    end(&mut w, 1, T0 + 30, EndReason::IntentionalRestart);
+    session_parts(
+        &mut w,
+        2,
+        T0 + 40,
+        Some("synthetic-live-a"),
+        Some("video-a"),
+    );
+    end(&mut w, 2, T0 + 80, EndReason::SourceEnded);
+    session_parts(&mut w, 3, T0 + 100, None, Some("video-b"));
+    end(&mut w, 3, T0 + 120, EndReason::ProcessRestart);
+    session_parts(&mut w, 4, T0 + 130, None, Some("video-b"));
+    end(&mut w, 4, T0 + 150, EndReason::SourceEnded);
+    let page = sessions(&w, T0 + 200);
+    let text = serde_json::to_string(&page).unwrap();
+    assert!(!text.contains("synthetic-live-a"), "{text}");
+    let live: std::collections::HashSet<_> = page
+        .items
+        .iter()
+        .filter(|s| s.source_id.as_deref() == Some("video-a"))
+        .map(|s| s.broadcast_id.as_str())
+        .collect();
+    let source: std::collections::HashSet<_> = page
+        .items
+        .iter()
+        .filter(|s| s.source_id.as_deref() == Some("video-b"))
+        .map(|s| s.broadcast_id.as_str())
+        .collect();
+    assert_eq!(live.len(), 1, "{text}");
+    assert!(live.iter().next().unwrap().starts_with("live:"), "{live:?}");
+    assert_eq!(source, std::collections::HashSet::from(["src:YT:video-b"]));
+}
+
 fn mark(key: &str, started: u64, phase: SummaryPhase, node: Option<&str>) -> BiliLiveMark {
     BiliLiveMark {
         room: 5,
@@ -536,6 +584,7 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
             channel_name: "name SYNTHKEY-0123456789".into(),
             title: Some("rtmp://live/x?key=SYNTHKEY-0123456789".into()),
             live_key: None,
+            source_id: None,
         },
     ))
     .unwrap();
@@ -960,6 +1009,8 @@ async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
             stuck: 0,
             gaps: vec![],
             median_bitrate_kbps: None,
+            source_id: None,
+            broadcast_id: String::new(),
             bili: None,
         }],
         ..Default::default()

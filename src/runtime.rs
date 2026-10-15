@@ -2123,6 +2123,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             &channel_name,
                             Some(&cfg_title),
                             history_area_v2,
+                            current_video_id.as_deref(),
                         )
                     });
                     guard.run_started(run.id());

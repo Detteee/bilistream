@@ -14,7 +14,7 @@ import {
   DASH, orDash, formatCount, formatHours, formatPercent, formatAbsolute, formatRelative, formatRange,
   formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine, stripCells, sparkPath,
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
-  expectedResolution, customRange, missingNodeText, heatLevel, platformKey, platformName, reasonLabel,
+  expectedResolution, customRange, missingNodeText, streamHeat, audienceBroadcasts, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
   mergeRetention, EVENTS_EMPTY, isolatedPointIndices,
 } from './analytics-format.js';
@@ -207,7 +207,7 @@ const KPI_DEFS = [
   { key: 'failures', name: '异常重启', unit: '次', fmt: formatCount, delta: (a, b) => a - b, dUnit: '', invert: true, tone: 'warn' },
   { key: 'recover_secs_avg', name: '平均恢复', unit: '秒', fmt: formatCount, delta: (a, b) => a - b, dUnit: ' 秒', invert: true },
   { key: 'sessions', name: '开播场次', unit: '场', fmt: formatCount, delta: (a, b) => a - b, dUnit: '' },
-  { key: 'notify_sent', name: 'QQ 告警', unit: '条', fmt: formatCount, delta: null },
+  { key: 'notify_sent', name: 'QQ 通知', unit: '条', fmt: formatCount, delta: null },
 ];
 function deltaPrefix(r) {
   if (r.preset === '7d') return '较上周';
@@ -379,24 +379,31 @@ function audienceTiles(t, { sessions = null, summarizedSub = '' } = {}) {
   add('看过人数', orDash(t.watched), '人', watchedSub || summarizedSub);
   add('弹幕', orDash(t.danmu), '条', pendingSub);
   add('新增粉丝', orDash(t.add_fans), '人', pendingSub);
-  add('新增粉丝团', orDash(t.new_fans_club), '人', pendingSub);
-  // 最大在线 only when present (MaxOnline unverified upstream); omitted otherwise.
-  if (Number.isFinite(t.max_online)) add('最大在线', formatCount(t.max_online), '人', '未验证');
   void sessions;
   return tiles;
 }
+function selectedBroadcast() {
+  const id = $('analytics-aud-session')?.value;
+  if (!id) return null;
+  return audienceBroadcasts(view.sessions).find(b => b.id === id) || null;
+}
 function renderAudience(stats, r) {
   const select = $('analytics-aud-session');
-  const chosen = view.sessions.find(s => String(s.id) === select.value);
+  const broadcasts = audienceBroadcasts(view.sessions);
   const keep = select.value;
   select.replaceChildren(new Option('全部场次（本范围）', ''));
-  for (const s of view.sessions) select.append(new Option(`${formatAbsolute(s.started_at)} ${s.channel_name || s.channel_id || ''}`, String(s.id)));
-  select.value = chosen ? keep : '';
+  for (const b of broadcasts) {
+    const who = b.channel_name || b.channel_id || '';
+    const source = b.sourceIds.length ? ` · ${b.sourceIds.join('、')}` : '';
+    select.append(new Option(`${formatAbsolute(b.started_at)} ${who}${source}`.trim(), b.id));
+  }
+  select.value = broadcasts.some(b => b.id === keep) ? keep : '';
   syncDetailButton();
-  if (!view.sessions.length) return setEmpty('audience', '此时间范围内没有转播。', thirtyDaysButton());
+  if (!broadcasts.length) return setEmpty('audience', '此时间范围内没有转播。', thirtyDaysButton());
   let totals;
   let sub = '';
-  if (chosen) totals = biliTotals(chosen.bili);
+  const chosen = broadcasts.find(b => b.id === select.value);
+  if (chosen) totals = chosen.bili;
   else {
     totals = rangeAudience(view.summary?.kpis);
     sub = '本范围合计';
@@ -421,7 +428,7 @@ function renderAudience(stats, r) {
 
 function syncDetailButton() {
   const button = $('analytics-aud-detail');
-  if (button) button.hidden = !$('analytics-aud-session').value;
+  if (button) button.hidden = !selectedBroadcast();
 }
 
 // ---------- uPlot ----------
@@ -637,7 +644,6 @@ function renderReliability(summary) {
 function renderCalendar(summary) {
   const days = Array.isArray(summary?.calendar) ? summary.calendar : [];
   if (!days.length) return setEmpty('calendar', '记录满一天后显示开播日历。');
-  const max = Math.max(0, ...days.map(d => Number(d.live_secs) || 0));
   const coverage = summary?.coverage?.from;
   const pad = (new Date(days[0].day * 1000).getDay() + 6) % 7; // rows Monday..Sunday
   const grid = el('div', 'analytics-heatmap');
@@ -649,16 +655,26 @@ function renderCalendar(summary) {
   for (let i = 0; i < pad; i++) grid.append(el('span'));
   for (const d of days) {
     const cell = el('span', 'analytics-heat');
-    cell.dataset.level = String(heatLevel(d.live_secs, max));
+    const gap = Number.isFinite(coverage) && d.day + DAY <= coverage;
+    const heat = streamHeat(d.live_secs);
+    if (gap) cell.dataset.gap = '';
+    else if (heat > 0) {
+      cell.dataset.on = '';
+      cell.style.setProperty('--heat', String(heat));
+    }
     if (d.failures > 0) cell.dataset.fail = '';
-    if (Number.isFinite(coverage) && d.day + DAY <= coverage) cell.dataset.gap = '';
     cell.title = `${formatMonthDay(d.day)} · ${formatHours(d.live_secs)} 小时${d.failures > 0 ? ` · 异常 ${d.failures} 次` : ''}`;
     grid.append(cell);
   }
   const wrap = el('div', 'analytics-heatmap-wrap');
   wrap.append(grid);
   const legend = el('ul', 'analytics-legend');
-  for (const [label, attrs] of [['少', { level: '1' }], ['多', { level: '4' }], ['有异常', { fail: '' }], ['未记录', { gap: '' }]]) {
+  const scaleItem = el('li');
+  const scale = el('span', 'analytics-heat-scale');
+  scale.title = '当天推流时长，从 0 小时到 24 小时';
+  scaleItem.append(document.createTextNode('0小时'), scale, document.createTextNode('24小时'));
+  legend.append(scaleItem);
+  for (const [label, attrs] of [['有异常', { fail: '' }], ['未记录', { gap: '' }]]) {
     const li = el('li');
     const sw = el('span', 'analytics-heat');
     Object.assign(sw.dataset, attrs);
@@ -1070,8 +1086,8 @@ function bindControls() {
   $('analytics-aud-session').addEventListener('change', () => { renderAudience(view.stats, view.range); syncDetailButton(); });
   // Keyboard path to 单场详情 (W2, W10): a real button next to the select.
   $('analytics-aud-detail').addEventListener('click', () => {
-    const id = $('analytics-aud-session').value;
-    if (id) openDetail(id);
+    const broadcast = selectedBroadcast();
+    if (broadcast) openDetail(broadcast.sessionId);
   });
   $('analytics-event-filter').addEventListener('change', async () => {
     eventsController?.abort();

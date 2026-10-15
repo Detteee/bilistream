@@ -441,6 +441,21 @@ pub(crate) fn run_writer(
     });
 }
 
+/// YouTube video id, Twitch stream id, or Niconico program id. Anything else
+/// (URLs, whitespace, secrets) is dropped rather than stored as a 场次 label.
+pub(crate) fn source_stream_id(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    if id.is_empty()
+        || id.chars().count() > 80
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some(id.to_string())
+}
+
 // ------------------------------------------------------------ relay hooks
 
 /// One relay session (design §5.4). `finish` records the reason; dropping
@@ -458,7 +473,7 @@ impl SessionGuard {
         channel_name: &str,
         title: Option<&str>,
     ) -> Self {
-        Self::start_with_area(cfg, platform, channel_id, channel_name, title, None)
+        Self::start_with_area(cfg, platform, channel_id, channel_name, title, None, None)
     }
 
     pub fn start_with_area(
@@ -468,6 +483,7 @@ impl SessionGuard {
         channel_name: &str,
         title: Option<&str>,
         area_v2: Option<u64>,
+        source_id: Option<&str>,
     ) -> Self {
         refresh_config(cfg);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
@@ -488,6 +504,7 @@ impl SessionGuard {
             channel_name: crate::logging::safe_text(channel_name, 80),
             title: title.map(|t| crate::logging::safe_text(t, 160)),
             live_key: live_key.clone(),
+            source_id: source_id.and_then(source_stream_id),
             area_v2,
             room,
         });

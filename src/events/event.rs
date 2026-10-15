@@ -149,6 +149,8 @@ pub enum EventKind {
         channel_name: String,
         title: Option<String>,
         live_key: Option<String>,
+        /// YouTube video id, Twitch stream id, or Niconico program id.
+        source_id: Option<String>,
         area_v2: Option<u64>,
         room: u64,
     },

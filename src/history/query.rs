@@ -297,6 +297,13 @@ pub(crate) struct SessionItem {
     pub stuck: i64,
     pub gaps: Vec<(i64, i64, String)>,
     pub median_bitrate_kbps: Option<f64>,
+    /// Public source broadcast id (YouTube video, Twitch stream, Niconico program).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// Audience 场次. `live:` plus a hash of the Bilibili live, otherwise
+    /// `src:{platform}:{source_id}`, otherwise `session:{eid}`. Never the raw live key.
+    #[serde(default)]
+    pub broadcast_id: String,
     pub bili: Option<BiliItem>,
 }
 
@@ -336,9 +343,10 @@ struct Row {
     stuck: i64,
     live_key: Option<String>,
     area_v2: Option<u64>,
+    source_id: Option<String>,
 }
 
-const SESSION_COLS: &str = "id,eid,node,platform,channel_id,channel_name,title,started_at,ended_at,end_reason,runs,failures,stuck,live_key,area_v2";
+const SESSION_COLS: &str = "id,eid,node,platform,channel_id,channel_name,title,started_at,ended_at,end_reason,runs,failures,stuck,live_key,area_v2,source_id";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     Ok(Row {
@@ -357,7 +365,27 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         stuck: r.get(12)?,
         live_key: r.get(13)?,
         area_v2: r.get(14)?,
+        source_id: r.get(15)?,
     })
+}
+
+fn broadcast_id(
+    platform: &str,
+    live_key: &Option<String>,
+    source_id: &Option<String>,
+    eid: &str,
+) -> String {
+    if let Some(key) = live_key.as_deref().filter(|key| !key.is_empty()) {
+        return format!("live:{}", key_hash(key));
+    }
+    if let Some(id) = source_id.as_deref().filter(|id| !id.is_empty()) {
+        let platform = match platform {
+            "TW" | "NC" => platform,
+            _ => "YT",
+        };
+        return format!("src:{platform}:{id}");
+    }
+    format!("session:{eid}")
 }
 
 struct RunRow {
@@ -542,6 +570,7 @@ fn watched_sample(conn: &Connection, session: i64) -> rusqlite::Result<Option<(i
 fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> {
     let runs = runs_of(conn, row.id)?;
     let bili = Some(bili_item(conn, &row, now)?);
+    let broadcast_id = broadcast_id(&row.platform, &row.live_key, &row.source_id, &row.eid);
     Ok(SessionItem {
         id: row.eid.clone(),
         gaps: gaps(&runs, row.ended_at),
@@ -569,6 +598,8 @@ fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> 
         runs: row.runs,
         failures: row.failures,
         stuck: row.stuck,
+        source_id: row.source_id,
+        broadcast_id,
         bili,
     })
 }

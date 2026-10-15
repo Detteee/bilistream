@@ -206,8 +206,9 @@ export const STOP_LIVE_DATA_FIELDS = Object.freeze({
   LiveTime: 'live_time', AddFans: 'add_fans', NewFansClub: 'new_fans_club',
   DanmuNum: 'danmu', MaxOnline: 'max_online', WatchedCount: 'watched',
 });
-// Count fields the UI shows as session totals (max_online is separate: it is
-// shown only when present, marked 未验证).
+// Count fields kept from a valid summary. 新增粉丝团 and 最大在线 stay in the
+// payload so a negative sentinel still rejects the whole reply; the 观众 tiles
+// do not show them.
 export const BILI_TOTAL_KEYS = Object.freeze(['watched', 'danmu', 'add_fans', 'new_fans_club']);
 const EMPTY_TOTALS = Object.freeze({ watched: null, danmu: null, add_fans: null, new_fans_club: null, max_online: null });
 
@@ -282,8 +283,8 @@ export function biliStateLabel(state) {
 }
 
 // Range totals over sessions. A field is summed only over sessions whose
-// summary is valid; with none it stays null (`--`). max_online is the largest
-// present value, or null so the 最大在线 tile is omitted.
+// summary is valid; with none it stays null (`--`). max_online stays in the
+// aggregate for callers that still read the payload; the 观众 tiles omit it.
 export function aggregateAudience(sessions) {
   const list = (Array.isArray(sessions) ? sessions : []).map(s => biliTotals(s?.bili));
   const ok = list.filter(t => t.state === 'ok');
@@ -364,10 +365,69 @@ export function missingNodeText(missing) {
   };
 }
 
-// 4 heat levels relative to the busiest day in the window.
-export function heatLevel(secs, max) {
-  if (!isNum(secs) || secs <= 0 || !isNum(max) || max <= 0) return 0;
-  return Math.max(1, Math.min(4, Math.ceil((secs / max) * 4)));
+// Share of a day, capped at 24 hours. 0 means no stream time. The calendar
+// paints this as a continuous hue so a cell can be read as a duration.
+export function streamHeat(secs) {
+  if (!isNum(secs) || secs <= 0) return 0;
+  return Math.min(1, secs / 86400);
+}
+
+// One 观众场次 per Bilibili live (`live:…`) or, when that id was never stored,
+// per YouTube/Twitch/Niconico broadcast (`src:…`). ffmpeg pushes that share
+// an id collapse. Totals from one live are not added together.
+export function audienceBroadcasts(sessions) {
+  const groups = new Map();
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const key = session?.broadcast_id || `session:${session?.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(session);
+  }
+  const out = [];
+  for (const [id, members] of groups) {
+    members.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+    const first = members[0];
+    const sourceIds = [...new Set(members.map(s => s.source_id).filter(Boolean))];
+    out.push({
+      id,
+      sessionId: String(first.id),
+      started_at: first.started_at,
+      channel_name: first.channel_name || '',
+      channel_id: first.channel_id || '',
+      platform: first.platform || '',
+      sourceIds,
+      bili: broadcastAudience(members),
+    });
+  }
+  out.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+  return out;
+}
+
+function broadcastAudience(members) {
+  const totals = members.map(s => biliTotals(s?.bili));
+  const ok = totals.filter(t => t.state === 'ok');
+  const pick = key => {
+    const vals = ok.map(t => t[key]).filter(isNum);
+    return vals.length ? Math.max(...vals) : null;
+  };
+  const peaks = totals.map(t => t.online_peak).filter(isNum);
+  const state = ok.length ? 'ok'
+    : totals.some(t => t.state === 'pending') ? 'pending'
+    : totals.some(t => t.state === 'failed') ? 'failed'
+    : totals.some(t => t.state === 'skipped') ? 'skipped'
+    : 'none';
+  let watched = pick('watched');
+  let watched_source = watched != null ? 'summary' : null;
+  if (watched == null) {
+    const samples = totals.filter(t => t.watched_source === 'sample' && isNum(t.watched));
+    if (samples.length) {
+      watched = Math.max(...samples.map(t => t.watched));
+      watched_source = 'sample';
+    }
+  }
+  return {
+    state, online_peak: peaks.length ? Math.max(...peaks) : null, watched_source,
+    watched, danmu: pick('danmu'), add_fans: pick('add_fans'),
+  };
 }
 
 const PLATFORM_KEY = { YT: 'youtube', TW: 'twitch', NC: 'niconico' };

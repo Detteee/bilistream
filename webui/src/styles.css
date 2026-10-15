@@ -2928,10 +2928,20 @@ html.light-theme .analytics {
   border-radius: 3px;
   background: var(--surface-4);
 }
-.analytics .analytics-heat[data-level="1"] { background: color-mix(in srgb, var(--brand) 28%, var(--surface-4)); }
-.analytics .analytics-heat[data-level="2"] { background: color-mix(in srgb, var(--brand) 50%, var(--surface-4)); }
-.analytics .analytics-heat[data-level="3"] { background: color-mix(in srgb, var(--brand) 74%, var(--surface-4)); }
-.analytics .analytics-heat[data-level="4"] { background: var(--brand); }
+.analytics .analytics-heat[data-on] {
+  /* 0h blue → 12h green → 24h amber. --heat is live time / 24h, capped at 1. */
+  background: hsl(
+    calc(212 - var(--heat) * 178),
+    calc(42% + var(--heat) * 48%),
+    calc(76% - var(--heat) * 34%)
+  );
+}
+.analytics .analytics-heat-scale {
+  width: 7.5rem;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, hsl(212, 42%, 76%), hsl(123, 66%, 59%), hsl(34, 90%, 42%));
+}
 .analytics .analytics-heat[data-fail] { box-shadow: inset 0 0 0 2px var(--danger); }
 .analytics .analytics-heat[data-gap] {
   background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line) 3px 4px);

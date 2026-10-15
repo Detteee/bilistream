@@ -4,7 +4,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 pub(crate) const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -286,6 +286,9 @@ fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
         }
         if version <= 2 {
             compact_raw(&tx)?;
+        }
+        if version <= 3 {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN source_id TEXT;")?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;

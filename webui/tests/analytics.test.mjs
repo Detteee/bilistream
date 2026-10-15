@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
-  missingNodeText, heatLevel, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
+  missingNodeText, streamHeat, audienceBroadcasts, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
 } from '../src/js/analytics-format.js';
 import {
   createAnalyticsLoader, renderChunkError, CHUNK_ERROR_TITLE, CHUNK_ERROR_BODY, CHUNK_ERROR_BUTTON,
@@ -29,7 +29,7 @@ test('the valid live-session fixture maps to totals; duration never comes from L
   assert.equal(sessionDuration(session), 3600, 'our own start/end, not LiveTime 17434');
   assert.equal(sessionDuration({ started_at: NOW - 60, ended_at: null }, NOW), 60, 'open session runs to now');
   const t = biliTotals(bili);
-  assert.equal(t.max_online, 2765, '最大在线 present → tile shown (marked 未验证)');
+  assert.equal(t.max_online, 2765, 'MaxOnline stays in the payload so a bad reply can still be rejected');
 });
 
 test('the whole unknown-key fixture (WatchedCount positive, others -999999) is a failed summary: every total is --', async () => {
@@ -142,11 +142,31 @@ test('missing nodes: grouped copy, unknown reason falls back, detail only as tit
   assert.equal(missingNodeText([]), null);
 });
 
-test('heat levels', () => {
-  assert.equal(heatLevel(0, 100), 0);
-  assert.equal(heatLevel(1, 100), 1);
-  assert.equal(heatLevel(100, 100), 4);
-  assert.equal(heatLevel(null, 100), 0);
+test('calendar heat is a 0–24 hour spectrum, not a relative more/less step', () => {
+  assert.equal(streamHeat(0), 0);
+  assert.equal(streamHeat(null), 0);
+  assert.equal(streamHeat(12 * 3600), 0.5);
+  assert.equal(streamHeat(24 * 3600), 1);
+  assert.equal(streamHeat(30 * 3600), 1);
+});
+
+test('audience sessions group ffmpeg pushes by Bilibili live or source id', () => {
+  const broadcasts = audienceBroadcasts([
+    { id: 'a', broadcast_id: 'live:aa', started_at: 10, channel_name: '频道', platform: 'YT', source_id: 'vid1', bili: { state: 'ok', watched: 100, danmu: 4, add_fans: 1, online_peak: 20 } },
+    { id: 'b', broadcast_id: 'live:aa', started_at: 50, channel_name: '频道', platform: 'YT', source_id: 'vid1', bili: { state: 'ok', watched: 100, danmu: 4, add_fans: 1, online_peak: 40 } },
+    { id: 'c', broadcast_id: 'src:TW:99', started_at: 80, channel_name: '其他', platform: 'TW', source_id: '99', bili: { state: 'pending', online_peak: 5, watched: 3, watched_source: 'sample' } },
+    { id: 'd', broadcast_id: 'src:TW:99', started_at: 90, channel_name: '其他', platform: 'TW', source_id: '99', bili: { state: 'pending', online_peak: 8, watched: 7, watched_source: 'sample' } },
+  ]);
+  assert.equal(broadcasts.length, 2);
+  assert.equal(broadcasts[0].id, 'src:TW:99');
+  assert.equal(broadcasts[0].bili.online_peak, 8);
+  assert.equal(broadcasts[0].bili.watched, 7);
+  assert.equal(broadcasts[0].bili.danmu, null);
+  assert.equal(broadcasts[1].id, 'live:aa');
+  assert.equal(broadcasts[1].sessionId, 'a');
+  assert.equal(broadcasts[1].bili.watched, 100);
+  assert.equal(broadcasts[1].bili.online_peak, 40);
+  assert.deepEqual(broadcasts[1].sourceIds, ['vid1']);
 });
 
 test('mock sessions carry no revenue and never leak sentinels', () => {
@@ -303,7 +323,7 @@ test('B1: 查看本场详情 button beside the 观众 select opens the selected 
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.analytics \.analytics-detail-open \{ min-height: 44px; \}/);
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /\$\('analytics-aud-detail'\)\.addEventListener\('click', \(\) => \{\s*const id = \$\('analytics-aud-session'\)\.value;\s*if \(id\) openDetail\(id\);/);
+  assert.match(view, /\$\('analytics-aud-detail'\)\.addEventListener\('click', \(\) => \{\s*const broadcast = selectedBroadcast\(\);\s*if \(broadcast\) openDetail\(broadcast\.sessionId\);/);
 });
 
 test('B2: 查看日志 and dialog 关闭 get 44px targets at ≤560px', async () => {

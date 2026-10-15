@@ -1131,6 +1131,7 @@ mod tests {
             channel_name: "频道".into(),
             title: None,
             live_key: None,
+            source_id: None,
             area_v2: Some(86),
             room: 1,
         };

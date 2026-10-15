@@ -165,6 +165,7 @@ impl Writer {
                 channel_name,
                 title,
                 live_key,
+                source_id,
                 area_v2,
                 room,
             } => {
@@ -181,8 +182,8 @@ impl Writer {
                     .checked_add(1)
                     .ok_or(rusqlite::Error::InvalidQuery)?;
                 self.conn.execute(
-                    "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,title,started_at,last_seen_at,live_key,area_v2,room,id)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)",
+                    "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,title,started_at,last_seen_at,live_key,area_v2,room,source_id,id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13,?14)",
                     params![
                         eid,
                         self.node,
@@ -196,6 +197,10 @@ impl Writer {
                         live_key,
                         area_v2.map(|v| v.min(i64::MAX as u64) as i64),
                         (*room).min(i64::MAX as u64) as i64,
+                        source_id.as_deref().and_then(|id| {
+                            let clean = self.scrub(id);
+                            super::source_stream_id(&clean)
+                        }),
                         id,
                     ],
                 )?;
