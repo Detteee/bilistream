@@ -265,7 +265,7 @@ async fn a_removed_member_can_neither_push_nor_pull_and_loses_its_copy() {
         Err(ServeRefusal::NotMember)
     );
     assert_eq!(
-        serve_pull(&b.1, "x", &members, true).map(|_| ()),
+        serve_pull(&b.1, "x", &members, true, true).map(|_| ()),
         Err(ServeRefusal::NotMember)
     );
     assert_eq!(

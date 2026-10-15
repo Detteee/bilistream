@@ -78,6 +78,11 @@ pub trait PeerLink: Send + Sync {
     fn credentials_sync(&self, _node: &str) -> bool {
         true
     }
+    /// Watch-list cluster sync: the peer's heartbeat advertises `watch_sync`.
+    /// Others get the copy without the follow list.
+    fn watch_sync(&self, _node: &str) -> bool {
+        true
+    }
     /// Addendum F rule 2: forward a credential save to the gateway holder.
     async fn forward(
         &self,
@@ -171,14 +176,14 @@ pub async fn push_all(
         let copy = store::export_copy(store)?;
         let mut still = Vec::new();
         for node in targets {
-            let result = if copy.credentials.is_some() && !link.credentials_sync(&node) {
-                let mut plain = copy.clone();
+            let mut plain = copy.clone();
+            if plain.credentials.is_some() && !link.credentials_sync(&node) {
                 plain.credentials = None;
-                link.push(revision, &node, &plain).await
-            } else {
-                link.push(revision, &node, &copy).await
-            };
-            match result {
+            }
+            if plain.watch.is_some() && !link.watch_sync(&node) {
+                plain.watch = None;
+            }
+            match link.push(revision, &node, &plain).await {
                 Ok(_) => acked.push(node),
                 // Includes `MembershipChanged`: the next attempt re-reads.
                 Err(_) => still.push(node),
@@ -253,6 +258,7 @@ pub fn serve_pull(
     from: &str,
     members: &[String],
     credentials_sync: bool,
+    watch_sync: bool,
 ) -> Result<OpenidCopy, ServeRefusal> {
     check_member(from, members)?;
     let mut copy = store::export_copy(store).map_err(|_| ServeRefusal::Store)?;
@@ -260,6 +266,9 @@ pub fn serve_pull(
         // The same capability projection as push: old peers reject unknown
         // fields and must never receive an AppSecret they cannot sync.
         copy.credentials = None;
+    }
+    if !watch_sync {
+        copy.watch = None;
     }
     Ok(copy)
 }
@@ -270,6 +279,22 @@ pub fn peer_supports_credentials(node: &str) -> bool {
         .get(node)
         .and_then(|status| status.notify_credentials_sync)
         .unwrap_or(false)
+}
+
+pub fn peer_supports_watch(node: &str) -> bool {
+    crate::cluster::cluster_state_read()
+        .nodes
+        .get(node)
+        .and_then(|status| status.notify_watch_sync)
+        .unwrap_or(false)
+}
+
+/// Include the follow list on a pull when the peer heartbeat advertises
+/// `watch_sync`, or when the pull request itself does. A restart often pulls
+/// before either side has seen the other's heartbeat. Older peers send
+/// neither, so the field stays off their copy.
+pub fn pull_sends_watch(advertised: bool, request_flag: Option<&str>) -> bool {
+    advertised || request_flag == Some("1")
 }
 
 /// Addendum C transport rule, sending side: the openid goes to a member
@@ -427,12 +452,30 @@ pub(crate) fn forward_reply(
                 .and_then(|d| d.get("current_generation"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
+            let watch_revision = data
+                .as_ref()
+                .and_then(|d| d.get("current_revision"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             Err(match code {
                 "credentials_conflict" => SaveError::Conflict { current },
+                "watch_conflict" => SaveError::WatchConflict {
+                    current: watch_revision,
+                },
                 _ => SaveError::HolderMoved,
             })
         }
-        400 => Err(SaveError::Invalid),
+        400 => {
+            let code = data
+                .as_ref()
+                .and_then(|d| d.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            Err(match code {
+                "base_watch_revision_required" => SaveError::WatchBaseRequired,
+                _ => SaveError::Invalid,
+            })
+        }
         _ => Err(SaveError::HolderUnreachable),
     }
 }
@@ -497,6 +540,10 @@ impl PeerLink for SignedLink {
 
     fn credentials_sync(&self, node: &str) -> bool {
         peer_supports_credentials(node)
+    }
+
+    fn watch_sync(&self, node: &str) -> bool {
+        peer_supports_watch(node)
     }
 
     async fn forward(
@@ -690,6 +737,14 @@ pub fn spawn_push(store: Arc<Store>, local: String) {
         return;
     }
     tokio::spawn(async move {
+        let seeded = {
+            let store = Arc::clone(&store);
+            let local = local.clone();
+            tokio::task::spawn_blocking(move || {
+                super::watch_sync::seed_if_needed(&store, &local, crate::storage::now())
+            })
+        };
+        let _ = seeded.await;
         PUSH_COALESCER
             .drive(|| {
                 let store = Arc::clone(&store);

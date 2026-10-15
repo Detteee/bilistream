@@ -5,7 +5,8 @@
 use super::membership::{member_endpoint, trust_snapshot, Descriptor, Membership};
 use super::peer_auth::{
     PeerClient, PeerResponse, PeerScope, RoutePolicy, HELLO_REQUEST_BYTES, HELLO_RESPONSE_BYTES,
-    MAX_BODY_BYTES, OPERATION_BODY_BYTES, PAIRING_BODY_BYTES,
+    MAX_BODY_BYTES, NOTIFY_OPENID_PATH, NOTIFY_WATCH_SYNC_HEADER, OPERATION_BODY_BYTES,
+    PAIRING_BODY_BYTES,
 };
 use super::types::PeerApiResponse;
 use crate::config::Config;
@@ -136,14 +137,15 @@ pub(crate) mod routes {
     /// Batch 1b: the writer pushes the sealed admin openid record (or an
     /// explicit unbound state) to a current member.
     pub(crate) const NOTIFY_OPENID_PUSH: RoutePolicy =
-        route("POST", "/api/cluster/v1/notify/openid", 4096, 4096);
+        route("POST", NOTIFY_OPENID_PATH, 64 * 1024, 64 * 1024);
     /// Batch 1b: a joining node or a new writer pulls a member's record once.
     pub(crate) const NOTIFY_OPENID_PULL: RoutePolicy =
-        route("GET", "/api/cluster/v1/notify/openid", 0, 4096);
+        route("GET", NOTIFY_OPENID_PATH, 0, 64 * 1024);
     /// Addendum F: a member forwards an AppID/AppSecret save to the gateway
-    /// holder (same path as the openid route, `PUT`).
+    /// holder (same path as the openid route, `PUT`). The body may also
+    /// carry a follow list of up to 50 entries.
     pub(crate) const NOTIFY_CREDENTIALS_SAVE: RoutePolicy =
-        route("PUT", "/api/cluster/v1/notify/openid", 4096, 4096);
+        route("PUT", NOTIFY_OPENID_PATH, 64 * 1024, 64 * 1024);
     /// Unauthenticated bootstrap: identity proof and password-gated pairing.
     pub(crate) const HELLO: RoutePolicy = route(
         "POST",
@@ -414,7 +416,7 @@ async fn unsigned_test_send(
         .build()
         .map_err(io::Error::other)?;
     let url = format!("{}{}", base.trim_end_matches('/'), route.path);
-    let request = if route.method == "GET" {
+    let mut request = if route.method == "GET" {
         client.get(url)
     } else {
         client
@@ -422,6 +424,9 @@ async fn unsigned_test_send(
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body)
     };
+    if route.method == "GET" && route.path == routes::NOTIFY_OPENID_PULL.path {
+        request = request.header(NOTIFY_WATCH_SYNC_HEADER, "1");
+    }
     let response = request.timeout(timeout).send().await.map_err(|e| {
         io::Error::new(
             if e.is_timeout() {

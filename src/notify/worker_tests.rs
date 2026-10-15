@@ -413,6 +413,7 @@ async fn a_credential_commit_after_matching_a_bind_message_wins_the_transaction(
             base_generation: Some(worker.cred_meta.generation),
             appid: Some("9876543210".into()),
             appsecret: Some("synthetic-replacement-secret".into()),
+            watch: None,
             ..Default::default()
         },
         "solo",
@@ -506,6 +507,7 @@ async fn changing_credentials_retires_queued_and_inflight_events_from_the_old_ga
             base_generation: Some(worker.cred_meta.generation),
             appid: Some("9876543210".into()),
             appsecret: Some("synthetic-replacement-secret".into()),
+            watch: None,
             ..Default::default()
         },
         "solo",
@@ -1036,6 +1038,7 @@ async fn watched_channel_going_live_sends_one_green_notice() {
     let seen = vec![crate::notify::live::LiveObservation {
         platform: "youtube".into(),
         channel_id: "UCwatched".into(),
+        channel_name: String::new(),
         title: Some("【歌枠】".into()),
     }];
     worker.channel_live(now, &seen);
@@ -1043,6 +1046,7 @@ async fn watched_channel_going_live_sends_one_green_notice() {
     linked.push(crate::notify::live::LiveObservation {
         platform: "twitch".into(),
         channel_id: "WATCHED-LOGIN".into(),
+        channel_name: String::new(),
         title: Some("同场直播".into()),
     });
     worker.channel_live(now + 5, &linked);
@@ -1109,6 +1113,7 @@ async fn migrating_one_live_legacy_follow_sends_nothing_and_persists_episode_sup
     let seen = vec![crate::notify::live::LiveObservation {
         platform: "twitch".into(),
         channel_id: "linked-login".into(),
+        channel_name: String::new(),
         title: None,
     }];
     worker.apply_digest(&single_node(), false, now);
@@ -1160,6 +1165,7 @@ fn only_configured_entries_are_live_and_peer_delivery_discards_their_pending_not
     let unavailable = vec![crate::notify::live::LiveObservation {
         platform: "twitch".into(),
         channel_id: "manual-login".into(),
+        channel_name: String::new(),
         title: None,
     }];
     worker.tracker.on_event(
@@ -1180,6 +1186,7 @@ fn only_configured_entries_are_live_and_peer_delivery_discards_their_pending_not
     let seen = vec![crate::notify::live::LiveObservation {
         platform: "youtube".into(),
         channel_id: "UCconfigured".into(),
+        channel_name: String::new(),
         title: None,
     }];
     worker.channel_live(now, &seen);

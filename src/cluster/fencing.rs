@@ -508,6 +508,7 @@ pub(crate) async fn collect_local_snapshot(
         notify_credentials_sync: Some(true),
         notify_credentials_generation: Some(crate::notify::local_credentials_sync().0),
         notify_openid_rebind: Some(crate::notify::local_credentials_sync().1),
+        notify_watch_sync: Some(true),
         bili_live: crate::history::live_book::heartbeat_book(),
     }
 }

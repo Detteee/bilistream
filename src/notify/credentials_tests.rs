@@ -108,6 +108,7 @@ fn save_req(base: Option<u64>, appid: Option<&str>, secret: Option<&str>) -> Cre
         appid: appid.map(str::to_string),
         appsecret: secret.map(str::to_string),
         clear_appsecret: false,
+        watch: None,
     }
 }
 
@@ -409,7 +410,7 @@ fn a_legacy_pull_gets_the_original_openid_shape_without_synced_credentials() {
     }
     let a = holder("a");
     let members = vec!["a".into(), "b".into()];
-    let copy = crate::notify::openid_sync::serve_pull(&a.1, "b", &members, false).unwrap();
+    let copy = crate::notify::openid_sync::serve_pull(&a.1, "b", &members, false, false).unwrap();
     let bytes = serde_json::to_vec(&copy).unwrap();
     let legacy: LegacyCopy =
         serde_json::from_slice(&bytes).expect("old deny_unknown_fields decoder");
@@ -421,7 +422,7 @@ fn a_legacy_pull_gets_the_original_openid_shape_without_synced_credentials() {
     assert_eq!(legacy.writer, "a");
     assert!(!String::from_utf8_lossy(&bytes).contains(SECRET));
     assert!(!String::from_utf8_lossy(&bytes).contains("credentials"));
-    let modern = crate::notify::openid_sync::serve_pull(&a.1, "b", &members, true).unwrap();
+    let modern = crate::notify::openid_sync::serve_pull(&a.1, "b", &members, true, true).unwrap();
     assert_eq!(modern.credentials.as_ref().unwrap().appsecret, SECRET);
 }
 
@@ -727,12 +728,24 @@ async fn forwarded_credentials_and_a_legacy_watch_save_keep_watch_preferences_lo
     )
     .unwrap();
     let mut update = mixed_forwarded_update(&b.1);
+    update.base_watch_revision = Some(0);
     update.config.as_mut().unwrap()["watch"] = serde_json::json!({"enabled":true,"channels":[
         {"platform":"youtube","channel_id":"UCwatch","name":"old"},
         {"platform":"twitch","channel_id":"WATCHLOGIN","name":"old"}
     ]});
-    let request = credential_part(&b.1, &update).unwrap().unwrap();
+    let mut request = credential_part(&b.1, &update).unwrap().unwrap();
+    let watch = crate::webui::api::notify::watch_part(&b.1, &update)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        watch.channels,
+        vec![crate::notify::config::WatchChannel::Configured {
+            name: "canonical".into()
+        }]
+    );
+    request.watch = Some(watch);
     strip_credentials(&mut update);
+    crate::webui::api::notify::strip_watch(&mut update);
     let prepared = forwarded::prepare(&b.1, &update, "b", "a").unwrap();
     let outcome = save(
         &b.1,
@@ -770,8 +783,39 @@ async fn forwarded_credentials_and_a_legacy_watch_save_keep_watch_preferences_lo
     );
     assert_eq!(secret(&a.1).as_deref(), Some(SECRET2));
     assert_eq!(secret(&b.1).as_deref(), Some(SECRET2));
-    assert!(!load_config(&a.1).unwrap().0.watch.enabled);
-    assert!(load_config(&a.1).unwrap().0.watch.channels.is_empty());
+    assert_eq!(appid(&a.1), APPID2);
+    assert_eq!(appid(&b.1), APPID2);
+    let holder_watch = load_config(&a.1).unwrap().0.watch;
+    let local_watch = load_config(&b.1).unwrap().0.watch;
+    assert!(holder_watch.enabled && local_watch.enabled);
+    assert!(holder_watch.migration_notice.is_none());
+    assert_eq!(holder_watch.channels, local_watch.channels);
+    assert_eq!(
+        holder_watch.channels,
+        vec![crate::notify::config::WatchChannel::Configured {
+            name: "canonical".into()
+        }]
+    );
+    assert_eq!(
+        load_meta(&a.1).unwrap().generation,
+        load_meta(&b.1).unwrap().generation
+    );
+    assert_eq!(
+        crate::notify::watch_sync::load_meta(&a.1).unwrap().revision,
+        1
+    );
+    assert_eq!(
+        crate::notify::watch_sync::load_meta(&b.1).unwrap().revision,
+        1
+    );
+    assert!(
+        !load_config(&b.1).unwrap().0.commands_enabled,
+        "non-watch preferences stay on the forwarding node"
+    );
+    assert!(
+        load_config(&a.1).unwrap().0.commands_enabled,
+        "the holder does not take the forwarder's other preferences"
+    );
 }
 
 #[test]

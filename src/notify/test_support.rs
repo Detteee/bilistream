@@ -163,6 +163,9 @@ pub struct MemCluster {
     /// Addendum F: nodes on an older build (no `credentials_sync`); they
     /// refuse a copy that carries the set, as `deny_unknown_fields` does.
     pub legacy: Mutex<std::collections::HashSet<String>>,
+    /// Nodes that do not advertise `watch_sync`. A copy that still carries
+    /// the follow list is refused, the same way an old decoder would.
+    pub no_watch: Mutex<std::collections::HashSet<String>>,
     /// Addendum F: the node that holds the QQ gateway.
     pub holder: Mutex<Option<String>>,
 }
@@ -185,6 +188,7 @@ impl MemCluster {
             clustered: Mutex::new(true),
             member_reads: Mutex::new(0),
             legacy: Mutex::new(Default::default()),
+            no_watch: Mutex::new(Default::default()),
             holder: Mutex::new(None),
         })
     }
@@ -307,6 +311,9 @@ impl PeerLink for MemLink {
         if copy.credentials.is_some() && self.cluster.legacy.lock().unwrap().contains(node) {
             return Err(LinkError::Refused);
         }
+        if copy.watch.is_some() && self.cluster.no_watch.lock().unwrap().contains(node) {
+            return Err(LinkError::Refused);
+        }
         let body = serde_json::to_vec(copy).unwrap();
         super::openid_sync::serve_push(&self.cluster.store(node), &self.local, &members, &body)
             .map_err(|_| LinkError::Refused)
@@ -314,6 +321,10 @@ impl PeerLink for MemLink {
 
     fn credentials_sync(&self, node: &str) -> bool {
         !self.cluster.legacy.lock().unwrap().contains(node)
+    }
+
+    fn watch_sync(&self, node: &str) -> bool {
+        !self.cluster.no_watch.lock().unwrap().contains(node)
     }
 
     async fn forward(
@@ -353,11 +364,13 @@ impl PeerLink for MemLink {
         }
         let members = self.cluster.members.lock().unwrap().clone();
         let supported = !self.cluster.legacy.lock().unwrap().contains(&self.local);
+        let watch = !self.cluster.no_watch.lock().unwrap().contains(&self.local);
         let copy = super::openid_sync::serve_pull(
             &self.cluster.store(node),
             &self.local,
             &members,
             supported,
+            watch,
         )
         .map_err(|_| LinkError::Refused)?;
         // Through JSON, as on the wire.

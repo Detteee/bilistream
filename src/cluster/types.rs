@@ -98,6 +98,11 @@ pub struct ClusterNodeSnapshot {
     pub notify_credentials_generation: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_openid_rebind: Option<bool>,
+    /// This build replicates the shared follow list on the openid route.
+    /// Heartbeats carry only the flag, never the channel list. `None` means
+    /// an older node: it must not be sent the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_watch_sync: Option<bool>,
     /// The B站 live book (`history::live_book`, analytics design §17): which
     /// `live_key` the shared room is in. Peer heartbeat only; stripped from
     /// `/api/cluster/status`. Older nodes neither send nor read it.

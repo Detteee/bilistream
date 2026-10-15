@@ -13,6 +13,11 @@ use std::time::Duration;
 
 pub const HELLO_ROUTE: &str = "/api/cluster/v1/hello";
 pub const PAIRING_ROUTE: &str = "/api/cluster/v1/pairing/reserve";
+/// The openid pull asks for the shared follow list. Heartbeats also advertise
+/// `watch_sync`, but a restart pull often leaves before that round trip.
+/// Older peers do not send this header, so they are not given the field.
+pub const NOTIFY_WATCH_SYNC_HEADER: &str = "x-bilistream-watch-sync";
+pub const NOTIFY_OPENID_PATH: &str = "/api/cluster/v1/notify/openid";
 /// Signed membership probe. The caller's stored revision is not required to be current.
 pub const RECOGNITION_ROUTE: &str = "/api/cluster/v1/membership/recognition";
 
@@ -224,7 +229,7 @@ impl PeerClient {
                 route,
                 &body,
             )?;
-            let response = self
+            let mut request = self
                 .client
                 .request(
                     Method::from_bytes(route.method.as_bytes())
@@ -232,7 +237,11 @@ impl PeerClient {
                     endpoint.route_url(route.path)?,
                 )
                 .header(header::AUTHORIZATION, signed.authorization.clone())
-                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_TYPE, "application/json");
+            if route.method == "GET" && route.path == NOTIFY_OPENID_PATH {
+                request = request.header(NOTIFY_WATCH_SYNC_HEADER, "1");
+            }
+            let response = request
                 .body(body.clone())
                 .send()
                 .await

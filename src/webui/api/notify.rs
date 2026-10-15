@@ -11,7 +11,8 @@
 
 use super::ApiResponse;
 use crate::notify::{
-    self, bind::BindMode, config::validate, store, Command, NotifyConfig, Refusal,
+    self, bind::BindMode, config::validate, openid_sync::PeerLink, store, Command, NotifyConfig,
+    Refusal,
 };
 use crate::webui::listen::{AuthGeneration, AuthState};
 use axum::http::HeaderMap;
@@ -149,6 +150,7 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
     if let (Some(view), Value::Object(extra)) = (view.as_object_mut(), credentials_view) {
         view.extend(extra);
     }
+    view["watch_revision"] = json!(settings.watch.revision);
     if view["openid_rebind"] == json!(true) {
         view["openid_set"] = json!(false);
     }
@@ -279,6 +281,9 @@ pub struct UpdateNotify {
     /// Addendum F: the `credentials_generation` from GET. A stale value is
     /// 409 `credentials_conflict` when the AppID or AppSecret changes.
     pub base_generation: Option<u64>,
+    /// The `watch_revision` from GET. Required when `config.watch` is present.
+    /// A stale value is 409 `watch_conflict`.
+    pub base_watch_revision: Option<u64>,
 }
 
 impl UpdateNotify {
@@ -461,6 +466,23 @@ pub fn apply_update_with<G>(
 where
     G: FnOnce(&mut crate::storage::Transaction<'_>) -> std::io::Result<()> + Send + 'static,
 {
+    apply_with_watch(store, update, node_id, writer, credentials, None, after)
+}
+
+/// Same transaction as `apply_update_with`, plus a follow-list revision bump
+/// that patches only `watch` after the AppID write.
+pub(crate) fn apply_with_watch<G>(
+    store: &crate::storage::Store,
+    update: &UpdateNotify,
+    node_id: &str,
+    writer: &dyn Fn() -> Result<(), Refusal>,
+    credentials: Option<store::CredentialsStep>,
+    watch: Option<store::WatchStep>,
+    after: G,
+) -> Result<Value, UpdateError>
+where
+    G: FnOnce(&mut crate::storage::Transaction<'_>) -> std::io::Result<()> + Send + 'static,
+{
     let bad = |message: &str| UpdateError::Status(StatusCode::BAD_REQUEST, message.to_string());
     let secret = update
         .app_secret
@@ -535,6 +557,7 @@ where
         update.expected_secret_revision.unwrap_or(0),
         openid_write,
         credentials,
+        watch,
         |_| Ok(()),
         after,
     )
@@ -555,8 +578,10 @@ async fn local_node_id() -> String {
 pub(crate) fn credentials_status(error: notify::credentials::SaveError) -> StatusCode {
     use notify::credentials::SaveError;
     match error {
-        SaveError::Conflict { .. } | SaveError::HolderMoved => StatusCode::CONFLICT,
-        SaveError::Invalid => StatusCode::BAD_REQUEST,
+        SaveError::Conflict { .. } | SaveError::HolderMoved | SaveError::WatchConflict { .. } => {
+            StatusCode::CONFLICT
+        }
+        SaveError::Invalid | SaveError::WatchBaseRequired => StatusCode::BAD_REQUEST,
         SaveError::HolderUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         SaveError::Store => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -568,6 +593,9 @@ fn credentials_refused(error: notify::credentials::SaveError) -> Response {
     let mut data = json!({ "code": error.code() });
     if let SaveError::Conflict { current } = error {
         data["current_generation"] = json!(current);
+    }
+    if let SaveError::WatchConflict { current } = error {
+        data["current_revision"] = json!(current);
     }
     reply(status, Some(data), error.message())
 }
@@ -609,6 +637,7 @@ pub fn credential_part(
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         clear_appsecret: update.clear_app_secret,
+        watch: None,
     };
     Ok(save.is_change().then_some(save))
 }
@@ -645,6 +674,45 @@ pub(crate) fn strip_credentials(update: &mut UpdateNotify) -> bool {
             .admin_openid
             .as_deref()
             .is_some_and(|openid| !openid.trim().is_empty())
+}
+
+/// The follow list in this PUT, already migrated and validated against this
+/// node's catalog. `None` when the body does not include `watch`.
+pub(crate) fn watch_part(
+    store: &crate::storage::Store,
+    update: &UpdateNotify,
+) -> Result<Option<notify::watch_sync::WatchSave>, UpdateError> {
+    let Some(patch) = update
+        .config
+        .as_ref()
+        .filter(|patch| patch.get("watch").is_some())
+    else {
+        return Ok(None);
+    };
+    let (current, _) = store::load_config(store).map_err(store_error)?;
+    let desired = updated_config(store, &current, patch)?;
+    Ok(Some(notify::watch_sync::WatchSave {
+        base_revision: update.base_watch_revision,
+        enabled: desired.watch.enabled,
+        channels: desired.watch.channels,
+        migration_notice: desired.watch.migration_notice,
+    }))
+}
+
+/// Drop `watch` so a local preference write cannot replace the list the
+/// holder just committed. Returns whether a watch object was removed.
+pub(crate) fn strip_watch(update: &mut UpdateNotify) -> bool {
+    let Some(config) = update.config.as_mut() else {
+        return false;
+    };
+    let Some(object) = config.as_object_mut() else {
+        return false;
+    };
+    let removed = object.remove("watch").is_some();
+    if object.is_empty() {
+        update.config = None;
+    }
+    removed
 }
 
 /// The gateway holder from this node's heartbeat view.
@@ -687,6 +755,7 @@ pub(crate) async fn update_notify(
     let mut update = update;
     // Addendum F: the AppID/AppSecret go to the gateway holder first. If
     // that fails nothing else is saved; the values are never echoed.
+    // The follow list uses the same holder, then the same member copy.
     let credentials = match credential_part(&store, &update) {
         Ok(part) => part,
         Err(error) => {
@@ -694,31 +763,67 @@ pub(crate) async fn update_notify(
             return reply(io_status(&error), None, error.to_string());
         }
     };
+    let watch = match watch_part(&store, &update) {
+        Ok(part) => part,
+        Err(error) => {
+            update.wipe();
+            return error.into_response();
+        }
+    };
+    if watch
+        .as_ref()
+        .is_some_and(|save| save.base_revision.is_none())
+    {
+        update.wipe();
+        return credentials_refused(notify::credentials::SaveError::WatchBaseRequired);
+    }
+    if watch.is_some() {
+        // The holder, or the local watch step, writes the list. Leaving it in
+        // the preference patch would not bump the revision and could replace
+        // a list just pulled back.
+        strip_watch(&mut update);
+    }
     let mut credentials_pushed = false;
     let mut local_credentials: Option<store::CredentialsStep> = None;
-    if let Some(save) = credentials {
-        if let Err(error) = notify::credentials::validate_save(&save) {
-            update.wipe();
-            return credentials_refused(error);
+    let mut local_watch: Option<store::WatchStep> = None;
+    let holder = current_holder(&node_id).await;
+    let link = notify::openid_sync::SignedLink::new(Arc::clone(&store), node_id.clone());
+    let forward_watch = match &holder {
+        notify::credentials::Holder::Peer(peer) if link.watch_sync(peer) => watch.clone(),
+        _ => None,
+    };
+    let watch_locally = if forward_watch.is_some() { None } else { watch };
+    if credentials.is_some() || forward_watch.is_some() {
+        if let Some(save) = credentials.as_ref() {
+            if let Err(error) = notify::credentials::validate_save(save) {
+                update.wipe();
+                return credentials_refused(error);
+            }
+            if notify::credentials::base_generation_missing(
+                save,
+                notify::credentials::REQUIRE_BASE_GENERATION,
+            ) {
+                update.wipe();
+                return base_generation_required();
+            }
+            strip_credentials(&mut update);
         }
-        if notify::credentials::base_generation_missing(
-            &save,
-            notify::credentials::REQUIRE_BASE_GENERATION,
-        ) {
-            update.wipe();
-            return base_generation_required();
-        }
-        strip_credentials(&mut update);
-        let holder = current_holder(&node_id).await;
-        match holder {
+        match &holder {
             notify::credentials::Holder::Local | notify::credentials::Holder::Nobody => {
                 // Rev 2 item 15: committed with the rest in ONE transaction.
-                local_credentials = Some((save, node_id.clone(), crate::storage::now()));
-                credentials_pushed = true;
+                if let Some(save) = credentials {
+                    local_credentials = Some((save, node_id.clone(), crate::storage::now()));
+                    credentials_pushed = true;
+                }
+                if let Some(watch) = watch_locally {
+                    local_watch = Some((watch, node_id.clone(), crate::storage::now()));
+                }
             }
-            notify::credentials::Holder::Peer(ref peer) => {
+            notify::credentials::Holder::Peer(peer) => {
                 // Validate and pin local preferences before the holder
                 // commits. Only credential-only revision bumps may rebase.
+                let mut save = credentials.unwrap_or_default();
+                save.watch = forward_watch;
                 let check_store = Arc::clone(&store);
                 let check_node = node_id.clone();
                 let check_peer = peer.clone();
@@ -739,12 +844,10 @@ pub(crate) async fn update_notify(
                     Ok(settings) => settings,
                     Err(error) => return error.into_response(),
                 };
-                let link =
-                    notify::openid_sync::SignedLink::new(Arc::clone(&store), node_id.clone());
                 let outcome = notify::credentials::save(
                     &store,
                     &link,
-                    &holder,
+                    &notify::credentials::Holder::Peer(peer.clone()),
                     &save,
                     &node_id,
                     crate::storage::now(),
@@ -755,11 +858,20 @@ pub(crate) async fn update_notify(
                     Ok(outcome) => outcome,
                     Err(error) => return credentials_refused(error),
                 };
-                tracing::info!(
-                    "QQ 通知机器人凭据已由节点 {} 保存 (generation {})",
-                    peer,
-                    outcome.generation
-                );
+                if outcome.changed {
+                    tracing::info!(
+                        "QQ 通知机器人凭据已由节点 {} 保存 (generation {})",
+                        peer,
+                        outcome.generation
+                    );
+                }
+                if outcome.watch_changed {
+                    tracing::info!(
+                        "QQ 通知关注列表已由节点 {} 保存 (revision {})",
+                        peer,
+                        outcome.watch_revision.unwrap_or(0)
+                    );
+                }
                 let completed =
                     forwarded::complete(Arc::clone(&store), &link, peer, outcome, settings, |_| {
                         Ok(())
@@ -768,23 +880,49 @@ pub(crate) async fn update_notify(
                 if completed.cache_ready {
                     let _ = notify::send_command(Command::Reload);
                 } else {
-                    tracing::warn!(
-                        "QQ 通知凭据已保存，本节点同步待重试 (generation {})",
-                        outcome.generation
-                    );
-                    notify::openid_sync::spawn_pull(store, node_id);
+                    tracing::warn!("QQ 通知已由节点 {} 保存，本节点同步待重试", peer);
+                    notify::openid_sync::spawn_pull(Arc::clone(&store), node_id.clone());
+                }
+                // Holder has no watch_sync: commit here and push to members
+                // that do. The credential commit on the holder already stands.
+                if let Some(watch) = watch_locally {
+                    let stored = Arc::clone(&store);
+                    let node = node_id;
+                    let saved = tokio::task::spawn_blocking(move || {
+                        notify::watch_sync::apply_save(
+                            &stored,
+                            &watch,
+                            &node,
+                            crate::storage::now(),
+                        )
+                    })
+                    .await
+                    .unwrap_or(Err(notify::credentials::SaveError::Store));
+                    match saved {
+                        Ok(saved) if saved.changed => {
+                            notify::openid_sync::spawn_push(push_store, push_node);
+                        }
+                        Ok(_) => {}
+                        Err(error) => return credentials_refused(error),
+                    }
                 }
                 return completed.into_response(cleared);
             }
         }
+    } else if let Some(watch) = watch_locally {
+        local_watch = Some((watch, node_id.clone(), crate::storage::now()));
     }
+    let watch_before = local_watch
+        .as_ref()
+        .and(notify::watch_sync::load_meta(&store).ok());
     let result = tokio::task::spawn_blocking(move || {
-        let result = apply_update_with(
+        let result = apply_with_watch(
             &store,
             &update,
             &node_id,
             &|| notify::check_writer("修改管理员 openid"),
             local_credentials,
+            local_watch,
             |_| Ok(()),
         );
         update.wipe();
@@ -800,7 +938,11 @@ pub(crate) async fn update_notify(
     match result {
         Ok(view) => {
             let _ = notify::send_command(Command::Reload);
-            if openid_changed || credentials_pushed {
+            let watch_changed = watch_before.is_some_and(|before| {
+                notify::watch_sync::load_meta(&push_store)
+                    .is_ok_and(|meta| meta.revision != before.revision)
+            });
+            if openid_changed || credentials_pushed || watch_changed {
                 // 1b / F: the new set goes to every current member.
                 notify::openid_sync::spawn_push(push_store, push_node);
             }
@@ -985,8 +1127,22 @@ pub(crate) async fn peer_openid_pull(
         Err(response) => return *response,
     };
     let credentials_sync = notify::openid_sync::peer_supports_credentials(&from);
+    let watch_flag = headers
+        .get(crate::cluster::peer_auth::NOTIFY_WATCH_SYNC_HEADER)
+        .and_then(|value| value.to_str().ok());
+    let watch_sync = notify::openid_sync::pull_sends_watch(
+        notify::openid_sync::peer_supports_watch(&from),
+        watch_flag,
+    );
+    let local = local_node_id().await;
     let result = tokio::task::spawn_blocking(move || {
-        notify::openid_sync::serve_pull(&store, &from, &members, credentials_sync)
+        // A list saved before this build has revision 0. Seed it before the
+        // copy is built so a joining node receives it without another save.
+        if !local.is_empty() {
+            notify::watch_sync::seed_if_needed(&store, &local, crate::storage::now())
+                .map_err(|_| notify::openid_sync::ServeRefusal::Store)?;
+        }
+        notify::openid_sync::serve_pull(&store, &from, &members, credentials_sync, watch_sync)
     })
     .await
     .unwrap_or(Err(notify::openid_sync::ServeRefusal::Store));
@@ -1037,7 +1193,7 @@ pub(crate) async fn peer_credentials_save(
     )));
     match result {
         Ok(outcome) => {
-            if outcome.changed {
+            if outcome.changed || outcome.watch_changed {
                 let _ = notify::send_command(Command::Reload);
                 notify::openid_sync::spawn_push(push_store, push_node);
             }

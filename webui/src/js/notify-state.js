@@ -401,6 +401,8 @@ export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
     case 'credentials_conflict':
     case 'base_generation_required':
     case 'credentials_holder_moved':
+    case 'watch_conflict':
+    case 'base_watch_revision_required':
       return { kind: 'credentials_conflict', banner: { lead: `${CONFLICT_TEXT}。`, text: '', tone: 'warn', action: { label: '刷新', target: 'refresh' } } };
     case 'credentials_holder_unreachable':
       return { kind: 'holder_down', banner: { lead: `${HOLDER_DOWN_TEXT}。`, text: '', tone: 'warn' } };
@@ -756,6 +758,12 @@ export function credentialsSync(settings) {
 export function baseGeneration(settings) {
   return credentialsSync(settings) ? settings.credentials_generation : undefined;
 }
+// Follow-list revision from GET. Absent on an older backend, so the save
+// omits `base_watch_revision` and keeps today's per-node behaviour.
+export function watchRevision(settings) {
+  return Number.isInteger(settings?.watch_revision) && settings.watch_revision >= 0
+    ? settings.watch_revision : undefined;
+}
 // AppID flag. Under F the value is write-only and never read; `appid_set`
 // wins, then (older backends) whether config carries an AppID at all.
 export function appIdSet(settings) {
@@ -843,6 +851,10 @@ export function saveBody(settings, patch, { secret = '', openid = '' } = {}) {
   const body = { config: patch, expected_revision: settings.revision };
   const base = baseGeneration(settings);
   if (base !== undefined) body.base_generation = base;
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'watch')) {
+    const watchBase = watchRevision(settings);
+    if (watchBase !== undefined) body.base_watch_revision = watchBase;
+  }
   if (secret) {
     body.app_secret = secret;
     body.expected_secret_revision = settings.secret_revision;

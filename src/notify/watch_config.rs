@@ -1,6 +1,6 @@
 //! Channel-name watch preferences and the one-way legacy account migration.
-//! Configured entries resolve the current catalog; account IDs are never a
-//! frozen snapshot. This record is local, like the other notify preferences.
+//! The follow list is cluster-wide (`watch_sync`); every other preference in
+//! this record stays on the node that saved it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

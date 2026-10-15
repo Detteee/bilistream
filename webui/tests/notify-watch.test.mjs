@@ -38,6 +38,9 @@ test('one configured name selects all platforms in one entry and one generation-
   const body = saveBody(settings, formToPatch(form, base));
   assert.deepEqual(body.config.watch, { enabled: false, channels: [configured] });
   assert.equal(body.base_generation, 7);
+  assert.equal(body.base_watch_revision, undefined);
+  const synced = saveBody({ ...settings, watch_revision: 3 }, formToPatch(form, base));
+  assert.equal(synced.base_watch_revision, 3);
   assert.equal(body.expected_revision, 4);
   assert.deepEqual(toggleWatchCandidate(added.list, candidate, false).list, []);
 });
@@ -197,4 +200,17 @@ test('unknown node or migration identity never creates an unscoped persistent di
   assert.equal(page.isDismissed('', { at: 1792032000, folded: 1 }), true);
   assert.equal(page.isDismissed('ny', { at: 1792032000, folded: 1 }), false);
   assert.equal(page.isDismissed('jp', { folded: 1 }), true);
+});
+
+test('a stale follow-list base refreshes and is not saved again by itself', () => {
+  for (const code of ['watch_conflict', 'base_watch_revision_required']) {
+    const refusal = notifyRefusal(
+      { status: code === 'watch_conflict' ? 409 : 400, body: { success: false, message: 'stale', data: { code, current_revision: 4 } } },
+      null,
+      { route: 'config' },
+    );
+    assert.equal(refusal.kind, 'credentials_conflict');
+    assert.equal(refusal.banner.action.target, 'refresh');
+    assert.equal(refusal.banner.action.label, '刷新');
+  }
 });

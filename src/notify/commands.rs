@@ -10,7 +10,7 @@
 use super::event::{EventKind, Severity};
 use super::format::{duration_text, month_day, short_time, utc8_time, RenderContext, MAX_CHARS};
 use super::ledger::{NotifyLedger, ACTIVE_PER_DAY};
-use super::observer::ClusterDigest;
+use super::observer::{ClusterDigest, NodeSlot};
 use super::sink::{PassiveTarget, PASSIVE_MAX_REPLIES, PASSIVE_WINDOW_SECS};
 
 /// At most one answer per this many seconds, and `MAX_PER_HOUR` an hour.
@@ -90,7 +90,7 @@ pub struct View<'a> {
     pub ledger: &'a NotifyLedger,
     pub open: Vec<OpenEntry>,
     pub passive: Option<&'a PassiveTarget>,
-    pub live: Vec<(String, Option<String>)>,
+    pub live: Vec<StatusChannel>,
     pub gateway_online: bool,
     /// A membership change paused execution (not a fault; Clerk N6 keeps it
     /// apart from a node's drain).
@@ -125,89 +125,175 @@ pub fn reply(cmd: Cmd, view: &View<'_>) -> String {
     super::format::with_sender(&body, &view.ctx.node_name(&view.ctx.reporter))
 }
 
+/// One live source in a status reply. `platforms` holds the raw platform
+/// keys (`youtube`, `twitch`, `niconico`); an empty name means the only
+/// available identity was a raw YouTube channel id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusChannel {
+    pub name: String,
+    pub platforms: Vec<String>,
+}
+
 fn status(view: &View<'_>) -> String {
-    let ctx = view.ctx;
     let worst = view.open.iter().map(|entry| entry.severity).max();
-    let (head, word) = match worst {
-        Some(Severity::Critical) => ("🔴", "有故障"),
-        Some(Severity::Warning) => ("🟠", "有警告"),
-        _ => ("✅", "正常"),
+    let headline = match worst {
+        Some(Severity::Critical) => "🔴 有故障",
+        Some(Severity::Warning) => "🟠 有警告",
+        _ => "✅ 目前正常",
     };
-    let mut lines = vec![
-        format!("{head} bilistream 状态 · {word}"),
-        format!("时间 {} (UTC+8)", utc8_time(view.now)),
-    ];
-    lines.push(match view.digest.owner.as_deref() {
-        Some(owner) => format!("转播节点：{}", ctx.node_name(owner)),
-        None if !view.digest.enabled => "单节点模式".to_string(),
-        None => "转播节点尚未确定".to_string(),
-    });
-    if view.digest.enabled {
-        let healthy = view.digest.nodes.iter().filter(|node| node.healthy).count();
-        lines.push(format!("节点 {healthy}/{} 正常", view.digest.nodes.len()));
-        if view.membership_paused {
-            lines.push("成员变更中（暂停执行，非故障）".to_string());
-        }
-        for node in view.digest.nodes.iter().take(MAX_NODES) {
-            let role = if view.digest.owner.as_deref() == Some(node.id.as_str()) {
-                "活跃"
-            } else {
-                "备用"
-            };
-            let health = if node.draining {
-                "正在排空（非故障）".to_string()
-            } else if node.healthy {
-                "正常".to_string()
-            } else if node.stale || !node.fresh {
-                format!("故障：{}", super::event::reason_text(&node.reason))
-            } else {
-                format!("降级：{}", super::event::reason_text(&node.reason))
-            };
-            lines.push(format!("· {} {role} {health}", ctx.node_name(&node.id)));
-        }
-        if view.digest.nodes.len() > MAX_NODES {
-            lines.push(format!(
-                "另有 {} 个节点",
-                view.digest.nodes.len() - MAX_NODES
-            ));
-        }
-    }
-    if !view.live.is_empty() {
-        let names: Vec<String> = view
-            .live
-            .iter()
-            .take(3)
-            .map(|(name, _)| ctx.value(name, 20))
-            .collect();
-        lines.push(format!("直播中 {}", names.join("、")));
+    let mut lines = vec![headline.to_string()];
+    lines.extend(cluster_summary(view));
+    if let Some(line) = live_summary(view) {
+        lines.push(line);
     }
     if !view.open.is_empty() {
-        lines.push(format!("未恢复 {}：", view.open.len()));
+        lines.push(format!("还有 {} 件没恢复：", view.open.len()));
         for entry in view.open.iter().take(MAX_ENTRIES) {
             lines.push(format!(
-                "· {} {} {} · 已持续 {}",
+                "{} {} {}，已经 {}",
                 marker(entry.severity),
+                view.ctx.node_name(&entry.node),
                 entry.kind.title(),
-                ctx.node_name(&entry.node),
                 duration_text(view.now.saturating_sub(entry.since))
             ));
         }
     }
-    lines.push(format!(
-        "通知 网关{} · 召回额度剩余 {} · 未送达 {}",
-        if view.gateway_online {
-            "在线"
-        } else {
-            "离线"
-        },
-        view.ledger
-            .wakeups_left(view.now)
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "未知".into()),
-        view.ledger.undelivered_pending()
-    ));
-    lines.push("回复 help 查看命令".to_string());
+    lines.push(notify_summary(view));
     cut(lines)
+}
+
+fn cluster_summary(view: &View<'_>) -> Vec<String> {
+    let ctx = view.ctx;
+    let digest = view.digest;
+    if !digest.enabled {
+        return vec!["这台机器单独运行".to_string()];
+    }
+    let mut lines = Vec::new();
+    if view.membership_paused {
+        lines.push("正在调整集群成员，转播先暂停，这不是故障".to_string());
+    }
+    let shown: Vec<&NodeSlot> = digest.nodes.iter().take(MAX_NODES).collect();
+    let owner = digest.owner.as_deref();
+    let calm = owner.is_some()
+        && !view.membership_paused
+        && shown
+            .iter()
+            .all(|node| node.healthy && !node.draining && node.fresh && !node.stale);
+    if calm {
+        let owner_name = ctx.node_name(owner.unwrap_or_default());
+        let standbys: Vec<String> = shown
+            .iter()
+            .filter(|node| Some(node.id.as_str()) != owner)
+            .map(|node| ctx.node_name(&node.id))
+            .collect();
+        lines.push(if standbys.is_empty() {
+            format!("{owner_name} 正在转播")
+        } else {
+            format!("{owner_name} 正在转播，{} 待命", name_list(&standbys))
+        });
+    } else {
+        lines.push(match owner {
+            Some(owner) => format!("{} 正在转播", ctx.node_name(owner)),
+            None => "还没有确定哪台在转播".to_string(),
+        });
+        for node in &shown {
+            if owner == Some(node.id.as_str()) {
+                continue;
+            }
+            lines.push(format!("{} {}", ctx.node_name(&node.id), node_state(node)));
+        }
+    }
+    if digest.nodes.len() > MAX_NODES {
+        lines.push(format!("还有 {} 台没列出", digest.nodes.len() - MAX_NODES));
+    }
+    lines
+}
+
+fn node_state(node: &NodeSlot) -> String {
+    if node.draining {
+        "正在排空，不是故障".to_string()
+    } else if node.healthy {
+        "待命".to_string()
+    } else if node.stale || !node.fresh {
+        format!("故障，{}", super::event::reason_text(&node.reason))
+    } else {
+        format!("备用，{}", super::event::reason_text(&node.reason))
+    }
+}
+
+fn name_list(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [one, two] => format!("{one} 和 {two}"),
+        _ => {
+            let (last, rest) = names.split_last().expect("at least three names");
+            format!("{} 和 {last}", rest.join("、"))
+        }
+    }
+}
+
+fn live_summary(view: &View<'_>) -> Option<String> {
+    if view.live.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = view
+        .live
+        .iter()
+        .take(3)
+        .map(|channel| channel_phrase(channel, view.ctx))
+        .collect();
+    let mut line = format!("正在直播：{}", shown.join("、"));
+    if view.live.len() > 3 {
+        line.push_str(&format!("，还有 {} 个", view.live.len() - 3));
+    }
+    Some(line)
+}
+
+fn channel_phrase(channel: &StatusChannel, ctx: &RenderContext) -> String {
+    let labels = channel
+        .platforms
+        .iter()
+        .map(|platform| platform_label(platform))
+        .collect::<Vec<_>>()
+        .join("、");
+    let name = channel.name.trim();
+    if name.is_empty() {
+        if channel.platforms.len() == 1 {
+            format!("一个 {labels} 频道")
+        } else {
+            format!("一个频道（{labels}）")
+        }
+    } else {
+        format!("{}（{labels}）", ctx.value(name, 24))
+    }
+}
+
+fn platform_label(platform: &str) -> &'static str {
+    match platform.to_ascii_lowercase().as_str() {
+        "youtube" | "yt" => "YouTube",
+        "twitch" | "tw" => "Twitch",
+        "niconico" | "nico" => "Niconico",
+        _ => "其他",
+    }
+}
+
+fn notify_summary(view: &View<'_>) -> String {
+    let gateway = if view.gateway_online {
+        "通知网关在线"
+    } else {
+        "通知网关离线"
+    };
+    let quota = match view.ledger.wakeups_left(view.now) {
+        Some(left) => format!("主动召回还剩 {left} 次"),
+        None => "主动召回次数还不确定".to_string(),
+    };
+    let mut line = format!("{gateway}，{quota}");
+    let pending = view.ledger.undelivered_pending();
+    if pending > 0 {
+        line.push_str(&format!("，还有 {pending} 条没送达"));
+    }
+    line
 }
 
 fn events(view: &View<'_>) -> String {
@@ -337,7 +423,10 @@ mod tests {
                 severity: Severity::Warning,
             }],
             passive,
-            live: vec![("主频道".into(), None)],
+            live: vec![StatusChannel {
+                name: "主频道".into(),
+                platforms: vec!["youtube".into()],
+            }],
             gateway_online: true,
             membership_paused: false,
         }
@@ -428,14 +517,13 @@ mod tests {
         };
         let v = view(&ctx, &digest, &ledger, Some(&passive));
         let status = reply(Cmd::Status, &v);
-        assert!(
-            status.starts_with("🟠 bilistream 状态 · 有警告"),
-            "{status}"
-        );
-        assert!(status.contains("节点 1/2 正常"));
-        assert!(status.contains("· sg-3 备用 降级：网络不稳定"));
-        assert!(status.contains("直播中 主频道"));
-        assert!(status.contains("· 🟠 节点降级 sg-3 · 已持续 41 分钟"));
+        assert!(status.starts_with("🟠 有警告"), "{status}");
+        assert!(status.contains("osaka-2 正在转播"));
+        assert!(status.contains("sg-3 备用，网络不稳定"));
+        assert!(status.contains("正在直播：主频道（YouTube）"));
+        assert!(status.contains("🟠 sg-3 节点降级，已经 41 分钟"));
+        assert!(!status.contains("UC-"));
+        assert!(!status.contains("回复 help"));
         let events = reply(Cmd::Event, &v);
         assert!(
             events.contains("· 节点故障 tokyo-1 · 14:54 发送，15:02 恢复"),
@@ -454,6 +542,73 @@ mod tests {
             assert_eq!(text.matches("发送节点：").count(), 1);
         }
         assert_eq!(ledger, before);
+    }
+
+    #[test]
+    fn a_calm_status_names_live_channels_and_skips_raw_ids() {
+        let mut names = std::collections::HashMap::new();
+        names.insert("ca".into(), "CA".into());
+        names.insert("jp".into(), "JP".into());
+        names.insert("ny".into(), "US".into());
+        let ctx = RenderContext {
+            reporter: "ca".into(),
+            names,
+            ..Default::default()
+        };
+        let digest = ClusterDigest {
+            enabled: true,
+            owner: Some("ca".into()),
+            nodes: vec![
+                NodeSlot {
+                    id: "ny".into(),
+                    healthy: true,
+                    fresh: true,
+                    ..Default::default()
+                },
+                NodeSlot {
+                    id: "ca".into(),
+                    healthy: true,
+                    fresh: true,
+                    ..Default::default()
+                },
+                NodeSlot {
+                    id: "jp".into(),
+                    healthy: true,
+                    fresh: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let ledger = NotifyLedger::default();
+        let mut status_view = view(&ctx, &digest, &ledger, None);
+        status_view.open.clear();
+        status_view.live = vec![
+            StatusChannel {
+                name: "紡木こかげ".into(),
+                platforms: vec!["youtube".into()],
+            },
+            StatusChannel {
+                name: "夢野あかり".into(),
+                platforms: vec!["twitch".into()],
+            },
+            StatusChannel {
+                name: String::new(),
+                platforms: vec!["youtube".into()],
+            },
+        ];
+        let status = reply(Cmd::Status, &status_view);
+        assert!(status.starts_with("✅ 目前正常"), "{status}");
+        assert!(status.contains("CA 正在转播，US 和 JP 待命"), "{status}");
+        assert!(
+            status.contains(
+                "正在直播：紡木こかげ（YouTube）、夢野あかり（Twitch）、一个 YouTube 频道"
+            ),
+            "{status}"
+        );
+        assert!(!status.contains("UC-"), "{status}");
+        assert!(!status.contains("节点 3/3"), "{status}");
+        assert!(!status.contains("未送达"), "{status}");
     }
 
     #[test]
@@ -498,10 +653,10 @@ mod tests {
             membership_paused: false,
         };
         let text = reply(Cmd::Status, &v);
-        assert!(text.contains("osaka-2 备用 正在排空（非故障）"), "{text}");
+        assert!(text.contains("osaka-2 正在排空，不是故障"), "{text}");
         assert!(!text.contains("成员变更中"), "{text}");
         v.membership_paused = true;
-        assert!(reply(Cmd::Status, &v).contains("成员变更中（暂停执行，非故障）"));
+        assert!(reply(Cmd::Status, &v).contains("正在调整集群成员，转播先暂停，这不是故障"));
         let quota = reply(Cmd::Quota, &v);
         assert!(
             quota.contains("召回额度 未知（尚未收到管理员消息）"),

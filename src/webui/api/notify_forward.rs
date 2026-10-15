@@ -24,6 +24,11 @@ fn preferences(mut config: Value) -> Value {
     if let Some(qq) = config.get_mut("qq").and_then(Value::as_object_mut) {
         qq.remove("app_id");
     }
+    // A synced follow list must not look like a local preference edit, and
+    // a local preference save must not write an older list back.
+    if let Some(object) = config.as_object_mut() {
+        object.remove("watch");
+    }
     config
 }
 
@@ -84,6 +89,11 @@ impl LocalSettings {
         }
         let mut desired = self.desired.clone();
         desired["qq"]["app_id"] = current["qq"]["app_id"].clone();
+        if let Some(watch) = current.get("watch") {
+            desired["watch"] = watch.clone();
+        } else if let Some(object) = desired.as_object_mut() {
+            object.remove("watch");
+        }
         tx.write(store::CONFIG_RECORD, desired)?;
         Ok(())
     }

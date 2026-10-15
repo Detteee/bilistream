@@ -596,6 +596,11 @@ impl Worker {
         ) {
             tracing::warn!("QQ 通知凭据同步初始化失败 ({:?})", error.kind());
         }
+        if let Err(error) =
+            super::watch_sync::seed_if_needed(&self.store, &self.node_id, now_secs())
+        {
+            tracing::warn!("QQ 通知关注列表同步初始化失败 ({:?})", error.kind());
+        }
         match store::load_settings(&self.store) {
             Ok(snapshot) => self.apply_settings_snapshot(snapshot),
             Err(error) => tracing::warn!("QQ 通知设置读取失败 ({:?})", error.kind()),
@@ -1844,16 +1849,39 @@ impl Worker {
                 })
             })
             .collect();
-        let mut live_names: Vec<(String, Option<String>)> = Vec::new();
+        let mut grouped: Vec<(String, commands::StatusChannel)> = Vec::new();
         for obs in &self.live_now {
-            let name = watched
-                .get(&obs.ident())
-                .cloned()
-                .unwrap_or_else(|| obs.channel_id.clone());
-            if !live_names.iter().any(|(existing, _)| *existing == name) {
-                live_names.push((name, obs.title.clone()));
+            let watched_name = watched.get(&obs.ident()).cloned();
+            let name = watched_name
+                .clone()
+                .or_else(|| obs.readable_name())
+                .unwrap_or_default();
+            let key = if watched_name.is_some() {
+                format!("watch:{name}")
+            } else if name.is_empty() {
+                obs.ident()
+            } else {
+                format!("{}:{name}", obs.platform)
+            };
+            if let Some((_, channel)) = grouped.iter_mut().find(|(existing, _)| existing == &key) {
+                if !channel
+                    .platforms
+                    .iter()
+                    .any(|platform| platform == &obs.platform)
+                {
+                    channel.platforms.push(obs.platform.clone());
+                }
+            } else {
+                grouped.push((
+                    key,
+                    commands::StatusChannel {
+                        name,
+                        platforms: vec![obs.platform.clone()],
+                    },
+                ));
             }
         }
+        let live_names: Vec<_> = grouped.into_iter().map(|(_, channel)| channel).collect();
         let open = self
             .tracker
             .open_entries()

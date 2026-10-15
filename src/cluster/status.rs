@@ -368,6 +368,7 @@ pub(crate) fn empty_node(
         notify_credentials_sync: None,
         notify_credentials_generation: None,
         notify_openid_rebind: None,
+        notify_watch_sync: None,
         bili_live: None,
     }
 }

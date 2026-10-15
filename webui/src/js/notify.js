@@ -344,7 +344,7 @@ function renderWatch() {
   const count = $('notify-watch-count');
   setBadge(count, `已关注 ${rows.length} / ${WATCH_MAX}`, watchDraft.length >= WATCH_MAX ? 'sync-warning' : '');
   $('notify-watch-help').textContent = groupedWatchSupported(settings)
-    ? '按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。'
+    ? '按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。保存后同步到所有节点。'
     : '按频道名称选择关注项。当前节点暂不支持跨平台合并通知。';
   $('notify-watch-search-clear').hidden = !query;
   $('notify-watch-migration-text').textContent = migration;

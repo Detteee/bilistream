@@ -373,9 +373,12 @@ pub(crate) fn accept_tx(
     } else {
         meta.migration_notice.clone()
     };
-    let mut config = config;
-    set_appid(&mut config, copy.appid.trim());
-    tx.write(store::CONFIG_RECORD, config)?;
+    // Re-read immediately before the write. The snapshot taken for the
+    // flag comparison must not put back a follow list this transaction
+    // already replaced.
+    let mut fresh = config_value_tx(tx)?;
+    set_appid(&mut fresh, copy.appid.trim());
+    tx.write(store::CONFIG_RECORD, fresh)?;
     write_secret_tx(tx, &copy.appsecret)?;
     write_meta_tx(
         tx,
@@ -486,6 +489,10 @@ pub struct CredentialSave {
     pub appsecret: Option<String>,
     #[serde(default)]
     pub clear_appsecret: bool,
+    /// Follow list committed with this save. Omitted for peers that do not
+    /// advertise `watch_sync` (their decoder rejects unknown fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<super::watch_sync::WatchSave>,
 }
 
 impl Drop for CredentialSave {
@@ -503,6 +510,10 @@ impl std::fmt::Debug for CredentialSave {
             .field("appid_changed", &self.appid.is_some())
             .field("appsecret", &self.appsecret.as_ref().map(|_| "[redacted]"))
             .field("clear_appsecret", &self.clear_appsecret)
+            .field(
+                "watch",
+                &self.watch.as_ref().map(|watch| watch.channels.len()),
+            )
             .finish()
     }
 }
@@ -524,6 +535,11 @@ pub struct SaveOutcome {
     pub generation: u64,
     pub changed: bool,
     pub openid_cleared: bool,
+    /// Set when this commit also carried a follow-list save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watch_changed: bool,
 }
 
 /// Why a save was not committed. Fixed codes only.
@@ -540,6 +556,10 @@ pub enum SaveError {
     /// 409 `credentials_holder_moved`: the forwarded node no longer holds
     /// the gateway; the page retries.
     HolderMoved,
+    /// 409 `watch_conflict`: stale `base_watch_revision`.
+    WatchConflict { current: u64 },
+    /// 400 `base_watch_revision_required`.
+    WatchBaseRequired,
     /// 500.
     Store,
 }
@@ -551,6 +571,8 @@ impl SaveError {
             SaveError::Invalid => "credentials_invalid",
             SaveError::HolderUnreachable => "credentials_holder_unreachable",
             SaveError::HolderMoved => "credentials_holder_moved",
+            SaveError::WatchConflict { .. } => "watch_conflict",
+            SaveError::WatchBaseRequired => "base_watch_revision_required",
             SaveError::Store => "credentials_store",
         }
     }
@@ -562,6 +584,8 @@ impl SaveError {
             SaveError::HolderUnreachable => "暂时无法连接持有 QQ 连接的节点，请稍后再试",
             // F rev 3 rule 17: handled like the other conflicts.
             SaveError::HolderMoved => "机器人凭据已被其他页面或节点修改，请重新加载后再保存",
+            SaveError::WatchConflict { .. } => "关注列表已被其他节点修改，请重新加载后再保存",
+            SaveError::WatchBaseRequired => "请重新加载通知设置后再保存关注列表",
             SaveError::Store => "机器人凭据保存失败",
         }
     }
@@ -670,7 +694,7 @@ pub(crate) fn apply_save_tx_with_binding(
             current: meta.generation,
         }));
     }
-    let mut config = config_value_tx(tx)?;
+    let config = config_value_tx(tx)?;
     let current_appid = appid_of(&config);
     let current_secret = secret_tx(tx)?;
     let next_appid = appid.unwrap_or_else(|| current_appid.clone());
@@ -686,11 +710,15 @@ pub(crate) fn apply_save_tx_with_binding(
             generation: meta.generation,
             changed: false,
             openid_cleared: false,
+            watch_revision: None,
+            watch_changed: false,
         });
     }
     if appid_changed {
-        set_appid(&mut config, &next_appid);
-        tx.write(store::CONFIG_RECORD, config)?;
+        // Re-read so a follow-list write earlier in this transaction is kept.
+        let mut fresh = config_value_tx(tx)?;
+        set_appid(&mut fresh, &next_appid);
+        tx.write(store::CONFIG_RECORD, fresh)?;
     }
     if secret_changed {
         write_secret_tx(tx, &next_secret)?;
@@ -723,6 +751,8 @@ pub(crate) fn apply_save_tx_with_binding(
         generation,
         changed: true,
         openid_cleared,
+        watch_revision: None,
+        watch_changed: false,
     })
 }
 
@@ -807,7 +837,27 @@ pub fn serve_forward(
     if !holds {
         return Err(ForwardRefusal::Save(SaveError::HolderMoved));
     }
-    apply_save(store, &request, local, now).map_err(ForwardRefusal::Save)
+    if request.is_change() {
+        validate_save(&request).map_err(ForwardRefusal::Save)?;
+    }
+    if request.watch.is_some() {
+        // Same reason as `watch_sync::apply_save`: a base of 0 must see the
+        // seeded revision, and a conflict must not undo that seed.
+        super::watch_sync::seed_if_needed(store, local, now)
+            .map_err(|_| ForwardRefusal::Save(SaveError::Store))?;
+    }
+    let local = local.to_string();
+    store
+        .transaction(move |tx| {
+            let mut outcome = apply_save_tx(tx, &request, &local, now)?;
+            if let Some(watch) = request.watch.as_ref() {
+                let watch = super::watch_sync::apply_save_tx(tx, watch, &local, now)?;
+                outcome.watch_revision = Some(watch.revision);
+                outcome.watch_changed = watch.changed;
+            }
+            Ok(outcome)
+        })
+        .map_err(|error| ForwardRefusal::Save(save_failed(&error).unwrap_or(SaveError::Store)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

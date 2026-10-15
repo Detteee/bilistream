@@ -27,6 +27,9 @@ pub const END_HOLD_SECS: u64 = 600;
 pub struct LiveObservation {
     pub platform: String,
     pub channel_id: String,
+    /// Configured display name from the status card. Empty when a peer status
+    /// only carried the platform id.
+    pub channel_name: String,
     pub title: Option<String>,
 }
 
@@ -34,25 +37,65 @@ impl LiveObservation {
     pub fn ident(&self) -> String {
         watch_account_ident(&self.platform, &self.channel_id)
     }
+
+    /// A name a person can read. A raw YouTube channel id is not one.
+    pub fn readable_name(&self) -> Option<String> {
+        for value in [self.channel_name.trim(), self.channel_id.trim()] {
+            if value.is_empty() {
+                continue;
+            }
+            if self.platform.eq_ignore_ascii_case("youtube") && looks_like_youtube_channel_id(value)
+            {
+                continue;
+            }
+            return Some(value.to_string());
+        }
+        None
+    }
+}
+
+fn looks_like_youtube_channel_id(value: &str) -> bool {
+    let compact: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
+    compact.len() >= 22
+        && compact.starts_with("UC")
+        && compact
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 /// Live channels in one node's status.
 pub fn observations(status: &StatusData) -> Vec<LiveObservation> {
     let mut out = Vec::new();
     if let Some(yt) = status.youtube.as_ref().filter(|s| s.is_live) {
-        out.push(("youtube", yt.channel_id.clone(), yt.title.clone()));
+        out.push((
+            "youtube",
+            yt.channel_id.clone(),
+            yt.channel_name.clone(),
+            yt.title.clone(),
+        ));
     }
     if let Some(tw) = status.twitch.as_ref().filter(|s| s.is_live) {
-        out.push(("twitch", tw.channel_id.clone(), tw.title.clone()));
+        out.push((
+            "twitch",
+            tw.channel_id.clone(),
+            tw.channel_name.clone(),
+            tw.title.clone(),
+        ));
     }
     if let Some(nico) = status.niconico.as_ref().filter(|s| s.is_live) {
-        out.push(("niconico", nico.channel_id.clone(), nico.title.clone()));
+        out.push((
+            "niconico",
+            nico.channel_id.clone(),
+            nico.channel_name.clone(),
+            nico.title.clone(),
+        ));
     }
     out.into_iter()
-        .filter(|(_, id, _)| !id.trim().is_empty())
-        .map(|(platform, id, title)| LiveObservation {
+        .filter(|(_, id, _, _)| !id.trim().is_empty())
+        .map(|(platform, id, name, title)| LiveObservation {
             platform: platform.to_string(),
             channel_id: id.trim().to_string(),
+            channel_name: name.trim().to_string(),
             title,
         })
         .collect()
@@ -291,14 +334,41 @@ mod tests {
             LiveObservation {
                 platform: "twitch".into(),
                 channel_id: "somelogin".into(),
+                channel_name: String::new(),
                 title: Some(title.into()),
             },
             LiveObservation {
                 platform: "youtube".into(),
                 channel_id: "UCnotwatched".into(),
+                channel_name: String::new(),
                 title: None,
             },
         ]
+    }
+
+    #[test]
+    fn a_status_name_uses_the_configured_channel_and_hides_a_youtube_id() {
+        let named = LiveObservation {
+            platform: "youtube".into(),
+            channel_id: "UC-WX1CXssCtCtc2TNIRnJzg".into(),
+            channel_name: "紡木こかげ".into(),
+            title: None,
+        };
+        assert_eq!(named.readable_name().as_deref(), Some("紡木こかげ"));
+        let raw = LiveObservation {
+            platform: "youtube".into(),
+            channel_id: "UC-WX1CXssCtCtc2TNIRnJzg".into(),
+            channel_name: String::new(),
+            title: None,
+        };
+        assert_eq!(raw.readable_name(), None);
+        let twitch = LiveObservation {
+            platform: "twitch".into(),
+            channel_id: "akarindao".into(),
+            channel_name: "夢野あかり".into(),
+            title: None,
+        };
+        assert_eq!(twitch.readable_name().as_deref(), Some("夢野あかり"));
     }
 
     #[test]
@@ -419,6 +489,7 @@ mod tests {
         let youtube = LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCwatched".into(),
+            channel_name: String::new(),
             title: Some("yt title".into()),
         };
         let twitch = live("tw title")[0].clone();
@@ -491,6 +562,7 @@ mod tests {
         let youtube = vec![LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCwatched".into(),
+            channel_name: String::new(),
             title: None,
         }];
         assert!(
@@ -654,6 +726,7 @@ mod tests {
         let youtube = vec![LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCwatched".into(),
+            channel_name: String::new(),
             title: None,
         }];
         for queued_key in [first[0].dedup_key(), "stream.live:twitch:somelogin".into()] {
@@ -699,6 +772,7 @@ mod tests {
         let youtube = vec![LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCwatched".into(),
+            channel_name: String::new(),
             title: None,
         }];
         let mut lw = LiveWatch::default();
@@ -833,6 +907,7 @@ mod tests {
         let unavailable = vec![LiveObservation {
             platform: "twitch".into(),
             channel_id: "own-login".into(),
+            channel_name: String::new(),
             title: None,
         }];
         assert!(LiveWatch::default()
@@ -850,6 +925,7 @@ mod tests {
         let seen = vec![LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCnext".into(),
+            channel_name: String::new(),
             title: None,
         }];
         let events = LiveWatch::default().channel_live(

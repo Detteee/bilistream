@@ -771,11 +771,13 @@ async fn owner_process_failover_reuses_the_delivered_fault_and_linked_watch_ledg
         crate::notify::live::LiveObservation {
             platform: "youtube".into(),
             channel_id: "UCfixture".into(),
+            channel_name: String::new(),
             title: Some("same episode".into()),
         },
         crate::notify::live::LiveObservation {
             platform: "twitch".into(),
             channel_id: "fixture-login".into(),
+            channel_name: String::new(),
             title: Some("same episode".into()),
         },
     ];

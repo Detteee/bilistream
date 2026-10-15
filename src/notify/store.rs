@@ -12,10 +12,12 @@
 //!   restore transaction), see `migrate_plain_openid`.
 //! - `notify-state`: the last ledger and send outcome, so a restart neither
 //!   repeats alerts nor forgets spent budgets.
+//! - `notify-watch`: follow-list revision metadata (`revision`, `updated_by`,
+//!   `updated_at`). The list itself stays in `notify-config.watch`.
 //!
 //! None of them is in `storage::NAMES` (so never in backups or legacy
-//! exports) or `MANAGED_RECORDS`. AppID, AppSecret and binding metadata
-//! synchronize only through the notifier's signed member channel.
+//! exports) or `MANAGED_RECORDS`. AppID, AppSecret, binding metadata and the
+//! follow list synchronize only through the notifier's signed member channel.
 
 use super::config::NotifyConfig;
 use super::ledger::NotifyLedger;
@@ -41,6 +43,7 @@ pub(crate) fn settings_records(
         SECRETS_RECORD,
         OPENID_RECORD,
         super::credentials::CREDENTIALS_RECORD,
+        super::watch_sync::WATCH_RECORD,
     ];
     let mut records = store.read_many(&names)?;
     if records
@@ -58,6 +61,7 @@ pub struct SettingsSnapshot {
     pub secret: (Option<AppSecret>, Option<u64>),
     pub openid: OpenidState,
     pub credentials: super::credentials::CredentialsMeta,
+    pub watch: super::watch_sync::WatchMeta,
 }
 
 pub fn load_settings(store: &Store) -> io::Result<SettingsSnapshot> {
@@ -69,6 +73,7 @@ pub fn load_settings(store: &Store) -> io::Result<SettingsSnapshot> {
         credentials: super::credentials::parse_meta(
             records.remove(super::credentials::CREDENTIALS_RECORD),
         )?,
+        watch: super::watch_sync::parse_meta(records.remove(super::watch_sync::WATCH_RECORD))?,
     })
 }
 
@@ -393,6 +398,11 @@ pub struct OpenidCopy {
     /// advertise `credentials_sync` (older nodes refuse unknown fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<super::credentials::CredentialsCopy>,
+    /// The shared follow list. Omitted for peers that do not advertise
+    /// `watch_sync`, and omitted while this node has never saved one
+    /// (`watch_revision` 0 and an empty disabled list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<super::watch_sync::WatchCopy>,
 }
 
 impl Drop for OpenidCopy {
@@ -409,6 +419,10 @@ impl std::fmt::Debug for OpenidCopy {
             .field("revision", &self.revision)
             .field("writer", &self.writer)
             .field("credentials", &self.credentials)
+            .field(
+                "watch_revision",
+                &self.watch.as_ref().map(|watch| watch.revision),
+            )
             .finish()
     }
 }
@@ -425,6 +439,11 @@ const COPY_VIA: [&str; 3] = ["manual", "message", "friend_add"];
 
 /// This node's record as a peer copy.
 pub fn export_copy(store: &Store) -> io::Result<OpenidCopy> {
+    let node = super::local_node_id();
+    if !node.is_empty() {
+        // A non-empty revision-0 list becomes revision 1 before it can travel.
+        super::watch_sync::seed_if_needed(store, &node, crate::storage::now())?;
+    }
     export_copy_with(store, || Ok(()))
 }
 
@@ -454,6 +473,7 @@ pub(crate) fn export_copy_with(
         revision: state.revision,
         writer: state.writer.clone(),
         credentials: super::credentials::export_snapshot(&snapshot)?,
+        watch: super::watch_sync::export_snapshot(&snapshot)?,
     })
 }
 
@@ -545,7 +565,11 @@ where
             None => Default::default(),
         };
         let credentials = set.applied;
-        let restamped = set.restamped;
+        let watch = match copy.watch.as_ref() {
+            Some(watch) => super::watch_sync::accept_tx(tx, watch, holder.as_deref(), now)?,
+            None => Default::default(),
+        };
+        let restamped = set.restamped || watch.restamped;
         // revision 0 = "never written": nothing to adopt.
         let outcome =
             if copy.revision == 0 || copy.key() <= (current.revision, current.writer.as_str()) {
@@ -574,7 +598,7 @@ where
                     .map(|set| set.openid_appid.as_str());
                 super::credentials::associate_binding_tx(tx, proof.unwrap_or(&current_appid))?;
                 CopyOutcome {
-                    applied: credentials || proof.is_some(),
+                    applied: credentials || proof.is_some() || watch.applied,
                     revision: current.revision,
                     restamped,
                 }
@@ -814,6 +838,7 @@ where
         expected_secret,
         openid,
         None,
+        None,
         between,
         |_| Ok(()),
     )
@@ -823,6 +848,9 @@ where
 /// Addendum F credential part of a settings save: the request, the
 /// committing node and the clock.
 pub type CredentialsStep = (super::credentials::CredentialSave, String, u64);
+
+/// Follow-list part of the same settings transaction.
+pub type WatchStep = (super::watch_sync::WatchSave, String, u64);
 
 /// Addendum F rev 2 item 15: config, AppSecret, the synced AppID/AppSecret
 /// set (with the openid clearing an AppID change causes) and the openid
@@ -837,6 +865,7 @@ pub(crate) fn save_all_with<F, G>(
     expected_secret: u64,
     openid: Option<OpenidWrite>,
     credentials: Option<CredentialsStep>,
+    watch: Option<WatchStep>,
     between: F,
     after: G,
 ) -> io::Result<(SavedRevisions, Option<super::credentials::SaveOutcome>)>
@@ -856,6 +885,11 @@ where
         SecretChange::Set(value) => Some(secret_value(Some(&value))?),
         SecretChange::Clear => Some(secret_value(None)?),
     };
+    if let Some((_, node, now)) = watch.as_ref() {
+        // Commit an upgrade seed before this transaction so a stale
+        // `base_watch_revision` cannot replace a list that was never synced.
+        super::watch_sync::seed_if_needed(store, node, *now)?;
+    }
     store.transaction(move |tx| {
         let mut saved = SavedRevisions::default();
         if let Some((value, expected)) = config {
@@ -870,6 +904,10 @@ where
                 tx, save, node, *now, binding,
             )?),
             None => None,
+        };
+        if let Some((save, node, now)) = watch.as_ref() {
+            // After the AppID write: this re-reads config and patches `watch` only.
+            super::watch_sync::apply_save_tx(tx, save, node, *now)?;
         };
         if let Some(value) = secret {
             saved.secret = Some(cas(tx, "secret", SECRETS_RECORD, expected_secret, value)?);
