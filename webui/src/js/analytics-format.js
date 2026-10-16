@@ -365,11 +365,23 @@ export function missingNodeText(missing) {
   };
 }
 
-// Share of a day, capped at 24 hours. 0 means no stream time. The calendar
-// paints this as a continuous hue so a cell can be read as a duration.
+// Share of a day, capped at 24 hours. 0 means no stream time.
 export function streamHeat(secs) {
   if (!isNum(secs) || secs <= 0) return 0;
   return Math.min(1, secs / 86400);
+}
+
+// Coolors a4e9f9 → c5aef2 → 8578ea. t is 0 at the first stop and 1 at the last.
+const SPECTRUM_STOPS = [[0xa4, 0xe9, 0xf9], [0xc5, 0xae, 0xf2], [0x85, 0x78, 0xea]];
+export function spectrumColor(t) {
+  if (!isNum(t) || t <= 0) return 'rgb(164 233 249)';
+  const x = Math.min(1, t) * (SPECTRUM_STOPS.length - 1);
+  const i = Math.min(SPECTRUM_STOPS.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = SPECTRUM_STOPS[i];
+  const b = SPECTRUM_STOPS[i + 1];
+  const channel = n => Math.round(a[n] + (b[n] - a[n]) * f);
+  return `rgb(${channel(0)} ${channel(1)} ${channel(2)})`;
 }
 
 // One 观众场次 per Bilibili live (`live:…`) or, when that id was never stored,

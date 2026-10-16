@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
-  missingNodeText, streamHeat, audienceBroadcasts, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
+  missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
 } from '../src/js/analytics-format.js';
 import {
   createAnalyticsLoader, renderChunkError, CHUNK_ERROR_TITLE, CHUNK_ERROR_BODY, CHUNK_ERROR_BUTTON,
@@ -148,6 +148,10 @@ test('calendar heat is a 0–24 hour spectrum, not a relative more/less step', (
   assert.equal(streamHeat(12 * 3600), 0.5);
   assert.equal(streamHeat(24 * 3600), 1);
   assert.equal(streamHeat(30 * 3600), 1);
+  assert.equal(spectrumColor(0), 'rgb(164 233 249)');
+  assert.equal(spectrumColor(0.5), 'rgb(197 174 242)');
+  assert.equal(spectrumColor(1), 'rgb(133 120 234)');
+  assert.notEqual(spectrumColor(0.25), spectrumColor(0.75));
 });
 
 test('audience sessions group ffmpeg pushes by Bilibili live or source id', () => {

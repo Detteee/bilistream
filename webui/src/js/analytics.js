@@ -14,7 +14,7 @@ import {
   DASH, orDash, formatCount, formatHours, formatPercent, formatAbsolute, formatRelative, formatRange,
   formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine, stripCells, sparkPath,
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
-  expectedResolution, customRange, missingNodeText, streamHeat, audienceBroadcasts, platformKey, platformName, reasonLabel,
+  expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
   mergeRetention, EVENTS_EMPTY, isolatedPointIndices,
 } from './analytics-format.js';
@@ -660,7 +660,7 @@ function renderCalendar(summary) {
     if (gap) cell.dataset.gap = '';
     else if (heat > 0) {
       cell.dataset.on = '';
-      cell.style.setProperty('--heat', String(heat));
+      cell.style.backgroundColor = spectrumColor(heat);
     }
     if (d.failures > 0) cell.dataset.fail = '';
     cell.title = `${formatMonthDay(d.day)} · ${formatHours(d.live_secs)} 小时${d.failures > 0 ? ` · 异常 ${d.failures} 次` : ''}`;
