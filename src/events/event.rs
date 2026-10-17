@@ -42,6 +42,53 @@ impl EndReason {
     }
 }
 
+/// Why the Bilibili relay session ended. Distinct from the history session's
+/// `EndReason`: this one is keyed to the room going offline and carries the
+/// two causes the history codes cannot express (Bilibili 警告/切断 and the
+/// idle-room auto stop). It travels in `EventKind::BroadcastEnded` and in the
+/// synced notify ledger, so it derives serde.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BroadcastEndCause {
+    /// Bilibili 警告/切断 stopped the room.
+    WarningCut,
+    /// 主动停播 (WebUI or danmaku command).
+    ManualStop,
+    /// 源直播已结束，房间空转超过 3 小时后自动停播.
+    AutoStop,
+    /// 源直播结束与房间停播同时确认.
+    SourceEnded,
+    /// 违禁词(主播名或玩家ID)命中，本进程主动停播.
+    ContentRejected,
+    /// The room was taken offline without this node stopping it.
+    BiliStopped,
+}
+
+impl BroadcastEndCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WarningCut => "warning_cut",
+            Self::ManualStop => "manual_stop",
+            Self::AutoStop => "auto_stop",
+            Self::SourceEnded => "source_ended",
+            Self::ContentRejected => "content_rejected",
+            Self::BiliStopped => "bili_stopped",
+        }
+    }
+
+    /// The 下播 notice's `结束原因` line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WarningCut => "B站警告/切断",
+            Self::ManualStop => "主动停播",
+            Self::AutoStop => "源直播结束后自动停播",
+            Self::SourceEnded => "源直播结束",
+            Self::ContentRejected => "检测到违禁词停播",
+            Self::BiliStopped => "B站直播间下播",
+        }
+    }
+}
+
 /// StopLiveData totals after the allowlist. No revenue field exists.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BiliTotals {
@@ -138,7 +185,11 @@ pub enum EventKind {
         channel: String,
         title: String,
     },
-    BroadcastEnded,
+    /// The Bilibili room went offline: the one 下播 boundary of a relay
+    /// session (a source switch never ends it).
+    BroadcastEnded {
+        cause: BroadcastEndCause,
+    },
     ProcessStarted {
         version: &'static str,
     },
@@ -281,7 +332,7 @@ impl std::fmt::Debug for EventKind {
         // failed assertion or future diagnostic must not print that payload.
         let name = match self {
             Self::BroadcastStarted { .. } => "BroadcastStarted",
-            Self::BroadcastEnded => "BroadcastEnded",
+            Self::BroadcastEnded { .. } => "BroadcastEnded",
             Self::ProcessStarted { .. } => "ProcessStarted",
             Self::SessionStarted { .. } => "SessionStarted",
             Self::SessionLiveKey { .. } => "SessionLiveKey",

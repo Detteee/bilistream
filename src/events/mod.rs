@@ -3,7 +3,8 @@
 
 pub mod event;
 pub use event::{
-    BiliLiveRecord, BiliSummaryPhase, BiliTotals, EndReason, Event, EventKind, NodeState, Severity,
+    BiliLiveRecord, BiliSummaryPhase, BiliTotals, BroadcastEndCause, EndReason, Event, EventKind,
+    NodeState, Severity,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

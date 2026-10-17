@@ -1,4 +1,10 @@
-//! 本直播间开播/下播 notices (contract Addendum A rev 2, D, E rev 3).
+//! 本直播间开播/换台/下播 notices (contract Addendum A rev 2, D, E rev 3).
+//!
+//! The unit is the Bilibili room session, not the upstream source: the room
+//! going live opens `generation`, a source change inside it is one
+//! `LiveKind::LiveSwitch`, and only the room going offline closes it, with
+//! one 下播 that names the source chain and the end cause (Addendum E rev 5
+//! item 20).
 //!
 //! The streaming node records the broadcast in the synced ledger
 //! (`LiveLedger::broadcast`); only the gateway holder sends. Each notice
@@ -16,6 +22,7 @@
 use super::ledger::NotifyLedger;
 use super::qq::api::{ApiResult, QqMode};
 use super::sink::{PassiveTarget, PASSIVE_MAX_REPLIES};
+use crate::events::BroadcastEndCause;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
@@ -39,11 +46,16 @@ pub const PASSIVE_CLOSED_CODES: [i64; 3] = [40034005, 304103, 40034128];
 const TITLE_CHARS: usize = 40;
 const NAME_CHARS: usize = 40;
 const SHANGHAI_SECS: i32 = 8 * 3600;
+/// Switched sources kept for the 下播 chain; older ones only survive as the
+/// session's first source.
+const RECENT_SOURCES: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveKind {
     LiveStart,
+    /// The room stayed live and the relayed source changed (换台).
+    LiveSwitch,
     LiveEnd,
 }
 
@@ -51,13 +63,84 @@ impl LiveKind {
     pub fn as_str(self) -> &'static str {
         match self {
             LiveKind::LiveStart => "live_start",
+            LiveKind::LiveSwitch => "live_switch",
             LiveKind::LiveEnd => "live_end",
         }
     }
     fn label(self) -> &'static str {
         match self {
             LiveKind::LiveStart => "开播",
+            LiveKind::LiveSwitch => "换台",
             LiveKind::LiveEnd => "下播",
+        }
+    }
+}
+
+/// Identity of one notice inside a broadcast: the kind plus, for
+/// `LiveSwitch`, the `Broadcast::switch_seq` it announces. A session switches
+/// sources many times, so switch notices cannot share a single record slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LiveEventKey {
+    pub kind: LiveKind,
+    pub seq: u32,
+}
+
+impl LiveEventKey {
+    pub const fn start() -> Self {
+        Self {
+            kind: LiveKind::LiveStart,
+            seq: 0,
+        }
+    }
+    pub const fn end() -> Self {
+        Self {
+            kind: LiveKind::LiveEnd,
+            seq: 0,
+        }
+    }
+    pub const fn switch(seq: u32) -> Self {
+        Self {
+            kind: LiveKind::LiveSwitch,
+            seq,
+        }
+    }
+    /// The wire form used in records, logs and dedup keys:
+    /// `live_start`, `live_end`, `live_switch:3`.
+    pub fn as_str(self) -> String {
+        match self.kind {
+            LiveKind::LiveSwitch => format!("live_switch:{}", self.seq),
+            other => other.as_str().to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for LiveEventKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.as_str())
+    }
+}
+
+impl Serialize for LiveEventKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for LiveEventKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let raw = String::deserialize(deserializer)?;
+        let unknown = || Error::custom(format!("unknown live event key {raw}"));
+        match raw.split_once(':') {
+            Some(("live_switch", seq)) => Ok(Self::switch(seq.parse().map_err(Error::custom)?)),
+            Some(_) => Err(unknown()),
+            // A pre-换台 ledger only holds 开播/下播 records.
+            None => match raw.as_str() {
+                "live_start" => Ok(Self::start()),
+                "live_end" => Ok(Self::end()),
+                "live_switch" => Ok(Self::switch(0)),
+                _ => Err(unknown()),
+            },
         }
     }
 }
@@ -132,8 +215,32 @@ impl DeliveryRecord {
     }
 }
 
-/// One broadcast of this room: the counter only moves when a new broadcast
-/// starts (a re-call of start-live while it is open reuses it).
+/// One relayed source of a session, as the 换台 notice saw it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceEntry {
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub at: u64,
+}
+
+impl SourceEntry {
+    fn clean(info: &LiveSource, at: u64) -> Self {
+        Self {
+            platform: crate::logging::safe_text(&info.platform, NAME_CHARS),
+            channel: crate::logging::safe_text(&info.channel, NAME_CHARS),
+            title: crate::logging::safe_text(&info.title, TITLE_CHARS),
+            at,
+        }
+    }
+}
+
+/// One Bilibili room session: `generation` only moves when the room goes live
+/// again. A source switch inside the session is a 换台, never a new 开播.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Broadcast {
     pub generation: u64,
@@ -151,6 +258,19 @@ pub struct Broadcast {
     pub started_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
+    /// `platform:channel` selected now; empty means the first source.
+    #[serde(default)]
+    pub current_key: String,
+    /// Switches announced in this session (the newest `LiveSwitch` ordinal).
+    #[serde(default)]
+    pub switch_seq: u32,
+    /// The tail of the switched sources, newest last, bounded by
+    /// `RECENT_SOURCES`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<SourceEntry>,
+    /// Why the room went offline; absent while it is live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_cause: Option<BroadcastEndCause>,
 }
 
 /// `active_push` per node (Addendum E rev 2 item 10). Stored as unix
@@ -203,7 +323,7 @@ pub struct LiveLedger {
     pub broadcast: Broadcast,
     /// `live_event_delivery` for `broadcast.generation` only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub delivery: BTreeMap<LiveKind, DeliveryRecord>,
+    pub delivery: BTreeMap<LiveEventKey, DeliveryRecord>,
     /// Highest gateway-holder term handed out.
     #[serde(default)]
     pub term: u64,
@@ -219,28 +339,52 @@ impl LiveLedger {
     /// Commutative, associative, idempotent.
     pub fn join(&mut self, other: &LiveLedger) {
         self.term = self.term.max(other.term);
-        let mine = &self.broadcast;
-        let theirs = &other.broadcast;
+        let mine = self.broadcast.clone();
+        let theirs = other.broadcast.clone();
+        let same_session = theirs.generation == mine.generation
+            && theirs.started_at == mine.started_at
+            && theirs.stream_key == mine.stream_key;
         if (theirs.generation, theirs.started_at, &theirs.stream_key)
             > (mine.generation, mine.started_at, &mine.stream_key)
         {
             // A newer broadcast: older records are cleared (rule 14).
-            let ended =
-                if theirs.generation == mine.generation && theirs.stream_key == mine.stream_key {
-                    theirs.ended_at.max(mine.ended_at)
-                } else {
-                    theirs.ended_at
-                };
+            let ended = if same_session {
+                theirs.ended_at.max(mine.ended_at)
+            } else {
+                theirs.ended_at
+            };
+            let end_cause = if !same_session {
+                theirs.end_cause
+            } else if mine.ended_at > theirs.ended_at {
+                mine.end_cause
+            } else {
+                theirs.end_cause.or(mine.end_cause)
+            };
             if theirs.generation > mine.generation {
                 self.delivery = other.delivery.clone();
             } else {
                 merge_records(&mut self.delivery, &other.delivery);
             }
-            self.broadcast = theirs.clone();
+            self.broadcast = theirs;
             self.broadcast.ended_at = ended;
-        } else if theirs.generation == mine.generation {
-            if theirs.started_at == mine.started_at && theirs.stream_key == mine.stream_key {
-                self.broadcast.ended_at = mine.ended_at.max(theirs.ended_at);
+            self.broadcast.end_cause = end_cause;
+        } else if same_session {
+            if theirs.ended_at > mine.ended_at {
+                self.broadcast.ended_at = theirs.ended_at;
+                self.broadcast.end_cause = theirs.end_cause;
+            } else if theirs.ended_at == mine.ended_at && self.broadcast.end_cause.is_none() {
+                self.broadcast.end_cause = theirs.end_cause;
+            }
+            // Switch state is monotonic: a node that has not seen the newest
+            // source yet loses only that field, never the whole session.
+            if theirs.switch_seq > mine.switch_seq
+                || (theirs.switch_seq == mine.switch_seq && theirs.recent.len() > mine.recent.len())
+            {
+                self.broadcast.switch_seq = theirs.switch_seq.max(mine.switch_seq);
+                self.broadcast.recent = theirs.recent.clone();
+                if !theirs.current_key.is_empty() {
+                    self.broadcast.current_key = theirs.current_key.clone();
+                }
             }
             merge_records(&mut self.delivery, &other.delivery);
         }
@@ -253,58 +397,93 @@ impl LiveLedger {
                 }
             }
         }
+        self.prune_switch_records();
     }
 
-    /// Successful start-live on the streaming node. Returns the generation.
-    pub fn start(&mut self, info: &LiveStartInfo, now: u64) -> u64 {
-        let open = self.broadcast.generation > 0 && self.broadcast.ended_at.is_none();
-        if open {
-            // The counter follows the Bilibili broadcast (rev 5 item 20): a
-            // restart, a failover or a source switch while it is open is the
-            // same broadcast, so no second 开播 and one 下播 at its end.
-            return self.broadcast.generation;
+    /// The runtime selected this source while the room is live: open the
+    /// broadcast if none is open, otherwise record a 换台 when the source
+    /// moved. Idempotent for a re-selection of the current source.
+    pub fn source(&mut self, info: &LiveSource, now: u64) -> SourceOutcome {
+        if self.broadcast.generation == 0 || self.broadcast.ended_at.is_some() {
+            let generation = self.broadcast.generation + 1;
+            self.broadcast = Broadcast {
+                generation,
+                stream_key: info.stream_key.clone(),
+                current_key: info.stream_key.clone(),
+                platform: crate::logging::safe_text(&info.platform, NAME_CHARS),
+                channel: crate::logging::safe_text(&info.channel, NAME_CHARS),
+                title: crate::logging::safe_text(&info.title, TITLE_CHARS),
+                started_at: now,
+                ..Broadcast::default()
+            };
+            self.delivery.clear();
+            return SourceOutcome::Started(generation);
         }
-        self.broadcast = Broadcast {
-            generation: self.broadcast.generation + 1,
-            stream_key: info.stream_key.clone(),
-            platform: crate::logging::safe_text(&info.platform, NAME_CHARS),
-            channel: crate::logging::safe_text(&info.channel, NAME_CHARS),
-            title: crate::logging::safe_text(&info.title, TITLE_CHARS),
-            started_at: now,
-            ended_at: None,
+        let current = if self.broadcast.current_key.is_empty() {
+            self.broadcast.stream_key.clone()
+        } else {
+            self.broadcast.current_key.clone()
         };
-        self.delivery.clear();
-        self.broadcast.generation
+        if current == info.stream_key {
+            return SourceOutcome::Same(self.broadcast.generation);
+        }
+        self.broadcast.switch_seq += 1;
+        self.broadcast.current_key = info.stream_key.clone();
+        self.broadcast.recent.push(SourceEntry::clean(info, now));
+        if self.broadcast.recent.len() > RECENT_SOURCES {
+            let drop = self.broadcast.recent.len() - RECENT_SOURCES;
+            self.broadcast.recent.drain(..drop);
+        }
+        // A newer source supersedes the switch notice still in flight: the old
+        // source is stale by the time that notice would be sent.
+        self.prune_switch_records();
+        SourceOutcome::Switched(self.broadcast.generation, self.broadcast.switch_seq)
     }
 
-    /// 直播结束 on the active node. Only an open broadcast ends, once.
-    pub fn end(&mut self, now: u64) -> bool {
+    /// The Bilibili room went offline. Only an open broadcast ends, once, and
+    /// the first cause wins.
+    pub fn end(&mut self, now: u64, cause: BroadcastEndCause) -> bool {
         if self.broadcast.generation == 0 || self.broadcast.ended_at.is_some() {
             return false;
         }
         self.broadcast.ended_at = Some(now.max(self.broadcast.started_at));
+        self.broadcast.end_cause = Some(cause);
         true
     }
 
-    /// Kinds that are due for this broadcast.
-    pub fn due_kinds(&self) -> Vec<LiveKind> {
+    /// Notices due for this broadcast, in the order they happened.
+    pub fn due_events(&self) -> Vec<LiveEventKey> {
         if self.broadcast.generation == 0 {
             return Vec::new();
         }
-        let mut kinds = vec![LiveKind::LiveStart];
-        if self.broadcast.ended_at.is_some() {
-            kinds.push(LiveKind::LiveEnd);
+        let mut keys = vec![LiveEventKey::start()];
+        // A 换台 continues the 开播: while that first notice is still queued
+        // (or being retried) the session's opening line is the one to chase.
+        let start_answered = self
+            .delivery
+            .get(&LiveEventKey::start())
+            .is_some_and(|record| {
+                matches!(record.state, DeliveryState::Delivered | DeliveryState::Off)
+            });
+        if self.broadcast.switch_seq > 0 && start_answered {
+            keys.push(LiveEventKey::switch(self.broadcast.switch_seq));
         }
-        kinds
+        if self.broadcast.ended_at.is_some() {
+            keys.push(LiveEventKey::end());
+        }
+        keys
     }
 
-    /// Addendum D `pending_live_events`.
+    /// Addendum D `pending_live_events` (one entry per kind, not per switch).
     pub fn pending(&self) -> Vec<&'static str> {
-        self.delivery
+        let mut kinds: Vec<&'static str> = self
+            .delivery
             .iter()
             .filter(|(_, record)| record.state == DeliveryState::Pending)
-            .map(|(kind, _)| kind.as_str())
-            .collect()
+            .map(|(key, _)| key.kind.as_str())
+            .collect();
+        kinds.dedup();
+        kinds
     }
 
     /// When the worker must wake for an ambiguous retry or a held notice's
@@ -331,16 +510,24 @@ impl LiveLedger {
         self.active_push.retain(|_, push| push.last_at <= limit);
     }
 
-    fn write(&mut self, kind: LiveKind, mut record: DeliveryRecord) {
-        let seq = self.delivery.get(&kind).map(|old| old.seq).unwrap_or(0) + 1;
+    fn write(&mut self, key: LiveEventKey, mut record: DeliveryRecord) {
+        let seq = self.delivery.get(&key).map(|old| old.seq).unwrap_or(0) + 1;
         record.seq = seq;
-        self.delivery.insert(kind, record);
+        self.delivery.insert(key, record);
+    }
+
+    /// Keep only the current switch's record: a superseded 换台 is never sent
+    /// and must not ride along in heartbeats.
+    fn prune_switch_records(&mut self) {
+        let current = self.broadcast.switch_seq;
+        self.delivery
+            .retain(|key, _| key.kind != LiveKind::LiveSwitch || key.seq == current);
     }
 }
 
 fn merge_records(
-    mine: &mut BTreeMap<LiveKind, DeliveryRecord>,
-    theirs: &BTreeMap<LiveKind, DeliveryRecord>,
+    mine: &mut BTreeMap<LiveEventKey, DeliveryRecord>,
+    theirs: &BTreeMap<LiveEventKey, DeliveryRecord>,
 ) {
     for (kind, record) in theirs {
         match mine.get_mut(kind) {
@@ -358,21 +545,34 @@ fn retry_at(record: &DeliveryRecord) -> u64 {
     record.first_at + AMBIGUOUS_RETRY_AT[index]
 }
 
-/// What the runtime knows at a successful start-live. No ids beyond the
+/// What the runtime knows when it selects a relay source. No ids beyond the
 /// source's platform/channel names, which the status page shows anyway.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LiveStartInfo {
+pub struct LiveSource {
     pub stream_key: String,
     pub platform: String,
     pub channel: String,
     pub title: String,
 }
 
+/// What `LiveLedger::source` did with the selected source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceOutcome {
+    /// The room had no open session: this opened generation `u64`.
+    Started(u64),
+    /// The room stayed live: `(generation, switch ordinal)`.
+    Switched(u64, u32),
+    /// The same source was selected again: `generation`.
+    Same(u64),
+}
+
 /// Signals from the streaming runtime; queued without waiting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveSignal {
-    Started(LiveStartInfo),
-    Ended,
+    /// A source is selected and the Bilibili room is live.
+    Source(LiveSource),
+    /// The Bilibili room went offline.
+    Ended(BroadcastEndCause),
 }
 
 pub fn shanghai_month(now: u64) -> u32 {
@@ -392,56 +592,118 @@ pub fn rfc3339(at: u64) -> String {
     shanghai(at).to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
-/// This relay's start/end is distinct from the watched channel's live state.
-/// A held notice retains its event time and names the node sending it now.
-pub fn render(kind: LiveKind, broadcast: &Broadcast, catch_up: bool, sender: &str) -> String {
+/// One notice of a relay session: 开播, a 换台, or the single 下播. A held
+/// notice retains its event time and names the node sending it now.
+pub fn render(key: LiveEventKey, broadcast: &Broadcast, catch_up: bool, sender: &str) -> String {
     let clean = |value: &str, cols: usize| super::format::sanitize(value, cols);
-    let platform = clean(&broadcast.platform, 16);
-    let channel = clean(&broadcast.channel, NAME_CHARS);
-    let source = if channel.is_empty() {
-        "当前频道"
-    } else {
-        &channel
-    };
     let mut lines = Vec::new();
-    let at = match kind {
-        LiveKind::LiveStart => {
-            let title = clean(&broadcast.title, TITLE_CHARS);
-            lines.push(format!("🟢 开始转播 {source}"));
-            match (platform.is_empty(), title.is_empty()) {
-                (false, false) => lines.push(format!("{platform} · {title}")),
-                (false, true) => lines.push(platform),
-                (true, false) => lines.push(title),
-                (true, true) => {}
-            }
-            broadcast.started_at
+    let at = match key.kind {
+        LiveKind::LiveStart | LiveKind::LiveSwitch => {
+            let entry = match key.kind {
+                LiveKind::LiveStart => SourceEntry {
+                    platform: broadcast.platform.clone(),
+                    channel: broadcast.channel.clone(),
+                    title: broadcast.title.clone(),
+                    at: broadcast.started_at,
+                },
+                _ => switched_source(broadcast, key.seq),
+            };
+            let platform = clean(&entry.platform, 16);
+            let channel = clean(&entry.channel, NAME_CHARS);
+            let source = if channel.is_empty() {
+                "当前频道".to_string()
+            } else {
+                channel
+            };
+            let title = clean(&entry.title, TITLE_CHARS);
+            lines.push(match key.kind {
+                LiveKind::LiveStart => format!("🟢 开始转播 {source}"),
+                _ => format!("🟢换台 {source}"),
+            });
+            push_platform_title(&mut lines, &platform, &title);
+            entry.at
         }
         LiveKind::LiveEnd => {
             let end = broadcast.ended_at.unwrap_or(broadcast.started_at);
             let length = super::format::duration_text(end.saturating_sub(broadcast.started_at));
             lines.push("⚪ 本场转播已结束".to_string());
-            // The ledger retains the first source across source switches.
-            // It does not tell us which channel was selected at the end.
-            lines.push(if channel.is_empty() {
-                format!("本场共持续 {length}。")
-            } else {
-                format!("本场从 {channel} 开始，共持续 {length}。")
-            });
+            lines.push(session_line(broadcast, &length));
+            if let Some(cause) = broadcast.end_cause {
+                lines.push(format!("结束原因：{}", cause.label()));
+            }
             end
         }
     };
     if catch_up {
         lines.push(format!(
             "补发：{}于 {} (UTC+8)",
-            if kind == LiveKind::LiveStart {
-                "开始"
-            } else {
-                "结束"
+            match key.kind {
+                LiveKind::LiveStart => "开始",
+                LiveKind::LiveSwitch => "换台",
+                LiveKind::LiveEnd => "结束",
             },
             super::format::utc8_time(at)
         ));
     }
     super::format::with_sender(&lines.join("\n"), sender)
+}
+
+fn push_platform_title(lines: &mut Vec<String>, platform: &str, title: &str) {
+    match (platform.is_empty(), title.is_empty()) {
+        (false, false) => lines.push(format!("{platform} · {title}")),
+        (false, true) => lines.push(platform.to_string()),
+        (true, false) => lines.push(title.to_string()),
+        (true, true) => {}
+    }
+}
+
+/// The source a switch notice announces. Only the newest switch is ever due
+/// (`LiveLedger::prune_switch_records`), so the tail of `recent` is it.
+fn switched_source(broadcast: &Broadcast, seq: u32) -> SourceEntry {
+    if seq == broadcast.switch_seq {
+        if let Some(entry) = broadcast.recent.last() {
+            return entry.clone();
+        }
+    }
+    SourceEntry {
+        platform: broadcast.platform.clone(),
+        channel: broadcast.channel.clone(),
+        title: broadcast.title.clone(),
+        at: broadcast.started_at,
+    }
+}
+
+/// `本场 橘ひなの -> Kamito，共持续 1 天 3 小时。` A session that never
+/// switched keeps the older `本场从 … 开始` wording.
+fn session_line(broadcast: &Broadcast, length: &str) -> String {
+    let clean = |value: &str| super::format::sanitize(value, NAME_CHARS);
+    let first = clean(&broadcast.channel);
+    let mut names: Vec<String> = Vec::new();
+    if !first.is_empty() {
+        names.push(first);
+    }
+    names.extend(
+        broadcast
+            .recent
+            .iter()
+            .map(|entry| clean(&entry.channel))
+            .filter(|name| !name.is_empty()),
+    );
+    let total = broadcast.switch_seq as usize + 1;
+    match names.len() {
+        0 => format!("本场共持续 {length}。"),
+        1 => format!("本场从 {} 开始，共持续 {length}。", names[0]),
+        _ if total <= RECENT_SOURCES + 1 => {
+            format!("本场 {}，共持续 {length}。", names.join(" -> "))
+        }
+        _ => {
+            let last = names.last().cloned().unwrap_or_default();
+            format!(
+                "本场 {} -> …（共 {total} 个频道）-> {last}，共持续 {length}。",
+                names[0]
+            )
+        }
+    }
 }
 
 /// One C2C request for a live notice.
@@ -714,11 +976,12 @@ pub async fn drive(
         return report;
     };
     let broadcast = driver.ledger.live.broadcast.clone();
-    for kind in driver.ledger.live.due_kinds() {
+    for key in driver.ledger.live.due_events() {
+        let kind = key.kind;
         if !driver.enabled {
-            if !driver.ledger.live.delivery.contains_key(&kind) {
+            if !driver.ledger.live.delivery.contains_key(&key) {
                 let record = driver.record(DeliveryState::Off, Channel::None, 0, driver.now);
-                driver.ledger.live.write(kind, record);
+                driver.ledger.live.write(key, record);
                 report.changed = true;
             }
             continue;
@@ -729,7 +992,7 @@ pub async fn drive(
             .ledger
             .live
             .delivery
-            .get(&kind)
+            .get(&key)
             .is_some_and(|record| record.held);
         // At most a handful of steps: active ×3, passive, wakeup, pending.
         for _ in 0..8 {
@@ -742,7 +1005,7 @@ pub async fn drive(
                 .map(|push| push.last_at)
                 .unwrap_or(0);
             let step = next_step(
-                driver.ledger.live.delivery.get(&kind),
+                driver.ledger.live.delivery.get(&key),
                 term,
                 driver.now,
                 active_ok_at,
@@ -802,7 +1065,7 @@ pub async fn drive(
                 let mut record =
                     driver.record(DeliveryState::Pending, Channel::None, 0, driver.now);
                 record.held = true;
-                driver.ledger.live.write(kind, record);
+                driver.ledger.live.write(key, record);
                 report.skipped.push(kind);
                 report.changed = true;
                 break;
@@ -810,17 +1073,17 @@ pub async fn drive(
             // Rule 11: commit `sending` before the request, or do not send.
             let mut sending = driver.record(DeliveryState::Sending, channel, attempts, first_at);
             sending.held = from_pending;
-            let previous = driver.ledger.live.delivery.get(&kind).cloned();
-            driver.ledger.live.write(kind, sending);
+            let previous = driver.ledger.live.delivery.get(&key).cloned();
+            driver.ledger.live.write(key, sending);
             report.changed = true;
             if commit.commit(driver.ledger).await.is_err() {
                 // Not sent: put the old record back so nothing claims a send.
                 match previous {
                     Some(previous) => {
-                        driver.ledger.live.delivery.insert(kind, previous);
+                        driver.ledger.live.delivery.insert(key, previous);
                     }
                     None => {
-                        driver.ledger.live.delivery.remove(&kind);
+                        driver.ledger.live.delivery.remove(&key);
                     }
                 }
                 report.commit_failed = true;
@@ -831,7 +1094,7 @@ pub async fn drive(
                 || previous
                     .as_ref()
                     .is_some_and(|record| record.state == DeliveryState::Pending);
-            let text = render(kind, &broadcast, catch_up, driver.sender_name);
+            let text = render(key, &broadcast, catch_up, driver.sender_name);
             let (mode, msg_id, seq) = match channel {
                 Channel::Passive => {
                     let target = driver.passive.as_deref().expect("usable passive target");
@@ -848,8 +1111,8 @@ pub async fn drive(
             let result = transport
                 .send(LiveSend {
                     attempt: super::sink::AttemptContext {
-                        key: format!("bili.{}", kind.as_str()),
-                        dedup: format!("bili.{}:{}", kind.as_str(), broadcast.generation),
+                        key: format!("bili.{}", key.as_str()),
+                        dedup: format!("bili.{}:{}", key.as_str(), broadcast.generation),
                         phase: kind.as_str(),
                         test: false,
                         suppressed: 0,
@@ -921,7 +1184,7 @@ pub async fn drive(
             };
             let mut done = driver.record(state, channel, attempts, first_at);
             done.held = from_pending;
-            driver.ledger.live.write(kind, done);
+            driver.ledger.live.write(key, done);
             if state == DeliveryState::Delivered {
                 report.delivered.push((kind, channel));
                 // Best effort: a lost `delivered` write only risks a rare

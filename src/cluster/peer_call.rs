@@ -5,9 +5,12 @@
 use super::membership::{member_endpoint, trust_snapshot, Descriptor, Membership};
 use super::peer_auth::{
     PeerClient, PeerResponse, PeerScope, RoutePolicy, HELLO_REQUEST_BYTES, HELLO_RESPONSE_BYTES,
-    MAX_BODY_BYTES, NOTIFY_OPENID_PATH, NOTIFY_WATCH_SYNC_HEADER, OPERATION_BODY_BYTES,
-    PAIRING_BODY_BYTES,
+    MAX_BODY_BYTES, NOTIFY_OPENID_PATH, OPERATION_BODY_BYTES, PAIRING_BODY_BYTES,
 };
+// Only `unsigned_test_send` marks the watch-sync pull, so the import exists in
+// test builds alone.
+#[cfg(test)]
+use super::peer_auth::NOTIFY_WATCH_SYNC_HEADER;
 use super::types::PeerApiResponse;
 use crate::config::Config;
 use serde::{de::DeserializeOwned, Serialize};

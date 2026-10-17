@@ -7,7 +7,9 @@ use crate as bilistream;
 
 use bilistream::cluster::{self, ClusterStreamIdentity};
 use bilistream::config::{load_config, save_config, Config};
+use bilistream::events::BroadcastEndCause;
 use bilistream::logging::{safe_diagnostic, safe_text};
+use bilistream::notify::live_events::LiveSource;
 use bilistream::plugins::bilibili::get_thumbnail;
 use bilistream::plugins::danmaku::warning::{
     canonical_channel_id, log_warning_mark, warning_tracker, BroadcastSource, SourceObservation,
@@ -600,6 +602,21 @@ fn end_action(
         (false, bili_live) => EndAction::AnnounceEnd { bili_live },
         (true, true) => EndAction::AnnounceInterrupted,
         (true, false) => EndAction::BiliStoppedQuietly,
+    }
+}
+
+/// The session 下播 cause this action implies, or `None` while the room is
+/// still live: the notice must follow the room, never the push. `AutoStop` is
+/// not here — it is emitted where the room is actually stopped.
+fn end_cause(action: EndAction, bili_live: bool) -> Option<BroadcastEndCause> {
+    match action {
+        EndAction::SkipManualStop => Some(BroadcastEndCause::ManualStop),
+        // The danmaku handler records this when it stops the room; this path
+        // covers a warning that took the room offline without it.
+        EndAction::SkipWarning => (!bili_live).then_some(BroadcastEndCause::WarningCut),
+        EndAction::AnnounceEnd { bili_live: false } => Some(BroadcastEndCause::SourceEnded),
+        EndAction::BiliStoppedQuietly => Some(BroadcastEndCause::BiliStopped),
+        _ => None,
     }
 }
 
@@ -1374,6 +1391,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
     // Survives outer-loop passes so the same broadcast coming back after a
     // miss does not announce 直播结束 twice.
     let mut stream_end = StreamEndState::default();
+    // The room's liveness as the previous pass observed it. The session 下播
+    // notice is keyed to this edge: only an observed online-to-offline change
+    // closes the broadcast, so a source gap never ends the room's session.
+    let mut bili_room_was_live = false;
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -1580,6 +1601,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
         };
         let bili_is_live = bili_live.is_live;
+        // Session 下播 edge: the room was live in the previous pass and is
+        // offline now. Emitted before this pass selects a source, so a room
+        // that comes back opens a new session. `LiveLedger::end` only closes
+        // an open session and the first cause wins, so a stop this process
+        // already announced (manual/warning/auto) keeps its own cause.
+        if bili_room_was_live && !bili_is_live {
+            bilistream::notify::live_ended(BroadcastEndCause::BiliStopped);
+        }
+        bili_room_was_live = bili_is_live;
         let bili_title = bili_live.title.clone();
         let bili_area_id = bili_live.area_id;
         let mut bili_status = bilistream::BiliStatus {
@@ -1908,8 +1938,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 if let Some(word) = monitor.invalid_word().await {
                     tracing::error!("检测到非法词汇:{}，不转播", word);
                     if bili_is_live {
-                        if let Err(error) = bili_stop_live(&cfg).await {
-                            tracing::error!("停止 B 站直播失败: {}", error);
+                        match bili_stop_live(&cfg).await {
+                            // The room is offline because of the keyword, not
+                            // because it went away on its own.
+                            Ok(()) => {
+                                bilistream::notify::live_ended(BroadcastEndCause::ContentRejected)
+                            }
+                            Err(error) => tracing::error!("停止 B 站直播失败: {}", error),
                         }
                     }
                     wait_config_update_or_timeout(Duration::from_secs(cfg.interval.max(1))).await;
@@ -1936,16 +1971,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                 tracing::error!("B站直播标题变更失败: {}", e);
                             }
                         }
-                        // 开播 notice (Addendum A): recorded under the broadcast
-                        // counter; the QQ gateway holder sends it.
-                        bilistream::notify::live_started(
-                            bilistream::notify::live_events::LiveStartInfo {
-                                stream_key: format!("{platform}:{channel_id}"),
-                                platform: live_platform_name(platform),
-                                channel: channel_name.clone(),
-                                title: title_str.to_string(),
-                            },
-                        );
+                        // 开播 notice (Addendum A) is recorded once the source
+                        // for this pass is selected and the room is live (see
+                        // `notify::live_source` below), so it carries the same
+                        // source the push uses.
                         tracing::info!(
                             "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
                             safe_text(&area_name, 32),
@@ -2042,6 +2071,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                 continue 'outer;
             }
+            // The room is live and this pass has committed to a source: opens
+            // the session's 开播, or records a 换台 inside it (Addendum E rev 5
+            // item 20). Emitted here so the notice names the source the push
+            // actually uses, and re-emitted per pass so a source change is seen.
+            bilistream::notify::live_source(LiveSource {
+                stream_key: format!("{platform}:{channel_id}"),
+                platform: live_platform_name(platform).to_string(),
+                channel: channel_name.clone(),
+                title: title_str.to_string(),
+            });
             let source_client = selected_source_client(&selected_stream, &probes, &nico_live);
 
             stream_end.start_session(
@@ -2211,8 +2250,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         }
                         end_announce = announce;
                         source_ended = true;
-                        // 下播 notice at once, on the same signal as 切换.
-                        bilistream::notify::live_ended();
+                        // The source ending is not the room ending: the room
+                        // stays live for the 换台 window, and the session's
+                        // 下播 is sent when the room itself goes offline.
                         (false, None)
                     }
                     RefetchStep::NewBroadcast => {
@@ -2416,6 +2456,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             {
                 clear_manual_stop();
             }
+            // One 下播 for the session, from the action that left the room
+            // offline. `LiveLedger::end` only closes an open session and the
+            // first cause wins, so an earlier precise cause (a warning or a
+            // manual stop) is never overwritten.
+            if let Some(cause) = end_cause(action, bili_is_live) {
+                bilistream::notify::live_ended(cause);
+            }
             match action {
                 EndAction::SkipHandoff => {
                     tracing::debug!("{session_log} 集群交接，跳过结束弹幕");
@@ -2448,9 +2495,6 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         );
                         let ended = stream_end.mark_ended(signals);
                         end_announce = ended.unwrap_or(false);
-                        if ended.is_some() {
-                            bilistream::notify::live_ended();
-                        }
                     }
                     if bili_live {
                         tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
@@ -2501,8 +2545,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                                         AUTO_STOP_AFTER_HOURS,
                                         hours
                                     );
-                                    if let Err(e) = bili_stop_live(&cfg).await {
-                                        tracing::error!("自动停播失败: {}", e);
+                                    match bili_stop_live(&cfg).await {
+                                        Ok(()) => bilistream::notify::live_ended(
+                                            BroadcastEndCause::AutoStop,
+                                        ),
+                                        Err(e) => tracing::error!("自动停播失败: {}", e),
                                     }
                                 }
                             }
@@ -2935,11 +2982,16 @@ impl LolMonitor {
                         "{context} 玩家ID包含禁用词 {}，停止B站直播",
                         safe_text(&word, 32)
                     );
-                    if let Err(error) = bili_stop_live(&cfg).await {
-                        tracing::error!(
-                            "{context} 停止B站直播失败；{}",
-                            safe_diagnostic(&error.to_string())
-                        );
+                    match bili_stop_live(&cfg).await {
+                        Ok(()) => {
+                            bilistream::notify::live_ended(BroadcastEndCause::ContentRejected)
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                "{context} 停止B站直播失败；{}",
+                                safe_diagnostic(&error.to_string())
+                            );
+                        }
                     }
                     if let Err(error) =
                         send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播").await
@@ -4596,6 +4648,41 @@ mod tests {
         assert_eq!(
             end_action(R::BiliStopped, false, false, true, false),
             EndAction::BiliStoppedQuietly
+        );
+    }
+
+    #[test]
+    fn end_cause_follows_the_room_and_never_ends_a_live_one() {
+        // Skipped exits that keep the room live produce no 下播 at all.
+        for action in [
+            EndAction::SkipHandoff,
+            EndAction::SkipRestart,
+            EndAction::SkipNewBroadcast,
+            EndAction::SkipEndCheckCancelled,
+            EndAction::AnnounceInterrupted,
+            EndAction::AnnounceEnd { bili_live: true },
+        ] {
+            assert_eq!(end_cause(action, true), None, "{action:?}");
+            assert_eq!(end_cause(action, false), None, "{action:?}");
+        }
+        // A warning with the room still live is not an end.
+        assert_eq!(end_cause(EndAction::SkipWarning, true), None);
+        assert_eq!(
+            end_cause(EndAction::SkipWarning, false),
+            Some(BroadcastEndCause::WarningCut)
+        );
+        // Every offline-room action names its cause.
+        assert_eq!(
+            end_cause(EndAction::SkipManualStop, false),
+            Some(BroadcastEndCause::ManualStop)
+        );
+        assert_eq!(
+            end_cause(EndAction::AnnounceEnd { bili_live: false }, false),
+            Some(BroadcastEndCause::SourceEnded)
+        );
+        assert_eq!(
+            end_cause(EndAction::BiliStoppedQuietly, false),
+            Some(BroadcastEndCause::BiliStopped)
         );
     }
 

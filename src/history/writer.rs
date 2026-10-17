@@ -158,7 +158,7 @@ impl Writer {
     pub(crate) fn apply(&mut self, event: &Event) -> rusqlite::Result<()> {
         let at = event.at as i64;
         match &event.kind {
-            EventKind::BroadcastStarted { .. } | EventKind::BroadcastEnded => {}
+            EventKind::BroadcastStarted { .. } | EventKind::BroadcastEnded { .. } => {}
             EventKind::ProcessStarted { version } => {
                 self.conn.execute(
                     "INSERT OR REPLACE INTO boots (boot_id, node, started_at, last_seen_at, version) VALUES (?1,?2,?3,?3,?4)",

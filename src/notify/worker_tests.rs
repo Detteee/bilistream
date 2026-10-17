@@ -1382,7 +1382,7 @@ async fn supervisor_restarts_a_panicked_worker_and_keeps_the_channel() {
                 }
                 assert!(matches!(
                     events.recv().await.unwrap().kind,
-                    crate::events::EventKind::BroadcastEnded
+                    crate::events::EventKind::BroadcastEnded { .. }
                 ));
                 // The second run still receives commands sent after the panic.
                 while let Some(command) = commands.recv().await {
@@ -1405,7 +1405,9 @@ async fn supervisor_restarts_a_panicked_worker_and_keeps_the_channel() {
     event_tx
         .send(Arc::new(crate::events::Event {
             at: 7,
-            kind: crate::events::EventKind::BroadcastEnded,
+            kind: crate::events::EventKind::BroadcastEnded {
+                cause: crate::events::BroadcastEndCause::BiliStopped,
+            },
         }))
         .await
         .unwrap();
@@ -2476,14 +2478,12 @@ async fn logged_in_status_carries_live_event_fields_without_ledger_ids() {
         "the single node holds the gateway"
     );
     worker.on_live_signal(
-        crate::notify::live_events::LiveSignal::Started(
-            crate::notify::live_events::LiveStartInfo {
-                stream_key: "YT:UC1".into(),
-                platform: "YouTube".into(),
-                channel: "ch".into(),
-                title: "t".into(),
-            },
-        ),
+        crate::notify::live_events::LiveSignal::Source(crate::notify::live_events::LiveSource {
+            stream_key: "YT:UC1".into(),
+            platform: "YouTube".into(),
+            channel: "ch".into(),
+            title: "t".into(),
+        }),
         now,
     );
     worker.passive = Some(PassiveTarget {
@@ -2545,10 +2545,15 @@ async fn a_non_holder_records_the_broadcast_but_never_sends() {
     let mut worker = Worker::new(Arc::clone(&store), "solo".into());
     let now = now_secs();
     worker.on_live_signal(
-        crate::notify::live_events::LiveSignal::Started(Default::default()),
+        crate::notify::live_events::LiveSignal::Source(Default::default()),
         now,
     );
-    worker.on_live_signal(crate::notify::live_events::LiveSignal::Ended, now + 60);
+    worker.on_live_signal(
+        crate::notify::live_events::LiveSignal::Ended(
+            crate::events::BroadcastEndCause::BiliStopped,
+        ),
+        now + 60,
+    );
     assert_eq!(worker.ledger.live.broadcast.generation, 1);
     assert!(worker.ledger.live.broadcast.ended_at.is_some());
     // No apply_digest yet: no gateway, no term.

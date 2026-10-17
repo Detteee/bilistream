@@ -510,8 +510,8 @@ mod tests {
     #[test]
     fn public_payload_has_no_live_event_budget_or_active_push() {
         let mut ledger = crate::notify::NotifyLedger::default();
-        ledger.live.start(
-            &crate::notify::live_events::LiveStartInfo {
+        ledger.live.source(
+            &crate::notify::live_events::LiveSource {
                 stream_key: "YT:UC1".into(),
                 platform: "YouTube".into(),
                 channel: "SecretChannelName".into(),

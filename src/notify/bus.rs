@@ -2,13 +2,13 @@
 //! machine. Cluster alerts and configured watch episodes retain their sole
 //! level-triggered observer; history-only facts never create new QQ alerts.
 
-use super::live_events::{LiveSignal, LiveStartInfo};
+use super::live_events::{LiveSignal, LiveSource};
 use crate::events::{Event, EventKind};
 
 pub fn wants(kind: &EventKind) -> bool {
     matches!(
         kind,
-        EventKind::BroadcastStarted { .. } | EventKind::BroadcastEnded
+        EventKind::BroadcastStarted { .. } | EventKind::BroadcastEnded { .. }
     )
 }
 
@@ -19,13 +19,13 @@ pub fn map(event: &Event) -> Option<LiveSignal> {
             platform,
             channel,
             title,
-        } => Some(LiveSignal::Started(LiveStartInfo {
+        } => Some(LiveSignal::Source(LiveSource {
             stream_key: stream_key.clone(),
             platform: platform.clone(),
             channel: channel.clone(),
             title: title.clone(),
         })),
-        EventKind::BroadcastEnded => Some(LiveSignal::Ended),
+        EventKind::BroadcastEnded { cause } => Some(LiveSignal::Ended(*cause)),
         _ => None,
     }
 }

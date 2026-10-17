@@ -158,7 +158,7 @@ fn stalled_live_intake_is_bounded_observable_and_returns_under_a_millisecond() {
     crate::events::with_sync_test_bus(Arc::clone(&bus), || {
         for _ in 0..N {
             let start = std::time::Instant::now();
-            crate::notify::live_ended();
+            crate::notify::live_ended(crate::events::BroadcastEndCause::BiliStopped);
             nanos.push(start.elapsed().as_nanos());
         }
         crate::events::emit(FactKind::RecorderHeartbeat);
@@ -309,7 +309,7 @@ async fn broadcast_bus_keeps_generation_dedup_and_tracks_each_ladder_attempt() {
         });
         worker.ledger.record_admin_message(now);
         for _ in 0..2 {
-            crate::notify::live_started(crate::notify::live_events::LiveStartInfo {
+            crate::notify::live_source(crate::notify::live_events::LiveSource {
                 stream_key: "youtube:UCfixture".into(),
                 platform: "YouTube".into(),
                 channel: "Configured channel".into(),
@@ -343,7 +343,7 @@ async fn broadcast_bus_keeps_generation_dedup_and_tracks_each_ladder_attempt() {
             ]
         );
         let generation = worker.ledger.live.broadcast.generation;
-        crate::notify::live_ended();
+        crate::notify::live_ended(crate::events::BroadcastEndCause::BiliStopped);
         let event = intake.recv().await.unwrap();
         worker.on_live_signal(crate::notify::bus::map(&event).unwrap(), now + 3 * 3600);
         assert_eq!(worker.ledger.live.broadcast.generation, generation);
@@ -353,7 +353,7 @@ async fn broadcast_bus_keeps_generation_dedup_and_tracks_each_ladder_attempt() {
 
 #[tokio::test]
 async fn a_held_relay_notice_names_the_new_sender_after_handoff() {
-    use crate::notify::live_events::{LiveSignal, LiveStartInfo};
+    use crate::notify::live_events::{LiveSignal, LiveSource};
     crate::install_crypto_provider();
     let mock = MockQq::start().await;
     mock.script([(400, json!({"code":40034105}))]);
@@ -369,7 +369,7 @@ async fn a_held_relay_notice_names_the_new_sender_after_handoff() {
     a.node_names.insert("a".into(), "旧发送节点".into());
     a.ledger.record_admin_message(now - 4 * 86_400);
     a.on_live_signal(
-        LiveSignal::Started(LiveStartInfo {
+        LiveSignal::Source(LiveSource {
             stream_key: "youtube:UCfixture".into(),
             platform: "YouTube".into(),
             channel: "示例频道".into(),
@@ -1232,4 +1232,61 @@ async fn stopped_non_owner_process_sends_exactly_one_failure_and_one_timed_recov
             ("a", NodeState::Up, nodes.now + 126)
         ]
     );
+}
+
+/// The whole path the user asked for, through the real bus: one 开播 for the
+/// room going live, one 换台 when the relayed source changes inside it, and one
+/// 下播 naming the chain and the cause.
+#[tokio::test]
+async fn one_broadcast_sends_开播_then_换台_then_one_下播() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, OPENID);
+    let mut worker = ready_worker(&store, "solo").await;
+    let now = now_secs();
+    let bus = Arc::new(crate::events::Bus::new());
+    let mut intake = bus.register("notify", 64, crate::notify::bus::wants);
+    bus.seal();
+    let source = |key: &str, name: &str| crate::notify::live_events::LiveSource {
+        stream_key: key.into(),
+        platform: "YouTube".into(),
+        channel: name.into(),
+        title: "Fixture".into(),
+    };
+    crate::events::with_test_bus(bus, async {
+        worker.apply_digest(&single_node(), false, now);
+        for (key, name) in [("youtube:UC1", "First"), ("twitch:other", "Second")] {
+            crate::notify::live_source(source(key, name));
+            let event = intake.recv().await.unwrap();
+            worker.on_live_signal(crate::notify::bus::map(&event).unwrap(), now);
+            worker.deliver_live(now).await;
+        }
+        let text = |index: usize| {
+            mock.messages()[index].1["content"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(mock.messages().len(), 2);
+        assert_eq!(
+            text(0),
+            "🟢 开始转播 First\nYouTube · Fixture\n发送节点：solo"
+        );
+        assert_eq!(text(1), "🟢换台 Second\nYouTube · Fixture\n发送节点：solo");
+
+        let generation = worker.ledger.live.broadcast.generation;
+        crate::notify::live_ended(crate::events::BroadcastEndCause::WarningCut);
+        let event = intake.recv().await.unwrap();
+        worker.on_live_signal(crate::notify::bus::map(&event).unwrap(), now + 90);
+        worker.deliver_live(now + 91).await;
+        let ended = text(2);
+        assert_eq!(worker.ledger.live.broadcast.generation, generation);
+        assert_eq!(mock.messages().len(), 3, "one 下播 for the session");
+        assert_eq!(
+            ended,
+            "⚪ 本场转播已结束\n本场 First -> Second，共持续 1 分钟。\n结束原因：B站警告/切断\n发送节点：solo"
+        );
+    })
+    .await;
 }

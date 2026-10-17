@@ -116,7 +116,7 @@ fn saturated_emit_latency() {
     let bus = Bus::new();
     let _stalled = bus.register("history", 1, |_| true);
     let mut notify = bus.register("notify", 64, |event| {
-        matches!(event, EventKind::BroadcastEnded)
+        matches!(event, EventKind::BroadcastEnded { .. })
     });
     bus.seal();
     bus.emit_at(0, event());
@@ -132,10 +132,15 @@ fn saturated_emit_latency() {
         samples.push(at.elapsed().as_nanos());
     }
     samples.sort_unstable();
-    bus.emit_at(100_002, EventKind::BroadcastEnded);
+    bus.emit_at(
+        100_002,
+        EventKind::BroadcastEnded {
+            cause: BroadcastEndCause::BiliStopped,
+        },
+    );
     assert!(matches!(
         notify.try_recv().unwrap().kind,
-        EventKind::BroadcastEnded
+        EventKind::BroadcastEnded { .. }
     ));
     assert_eq!(
         bus.dropped(),

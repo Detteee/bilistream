@@ -213,9 +213,10 @@ pub fn cluster_changed() {
     WAKE.notify_one();
 }
 
-/// Successful start-live (Addendum A). Never waits; a stopped notifier
-/// ignores it.
-pub fn live_started(info: live_events::LiveStartInfo) {
+/// The runtime selected this source and the Bilibili room is live: opens the
+/// session's 开播 or records a 换台 inside it (Addendum A/E item 20). Never
+/// waits; a stopped notifier ignores it.
+pub fn live_source(info: live_events::LiveSource) {
     crate::events::emit(crate::events::EventKind::BroadcastStarted {
         // This is the public upstream platform:id, never a Bilibili key.
         stream_key: crate::logging::safe_text(&info.stream_key, 128),
@@ -225,9 +226,9 @@ pub fn live_started(info: live_events::LiveStartInfo) {
     });
 }
 
-/// 直播结束 on the active node (the same signal as the status page's 切换).
-pub fn live_ended() {
-    crate::events::emit(crate::events::EventKind::BroadcastEnded);
+/// The Bilibili room went offline, for `cause`. Only an open session ends.
+pub fn live_ended(cause: crate::events::BroadcastEndCause) {
+    crate::events::emit(crate::events::EventKind::BroadcastEnded { cause });
 }
 
 /// Ledger to advertise in this node's heartbeat snapshot.

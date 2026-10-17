@@ -733,11 +733,19 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = bili_stop_live(&cfg).await {
-                            error!(
-                                "Failed to stop live on warning: {}",
-                                safe_diagnostic(&error.to_string())
-                            );
+                        match bili_stop_live(&cfg).await {
+                            // The room is offline: this is the session's 下播
+                            // cause, and the runtime cannot tell a cut from a
+                            // plain stop (Addendum E rev 5 item 20).
+                            Ok(()) => crate::notify::live_ended(
+                                crate::events::BroadcastEndCause::WarningCut,
+                            ),
+                            Err(error) => {
+                                error!(
+                                    "Failed to stop live on warning: {}",
+                                    safe_diagnostic(&error.to_string())
+                                );
+                            }
                         }
                         if !warning_tracker().event_is_current(&warning) {
                             return;
@@ -772,11 +780,16 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = bili_stop_live(&cfg).await {
-                            error!(
-                                "Failed to stop live on warning: {}",
-                                safe_diagnostic(&error.to_string())
-                            );
+                        match bili_stop_live(&cfg).await {
+                            Ok(()) => crate::notify::live_ended(
+                                crate::events::BroadcastEndCause::WarningCut,
+                            ),
+                            Err(error) => {
+                                error!(
+                                    "Failed to stop live on warning: {}",
+                                    safe_diagnostic(&error.to_string())
+                                );
+                            }
                         }
                         warning_tracker().finish_unmarked_event(&warning);
                     });

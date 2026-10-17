@@ -60,6 +60,10 @@ pub async fn stop_stream() -> Result<ApiResponse<()>, StatusCode> {
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // The room is offline now, so record the session's 下播 cause here:
+    // the runtime only observes it later, and this is the deliberate action.
+    crate::notify::live_ended(crate::events::BroadcastEndCause::ManualStop);
+
     Ok(ApiResponse {
         success: true,
         data: None,

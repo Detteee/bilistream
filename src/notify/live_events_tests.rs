@@ -2,6 +2,7 @@
 //! failover, fallback codes, ambiguous-retry limit, no leaks.
 
 use super::*;
+use crate::events::BroadcastEndCause;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
@@ -123,8 +124,8 @@ impl LiveCommit for FakeCommit {
     }
 }
 
-fn info(key: &str) -> LiveStartInfo {
-    LiveStartInfo {
+fn info(key: &str) -> LiveSource {
+    LiveSource {
         stream_key: key.into(),
         platform: "YouTube".into(),
         channel: "某频道".into(),
@@ -137,7 +138,7 @@ fn started() -> NotifyLedger {
         local: "a".into(),
         ..Default::default()
     };
-    ledger.live.start(&info("YT:UC1"), NOW);
+    ledger.live.source(&info("YT:UC1"), NOW);
     ledger
 }
 
@@ -171,8 +172,8 @@ async fn run(
     drive(&mut driver, qq, commit).await
 }
 
-fn state(ledger: &NotifyLedger, kind: LiveKind) -> Option<DeliveryState> {
-    ledger.live.delivery.get(&kind).map(|record| record.state)
+fn state(ledger: &NotifyLedger, key: LiveEventKey) -> Option<DeliveryState> {
+    ledger.live.delivery.get(&key).map(|record| record.state)
 }
 
 #[tokio::test]
@@ -195,30 +196,40 @@ async fn active_first_then_never_again_for_the_same_generation() {
     // The sending record was committed before the request, delivered after.
     let committed = commit.snapshots();
     assert_eq!(
-        state(&committed[0], LiveKind::LiveStart),
+        state(&committed[0], LiveEventKey::start()),
         Some(DeliveryState::Sending)
     );
-    assert_eq!(committed[0].live.delivery[&LiveKind::LiveStart].term, 1);
+    assert_eq!(committed[0].live.delivery[&LiveEventKey::start()].term, 1);
     assert_eq!(
-        state(&committed[1], LiveKind::LiveStart),
+        state(&committed[1], LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
     // Restart re-calling start-live keeps the counter: nothing new is due.
-    assert_eq!(ledger.live.start(&info("YT:UC1"), NOW + 60), 1);
+    assert_eq!(
+        ledger.live.source(&info("YT:UC1"), NOW + 60),
+        SourceOutcome::Same(1)
+    );
     run(&mut ledger, None, Some(2), NOW + 61, &qq, &commit).await;
     assert_eq!(qq.count(), 1);
     // 下播 once, then the next broadcast clears the records.
-    assert!(ledger.live.end(NOW + 3 * 3600 + 12 * 60));
-    assert!(!ledger.live.end(NOW + 4 * 3600));
+    assert!(ledger
+        .live
+        .end(NOW + 3 * 3600 + 12 * 60, BroadcastEndCause::SourceEnded));
+    assert!(!ledger
+        .live
+        .end(NOW + 4 * 3600, BroadcastEndCause::SourceEnded));
     run(&mut ledger, None, Some(2), NOW + 4 * 3600, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
     assert_eq!(
         qq.text(1),
-        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 3 小时 12 分钟。\n发送节点：a"
+        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 3 小时 12 分钟。\n结束原因：源直播结束\n发送节点：a"
     );
     run(&mut ledger, None, Some(2), NOW + 4 * 3600 + 5, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
-    assert_eq!(ledger.live.start(&info("YT:UC1"), NOW + 5 * 3600), 2);
+    assert_eq!(
+        ledger.live.source(&info("YT:UC1"), NOW + 5 * 3600),
+        SourceOutcome::Started(2)
+    );
     assert!(ledger.live.delivery.is_empty());
     run(&mut ledger, None, Some(2), NOW + 5 * 3600, &qq, &commit).await;
     assert_eq!(qq.count(), 3);
@@ -243,7 +254,7 @@ async fn no_permission_and_rate_limit_fall_back_to_passive() {
         let sendings: Vec<Channel> = commit
             .snapshots()
             .iter()
-            .filter_map(|l| l.live.delivery.get(&LiveKind::LiveStart))
+            .filter_map(|l| l.live.delivery.get(&LiveEventKey::start()))
             .filter(|r| r.state == DeliveryState::Sending)
             .map(|r| r.channel)
             .collect();
@@ -353,7 +364,7 @@ async fn ambiguous_results_retry_active_three_times_then_fall_back() {
     run(&mut ledger, Some(&mut target), Some(1), NOW, &qq, &commit).await;
     assert_eq!(qq.modes(), vec!["active"]);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Sending)
     );
     assert_eq!(ledger.live.next_retry_at(), Some(NOW + 20));
@@ -390,7 +401,7 @@ async fn ambiguous_results_retry_active_three_times_then_fall_back() {
     .await;
     assert_eq!(qq.modes(), vec!["active", "active", "active", "passive"]);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
     // Ambiguous results never touched active_push or a wakeup.
@@ -431,7 +442,7 @@ async fn a_failed_sending_write_means_no_send() {
     assert!(report.commit_failed);
     assert_eq!(qq.count(), 0);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         None,
         "no record claims a send"
     );
@@ -450,7 +461,7 @@ async fn a_failed_sending_write_means_no_send() {
     assert_eq!(qq.modes(), vec!["active"]);
     assert_eq!(target.replies_used, 0);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Refused)
     );
 }
@@ -470,14 +481,14 @@ async fn crash_between_the_sending_write_and_the_send() {
     let mut restarted = commit.last();
     restarted.local = "a".into();
     assert_eq!(
-        state(&restarted, LiveKind::LiveStart),
+        state(&restarted, LiveEventKey::start()),
         Some(DeliveryState::Sending)
     );
     let commit = FakeCommit::default();
     run(&mut restarted, None, Some(2), NOW + 30, &qq, &commit).await;
     assert_eq!(qq.count(), 1, "the notice is not lost");
     assert_eq!(
-        state(&restarted, LiveKind::LiveStart),
+        state(&restarted, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
 }
@@ -495,7 +506,10 @@ async fn crash_between_accept_and_the_delivered_write_sends_one_duplicate_at_mos
     assert_eq!(qq.count(), 1);
     let mut b = commit.last();
     b.local = "b".into();
-    assert_eq!(state(&b, LiveKind::LiveStart), Some(DeliveryState::Sending));
+    assert_eq!(
+        state(&b, LiveEventKey::start()),
+        Some(DeliveryState::Sending)
+    );
     let commit_b = FakeCommit::default();
     run(&mut b, None, Some(2), NOW + 30, &qq, &commit_b).await;
     assert_eq!(qq.count(), 2, "one accepted duplicate");
@@ -529,7 +543,7 @@ async fn failover_mid_retry_sends_once() {
     assert_eq!(qq.count(), 2);
     assert!(qq.text(1).ends_with("发送节点：b"));
     assert_eq!(
-        state(&b, LiveKind::LiveStart),
+        state(&b, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
     // A sees B's record and, even holding the gateway again, sends nothing.
@@ -542,7 +556,7 @@ async fn failover_mid_retry_sends_once() {
     let stale = commit_a.snapshots()[0].clone();
     b.join(&stale);
     assert_eq!(
-        state(&b, LiveKind::LiveStart),
+        state(&b, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
 }
@@ -581,7 +595,7 @@ async fn switch_off_marks_the_notice_off_and_nothing_is_sent() {
     drive(&mut driver, &qq, &commit).await;
     assert_eq!(qq.count(), 0);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Off)
     );
     // Turning it back on later does not resend an old broadcast's notice.
@@ -605,7 +619,7 @@ async fn active_push_counts_the_shanghai_month_and_tracks_refusals() {
     // 40 days later the month rolled over: the view reads 0.
     assert_eq!(push.view(NOW + 40 * 86_400)["month_sent"], 0);
     // Refusals keep the first date until the next ok.
-    ledger.live.end(NOW + 100);
+    ledger.live.end(NOW + 100, BroadcastEndCause::SourceEnded);
     let qq = FakeQq::script([code(CODE_RATE_LIMITED)]);
     let report = run(&mut ledger, None, Some(1), NOW + 200, &qq, &commit).await;
     assert_eq!(
@@ -635,13 +649,13 @@ fn live_join_is_commutative_associative_and_idempotent() {
     };
     let mut a = started();
     a.live
-        .write(LiveKind::LiveStart, record(DeliveryState::Sending, NOW));
+        .write(LiveEventKey::start(), record(DeliveryState::Sending, NOW));
     let mut b = a.clone();
     b.live.write(
-        LiveKind::LiveStart,
+        LiveEventKey::start(),
         record(DeliveryState::Delivered, NOW + 1),
     );
-    b.live.end(NOW + 50);
+    b.live.end(NOW + 50, BroadcastEndCause::SourceEnded);
     let mut c = a.clone();
     c.live.term = 7;
     c.live.active_push.insert("c".into(), ActivePush::default());
@@ -656,14 +670,14 @@ fn live_join_is_commutative_associative_and_idempotent() {
     twice.join(&abc);
     assert_eq!(twice, abc);
     assert_eq!(
-        abc.delivery[&LiveKind::LiveStart].state,
+        abc.delivery[&LiveEventKey::start()].state,
         DeliveryState::Delivered
     );
     assert_eq!(abc.broadcast.ended_at, Some(NOW + 50));
     assert_eq!(abc.term, 7);
     // A newer generation replaces older records wholesale (rule 14).
     let mut next = b.clone();
-    next.live.start(&info("YT:UC1"), NOW + 7200);
+    next.live.source(&info("YT:UC1"), NOW + 7200);
     abc.join(&next.live);
     assert_eq!(abc.broadcast.generation, 2);
     assert!(abc.delivery.is_empty());
@@ -710,14 +724,14 @@ async fn ledger_and_records_carry_no_openid_or_msg_id() {
 fn texts_carry_no_links_or_revenue() {
     let mut broadcast = started().live.broadcast;
     broadcast.title = "看 https://example.com 吧".into();
-    let text = render(LiveKind::LiveStart, &broadcast, false, "a");
+    let text = render(LiveEventKey::start(), &broadcast, false, "a");
     assert!(
         !text.contains("://") && !text.contains("example.com"),
         "{text}"
     );
     broadcast.ended_at = Some(broadcast.started_at + 47 * 60);
     assert_eq!(
-        render(LiveKind::LiveEnd, &broadcast, false, "a"),
+        render(LiveEventKey::end(), &broadcast, false, "a"),
         "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 47 分钟。\n发送节点：a"
     );
 }
@@ -734,7 +748,7 @@ async fn an_unknown_4xx_on_active_counts_toward_the_retry_limit_before_falling_b
     run(&mut ledger, Some(&mut target), Some(1), NOW, &qq, &commit).await;
     assert_eq!(qq.modes(), vec!["active"], "no fallback on the first 4xx");
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Sending)
     );
     assert_eq!(target.replies_used, 0, "passive budget untouched");
@@ -743,17 +757,18 @@ async fn an_unknown_4xx_on_active_counts_toward_the_retry_limit_before_falling_b
     }
     assert_eq!(qq.modes(), vec!["active", "active", "active", "passive"]);
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
     // Not a refusal: active_push is unchanged.
     assert!(!ledger.live.active_push.contains_key("a"));
 }
 
-/// L1 (rev 5 item 20): a source switch during one Bilibili broadcast sends
-/// no second 开播, and exactly one 下播 when the broadcast ends.
+/// L1 (rev 5 item 20): a source switch during one Bilibili broadcast sends a
+/// 换台, never a second 开播, and exactly one 下播 that names the source chain
+/// and the end cause when the room goes offline.
 #[tokio::test]
-async fn a_source_switch_mid_broadcast_is_the_same_broadcast() {
+async fn a_source_switch_mid_broadcast_sends_a_switch_and_one_end() {
     let mut ledger = started();
     let qq = FakeQq::default();
     let commit = FakeCommit::default();
@@ -762,26 +777,162 @@ async fn a_source_switch_mid_broadcast_is_the_same_broadcast() {
     let generation = ledger.live.broadcast.generation;
     let mut other = info("TW:other");
     other.channel = "后来切换的频道".into();
-    assert_eq!(ledger.live.start(&other, NOW + 600), generation);
+    assert_eq!(
+        ledger.live.source(&other, NOW + 600),
+        SourceOutcome::Switched(generation, 1)
+    );
     assert_eq!(
         ledger.live.broadcast.stream_key, "YT:UC1",
         "first source kept"
     );
+    assert_eq!(ledger.live.broadcast.current_key, "TW:other");
     run(&mut ledger, None, Some(1), NOW + 601, &qq, &commit).await;
-    assert_eq!(qq.count(), 1, "no second 开播");
-    assert!(ledger.live.end(NOW + 3600));
-    assert!(!ledger.live.end(NOW + 3601), "ends once");
+    assert_eq!(qq.count(), 2, "one 换台, no second 开播");
+    assert_eq!(
+        qq.text(1),
+        "🟢换台 后来切换的频道\nYouTube · 周末杂谈\n发送节点：a"
+    );
+    // Re-selecting the source already relayed changes nothing.
+    assert_eq!(
+        ledger.live.source(&other, NOW + 700),
+        SourceOutcome::Same(generation)
+    );
+    run(&mut ledger, None, Some(1), NOW + 701, &qq, &commit).await;
+    assert_eq!(qq.count(), 2, "same source: no notice");
+    assert!(ledger.live.end(NOW + 3600, BroadcastEndCause::WarningCut));
+    assert!(
+        !ledger.live.end(NOW + 3601, BroadcastEndCause::ManualStop),
+        "ends once, the first cause wins"
+    );
     run(&mut ledger, None, Some(1), NOW + 3602, &qq, &commit).await;
     run(&mut ledger, None, Some(1), NOW + 3700, &qq, &commit).await;
-    assert_eq!(qq.count(), 2);
-    let ended = qq.text(1);
+    assert_eq!(qq.count(), 3);
+    let ended = qq.text(2);
     assert!(ended.starts_with("⚪ 本场转播已结束"));
-    assert!(ended.contains("本场从 某频道 开始，共持续 1 小时 0 分钟。"));
-    assert!(!ended.contains("后来切换的频道") && !ended.contains("某频道 下播"));
+    assert!(
+        ended.contains("本场 某频道 -> 后来切换的频道，共持续 1 小时 0 分钟。"),
+        "{ended}"
+    );
+    assert!(ended.contains("结束原因：B站警告/切断"), "{ended}");
+    assert!(ended.ends_with("发送节点：a"), "{ended}");
     // After it ended, a start is a new broadcast again.
     assert_eq!(
-        ledger.live.start(&info("TW:other"), NOW + 7200),
-        generation + 1
+        ledger.live.source(&info("TW:other"), NOW + 7200),
+        SourceOutcome::Started(generation + 1)
+    );
+}
+
+/// A superseded 换台 never sends and never rides along in heartbeats: only the
+/// newest switch record survives the session.
+#[tokio::test]
+async fn only_the_newest_switch_record_survives() {
+    let mut ledger = started();
+    let qq = FakeQq::default();
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    let mut first = info("TW:first");
+    first.channel = "第一个".into();
+    let mut second = info("YT:second");
+    second.channel = "第二个".into();
+    ledger.live.source(&first, NOW + 100);
+    run(&mut ledger, None, Some(1), NOW + 101, &qq, &commit).await;
+    assert_eq!(qq.count(), 2);
+    assert_eq!(
+        ledger.live.delivery[&LiveEventKey::switch(1)].state,
+        DeliveryState::Delivered
+    );
+    // The next switch supersedes the record still in flight.
+    ledger.live.source(&second, NOW + 200);
+    assert_eq!(ledger.live.broadcast.switch_seq, 2);
+    let keys: Vec<String> = ledger
+        .live
+        .delivery
+        .keys()
+        .map(|key| key.as_str())
+        .collect();
+    assert_eq!(keys, vec!["live_start"], "the superseded switch is dropped");
+    run(&mut ledger, None, Some(1), NOW + 201, &qq, &commit).await;
+    assert_eq!(qq.count(), 3, "only the newest switch is sent");
+    assert_eq!(qq.text(1), "🟢换台 第一个\nYouTube · 周末杂谈\n发送节点：a");
+    assert_eq!(qq.text(2), "🟢换台 第二个\nYouTube · 周末杂谈\n发送节点：a");
+    let keys: Vec<String> = ledger
+        .live
+        .delivery
+        .keys()
+        .map(|key| key.as_str())
+        .collect();
+    assert_eq!(keys, vec!["live_start", "live_switch:2"]);
+}
+
+/// The 换台 continues the 开播: while the session's opening notice is still
+/// queued, a switch never overtakes it.
+#[tokio::test]
+async fn a_switch_waits_for_the_opening_notice() {
+    let mut ledger = started();
+    ledger.record_admin_message(NOW - 60);
+    // Refused active, then the one usable wakeup refused too: held.
+    let qq = FakeQq::script([code(CODE_NO_PERMISSION), code(40054010)]);
+    let commit = FakeCommit::default();
+    run(&mut ledger, None, Some(1), NOW, &qq, &commit).await;
+    assert_eq!(ledger.live.pending(), vec!["live_start"]);
+    let mut other = info("TW:other");
+    other.channel = "后来切换的频道".into();
+    ledger.live.source(&other, NOW + 300);
+    assert_eq!(ledger.live.due_events(), vec![LiveEventKey::start()]);
+    run(&mut ledger, None, Some(1), NOW + 301, &qq, &commit).await;
+    assert_eq!(qq.count(), 2, "the held 开播 is not displaced by the 换台");
+}
+
+/// Every cause names itself once and survives the ledger's serde round trip.
+#[test]
+fn every_end_cause_names_itself_and_round_trips() {
+    let all = [
+        BroadcastEndCause::WarningCut,
+        BroadcastEndCause::ManualStop,
+        BroadcastEndCause::AutoStop,
+        BroadcastEndCause::SourceEnded,
+        BroadcastEndCause::ContentRejected,
+        BroadcastEndCause::BiliStopped,
+    ];
+    let mut labels: Vec<&str> = all.iter().map(|cause| cause.label()).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(labels.len(), all.len(), "one label per cause");
+    for cause in all {
+        let json = serde_json::to_string(&cause).unwrap();
+        assert_eq!(json, format!("\"{}\"", cause.as_str()));
+        assert_eq!(
+            serde_json::from_str::<BroadcastEndCause>(&json).unwrap(),
+            cause
+        );
+    }
+}
+
+/// The task's exact copy: 开播 names the first source, 换台 the one the room
+/// moved to inside the same session, and 下播 names the chain, the total
+/// duration and the cause.
+#[test]
+fn the_notice_copy_is_the_task_copy() {
+    let mut ledger = started();
+    assert_eq!(
+        render(LiveEventKey::start(), &ledger.live.broadcast, false, "JP"),
+        "🟢 开始转播 某频道\nYouTube · 周末杂谈\n发送节点：JP"
+    );
+    let mut other = info("TW:kamito");
+    other.platform = "Twitch".into();
+    other.channel = "Kamito".into();
+    other.title = "League of Legends".into();
+    ledger.live.source(&other, NOW + 3 * 3600);
+    assert_eq!(
+        render(LiveEventKey::switch(1), &ledger.live.broadcast, false, "JP"),
+        "🟢换台 Kamito\nTwitch · League of Legends\n发送节点：JP"
+    );
+    ledger
+        .live
+        .end(NOW + 27 * 3600, BroadcastEndCause::WarningCut);
+    assert_eq!(
+        render(LiveEventKey::end(), &ledger.live.broadcast, false, "JP"),
+        "⚪ 本场转播已结束\n本场 某频道 -> Kamito，共持续 1 天 3 小时。\n结束原因：B站警告/切断\n发送节点：JP"
     );
 }
 
@@ -854,7 +1005,7 @@ async fn a_failed_delivered_write_does_not_resend() {
         vec![(LiveKind::LiveStart, Channel::Active)]
     );
     assert_eq!(
-        state(&ledger, LiveKind::LiveStart),
+        state(&ledger, LiveEventKey::start()),
         Some(DeliveryState::Delivered)
     );
     run(&mut ledger, None, Some(1), NOW + 30, &qq, &commit).await;
@@ -886,7 +1037,7 @@ async fn an_unclear_active_retry_on_a_held_notice_stays_held_without_a_wakeup() 
     assert_eq!(qq2.modes(), vec!["active", "active", "active"]);
     assert_eq!(ledger.live.pending(), vec!["live_start"], "still held");
     assert_eq!(ledger.wakeups_left(start + 60), left, "no wakeup spent");
-    assert!(ledger.live.delivery[&LiveKind::LiveStart].held);
+    assert!(ledger.live.delivery[&LiveEventKey::start()].held);
     // A later cycle (another term after a failover) still never wakes.
     run(&mut ledger, None, Some(2), start + 61, &qq2, &commit).await;
     assert!(!qq2.modes().contains(&"wakeup"));

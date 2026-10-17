@@ -346,20 +346,33 @@ impl Worker {
         }
     }
 
-    /// The streaming runtime's 开播/下播 signal (recorded on any node; the
+    /// The streaming runtime's source/end signal (recorded on any node; the
     /// gateway holder sends after the heartbeat carries it).
     pub fn on_live_signal(&mut self, signal: super::live_events::LiveSignal, now: u64) {
-        use super::live_events::LiveSignal;
+        use super::live_events::{LiveSignal, SourceOutcome};
         let changed = match signal {
-            LiveSignal::Started(info) => {
-                let before = self.ledger.live.broadcast.generation;
-                let generation = self.ledger.live.start(&info, now);
-                if generation != before {
+            LiveSignal::Source(info) => match self.ledger.live.source(&info, now) {
+                SourceOutcome::Started(generation) => {
                     tracing::info!("QQ 开播通知: 第 {} 场直播开始", generation);
+                    true
                 }
-                generation != before
+                SourceOutcome::Switched(generation, switch_seq) => {
+                    tracing::info!(
+                        "QQ 换台通知: 第 {} 场直播第 {} 次换台",
+                        generation,
+                        switch_seq
+                    );
+                    true
+                }
+                SourceOutcome::Same(_) => false,
+            },
+            LiveSignal::Ended(cause) => {
+                let ended = self.ledger.live.end(now, cause);
+                if ended {
+                    tracing::info!("QQ 下播通知: 结束原因 {}", cause.as_str());
+                }
+                ended
             }
-            LiveSignal::Ended => self.ledger.live.end(now),
         };
         if changed {
             self.ledger.touch(&self.node_id, now);
@@ -368,12 +381,12 @@ impl Worker {
         }
     }
 
-    /// Addendum E ladder for due 开播/下播 notices (gateway holder only).
+    /// Addendum E ladder for due 开播/换台/下播 notices (gateway holder only).
     async fn deliver_live(&mut self, now: u64) {
         let term = self
             .live_term
             .filter(|_| self.gateway_owner && self.capable());
-        if term.is_none() || self.ledger.live.due_kinds().is_empty() {
+        if term.is_none() || self.ledger.live.due_events().is_empty() {
             return;
         }
         let Some(sink) = self.sink() else {
