@@ -578,6 +578,54 @@ pub async fn get_youtube_channel_status(
     Ok(select_holodex_channel_status(channel_id, &streams))
 }
 
+/// The watch poller reuses `videos.list` answers the channel list fetched less
+/// than this ago, so following a whole roster stays at one call per poll
+/// instead of one per channel.
+const WATCH_FRESH_FOR: Duration = Duration::from_secs(90);
+
+/// Live rows for the QQ watch list: the whole watched roster in one index
+/// read.
+///
+/// [`index_rows`] answers for the channel being relayed; this covers channels
+/// that are only watched, so a go-live signal no longer waits for a relay.
+/// `Err` means no source could answer at all, which lets the caller keep its
+/// last rows instead of reading silence as "offline".
+pub async fn watch_live_rows(channel_ids: &[String]) -> Result<Vec<HolodexStream>, String> {
+    let mut wanted: Vec<String> = channel_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    wanted.sort();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cfg = load_config().await.map_err(|e| e.to_string())?;
+    let has_holodex_key = cfg
+        .holodex_api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty());
+    if !has_holodex_key && !super::youtube_data::youtube_configured(&cfg) {
+        return Err("没有可用的开播数据源".to_string());
+    }
+    let roster: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+    let streams = if has_holodex_key {
+        get_holodex_streams(wanted.clone(), false)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let streams = super::youtube_discovery::merge_discovered(streams);
+    let streams =
+        super::youtube_data::apply_youtube_overlay_within(streams, Some(WATCH_FRESH_FOR)).await;
+    Ok(streams
+        .into_iter()
+        .filter(|row| row.status == "live" && roster.contains(row.channel.id.as_str()))
+        .collect())
+}
+
 /// Holodex rows plus this channel's streams found by RSS discovery.
 fn with_discovered_rows(channel_id: &str, streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
     super::youtube_discovery::merge_discovered(streams)

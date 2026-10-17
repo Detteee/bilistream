@@ -25,6 +25,7 @@ pub mod sink;
 pub mod store;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod watch_index;
 pub mod watch_sync;
 pub mod worker;
 

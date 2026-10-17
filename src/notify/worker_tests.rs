@@ -1078,6 +1078,56 @@ async fn watched_channel_going_live_sends_one_green_notice() {
 }
 
 #[tokio::test]
+async fn watched_channel_without_relay_reports_live_from_the_index() {
+    crate::install_crypto_provider();
+    let mock = MockQq::start().await;
+    let (_temp, store) = store();
+    configure(&store, &mock, OPENID);
+    store
+        .write(
+            "channels.json",
+            json!({"channels":[{
+                "name":"主频道","aliases":[],"platforms":{"youtube":"UCwatched"}
+            }]}),
+        )
+        .unwrap();
+    let (mut cfg, rev) = store::load_config(&store).unwrap();
+    cfg.watch.enabled = true;
+    cfg.watch
+        .channels
+        .push(crate::notify::config::WatchChannel::Configured {
+            name: "主频道".into(),
+        });
+    store::save_config(&store, &cfg, rev).unwrap();
+    let mut worker = ready_worker(&store, "solo").await;
+    let now = now_secs();
+    worker.apply_digest(&single_node(), false, now);
+    // Nothing is relayed here, so the status card is empty: only the index
+    // poll knows that the watched channel is live.
+    worker.watch_index.publish_rows(
+        now,
+        vec![crate::notify::live::LiveObservation {
+            platform: "youtube".into(),
+            channel_id: "UCwatched".into(),
+            channel_name: "主频道".into(),
+            title: Some("【歌枠】".into()),
+        }],
+    );
+    worker.channel_live(now, &[]);
+    assert_eq!(worker.tracker.queued(), 1);
+    worker.deliver(now + 11, &single_node()).await;
+    let messages = mock.messages();
+    assert_eq!(messages.len(), 1);
+    let content = messages[0].1["content"].as_str().unwrap();
+    assert!(content.starts_with("🟢 主频道 开播了\n"), "{content}");
+    assert!(content.contains("YouTube"), "{content}");
+    // The same index rows on the next wakes do not send again.
+    worker.channel_live(now + 15, &[]);
+    worker.deliver(now + 26, &single_node()).await;
+    assert_eq!(mock.messages().len(), 1);
+}
+
+#[tokio::test]
 async fn migrating_one_live_legacy_follow_sends_nothing_and_persists_episode_suppression() {
     crate::install_crypto_provider();
     let mock = MockQq::start().await;

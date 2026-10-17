@@ -1,11 +1,13 @@
 //! Go-live notices for the 开播通知关注列表 (watch list).
 //!
 //! Trigger point (documented in design §2.1): a watched channel counts as
-//! live when the YouTube, Twitch or Niconico status of this node or of any
-//! fresh cluster node reports `is_live = true` for that channel id. That is
-//! the same poll result that makes bilistream start the relay, so the notice
-//! is not tied to whether the relay actually started. The sender's notifier
-//! sees it on its next wake (at most 15 s later).
+//! live when an index row for one of its linked accounts says so. The rows
+//! come from two places, both fed into [`LiveWatch::channel_live`]: the
+//! YouTube/Twitch/Niconico status card of this node or of any fresh cluster
+//! node (only the relayed channel), and the watched roster read from the
+//! Holodex/YouTube index by [`super::watch_index`]. The index read is what
+//! makes a channel that is merely watched, never restreamed, report going
+//! live. The notice is not tied to whether the relay actually started.
 //!
 //! One notice per channel episode, cluster-wide. All linked platforms share
 //! `stream.live:<kind>:<name>`; old per-account marks are recognized too.

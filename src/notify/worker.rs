@@ -23,6 +23,7 @@ use super::sink::{AttemptContext, DeliveryContext, PassiveTarget, Rendered, Send
 use super::store::{
     self, AppSecret, LastOutcome, OpenidChange, OpenidState, OpenidWrite, PersistedState,
 };
+use super::watch_index;
 use super::{Command, NodeRef, Refusal};
 use crate::storage::Store;
 use futures_util::FutureExt;
@@ -268,6 +269,8 @@ pub struct Worker {
     /// Resolved items that could not be delivered; attached to the next one.
     held: Vec<OutItem>,
     live_watch: LiveWatch,
+    /// Index rows for watched channels that are not relayed here.
+    watch_index: watch_index::WatchIndex,
     live_now: Vec<live::LiveObservation>,
     watch_channels: Vec<live::ResolvedWatchChannel>,
     limiter: commands::Limiter,
@@ -511,6 +514,7 @@ impl Worker {
             gateway_fatal: None,
             held: Vec::new(),
             live_watch: LiveWatch::default(),
+            watch_index: watch_index::WatchIndex::default(),
             live_now: Vec::new(),
             watch_channels: Vec::new(),
             limiter: commands::Limiter::default(),
@@ -541,6 +545,7 @@ impl Worker {
         wake: &'static Notify,
     ) {
         self.running = true;
+        self.watch_index.start();
         loop {
             let now = now_secs();
             if now.saturating_sub(self.loaded_at) >= CONFIG_RELOAD_SECS
@@ -1435,16 +1440,33 @@ impl Worker {
     }
 
     /// Watch-list go-live (the single call site; see `live.rs`).
+    ///
+    /// `seen` carries the status-card observations: the channel this node
+    /// relays. Watched channels that are not relayed come from the index poll
+    /// in `watch_index.rs`, appended here so both sources feed one detector.
     fn channel_live(&mut self, now: u64, seen: &[live::LiveObservation]) {
-        self.live_now = seen.to_vec();
         let catalog = match super::config::WatchCatalog::load(&self.store) {
             Ok(catalog) => catalog,
             Err(error) => {
                 tracing::debug!("QQ 关注频道读取失败 ({:?})", error.kind());
+                self.live_now = seen.to_vec();
                 return;
             }
         };
         self.watch_channels = live::resolve_watch(&self.cfg.watch, &catalog);
+        let can_send =
+            self.cfg.enabled && matches!(self.authority, Authority::Primary | Authority::Delegate);
+        self.watch_index
+            .follow(can_send && self.cfg.watch.enabled, &self.watch_channels);
+        let mut seen = seen.to_vec();
+        let known: HashSet<String> = seen.iter().map(|obs| obs.ident()).collect();
+        seen.extend(
+            self.watch_index
+                .observations(now)
+                .into_iter()
+                .filter(|obs| !known.contains(&obs.ident())),
+        );
+        self.live_now = seen.clone();
         let allowed: HashSet<String> = self
             .watch_channels
             .iter()
@@ -1465,8 +1487,6 @@ impl Worker {
                     || !allowed.contains(&item.key)
                     || announced.contains(&item.key))
         });
-        let can_send =
-            self.cfg.enabled && matches!(self.authority, Authority::Primary | Authority::Delegate);
         let before = self.ledger.incidents.clone();
         let tracker = &self.tracker;
         let events = self.live_watch.channel_live(
@@ -1474,7 +1494,7 @@ impl Worker {
             self.started_at,
             self.cfg.watch.enabled,
             &self.watch_channels,
-            seen,
+            &seen,
             &mut self.ledger,
             can_send,
             |key| tracker.has_queued(key),
