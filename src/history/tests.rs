@@ -1873,6 +1873,79 @@ fn starts_are_half_open_and_appear_only_in_their_start_bucket() {
 }
 
 #[test]
+fn opening_count_is_one_per_broadcast_not_per_relay_session() {
+    let (mut w, _) = writer("metric-broadcasts");
+    // The same B站 broadcast relayed twice: the relay drops and restarts under
+    // the same live key. Two ffmpeg sessions, one 开播场次.
+    session(&mut w, 1, T0, Some("K1"));
+    end(&mut w, 1, T0 + 600, EndReason::SourceEnded);
+    session(&mut w, 2, T0 + 700, Some("K1"));
+    end(&mut w, 2, T0 + 1200, EndReason::SourceEnded);
+    // A later broadcast under a new key is a second 场次.
+    session(&mut w, 3, T0 + 3600, Some("K2"));
+    let parts = query::summary(&w.conn, &q(T0, T0 + 7200), "local", T0 + 7300).unwrap();
+    assert_eq!(parts.kpis.sessions, 2, "broadcasts, not ffmpeg sessions");
+    assert_eq!(parts.buckets.iter().map(|b| b.sessions).sum::<i64>(), 2);
+    let out = query::render_summary(&parts, &[]);
+    assert_eq!(out["kpis"]["sessions"], 2);
+    let text = out.to_string();
+    assert!(
+        !text.contains("K1") && !text.contains("K2"),
+        "the live key never leaves"
+    );
+}
+
+#[test]
+fn opening_count_falls_back_to_the_source_id_then_the_session() {
+    let (mut w, _) = writer("metric-broadcasts-source");
+    // No B站 key: the relayed source video identifies the broadcast.
+    session_parts(&mut w, 1, T0, None, Some("vid123"));
+    end(&mut w, 1, T0 + 300, EndReason::SourceEnded);
+    session_parts(&mut w, 2, T0 + 400, None, Some("vid123"));
+    end(&mut w, 2, T0 + 900, EndReason::SourceEnded);
+    session_parts(&mut w, 3, T0 + 1000, None, Some("vid456"));
+    // With neither id the session is the only identity left.
+    session(&mut w, 4, T0 + 2000, None);
+    session(&mut w, 5, T0 + 2100, None);
+    let parts = query::summary(&w.conn, &q(T0, T0 + 3600), "local", T0 + 3600).unwrap();
+    assert_eq!(
+        parts.kpis.sessions, 4,
+        "vid123 twice, vid456, and two id-less relays"
+    );
+}
+
+#[test]
+fn one_broadcast_across_two_nodes_counts_once() {
+    let (mut a, _) = writer_node("metric-broadcast-a", "tokyo-1");
+    session(&mut a, 1, T0, Some("K1"));
+    end(&mut a, 1, T0 + 600, EndReason::ClusterHandoff);
+    let (mut b, _) = writer_node("metric-broadcast-b", "tokyo-2");
+    session(&mut b, 1, T0 + 600, Some("K1"));
+    end(&mut b, 1, T0 + 1200, EndReason::SourceEnded);
+    let window = q(T0, T0 + 3600);
+    let parts: Vec<_> = [(&a, "tokyo-1"), (&b, "tokyo-2")]
+        .into_iter()
+        .map(|(w, node)| query::summary(&w.conn, &window, node, T0 + 1300).unwrap())
+        .collect();
+    let merged = query::merge_summary(parts);
+    assert_eq!(merged.kpis.sessions, 1, "one broadcast, two node sessions");
+    assert_eq!(merged.kpis.live_secs, 1200, "duration still counts both");
+    assert_eq!(merged.buckets.iter().map(|b| b.sessions).sum::<i64>(), 1);
+
+    // A peer from before `broadcasts` contributes only its own count.
+    let (mut old, _) = writer_node("metric-broadcast-old", "old-1");
+    session(&mut old, 1, T0 + 30, Some("K9"));
+    let mut legacy = query::summary(&old.conn, &window, "old-1", T0 + 1300).unwrap();
+    legacy.kpis.sessions = 3;
+    legacy.kpis.broadcasts.clear();
+    let merged = query::merge_summary(vec![merged, legacy]);
+    assert_eq!(
+        merged.kpis.sessions, 4,
+        "one broadcast plus the legacy count"
+    );
+}
+
+#[test]
 fn availability_and_recovery_do_not_use_the_fifty_gap_display_cap() {
     let (mut w, _) = writer("metric-many-gaps");
     session(&mut w, 1, T0, None);

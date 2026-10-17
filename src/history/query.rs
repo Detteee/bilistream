@@ -5,7 +5,7 @@
 use super::event::{metric_id, EndReason, METRICS};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const DAY: i64 = 86_400;
 pub(crate) const MAX_POINTS: usize = 2000;
@@ -1277,7 +1277,13 @@ pub(crate) struct LiveTotals {
 pub(crate) struct KpiParts {
     pub live_secs: i64,
     pub down_secs: i64,
+    /// 开播场次: distinct broadcasts started in the range. See `broadcasts`.
     pub sessions: i64,
+    /// Broadcast ids started in the range (`live:<hash>`, `src:<platform>:<id>`
+    /// or `session:<eid>`). Carried across nodes so one broadcast relayed by
+    /// two of them counts once, the same way `lives` dedupes its totals.
+    #[serde(default)]
+    pub broadcasts: BTreeSet<String>,
     #[serde(default)]
     pub clean_runs: i64,
     pub failures: i64,
@@ -1296,6 +1302,9 @@ pub(crate) struct BucketParts {
     pub start: i64,
     pub live_secs: BTreeMap<String, i64>,
     pub sessions: i64,
+    /// Broadcasts started in this bucket, for cross-node dedupe of `sessions`.
+    #[serde(default)]
+    pub broadcasts: BTreeSet<String>,
     pub failures: i64,
     pub recover_sum: i64,
     pub recover_n: i64,
@@ -1376,6 +1385,11 @@ struct SumSession {
     runs: Vec<RunRow>,
     fails: Vec<(i64, Option<String>)>,
     live_key: Option<String>,
+    /// Stable identity of the broadcast this relay session carried: the same
+    /// B站 `live_key`, source video id, or — with neither — the session itself.
+    /// Reconnects, restarts and failovers keep the id, so 开播场次 counts
+    /// broadcasts instead of ffmpeg pushes.
+    broadcast: String,
     online_peak: Option<f64>,
 }
 
@@ -1394,7 +1408,9 @@ fn load_sessions(
     let mut out = Vec::new();
     for r in rows {
         let runs = runs_of(conn, r.id)?;
+        let broadcast = broadcast_id(&r.platform, &r.live_key, &r.source_id, &r.eid);
         out.push(SumSession {
+            broadcast,
             id: r.id,
             eid: r.eid,
             fails: runs
@@ -1490,7 +1506,9 @@ fn kpis(
         let duration = clip(s.started, end, from, to);
         k.live_secs += duration;
         k.down_secs += duration - pushing_secs(s, from, to, now);
-        k.sessions += (s.started >= from && s.started < to) as i64;
+        if s.started >= from && s.started < to {
+            k.broadcasts.insert(s.broadcast.clone());
+        }
         k.clean_runs += completed_runs(s, from, to).0;
         k.failures += s
             .fails
@@ -1545,6 +1563,7 @@ fn kpis(
     )?;
     k.notify_sent = sent;
     k.notify_failed = failed;
+    k.sessions = k.broadcasts.len() as i64;
     Ok(k)
 }
 
@@ -1584,7 +1603,9 @@ pub(crate) fn summary(
             if d > 0 {
                 *b.live_secs.entry(s.platform.clone()).or_default() += d;
             }
-            b.sessions += (s.started >= from && s.started < to) as i64;
+            if s.started >= from && s.started < to {
+                b.broadcasts.insert(s.broadcast.clone());
+            }
             b.failures += s
                 .fails
                 .iter()
@@ -1605,6 +1626,7 @@ pub(crate) fn summary(
                 }
             }
         }
+        b.sessions = b.broadcasts.len() as i64;
         buckets.push(b);
         start = end;
     }
@@ -1786,7 +1808,12 @@ fn merge_live(into: &mut LiveTotals, incoming: LiveTotals) {
 fn merge_kpis(into: &mut KpiParts, k: KpiParts) {
     into.live_secs += k.live_secs;
     into.down_secs += k.down_secs;
-    into.sessions += k.sessions;
+    // Each node already counts its own broadcasts once; drop the ones another
+    // node already reported so a failover does not look like two 开播.
+    // Peers that predate `broadcasts` only contribute their count.
+    let common = k.broadcasts.intersection(&into.broadcasts).count() as i64;
+    into.sessions += k.sessions - common;
+    into.broadcasts.extend(k.broadcasts);
     into.clean_runs += k.clean_runs;
     into.failures += k.failures;
     into.recover_sum += k.recover_sum;
@@ -1827,7 +1854,9 @@ pub(crate) fn merge_summary(parts: Vec<SummaryParts>) -> SummaryParts {
             for (k, v) in b.live_secs {
                 *e.live_secs.entry(k).or_default() += v;
             }
-            e.sessions += b.sessions;
+            let common = b.broadcasts.intersection(&e.broadcasts).count() as i64;
+            e.sessions += b.sessions - common;
+            e.broadcasts.extend(b.broadcasts);
             e.failures += b.failures;
             e.recover_sum += b.recover_sum;
             e.recover_n += b.recover_n;
