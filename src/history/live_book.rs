@@ -492,6 +492,15 @@ pub(crate) fn restore(book: BiliLiveBook) {
     local().restore(book);
 }
 
+/// Forgets every broadcast this process remembers: their rows were deleted,
+/// so a late summary must not write them back into the fresh archive.
+pub(crate) fn clear() {
+    update_local(|state| {
+        state.book = BiliLiveBook::default();
+        state.restored.clear();
+    });
+}
+
 pub(crate) fn needs_revalidation(room: u64, key: &str) -> bool {
     local().needs_revalidation(room, key)
 }

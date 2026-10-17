@@ -64,7 +64,7 @@ async fn queued_shutdown_facts_are_committed_before_flush_ack_and_reopen() {
     );
     let (flush, controls) = tokio::sync::mpsc::channel(1);
     let (ack, mut received) = tokio::sync::oneshot::channel();
-    flush.try_send(ack).unwrap();
+    flush.try_send(crate::history::Control::Flush(ack)).unwrap();
     // Pause the real writer at its first transaction. Prequeueing the flush
     // makes an implementation which acknowledges before draining observable:
     // it would acknowledge first, then enter this transaction via its normal
@@ -174,7 +174,7 @@ async fn failed_or_closed_writer_never_acknowledges_a_successful_flush() {
     );
     let (flush, controls) = tokio::sync::mpsc::channel(1);
     let (ack, received) = tokio::sync::oneshot::channel();
-    flush.try_send(ack).unwrap();
+    flush.try_send(crate::history::Control::Flush(ack)).unwrap();
     let worker =
         std::thread::spawn(move || crate::history::run_writer(w, data, controls, shared, false));
     assert!(!tokio::time::timeout(Duration::from_secs(2), received)
@@ -999,4 +999,62 @@ fn export_browser_history_fixture() {
     )
     .unwrap();
     eprintln!("sanitized history fixture: {}", directory.display());
+}
+
+/// The clear control is the only path the dashboard button uses. It must run
+/// on the writer thread (never a second connection), refuse while a relay is
+/// open, and drain the queue first so a just-captured sample cannot reappear.
+#[test]
+fn clear_control_refuses_an_open_relay_and_deletes_what_it_drained() {
+    use std::sync::Arc;
+    let (mut w, path) = writer("clear-control");
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<Event>>(16);
+    for event in [
+        ev(
+            T0,
+            EventKind::SessionStarted {
+                seq: 1,
+                platform: "YT",
+                channel_id: "c".into(),
+                channel_name: "n".into(),
+                title: None,
+                live_key: Some("key-a".into()),
+                source_id: None,
+                area_v2: None,
+                room: 1,
+            },
+        ),
+        ev(T0, EventKind::FfmpegStarted { seq: 1, run: 10 }),
+        ev(
+            T0 + 1,
+            EventKind::StatsSample {
+                seq: 1,
+                bitrate_kbps: (1000.0, 2000.0, 3000.0),
+                fps: Some(30.0),
+                speed: Some(1.0),
+            },
+        ),
+    ] {
+        tx.try_send(Arc::new(event)).unwrap();
+    }
+    let shared = flush_shared(&path);
+
+    let refused = crate::history::clear_rows(&mut w, &mut rx, &shared, true).unwrap_err();
+    assert!(refused.contains("正在转播"), "{refused}");
+    assert_eq!(rx.len(), 3, "a refused clear leaves the queue alone");
+    assert_eq!(count(&w, "sessions"), 0);
+
+    let rows = crate::history::clear_rows(&mut w, &mut rx, &shared, false).unwrap();
+    assert!(
+        rows > 0,
+        "queued rows are drained and counted before deletion"
+    );
+    assert!(rx.is_empty());
+    for table in CLEARED {
+        assert_eq!(count(&w, table), 0, "{table} still has rows");
+    }
+    assert_eq!(count(&w, "boots"), 1);
+    let status = shared.status.lock().unwrap();
+    assert_eq!(status.state, "running");
+    assert!(status.last_error.is_none());
 }

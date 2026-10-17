@@ -39,6 +39,14 @@ impl Writer {
         self.secrets = secrets.into_iter().filter(|s| s.len() >= 4).collect();
     }
 
+    /// Every row these maps point at was deleted. A later event must open a
+    /// fresh session instead of referencing a row that no longer exists.
+    pub(crate) fn forget(&mut self) {
+        self.sessions.clear();
+        self.runs.clear();
+        self.open_session = None;
+    }
+
     /// Replaces verbatim secrets before any TEXT is bound (design §5.7).
     pub(crate) fn scrub(&self, text: &str) -> String {
         let mut out = text.to_string();

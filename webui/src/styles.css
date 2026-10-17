@@ -3131,6 +3131,8 @@ html.light-theme .analytics {
 .analytics .analytics-stat-value small { margin-left: 2px; color: var(--text-mute); font-size: var(--fs-xs); font-weight: 600; }
 .analytics .analytics-caption { color: var(--text-mute); font-size: var(--fs-xs); }
 .analytics .analytics-retention { display: block; margin-top: var(--sp-3); }
+.analytics .analytics-maintenance { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line-1); }
+.analytics .analytics-maintenance small { flex: 1 1 16ch; min-width: 0; }
 
 .analytics .analytics-platform-dot {
   display: inline-block;

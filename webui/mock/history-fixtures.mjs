@@ -257,6 +257,9 @@ export function historyRoute(path, params, mode, ok, nowSec = Math.floor(Date.no
   const empty = mode === 'empty';
   const name = path.slice('/api/history/'.length);
   if (name === 'status') return [200, ok(historyStatus(mode, nowSec))];
+  // POST /api/history/clean is destructive maintenance: answer before the
+  // clamped/partial decorations, since the caller re-reads everything after it.
+  if (name === 'clean') return [200, ok({ rows: empty ? 0 : 1280 })];
   const base = ok;
   ok = data => base(data && typeof data === 'object' ? {
     ...data,

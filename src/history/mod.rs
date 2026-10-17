@@ -62,7 +62,16 @@ pub(crate) struct Shared {
 
 struct Handle {
     shared: Arc<Shared>,
-    flush: mpsc::Sender<oneshot::Sender<bool>>,
+    control: mpsc::Sender<Control>,
+}
+
+/// Commands for the writer thread. Both mutate the single RW connection, so
+/// they queue behind the same door as ordinary batches.
+pub(crate) enum Control {
+    /// Commit everything already queued; `true` when nothing was dropped.
+    Flush(oneshot::Sender<bool>),
+    /// Delete every recorded row and reset the writer's row-id caches.
+    Clear(oneshot::Sender<Result<u64, String>>),
 }
 
 static HANDLE: OnceLock<Handle> = OnceLock::new();
@@ -115,16 +124,34 @@ pub async fn flush(timeout: Duration) -> bool {
     if !handle.shared.enabled {
         return true;
     }
-    request_flush(&handle.flush, timeout).await
+    request_flush(&handle.control, timeout).await
 }
 
-pub(crate) async fn request_flush(
-    sender: &mpsc::Sender<oneshot::Sender<bool>>,
-    timeout: Duration,
-) -> bool {
+/// Delete every recorded row on this node, returning how many were removed.
+/// The work runs on the writer thread, and a relay in progress is refused so
+/// a live session never has its rows folded into a fresh archive.
+pub async fn clear(timeout: Duration) -> Result<u64, String> {
+    let Some(handle) = HANDLE.get() else {
+        return Err("统计未启用".into());
+    };
+    if !handle.shared.enabled {
+        return Err("统计未启用".into());
+    }
+    let (ack, received) = oneshot::channel();
+    if handle.control.send(Control::Clear(ack)).await.is_err() {
+        return Err("统计写入线程已停止".into());
+    }
+    match tokio::time::timeout(timeout, received).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("统计写入线程已停止".into()),
+        Err(_) => Err("清理超时，请稍后重试".into()),
+    }
+}
+
+pub(crate) async fn request_flush(sender: &mpsc::Sender<Control>, timeout: Duration) -> bool {
     tokio::time::timeout(timeout, async {
         let (ack, received) = oneshot::channel();
-        if sender.send(ack).await.is_err() {
+        if sender.send(Control::Flush(ack)).await.is_err() {
             return false;
         }
         received.await.unwrap_or(false)
@@ -186,11 +213,11 @@ pub async fn start() {
         secrets: Mutex::new(None),
         enabled: cfg.history.enabled,
     });
-    let (flush, flush_rx) = mpsc::channel(1);
+    let (control, control_rx) = mpsc::channel(1);
     if HANDLE
         .set(Handle {
             shared: Arc::clone(&shared),
-            flush,
+            control,
         })
         .is_err()
     {
@@ -213,7 +240,7 @@ pub async fn start() {
                 let mut writer = writer::Writer::new(conn, &node, boot_id());
                 writer.set_secrets(secrets_of(&cfg));
                 live_book::restore(writer::load_live_book(&writer.conn)?);
-                run_writer(writer, rx, flush_rx, Arc::clone(&thread_shared), true);
+                run_writer(writer, rx, control_rx, Arc::clone(&thread_shared), true);
                 Ok::<(), rusqlite::Error>(())
             }));
             match result {
@@ -322,10 +349,35 @@ fn flush_queued(w: &mut writer::Writer, rx: &mut Receiver<Arc<Event>>, shared: &
     remaining == 0 && shared.dropped.load(Ordering::Relaxed) == 0
 }
 
+/// Commits what is already queued, then deletes it, so a sample captured just
+/// before the request cannot reappear in the fresh archive. Running this only
+/// while no relay is open keeps the writer's cached session ids harmless; the
+/// caller passes that fact in so the rule is testable without a live relay.
+fn clear_rows(
+    w: &mut writer::Writer,
+    rx: &mut Receiver<Arc<Event>>,
+    shared: &Shared,
+    relay_open: bool,
+) -> Result<u64, String> {
+    if relay_open {
+        return Err("正在转播，请先停止转播再清理历史".into());
+    }
+    let _ = flush_queued(w, rx, shared);
+    let rows = maintain::clear(&w.conn)
+        .map_err(|error| crate::logging::safe_text(&error.to_string(), 120))?;
+    w.forget();
+    live_book::clear();
+    let mut status = shared.status.lock().unwrap_or_else(|e| e.into_inner());
+    status.state = "running";
+    status.last_batch_at = Some(now());
+    status.last_error = None;
+    Ok(rows)
+}
+
 pub(crate) fn run_writer(
     mut w: writer::Writer,
     mut rx: Receiver<Arc<Event>>,
-    mut flush_rx: Receiver<oneshot::Sender<bool>>,
+    mut control_rx: Receiver<Control>,
     shared: Arc<Shared>,
     publish: bool,
 ) {
@@ -348,8 +400,16 @@ pub(crate) fn run_writer(
             let mut batch = Vec::new();
             let next = tokio::select! {
                 biased;
-                Some(ack) = flush_rx.recv() => {
-                    let _ = ack.send(flush_queued(&mut w, &mut rx, &shared));
+                Some(control) = control_rx.recv() => {
+                    match control {
+                        Control::Flush(ack) => {
+                            let _ = ack.send(flush_queued(&mut w, &mut rx, &shared));
+                        }
+                        Control::Clear(ack) => {
+                            let open = OPEN_SEQ.load(Ordering::Acquire) != 0;
+                            let _ = ack.send(clear_rows(&mut w, &mut rx, &shared, open));
+                        }
+                    }
                     continue;
                 },
                 next = tokio::time::timeout(Duration::from_secs(1), rx.recv()) => next,

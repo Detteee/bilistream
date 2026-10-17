@@ -810,6 +810,19 @@ pub async fn stats(
     handle("stats", params, headers).await
 }
 
+/// Destructive maintenance: deletes this node's recorded rows so a fresh
+/// range starts empty. The writer thread owns the only RW connection, so the
+/// request is queued there; a relay in progress answers 409 instead.
+pub async fn clean() -> Response {
+    match crate::history::clear(Duration::from_secs(30)).await {
+        Ok(rows) => {
+            crate::webui::events::publish(crate::webui::events::HISTORY);
+            ok(json!({ "rows": rows }))
+        }
+        Err(message) => fail(StatusCode::CONFLICT, &message),
+    }
+}
+
 pub(crate) fn status_value(cfg: &Config) -> Value {
     let node = local_node(cfg);
     let mut cluster_nodes = vec![node.clone()];

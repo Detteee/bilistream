@@ -517,3 +517,44 @@ pub(crate) fn tick(
     }
     Ok(report)
 }
+
+/// Deletes every recorded row in one transaction and returns the row count.
+/// Boot rows stay: they are process bookkeeping the live writer keeps
+/// updating, not recorded statistics. The caller (the writer thread) must
+/// have drained its queue and dropped every cached row id first.
+pub(crate) fn clear(conn: &Connection) -> rusqlite::Result<u64> {
+    // Children before parents; `runs` is the only foreign key into `sessions`.
+    const TABLES: [&str; 10] = [
+        "runs",
+        "events",
+        "notify_sends",
+        "node_segments",
+        "samples_1m",
+        "samples_1h",
+        "sample_frames",
+        "bili_lives",
+        "sessions",
+        "meta",
+    ];
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let mut rows = 0u64;
+    for table in TABLES {
+        match conn.execute(&format!("DELETE FROM {table}"), []) {
+            Ok(deleted) => rows += deleted as u64,
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+    }
+    if let Err(error) = conn.execute_batch("COMMIT") {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    // Give the pages back now instead of waiting for the next tick. The file
+    // is empty, so the incremental vacuum truncates rather than rewrites; a
+    // reader pinning the old snapshot only delays the WAL truncation.
+    let _ = conn.execute_batch("PRAGMA incremental_vacuum");
+    let _ = checkpoint(conn, true);
+    Ok(rows)
+}

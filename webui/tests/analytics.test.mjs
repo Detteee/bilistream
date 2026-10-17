@@ -170,7 +170,24 @@ test('audience sessions group ffmpeg pushes by Bilibili live or source id', () =
   assert.equal(broadcasts[1].sessionId, 'a');
   assert.equal(broadcasts[1].bili.watched, 100);
   assert.equal(broadcasts[1].bili.online_peak, 40);
-  assert.deepEqual(broadcasts[1].sourceIds, ['vid1']);
+  assert.deepEqual(broadcasts[1].channels, ['频道']);
+});
+
+test('a broadcast that switched channel names every channel it carried', () => {
+  // Priority switch mid-live: the B站 live id stays, the source channel and
+  // video change. The option label must name both channels, not one channel
+  // with both video ids.
+  const [b] = audienceBroadcasts([
+    { id: 'a', broadcast_id: 'live:aa', started_at: 10, channel_name: '频道甲', channel_id: 'UC1', source_id: 'vid1', bili: { state: 'ok', watched: 5 } },
+    { id: 'b', broadcast_id: 'live:aa', started_at: 60, channel_name: '频道乙', channel_id: 'UC2', source_id: 'vid2', bili: { state: 'ok', watched: 9 } },
+    { id: 'c', broadcast_id: 'live:aa', started_at: 90, channel_name: '频道甲', channel_id: 'UC1', source_id: 'vid3', bili: { state: 'ok', watched: 9 } },
+  ]);
+  assert.deepEqual(b.channels, ['频道甲', '频道乙'], 'each channel once, in relay order');
+  assert.equal(b.id, 'live:aa');
+  const [nameless] = audienceBroadcasts([
+    { id: 'x', broadcast_id: 'live:bb', started_at: 5, channel_name: '', channel_id: 'UC9', bili: { state: 'none' } },
+  ]);
+  assert.deepEqual(nameless.channels, ['UC9'], 'a nameless session falls back to its channel id');
 });
 
 test('mock sessions carry no revenue and never leak sentinels', () => {
@@ -354,4 +371,38 @@ test('mock end_reason uses only the seven backend codes, each mapped (open → -
   }
   assert.ok(seen.size >= 5, 'mock exercises most codes');
   assert.ok(body.data.items.some(s => s.failures > 0 && ['aborted', 'process_restart'].includes(s.end_reason)));
+});
+
+// ---------- clear history (W18) ----------
+
+test('W18: 清理历史 is destructive, confirmed, local-only, and re-reads everything', async () => {
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<div class="analytics-maintenance">/);
+  assert.match(html, /历史只保存在本节点。清理后统计、场次和事件从零开始。/);
+  assert.match(html, /id="analytics-clean-btn"[^>]*class="[^"]*btn-danger[^"]*"[^>]*type="button">清理历史…<\/button>/);
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.analytics \.analytics-maintenance \{[^}]*border-top: 1px solid var\(--line-1\)/);
+  const shared = await readFile(new URL('../src/shared.css', import.meta.url), 'utf8');
+  assert.match(shared, /\.btn-danger\s*\{/, 'the button reuses the shared danger style');
+  const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
+  assert.match(view, /const CLEAN_CONFIRM = '[^']*无法撤销[^']*';/);
+  assert.match(view, /if \(cleanBtn\.disabled \|\| !confirm\(CLEAN_CONFIRM\)\) return;/);
+  assert.match(view, /await deps\.postJson\('\/api\/history\/clean', \{\}\)/);
+  assert.match(view, /await refresh\(\{ force: true \}\)/);
+  assert.match(view, /showNotice\(`清理失败：\$\{error\?\.message \|\| error\}`, 'danger'\)/);
+  assert.match(view, /cleanBtn\.textContent = CLEAN_LABEL;/, 'the label is restored after a failure too');
+  // The chunk gets its own modules through deps, so main.js must hand postJson over.
+  const main = await readFile(new URL('../src/js/main.js', import.meta.url), 'utf8');
+  assert.match(main, /import \{[^}]*postJson[^}]*\} from '\.\/api\.js';/);
+  assert.match(main, /deps: \{[^}]*postJson[^}]*\}/, 'postJson reaches the chunk deps');
+});
+
+test('W18 mock: POST /api/history/clean answers with the deleted row count', () => {
+  const ok = data => ({ success: true, data });
+  const [status, body] = historyRoute('/api/history/clean', new URLSearchParams(), 'populated', ok, NOW);
+  assert.equal(status, 200);
+  assert.ok(body.data.rows > 0, 'a populated archive reports rows');
+  assert.equal(body.data.clamped_to_days, undefined, 'maintenance is not range-decorated');
+  const [, empty] = historyRoute('/api/history/clean', new URLSearchParams(), 'empty', ok, NOW);
+  assert.equal(empty.data.rows, 0, 'clearing an empty archive is a no-op, not an error');
 });

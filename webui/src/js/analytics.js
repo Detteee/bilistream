@@ -24,6 +24,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const DAY = 86400;
 const AUDIENCE_HINT = '数据来自 B 站非公开接口，可能缺失。在线人数有上限，仅供参考。';
 const NOT_SUPPORTED = '当前后端版本不支持统计，请升级 bilistream。';
+const CLEAN_LABEL = '清理历史…';
+const CLEAN_CONFIRM = '清理本节点已记录的全部场次、采样和事件，且无法撤销。确定清理吗？';
 
 let deps = null;
 let root = null;
@@ -393,9 +395,9 @@ function renderAudience(stats, r) {
   const keep = select.value;
   select.replaceChildren(new Option('全部场次（本范围）', ''));
   for (const b of broadcasts) {
-    const who = b.channel_name || b.channel_id || '';
-    const source = b.sourceIds.length ? ` · ${b.sourceIds.join('、')}` : '';
-    select.append(new Option(`${formatAbsolute(b.started_at)} ${who}${source}`.trim(), b.id));
+    // 10-17 20:00 频道甲 频道乙 — every channel this broadcast carried.
+    const who = b.channels.join(' ') || DASH;
+    select.append(new Option(`${formatAbsolute(b.started_at)} ${who}`, b.id));
   }
   select.value = broadcasts.some(b => b.id === keep) ? keep : '';
   syncDetailButton();
@@ -1077,6 +1079,25 @@ function bindControls() {
     if (!result.error) selectRange(result);
   });
   $('analytics-refresh-btn').addEventListener('click', () => refresh({ force: true }));
+  // Destructive and one-shot: ask, then re-read every panel from an empty
+  // history. The server refuses while a relay is open (409 with its reason).
+  const cleanBtn = $('analytics-clean-btn');
+  cleanBtn.addEventListener('click', async () => {
+    if (cleanBtn.disabled || !confirm(CLEAN_CONFIRM)) return;
+    cleanBtn.disabled = true;
+    cleanBtn.textContent = '清理中…';
+    try {
+      const reply = await deps.postJson('/api/history/clean', {});
+      const rows = Number(reply?.data?.rows) || 0;
+      showNotice(`已清理 ${rows} 行历史，统计从零开始。`);
+      await refresh({ force: true });
+    } catch (error) {
+      showNotice(`清理失败：${error?.message || error}`, 'danger');
+    } finally {
+      cleanBtn.disabled = false;
+      cleanBtn.textContent = CLEAN_LABEL;
+    }
+  });
   $('analytics-autorefresh').addEventListener('change', startAutoRefresh);
   $('analytics-scope').addEventListener('change', event => {
     prefs.scope = event.target.value;

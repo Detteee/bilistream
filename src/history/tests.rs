@@ -2405,3 +2405,130 @@ async fn short_coordinator_retention_does_not_truncate_a_longer_peer() {
         }
     }
 }
+
+// --------------------------------------------------------- clear history
+
+/// Every table the operator can see through the 统计 view, children first.
+const CLEARED: [&str; 10] = [
+    "runs",
+    "events",
+    "notify_sends",
+    "node_segments",
+    "samples_1m",
+    "samples_1h",
+    "sample_frames",
+    "bili_lives",
+    "sessions",
+    "meta",
+];
+
+#[test]
+fn clear_empties_every_recorded_table_but_keeps_the_process_book() {
+    let (mut w, path) = writer("clear");
+    session(&mut w, 1, T0, Some("key-a"));
+    w.apply(&ev(
+        T0 + 60,
+        EventKind::StatsSample {
+            seq: 1,
+            bitrate_kbps: (1000.0, 2000.0, 3000.0),
+            fps: Some(30.0),
+            speed: Some(1.0),
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(
+        T0 + 60,
+        EventKind::BiliLiveStarted {
+            live_key: "key-a".into(),
+            room: 1,
+        },
+    ))
+    .unwrap();
+    w.apply(&ev(
+        T0 + 60,
+        EventKind::BiliStartFailed {
+            seq: Some(1),
+            error: "示例失败".into(),
+        },
+    ))
+    .unwrap();
+    end(&mut w, 1, T0 + 120, EndReason::BiliStopped);
+
+    // The fixture must actually fill the tables the button claims to clear.
+    for table in [
+        "runs",
+        "events",
+        "sample_frames",
+        "bili_lives",
+        "sessions",
+        "meta",
+    ] {
+        assert!(count(&w, table) > 0, "{table} fixture is empty");
+    }
+    let before: i64 = CLEARED.iter().map(|t| count(&w, t)).sum();
+
+    let rows = maintain::clear(&w.conn).unwrap();
+    assert_eq!(rows, before as u64, "the count covers every deleted row");
+    for table in CLEARED {
+        assert_eq!(count(&w, table), 0, "{table} still has rows");
+    }
+    assert_eq!(count(&w, "boots"), 1, "boots is process bookkeeping");
+
+    // The writer's in-memory maps must forget the deleted ids, and session ids
+    // restart at 1 because no rows are left to collide with.
+    w.forget();
+    session(&mut w, 1, T0 + DAY, Some("key-b"));
+    end(&mut w, 1, T0 + DAY + 60, EndReason::BiliStopped);
+    let id: i64 = w
+        .conn
+        .query_row("SELECT id FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(id, 1);
+    assert_eq!((count(&w, "sessions"), count(&w, "runs")), (1, 1));
+    assert_eq!(count(&w, "boots"), 1);
+
+    // Everything is committed: a read-only connection sees the empty file.
+    let ro = schema::open_ro(&path).unwrap();
+    let sessions: i64 = ro
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1);
+}
+
+#[test]
+fn observations_for_a_cleared_session_are_dropped_not_reinserted() {
+    let (mut w, _) = writer("clear-stale");
+    session(&mut w, 1, T0, Some("key-a"));
+    maintain::clear(&w.conn).unwrap();
+    w.forget();
+    // Samples and runs already queued (or re-sent) for the deleted session must
+    // not resurrect rows or their foreign keys.
+    for kind in [
+        EventKind::StatsSample {
+            seq: 1,
+            bitrate_kbps: (1.0, 2.0, 3.0),
+            fps: None,
+            speed: None,
+        },
+        EventKind::BiliCounts {
+            seq: 1,
+            room: 1,
+            online: Some(10),
+            watched: Some(20),
+        },
+        EventKind::FfmpegStarted { seq: 1, run: 10 },
+        EventKind::FfmpegExited {
+            seq: 1,
+            run: 10,
+            code: Some(0),
+            success: true,
+            counted_failure: false,
+            diagnostic: None,
+        },
+    ] {
+        w.apply(&ev(T0 + 1, kind)).unwrap();
+    }
+    for table in ["sessions", "runs", "sample_frames", "bili_lives", "events"] {
+        assert_eq!(count(&w, table), 0, "{table} was resurrected");
+    }
+}

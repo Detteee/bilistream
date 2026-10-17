@@ -1,8 +1,8 @@
 // main.js — view router, login gate, SSE wakeup, and timers.
 
-import { isDashboardVisible } from './dom.js';
+import { isDashboardVisible, showNotification } from './dom.js';
 import { state, isViewActive, invalidateManagedData } from './state.js';
-import { ensureWebUiAccess, getJson } from './api.js';
+import { ensureWebUiAccess, getJson, postJson } from './api.js';
 import { formatNetworkRate, formatSpeedRatio, formatFps } from './format.js';
 import { createAnalyticsLoader } from './analytics-loader.js';
 import { configureEventStream, initEventStream } from './events.js';
@@ -51,7 +51,7 @@ const viewsLoaded = new Set();
 const analytics = createAnalyticsLoader({
   importer: () => import('./analytics.js'),
   getView: () => document.getElementById('view-analytics'),
-  deps: { getJson, isDashboardVisible, formatNetworkRate, formatSpeedRatio, formatFps },
+  deps: { getJson, postJson, showNotification, isDashboardVisible, formatNetworkRate, formatSpeedRatio, formatFps },
   reload: () => window.location.reload(),
   isActive: () => isViewActive('analytics'),
 });

@@ -128,6 +128,7 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/history/sessions", get(api::history::sessions))
         .route("/history/events", get(api::history::events))
         .route("/history/stats", get(api::history::stats))
+        .route("/history/clean", post(api::history::clean))
         .route(
             "/cluster/v1/history",
             post(api::history::peer_history).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),

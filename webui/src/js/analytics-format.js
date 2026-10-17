@@ -390,23 +390,23 @@ export function spectrumColor(t) {
 export function audienceBroadcasts(sessions) {
   const groups = new Map();
   for (const session of Array.isArray(sessions) ? sessions : []) {
-    const key = session?.broadcast_id || `session:${session?.id}`;
+    if (!session || typeof session !== 'object') continue;
+    const key = session.broadcast_id || `session:${session.id}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(session);
   }
   const out = [];
   for (const [id, members] of groups) {
     members.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-    const first = members[0];
-    const sourceIds = [...new Set(members.map(s => s.source_id).filter(Boolean))];
+    // A broadcast keeps its B站 live id while the relay switches source
+    // channel (priority switch), so name every channel it carried, once, in
+    // relay order. The video ids would then read as if one channel played them.
+    const channels = [...new Set(members.map(s => s.channel_name || s.channel_id).filter(Boolean))];
     out.push({
       id,
-      sessionId: String(first.id),
-      started_at: first.started_at,
-      channel_name: first.channel_name || '',
-      channel_id: first.channel_id || '',
-      platform: first.platform || '',
-      sourceIds,
+      sessionId: String(members[0].id),
+      started_at: members[0].started_at,
+      channels,
       bili: broadcastAudience(members),
     });
   }
