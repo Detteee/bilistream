@@ -167,7 +167,7 @@ pub async fn download_and_install_update(
     download_url: &str,
     _progress_callback: Option<Box<dyn Fn(u64, u64) + Send>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing::info!("📥 开始下载更新: {}", download_url);
+    tracing::info!("开始下载更新: {}", download_url);
 
     let client = reqwest::Client::builder()
         .user_agent("bilistream")
@@ -205,17 +205,17 @@ pub async fn download_and_install_update(
     // Download with progress
     use std::io::Write;
 
-    tracing::info!("📥 下载中... (大小: {} MB)", total_size / 1024 / 1024);
+    tracing::info!("下载中... (大小: {} MB)", total_size / 1024 / 1024);
     let bytes = crate::plugins::http::response_bytes_limited(response, 256 * 1024 * 1024).await?;
     file.write_all(&bytes)?;
     let downloaded = bytes.len() as u64;
 
-    tracing::info!("✅ 下载完成: {} bytes", downloaded);
+    tracing::info!("下载完成: {} bytes", downloaded);
 
     file.sync_all()?;
     drop(file);
 
-    tracing::info!("✅ 下载完成，开始更新...");
+    tracing::info!("下载完成，开始更新...");
 
     set_update_status("installing", "正在安装更新");
     tokio::task::spawn_blocking(move || install_update(&temp_file, &exe_dir)).await??;
@@ -223,8 +223,8 @@ pub async fn download_and_install_update(
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
 
-    tracing::info!("✅ 更新完成！");
-    tracing::info!("⚠️  请重启程序以使用新版本");
+    tracing::info!("更新完成！");
+    tracing::info!("请重启程序以使用新版本");
 
     Ok(())
 }

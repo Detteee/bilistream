@@ -219,9 +219,9 @@ async fn setup(
         return error_reply(&error);
     }
     let message = if create {
-        "已创建集群，本服务器是唯一成员"
+        "已创建集群，本节点是唯一成员"
     } else {
-        "本服务器已准备加入，请在集群中任一服务器的面板添加它"
+        "本节点已准备加入，请在集群中任一节点的面板添加它"
     };
     match membership_view(runtime, true) {
         Ok(view) => reply(StatusCode::OK, Some(view), message),
@@ -315,7 +315,7 @@ pub(crate) async fn submit_operation(
                 );
             }
             if target_password.trim().is_empty() {
-                return reply::<()>(StatusCode::BAD_REQUEST, None, "请输入目标服务器的面板密码");
+                return reply::<()>(StatusCode::BAD_REQUEST, None, "请输入目标节点的面板密码");
             }
             (
                 operation_id,
@@ -393,7 +393,7 @@ pub(crate) async fn submit_operation(
         (Ok(identity), Ok(Some(manifest)), Ok(local)) if local.lifecycle == Lifecycle::Managed => {
             (identity.public().member_id.clone(), manifest)
         }
-        _ => return reply::<()>(StatusCode::CONFLICT, None, "本服务器尚未加入受管集群"),
+        _ => return reply::<()>(StatusCode::CONFLICT, None, "本节点尚未加入受管集群"),
     };
     if expected != manifest.revision {
         return reply::<()>(StatusCode::CONFLICT, None, "成员版本已改变，请刷新后重试");
@@ -418,7 +418,7 @@ pub(crate) async fn submit_operation(
         return reply::<()>(
             StatusCode::BAD_GATEWAY,
             None,
-            format!("以下服务器必须在线才能变更成员: {}", missing.join("、")),
+            format!("以下节点必须在线才能变更成员: {}", missing.join("、")),
         );
     }
     let begin = {
@@ -496,7 +496,7 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
                 return error_reply(&error);
             }
             runtime.spawn_driver(id.clone());
-            status_reply(runtime, &id, "目标服务器已确认配对，成员操作已开始")
+            status_reply(runtime, &id, "目标节点已确认配对，成员操作已开始")
         }
         Ok((identity, Reservation::Refused(code, message))) => {
             abort(runtime, &id, message.clone(), Some(identity.member_id)).await;
@@ -510,17 +510,17 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
             reply::<()>(status, None, message)
         }
         Ok((_, Reservation::Uncertain(message))) => {
-            let note = format!("无法确认目标服务器是否已预约，将自动核对: {message}");
+            let note = format!("无法确认目标节点是否已预约，将自动核对: {message}");
             let note_id = id.clone();
             let _ = record(runtime, move |m| m.note(note_id, note)).await;
             runtime.spawn_driver(id.clone());
-            status_reply(runtime, &id, "目标服务器响应丢失，正在核对配对状态")
+            status_reply(runtime, &id, "目标节点响应丢失，正在核对配对状态")
         }
         Err(error) => {
             abort(
                 runtime,
                 &id,
-                "目标服务器不可达或身份验证失败，操作已取消".into(),
+                "目标节点不可达或身份验证失败，操作已取消".into(),
                 None,
             )
             .await;
@@ -528,7 +528,7 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
             reply::<()>(
                 StatusCode::BAD_GATEWAY,
                 None,
-                format!("目标服务器不可达或身份验证失败: {error}"),
+                format!("目标节点不可达或身份验证失败: {error}"),
             )
         }
     }
@@ -579,7 +579,7 @@ async fn forward_self_removal(
                 return reply(
                     StatusCode::OK,
                     status,
-                    format!("已交由 {} 协调移除本服务器", member.node_id),
+                    format!("已交由 {} 协调移除本节点", member.node_id),
                 );
             }
             Ok(response) if response.status == 409 => {
@@ -598,7 +598,7 @@ async fn forward_self_removal(
     reply::<()>(
         StatusCode::BAD_GATEWAY,
         None,
-        format!("没有可协调的保留服务器: {}", unreachable.join("、")),
+        format!("没有可协调的保留节点: {}", unreachable.join("、")),
     )
 }
 
@@ -631,7 +631,7 @@ async fn operation_status(runtime: &Runtime, id: String, retry: bool) -> Respons
             return reply::<()>(
                 StatusCode::NOT_FOUND,
                 None,
-                "操作尚未到达本服务器，请稍后刷新或在协调服务器查看",
+                "操作尚未到达本节点，请稍后刷新或在协调节点查看",
             )
         }
         Err(error) => return error_reply(&error),
@@ -654,7 +654,7 @@ async fn operation_status(runtime: &Runtime, id: String, retry: bool) -> Respons
         let mut status = project(runtime, &op);
         status.phase = "needs_attention".into();
         status.message = Some(format!(
-            "无法连接协调服务器 {}，本服务器保持暂停直到结果确认",
+            "无法连接协调节点 {}，本节点保持暂停直到结果确认",
             status.coordinator_node_id
         ));
         return reply(StatusCode::OK, Some(status), "");
@@ -702,7 +702,7 @@ pub(crate) async fn peer_hello(
         None => return bad_request(),
     };
     let Ok(identity) = auth.runtime().membership.identity() else {
-        return (StatusCode::NOT_FOUND, "本服务器尚未创建或准备加入集群").into_response();
+        return (StatusCode::NOT_FOUND, "本节点尚未创建或准备加入集群").into_response();
     };
     peer_json(auth.peer_hello(&identity, &request))
 }
@@ -730,17 +730,13 @@ pub(crate) async fn peer_reserve(
                 axum::http::header::RETRY_AFTER,
                 retry.map_or(60, |d| d.as_secs().max(1)).to_string(),
             )],
-            Json(
-                serde_json::json!({"success":false,"message":"目标服务器密码尝试过多，请稍后重试"}),
-            ),
+            Json(serde_json::json!({"success":false,"message":"目标节点密码尝试过多，请稍后重试"})),
         )
             .into_response(),
         Err((status, _)) => {
             return (
                 status,
-                Json(
-                    serde_json::json!({"success":false,"message":"目标服务器面板密码错误或未设置"}),
-                ),
+                Json(serde_json::json!({"success":false,"message":"目标节点面板密码错误或未设置"})),
             )
                 .into_response()
         }
@@ -751,7 +747,7 @@ pub(crate) async fn peer_reserve(
             if tx.read("webui-password")?.map(|doc| doc.revision) != revision {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
-                    "目标服务器面板密码已更改",
+                    "目标节点面板密码已更改",
                 ));
             }
             Ok(())
@@ -859,7 +855,7 @@ pub(crate) async fn leave_cluster(
             Ok(view) => reply(
                 StatusCode::OK,
                 Some(view),
-                "本服务器已离开集群，监控已全部关闭",
+                "本节点已离开集群，监控已全部关闭",
             ),
             Err(error) => error_reply(&error),
         },

@@ -279,7 +279,7 @@ impl Runtime {
         let identity =
             match tokio::time::timeout(PEER_TIMEOUT, self.client.discover(&endpoint)).await {
                 Ok(Ok(identity)) => identity,
-                _ => return Ok(Step::Wait("目标服务器暂不可达，无法确认配对状态".into())),
+                _ => return Ok(Step::Wait("目标节点暂不可达，无法确认配对状态".into())),
             };
         let candidate = candidate_descriptor(&identity, target_url);
         let (id, pinned) = (op.intent.operation_id.clone(), candidate.clone());
@@ -302,14 +302,14 @@ impl Runtime {
                 self.blocking(move |m| m.propose(id, Some(receipt))).await?;
                 Ok(Step::Again)
             }
-            Reply::Unavailable(message) => Ok(Step::Wait(format!("目标服务器暂不可达: {message}"))),
+            Reply::Unavailable(message) => Ok(Step::Wait(format!("目标节点暂不可达: {message}"))),
             // The target holds no reservation for this intent: abort. The
             // password was not kept, so the operator starts a new operation.
             _ => {
                 let id = op.intent.operation_id.clone();
                 self.blocking(move |m| {
                     m.decide(id.clone(), DecisionKind::Abort)?;
-                    m.note(id, "目标服务器未保留配对，操作已取消".into())
+                    m.note(id, "目标节点未保留配对，操作已取消".into())
                 })
                 .await?;
                 Ok(Step::Again)
@@ -601,7 +601,7 @@ impl Runtime {
                     recipients.push(candidate);
                 }
             } else {
-                waiting.push("等待目标服务器恢复以清理可能的配对预约".into());
+                waiting.push("等待目标节点恢复以清理可能的配对预约".into());
             }
         }
         for member in recipients {
@@ -963,7 +963,7 @@ impl Runtime {
         let endpoint = member_endpoint(target_url)?;
         let identity = tokio::time::timeout(PEER_TIMEOUT, self.client.discover(&endpoint))
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "目标服务器连接超时"))??;
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "目标节点连接超时"))??;
         let (id, candidate) = (
             op.intent.operation_id.clone(),
             candidate_descriptor(&identity, target_url),
@@ -994,7 +994,7 @@ impl Runtime {
             let message = serde_json::from_slice::<serde_json::Value>(&response.body)
                 .ok()
                 .and_then(|v| v["message"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| "目标服务器拒绝配对".into());
+                .unwrap_or_else(|| "目标节点拒绝配对".into());
             // A proxy/origin failure may replace the reply after the target
             // durably reserved. Only application refusal statuses are definite.
             let reservation = if matches!(response.status, 400 | 403 | 409 | 429) {
@@ -1004,11 +1004,11 @@ impl Runtime {
             };
             return Ok((identity, reservation));
         }
-        let receipt: PairingReceipt = serde_json::from_slice(&response.body)
-            .map_err(|_| invalid("目标服务器配对回执无效"))?;
+        let receipt: PairingReceipt =
+            serde_json::from_slice(&response.body).map_err(|_| invalid("目标节点配对回执无效"))?;
         if receipt.candidate.member_id != identity.member_id || receipt.verify(&op.intent).is_err()
         {
-            return Err(invalid("目标服务器配对回执与其身份不符"));
+            return Err(invalid("目标节点配对回执与其身份不符"));
         }
         Ok((identity, Reservation::Reserved(receipt)))
     }
@@ -1063,7 +1063,7 @@ impl Runtime {
         self.blocking(move |membership| membership.commit_local_departure(proved))
             .await?;
         self.membership_changed();
-        tracing::info!("本节点已确认其他服务器不再承认当前身份，退出集群并关闭监控");
+        tracing::info!("本节点已确认其他节点不再承认当前身份，退出集群并关闭监控");
         Ok(())
     }
 }
@@ -1086,18 +1086,18 @@ fn departure_failure(present: &[String], missing: &[String]) -> String {
     let mut parts = Vec::new();
     if !present.is_empty() {
         parts.push(format!(
-            "服务器 {} 仍承认本节点，请使用「移除」",
+            "节点 {} 仍承认本节点，请使用「移除」",
             present.join("、")
         ));
     }
     if !missing.is_empty() {
         parts.push(format!(
-            "服务器 {} 没有确认本节点已不在集群中",
+            "节点 {} 没有确认本节点已不在集群中",
             missing.join("、")
         ));
     }
     if parts.is_empty() {
-        "没有收到全部服务器的退出证明".into()
+        "没有收到全部节点的退出证明".into()
     } else {
         parts.join("。")
     }

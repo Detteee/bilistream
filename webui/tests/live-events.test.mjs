@@ -60,6 +60,7 @@ test('wakeup budget line: ok, warn at reserve, unknown when missing or stale', (
   const at = 1_790_000_000;
   const ok = wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 2, wakeup_next_close_at: at });
   assert.equal(ok.main, '唤醒额度 3/4 · 保留 2 用于故障提醒');
+  assert.equal(ok.segments.map(seg => seg.sep ?? seg.text).join(''), ok.main, 'phrases and line stay in sync');
   assert.equal(ok.tone, 'ok');
   assert.equal(ok.next, ` · 下一档 ${formatLocalShort(at)} 到期`);
   assert.match(ok.next, /^ · 下一档 \d\d-\d\d \d\d:\d\d 到期$/);
@@ -72,7 +73,7 @@ test('wakeup budget line: ok, warn at reserve, unknown when missing or stale', (
   assert.equal(wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 1 }).main.includes('保留 1'), true, 'reserve is never hard-coded');
   for (const view of [wakeupBudgetView({ wakeup_reserve: 2 }), wakeupBudgetView({ wakeup_remaining: 3 }),
     wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 2, wakeup_next_close_at: at, passive_window_open: true }, { available: false })]) {
-    assert.deepEqual(view, { main: '唤醒额度 —', tone: 'muted', next: null, passive: false });
+    assert.deepEqual(view, { main: '唤醒额度 —', segments: [{ text: '唤醒额度 —' }], tone: 'muted', next: null, passive: false });
   }
 });
 

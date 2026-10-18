@@ -555,7 +555,9 @@ export function pickBudget(status, settings) {
 }
 
 // §17.3 view model. `available` is false when /status is missing or stale.
-// Returns { main, tone, next|null, passive }.
+// Returns { main, segments, tone, next|null, passive }. `segments` is the
+// authoritative phrase list the view renders as nowrap spans and `main` is the
+// same phrases joined, so copy cannot desynchronise the two.
 // §17.8: `push` is the top-level `active_push` (undefined on an older
 // backend, which keeps the §17 rules). With it, the budget is the fallback:
 // 「备用：」 prefix, warn and the passive hint only while push is not `ok`.
@@ -565,13 +567,23 @@ export function wakeupBudgetView(budget, { available = true, push = undefined } 
   const known = available && Number.isInteger(remaining) && Number.isInteger(reserve);
   const hasPush = push !== undefined;
   const prefix = hasPush ? '备用：' : '';
-  if (!known) return { main: `${prefix}唤醒额度 —`, tone: 'muted', next: null, passive: false };
+  if (!known) {
+    const text = `${prefix}唤醒额度 —`;
+    return { main: text, segments: [{ text }], tone: 'muted', next: null, passive: false };
+  }
   const pushOk = hasPush && push?.last_result === 'ok';
   const low = remaining <= reserve && !pushOk;
   const at = budget.wakeup_next_close_at;
   const windowOpen = budget.passive_window_open === true;
+  const segments = [
+    { text: `${prefix}唤醒额度 ${remaining}/4` },
+    { sep: ' · ' },
+    { text: `保留 ${reserve} 用于故障提醒` },
+  ];
+  if (low) segments.push({ sep: '，' }, { text: '开播/下播只用被动回复', suffix: true });
   return {
-    main: `${prefix}唤醒额度 ${remaining}/4 · 保留 ${reserve} 用于故障提醒${low ? '，开播/下播只用被动回复' : ''}`,
+    main: segments.map(seg => seg.sep ?? seg.text).join(''),
+    segments,
     tone: low ? 'warn' : 'ok',
     next: Number.isFinite(at) && at > 0 ? ` · 下一档 ${formatLocalShort(at)} 到期` : null,
     passive: hasPush ? windowOpen && pushLimited(push) : windowOpen,

@@ -10,12 +10,12 @@ const setHidden = (el, hidden) => { if (el && el.hidden !== hidden) el.hidden = 
 
 // Budget text as phrases; each phrase is its own nowrap span, so the line can
 // only break at the ` · ` / `，` separators between them (§17.6, review B3).
+// The producer hands over the phrases, so the layout contract lives in one
+// file: re-parsing `main` here used to make any copy edit fail silently into a
+// single unbreakable span.
 export function budgetSegments(view) {
-  const m = /^((?:备用：)?)唤醒额度 (\d+\/4) · (保留 \d+ 用于故障提醒)(，(开播\/下播只用被动回复))?$/.exec(view.main);
-  if (!m) return [{ text: view.main }];
-  const out = [{ text: `${m[1]}唤醒额度 ${m[2]}` }, { sep: ' · ' }, { text: m[3] }];
-  if (m[5]) out.push({ sep: '，' }, { text: m[5], suffix: true });
-  return out;
+  if (Array.isArray(view?.segments)) return view.segments;
+  return [{ text: view?.main ?? '' }];
 }
 
 function fillSegments(doc, el, segments) {

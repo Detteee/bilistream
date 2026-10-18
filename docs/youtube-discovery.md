@@ -21,7 +21,7 @@ RSS and WebSub find potential streams; the YouTube Data API checks their live st
 
 Each usable key has a 9,000-unit application budget per Pacific day. Protected work and target checks reserve quota before roster polling. Polling cadence also adapts to learned go-live hours and remaining quota. RSS has no API request quota cost, but confirming discovered IDs does.
 
-## Shared index / 多服务器共享索引
+## Shared index / 多节点共享索引
 
 When the cluster has a selected public-status node with usable keys, that node supplies the YouTube index. Other nodes fetch its answers instead of making duplicate discovery calls. Configure RSS, keys and WebSub on the index node; these settings are node-local.
 

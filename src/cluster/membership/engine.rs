@@ -548,7 +548,7 @@ impl Membership {
             if local.lifecycle != Lifecycle::JoinReady
                 || local.hold.as_deref() != Some("join_ready")
             {
-                return Err(conflict("请先在目标服务器准备加入集群"));
+                return Err(conflict("请先在目标节点准备加入集群"));
             }
             let identity = identity_tx(tx)?;
             let receipt = PairingReceipt::sign(
@@ -685,7 +685,7 @@ impl Membership {
                 .as_ref()
                 .is_some_and(|old| old.identity() != candidate.identity())
             {
-                return Err(conflict("目标服务器身份已改变，仍需清理原预约"));
+                return Err(conflict("目标节点身份已改变，仍需清理原预约"));
             }
             op.pairing_candidate = Some(candidate);
             op.pairing_contacted = true;
@@ -1142,7 +1142,7 @@ impl Membership {
     pub fn departure_plan(&self) -> io::Result<DeparturePlan> {
         let local = self.local()?;
         if local.lifecycle != Lifecycle::Managed {
-            return Err(conflict("只有已加入集群的服务器可以这样退出"));
+            return Err(conflict("只有已加入集群的节点可以这样退出"));
         }
         let journal = read::<Journal>(&self.store, OPERATIONS_RECORD)?.unwrap_or_default();
         match departure_block(&local, &journal) {
@@ -1168,7 +1168,7 @@ impl Membership {
             .cloned()
             .collect::<Vec<_>>();
         if others.is_empty() {
-            return Err(conflict("集群中没有其他服务器可以确认，请使用「移除」"));
+            return Err(conflict("集群中没有其他节点可以确认，请使用「移除」"));
         }
         Ok(DeparturePlan {
             cluster_id: manifest.cluster_id,
@@ -1212,7 +1212,7 @@ impl Membership {
                 .map(|member| member.member_id.clone())
                 .collect::<BTreeSet<_>>();
             if others.is_empty() {
-                return Err(conflict("集群中没有其他服务器可以确认，请使用「移除」"));
+                return Err(conflict("集群中没有其他节点可以确认，请使用「移除」"));
             }
             if others != proved {
                 return Err(conflict("成员清单已改变，请刷新后重试"));
@@ -1543,7 +1543,7 @@ fn project_config(
     turn_off: bool,
 ) -> io::Result<()> {
     let Some(document) = tx.read("config.json")? else {
-        return Err(invalid("请先完成服务器初始设置"));
+        return Err(invalid("请先完成本机初始设置"));
     };
     let mut config = document.value;
     if !config["cluster"].is_object() {

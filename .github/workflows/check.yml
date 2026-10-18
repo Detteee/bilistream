@@ -1,7 +1,7 @@
 name: Checks
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 permissions:
   contents: read
@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -20,5 +20,10 @@ jobs:
       - run: npm --prefix webui run check
       - run: npm --prefix webui test
       - run: cargo fmt --all --check
+      # `dev` pushes are not covered by a PR gate, and the accumulated clippy
+      # debt proved nothing else watched them. Not `-D warnings` yet: the tree
+      # still carries ten pre-existing warnings; turn the deny on once they are
+      # cleared, so this step cannot regress silently in the meantime.
+      - run: cargo clippy --locked -p bilistream --all-targets
       - run: cargo test --locked -p bilistream
       - run: cargo build --locked -p bilistream --bin bilistream

@@ -541,7 +541,7 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
                         }
                     });
 
-                tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
+                tracing::error!("Bilibili 开播失败 (错误码: {}): {}", code, message);
 
                 if let Some(face_auth_url) = face_auth_url {
                     return Err(format!("FACE_AUTH_REQUIRED:{}", face_auth_url).into());
@@ -551,12 +551,12 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
             }
             60031 => {
                 // Temporary ban. The end time is not in this body; room_init.lock_till is.
-                tracing::error!("❌ Bilibili 开播失败 (错误码: {})", code);
-                tracing::error!("📛 {}", message);
+                tracing::error!("Bilibili 开播失败 (错误码: {})", code);
+                tracing::error!("{}", message);
                 return Err(format!("{}{}", BILI_START_TEMP_BAN_PREFIX, message).into());
             }
             _ => {
-                tracing::error!("❌ Bilibili 开播失败 (错误码: {}): {}", code, message);
+                tracing::error!("Bilibili 开播失败 (错误码: {}): {}", code, message);
                 return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
             }
         }
@@ -647,7 +647,7 @@ pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box
             // Check for content moderation failure
             if message.contains("未能通过审核") {
                 return Err(format!(
-                    "⚠️ 标题审核失败: {} - 可能包含敏感词汇，请尝试其他标题",
+                    "标题审核失败: {} - 可能包含敏感词汇，请尝试其他标题",
                     message
                 )
                 .into());

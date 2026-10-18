@@ -127,63 +127,63 @@ pub(crate) async fn initialize_user_data(_directory: &Path) -> Result<usize, Str
 async fn ensure_windows_dependencies() -> Result<(), Box<dyn Error>> {
     let exe_dir = current_exe_dir()?;
 
-    println!("🔍 检查 Windows 依赖项...");
+    println!("检查 Windows 依赖项...");
 
     // Check and download yt-dlp
     let yt_dlp_path = exe_dir.join("yt-dlp.exe");
     if !yt_dlp_path.exists() {
-        println!("📥 下载 yt-dlp.exe...");
+        println!("下载 yt-dlp.exe...");
         download_file_to_path(YT_DLP_URL, &yt_dlp_path).await?;
-        println!("✅ yt-dlp.exe 下载完成");
+        println!("yt-dlp.exe 下载完成");
     } else {
-        println!("✅ yt-dlp.exe 已存在");
+        println!("yt-dlp.exe 已存在");
     }
 
     // Check and download ffmpeg
     let ffmpeg_path = exe_dir.join("ffmpeg.exe");
     if !ffmpeg_path.exists() {
-        println!("📥 下载 ffmpeg.exe (这可能需要几分钟)...");
+        println!("下载 ffmpeg.exe (这可能需要几分钟)...");
         download_and_extract_ffmpeg(&exe_dir).await?;
-        println!("✅ ffmpeg.exe 下载完成");
+        println!("ffmpeg.exe 下载完成");
     } else {
-        println!("✅ ffmpeg.exe 已存在");
+        println!("ffmpeg.exe 已存在");
     }
 
     // Check for streamlink (needs to be installed separately)
     if !check_streamlink_installed() {
-        println!("⚠️  streamlink 未安装");
+        println!("streamlink 未安装");
         println!("   对于 Twitch 支持，请安装 streamlink:");
         println!("   1. 下载: https://github.com/streamlink/windows-builds/releases");
         println!("   2. 或使用: pip install streamlink");
         println!("   3. 安装 ttvlol 插件: https://github.com/2bc4/streamlink-ttvlol");
         println!();
     } else {
-        println!("✅ streamlink 已安装");
+        println!("streamlink 已安装");
     }
 
     // Check for Deno (required by yt-dlp)
     if !check_deno_installed() {
-        println!("⚠️  Deno 未安装");
+        println!("Deno 未安装");
         println!("   yt-dlp 需要 Deno 获取m3u8");
         println!("   正在自动安装 Deno...");
 
         match install_deno_windows().await {
             Ok(_) => {
-                println!("✅ Deno 安装成功");
+                println!("Deno 安装成功");
                 println!("   请重启程序以使 Deno 生效");
             }
             Err(e) => {
-                println!("❌ Deno 自动安装失败: {}", e);
+                println!("Deno 自动安装失败: {}", e);
                 println!("   请手动安装:");
                 println!("   PowerShell: irm https://deno.land/install.ps1 | iex");
             }
         }
         println!();
     } else {
-        println!("✅ Deno 已安装");
+        println!("Deno 已安装");
     }
 
-    println!("✅ 核心依赖项已就绪\n");
+    println!("核心依赖项已就绪\n");
     Ok(())
 }
 
@@ -211,7 +211,7 @@ fn check_deno_installed() -> bool {
 async fn install_deno_windows() -> Result<(), Box<dyn Error>> {
     use std::io::Write;
 
-    println!("📥 下载 Deno 安装脚本...");
+    println!("下载 Deno 安装脚本...");
 
     // Download the Deno install script
     let install_script_url = "https://deno.land/install.ps1";
@@ -225,7 +225,7 @@ async fn install_deno_windows() -> Result<(), Box<dyn Error>> {
     file.write_all(script_content.as_bytes())?;
     drop(file);
 
-    println!("🔧 运行安装脚本...");
+    println!("运行安装脚本...");
 
     // Run PowerShell script
     let output = std::process::Command::new("powershell")
@@ -239,7 +239,7 @@ async fn install_deno_windows() -> Result<(), Box<dyn Error>> {
     let _ = fs::remove_file(&script_path);
 
     if output.status.success() {
-        println!("📝 安装输出:");
+        println!("安装输出:");
         println!("{}", String::from_utf8_lossy(&output.stdout));
         Ok(())
     } else {
@@ -250,46 +250,46 @@ async fn install_deno_windows() -> Result<(), Box<dyn Error>> {
 /// Ensure Linux-specific dependencies (yt-dlp, ffmpeg, streamlink, deno)
 #[cfg(not(target_os = "windows"))]
 async fn ensure_linux_dependencies() -> Result<(), Box<dyn Error>> {
-    println!("🔍 检查 Linux 依赖项...");
+    println!("检查 Linux 依赖项...");
 
     // Check for yt-dlp
     if !check_command_installed("yt-dlp") {
-        println!("⚠️  yt-dlp 未安装");
+        println!("yt-dlp 未安装");
         println!("   安装方法:");
         println!("   sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp");
         println!("   sudo chmod a+rx /usr/local/bin/yt-dlp");
         println!("   或使用: pip install yt-dlp");
         println!();
     } else {
-        println!("✅ yt-dlp 已安装");
+        println!("yt-dlp 已安装");
     }
 
     // Check for ffmpeg
     if !check_command_installed("ffmpeg") {
-        println!("⚠️  ffmpeg 未安装");
+        println!("ffmpeg 未安装");
         println!("   安装方法:");
         println!("   Ubuntu/Debian: sudo apt install ffmpeg");
         println!("   Fedora: sudo dnf install ffmpeg");
         println!("   Arch: sudo pacman -S ffmpeg");
         println!();
     } else {
-        println!("✅ ffmpeg 已安装");
+        println!("ffmpeg 已安装");
     }
 
     // Check for streamlink
     if !check_command_installed("streamlink") {
-        println!("⚠️  streamlink 未安装");
+        println!("streamlink 未安装");
         println!("   对于 Twitch 支持，请安装 streamlink:");
         println!("   pip install streamlink");
         println!("   安装 ttvlol 插件: https://github.com/2bc4/streamlink-ttvlol");
         println!();
     } else {
-        println!("✅ streamlink 已安装");
+        println!("streamlink 已安装");
     }
 
     // Check for Deno
     if !check_command_installed("deno") {
-        println!("⚠️  Deno 未安装");
+        println!("Deno 未安装");
         println!("   yt-dlp 需要 Deno 来处理某些网站（如 YouTube）");
         println!("   安装方法:");
         println!("   curl -fsSL https://deno.land/install.sh | sh");
@@ -297,10 +297,10 @@ async fn ensure_linux_dependencies() -> Result<(), Box<dyn Error>> {
         println!("   export PATH=\"$HOME/.deno/bin:$PATH\"");
         println!();
     } else {
-        println!("✅ Deno 已安装");
+        println!("Deno 已安装");
     }
 
-    println!("✅ 依赖项检查完成\n");
+    println!("依赖项检查完成\n");
     Ok(())
 }
 

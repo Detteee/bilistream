@@ -547,7 +547,7 @@
             <div class="dashboard-card-header cluster-header">
               <h2 class="dashboard-card-title">
                 <svg aria-hidden="true"><use href="#i-servers" /></svg>
-                多服务器
+                多节点
                 <span class="status-indicator status-offline" id="cluster-status-indicator"></span>
               </h2>
               <div class="card-header-actions">
@@ -1554,7 +1554,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="通过读取 YouTube 频道 RSS 确认直播状态，需要 YouTube Data API Key。关闭后仍会处理 WebSub 推送，并按可用配额轮询上传列表。多服务器共享索引时，请在 YouTube 索引节点上设置。">
+                <label class="toggle-label" title="通过读取 YouTube 频道 RSS 确认直播状态，需要 YouTube Data API Key。关闭后仍会处理 WebSub 推送，并按可用配额轮询上传列表。多节点共享索引时，请在 YouTube 索引节点上设置。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-youtube-rss-checkbox">
                     <span class="toggle-slider"></span>
@@ -1785,27 +1785,27 @@
           <div class="panel__head">
             <h2 class="panel__title" id="cluster-settings-title">
               <svg aria-hidden="true"><use href="#i-servers" /></svg>
-              多服务器节点
+              集群节点
             </h2>
           </div>
           <div class="panel__body">
             <div class="cluster-membership" id="cluster-membership">
               <div class="cluster-membership-head">
                 <span class="cluster-membership-badge" id="cluster-membership-badge" data-lifecycle="">读取中</span>
-                <p id="cluster-membership-summary" class="settings-help-text" role="status">正在读取多服务器状态…</p>
+                <p id="cluster-membership-summary" class="settings-help-text" role="status">正在读取多节点状态…</p>
               </div>
               <p id="cluster-membership-password-hint" class="settings-help-text cluster-membership-warning hidden">
-                请先在<a href="#panel-security-title" id="cluster-membership-security-link">安全</a>中设置面板密码，其他服务器添加本服务器时需要验证它。
+                请先在<a href="#panel-security-title" id="cluster-membership-security-link">安全</a>中设置面板密码，其他节点添加本节点时需要验证它。
               </p>
               <div class="session-actions cluster-membership-setup hidden" id="cluster-membership-setup">
                 <button id="cluster-create-btn" class="btn-primary" type="button">新建集群</button>
                 <button id="cluster-prepare-join-btn" class="btn-secondary" type="button">准备加入</button>
               </div>
-              <small class="settings-help-text hidden" id="cluster-membership-setup-hint">使用下方「本节点」的 ID、名称、地址和优先级。地址必须是证书有效的 HTTPS，或本机回环的认证隧道。准备加入会停止本服务器的转播，直到加入完成。</small>
+              <small class="settings-help-text hidden" id="cluster-membership-setup-hint">使用下方「本节点」的 ID、名称、地址和优先级。地址必须是证书有效的 HTTPS，或本机回环的认证隧道。准备加入会停止本节点的转播，直到加入完成。</small>
               <div class="session-actions cluster-membership-leave hidden" id="cluster-membership-leave">
                 <button id="cluster-leave-btn" class="btn-secondary" type="button">退出集群</button>
               </div>
-              <p id="cluster-leave-hint" class="settings-help-text hidden">其他服务器已移除本节点时，可在此退出；仍被承认时请使用「移除」。</p>
+              <p id="cluster-leave-hint" class="settings-help-text hidden">其他节点已移除本节点时，可在此退出；仍被承认时请使用「移除」。</p>
               <p id="cluster-leave-error" class="settings-help-text cluster-membership-error" role="status" aria-live="polite"></p>
               <div id="cluster-operation-list" class="cluster-operation-list" aria-live="polite"></div>
             </div>
@@ -1881,22 +1881,22 @@
             <div class="cluster-settings-add hidden" id="cluster-member-add">
               <div class="cluster-settings-panel-header">
                 <span class="cluster-settings-panel-mark cluster-settings-panel-mark-add" aria-hidden="true"></span>
-                <span>添加服务器</span>
+                <span>添加节点</span>
               </div>
               <div class="cluster-settings-add-grid">
                 <div class="control-group cluster-settings-add-url">
-                  <label for="cluster-add-url">目标服务器地址</label>
+                  <label for="cluster-add-url">目标节点地址</label>
                   <input type="text" inputmode="url" id="cluster-add-url" autocomplete="off" spellcheck="false" placeholder="https://node-002.example.com">
                 </div>
                 <div class="control-group">
-                  <label for="cluster-add-password">目标服务器面板密码</label>
+                  <label for="cluster-add-password">目标节点面板密码</label>
                   <input type="password" id="cluster-add-password" autocomplete="new-password">
                 </div>
                 <div class="control-group cluster-settings-add-action">
-                  <button id="cluster-add-btn" type="button" class="btn-secondary cluster-settings-add-btn">添加服务器</button>
+                  <button id="cluster-add-btn" type="button" class="btn-secondary cluster-settings-add-btn">添加节点</button>
                 </div>
               </div>
-              <small class="settings-help-text">目标服务器需先在它的面板点击「准备加入」。密码只用于这一次验证，不会保存。添加期间所有服务器暂停转播，所有现有服务器必须在线。</small>
+              <small class="settings-help-text">目标节点需先在它的面板点击「准备加入」。密码只用于这一次验证，不会保存。添加期间所有节点暂停转播，所有现有节点必须在线。</small>
               <p id="cluster-add-error" class="settings-help-text cluster-membership-error" role="status" aria-live="polite"></p>
             </div>
 
@@ -2159,7 +2159,7 @@
                     </select>
                     <button id="public-status-role-btn" type="button" class="btn-secondary hidden">更改运行位置</button>
                   </div>
-                  <small class="settings-help-text" id="public-status-node-hint">本机即可运行，无需开启多服务器。</small>
+                  <small class="settings-help-text" id="public-status-node-hint">本机即可运行，无需开启多节点。</small>
                 </div>
                 <div class="cluster-public-status-fields">
                   <div class="control-group">

@@ -82,7 +82,7 @@ async function refreshMembership() {
     } catch (error) {
       console.debug('Failed to load cluster membership:', error);
       const summary = element('cluster-membership-summary');
-      if (summary && !view) summary.textContent = '无法读取多服务器状态';
+      if (summary && !view) summary.textContent = '无法读取多节点状态';
     } finally {
       refreshing = null;
     }
@@ -129,7 +129,7 @@ async function poll(id) {
   }
   if (!runs.has(id)) return;
   if (entry.self_removal && view?.lifecycle === 'left') {
-    return settle(id, { ...(progress.status || { kind: 'remove' }), phase: 'completed', terminal: true, pending_node_ids: [], message: '本服务器已离开集群' });
+    return settle(id, { ...(progress.status || { kind: 'remove' }), phase: 'completed', terminal: true, pending_node_ids: [], message: '本节点已离开集群' });
   }
   if (progress.status && !operationUnsettled(progress.status)) {
     if (!operationCleanupPending(progress.status)) return settle(id, progress.status);
@@ -219,7 +219,7 @@ async function recoverAfterFailure(id, error, kind) {
     if (error.status === 409) void refreshMembership();
     return;
   }
-  progress.error = '无法确认操作是否已被服务器接收，请查询同一操作的状态，不要重新提交。';
+  progress.error = '无法确认操作是否已被节点接收，请查询同一操作的状态，不要重新提交。';
   schedule(id, pollDelay(0));
 }
 
@@ -261,8 +261,8 @@ async function runSetup(create) {
     return;
   }
   const question = create
-    ? '新建集群后，本服务器成为唯一成员；之后可在此添加其他服务器。继续吗？'
-    : '准备加入会停止本服务器的转播，直到被其他服务器添加完成。继续吗？';
+    ? '新建集群后，本节点成为唯一成员；之后可在此添加其他节点。继续吗？'
+    : '准备加入会停止本节点的转播，直到被其他节点添加完成。继续吗？';
   if (!confirm(question)) return;
   const payload = { expected_local_revision: view.local_revision, name: descriptor.name || descriptor.node_id, node_id: descriptor.node_id, api_url: descriptor.api_url, priority: descriptor.priority };
   // An uncertain reply is resumed with the same ID; the server treats it as one request.
@@ -289,8 +289,8 @@ function addServer() {
   const password = element('cluster-add-password');
   const target = (url?.value || '').trim().replace(/\/+$/, '');
   element('cluster-add-error').textContent = '';
-  if (!target) { showError('请填写目标服务器地址'); url?.focus(); return; }
-  if (!password?.value) { showError('请填写目标服务器的面板密码'); password?.focus(); return; }
+  if (!target) { showError('请填写目标节点地址'); url?.focus(); return; }
+  if (!password?.value) { showError('请填写目标节点的面板密码'); password?.focus(); return; }
   const secret = password.value;
   password.value = '';
   void submitOperation('add', { target_url: target, target_password: secret }, { label: target, clear: [password] })
@@ -304,7 +304,7 @@ function memberById(id) {
 async function leaveCluster() {
   const blocked = leaveBlocked(view, tracked);
   if (submitting || blocked === null || blocked) return;
-  if (!confirm('向其他服务器确认本节点是否已被移除？只有每台都确认本节点已不在集群中，本服务器才会关闭全部监控并退出。仍被承认时请改用「移除」。网络不通不会当作已退出。')) return;
+  if (!confirm('向其他节点确认本节点是否已被移除？只有每台都确认本节点已不在集群中，本节点才会关闭全部监控并退出。仍被承认时请改用「移除」。网络不通不会当作已退出。')) return;
   submitting = true;
   const output = element('cluster-leave-error');
   if (output) output.textContent = '';
@@ -312,7 +312,7 @@ async function leaveCluster() {
   try {
     const result = await postJsonApi('/api/cluster/membership/leave', {}, { replayAfterLogin: false });
     if (result?.success === false) throw new Error(result.message || '退出失败');
-    showNotification(result?.message || '本服务器已离开集群', 'success');
+    showNotification(result?.message || '本节点已离开集群', 'success');
     await refreshMembership();
   } catch (error) {
     const message = error.message || '退出失败';
@@ -328,9 +328,9 @@ function changePublicNode() {
   const nodeId = publicStatusSelection();
   if (nodeId === committedPublicNodeId()) return;
   const member = view?.members?.find(item => item.node_id === nodeId);
-  if (nodeId && !member) { showNotification('所选服务器不在当前成员列表中', 'error'); return; }
+  if (nodeId && !member) { showNotification('所选节点不在当前成员列表中', 'error'); return; }
   const label = member ? (member.name || member.node_id) : '关闭状态页';
-  if (!confirm(`将公开状态页和共享 YouTube 索引改到「${label}」？期间所有服务器会暂停转播。`)) return;
+  if (!confirm(`将公开状态页和共享 YouTube 索引改到「${label}」？期间所有节点会暂停转播。`)) return;
   void submitOperation('set_public_node', { public_member_id: member ? member.member_id : null }, { label });
 }
 
@@ -402,7 +402,7 @@ function renderOperations() {
     title.textContent = info.title;
     const phase = document.createElement('span');
     phase.className = 'cluster-operation-phase';
-    phase.textContent = progress.unknown ? '服务器尚未记录此操作' : submitting && !progress.status ? '正在提交' : info.phase;
+    phase.textContent = progress.unknown ? '节点尚未记录此操作' : submitting && !progress.status ? '正在提交' : info.phase;
     card.append(title, phase);
     for (const text of [info.attention, info.cleanup, info.message, progress.error]) {
       if (!text) continue;
@@ -577,7 +577,7 @@ function memberEditor(member) {
   const priorityField = field('优先级', priority);
   priorityField.classList.add('cluster-peer-field-priority');
   fields.append(field('名称', name), priorityField, urlField);
-  const save = actionButton('保存服务器信息', 'btn-primary', () => {
+  const save = actionButton('保存节点信息', 'btn-primary', () => {
     const body = {
       target_member_id: member.member_id,
       name: name.value.trim() || member.node_id,
@@ -586,7 +586,7 @@ function memberEditor(member) {
     };
     if (!body.api_url) { showNotification('请填写 API 地址', 'error'); return; }
     if (body.name === member.name && body.api_url === member.api_url && body.priority === member.priority) {
-      showNotification('服务器信息没有变化', 'error');
+      showNotification('节点信息没有变化', 'error');
       return;
     }
     void submitOperation('update_node', body, { label: member.name || member.node_id }).then(started => {
@@ -596,7 +596,7 @@ function memberEditor(member) {
   save.dataset.membershipSubmit = 'update';
   const note = document.createElement('small');
   note.className = 'settings-help-text';
-  note.textContent = '节点 ID 和身份不能修改；需要更换时请移除后重新加入。保存期间所有服务器暂停转播。';
+  note.textContent = '节点 ID 和身份不能修改；需要更换时请移除后重新加入。保存期间所有节点暂停转播。';
   form.append(fields, note, save);
   return form;
 }
@@ -618,19 +618,19 @@ function removalConfirm(member, context) {
   if (needsReplacement) {
     replacement = document.createElement('select');
     replacement.className = 'cluster-member-replacement';
-    const placeholder = new Option('请选择接替的服务器', '');
+    const placeholder = new Option('请选择接替的节点', '');
     placeholder.disabled = true;
     replacement.append(placeholder, new Option('关闭公开状态页', 'none'));
     for (const other of view.members.filter(item => item.member_id !== member.member_id)) {
       replacement.append(new Option(other.name || other.node_id, other.member_id));
     }
     replacement.value = '';
-    box.appendChild(field('状态页接替服务器', replacement));
+    box.appendChild(field('状态页接替节点', replacement));
   }
   const confirmButton = actionButton(`确认移除 ${member.name || member.node_id}`, 'btn-primary cluster-member-remove-confirm-btn', () => {
     const body = { target_member_id: member.member_id };
     if (needsReplacement) {
-      if (!replacement.value) { showNotification('请选择接替状态页的服务器，或选择关闭状态页', 'error'); replacement.focus(); return; }
+      if (!replacement.value) { showNotification('请选择接替状态页的节点，或选择关闭状态页', 'error'); replacement.focus(); return; }
       body.replacement_public_member_id = replacement.value === 'none' ? null : replacement.value;
     }
     const selfRemoval = member.member_id === context.localMemberId;

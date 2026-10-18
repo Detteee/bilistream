@@ -197,11 +197,11 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("💡 提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+                tracing::info!("提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
             }
             Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级: {}", e);
             }
         }
     }
@@ -221,10 +221,10 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
             }
             Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级: {}", e);
             }
         }
     }
@@ -242,11 +242,11 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("⚠️ 设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("💡 提示: 使用 sudo 运行以获得更好性能");
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+                tracing::info!("提示: 使用 sudo 运行以获得更好性能");
             }
             Err(e) => {
-                tracing::warn!("⚠️ 无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级: {}", e);
             }
         }
     }

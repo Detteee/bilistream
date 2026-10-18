@@ -564,6 +564,11 @@ function renderBind() {
   }
   if (waiting && !bindTimer) {
     bindTimer = setInterval(() => {
+      // Same visibility gate as the other 系统设置 timers: a pending pairing
+      // code must not keep redrawing and polling while another view is on
+      // screen. The timer stays armed so returning to the view resumes the
+      // countdown immediately.
+      if (!isViewActive('settings') || document.hidden) return;
       renderBind();
       // Poll the status while waiting; SSE `status` also wakes us.
       if (Math.round((Date.now() - statusAt) / 1000) >= 3) refreshNotifyStatus();
@@ -1067,8 +1072,10 @@ async function startBind() {
     if (replace && !confirm('已绑定管理员 openid。重新绑定成功后会替换它，确定吗？')) return;
     const result = await postJson('/api/notify/bind', { mode, replace });
     clearRefusal(); // R2: a new pairing code supersedes an earlier refusal
-    status = { ...(status || {}), bind: result.data };
-    statusAt = Date.now();
+    // Merge through the sequence guard: a GET /api/notify/status that started
+    // before this POST must not land afterwards with a pre-bind snapshot and
+    // blank the pairing code and countdown.
+    setStatus({ ...(status || {}), bind: result.data }, statusReq.next());
     lastBindState = 'waiting';
     setResult('');
   } catch (error) {

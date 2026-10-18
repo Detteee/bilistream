@@ -2226,13 +2226,18 @@ html:not(.app-ready) #main-page {
   margin-top: var(--sp-4);
 }
 
-/* Status rows reuse .cluster-node-meta*; give the value a dot slot. */
+/* Status rows reuse .cluster-node-meta*; the value keeps one rule: a dot slot
+   plus wrapping for long node names and badges (R2). It used to be declared
+   twice, which meant reading two places to know the rendered value. */
 .notify-settings .cluster-node-meta { gap: var(--sp-2); }
 .notify-settings .notify-status-value {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .notify-settings .status-indicator.notify-dot-danger {
   background: var(--danger);
@@ -2301,12 +2306,6 @@ html:not(.app-ready) #main-page {
 
 /* R2. Status values: long node names and badges wrap inside the box. */
 .notify-settings .cluster-node-meta-label { flex: 0 0 auto; }
-.notify-settings .notify-status-value {
-  display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
 .notify-settings .cluster-node-meta-value .cluster-badge,
 .notify-settings .notify-copy-results .cluster-badge {
   flex: 0 1 auto;

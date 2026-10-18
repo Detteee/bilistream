@@ -652,7 +652,7 @@ async function saveSystemConfig() {
   try {
     const config = structuredClone(getCurrentConfig());
     if (config.cluster.enabled && (!config.cluster.node_id || !config.cluster.public_api_url)) {
-      throw new Error('启用多服务器时必须填写本节点 ID 和 API 地址');
+      throw new Error('启用多节点时必须填写本节点 ID 和 API 地址');
     }
     // Membership operations commit topology outside this form.
     configBaseline.cluster = rebaseClusterDraft(configBaseline.cluster);

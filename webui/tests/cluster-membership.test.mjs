@@ -48,7 +48,7 @@ test('held lifecycles explain that they stay paused and do not expire', () => {
   assert.match(lifecycleSummary({ lifecycle: 'join_ready' }), /不会自动恢复单机转播/);
   assert.match(lifecycleSummary({ lifecycle: 'pairing' }), /不会自动过期/);
   assert.match(lifecycleSummary({ lifecycle: 'left' }), /不会自动恢复单机转播/);
-  assert.match(lifecycleSummary({ lifecycle: 'managed', members: [{}, {}], revision: 4 }), /2 台.*版本 4/);
+  assert.match(lifecycleSummary({ lifecycle: 'managed', members: [{}, {}], revision: 4 }), /2 个节点.*版本 4/);
 });
 
 test('leave is offered only while this server is managed and idle', () => {
@@ -57,34 +57,34 @@ test('leave is offered only while this server is managed and idle', () => {
   assert.equal(leaveBlocked({ lifecycle: 'left' }), null);
   assert.equal(leaveBlocked({ lifecycle: 'join_ready' }), null);
   assert.equal(leaveBlocked({ lifecycle: 'standalone' }), null);
-  assert.match(leaveBlocked({ ...managed, operation: status() }), /尚未在所有服务器完成/);
+  assert.match(leaveBlocked({ ...managed, operation: status() }), /尚未在所有节点完成/);
   assert.match(leaveBlocked(managed, [{ operation_id: 'pending' }]), /结果尚未确认/);
 });
 
 test('a new operation waits until the previous one reached every member', () => {
   const managed = { lifecycle: 'managed', revision: 3 };
   assert.equal(newOperationBlock(managed), '');
-  assert.match(newOperationBlock({ ...managed, operation: status() }), /尚未在所有服务器完成/);
+  assert.match(newOperationBlock({ ...managed, operation: status() }), /尚未在所有节点完成/);
   const finishedButUndelivered = status({ phase: 'completed', terminal: true, pending_node_ids: ['node-003'] });
   assert.equal(operationUnsettled(finishedButUndelivered), true);
-  assert.match(newOperationBlock({ ...managed, operation: finishedButUndelivered }), /尚未在所有服务器完成/);
+  assert.match(newOperationBlock({ ...managed, operation: finishedButUndelivered }), /尚未在所有节点完成/);
   assert.equal(newOperationBlock({ ...managed, operation: status({ phase: 'completed', terminal: true }) }), '');
   assert.match(newOperationBlock(managed, [{ operation_id: 'b' }]), /结果尚未确认/);
   assert.match(newOperationBlock({ lifecycle: 'join_ready' }), /尚未加入/);
 });
 
-test('operation descriptions name the servers that need attention, not a manager role', () => {
+test('operation descriptions name the nodes that need attention, not a manager role', () => {
   const info = describeOperation(status({ phase: 'needs_attention', pending_node_ids: ['node-002', 'node-003'], message: '无法连接' }), { label: 'Example Node 002' });
-  assert.equal(info.title, '添加服务器 · Example Node 002');
+  assert.equal(info.title, '添加节点 · Example Node 002');
   assert.equal(info.phase, '需要处理');
   assert.equal(info.attention, '需要在线确认：node-002、node-003');
-  assert.equal(info.coordinator, '协调服务器：node-001');
+  assert.equal(info.coordinator, '协调节点：node-001');
   assert.equal(info.retryable, true);
   assert.equal(info.success, false);
   const done = describeOperation(status({ phase: 'completed', terminal: true, retryable: false }));
   assert.equal(done.success, true);
   assert.equal(done.settled, true);
-  assert.equal(describeOperation(status({ phase: 'completed', terminal: true, pending_node_ids: ['node-003'] })).phase, '已完成，仍在通知部分服务器');
+  assert.equal(describeOperation(status({ phase: 'completed', terminal: true, pending_node_ids: ['node-003'] })).phase, '已完成，仍在通知部分节点');
   assert.equal(describeOperation(status({ phase: 'aborted', terminal: true })).success, false);
 });
 

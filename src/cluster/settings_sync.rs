@@ -109,7 +109,7 @@ pub async fn push_cluster_settings_to_peers(cfg: &Config) -> Result<usize, Strin
 }
 
 pub(crate) const TOPOLOGY_EDIT_REJECTED: &str =
-    "集群成员、节点身份和状态页节点只能通过成员操作更改，请使用多服务器设置中的成员操作";
+    "集群成员、节点身份和状态页节点只能通过成员操作更改，请使用多节点设置中的成员操作";
 
 /// Generic form saves may carry unchanged topology for compatibility. Any
 /// change to it is refused; only ordinary settings are taken from the form.

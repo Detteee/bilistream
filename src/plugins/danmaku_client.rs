@@ -42,7 +42,7 @@ pub(crate) fn capture_warning_message(
             .as_ref()
             .and_then(|data| data["msg"].as_str())
             .unwrap_or("No message");
-        warn!("⚠️ Warning: {}", safe_text(text, 160));
+        warn!("Warning: {}", safe_text(text, 160));
     } else if cmd != "ROOM_LOCK" {
         let key = if cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
             "dialog_title"
@@ -56,7 +56,7 @@ pub(crate) fn capture_warning_message(
             .as_ref()
             .and_then(|data| data[key].as_str())
             .unwrap_or("Stream cut off");
-        warn!("✂️ Cut off/Warning: {}", safe_text(text, 160));
+        warn!("Cut off/Warning: {}", safe_text(text, 160));
     }
     let mut event = warnings.capture_event();
     if cmd != "ROOM_LOCK" {
@@ -386,13 +386,13 @@ impl BilibiliDanmakuClient {
         loop {
             // Check for stop signal
             if crate::plugins::danmaku::should_stop_danmaku() {
-                info!("🛑 收到停止信号，断开弹幕连接");
+                info!("收到停止信号，断开弹幕连接");
                 break;
             }
 
             tokio::select! {
                 _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
-                    info!("🛑 收到停止信号，断开弹幕连接");
+                    info!("收到停止信号，断开弹幕连接");
                     break;
                 }
                 // Handle incoming messages with timeout
@@ -682,7 +682,7 @@ impl BilibiliDanmakuClient {
                             let owner_uid = self.config.dede_user_id.parse::<u64>().unwrap_or(0);
 
                             // Log every danmaku message
-                            // info!("💬 [{}]: {}", username, danmaku_text);
+                            // info!("[{}]: {}", username, danmaku_text);
 
                             // Process owner-only commands
                             if danmaku_text.contains("%查询") || danmaku_text.contains("%转播")
@@ -750,7 +750,7 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                        if let Err(error) = send_danmaku(&cfg, "警告/切断状态，请换台").await
                         {
                             error!(
                                 "Failed to send warning danmaku: {}",
@@ -770,7 +770,7 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = send_danmaku(&cfg, "🚫 警告/切断状态，请换台").await
+                        if let Err(error) = send_danmaku(&cfg, "警告/切断状态，请换台").await
                         {
                             error!(
                                 "Failed to send warning danmaku: {}",
@@ -798,7 +798,7 @@ impl BilibiliDanmakuClient {
             "WELCOME_GUARD" => {
                 // if let Some(data) = &message.data {
                 //     let username = data["username"].as_str().unwrap_or("Guard");
-                //     info!("🛡️ Guard {} entered the room", username);
+                //     info!("Guard {} entered the room", username);
                 // }
             }
             "SEND_GIFT" => {
@@ -806,7 +806,7 @@ impl BilibiliDanmakuClient {
                 //     let username = data["uname"].as_str().unwrap_or("User");
                 //     let gift_name = data["giftName"].as_str().unwrap_or("gift");
                 //     let num = data["num"].as_u64().unwrap_or(1);
-                //     info!("🎁 {} sent {} x{}", username, gift_name, num);
+                //     info!("{} sent {} x{}", username, gift_name, num);
                 //     let cfg = self.app_config.clone();
                 //     let thank_msg = format!("谢谢{}送的{}", username, gift_name);
                 //     tokio::spawn(async move {
@@ -822,7 +822,7 @@ impl BilibiliDanmakuClient {
                 //     let message_text = data["message"].as_str().unwrap_or("");
                 //     let price = data["price"].as_u64().unwrap_or(0);
                 //     info!(
-                //         "💰 {} sent Super Chat (¥{}): {}",
+                //         "{} sent Super Chat (¥{}): {}",
                 //         username, price, message_text
                 //     );
                 // }
@@ -832,7 +832,7 @@ impl BilibiliDanmakuClient {
                 //     let username = data["username"].as_str().unwrap_or("User");
                 //     let gift_name = data["gift_name"].as_str().unwrap_or("Guard");
                 //     let num = data["num"].as_u64().unwrap_or(1);
-                //     info!("🛡️ {} purchased {} x{}", username, gift_name, num);
+                //     info!("{} purchased {} x{}", username, gift_name, num);
                 // }
             }
             "INTERACT_WORD" | "INTERACT_WORD_V2" => {
@@ -948,13 +948,13 @@ pub async fn run_native_danmaku_client(
     loop {
         // Check for stop signal
         if crate::plugins::danmaku::should_stop_danmaku() {
-            info!("🛑 收到停止信号，退出弹幕客户端");
+            info!("收到停止信号，退出弹幕客户端");
             break;
         }
 
         let Some(result) = crate::plugins::danmaku::until_danmaku_stopped(client.connect()).await
         else {
-            info!("🛑 收到停止信号，退出弹幕客户端");
+            info!("收到停止信号，退出弹幕客户端");
             break;
         };
         match result {
@@ -964,7 +964,7 @@ pub async fn run_native_danmaku_client(
 
                 // Check if this was an intentional stop
                 if crate::plugins::danmaku::should_stop_danmaku() {
-                    info!("🛑 停止信号已确认，退出弹幕客户端");
+                    info!("停止信号已确认，退出弹幕客户端");
                     break;
                 }
 
@@ -972,7 +972,7 @@ pub async fn run_native_danmaku_client(
                 warn!("Unexpected disconnection, attempting to reconnect...");
                 tokio::select! {
                     _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
-                        info!("🛑 收到停止信号，退出弹幕客户端");
+                        info!("收到停止信号，退出弹幕客户端");
                         break;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {}
@@ -995,7 +995,7 @@ pub async fn run_native_danmaku_client(
                 info!("Reconnecting in {} seconds...", delay);
                 tokio::select! {
                     _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
-                        info!("🛑 收到停止信号，退出弹幕客户端");
+                        info!("收到停止信号，退出弹幕客户端");
                         break;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(delay as u64)) => {}

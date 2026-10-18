@@ -1084,7 +1084,7 @@ fn take_prefetched_source_status(
 ) -> Option<SourceStatus> {
     take_prefetched_playable_stream(platform, channel_id).map(|stream| {
         tracing::info!(
-            "♻️ 复用优先频道已确认的 {} 流地址，跳过重新拉取",
+            "复用优先频道已确认的 {} 流地址，跳过重新拉取",
             platform.label()
         );
         (
@@ -1239,7 +1239,7 @@ async fn skip_stream_if_previously_warned(
 
     if warnings.take_skip_log(&source) {
         tracing::warn!(
-            "⚠️ 跳过频道 {} - 之前因警告/切断停止",
+            "跳过频道 {} - 之前因警告/切断停止",
             safe_text(&stream.channel_name, 64)
         );
         if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
@@ -1247,7 +1247,7 @@ async fn skip_stream_if_previously_warned(
             if let Err(e) = send_danmaku(
                 cfg,
                 &format!(
-                    "⚠️ {} 因警告/切断被跳过，可使用弹幕指令换台",
+                    "{} 因警告/切断被跳过，可使用弹幕指令换台",
                     stream.channel_name
                 ),
             )
@@ -1398,7 +1398,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
-        tracing::debug!("🔄 外层循环开始 - 重新加载配置并检查频道状态");
+        tracing::debug!("外层循环开始 - 重新加载配置并检查频道状态");
 
         // Consume the previous reload signal before loading; updates that arrive during
         // load_config() remain set and will be picked up by the checks below.
@@ -1422,11 +1422,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             let (_, last_reason) =
                 cluster_wait.get_or_insert_with(|| (std::time::Instant::now(), String::new()));
             if *last_reason != reason {
-                tracing::info!("⏳ 等待集群允许监控: {}", reason);
+                tracing::info!("等待集群允许监控: {}", reason);
                 last_reason.clone_from(&reason);
             }
             if is_danmaku_running() {
-                tracing::info!("⏸️ {}，停止弹幕客户端", reason);
+                tracing::info!("{}，停止弹幕客户端", reason);
                 stop_danmaku().await;
             }
             let retry_secs = cfg
@@ -1442,7 +1442,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         }
         if let Some((started, _)) = cluster_wait.take() {
             tracing::info!(
-                "✅ 集群监控条件已就绪，等待耗时 {:.2} 秒",
+                "集群监控条件已就绪，等待耗时 {:.2} 秒",
                 started.elapsed().as_secs_f64()
             );
         }
@@ -1456,7 +1456,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             // Stop danmaku client if running and commands are disabled
             if is_danmaku_running() {
-                tracing::info!("⏸️ 弹幕命令已禁用，停止弹幕客户端");
+                tracing::info!("弹幕命令已禁用，停止弹幕客户端");
                 stop_danmaku().await;
             }
         }
@@ -1475,9 +1475,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 || (cfg.priority_channel.youtube_channel_id.is_empty()
                     && cfg.priority_channel.twitch_channel_id.is_empty()))
         {
-            tracing::error!("❌ YouTube、Twitch 和 Niconico 配置均为空");
+            tracing::error!("YouTube、Twitch 和 Niconico 配置均为空");
             tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
-            tracing::info!("💡 提示: 打开 Web UI，按设置向导完成配置");
+            tracing::info!("提示: 打开 Web UI，按设置向导完成配置");
             // Sleep and continue to allow WebUI configuration
             wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
             continue 'outer;
@@ -1485,7 +1485,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
-            tracing::info!("🔄 检测到配置更新，重新加载配置并检查频道状态");
+            tracing::info!("检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
         }
 
@@ -1595,7 +1595,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         let bili_live = match fetch_bili_live_status_logged(cfg.bililive.room).await {
             Ok(status) => status,
             Err(_) => {
-                tracing::warn!("⚠️ 将在下次循环重试");
+                tracing::warn!("将在下次循环重试");
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             }
@@ -2394,19 +2394,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let mut config_changed = false;
 
                 if cfg.youtube.crop.is_some() {
-                    tracing::info!("🔄 清除YouTube裁剪设置");
+                    tracing::info!("清除YouTube裁剪设置");
                     cfg.youtube.crop = None;
                     config_changed = true;
                 }
 
                 if cfg.twitch.crop.is_some() {
-                    tracing::info!("🔄 清除Twitch裁剪设置");
+                    tracing::info!("清除Twitch裁剪设置");
                     cfg.twitch.crop = None;
                     config_changed = true;
                 }
 
                 if cfg.niconico.crop.is_some() {
-                    tracing::info!("🔄 清除Niconico裁剪设置");
+                    tracing::info!("清除Niconico裁剪设置");
                     cfg.niconico.crop = None;
                     config_changed = true;
                 }
@@ -2616,7 +2616,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // Check if config was updated (skip waiting if so)
             if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                 clear_config_updated();
-                tracing::info!("🔄 检测到配置更新，重新加载配置并检查频道状态");
+                tracing::info!("检测到配置更新，重新加载配置并检查频道状态");
                 continue 'outer;
             }
 
@@ -2629,7 +2629,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 let sleep_time = std::cmp::min(check_interval, sleep_duration - elapsed);
                 if wait_config_update_or_timeout(Duration::from_secs(sleep_time)).await {
                     clear_config_updated();
-                    tracing::info!("🔄 等待期间检测到配置更新，重新加载配置并检查频道状态");
+                    tracing::info!("等待期间检测到配置更新，重新加载配置并检查频道状态");
                     continue 'outer;
                 }
                 elapsed += sleep_time;
@@ -2639,25 +2639,25 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     .find(|channel| bilistream::plugins::youtube::take_monitor_wake(channel))
                 {
                     if channel == cfg.youtube.channel_id {
-                        tracing::info!("🔔 YouTube 显示目标频道已开播，立即检查");
+                        tracing::info!("YouTube 显示目标频道已开播，立即检查");
                     } else {
-                        tracing::info!("🔔 YouTube 显示优先频道已开播，立即检查");
+                        tracing::info!("YouTube 显示优先频道已开播，立即检查");
                     }
                     continue 'outer;
                 }
                 if bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id) {
-                    tracing::info!("🔔 Twitch 显示目标频道已开播，立即检查");
+                    tracing::info!("Twitch 显示目标频道已开播，立即检查");
                     continue 'outer;
                 }
                 if bilistream::plugins::niconico_live::take_monitor_wake(&cfg.niconico.channel_id) {
-                    tracing::info!("🔔 Niconico 显示目标频道已开播，立即检查");
+                    tracing::info!("Niconico 显示目标频道已开播，立即检查");
                     continue 'outer;
                 }
 
                 // Check if config was updated during sleep
                 if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
                     clear_config_updated();
-                    tracing::info!("🔄 等待期间检测到配置更新，重新加载配置并检查频道状态");
+                    tracing::info!("等待期间检测到配置更新，重新加载配置并检查频道状态");
                     continue 'outer;
                 }
             }
@@ -2715,7 +2715,7 @@ async fn wait_priority(delay: Duration, priority_channel_id: &str) {
         if !priority_channel_id.is_empty()
             && bilistream::plugins::youtube::take_monitor_wake(priority_channel_id)
         {
-            tracing::info!("🔔 YouTube 显示优先频道已开播，立即检查");
+            tracing::info!("YouTube 显示优先频道已开播，立即检查");
             return;
         }
         let next = step.min(delay - waited);
@@ -2993,8 +2993,7 @@ impl LolMonitor {
                             );
                         }
                     }
-                    if let Err(error) =
-                        send_danmaku(&cfg, "检测到玩家ID存在违🈲词汇，停止直播").await
+                    if let Err(error) = send_danmaku(&cfg, "检测到玩家ID存在违词汇，停止直播").await
                     {
                         tracing::error!(
                             "{context} 发送弹幕失败；{}",
@@ -3113,7 +3112,7 @@ async fn check_collision(
 
                     if is_multi_channel {
                         tracing::debug!(
-                            "📺 检测到多频道转播，跳过撞车检测: {} - {}",
+                            "检测到多频道转播，跳过撞车检测: {} - {}",
                             room_name,
                             title
                         );
@@ -3122,7 +3121,7 @@ async fn check_collision(
 
                     // This appears to be a single-channel stream, flag as collision
                     tracing::debug!(
-                        "🚨 检测到撞车: {} ({}) 正在转播 {}",
+                        "检测到撞车: {} ({}) 正在转播 {}",
                         room_name,
                         room_id,
                         target_name
@@ -3268,7 +3267,7 @@ async fn handle_collisions(
                 }
 
                 tracing::warn!("YouTube和Twitch均检测到撞车，跳过本次转播");
-                // send_danmaku(&cfg, "🚨YT和TW双平台撞车").await?;
+                // send_danmaku(&cfg, "YT和TW双平台撞车").await?;
                 // tokio::time::sleep(Duration::from_secs(2)).await;
                 if let Err(e) = send_danmaku(
                     &cfg,
@@ -3453,14 +3452,10 @@ mod tests {
             .with_target(false)
             .with_writer(move || writer.clone())
             .finish();
-        let identity = FfmpegStreamIdentity::new(
-            "jp",
-            "YT",
-            &"示例频道001📺".repeat(8),
-            "example-channel-001",
-        );
+        let identity =
+            FfmpegStreamIdentity::new("jp", "YT", &"示例频道001".repeat(8), "example-channel-001");
         tracing::subscriber::with_default(subscriber, || {
-            log_selected_stream(&identity, Some(&"很长的示例直播标题📺".repeat(20)), false);
+            log_selected_stream(&identity, Some(&"很长的示例直播标题".repeat(20)), false);
             log_selected_stream(
                 &identity,
                 Some("示例标题\n2026-10-10 ERROR 注入\u{1b}[31m"),

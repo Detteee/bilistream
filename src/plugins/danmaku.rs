@@ -811,7 +811,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     };
     // Add check for 查询 command
     if normalized_danmaku.contains("%查询") {
-        // tracing::info!("🔍 查询命令收到");
+        // tracing::info!("查询命令收到");
         let channel_name = cfg.youtube.channel_name.clone();
         let area_name = area_name_or_unknown(cfg.youtube.area_v2);
         let _ =
@@ -852,7 +852,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         return;
     }
 
-    // tracing::info!("📺 转播命令收到: {}", normalized_danmaku);
+    // tracing::info!("转播命令收到: {}", normalized_danmaku);
     let danmaku_command = normalized_danmaku.replace(" :", "");
     let mut outcome = DanmakuTargetLog {
         node: cfg.cluster.node_id.clone(),
@@ -1068,7 +1068,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
 
         if updated_area_id != area_id {
             tracing::debug!(
-                "🔄 按直播标题/游戏关键词修正弹幕分区: {} -> {} (ID: {})",
+                "按直播标题/游戏关键词修正弹幕分区: {} -> {} (ID: {})",
                 safe_text(&area_name, 48),
                 safe_text(&updated_area_name, 48),
                 updated_area_id
@@ -1161,7 +1161,7 @@ pub fn run_danmaku() {
                 }
             };
             rt.block_on(async {
-                tracing::info!("🚀 启动弹幕客户端");
+                tracing::info!("启动弹幕客户端");
                 until_danmaku_stopped(async {
                     let cfg = match load_config().await {
                         Ok(cfg) => cfg,
@@ -1218,9 +1218,9 @@ pub fn enable_danmaku_commands(enabled: bool) {
     }
     set_danmaku_commands_enabled(enabled);
     if enabled {
-        tracing::info!("✅ 弹幕命令已启用");
+        tracing::info!("弹幕命令已启用");
     } else {
-        tracing::info!("⏸️ 弹幕命令已禁用");
+        tracing::info!("弹幕命令已禁用");
     }
     // The public page keys 切换 on this gate. Bust the 5s snapshot so a
     // poll that lands after 转播 ends (and the "可使用弹幕指令进行换台"
@@ -1238,7 +1238,7 @@ pub async fn stop_danmaku() {
         }
 
         if !should_stop_danmaku() {
-            tracing::info!("🛑 停止弹幕客户端");
+            tracing::info!("停止弹幕客户端");
         }
         set_danmaku_stop_signal(true);
     }
@@ -1254,7 +1254,7 @@ pub async fn stop_danmaku() {
     if is_danmaku_running() {
         tracing::warn!("弹幕客户端停止超时，保持停止信号等待后台退出");
     } else {
-        tracing::info!("✅ 弹幕客户端已成功停止");
+        tracing::info!("弹幕客户端已成功停止");
         // Only the next run clears the signal. A concurrent stop must not
         // clear a cancellation that another caller is still relying on.
     }

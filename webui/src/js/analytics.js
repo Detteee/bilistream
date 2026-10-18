@@ -534,12 +534,18 @@ function destroyChartsIn(container) {
     }
   }
 }
-function rebuildCharts() {
+function destroyAllCharts() {
   for (const [host, entry] of [...charts]) {
     entry.chart.destroy();
     entry.resize.disconnect();
     charts.delete(host);
-    if (host.isConnected) mountChart(host, entry.spec);
+  }
+}
+function rebuildCharts() {
+  const specs = [...charts].map(([host, entry]) => [host, entry.spec]);
+  destroyAllCharts();
+  for (const [host, spec] of specs) {
+    if (host.isConnected) mountChart(host, spec);
   }
 }
 
@@ -694,6 +700,13 @@ function renderNodes(summary) {
   const nodes = Array.isArray(summary?.per_node) ? summary.per_node : [];
   const nodeIds = view.status?.cluster_nodes || nodes.map(n => n.node_id);
   const cluster = nodeIds.length > 1;
+  // A persisted scope naming a node the current status does not list would keep
+  // filtering every request down to nothing while the picker reads 全部节点;
+  // drop it as soon as we have a definitive node list.
+  if (nodeIds.length && prefs.scope && !nodeIds.includes(prefs.scope)) {
+    prefs.scope = '';
+    writePref('analyticsScope', '');
+  }
   moduleEl('nodes').hidden = !cluster || !nodes.length;
   const scope = $('analytics-scope');
   scope.hidden = !cluster;
@@ -1182,6 +1195,11 @@ export function unmountAnalytics() {
   liveTimer = autoTimer = 0;
   themeObserver?.disconnect();
   themeObserver = null;
+  // uPlot instances, their ResizeObservers and the specs they hold (which
+  // include the whole stats payload) must not stay reachable after the view is
+  // gone; a paused live module must not stay paused for the next mount.
+  destroyAllCharts();
+  hoverPause = false;
   if ($('analytics-detail').open) $('analytics-detail').close();
 }
 

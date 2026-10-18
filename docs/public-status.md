@@ -18,6 +18,6 @@ Choose **不启用** and save to stop the viewer listener. Changes take effect w
 
 The viewer page is read-only and uses a separate port from the admin panel. It displays the local restream status in single-server mode. Its live/upcoming channel list uses your channel roster and configured discovery sources.
 
-## Multiple servers / 多服务器
+## Multiple servers / 多节点
 
 In a cluster, select the server that should serve the page and click **更改运行位置**. This is a membership change, so restreaming pauses on every server until it completes. Port and public URL save normally and synchronize to the other servers; viewers see the active restream server's status. The serving node also supplies the shared YouTube index when it has usable YouTube keys. See [advanced settings](advanced-settings.md) / [高级设置](advanced-settings.zh_CN.md).

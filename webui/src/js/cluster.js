@@ -275,7 +275,7 @@ function syncLocalNodeInputs() {
   const hint = document.getElementById('cluster-local-hint');
   if (!hint) return;
   hint.textContent = !membershipLifecycle ? ''
-    : locked ? '已加入集群：在下方服务器列表中编辑本服务器的名称、地址和优先级。节点 ID 不能更改。'
+    : locked ? '已加入集群：在下方节点列表中编辑本节点的名称、地址和优先级。节点 ID 不能更改。'
     : localLabelEditable() ? '新建或加入集群时使用这些信息；单机时名称也用于公开状态页。'
     : '新建或加入集群时使用这些信息；它们不会随「保存设置」保存。';
 }
@@ -467,7 +467,7 @@ function renderClusterStatus(cluster, errorMessage) {
 
   if (!cluster || !cluster.enabled) {
     indicator.className = 'status-indicator status-offline';
-    nodeList.replaceChildren(createClusterEmptyState(errorMessage || '在 系统设置 → 多服务器节点 中新建或加入集群后显示所有节点'));
+    nodeList.replaceChildren(createClusterEmptyState(errorMessage || '在 系统设置 → 集群节点 中新建或加入集群后显示所有节点'));
     updateClusterAutoFailoverToggle(window.configData?.cluster?.auto_failover !== false);
     renderedClusterNodes.clear();
     syncClusterActionAvailability();
@@ -1120,10 +1120,10 @@ function loadPublicStatusHint(cluster = loadedClusterConfig) {
   const held = !!membershipLifecycle && !['managed', 'standalone'].includes(membershipLifecycle);
   const hint = document.getElementById('public-status-node-hint');
   if (hint) hint.textContent = managed
-    ? '所选服务器提供公开页；有 YouTube key 时也提供共享索引。更改运行位置是一次成员操作，期间会暂停转播。'
-    : held ? '本服务器未加入集群，暂不能更改运行位置。'
+    ? '所选节点提供公开页；有 YouTube key 时也提供共享索引。更改运行位置是一次成员操作，期间会暂停转播。'
+    : held ? '本节点未加入集群，暂不能更改运行位置。'
     : cluster.enabled ? '所选节点提供公开页；有 YouTube key 时也提供共享索引。'
-    : '本机即可运行，无需开启多服务器。';
+    : '本机即可运行，无需开启多节点。';
   const button = document.getElementById('public-status-save-btn');
   if (button) button.textContent = managed ? '保存并同步' : '保存公开页设置';
 }

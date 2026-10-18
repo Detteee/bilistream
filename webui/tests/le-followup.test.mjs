@@ -59,6 +59,16 @@ test('§17.8 budget line: 备用： prefix, warn and passive hint only while pus
   assert.equal(legacy.main, '唤醒额度 2/4 · 保留 2 用于故障提醒，开播/下播只用被动回复');
   assert.equal(legacy.passive, true);
   assert.deepEqual(budgetSegments(ok)[0], { text: '备用：唤醒额度 2/4' });
+  assert.equal(
+    ok.segments.map(seg => seg.sep ?? seg.text).join(''),
+    ok.main,
+    'the phrase list and the joined line must not drift apart',
+  );
+  assert.deepEqual(
+    budgetSegments({ main: '手写的旧视图' }),
+    [{ text: '手写的旧视图' }],
+    'a view without phrases still renders as one segment',
+  );
   assert.equal(wakeupBudgetView(B, { push: { last_result: 'ok' }, available: false }).main, '备用：唤醒额度 —');
 });
 

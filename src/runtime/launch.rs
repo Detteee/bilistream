@@ -453,10 +453,10 @@ async fn run_tray_app(
     state: bilistream::AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
-        tracing::info!("🚀 欢迎使用 Bilistream！");
+        tracing::info!("欢迎使用 Bilistream！");
         tracing::info!("   检测到首次运行，启动设置向导...");
     } else {
-        tracing::info!("🚀 启动 Bilistream 系统托盘模式");
+        tracing::info!("启动 Bilistream 系统托盘模式");
     }
     tracing::info!("   Web UI 端口: {}", port);
 
@@ -476,23 +476,23 @@ async fn run_webui_app(
     state: bilistream::AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
-        tracing::info!("🚀 欢迎使用 Bilistream！");
+        tracing::info!("欢迎使用 Bilistream！");
         tracing::info!("   检测到首次运行，启动 Web 设置向导...");
         tracing::info!("");
-        tracing::info!("📋 请在浏览器中完成设置：");
+        tracing::info!("请在浏览器中完成设置：");
         tracing::info!("   1. 打开浏览器访问 http://localhost:{}", port);
         tracing::info!("   2. 按照向导完成 Bilibili 登录和配置");
         tracing::info!("   3. 配置完成后即可开始使用");
         tracing::info!("");
     } else {
-        tracing::info!("🚀 启动 Web UI 和自动监控模式");
+        tracing::info!("启动 Web UI 和自动监控模式");
         tracing::info!("   Web UI 将在后台运行");
         tracing::info!("   访问 http://localhost:{} 查看控制面板", port);
     }
 
     #[cfg(target_os = "windows")]
     {
-        tracing::info!("⚠️ 请勿关闭此窗口 ⚠️");
+        tracing::info!("请勿关闭此窗口 ");
         if let Err(e) = show_windows_notification(port) {
             eprintln!("无法显示通知: {}", e);
         }
@@ -675,10 +675,10 @@ fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>
     use std::process::Command as StdCommand;
 
     // Build notification message
-    let mut message = String::from("🌐 Web UI 服务已启动\n");
+    let mut message = String::from("Web UI 服务已启动\n");
     message.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    message.push_str(&format!("📍 本地访问: http://localhost:{}\n", port));
-    message.push_str(&format!("📍 本地访问: http://127.0.0.1:{}\n", port));
+    message.push_str(&format!("本地访问: http://localhost:{}\n", port));
+    message.push_str(&format!("本地访问: http://127.0.0.1:{}\n", port));
 
     // Escape the message for PowerShell
     let escaped_message = message.replace("`", "``").replace("\"", "`\"");
@@ -726,7 +726,7 @@ mod tests {
 
     fn emit_log_fixtures() {
         tracing::info!(target: "bilistream::plugins::ffmpeg", "jp YT/示例频道001 session=2 role=push 进程已启动 pid=1234");
-        tracing::info!(target: "bilistream::runtime", "jp YT/示例频道001 标题=INFO ERROR ⚠️ │示例😀\nWARN forged\r\t\x1b[31m红色\x1b[0m");
+        tracing::info!(target: "bilistream::runtime", "jp YT/示例频道001 标题=INFO ERROR │示例\nWARN forged\r\t\x1b[31m红色\x1b[0m");
         tracing::info!(target: "bilistream::runtime::launch", "Web UI 本地访问 http://localhost:3150");
         for diagnostic in [
             "rtmp://push.invalid/live/synthetic-push-key?key=synthetic-query",
@@ -784,7 +784,9 @@ mod tests {
             assert_eq!(state.get_logs().len(), 15);
             assert!(text.lines().all(|line| line.starts_with(prefix)));
             assert!(text.contains("INFO [ffmpeg] jp YT/示例频道001 session=2 role=push"));
-            assert!(text.contains("INFO [runtime] jp YT/示例频道001 标题=INFO ERROR ⚠️ │示例😀\\nWARN forged\\r\\t红色"));
+            assert!(text.contains(
+                "INFO [runtime] jp YT/示例频道001 标题=INFO ERROR │示例\\nWARN forged\\r\\t红色"
+            ));
             assert!(text.contains("HTTP 403"));
             assert!(text.contains("HTTP 502"));
             assert!(text.contains("HTTP 530"));
@@ -822,7 +824,7 @@ mod tests {
         capture.write_all(b"before initialization\n").unwrap();
         assert!(state.get_logs().is_empty());
         state.init_log_buffer();
-        let line = "2026-10-10 18:00:00+0800 \x1b[32mINFO\x1b[0m [runtime] jp 示例😀 │详情\n";
+        let line = "2026-10-10 18:00:00+0800 \x1b[32mINFO\x1b[0m [runtime] jp 示例│详情\n";
         for byte in line.bytes() {
             capture.write_all(&[byte]).unwrap();
         }

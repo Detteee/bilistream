@@ -66,19 +66,19 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let tray = BiliTray { port };
     tray.spawn().await?;
 
-    tracing::info!("✅ 系统托盘已启动");
+    tracing::info!("系统托盘已启动");
 
     // Auto-open browser on startup
     let url = format!("http://localhost:{}", port);
-    tracing::info!("🌐 正在打开浏览器: {}", url);
+    tracing::info!("正在打开浏览器: {}", url);
     if let Err(e) = open::that(&url) {
-        tracing::warn!("⚠️ 无法自动打开浏览器: {}", e);
-        tracing::info!("💡 请手动访问: {}", url);
+        tracing::warn!("无法自动打开浏览器: {}", e);
+        tracing::info!("请手动访问: {}", url);
     } else {
-        tracing::info!("✅ 浏览器已打开");
+        tracing::info!("浏览器已打开");
     }
 
-    tracing::info!("💡 点击托盘图标可重新打开控制面板");
+    tracing::info!("点击托盘图标可重新打开控制面板");
 
     // Keep the task alive; the tray service runs in the background until quit.
     std::future::pending::<()>().await;
@@ -129,20 +129,20 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             .build()
             .map_err(|error| error.to_string())?;
 
-        tracing::info!("✅ 托盘图标创建成功");
-        tracing::info!("✅ 系统托盘已启动");
+        tracing::info!("托盘图标创建成功");
+        tracing::info!("系统托盘已启动");
 
         // Auto-open browser on startup
         let url = format!("http://localhost:{}", port);
-        tracing::info!("🌐 正在打开浏览器: {}", url);
+        tracing::info!("正在打开浏览器: {}", url);
         if let Err(e) = open::that(&url) {
-            tracing::warn!("⚠️ 无法自动打开浏览器: {}", e);
-            tracing::info!("💡 请手动访问: {}", url);
+            tracing::warn!("无法自动打开浏览器: {}", e);
+            tracing::info!("请手动访问: {}", url);
         } else {
-            tracing::info!("✅ 浏览器已打开");
+            tracing::info!("浏览器已打开");
         }
 
-        tracing::info!("💡 点击托盘图标打开控制面板，右键显示菜单");
+        tracing::info!("点击托盘图标打开控制面板，右键显示菜单");
 
         // Spawn event handler in separate thread
         std::thread::spawn(move || loop {
@@ -156,7 +156,7 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        tracing::info!("🔄 进入Windows消息循环...");
+        tracing::info!("进入Windows消息循环...");
 
         // Windows message loop - required for tray icon events
         use std::ptr;
