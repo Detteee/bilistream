@@ -21,6 +21,21 @@ pub(crate) struct Writer {
     secrets: Vec<String>,
 }
 
+/// One row for the `events` table.
+///
+/// Grouped instead of seven positional parameters: `kind`, `title` and `detail`
+/// are adjacent `&str`s, so a caller could transpose them without the compiler
+/// noticing. `record_event` destructures it on entry, so the SQL stays readable.
+struct EventRecord<'a> {
+    at: i64,
+    kind: &'a str,
+    subject: Option<&'a str>,
+    severity: Severity,
+    title: &'a str,
+    detail: &'a str,
+    sid: Option<i64>,
+}
+
 impl Writer {
     pub(crate) fn new(conn: Connection, node: &str, boot_id: i64) -> Self {
         Self {
@@ -126,16 +141,16 @@ impl Writer {
             .optional()
     }
 
-    fn record_event(
-        &mut self,
-        at: i64,
-        kind: &str,
-        subject: Option<&str>,
-        severity: Severity,
-        title: &str,
-        detail: &str,
-        sid: Option<i64>,
-    ) -> rusqlite::Result<()> {
+    fn record_event(&mut self, record: EventRecord<'_>) -> rusqlite::Result<()> {
+        let EventRecord {
+            at,
+            kind,
+            subject,
+            severity,
+            title,
+            detail,
+            sid,
+        } = record;
         let eid = self.eid();
         self.conn.execute(
             "INSERT INTO events(eid,at,node,kind,subject,severity,title,detail,session_id)
@@ -373,15 +388,15 @@ impl Writer {
                 title,
                 detail,
             } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
                     kind,
-                    subject.as_deref(),
-                    *severity,
+                    subject: subject.as_deref(),
+                    severity: *severity,
                     title,
                     detail,
-                    self.open_session,
-                )?;
+                    sid: self.open_session,
+                })?;
             }
             EventKind::NotifySent {
                 key,
@@ -420,56 +435,56 @@ impl Writer {
                     if changed > 0 && *reason != "idle_drain" {
                         self.conn
                             .execute("UPDATE sessions SET stuck=stuck+1 WHERE id=?1", [sid])?;
-                        self.record_event(
+                        self.record_event(EventRecord {
                             at,
-                            "ffmpeg.stuck",
-                            None,
-                            Severity::Warn,
-                            "推流进度停滞",
-                            reason,
-                            Some(sid),
-                        )?;
+                            kind: "ffmpeg.stuck",
+                            subject: None,
+                            severity: Severity::Warn,
+                            title: "推流进度停滞",
+                            detail: reason,
+                            sid: Some(sid),
+                        })?;
                     }
                 }
             }
             EventKind::BiliStartFailed { seq, error } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    "bili.start_failed",
-                    None,
-                    Severity::Error,
-                    "B站开播失败",
-                    error,
-                    seq.and_then(|s| self.session_row(s)),
-                )?;
+                    kind: "bili.start_failed",
+                    subject: None,
+                    severity: Severity::Error,
+                    title: "B站开播失败",
+                    detail: error,
+                    sid: seq.and_then(|s| self.session_row(s)),
+                })?;
             }
             EventKind::BiliWarning { seq, room, msg }
             | EventKind::BiliCutOff { seq, room, msg } => {
                 let cut = matches!(&event.kind, EventKind::BiliCutOff { .. });
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    if cut { "bili.cut_off" } else { "bili.warning" },
-                    Some(&room.to_string()),
-                    if cut { Severity::Error } else { Severity::Warn },
-                    if cut {
+                    kind: if cut { "bili.cut_off" } else { "bili.warning" },
+                    subject: Some(&room.to_string()),
+                    severity: if cut { Severity::Error } else { Severity::Warn },
+                    title: if cut {
                         "B站切断推流"
                     } else {
                         "B站直播警告"
                     },
-                    msg,
-                    seq.and_then(|s| self.session_row(s)),
-                )?;
+                    detail: msg,
+                    sid: seq.and_then(|s| self.session_row(s)),
+                })?;
             }
             EventKind::RoomLocked { room, until } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    "bili.room_locked",
-                    Some(&room.to_string()),
-                    Severity::Error,
-                    "B站直播间锁定",
-                    &format!("until={until}"),
-                    None,
-                )?;
+                    kind: "bili.room_locked",
+                    subject: Some(&room.to_string()),
+                    severity: Severity::Error,
+                    title: "B站直播间锁定",
+                    detail: &format!("until={until}"),
+                    sid: None,
+                })?;
             }
             EventKind::NodeState {
                 node_id,
@@ -500,25 +515,24 @@ impl Writer {
                         "INSERT INTO node_segments(eid,observer,subject,state,reason,started_at,last_seen_at,initial,minority) VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8)",
                         params![eid,self.node,self.scrub(node_id),state.as_str(),self.scrub(reason),at,*initial,*minority],
                     )?;
-                    self.record_event(
+                    self.record_event(EventRecord {
                         at,
-                        "cluster.node_state",
-                        Some(node_id),
-                        if *initial
+                        kind: "cluster.node_state",
+                        subject: Some(node_id),
+                        severity: if *initial
                             || *minority
                             || !matches!(
                                 state,
                                 crate::events::NodeState::Down | crate::events::NodeState::Degraded
-                            )
-                        {
+                            ) {
                             Severity::Info
                         } else {
                             Severity::Warn
                         },
-                        &format!("{node_id} · {}", state.as_str()),
-                        reason,
-                        None,
-                    )?;
+                        title: &format!("{node_id} · {}", state.as_str()),
+                        detail: reason,
+                        sid: None,
+                    })?;
                 }
             }
             EventKind::RecorderHeartbeat => {
@@ -528,65 +542,65 @@ impl Writer {
                 self.conn.execute("UPDATE node_segments SET ended_at=last_seen_at WHERE observer=?1 AND ended_at IS NULL",[&self.node])?;
             }
             EventKind::OwnerChanged { from, to, failover } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    "cluster.owner_changed",
-                    to.as_deref(),
-                    if *failover {
+                    kind: "cluster.owner_changed",
+                    subject: to.as_deref(),
+                    severity: if *failover {
                         Severity::Warn
                     } else {
                         Severity::Info
                     },
-                    if *failover {
+                    title: if *failover {
                         "集群故障转移"
                     } else {
                         "集群活跃节点变更"
                     },
-                    &format!(
+                    detail: &format!(
                         "{} → {}",
                         from.as_deref().unwrap_or("—"),
                         to.as_deref().unwrap_or("—")
                     ),
-                    None,
-                )?;
+                    sid: None,
+                })?;
             }
             EventKind::QuorumChanged { has_quorum } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    "cluster.quorum",
-                    None,
-                    if *has_quorum {
+                    kind: "cluster.quorum",
+                    subject: None,
+                    severity: if *has_quorum {
                         Severity::Info
                     } else {
                         Severity::Warn
                     },
-                    if *has_quorum {
+                    title: if *has_quorum {
                         "集群多数派恢复"
                     } else {
                         "集群暂无多数派"
                     },
-                    "",
-                    None,
-                )?;
+                    detail: "",
+                    sid: None,
+                })?;
             }
             EventKind::LocalFault { reason, latched } => {
-                self.record_event(
+                self.record_event(EventRecord {
                     at,
-                    "cluster.local_fault",
-                    None,
-                    if *latched {
+                    kind: "cluster.local_fault",
+                    subject: None,
+                    severity: if *latched {
                         Severity::Warn
                     } else {
                         Severity::Info
                     },
-                    if *latched {
+                    title: if *latched {
                         "本节点异常"
                     } else {
                         "本节点恢复"
                     },
-                    reason,
-                    None,
-                )?;
+                    detail: reason,
+                    sid: None,
+                })?;
             }
         }
         Ok(())
