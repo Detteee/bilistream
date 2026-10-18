@@ -718,9 +718,9 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
 pub(crate) fn schedule_update_restart() -> Result<(), String> {
     // An unrelated screen session must never receive an automatic restart.
     // Only reuse the session explicitly inherited by this installation.
-    if let Some(screen_session) = super::stream::inherited_screen_session() {
+    if let Some(screen_session) = super::stream_control::inherited_screen_session() {
         let restart_command = crate::webui::restart::restart_command_line()?;
-        super::stream::schedule_screen_restart(
+        super::stream_control::schedule_screen_restart(
             &screen_session,
             restart_command.as_str(),
             std::process::id(),

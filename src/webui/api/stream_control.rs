@@ -1,3 +1,12 @@
+//! Stream and danmaku **control** endpoints: start/stop/restart, the priority
+//! warning release, the process restart, and the danmaku/cover/area writes.
+//!
+//! Named `stream_control` rather than `stream`: the bare name collided with
+//! `api::stream_list` (the admin list endpoint), `webui::stream_list` (the list
+//! core it wraps), `public::stream_list` (the public list) and
+//! `api::stream_switch` (layout switching), so `grep`-based navigation could not
+//! tell them apart.
+
 use super::*;
 
 #[derive(Deserialize)]
@@ -1153,7 +1162,7 @@ mod priority_warning_tests {
         let child = tokio::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "webui::api::stream::priority_warning_tests::priority_release_router_fixture",
+                "webui::api::stream_control::priority_warning_tests::priority_release_router_fixture",
                 "--ignored",
                 "--nocapture",
             ])

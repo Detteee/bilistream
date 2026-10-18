@@ -48,7 +48,7 @@ mod setup;
 mod setup_data;
 mod status;
 mod storage;
-mod stream;
+mod stream_control;
 pub(crate) mod stream_list;
 pub(crate) mod stream_switch;
 pub(crate) mod youtube_api_status;
@@ -67,7 +67,7 @@ pub use setup::*;
 pub use setup_data::{get_area_catalog, preview_setup_favorites, resolve_youtube_channel};
 pub use status::*;
 pub use storage::*;
-pub use stream::*;
+pub use stream_control::*;
 
 fn config_save_status(error: Box<dyn std::error::Error>) -> StatusCode {
     if error
