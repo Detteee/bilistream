@@ -1007,7 +1007,7 @@ async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<Probe
                 safe_diagnostic(error)
             );
         }
-        if is_config_updated() || !bilistream::config::config_is_current(cfg) {
+        if config_changed_since_pass(cfg) {
             return None;
         }
         probes.push(ProbedSource {
@@ -1511,6 +1511,14 @@ async fn observe_bili_room(
     Some(bili_live)
 }
 
+/// True when the config changed under this pass: a reload was requested, or the
+/// in-memory snapshot is no longer current. Callers decide whether to clear the
+/// signal and what to log — the three call sites that only `continue` rely on
+/// `load_pass_config` clearing it at the top of the next pass.
+fn config_changed_since_pass(cfg: &bilistream::config::Config) -> bool {
+    is_config_updated() || !bilistream::config::config_is_current(cfg)
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1555,7 +1563,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+        if config_changed_since_pass(&cfg) {
             clear_config_updated();
             tracing::info!("检测到配置更新，重新加载配置并检查频道状态");
             continue 'outer;
@@ -1629,7 +1637,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             .cloned()
             .unwrap_or(SourceStatus::OFFLINE);
 
-        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+        if config_changed_since_pass(&cfg) {
             clear_config_updated();
             continue 'outer;
         }
@@ -1885,7 +1893,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 mark_youtube_skipped_live(stream, was_live);
             }
         }
-        if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+        if config_changed_since_pass(&cfg) {
             clear_config_updated();
             continue 'outer;
         }
@@ -2144,7 +2152,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
             }
 
-            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+            if config_changed_since_pass(&cfg) {
                 continue 'outer;
             }
             // The room is live and this pass has committed to a source: opens
@@ -2691,7 +2699,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             }
 
             // Check if config was updated (skip waiting if so)
-            if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+            if config_changed_since_pass(&cfg) {
                 clear_config_updated();
                 tracing::info!("检测到配置更新，重新加载配置并检查频道状态");
                 continue 'outer;
@@ -2732,7 +2740,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 }
 
                 // Check if config was updated during sleep
-                if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
+                if config_changed_since_pass(&cfg) {
                     clear_config_updated();
                     tracing::info!("等待期间检测到配置更新，重新加载配置并检查频道状态");
                     continue 'outer;
