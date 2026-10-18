@@ -49,6 +49,33 @@ impl FfmpegCacheOptions {
     }
 }
 
+/// Everything the caller asks for when starting a push.
+///
+/// Grouped instead of eight positional parameters: `rtmp_url`, `rtmp_key`,
+/// `log_level` and `proxy` are all strings, so swapping two of them is a mistake
+/// the compiler cannot catch — the same reason `SourceStatus` became a struct.
+pub struct FfmpegRequest {
+    pub rtmp_url: String,
+    pub rtmp_key: String,
+    pub source: FfmpegSource,
+    pub proxy: Option<String>,
+    pub log_level: String,
+    pub crop: Option<(u32, u32, u32, u32)>,
+    pub cache: FfmpegCacheOptions,
+    pub identity: FfmpegStreamIdentity,
+}
+
+/// What a spawn needs once the supervisor lock is held: the destination key the
+/// HLS cache path keys its directory on, plus how to run ffmpeg.
+struct SpawnRequest {
+    rtmp_url_key: String,
+    source: FfmpegSource,
+    proxy: Option<String>,
+    log_level: String,
+    crop: Option<(u32, u32, u32, u32)>,
+    identity: FfmpegStreamIdentity,
+}
+
 /// Pre-muxed MPEG-TS producer (streamlink nicolive) piped into ffmpeg.
 #[derive(Clone)]
 pub struct PipedIngest {
@@ -2441,15 +2468,15 @@ fn start_ffmpeg_timeout_monitor(session: FfmpegSession, timeout_secs: u64) -> Jo
     tokio::spawn(monitor_ffmpeg_timeout(session, timeout_secs))
 }
 
-async fn spawn_direct_ffmpeg(
-    supervisor: &mut Option<FfmpegProcess>,
-    rtmp_url_key: String,
-    source: FfmpegSource,
-    proxy: Option<String>,
-    log_level: String,
-    crop: Option<(u32, u32, u32, u32)>,
-    identity: FfmpegStreamIdentity,
-) {
+async fn spawn_direct_ffmpeg(supervisor: &mut Option<FfmpegProcess>, request: SpawnRequest) {
+    let SpawnRequest {
+        rtmp_url_key,
+        source,
+        proxy,
+        log_level,
+        crop,
+        identity,
+    } = request;
     let ffmpeg_cmd = get_ffmpeg_command();
 
     let session = FfmpegSession(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
@@ -2559,14 +2586,17 @@ async fn spawn_direct_ffmpeg(
 
 async fn spawn_cached_ffmpeg(
     supervisor: &mut Option<FfmpegProcess>,
-    rtmp_url_key: String,
-    source: FfmpegSource,
-    proxy: Option<String>,
-    log_level: String,
-    crop: Option<(u32, u32, u32, u32)>,
+    request: SpawnRequest,
     latency_secs: u64,
-    identity: FfmpegStreamIdentity,
 ) {
+    let SpawnRequest {
+        rtmp_url_key,
+        source,
+        proxy,
+        log_level,
+        crop,
+        identity,
+    } = request;
     let cache_dir = match create_hls_cache_dir() {
         Ok(path) => path,
         Err(e) => {
@@ -2822,20 +2852,23 @@ async fn spawn_cached_ffmpeg(
 }
 
 /// Spawns and supervises an ffmpeg process with output monitoring
-pub async fn ffmpeg(
-    rtmp_url: String,
-    rtmp_key: String,
-    source: FfmpegSource,
-    proxy: Option<String>,
-    log_level: String,
-    crop: Option<(u32, u32, u32, u32)>, // (width, height, x, y)
-    cache: FfmpegCacheOptions,
-    identity: FfmpegStreamIdentity,
-) -> Option<FfmpegSession> {
+pub async fn ffmpeg(request: FfmpegRequest) -> Option<FfmpegSession> {
     FFMPEG_SUPERVISOR
         .interruptible(async {
             // Serialize the running check, process spawn, and registration with stops.
             let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
+            // Destructured up front: `identity` is needed by the cancellation
+            // checks below, and the spawn request is built from the rest.
+            let FfmpegRequest {
+                rtmp_url,
+                rtmp_key,
+                source,
+                proxy,
+                log_level,
+                crop,
+                cache,
+                identity,
+            } = request;
             if supervisor.is_some() {
                 return None;
             }
@@ -2858,32 +2891,20 @@ pub async fn ffmpeg(
             if identity.warnings.snapshot().holds(&identity.source) {
                 return None;
             }
-            let rtmp_url_key = format!("{}{}", rtmp_url, rtmp_key);
             let latency_secs = cache.latency_secs();
+            let spawn = SpawnRequest {
+                rtmp_url_key: format!("{rtmp_url}{rtmp_key}"),
+                source,
+                proxy,
+                log_level,
+                crop,
+                identity,
+            };
 
             if cache.enabled {
-                spawn_cached_ffmpeg(
-                    &mut supervisor,
-                    rtmp_url_key,
-                    source,
-                    proxy,
-                    log_level,
-                    crop,
-                    latency_secs,
-                    identity,
-                )
-                .await;
+                spawn_cached_ffmpeg(&mut supervisor, spawn, latency_secs).await;
             } else {
-                spawn_direct_ffmpeg(
-                    &mut supervisor,
-                    rtmp_url_key,
-                    source,
-                    proxy,
-                    log_level,
-                    crop,
-                    identity,
-                )
-                .await;
+                spawn_direct_ffmpeg(&mut supervisor, spawn).await;
             }
             supervisor.as_ref().map(|process| process.session)
         })

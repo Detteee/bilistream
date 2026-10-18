@@ -2222,19 +2222,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // cancel its end-of-stream recheck.
                 session_generation = capture_session_generation();
                 let run_history = ffmpeg::FfmpegRunHistory::default();
-                let session = ffmpeg(
-                    cfg.bililive.bili_rtmp_url.clone(),
-                    cfg.bililive.bili_rtmp_key.clone(),
-                    ffmpeg_source.clone(),
+                let session = ffmpeg(ffmpeg::FfmpegRequest {
+                    rtmp_url: cfg.bililive.bili_rtmp_url.clone(),
+                    rtmp_key: cfg.bililive.bili_rtmp_key.clone(),
+                    source: ffmpeg_source.clone(),
                     proxy,
-                    ffmpeg_log_level.to_string(),
+                    log_level: ffmpeg_log_level.to_string(),
                     crop,
-                    FfmpegCacheOptions {
+                    cache: FfmpegCacheOptions {
                         enabled: cache.enabled,
                         latency_secs: cache.latency_secs,
                     },
-                    stream_log.clone().with_history(run_history.clone()),
-                )
+                    identity: stream_log.clone().with_history(run_history.clone()),
+                })
                 .await;
                 last_session = session;
                 if let Some(run) = session {
