@@ -2107,6 +2107,29 @@ async fn clear_crop_settings(cfg: &mut bilistream::config::Config) {
     }
 }
 
+/// Read the two live states the end decision needs: the source's and the room's.
+///
+/// `SourceEnded` is the refetch miss itself; reading the source once more could
+/// flap 结束 back into 中断, so it is taken as ended without a second read. Every
+/// other exit reads the source strictly — only a positive offline statement
+/// counts, and a failed request reads as still live. The Bilibili read treats an
+/// error the same way, so a network blip cannot produce a wrong status message.
+async fn read_end_live_states(
+    cfg: &bilistream::config::Config,
+    exit_reason: FfmpegLoopExitReason,
+    source_client: &Option<SourceClient<'_>>,
+) -> (bool, bool) {
+    let current_is_live = match exit_reason {
+        FfmpegLoopExitReason::SourceEnded => false,
+        _ => !matches!(refetch_source(source_client).await, RefetchReading::Offline),
+    };
+    let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
+        .await
+        .map(|status| status.is_live)
+        .unwrap_or(true);
+    (current_is_live, bili_is_live)
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2688,18 +2711,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // more could flap back and turn 结束 into 中断.
             // Other exits read the source strictly: only a positive offline
             // statement counts; a failed request reads as still live.
-            let current_is_live = match ffmpeg_loop_exit_reason {
-                FfmpegLoopExitReason::SourceEnded => false,
-                _ => !matches!(
-                    refetch_source(&source_client).await,
-                    RefetchReading::Offline
-                ),
-            };
-            // On error, assume still live to avoid incorrect status messages.
-            let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
-                .await
-                .map(|status| status.is_live)
-                .unwrap_or(true);
+            let (current_is_live, bili_is_live) =
+                read_end_live_states(&cfg, ffmpeg_loop_exit_reason, &source_client).await;
 
             let action = end_action(
                 ffmpeg_loop_exit_reason,
