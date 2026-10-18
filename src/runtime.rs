@@ -1378,6 +1378,21 @@ fn ffmpeg_exit_should_count_as_failure(
         && !warning_skip
 }
 
+/// Keep the danmaku client in step with `enable_danmaku_command`: start it when
+/// the setting is on and it is not running, stop it (with the operator-visible
+/// line) when the setting is off. Extracted from `run_bilistream`, which is long
+/// enough that a reader could not tell this was a self-contained step.
+async fn sync_danmaku_client(cfg: &bilistream::config::Config) {
+    if cfg.bililive.enable_danmaku_command {
+        if !is_danmaku_running() {
+            run_danmaku();
+        }
+    } else if is_danmaku_running() {
+        tracing::info!("弹幕命令已禁用，停止弹幕客户端");
+        stop_danmaku().await;
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1452,19 +1467,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             );
         }
 
-        // Handle danmaku client based on enable_danmaku_command setting
-        if cfg.bililive.enable_danmaku_command {
-            // Start danmaku client if not running and commands are enabled
-            if !is_danmaku_running() {
-                run_danmaku();
-            }
-        } else {
-            // Stop danmaku client if running and commands are disabled
-            if is_danmaku_running() {
-                tracing::info!("弹幕命令已禁用，停止弹幕客户端");
-                stop_danmaku().await;
-            }
-        }
+        sync_danmaku_client(&cfg).await;
 
         // room_init.lock_till is the ban end. Wait it out before probing sources
         // or calling startLive; get_info does not carry the lock.
