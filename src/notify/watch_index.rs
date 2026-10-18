@@ -53,25 +53,43 @@ struct Shared {
 
 impl Shared {
     fn wanted(&self) -> Vec<String> {
-        self.wanted
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        lock_or_recover(&self.wanted, "notify watch roster").clone()
     }
 
     fn publish(&self, at: u64, rows: Vec<LiveObservation>) {
-        if let Ok(mut guard) = self.snapshot.lock() {
-            *guard = Some((at, rows));
-        }
+        *lock_or_recover(&self.snapshot, "notify watch snapshot") = Some((at, rows));
     }
+}
+
+/// Recover a poisoned lock instead of substituting an empty value.
+///
+/// A poisoned roster used to read as "nothing is watched" (the poller stops
+/// for the worker's lifetime) and a poisoned snapshot as "nothing is live" (a
+/// fabricated offline edge). `error-handling.md` requires `into_inner()` plus
+/// a warning for these process-wide maps.
+fn lock_or_recover<'a, T>(lock: &'a Mutex<T>, name: &str) -> std::sync::MutexGuard<'a, T> {
+    lock.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Recovering poisoned {name}");
+        poisoned.into_inner()
+    })
 }
 
 impl WatchIndex {
     /// Start the poller. Called from the worker loop, so a runtime exists;
     /// workers built without one keep an empty snapshot.
+    ///
+    /// A finished poller is restarted: this is called once at worker boot, so
+    /// a panic inside the task would otherwise stop watched-channel 开播
+    /// notices for the worker's lifetime.
     pub fn start(&mut self) {
-        if self.task.is_some() || tokio::runtime::Handle::try_current().is_err() {
+        if tokio::runtime::Handle::try_current().is_err() {
             return;
+        }
+        if let Some(task) = self.task.as_ref() {
+            if !task.is_finished() {
+                return;
+            }
+            tracing::warn!("QQ 关注频道轮询任务已退出，重新启动");
         }
         let shared = Arc::clone(&self.shared);
         self.task = Some(tokio::spawn(poll(shared)));
@@ -94,9 +112,7 @@ impl WatchIndex {
         wanted.sort();
         wanted.dedup();
         let cleared = {
-            let Ok(mut guard) = self.shared.wanted.lock() else {
-                return;
-            };
+            let mut guard = lock_or_recover(&self.shared.wanted, "notify watch roster");
             if *guard == wanted {
                 return;
             }
@@ -112,13 +128,10 @@ impl WatchIndex {
     /// Rows to treat as live now. Empty until the first poll lands, and once
     /// the last good poll is too old.
     pub fn observations(&self, now: u64) -> Vec<LiveObservation> {
-        self.shared
-            .snapshot
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().cloned())
+        lock_or_recover(&self.shared.snapshot, "notify watch snapshot")
+            .as_ref()
             .filter(|(at, _)| now.saturating_sub(*at) <= STALE_AFTER)
-            .map(|(_, rows)| rows)
+            .map(|(_, rows)| rows.clone())
             .unwrap_or_default()
     }
 
@@ -227,5 +240,25 @@ mod tests {
         live.publish_rows(1_000, vec![row("UCa")]);
         // No publish happened here: that is what `Err` from the fetch does.
         assert_eq!(live.observations(1_010), vec![row("UCa")]);
+    }
+
+    #[test]
+    fn a_poisoned_lock_still_serves_the_last_rows() {
+        let mut live = WatchIndex::default();
+        live.follow(true, &watched(&[("youtube", "UCa")]));
+        live.publish_rows(1_000, vec![row("UCa")]);
+
+        // Poison both maps: a panicking holder must not read as "nothing".
+        let shared = Arc::clone(&live.shared);
+        std::thread::spawn(move || {
+            let _roster = shared.wanted.lock().unwrap();
+            let _snapshot = shared.snapshot.lock().unwrap();
+            panic!("poison the watch-index locks");
+        })
+        .join()
+        .expect_err("the holder thread panics");
+
+        assert_eq!(live.shared.wanted(), vec!["UCa".to_string()]);
+        assert_eq!(live.observations(1_000), vec![row("UCa")]);
     }
 }

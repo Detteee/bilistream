@@ -459,9 +459,15 @@ async fn session(
                             seen.push_back(id);
                         }
                         if let Some(event) = frame.event {
-                            // A full channel drops the event: the worker is
-                            // busy and the event is advisory.
-                            let _ = events.try_send(event);
+                            // A full channel means the worker is busy: the event
+                            // is lost, so it must not be lost silently. The
+                            // event may be a pairing code or an admin command.
+                            if events.try_send(event).is_err() {
+                                let dropped = super::super::note_gateway_drop();
+                                tracing::warn!(
+                                    "QQ 网关事件处理不及，已丢弃一个事件（累计 {dropped}）"
+                                );
+                            }
                         }
                     }
                     _ => {}

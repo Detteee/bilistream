@@ -82,6 +82,59 @@ fn configure(store: &Store) {
     .unwrap();
 }
 
+fn document(value: serde_json::Value) -> crate::storage::Document {
+    crate::storage::Document {
+        value,
+        revision: 1,
+        updated_at: 10,
+    }
+}
+
+/// A record this build cannot read must stop the export, not become a
+/// legitimate "cleared" list that peers accept as a real change.
+#[test]
+fn an_unparseable_watch_record_never_exports_a_clear() {
+    let record = serde_json::json!({
+        "watch": {
+            "enabled": true,
+            "channels": [{"kind": "future-kind", "name": "x"}],
+            "migration_notice": null
+        }
+    });
+    assert!(
+        watch_of(&record).is_err(),
+        "an unreadable member must not fall back to a default list"
+    );
+
+    let mut snapshot = std::collections::HashMap::new();
+    snapshot.insert(
+        WATCH_RECORD.to_string(),
+        document(serde_json::json!({
+            "revision": 3,
+            "updated_by": "jp",
+            "updated_at": 10
+        })),
+    );
+    snapshot.insert(store::CONFIG_RECORD.to_string(), document(record));
+
+    assert!(
+        export_snapshot(&snapshot).is_err(),
+        "a record that cannot be parsed must not export a cleared follow list"
+    );
+}
+
+/// A legacy document without the member keeps the historical default, so the
+/// stricter parse does not break the migration path.
+#[test]
+fn an_absent_watch_member_still_uses_the_default() {
+    assert_eq!(watch_of(&serde_json::json!({})).unwrap(), None);
+    assert_eq!(
+        watch_of(&serde_json::json!({"qq": {}})).unwrap(),
+        None,
+        "an unrelated member is not a watch record"
+    );
+}
+
 #[tokio::test]
 async fn an_existing_list_beats_empty_disabled_peers_without_another_save() {
     let (jp, ca, ny, blank) = (temp(), temp(), temp(), temp());

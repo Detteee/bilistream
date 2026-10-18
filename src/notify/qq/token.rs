@@ -106,8 +106,21 @@ impl TokenCache {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .is_some_and(|at| now.duration_since(at) < MIN_FETCH_GAP);
-            if recently_fetched && now + Duration::from_secs(5) < cached.expires_at {
-                return Ok(cached.token.clone());
+            if recently_fetched {
+                // `MIN_FETCH_GAP` is a fetch gate, not just a return gate: a
+                // fetch inside the gap is throttled by QQ (100001) and costs a
+                // full gateway backoff. Keep serving the token we already have;
+                // once it is expired report a retryable failure instead of
+                // hammering the endpoint.
+                if now < cached.expires_at {
+                    return Ok(cached.token.clone());
+                }
+                return Err(TokenError {
+                    class: ErrorClass::Transient,
+                    code: None,
+                    http_status: 0,
+                    reason: "Token 刷新过于频繁".to_string(),
+                });
             }
         }
         if !crate::notify::config::endpoint_allowed(token_url) {

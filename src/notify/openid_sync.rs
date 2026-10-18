@@ -744,7 +744,9 @@ pub fn spawn_push(store: Arc<Store>, local: String) {
                 super::watch_sync::seed_if_needed(&store, &local, crate::storage::now())
             })
         };
-        let _ = seeded.await;
+        if let Err(error) = seeded.await {
+            tracing::warn!("QQ 关注列表迁移检查失败: {error}");
+        }
         PUSH_COALESCER
             .drive(|| {
                 let store = Arc::clone(&store);
@@ -766,9 +768,16 @@ pub fn spawn_pull(store: Arc<Store>, local: String) {
     }
     tokio::spawn(async move {
         let link = SignedLink::new(Arc::clone(&store), local);
-        if let Ok(true) = pull_all(&store, &link).await {
-            tracing::info!("QQ 通知管理员 openid 已从其他节点同步 (openid=<set>)");
-            let _ = super::send_command(super::Command::Reload);
+        match pull_all(&store, &link).await {
+            Ok(true) => {
+                tracing::info!("QQ 通知管理员 openid 已从其他节点同步 (openid=<set>)");
+                let _ = super::send_command(super::Command::Reload);
+            }
+            Ok(false) => {}
+            // The error is local (membership read, store, changing revision):
+            // peers render as `Ok(false)`. Without this the pull silently
+            // waits for the next 10-minute pass.
+            Err(error) => tracing::warn!("QQ 通知管理员 openid 拉取失败: {error}"),
         }
     });
 }

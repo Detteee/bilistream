@@ -154,15 +154,28 @@ fn config_value_tx(tx: &mut Transaction<'_>) -> io::Result<Value> {
     }
 }
 
-fn watch_of(config: &Value) -> WatchConfig {
-    config
-        .get("watch")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
+/// Read the `watch` member of a config document.
+///
+/// `Ok(None)` means the member is absent (a legacy document: callers keep the
+/// historical default). A member that cannot be parsed is an **error**, never a
+/// default: defaulting it produced an empty, disabled list that passed
+/// [`structural`] and was then exported at the stored revision as a real
+/// "clear", which peers accepted — one unreadable local record could wipe the
+/// cluster follow list.
+fn watch_of(config: &Value) -> io::Result<Option<WatchConfig>> {
+    match config.get("watch") {
+        None => Ok(None),
+        Some(value) => serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                tracing::warn!("QQ 关注列表记录无法解析，本轮不导出: {error}");
+                io::Error::other("关注列表记录无法解析")
+            }),
+    }
 }
 
 fn watch_tx(tx: &mut Transaction<'_>) -> io::Result<WatchConfig> {
-    Ok(watch_of(&config_value_tx(tx)?))
+    Ok(watch_of(&config_value_tx(tx)?)?.unwrap_or_default())
 }
 
 /// Replace only `watch` on a freshly read config so an AppID written earlier
@@ -223,10 +236,12 @@ pub(crate) fn export_snapshot(
     if meta.revision == 0 {
         return Ok(None);
     }
-    let watch = snapshot
-        .get(store::CONFIG_RECORD)
-        .map(|doc| watch_of(&doc.value))
-        .unwrap_or_default();
+    let watch = match snapshot.get(store::CONFIG_RECORD) {
+        // An absent member keeps the historical default; an unreadable one is
+        // an error (`?`) and stops the export.
+        Some(doc) => watch_of(&doc.value)?.unwrap_or_default(),
+        None => WatchConfig::default(),
+    };
     if !structural(&watch) || !identity_ok(&meta.updated_by) {
         return Ok(None);
     }

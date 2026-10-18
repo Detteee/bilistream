@@ -58,6 +58,8 @@ static WAKE: Notify = Notify::const_new();
 /// Replaced when a stopped worker is started again (WebUI rebind).
 static COMMANDS: Mutex<Option<mpsc::Sender<Command>>> = Mutex::new(None);
 static COMMAND_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Inbound QQ gateway events dropped because the worker channel was full.
+static GATEWAY_DROPPED: AtomicU64 = AtomicU64::new(0);
 /// A short lease from the existing observer, never a second election.
 static RECORDER_LEASE: AtomicU64 = AtomicU64::new(0);
 
@@ -90,7 +92,19 @@ pub fn dropped() -> serde_json::Value {
         .into_iter()
         .find_map(|(name, count)| (name == "notify").then_some(count))
         .unwrap_or(0);
-    serde_json::json!({"commands": COMMAND_DROPPED.load(Ordering::Relaxed), "events": bus})
+    serde_json::json!({
+        "commands": COMMAND_DROPPED.load(Ordering::Relaxed),
+        "gateway": GATEWAY_DROPPED.load(Ordering::Relaxed),
+        "events": bus,
+    })
+}
+
+/// Count a dropped inbound gateway event and return the running total.
+///
+/// A full channel used to drop C2C pairing codes and admin commands with no
+/// trace at all; the count is now visible through [`dropped`] and in logs.
+pub(crate) fn note_gateway_drop() -> u64 {
+    GATEWAY_DROPPED.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// What other modules (heartbeat snapshot, status API) read.
