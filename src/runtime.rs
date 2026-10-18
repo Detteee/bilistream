@@ -1393,6 +1393,79 @@ async fn sync_danmaku_client(cfg: &bilistream::config::Config) {
     }
 }
 
+/// Load this pass's config and consume the go-live wakes the pass is about to
+/// check anyway. The reload signal is cleared *before* loading so an update that
+/// arrives during `load_config()` stays set for the checks further down.
+async fn load_pass_config() -> Result<bilistream::config::Config, Box<dyn std::error::Error>> {
+    clear_config_updated();
+    let cfg = match load_config().await {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::warn!("加载配置失败，短暂重试: {}", e);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            load_config().await?
+        }
+    };
+    for channel in idle_wake_channels(&cfg) {
+        bilistream::plugins::youtube::take_monitor_wake(channel);
+    }
+    bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
+    bilistream::plugins::niconico_live::take_monitor_wake(&cfg.niconico.channel_id);
+    Ok(cfg)
+}
+
+/// While the cluster refuses to let this node monitor: say why once, stop the
+/// danmaku client, then wait for the condition or for a config update. Returns
+/// true when the caller should start the pass over.
+async fn wait_out_cluster_block(
+    cfg: &bilistream::config::Config,
+    cluster_wait: &mut Option<(std::time::Instant, String)>,
+) -> bool {
+    let Some(reason) = cluster::local_monitoring_block_reason(cfg) else {
+        return false;
+    };
+    let (_, last_reason) =
+        cluster_wait.get_or_insert_with(|| (std::time::Instant::now(), String::new()));
+    if *last_reason != reason {
+        tracing::info!("等待集群允许监控: {}", reason);
+        last_reason.clone_from(&reason);
+    }
+    if is_danmaku_running() {
+        tracing::info!("{}，停止弹幕客户端", reason);
+        stop_danmaku().await;
+    }
+    let retry_secs = cfg
+        .cluster
+        .heartbeat_interval_secs
+        .max(1)
+        .min(cfg.interval.max(1));
+    tokio::select! {
+        _ = cluster::wait_for_local_monitoring(cfg) => {}
+        _ = wait_config_update_or_timeout(Duration::from_secs(retry_secs)) => {}
+    }
+    true
+}
+
+/// A pass with nothing configured cannot probe anything: tell the operator how to
+/// configure, then wait for a config update so the WebUI has a chance to be used.
+/// Returns true when the caller should start the pass over.
+async fn require_a_configured_source(cfg: &bilistream::config::Config) -> bool {
+    let nothing_configured = cfg.youtube.channel_id.is_empty()
+        && cfg.twitch.channel_id.is_empty()
+        && !niconico_configured(&cfg.niconico)
+        && (!cfg.priority_channel.enabled
+            || (cfg.priority_channel.youtube_channel_id.is_empty()
+                && cfg.priority_channel.twitch_channel_id.is_empty()));
+    if !nothing_configured {
+        return false;
+    }
+    tracing::error!("YouTube、Twitch 和 Niconico 配置均为空");
+    tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
+    tracing::info!("提示: 打开 Web UI，按设置向导完成配置");
+    wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
+    true
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1420,44 +1493,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // Log outer loop restart for debugging channel switch issues
         tracing::debug!("外层循环开始 - 重新加载配置并检查频道状态");
 
-        // Consume the previous reload signal before loading; updates that arrive during
-        // load_config() remain set and will be picked up by the checks below.
-        clear_config_updated();
-        let mut cfg = match load_config().await {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                tracing::warn!("加载配置失败，短暂重试: {}", e);
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                load_config().await?
-            }
-        };
-        // This pass checks these channels anyway, so a go-live wake from before it adds nothing.
-        for channel in idle_wake_channels(&cfg) {
-            bilistream::plugins::youtube::take_monitor_wake(channel);
-        }
-        bilistream::plugins::twitch_live::take_monitor_wake(&cfg.twitch.channel_id);
-        bilistream::plugins::niconico_live::take_monitor_wake(&cfg.niconico.channel_id);
+        let mut cfg = load_pass_config().await?;
 
-        if let Some(reason) = cluster::local_monitoring_block_reason(&cfg) {
-            let (_, last_reason) =
-                cluster_wait.get_or_insert_with(|| (std::time::Instant::now(), String::new()));
-            if *last_reason != reason {
-                tracing::info!("等待集群允许监控: {}", reason);
-                last_reason.clone_from(&reason);
-            }
-            if is_danmaku_running() {
-                tracing::info!("{}，停止弹幕客户端", reason);
-                stop_danmaku().await;
-            }
-            let retry_secs = cfg
-                .cluster
-                .heartbeat_interval_secs
-                .max(1)
-                .min(cfg.interval.max(1));
-            tokio::select! {
-                _ = cluster::wait_for_local_monitoring(&cfg) => {}
-                _ = wait_config_update_or_timeout(Duration::from_secs(retry_secs)) => {}
-            }
+        if wait_out_cluster_block(&cfg, &mut cluster_wait).await {
             continue 'outer;
         }
         if let Some((started, _)) = cluster_wait.take() {
@@ -1475,19 +1513,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        // Validate YouTube/Twitch configuration
-        if cfg.youtube.channel_id.is_empty()
-            && cfg.twitch.channel_id.is_empty()
-            && !niconico_configured(&cfg.niconico)
-            && (!cfg.priority_channel.enabled
-                || (cfg.priority_channel.youtube_channel_id.is_empty()
-                    && cfg.priority_channel.twitch_channel_id.is_empty()))
-        {
-            tracing::error!("YouTube、Twitch 和 Niconico 配置均为空");
-            tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
-            tracing::info!("提示: 打开 Web UI，按设置向导完成配置");
-            // Sleep and continue to allow WebUI configuration
-            wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
+        if require_a_configured_source(&cfg).await {
             continue 'outer;
         }
 
