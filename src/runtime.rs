@@ -2601,6 +2601,34 @@ async fn probe_pass_sources(cfg: &bilistream::config::Config) -> Option<ProbePas
     })
 }
 
+/// Filter every candidate slot before the priority overlay runs.
+///
+/// Observe first, then filter: a stream the warning tracker already holds, or one
+/// whose title carries a banned keyword, is dropped here. A shared channel id has
+/// one provider result, and the skip logger deduplicates it. A dropped YouTube
+/// stream is remembered so a later pass can refetch it.
+async fn filter_stream_candidates(
+    cfg: &bilistream::config::Config,
+    warnings: &bilistream::plugins::danmaku::warning::WarningTracker,
+    streaming_banned_keywords: &[String],
+    candidates: &mut RawCandidates,
+) {
+    for stream in [
+        &mut candidates.youtube,
+        &mut candidates.twitch,
+        &mut candidates.niconico,
+        &mut candidates.priority_youtube,
+        &mut candidates.priority_twitch,
+    ] {
+        let was_live = stream.is_live;
+        skip_stream_if_previously_warned(stream, cfg, warnings).await;
+        skip_stream_if_banned_keyword(stream, streaming_banned_keywords, cfg).await;
+        if stream.platform == StreamPlatform::Youtube {
+            mark_youtube_skipped_live(stream, was_live);
+        }
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2697,22 +2725,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             bilistream::plugins::banned_keywords::streaming_banned_keywords();
         let mut candidates = stream_candidates(&cfg, sources);
 
-        // Observe first, then filter every slot before the priority overlay.
-        // A shared ID has one provider result; the skip logger deduplicates it.
-        for stream in [
-            &mut candidates.youtube,
-            &mut candidates.twitch,
-            &mut candidates.niconico,
-            &mut candidates.priority_youtube,
-            &mut candidates.priority_twitch,
-        ] {
-            let was_live = stream.is_live;
-            skip_stream_if_previously_warned(stream, &cfg, &warnings).await;
-            skip_stream_if_banned_keyword(stream, &streaming_banned_keywords, &cfg).await;
-            if stream.platform == StreamPlatform::Youtube {
-                mark_youtube_skipped_live(stream, was_live);
-            }
-        }
+        filter_stream_candidates(&cfg, &warnings, &streaming_banned_keywords, &mut candidates)
+            .await;
         if config_changed_since_pass(&cfg) {
             clear_config_updated();
             continue 'outer;
