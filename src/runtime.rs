@@ -2233,6 +2233,235 @@ async fn announce_stream_end(
         }
     }
 }
+/// Everything the push loop needs from the pass that selected a source.
+///
+/// Fourteen values, but they travel as one struct: the loop is the longest phase
+/// of the pass, and threading them positionally would be unreadable.
+struct PushLoop<'a> {
+    cfg: &'a bilistream::config::Config,
+    platform: &'a str,
+    channel_id: &'a str,
+    channel_name: &'a str,
+    cfg_title: &'a str,
+    /// The area the history row is opened with, aligned earlier in the pass.
+    history_area_v2: Option<u64>,
+    current_video_id: Option<&'a str>,
+    stream_log: &'a FfmpegStreamIdentity,
+    cluster_stream: &'a ClusterStreamIdentity,
+    selected_stream: &'a StreamCandidate,
+    source_client: &'a Option<SourceClient<'a>>,
+    /// By value: the loop rewrites it when the source rotates its playlist URL.
+    ffmpeg_source: FfmpegSource,
+    ffmpeg_log_level: &'a str,
+    lol_monitor: Option<LolMonitor>,
+}
+
+/// What the push loop leaves for the pass that called it.
+struct PushLoopOutcome {
+    exit_reason: FfmpegLoopExitReason,
+    last_session: Option<ffmpeg::FfmpegSession>,
+    /// The stop/restart generation the loop last captured: the end decision needs it.
+    session_generation: u64,
+    /// Whether the 直播结束 notice still has to go out for this broadcast.
+    end_announce: bool,
+}
+
+/// Run one selected source to its end.
+///
+/// Starts ffmpeg, attaches the monitors, waits for the session, then decides why
+/// the push stopped: cluster handoff, a new broadcast, the source ending, the room
+/// stopping, a manual restart, or an ordinary retry. It returns the outcome rather
+/// than acting on it, so the pass keeps the end handling in one place.
+async fn run_push_loop(
+    ctx: PushLoop<'_>,
+    state: &mut PassState,
+    history_session: &mut Option<crate::history::SessionGuard>,
+) -> PushLoopOutcome {
+    let PushLoop {
+        cfg,
+        platform,
+        channel_id,
+        channel_name,
+        cfg_title,
+        history_area_v2,
+        current_video_id,
+        stream_log,
+        cluster_stream,
+        selected_stream,
+        source_client,
+        mut ffmpeg_source,
+        ffmpeg_log_level,
+        lol_monitor,
+    } = ctx;
+    let mut session_generation = capture_session_generation();
+    let mut last_session = None;
+    let mut end_announce = false;
+    let exit_reason = loop {
+        if !cluster::local_may_push(cfg, Some(cluster_stream.clone())) {
+            set_manual_restart();
+            stop_ffmpeg().await;
+            break FfmpegLoopExitReason::ClusterHandoff;
+        }
+
+        let PlatformPushOptions { proxy, crop, cache } = platform_push_options(cfg, platform);
+
+        // Stop/restart requests from before this session must not
+        // cancel its end-of-stream recheck.
+        session_generation = capture_session_generation();
+        let run_history = ffmpeg::FfmpegRunHistory::default();
+        let session = ffmpeg(ffmpeg::FfmpegRequest {
+            rtmp_url: cfg.bililive.bili_rtmp_url.clone(),
+            rtmp_key: cfg.bililive.bili_rtmp_key.clone(),
+            source: ffmpeg_source.clone(),
+            proxy,
+            log_level: ffmpeg_log_level.to_string(),
+            crop,
+            cache: FfmpegCacheOptions {
+                enabled: cache.enabled,
+                latency_secs: cache.latency_secs,
+            },
+            identity: stream_log.clone().with_history(run_history.clone()),
+        })
+        .await;
+        last_session = session;
+        if let Some(run) = session {
+            let guard = history_session.get_or_insert_with(|| {
+                crate::history::SessionGuard::start_with_area(
+                    cfg,
+                    platform,
+                    channel_id,
+                    channel_name,
+                    Some(cfg_title),
+                    history_area_v2,
+                    current_video_id,
+                )
+            });
+            guard.run_started(run.id());
+            run_history.attach(guard.seq(), run.id());
+        }
+
+        if let Some(session) = session {
+            attach_push_monitors(session, stream_log, lol_monitor.clone(), selected_stream).await;
+        }
+
+        let (exit_status, push_moving) = wait_for_push_exit(session).await;
+
+        // The supervisor owns child exit diagnostics. None can also
+        // mean declined startup or an intentional/obsolete session.
+        let ffmpeg_exit_at = bilistream::storage::now();
+        let ffmpeg_exit_failed = exit_status.is_none_or(|status| !status.success());
+
+        // Check if stream is still live before restarting
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // The end of the stream is this refetch failing to find the
+        // source live: no new m3u8. Same signal as the page's 切换.
+        let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(cfg);
+        state.stream_end.on_push_ended(push_moving.moving);
+        let step = state.stream_end.on_refetch(
+            refetch_source(source_client).await,
+            current_end_signals(session_generation, node_active),
+            std::time::Instant::now(),
+        );
+        let outcome = interpret_refetch_step(step, stream_log);
+        end_announce = outcome.end_announce;
+        let RefetchOutcome {
+            current_is_live,
+            new_m3u8_url,
+            source_ended,
+            new_broadcast,
+            end_check_cancel,
+            ..
+        } = outcome;
+        let (
+            PushEndSignals {
+                bili_is_live,
+                manual_restart_requested,
+                config_updated_now,
+                ..
+            },
+            count_ffmpeg_exit_failure,
+        ) = collect_end_signals(cfg, channel_name, current_is_live, ffmpeg_exit_failed).await;
+        if let (Some(guard), Some(run)) = (history_session.as_ref(), session) {
+            guard.run_exited_with_diagnostic_at(
+                ffmpeg_exit_at,
+                run.id(),
+                exit_status.and_then(|status| status.code()),
+                !ffmpeg_exit_failed,
+                count_ffmpeg_exit_failure,
+                run_history.diagnostic().as_deref(),
+            );
+        }
+
+        match end_check_cancel {
+            Some(EndRecheckCancel::ClusterHandoff) => {
+                set_manual_restart();
+                stop_ffmpeg().await;
+                break FfmpegLoopExitReason::ClusterHandoff;
+            }
+            Some(EndRecheckCancel::ManualRestart) => {
+                break FfmpegLoopExitReason::EndCheckCancelled { restart: true };
+            }
+            Some(EndRecheckCancel::ManualStop) => {
+                break FfmpegLoopExitReason::EndCheckCancelled { restart: false };
+            }
+            None => {}
+        }
+        if new_broadcast {
+            break FfmpegLoopExitReason::NewBroadcast;
+        }
+
+        if source_ended {
+            break FfmpegLoopExitReason::SourceEnded;
+        }
+
+        if !bili_is_live {
+            break FfmpegLoopExitReason::BiliStopped;
+        }
+
+        // Check if manual restart was requested (force immediate restart)
+        if manual_restart_requested {
+            let exit_reason = FfmpegLoopExitReason::IntentionalRestart {
+                target_m3u8_available: new_m3u8_url.is_some(),
+            };
+            break exit_reason;
+        }
+
+        // Check if config was updated (channel switch)
+        if config_updated_now || !bilistream::config::config_is_current(cfg) {
+            tracing::debug!(
+                "{stream_log} 已检测到配置更新，源直播仍在线，沿用本次目标直到源直播结束"
+            );
+            // Don't break, let the stream continue until it naturally ends
+        }
+
+        // YouTube/Twitch HLS playlist URLs can rotate mid-live.
+        // Niconico's lv is the program id (like a YouTube video id) and
+        // does not change for one stream, so piped ingest is left as-is.
+        if let FfmpegSource::HlsUrl(url) = &mut ffmpeg_source {
+            if let Some(new_url) = new_m3u8_url {
+                if new_url != *url {
+                    tracing::debug!("{stream_log} 源播放地址已更新，下次启动使用新地址");
+                    *url = new_url;
+                }
+            }
+        }
+
+        // Stream is still live but ffmpeg exited, restart it
+        tracing::info!(
+            "{} 源直播仍在线，1秒后重试推流",
+            stream_log.session_label(session)
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    PushLoopOutcome {
+        exit_reason,
+        last_session,
+        session_generation,
+        end_announce,
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2474,7 +2703,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;
             };
-            let Some(mut ffmpeg_source) = selected_stream.ffmpeg_source() else {
+            let Some(ffmpeg_source) = selected_stream.ffmpeg_source() else {
                 tracing::warn!(
                     "{} 直播 {} 缺少可播放的流，等待下一轮检查",
                     selected_stream.platform.code(),
@@ -2592,182 +2821,35 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 format!("{platform}:{channel_id}"),
                 current_video_id.as_deref(),
             );
-            let mut end_announce = false;
-            let mut session_generation = capture_session_generation();
-
-            // Main ffmpeg monitoring loop - blocks until stream ends
-            let mut last_session = None;
             // 统计: one relay session per stream selection, opened by the
             // first real push; dropping it unfinished records `aborted`.
             let mut history_session: Option<crate::history::SessionGuard> = None;
-            let ffmpeg_loop_exit_reason = loop {
-                if !cluster::local_may_push(&cfg, Some(cluster_stream.clone())) {
-                    set_manual_restart();
-                    stop_ffmpeg().await;
-                    break FfmpegLoopExitReason::ClusterHandoff;
-                }
-
-                let PlatformPushOptions { proxy, crop, cache } =
-                    platform_push_options(&cfg, platform);
-
-                // Stop/restart requests from before this session must not
-                // cancel its end-of-stream recheck.
-                session_generation = capture_session_generation();
-                let run_history = ffmpeg::FfmpegRunHistory::default();
-                let session = ffmpeg(ffmpeg::FfmpegRequest {
-                    rtmp_url: cfg.bililive.bili_rtmp_url.clone(),
-                    rtmp_key: cfg.bililive.bili_rtmp_key.clone(),
-                    source: ffmpeg_source.clone(),
-                    proxy,
-                    log_level: ffmpeg_log_level.to_string(),
-                    crop,
-                    cache: FfmpegCacheOptions {
-                        enabled: cache.enabled,
-                        latency_secs: cache.latency_secs,
-                    },
-                    identity: stream_log.clone().with_history(run_history.clone()),
-                })
-                .await;
-                last_session = session;
-                if let Some(run) = session {
-                    let guard = history_session.get_or_insert_with(|| {
-                        crate::history::SessionGuard::start_with_area(
-                            &cfg,
-                            platform,
-                            &channel_id,
-                            &channel_name,
-                            Some(&cfg_title),
-                            history_area_v2,
-                            current_video_id.as_deref(),
-                        )
-                    });
-                    guard.run_started(run.id());
-                    run_history.attach(guard.seq(), run.id());
-                }
-
-                if let Some(session) = session {
-                    attach_push_monitors(
-                        session,
-                        &stream_log,
-                        lol_monitor.clone(),
-                        &selected_stream,
-                    )
-                    .await;
-                }
-
-                let (exit_status, push_moving) = wait_for_push_exit(session).await;
-
-                // The supervisor owns child exit diagnostics. None can also
-                // mean declined startup or an intentional/obsolete session.
-                let ffmpeg_exit_at = bilistream::storage::now();
-                let ffmpeg_exit_failed = exit_status.is_none_or(|status| !status.success());
-
-                // Check if stream is still live before restarting
-                tokio::time::sleep(Duration::from_secs(2)).await;
-
-                // The end of the stream is this refetch failing to find the
-                // source live: no new m3u8. Same signal as the page's 切换.
-                let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
-                state.stream_end.on_push_ended(push_moving.moving);
-                let step = state.stream_end.on_refetch(
-                    refetch_source(&source_client).await,
-                    current_end_signals(session_generation, node_active),
-                    std::time::Instant::now(),
-                );
-                let outcome = interpret_refetch_step(step, &stream_log);
-                // `end_announce` is declared outside the loop and read after it,
-                // so it must be assigned rather than shadowed.
-                end_announce = outcome.end_announce;
-                let RefetchOutcome {
-                    current_is_live,
-                    new_m3u8_url,
-                    source_ended,
-                    new_broadcast,
-                    end_check_cancel,
-                    ..
-                } = outcome;
-                let (
-                    PushEndSignals {
-                        bili_is_live,
-                        manual_restart_requested,
-                        config_updated_now,
-                        ..
-                    },
-                    count_ffmpeg_exit_failure,
-                ) = collect_end_signals(&cfg, &channel_name, current_is_live, ffmpeg_exit_failed)
-                    .await;
-                if let (Some(guard), Some(run)) = (&history_session, session) {
-                    guard.run_exited_with_diagnostic_at(
-                        ffmpeg_exit_at,
-                        run.id(),
-                        exit_status.and_then(|status| status.code()),
-                        !ffmpeg_exit_failed,
-                        count_ffmpeg_exit_failure,
-                        run_history.diagnostic().as_deref(),
-                    );
-                }
-
-                match end_check_cancel {
-                    Some(EndRecheckCancel::ClusterHandoff) => {
-                        set_manual_restart();
-                        stop_ffmpeg().await;
-                        break FfmpegLoopExitReason::ClusterHandoff;
-                    }
-                    Some(EndRecheckCancel::ManualRestart) => {
-                        break FfmpegLoopExitReason::EndCheckCancelled { restart: true };
-                    }
-                    Some(EndRecheckCancel::ManualStop) => {
-                        break FfmpegLoopExitReason::EndCheckCancelled { restart: false };
-                    }
-                    None => {}
-                }
-                if new_broadcast {
-                    break FfmpegLoopExitReason::NewBroadcast;
-                }
-
-                if source_ended {
-                    break FfmpegLoopExitReason::SourceEnded;
-                }
-
-                if !bili_is_live {
-                    break FfmpegLoopExitReason::BiliStopped;
-                }
-
-                // Check if manual restart was requested (force immediate restart)
-                if manual_restart_requested {
-                    let exit_reason = FfmpegLoopExitReason::IntentionalRestart {
-                        target_m3u8_available: new_m3u8_url.is_some(),
-                    };
-                    break exit_reason;
-                }
-
-                // Check if config was updated (channel switch)
-                if config_updated_now || !bilistream::config::config_is_current(&cfg) {
-                    tracing::debug!(
-                        "{stream_log} 已检测到配置更新，源直播仍在线，沿用本次目标直到源直播结束"
-                    );
-                    // Don't break, let the stream continue until it naturally ends
-                }
-
-                // YouTube/Twitch HLS playlist URLs can rotate mid-live.
-                // Niconico's lv is the program id (like a YouTube video id) and
-                // does not change for one stream, so piped ingest is left as-is.
-                if let FfmpegSource::HlsUrl(url) = &mut ffmpeg_source {
-                    if let Some(new_url) = new_m3u8_url {
-                        if new_url != *url {
-                            tracing::debug!("{stream_log} 源播放地址已更新，下次启动使用新地址");
-                            *url = new_url;
-                        }
-                    }
-                }
-
-                // Stream is still live but ffmpeg exited, restart it
-                tracing::info!(
-                    "{} 源直播仍在线，1秒后重试推流",
-                    stream_log.session_label(session)
-                );
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            };
+            let PushLoopOutcome {
+                exit_reason: ffmpeg_loop_exit_reason,
+                last_session,
+                session_generation,
+                end_announce,
+            } = run_push_loop(
+                PushLoop {
+                    cfg: &cfg,
+                    platform,
+                    channel_id: &channel_id,
+                    channel_name: &channel_name,
+                    cfg_title: &cfg_title,
+                    history_area_v2,
+                    current_video_id: current_video_id.as_deref(),
+                    stream_log: &stream_log,
+                    cluster_stream: &cluster_stream,
+                    selected_stream: &selected_stream,
+                    source_client: &source_client,
+                    ffmpeg_source,
+                    ffmpeg_log_level,
+                    lol_monitor,
+                },
+                &mut state,
+                &mut history_session,
+            )
+            .await;
             let session_log = stream_log.session_label(last_session);
             // Demotion and the execution watchdog also signal MANUAL_RESTART.
             // Report the current gate without changing restart/cleanup decisions.
