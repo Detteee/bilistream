@@ -259,7 +259,16 @@ export function historyRoute(path, params, mode, ok, nowSec = Math.floor(Date.no
   if (name === 'status') return [200, ok(historyStatus(mode, nowSec))];
   // POST /api/history/clean is destructive maintenance: answer before the
   // clamped/partial decorations, since the caller re-reads everything after it.
-  if (name === 'clean') return [200, ok({ rows: empty ? 0 : 1280 })];
+  // Every node clears, so the report names each one; `partial` mode also shows
+  // a node that kept its rows, which is what the danger notice is for.
+  if (name === 'clean') {
+    if (empty) return [200, ok({ rows: 0, nodes: [], failed: [] })];
+    return [200, ok({
+      rows: 1280,
+      nodes: [{ node_id: 'local', rows: 1000 }, { node_id: 'tokyo-1', rows: 280 }],
+      failed: partial ? [{ node_id: 'sg-3', reason: '正在转播，请先停止转播再清理历史' }] : [],
+    })];
+  }
   const base = ok;
   ok = data => base(data && typeof data === 'object' ? {
     ...data,

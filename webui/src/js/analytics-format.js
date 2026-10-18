@@ -365,6 +365,19 @@ export function missingNodeText(missing) {
   };
 }
 
+// Cluster-wide 清理历史 (W19): one report covering every node that answered.
+// A node that is relaying, unreachable or too old still holds rows, so its
+// reason is a danger line naming it rather than a silently shorter total.
+export function cleanNotice(data) {
+  const rows = isNum(data?.rows) ? data.rows : 0;
+  const nodes = Array.isArray(data?.nodes) ? data.nodes.filter(n => n && n.node_id) : [];
+  const failed = Array.isArray(data?.failed) ? data.failed.filter(f => f && f.node_id) : [];
+  const count = nodes.length || 1;
+  if (!failed.length) return { text: `已清理 ${rows} 行历史（${count} 台节点），从此刻起一起重新记录。`, tone: '' };
+  const names = failed.map(f => `${f.node_id} ${typeof f.reason === 'string' && f.reason ? f.reason : '未清理'}`).join('、');
+  return { text: `已清理 ${rows} 行（${count} 台节点）；${names} 仍保留旧记录，请停止转播或恢复节点后再试。`, tone: 'danger' };
+}
+
 // Share of a day, capped at 24 hours. 0 means no stream time.
 export function streamHeat(secs) {
   if (!isNum(secs) || secs <= 0) return 0;

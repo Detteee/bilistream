@@ -2332,8 +2332,12 @@
             </div>
             <small class="settings-help-text analytics-retention" id="analytics-retention"></small>
             <div class="analytics-maintenance">
-              <small class="settings-help-text">历史只保存在本节点。清理后统计、场次和事件从零开始。</small>
-              <button id="analytics-clean-btn" class="btn-danger compact-btn" type="button">清理历史…</button>
+              <small class="settings-help-text">清理会同步到集群内所有节点，从此刻起一起重新记录。</small>
+              <button id="analytics-clean-btn" class="btn-danger compact-btn" type="button" title="清理集群历史"
+                aria-label="清理集群历史">
+                <svg class="btn-icon" aria-hidden="true"><use href="#i-trash" /></svg>
+                <span id="analytics-clean-label">清理历史…</span>
+              </button>
             </div>
           </div>
         </section>

@@ -16,7 +16,7 @@ import {
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
-  mergeRetention, EVENTS_EMPTY, isolatedPointIndices,
+  mergeRetention, EVENTS_EMPTY, isolatedPointIndices, cleanNotice,
 } from './analytics-format.js';
 import { createHistoryClient, historyStateNotice, localHistoryScope } from './analytics-history.js';
 
@@ -25,7 +25,8 @@ const DAY = 86400;
 const AUDIENCE_HINT = '数据来自 B 站非公开接口，可能缺失。在线人数有上限，仅供参考。';
 const NOT_SUPPORTED = '当前后端版本不支持统计，请升级 bilistream。';
 const CLEAN_LABEL = '清理历史…';
-const CLEAN_CONFIRM = '清理本节点已记录的全部场次、采样和事件，且无法撤销。确定清理吗？';
+const CLEAN_RUNNING = '清理中…';
+const CLEAN_CONFIRM = '将清理集群内所有节点的历史（统计、场次和事件），且无法撤销。确定清理吗？';
 
 let deps = null;
 let root = null;
@@ -1092,23 +1093,26 @@ function bindControls() {
     if (!result.error) selectRange(result);
   });
   $('analytics-refresh-btn').addEventListener('click', () => refresh({ force: true }));
-  // Destructive and one-shot: ask, then re-read every panel from an empty
-  // history. The server refuses while a relay is open (409 with its reason).
+  // Destructive and one-shot: ask, then re-read every panel from the emptied
+  // archives. The coordinator clears every node; one that is relaying, offline
+  // or older answers in `failed` and is named in the notice. Only the label
+  // span is rewritten, so the trash icon survives the busy state.
   const cleanBtn = $('analytics-clean-btn');
+  const cleanLabel = $('analytics-clean-label');
   cleanBtn.addEventListener('click', async () => {
     if (cleanBtn.disabled || !confirm(CLEAN_CONFIRM)) return;
     cleanBtn.disabled = true;
-    cleanBtn.textContent = '清理中…';
+    cleanLabel.textContent = CLEAN_RUNNING;
     try {
       const reply = await deps.postJson('/api/history/clean', {});
-      const rows = Number(reply?.data?.rows) || 0;
-      showNotice(`已清理 ${rows} 行历史，统计从零开始。`);
+      const report = cleanNotice(reply?.data);
+      showNotice(report.text, report.tone);
       await refresh({ force: true });
     } catch (error) {
       showNotice(`清理失败：${error?.message || error}`, 'danger');
     } finally {
+      cleanLabel.textContent = CLEAN_LABEL;
       cleanBtn.disabled = false;
-      cleanBtn.textContent = CLEAN_LABEL;
     }
   });
   $('analytics-autorefresh').addEventListener('change', startAutoRefresh);

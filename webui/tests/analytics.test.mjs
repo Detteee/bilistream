@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
   missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
+  cleanNotice,
 } from '../src/js/analytics-format.js';
 import {
   createAnalyticsLoader, renderChunkError, CHUNK_ERROR_TITLE, CHUNK_ERROR_BODY, CHUNK_ERROR_BUTTON,
@@ -373,36 +374,67 @@ test('mock end_reason uses only the seven backend codes, each mapped (open → -
   assert.ok(body.data.items.some(s => s.failures > 0 && ['aborted', 'process_restart'].includes(s.end_reason)));
 });
 
-// ---------- clear history (W18) ----------
+// ---------- clear history (W18/W19) ----------
 
-test('W18: 清理历史 is destructive, confirmed, local-only, and re-reads everything', async () => {
+test('W18: 清理历史 carries the trash icon, is confirmed, and clears every node', async () => {
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
   assert.match(html, /<div class="analytics-maintenance">/);
-  assert.match(html, /历史只保存在本节点。清理后统计、场次和事件从零开始。/);
-  assert.match(html, /id="analytics-clean-btn"[^>]*class="[^"]*btn-danger[^"]*"[^>]*type="button">清理历史…<\/button>/);
+  assert.match(html, /清理会同步到集群内所有节点，从此刻起一起重新记录。/);
+  // The same trash glyph as the 裁剪 clear buttons in the status card.
+  assert.match(html, /id="analytics-clean-btn"[^>]*class="[^"]*btn-danger[^"]*"[^>]*>[\s\S]{0,140}<use href="#i-trash" \/>[\s\S]{0,80}<span id="analytics-clean-label">清理历史…<\/span>/);
+  assert.match(html, /id="yt-crop-clear-btn"[\s\S]{0,200}<use href="#i-trash" \/>/, 'the crop clear keeps the shared symbol');
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.analytics \.analytics-maintenance \{[^}]*border-top: 1px solid var\(--line-1\)/);
   const shared = await readFile(new URL('../src/shared.css', import.meta.url), 'utf8');
   assert.match(shared, /\.btn-danger\s*\{/, 'the button reuses the shared danger style');
+  assert.match(shared, /\.btn-icon \{[^}]*width: 17px/, 'the glyph is sized by the shared button icon');
+  assert.match(shared, /button \{[^}]*display: inline-flex[^}]*gap: var\(--sp-2\)/, 'icon and label share the base button gap');
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /const CLEAN_CONFIRM = '[^']*无法撤销[^']*';/);
+  assert.match(view, /const CLEAN_CONFIRM = '[^']*集群内所有节点[^']*无法撤销[^']*';/);
   assert.match(view, /if \(cleanBtn\.disabled \|\| !confirm\(CLEAN_CONFIRM\)\) return;/);
   assert.match(view, /await deps\.postJson\('\/api\/history\/clean', \{\}\)/);
   assert.match(view, /await refresh\(\{ force: true \}\)/);
+  assert.match(view, /const cleanLabel = \$\('analytics-clean-label'\)/);
+  assert.match(view, /cleanLabel\.textContent = CLEAN_RUNNING;/);
+  assert.match(view, /cleanLabel\.textContent = CLEAN_LABEL;/, 'the label is restored after a failure too');
+  assert.doesNotMatch(view, /cleanBtn\.textContent/, 'rewriting the button would drop the trash icon');
+  assert.match(view, /const report = cleanNotice\(reply\?\.data\);/);
+  assert.match(view, /showNotice\(report\.text, report\.tone\)/);
   assert.match(view, /showNotice\(`清理失败：\$\{error\?\.message \|\| error\}`, 'danger'\)/);
-  assert.match(view, /cleanBtn\.textContent = CLEAN_LABEL;/, 'the label is restored after a failure too');
   // The chunk gets its own modules through deps, so main.js must hand postJson over.
   const main = await readFile(new URL('../src/js/main.js', import.meta.url), 'utf8');
   assert.match(main, /import \{[^}]*postJson[^}]*\} from '\.\/api\.js';/);
   assert.match(main, /deps: \{[^}]*postJson[^}]*\}/, 'postJson reaches the chunk deps');
 });
 
-test('W18 mock: POST /api/history/clean answers with the deleted row count', () => {
+test('W18 mock: POST /api/history/clean reports every node that cleared', () => {
   const ok = data => ({ success: true, data });
   const [status, body] = historyRoute('/api/history/clean', new URLSearchParams(), 'populated', ok, NOW);
   assert.equal(status, 200);
   assert.ok(body.data.rows > 0, 'a populated archive reports rows');
+  assert.deepEqual(body.data.nodes.map(n => n.node_id), ['local', 'tokyo-1'], 'each cleared node is named');
+  assert.equal(body.data.failed.length, 0);
   assert.equal(body.data.clamped_to_days, undefined, 'maintenance is not range-decorated');
+  const [, partial] = historyRoute('/api/history/clean', new URLSearchParams(), 'partial', ok, NOW);
+  assert.equal(partial.data.failed[0].node_id, 'sg-3', 'a node that kept its rows is named');
   const [, empty] = historyRoute('/api/history/clean', new URLSearchParams(), 'empty', ok, NOW);
   assert.equal(empty.data.rows, 0, 'clearing an empty archive is a no-op, not an error');
+});
+
+test('W19: cleanNotice names the nodes that kept their rows', () => {
+  const all = cleanNotice({ rows: 1280, nodes: [{ node_id: 'local', rows: 1000 }, { node_id: 'tokyo-1', rows: 280 }], failed: [] });
+  assert.equal(all.tone, '');
+  assert.match(all.text, /已清理 1280 行历史（2 台节点）/);
+  assert.match(all.text, /从此刻起一起重新记录/);
+  const partial = cleanNotice({ rows: 1000, nodes: [{ node_id: 'local', rows: 1000 }], failed: [{ node_id: 'sg-3', reason: '未响应' }] });
+  assert.equal(partial.tone, 'danger');
+  assert.match(partial.text, /sg-3 未响应/);
+  assert.match(partial.text, /仍保留旧记录/);
+  // A node that never answered has no reason of its own: still named, never hidden.
+  assert.match(cleanNotice({ rows: 0, nodes: [], failed: [{ node_id: 'sg-3' }] }).text, /sg-3 未清理/);
+  // An older backend answers only `rows`: the report still reads correctly.
+  const legacy = cleanNotice({ rows: 12 });
+  assert.equal(legacy.tone, '');
+  assert.match(legacy.text, /1 台节点/);
+  assert.equal(cleanNotice(null).tone, '');
 });

@@ -133,6 +133,7 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
             "/cluster/v1/history",
             post(api::history::peer_history).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
         )
+        .route("/cluster/v1/history/clean", post(api::history::peer_clean))
         .route("/cluster/membership", get(api::get_membership))
         .route("/cluster/create", post(api::create_cluster))
         .route("/cluster/prepare-join", post(api::prepare_join))

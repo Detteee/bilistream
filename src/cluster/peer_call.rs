@@ -51,6 +51,11 @@ pub(crate) mod routes {
     /// the peer's own mergeable parts out. Read-only.
     pub(crate) const HISTORY: RoutePolicy =
         route("POST", "/api/cluster/v1/history", 16 * 1024, 1024 * 1024);
+    /// 清理历史 across the cluster (analytics §11): a member asks this node
+    /// to delete its own recorded rows. Members only, and a node that receives
+    /// it never fans out again, so one click deletes each archive once.
+    pub(crate) const HISTORY_CLEAN: RoutePolicy =
+        route("POST", "/api/cluster/v1/history/clean", 1024, 4096);
     pub(crate) const APPLY_NODE_MODE: RoutePolicy = route(
         "POST",
         "/api/cluster/apply-node-mode",
@@ -191,6 +196,7 @@ const TABLE: &[(RoutePolicy, RouteClass)] = &[
     (routes::EXPORT_CONFIG, RouteClass::PeerOnly),
     (routes::YT_INDEX, RouteClass::PeerOnly),
     (routes::HISTORY, RouteClass::PeerOnly),
+    (routes::HISTORY_CLEAN, RouteClass::PeerOnly),
     (routes::APPLY_NODE_MODE, RouteClass::PeerOnly),
     (routes::SYNC_CONFIG, RouteClass::PeerOnly),
     (routes::CACHE_MONITOR_STATE, RouteClass::PeerOnly),

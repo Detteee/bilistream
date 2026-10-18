@@ -810,16 +810,120 @@ pub async fn stats(
     handle("stats", params, headers).await
 }
 
-/// Destructive maintenance: deletes this node's recorded rows so a fresh
-/// range starts empty. The writer thread owns the only RW connection, so the
-/// request is queued there; a relay in progress answers 409 instead.
+/// The writer thread's budget for one clear. The peer route uses the same
+/// number, so a member always answers inside its own deadline.
+const CLEAN_TIMEOUT: Duration = Duration::from_secs(30);
+/// The coordinator waits longer than a peer's own budget, so a member that
+/// answers "清理超时" is reported with that reason instead of looking like a
+/// member that never replied.
+const CLEAN_PEER_TIMEOUT: Duration = Duration::from_secs(35);
+
+/// A member's answer to `HISTORY_CLEAN`.
+#[derive(Deserialize)]
+struct PeerCleanReply {
+    rows: u64,
+}
+
+/// Destructive maintenance (design §11): deletes this node's recorded rows and
+/// asks every member to do the same, so the cluster restarts from one moment
+/// together. Each archive is cleared by its own writer thread — the only RW
+/// connection — and a node that is relaying refuses, so the local refusal
+/// leaves every peer untouched. A peer that is relaying, unreachable or too
+/// old is named in `failed`; clicking again converges, because clearing an
+/// already empty archive is a no-op.
 pub async fn clean() -> Response {
-    match crate::history::clear(Duration::from_secs(30)).await {
-        Ok(rows) => {
-            crate::webui::events::publish(crate::webui::events::HISTORY);
-            ok(json!({ "rows": rows }))
+    let cfg = match crate::config::load_config().await {
+        Ok(cfg) => cfg,
+        Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "读取配置失败"),
+    };
+    let local = match crate::history::clear(CLEAN_TIMEOUT).await {
+        Ok(rows) => rows,
+        Err(message) => return fail(StatusCode::CONFLICT, &message),
+    };
+    let me = local_node(&cfg);
+    let targets: Vec<String> = if cfg.cluster.enabled {
+        cfg.cluster
+            .peers
+            .iter()
+            .map(|peer| peer.node_id.clone())
+            .filter(|id| *id != me)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let answers =
+        futures_util::future::join_all(targets.iter().map(|node| clean_peer(&cfg, node))).await;
+    let remote: Vec<(String, Result<u64, String>)> = targets.into_iter().zip(answers).collect();
+    crate::webui::events::publish(crate::webui::events::HISTORY);
+    ok(clean_report(&me, local, remote))
+}
+
+/// The report the button shows: the total, every node that cleared, and every
+/// node that kept its rows with the reason to show. The local node is always
+/// the first entry, so a one-node install reads the same way.
+pub(crate) fn clean_report(
+    me: &str,
+    local: u64,
+    remote: Vec<(String, Result<u64, String>)>,
+) -> Value {
+    let mut rows = local;
+    let mut nodes = vec![json!({ "node_id": me, "rows": local })];
+    let mut failed = Vec::new();
+    for (node, result) in remote {
+        match result {
+            Ok(peer_rows) => {
+                rows += peer_rows;
+                nodes.push(json!({ "node_id": node, "rows": peer_rows }));
+            }
+            Err(reason) => failed.push(json!({ "node_id": node, "reason": reason })),
         }
-        Err(message) => fail(StatusCode::CONFLICT, &message),
+    }
+    json!({ "rows": rows, "nodes": nodes, "failed": failed })
+}
+
+/// Signed peer route: clear this node's own archive and nothing else, so one
+/// click deletes each archive once. A refusal answers `success:false` over
+/// HTTP 200 — the call was served — which lets the coordinator carry this
+/// node's own reason ("正在转播…", "统计未启用") back to the operator instead of
+/// a bare status code.
+pub async fn peer_clean() -> Response {
+    match crate::history::clear(CLEAN_TIMEOUT).await {
+        Ok(rows) => ok(json!({ "rows": rows })),
+        Err(message) => fail(StatusCode::OK, &message),
+    }
+}
+
+/// One member's clear as the coordinator sees it: its row count, or the reason
+/// to show the operator. Wording matches the dashboard's missing-node labels.
+async fn clean_peer(cfg: &Config, node: &str) -> Result<u64, String> {
+    let call = crate::cluster::peer_call::call::<(), PeerCleanReply>(
+        cfg,
+        node,
+        routes::HISTORY_CLEAN,
+        None,
+        CLEAN_PEER_TIMEOUT,
+    );
+    match tokio::time::timeout(CLEAN_PEER_TIMEOUT, call).await {
+        Err(_) => Err("未响应".into()),
+        Ok(Err(error)) => Err(clean_reason(&error)),
+        Ok(Ok(envelope)) if envelope.success => Ok(envelope.data.map_or(0, |data| data.rows)),
+        Ok(Ok(envelope)) => Err(envelope.message.unwrap_or_else(|| "节点拒绝清理".into())),
+    }
+}
+
+fn clean_reason(error: &PeerCallError) -> String {
+    match error {
+        PeerCallError::Unreachable(message)
+            if message.contains("超时") || message.to_lowercase().contains("timed out") =>
+        {
+            "未响应".into()
+        }
+        PeerCallError::Unreachable(_) => "无法连接".into(),
+        PeerCallError::Refused(message) if message == "HTTP 401" || message == "HTTP 403" => {
+            "节点认证失败".into()
+        }
+        PeerCallError::Refused(message) if message == "HTTP 404" => "节点版本过旧".into(),
+        PeerCallError::Refused(_) => "节点拒绝清理".into(),
     }
 }
 
@@ -1236,5 +1340,78 @@ mod tests {
         );
         drop(local);
         let _ = std::fs::remove_file(path);
+    }
+
+    /// 清理历史 W19: the peer clear is a signed members-only route of its own,
+    /// so a member can delete another member's archive but a read method or an
+    /// unsigned caller cannot.
+    #[test]
+    fn cluster_clean_route_is_members_only_and_post_only() {
+        use crate::cluster::peer_call::{peer_route, RouteClass};
+        assert!(matches!(
+            peer_route("POST", "/api/cluster/v1/history/clean"),
+            Some((_, RouteClass::PeerOnly))
+        ));
+        assert!(peer_route("GET", "/api/cluster/v1/history/clean").is_none());
+        assert!(peer_route("POST", "/api/cluster/v1/history/clean/").is_none());
+        // The read route is untouched: a clear never answers a read.
+        assert!(matches!(
+            peer_route("POST", "/api/cluster/v1/history"),
+            Some((_, RouteClass::PeerOnly))
+        ));
+    }
+
+    /// The report the button reads: the total, the local node first, and every
+    /// node that kept its rows with the reason to show.
+    #[test]
+    fn clean_report_sums_every_node_and_names_the_ones_that_kept_rows() {
+        let report = clean_report(
+            "local",
+            10,
+            vec![
+                ("tokyo-1".into(), Ok(5)),
+                (
+                    "sg-3".into(),
+                    Err("正在转播，请先停止转播再清理历史".into()),
+                ),
+            ],
+        );
+        assert_eq!(report["rows"], 15);
+        assert_eq!(
+            report["nodes"][0],
+            json!({ "node_id": "local", "rows": 10 })
+        );
+        assert_eq!(
+            report["nodes"][1],
+            json!({ "node_id": "tokyo-1", "rows": 5 })
+        );
+        assert_eq!(report["failed"][0]["node_id"], "sg-3");
+        assert_eq!(
+            report["failed"][0]["reason"],
+            "正在转播，请先停止转播再清理历史"
+        );
+        // A one-node install reports itself and nothing else.
+        let solo = clean_report("local", 0, Vec::new());
+        assert_eq!(solo["rows"], 0);
+        assert_eq!(solo["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(solo["failed"].as_array().unwrap().len(), 0);
+    }
+
+    /// Reasons use the same wording as the dashboard's missing-node labels.
+    #[test]
+    fn clean_reason_speaks_the_dashboard_wording() {
+        let cases = [
+            (PeerCallError::Unreachable("节点请求超时".into()), "未响应"),
+            (
+                PeerCallError::Unreachable("connection refused".into()),
+                "无法连接",
+            ),
+            (PeerCallError::Refused("HTTP 401".into()), "节点认证失败"),
+            (PeerCallError::Refused("HTTP 404".into()), "节点版本过旧"),
+            (PeerCallError::Refused("HTTP 500".into()), "节点拒绝清理"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(clean_reason(&error), expected);
+        }
     }
 }

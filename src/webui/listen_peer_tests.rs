@@ -7,6 +7,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
+/// 清理历史 W19: the path the coordinator signs is the path this server
+/// mounts. A typo in either would leave the peer clear unauthenticated, so the
+/// two spellings are pinned together here.
+#[test]
+fn the_cluster_clean_route_survives_the_api_mount() {
+    use crate::cluster::peer_call::{peer_route, RouteClass};
+    let mounted = routes::HISTORY_CLEAN
+        .path
+        .strip_prefix("/api")
+        .expect("peer routes carry the /api prefix");
+    assert_eq!(mounted, "/cluster/v1/history/clean");
+    assert!(matches!(
+        peer_route("POST", &logical_path(mounted)),
+        Some((_, RouteClass::PeerOnly))
+    ));
+}
+
 async fn installation() -> (std::path::PathBuf, Arc<AuthState>) {
     let root = std::env::temp_dir().join(format!(
         "bilistream-peer-admission-{}",
