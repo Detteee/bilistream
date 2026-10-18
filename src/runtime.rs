@@ -1466,6 +1466,25 @@ async fn require_a_configured_source(cfg: &bilistream::config::Config) -> bool {
     true
 }
 
+/// State that outlives one pass of [`run_bilistream`]'s outer loop.
+///
+/// These three used to be locals at the top of the loop body. Lifting them into a
+/// struct is what lets the loop's phases move out into functions without every
+/// one of them taking three `&mut` parameters.
+#[derive(Default)]
+struct PassState {
+    /// Set while the cluster refuses to let this node monitor. The reason is kept
+    /// so the operator sees the wait start once, not on every pass.
+    cluster_wait: Option<(std::time::Instant, String)>,
+    /// Survives passes so the same broadcast coming back after a miss does not
+    /// announce 直播结束 twice.
+    stream_end: StreamEndState,
+    /// The room's liveness as the previous pass observed it. The session 下播
+    /// notice is keyed to this edge: only an observed online-to-offline change
+    /// closes the broadcast, so a source gap never ends the room's session.
+    bili_room_was_live: bool,
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1480,14 +1499,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
     // Credential renewal is explicit and runs after the interface is available.
     bilistream::config::refresh_credentials().await?;
-    let mut cluster_wait: Option<(std::time::Instant, String)> = None;
-    // Survives outer-loop passes so the same broadcast coming back after a
-    // miss does not announce 直播结束 twice.
-    let mut stream_end = StreamEndState::default();
-    // The room's liveness as the previous pass observed it. The session 下播
-    // notice is keyed to this edge: only an observed online-to-offline change
-    // closes the broadcast, so a source gap never ends the room's session.
-    let mut bili_room_was_live = false;
+    let mut state = PassState::default();
 
     'outer: loop {
         // Log outer loop restart for debugging channel switch issues
@@ -1495,10 +1507,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
 
         let mut cfg = load_pass_config().await?;
 
-        if wait_out_cluster_block(&cfg, &mut cluster_wait).await {
+        if wait_out_cluster_block(&cfg, &mut state.cluster_wait).await {
             continue 'outer;
         }
-        if let Some((started, _)) = cluster_wait.take() {
+        if let Some((started, _)) = state.cluster_wait.take() {
             tracing::info!(
                 "集群监控条件已就绪，等待耗时 {:.2} 秒",
                 started.elapsed().as_secs_f64()
@@ -1658,10 +1670,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         // that comes back opens a new session. `LiveLedger::end` only closes
         // an open session and the first cause wins, so a stop this process
         // already announced (manual/warning/auto) keeps its own cause.
-        if bili_room_was_live && !bili_is_live {
+        if state.bili_room_was_live && !bili_is_live {
             bilistream::notify::live_ended(BroadcastEndCause::BiliStopped);
         }
-        bili_room_was_live = bili_is_live;
+        state.bili_room_was_live = bili_is_live;
         let bili_title = bili_live.title.clone();
         let bili_area_id = bili_live.area_id;
         let mut bili_status = bilistream::BiliStatus {
@@ -2135,7 +2147,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             });
             let source_client = selected_source_client(&selected_stream, &probes, &nico_live);
 
-            stream_end.start_session(
+            state.stream_end.start_session(
                 format!("{platform}:{channel_id}"),
                 current_video_id.as_deref(),
             );
@@ -2273,8 +2285,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 // The end of the stream is this refetch failing to find the
                 // source live: no new m3u8. Same signal as the page's 切换.
                 let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
-                stream_end.on_push_ended(push_moving.moving);
-                let step = stream_end.on_refetch(
+                state.stream_end.on_push_ended(push_moving.moving);
+                let step = state.stream_end.on_refetch(
                     refetch_source(&source_client).await,
                     current_end_signals(session_generation, node_active),
                     std::time::Instant::now(),
@@ -2545,7 +2557,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             ffmpeg_loop_exit_reason,
                             current_end_signals(session_generation, node_active),
                         );
-                        let ended = stream_end.mark_ended(signals);
+                        let ended = state.stream_end.mark_ended(signals);
                         end_announce = ended.unwrap_or(false);
                     }
                     if bili_live {
@@ -2558,8 +2570,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     // lost the active role since the miss does neither.
                     let node_active =
                         !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
-                    let gate =
-                        stream_end.commands_gate(cfg.bililive.enable_danmaku_command, node_active);
+                    let gate = state
+                        .stream_end
+                        .commands_gate(cfg.bililive.enable_danmaku_command, node_active);
                     if gate {
                         enable_danmaku_commands(true);
                     }
