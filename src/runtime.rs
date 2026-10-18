@@ -2022,6 +2022,62 @@ async fn collect_end_signals(
     (signals, count_failure)
 }
 
+/// What one end-recheck outcome means for the pass that is pushing.
+struct RefetchOutcome {
+    current_is_live: bool,
+    new_m3u8_url: Option<String>,
+    /// Whether the 直播结束 notice still needs to go out for this broadcast.
+    end_announce: bool,
+    source_ended: bool,
+    new_broadcast: bool,
+    end_check_cancel: Option<EndRecheckCancel>,
+}
+
+/// Interpret one end-recheck step: log what happened, and say whether the pass
+/// keeps pushing, whether the source ended, and whether the whole broadcast is
+/// over.
+///
+/// The source ending is not the room ending: the room stays live for the 换台
+/// window, and the session's 下播 goes out when the room itself goes offline.
+fn interpret_refetch_step(step: RefetchStep, stream_log: &FfmpegStreamIdentity) -> RefetchOutcome {
+    let mut outcome = RefetchOutcome {
+        current_is_live: true,
+        new_m3u8_url: None,
+        end_announce: false,
+        source_ended: false,
+        new_broadcast: false,
+        end_check_cancel: None,
+    };
+    match step {
+        RefetchStep::Restart { m3u8_url } => outcome.new_m3u8_url = m3u8_url,
+        RefetchStep::Retry => {
+            tracing::warn!("{stream_log} 源状态请求失败，按网络错误重试推流");
+        }
+        RefetchStep::Ended {
+            announce,
+            timed_out,
+        } => {
+            if timed_out {
+                tracing::warn!(
+                    "{stream_log} 源状态请求连续失败{}秒且无在线回应，按直播结束处理",
+                    STREAM_END_ERROR_WINDOW.as_secs()
+                );
+            } else {
+                tracing::info!("{stream_log} 源播放列表刷新未找到直播，源直播已结束");
+            }
+            outcome.current_is_live = false;
+            outcome.end_announce = announce;
+            outcome.source_ended = true;
+        }
+        RefetchStep::NewBroadcast => outcome.new_broadcast = true,
+        RefetchStep::Cancelled(cancel) => {
+            outcome.current_is_live = false;
+            outcome.end_check_cancel = Some(cancel);
+        }
+    }
+    outcome
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2463,43 +2519,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     current_end_signals(session_generation, node_active),
                     std::time::Instant::now(),
                 );
-                let mut end_check_cancel = None;
-                let mut new_broadcast = false;
-                let mut source_ended = false;
-                let (current_is_live, new_m3u8_url) = match step {
-                    RefetchStep::Restart { m3u8_url } => (true, m3u8_url),
-                    RefetchStep::Retry => {
-                        tracing::warn!("{stream_log} 源状态请求失败，按网络错误重试推流");
-                        (true, None)
-                    }
-                    RefetchStep::Ended {
-                        announce,
-                        timed_out,
-                    } => {
-                        if timed_out {
-                            tracing::warn!(
-                                "{stream_log} 源状态请求连续失败{}秒且无在线回应，按直播结束处理",
-                                STREAM_END_ERROR_WINDOW.as_secs()
-                            );
-                        } else {
-                            tracing::info!("{stream_log} 源播放列表刷新未找到直播，源直播已结束");
-                        }
-                        end_announce = announce;
-                        source_ended = true;
-                        // The source ending is not the room ending: the room
-                        // stays live for the 换台 window, and the session's
-                        // 下播 is sent when the room itself goes offline.
-                        (false, None)
-                    }
-                    RefetchStep::NewBroadcast => {
-                        new_broadcast = true;
-                        (true, None)
-                    }
-                    RefetchStep::Cancelled(cancel) => {
-                        end_check_cancel = Some(cancel);
-                        (false, None)
-                    }
-                };
+                let outcome = interpret_refetch_step(step, &stream_log);
+                // `end_announce` is declared outside the loop and read after it,
+                // so it must be assigned rather than shadowed.
+                end_announce = outcome.end_announce;
+                let RefetchOutcome {
+                    current_is_live,
+                    new_m3u8_url,
+                    source_ended,
+                    new_broadcast,
+                    end_check_cancel,
+                    ..
+                } = outcome;
                 let (
                     PushEndSignals {
                         bili_is_live,
