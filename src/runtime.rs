@@ -2078,6 +2078,35 @@ fn interpret_refetch_step(step: RefetchStep, stream_log: &FfmpegStreamIdentity) 
     outcome
 }
 
+/// Clear every platform's crop setting once a stream ends, so the next stream
+/// starts uncropped, and persist the change if anything was cleared.
+///
+/// The caller decides *whether* to do this: a manual restart keeps the crop so it
+/// still applies to the restarted stream.
+async fn clear_crop_settings(cfg: &mut bilistream::config::Config) {
+    let mut config_changed = false;
+    if cfg.youtube.crop.is_some() {
+        tracing::info!("清除YouTube裁剪设置");
+        cfg.youtube.crop = None;
+        config_changed = true;
+    }
+    if cfg.twitch.crop.is_some() {
+        tracing::info!("清除Twitch裁剪设置");
+        cfg.twitch.crop = None;
+        config_changed = true;
+    }
+    if cfg.niconico.crop.is_some() {
+        tracing::info!("清除Niconico裁剪设置");
+        cfg.niconico.crop = None;
+        config_changed = true;
+    }
+    if config_changed {
+        if let Err(e) = save_config(cfg).await {
+            tracing::error!("保存配置失败: {}", e);
+        }
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2646,34 +2675,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 clear_manual_stop();
             }
 
-            // Clear crop settings for both platforms when stream ends
-            // Don't clear on manual restart - let it apply for the restarted stream
+            // Don't clear on a manual restart - let the crop apply to the
+            // restarted stream.
             if !exit_keeps_crop(ffmpeg_loop_exit_reason) {
-                let mut config_changed = false;
-
-                if cfg.youtube.crop.is_some() {
-                    tracing::info!("清除YouTube裁剪设置");
-                    cfg.youtube.crop = None;
-                    config_changed = true;
-                }
-
-                if cfg.twitch.crop.is_some() {
-                    tracing::info!("清除Twitch裁剪设置");
-                    cfg.twitch.crop = None;
-                    config_changed = true;
-                }
-
-                if cfg.niconico.crop.is_some() {
-                    tracing::info!("清除Niconico裁剪设置");
-                    cfg.niconico.crop = None;
-                    config_changed = true;
-                }
-
-                if config_changed {
-                    if let Err(e) = save_config(&mut cfg).await {
-                        tracing::error!("保存配置失败: {}", e);
-                    }
-                }
+                clear_crop_settings(&mut cfg).await;
             }
 
             // Stop priority monitoring when ffmpeg loop ends
