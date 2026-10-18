@@ -1978,6 +1978,50 @@ async fn attach_push_monitors(
     .await;
 }
 
+/// What the pass knew when the push ended. Distinct from [`EndSignals`], which is
+/// the end-recheck input; field names match the locals the loop used before, so
+/// the restart logic below reads unchanged.
+struct PushEndSignals {
+    bili_is_live: bool,
+    manual_restart_requested: bool,
+    manual_stop_requested: bool,
+    config_updated_now: bool,
+    warning_skip_now: bool,
+}
+
+/// Gather the signals that decide whether an FFmpeg exit counts as a failure, and
+/// record that decision with the cluster. A failed Bilibili status read counts as
+/// "still live" so a network blip cannot turn a real stream end into an error.
+async fn collect_end_signals(
+    cfg: &bilistream::config::Config,
+    channel_name: &str,
+    current_is_live: bool,
+    ffmpeg_exit_failed: bool,
+) -> (PushEndSignals, bool) {
+    let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
+        .await
+        .map(|status| status.is_live)
+        .unwrap_or(true);
+    let signals = PushEndSignals {
+        bili_is_live,
+        manual_restart_requested: was_manual_restart(),
+        manual_stop_requested: was_manual_stop(),
+        config_updated_now: is_config_updated(),
+        warning_skip_now: should_skip_due_to_warning(channel_name),
+    };
+    let count_failure = ffmpeg_exit_should_count_as_failure(
+        ffmpeg_exit_failed,
+        current_is_live,
+        signals.bili_is_live,
+        signals.manual_restart_requested,
+        signals.manual_stop_requested,
+        signals.config_updated_now,
+        signals.warning_skip_now,
+    );
+    cluster::record_stream_exit(!count_failure);
+    (signals, count_failure)
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2456,25 +2500,16 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         (false, None)
                     }
                 };
-                // On error, assume still live and retry next iteration.
-                let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
-                    .await
-                    .map(|status| status.is_live)
-                    .unwrap_or(true);
-                let manual_restart_requested = was_manual_restart();
-                let manual_stop_requested = was_manual_stop();
-                let config_updated_now = is_config_updated();
-                let warning_skip_now = should_skip_due_to_warning(&channel_name);
-                let count_ffmpeg_exit_failure = ffmpeg_exit_should_count_as_failure(
-                    ffmpeg_exit_failed,
-                    current_is_live,
-                    bili_is_live,
-                    manual_restart_requested,
-                    manual_stop_requested,
-                    config_updated_now,
-                    warning_skip_now,
-                );
-                cluster::record_stream_exit(!count_ffmpeg_exit_failure);
+                let (
+                    PushEndSignals {
+                        bili_is_live,
+                        manual_restart_requested,
+                        config_updated_now,
+                        ..
+                    },
+                    count_ffmpeg_exit_failure,
+                ) = collect_end_signals(&cfg, &channel_name, current_is_live, ffmpeg_exit_failed)
+                    .await;
                 if let (Some(guard), Some(run)) = (&history_session, session) {
                     guard.run_exited_with_diagnostic_at(
                         ffmpeg_exit_at,
