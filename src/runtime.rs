@@ -1519,6 +1519,202 @@ fn config_changed_since_pass(cfg: &bilistream::config::Config) -> bool {
     is_config_updated() || !bilistream::config::config_is_current(cfg)
 }
 
+/// This pass's probe answers, still unfiltered.
+///
+/// The WebUI status cache and the `StreamCandidate` build both read the same
+/// six-field answers. Exploding them into twenty locals forced the cache
+/// literal to reconstruct the structs it had just taken apart.
+struct PassSources {
+    youtube: SourceStatus,
+    twitch: SourceStatus,
+    niconico: SourceStatus,
+    nico_channel_id: String,
+    nico_channel_name: String,
+    priority_youtube: SourceStatus,
+    priority_twitch: SourceStatus,
+}
+
+/// The five slots the warning/keyword filter walks, before the priority overlay.
+struct RawCandidates {
+    youtube: StreamCandidate,
+    twitch: StreamCandidate,
+    niconico: StreamCandidate,
+    priority_youtube: StreamCandidate,
+    priority_twitch: StreamCandidate,
+}
+
+/// Publish this pass's probe answers to the admin status cache.
+///
+/// The field mapping and the "configured?" gates are the original literal,
+/// moved out of `run_bilistream` so the loop can keep reading top-down.
+fn publish_webui_status(
+    cfg: &bilistream::config::Config,
+    bili_status: bilistream::BiliStatus,
+    sources: &PassSources,
+) {
+    bilistream::update_status_cache(bilistream::StatusData {
+        bilibili: bili_status,
+        youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
+            let yt_area_name = get_area_name(cfg.youtube.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+            Some(bilistream::YtStatus {
+                is_live: sources.youtube.is_live,
+                enable_monitor: cfg.youtube.enable_monitor,
+                title: sources.youtube.title.clone(),
+                topic: sources.youtube.topic.clone(),
+                channel_name: cfg.youtube.channel_name.clone(),
+                channel_id: cfg.youtube.channel_id.clone(),
+                quality: cfg.youtube.quality.clone(),
+                area_id: cfg.youtube.area_v2,
+                area_name: yt_area_name,
+                crop_enabled: cfg.youtube.crop.is_some(),
+                ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
+                ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
+            })
+        } else {
+            None
+        },
+        twitch: if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
+            let tw_area_name = get_area_name(cfg.twitch.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+            Some(bilistream::TwStatus {
+                is_live: sources.twitch.is_live,
+                enable_monitor: cfg.twitch.enable_monitor,
+                title: sources.twitch.title.clone(),
+                game: sources.twitch.topic.clone(),
+                channel_name: cfg.twitch.channel_name.clone(),
+                channel_id: cfg.twitch.channel_id.clone(),
+                quality: cfg.twitch.quality.clone(),
+                area_id: cfg.twitch.area_v2,
+                area_name: tw_area_name,
+                crop_enabled: cfg.twitch.crop.is_some(),
+                ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
+                ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
+            })
+        } else {
+            None
+        },
+        niconico: if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
+            let nico_area_name = get_area_name(cfg.niconico.area_v2)
+                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+            Some(bilistream::NicoStatus {
+                is_live: sources.niconico.is_live,
+                enable_monitor: cfg.niconico.enable_monitor,
+                title: sources.niconico.title.clone(),
+                channel_name: sources.nico_channel_name.clone(),
+                channel_id: sources.nico_channel_id.clone(),
+                live_id: sources.niconico.video_id.clone(),
+                scheduled_start: sources
+                    .niconico
+                    .start_time
+                    .as_ref()
+                    .map(|start| start.to_rfc3339()),
+                quality: cfg.niconico.quality.clone(),
+                area_id: cfg.niconico.area_v2,
+                area_name: nico_area_name,
+                crop_enabled: cfg.niconico.crop.is_some(),
+                ffmpeg_cache_enabled: cfg.niconico.ffmpeg_cache.enabled,
+                ffmpeg_cache_latency_secs: cfg.niconico.ffmpeg_cache.latency_secs,
+            })
+        } else {
+            None
+        },
+        priority_channel: if cfg.priority_channel.enabled {
+            let (is_live, platform, title) = if sources.priority_youtube.is_live {
+                (
+                    true,
+                    Some("youtube".to_string()),
+                    sources.priority_youtube.title.clone(),
+                )
+            } else if sources.priority_twitch.is_live {
+                (
+                    true,
+                    Some("twitch".to_string()),
+                    sources.priority_twitch.title.clone(),
+                )
+            } else {
+                (false, None, None)
+            };
+            Some(bilistream::PriorityChannelStatus {
+                enabled: cfg.priority_channel.enabled,
+                auto_restart: cfg.priority_channel.auto_restart,
+                warning_held: bilistream::plugins::danmaku::priority_warning_held(cfg),
+                channel_name: cfg.priority_channel.channel_name.clone(),
+                is_live,
+                platform,
+                title,
+                default_area: cfg.priority_channel.default_area,
+                default_area_name: crate::plugins::get_area_name(cfg.priority_channel.default_area),
+            })
+        } else {
+            None
+        },
+    });
+}
+
+/// Turn this pass's probe answers into the five slots the filter loop walks.
+///
+/// Niconico is not `from_status`: it has no m3u8, and a live answer with an
+/// id becomes a streamlink pipe. `start_time` is ignored here (the idle
+/// preview already copied it off `PassSources.youtube`).
+fn stream_candidates(cfg: &bilistream::config::Config, sources: PassSources) -> RawCandidates {
+    RawCandidates {
+        youtube: StreamCandidate::from_status(
+            StreamPlatform::Youtube,
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            cfg.youtube.area_v2,
+            sources.youtube,
+        ),
+        twitch: StreamCandidate::from_status(
+            StreamPlatform::Twitch,
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+            cfg.twitch.area_v2,
+            sources.twitch,
+        ),
+        niconico: StreamCandidate {
+            platform: StreamPlatform::Niconico,
+            is_live: sources.niconico.is_live,
+            topic: None,
+            title: sources.niconico.title,
+            m3u8_url: None,
+            piped_ingest: if sources.niconico.is_live {
+                sources
+                    .niconico
+                    .video_id
+                    .as_deref()
+                    .and_then(|live_id| streamlink_ingest(&cfg.niconico, live_id).ok())
+            } else {
+                None
+            },
+            stream_id: sources.niconico.video_id,
+            channel_name: sources.nico_channel_name,
+            channel_id: if sources.nico_channel_id.is_empty() {
+                cfg.niconico.live_id.clone()
+            } else {
+                sources.nico_channel_id
+            },
+            area_v2: cfg.niconico.area_v2,
+            is_priority: false,
+        },
+        priority_youtube: StreamCandidate::from_status(
+            StreamPlatform::Youtube,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+            priority_area(StreamPlatform::Youtube, cfg),
+            sources.priority_youtube,
+        ),
+        priority_twitch: StreamCandidate::from_status(
+            StreamPlatform::Twitch,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.twitch_channel_id,
+            priority_area(StreamPlatform::Twitch, cfg),
+            sources.priority_twitch,
+        ),
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1576,45 +1772,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             clear_config_updated();
             continue 'outer;
         };
-        let SourceStatus {
-            is_live: yt_is_live,
-            topic: yt_area,
-            title: yt_title,
-            m3u8_url: yt_m3u8_url,
-            start_time: mut scheduled_start,
-            video_id: yt_video_id,
-        } = probed_status(&probes, probe_plan.youtube);
-        if scheduled_start
+        let mut youtube = probed_status(&probes, probe_plan.youtube);
+        if youtube
+            .start_time
             .as_ref()
             .is_some_and(|start| start > &(Local::now() + Duration::from_secs(2 * 24 * 60 * 60)))
         {
-            scheduled_start = None;
+            youtube.start_time = None;
         }
-        let SourceStatus {
-            is_live: priority_yt_is_live,
-            topic: priority_yt_area,
-            title: priority_yt_title,
-            m3u8_url: priority_yt_m3u8_url,
-            video_id: priority_yt_video_id,
-            ..
-        } = probed_status(&probes, probe_plan.priority_youtube);
-        let SourceStatus {
-            is_live: tw_is_live,
-            topic: tw_area,
-            title: tw_title,
-            m3u8_url: tw_m3u8_url,
-            video_id: tw_stream_id,
-            ..
-        } = probed_status(&probes, probe_plan.twitch);
-        let SourceStatus {
-            is_live: priority_tw_is_live,
-            topic: priority_tw_area,
-            title: priority_tw_title,
-            m3u8_url: priority_tw_m3u8_url,
-            video_id: priority_tw_stream_id,
-            ..
-        } = probed_status(&probes, probe_plan.priority_twitch);
-
+        let priority_youtube = probed_status(&probes, probe_plan.priority_youtube);
+        let twitch = probed_status(&probes, probe_plan.twitch);
+        let priority_twitch = probed_status(&probes, probe_plan.priority_twitch);
         let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
             Some(NiconicoClient::new(&cfg.niconico))
         } else {
@@ -1625,13 +1793,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             None
         };
-        let SourceStatus {
-            is_live: nico_is_live,
-            title: nico_title,
-            start_time: nico_scheduled_start,
-            video_id: nico_stream_id,
-            ..
-        } = nico_status
+        let niconico = nico_status
             .as_ref()
             .and_then(|status| status.as_ref().ok())
             .cloned()
@@ -1642,6 +1804,15 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
         let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
+        let sources = PassSources {
+            youtube,
+            twitch,
+            niconico,
+            nico_channel_id,
+            nico_channel_name,
+            priority_youtube,
+            priority_twitch,
+        };
         let mut observations = Vec::new();
         for (index, platform, name, id) in [
             (
@@ -1676,8 +1847,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         if let Some(Ok(status)) = &nico_status {
             observations.push(source_observation(
                 StreamPlatform::Niconico,
-                &nico_channel_name,
-                &nico_channel_id,
+                &sources.nico_channel_name,
+                &sources.nico_channel_id,
                 status,
             ));
         }
@@ -1702,189 +1873,21 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         };
         bili_status.apply_live_status(&bili_live);
 
-        // Update status cache for WebUI
-        bilistream::update_status_cache(bilistream::StatusData {
-            bilibili: bili_status,
-            youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
-                let yt_area_name = get_area_name(cfg.youtube.area_v2)
-                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
-                Some(bilistream::YtStatus {
-                    is_live: yt_is_live,
-                    enable_monitor: cfg.youtube.enable_monitor,
-                    title: yt_title.clone(),
-                    topic: yt_area.clone(),
-                    channel_name: cfg.youtube.channel_name.clone(),
-                    channel_id: cfg.youtube.channel_id.clone(),
-                    quality: cfg.youtube.quality.clone(),
-                    area_id: cfg.youtube.area_v2,
-                    area_name: yt_area_name,
-                    crop_enabled: cfg.youtube.crop.is_some(),
-                    ffmpeg_cache_enabled: cfg.youtube.ffmpeg_cache.enabled,
-                    ffmpeg_cache_latency_secs: cfg.youtube.ffmpeg_cache.latency_secs,
-                })
-            } else {
-                None
-            },
-            twitch: if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-                let tw_area_name = get_area_name(cfg.twitch.area_v2)
-                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
-                Some(bilistream::TwStatus {
-                    is_live: tw_is_live,
-                    enable_monitor: cfg.twitch.enable_monitor,
-                    title: tw_title.clone(),
-                    game: tw_area.clone(),
-                    channel_name: cfg.twitch.channel_name.clone(),
-                    channel_id: cfg.twitch.channel_id.clone(),
-                    quality: cfg.twitch.quality.clone(),
-                    area_id: cfg.twitch.area_v2,
-                    area_name: tw_area_name,
-                    crop_enabled: cfg.twitch.crop.is_some(),
-                    ffmpeg_cache_enabled: cfg.twitch.ffmpeg_cache.enabled,
-                    ffmpeg_cache_latency_secs: cfg.twitch.ffmpeg_cache.latency_secs,
-                })
-            } else {
-                None
-            },
-            niconico: if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
-                let nico_area_name = get_area_name(cfg.niconico.area_v2)
-                    .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
-                Some(bilistream::NicoStatus {
-                    is_live: nico_is_live,
-                    enable_monitor: cfg.niconico.enable_monitor,
-                    title: nico_title.clone(),
-                    channel_name: nico_channel_name.clone(),
-                    channel_id: nico_channel_id.clone(),
-                    live_id: nico_stream_id.clone(),
-                    scheduled_start: nico_scheduled_start
-                        .as_ref()
-                        .map(|start| start.to_rfc3339()),
-                    quality: cfg.niconico.quality.clone(),
-                    area_id: cfg.niconico.area_v2,
-                    area_name: nico_area_name,
-                    crop_enabled: cfg.niconico.crop.is_some(),
-                    ffmpeg_cache_enabled: cfg.niconico.ffmpeg_cache.enabled,
-                    ffmpeg_cache_latency_secs: cfg.niconico.ffmpeg_cache.latency_secs,
-                })
-            } else {
-                None
-            },
-            priority_channel: if cfg.priority_channel.enabled {
-                let (is_live, platform, title) = if priority_yt_is_live {
-                    (true, Some("youtube".to_string()), priority_yt_title.clone())
-                } else if priority_tw_is_live {
-                    (true, Some("twitch".to_string()), priority_tw_title.clone())
-                } else {
-                    (false, None, None)
-                };
-                Some(bilistream::PriorityChannelStatus {
-                    enabled: cfg.priority_channel.enabled,
-                    auto_restart: cfg.priority_channel.auto_restart,
-                    warning_held: bilistream::plugins::danmaku::priority_warning_held(&cfg),
-                    channel_name: cfg.priority_channel.channel_name.clone(),
-                    is_live,
-                    platform,
-                    title,
-                    default_area: cfg.priority_channel.default_area,
-                    default_area_name: crate::plugins::get_area_name(
-                        cfg.priority_channel.default_area,
-                    ),
-                })
-            } else {
-                None
-            },
-        });
+        publish_webui_status(&cfg, bili_status, &sources);
+        let scheduled_start = sources.youtube.start_time;
 
         let streaming_banned_keywords =
             bilistream::plugins::banned_keywords::streaming_banned_keywords();
-        let mut yt_stream = StreamCandidate::from_status(
-            StreamPlatform::Youtube,
-            &cfg.youtube.channel_name,
-            &cfg.youtube.channel_id,
-            cfg.youtube.area_v2,
-            SourceStatus {
-                is_live: yt_is_live,
-                topic: yt_area,
-                title: yt_title,
-                m3u8_url: yt_m3u8_url,
-                start_time: None,
-                video_id: yt_video_id,
-            },
-        );
-        let mut tw_stream = StreamCandidate::from_status(
-            StreamPlatform::Twitch,
-            &cfg.twitch.channel_name,
-            &cfg.twitch.channel_id,
-            cfg.twitch.area_v2,
-            SourceStatus {
-                is_live: tw_is_live,
-                topic: tw_area,
-                title: tw_title,
-                m3u8_url: tw_m3u8_url,
-                start_time: None,
-                video_id: tw_stream_id,
-            },
-        );
-        let mut priority_yt_stream = StreamCandidate::from_status(
-            StreamPlatform::Youtube,
-            &cfg.priority_channel.channel_name,
-            &cfg.priority_channel.youtube_channel_id,
-            priority_area(StreamPlatform::Youtube, &cfg),
-            SourceStatus {
-                is_live: priority_yt_is_live,
-                topic: priority_yt_area,
-                title: priority_yt_title,
-                m3u8_url: priority_yt_m3u8_url,
-                start_time: None,
-                video_id: priority_yt_video_id,
-            },
-        );
-        let mut priority_tw_stream = StreamCandidate::from_status(
-            StreamPlatform::Twitch,
-            &cfg.priority_channel.channel_name,
-            &cfg.priority_channel.twitch_channel_id,
-            priority_area(StreamPlatform::Twitch, &cfg),
-            SourceStatus {
-                is_live: priority_tw_is_live,
-                topic: priority_tw_area,
-                title: priority_tw_title,
-                m3u8_url: priority_tw_m3u8_url,
-                start_time: None,
-                video_id: priority_tw_stream_id,
-            },
-        );
-
-        let mut nico_stream = StreamCandidate {
-            platform: StreamPlatform::Niconico,
-            is_live: nico_is_live,
-            topic: None,
-            title: nico_title,
-            m3u8_url: None,
-            piped_ingest: if nico_is_live {
-                nico_stream_id
-                    .as_deref()
-                    .and_then(|live_id| streamlink_ingest(&cfg.niconico, live_id).ok())
-            } else {
-                None
-            },
-            stream_id: nico_stream_id,
-            channel_name: nico_channel_name,
-            channel_id: if nico_channel_id.is_empty() {
-                cfg.niconico.live_id.clone()
-            } else {
-                nico_channel_id
-            },
-            area_v2: cfg.niconico.area_v2,
-            is_priority: false,
-        };
+        let mut candidates = stream_candidates(&cfg, sources);
 
         // Observe first, then filter every slot before the priority overlay.
         // A shared ID has one provider result; the skip logger deduplicates it.
         for stream in [
-            &mut yt_stream,
-            &mut tw_stream,
-            &mut nico_stream,
-            &mut priority_yt_stream,
-            &mut priority_tw_stream,
+            &mut candidates.youtube,
+            &mut candidates.twitch,
+            &mut candidates.niconico,
+            &mut candidates.priority_youtube,
+            &mut candidates.priority_twitch,
         ] {
             let was_live = stream.is_live;
             skip_stream_if_previously_warned(stream, &cfg, &warnings).await;
@@ -1897,10 +1900,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             clear_config_updated();
             continue 'outer;
         }
-        let needs_refetch =
-            refetch_skipped_youtube(&yt_stream) | refetch_skipped_youtube(&priority_yt_stream);
-        let mut yt_stream = overlay_priority(yt_stream, priority_yt_stream);
-        let mut tw_stream = overlay_priority(tw_stream, priority_tw_stream);
+        let needs_refetch = refetch_skipped_youtube(&candidates.youtube)
+            | refetch_skipped_youtube(&candidates.priority_youtube);
+        let mut yt_stream = overlay_priority(candidates.youtube, candidates.priority_youtube);
+        let mut tw_stream = overlay_priority(candidates.twitch, candidates.priority_twitch);
+        let nico_stream = candidates.niconico;
         let priority_selected = select_stream(&yt_stream, &tw_stream, &nico_stream)
             .is_some_and(|stream| stream.is_priority);
         if cfg.enable_anti_collision && !priority_selected {
