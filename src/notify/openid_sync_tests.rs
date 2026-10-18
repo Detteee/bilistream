@@ -7,34 +7,14 @@ use super::*;
 use crate::notify::store::{
     accept_copy, export_copy, load_openid, write_openid, CopyState, OpenidChange, OpenidWrite,
 };
-use crate::notify::test_support::MemCluster;
+use crate::notify::test_support::{fast_policy, MemCluster, TestStore};
 use std::sync::Arc;
 
 const OPENID: &str = "E4F0A1B2C3D4E5F60718293A4B5C6D7E";
 const OTHER: &str = "0123456789ABCDEF0123456789ABCDEF";
 
-struct Temp(std::path::PathBuf, Arc<Store>);
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn temp() -> Temp {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).unwrap();
-    let root = std::env::temp_dir().join(format!(
-        "bilistream-openid-sync-{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ));
-    std::fs::create_dir_all(root.join("legacy")).unwrap();
-    let store = Store::open(
-        root.join("data"),
-        root.join("keys/master.key"),
-        Some(root.join("legacy")),
-    )
-    .unwrap();
-    Temp(root, store)
+fn temp() -> TestStore {
+    TestStore::new("openid-sync")
 }
 
 fn bind(store: &Store, writer: &str, openid: &str, expected: Option<u64>) -> u64 {
@@ -73,11 +53,7 @@ fn value(store: &Store) -> Option<String> {
         .map(|id| id.expose().to_string())
 }
 
-const FAST: RetryPolicy = RetryPolicy {
-    attempts: 5,
-    first_delay: Duration::from_millis(1),
-    max_delay: Duration::from_millis(4),
-};
+const FAST: RetryPolicy = fast_policy(5);
 
 #[test]
 fn a_non_owner_answers_409_naming_the_owner_and_writes_nothing() {

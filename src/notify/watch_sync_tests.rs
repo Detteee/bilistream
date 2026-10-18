@@ -3,43 +3,17 @@ use crate::notify::config::{WatchChannel, WatchConfig};
 use crate::notify::credentials::{self, CredentialsCopy, ForwardRefusal, SaveError};
 use crate::notify::openid_sync::{pull_all, push_all, RetryPolicy};
 use crate::notify::store::{self, accept_copy_as, save_settings, SecretChange};
-use crate::notify::test_support::MemCluster;
-use std::sync::Arc;
-use std::time::Duration;
+use crate::notify::test_support::{fast_policy, MemCluster, TestStore};
 
 const SECRET: &str = "SYNTHETICwatchSECRETmarker0001";
 const APPID: &str = "102030405";
 const APPID2: &str = "908070605";
 
-struct Temp(std::path::PathBuf, Arc<Store>);
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+fn temp() -> TestStore {
+    TestStore::new("watch-sync")
 }
 
-fn temp() -> Temp {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).unwrap();
-    let root = std::env::temp_dir().join(format!(
-        "bilistream-watch-sync-{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ));
-    std::fs::create_dir_all(root.join("legacy")).unwrap();
-    let store = Store::open(
-        root.join("data"),
-        root.join("keys/master.key"),
-        Some(root.join("legacy")),
-    )
-    .unwrap();
-    Temp(root, store)
-}
-
-const FAST: RetryPolicy = RetryPolicy {
-    attempts: 4,
-    first_delay: Duration::from_millis(1),
-    max_delay: Duration::from_millis(4),
-};
+const FAST: RetryPolicy = fast_policy(4);
 
 fn names(channels: &[WatchChannel]) -> Vec<String> {
     channels

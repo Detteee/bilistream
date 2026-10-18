@@ -377,3 +377,48 @@ impl PeerLink for MemLink {
         Ok(serde_json::from_slice(&serde_json::to_vec(&copy).unwrap()).unwrap())
     }
 }
+
+/// Isolated data root plus `Store` for the notify test modules.
+///
+/// `credentials_tests`, `openid_sync_tests` and `watch_sync_tests` each carried
+/// their own byte-identical copy of this type, its `Drop` and its constructor;
+/// only the temp-dir prefix differed. The fields stay positional (`.0` root,
+/// `.1` store) because the tests index them in hundreds of places — giving them
+/// names is a separate mechanical change with no behavioural value.
+pub struct TestStore(pub std::path::PathBuf, pub Arc<crate::storage::Store>);
+
+impl TestStore {
+    pub fn new(prefix: &str) -> Self {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "bilistream-{prefix}-{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        ));
+        std::fs::create_dir_all(root.join("legacy")).unwrap();
+        let store = crate::storage::Store::open(
+            root.join("data"),
+            root.join("keys/master.key"),
+            Some(root.join("legacy")),
+        )
+        .unwrap();
+        Self(root, store)
+    }
+}
+
+impl Drop for TestStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Fast retry policy for tests. `attempts` stays a parameter because the modules
+/// genuinely differ there (4 / 4 / 5); everything else in the three copies was
+/// identical and is now defined once.
+pub const fn fast_policy(attempts: u32) -> crate::notify::openid_sync::RetryPolicy {
+    crate::notify::openid_sync::RetryPolicy {
+        attempts,
+        first_delay: std::time::Duration::from_millis(1),
+        max_delay: std::time::Duration::from_millis(4),
+    }
+}

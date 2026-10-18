@@ -12,9 +12,8 @@ use crate::notify::store::{
     export_copy, load_config, load_openid, load_secret, save_settings, write_openid, OpenidChange,
     OpenidWrite, SecretChange,
 };
-use crate::notify::test_support::MemCluster;
+use crate::notify::test_support::{fast_policy, MemCluster, TestStore};
 use std::sync::Arc;
-use std::time::Duration;
 
 const APPID: &str = "102030405";
 const APPID2: &str = "908070605";
@@ -23,35 +22,11 @@ const SECRET2: &str = "SYNTHETICappSECRETmarker0002";
 const OPENID: &str = "E4F0A1B2C3D4E5F60718293A4B5C6D7E";
 const NOW: u64 = 1_791_702_240;
 
-struct Temp(std::path::PathBuf, Arc<Store>);
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+fn temp() -> TestStore {
+    TestStore::new("credentials")
 }
 
-fn temp() -> Temp {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).unwrap();
-    let root = std::env::temp_dir().join(format!(
-        "bilistream-credentials-{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ));
-    std::fs::create_dir_all(root.join("legacy")).unwrap();
-    let store = Store::open(
-        root.join("data"),
-        root.join("keys/master.key"),
-        Some(root.join("legacy")),
-    )
-    .unwrap();
-    Temp(root, store)
-}
-
-const FAST: RetryPolicy = RetryPolicy {
-    attempts: 4,
-    first_delay: Duration::from_millis(1),
-    max_delay: Duration::from_millis(4),
-};
+const FAST: RetryPolicy = fast_policy(4);
 
 fn configure(store: &Store, appid: &str, secret: &str) {
     let mut cfg = NotifyConfig::default();
@@ -83,7 +58,7 @@ fn bind(store: &Store, writer: &str) {
 }
 
 /// A holder with a seeded, bound set.
-fn holder(id: &str) -> Temp {
+fn holder(id: &str) -> TestStore {
     let t = temp();
     configure(&t.1, APPID, SECRET);
     assert!(seed_if_needed(&t.1, id, NOW, false).unwrap());
@@ -426,7 +401,7 @@ fn a_legacy_pull_gets_the_original_openid_shape_without_synced_credentials() {
     assert_eq!(modern.credentials.as_ref().unwrap().appsecret, SECRET);
 }
 
-fn binding_before_seed() -> Temp {
+fn binding_before_seed() -> TestStore {
     let source = temp();
     configure(&source.1, APPID, SECRET);
     bind(&source.1, "jp");
@@ -1517,7 +1492,7 @@ fn the_store_files_never_hold_the_appsecret_in_plain_text() {
     }
 }
 
-fn seeded(id: &str, appid_: &str, secret_: &str, at: u64, holder: bool) -> Temp {
+fn seeded(id: &str, appid_: &str, secret_: &str, at: u64, holder: bool) -> TestStore {
     let t = temp();
     configure(&t.1, appid_, secret_);
     assert!(seed_if_needed(&t.1, id, at, holder).unwrap());
