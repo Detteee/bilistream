@@ -1,6 +1,6 @@
 //! 统计 history backend tests (design §12). Fixtures are the real,
-//! key-stripped captures in `/workspace/bili-fixtures` copied byte-for-byte
-//! into `src/history/fixtures/`.
+//! key-stripped captures copied byte-for-byte into `src/history/fixtures/`
+//! (capture mode writes them to `.trellis/fixtures/`, see `capture.rs`).
 
 use super::enrich::{parse_room_live_key, parse_stop_live_data, StopLiveDataError};
 use super::event::{BiliTotals, EndReason, Event, EventKind, Severity};
@@ -108,6 +108,79 @@ fn sessions(w: &Writer, now: i64) -> query::SessionsPage {
     query::sessions(&w.conn, &q(T0 - DAY, now), now).unwrap()
 }
 
+/// Insert a relay session row directly so a boundary can be placed exactly.
+fn raw_session(w: &Writer, eid: &str, seq: i64, started_at: i64, ended_at: Option<i64>) {
+    w.conn
+        .execute(
+            "INSERT INTO sessions (eid,node,boot_id,seq,platform,channel_id,channel_name,
+             started_at,last_seen_at,ended_at)
+             VALUES (?1,'local',1,?4,'YT','chan','name',?2,coalesce(?3,?2),?3)",
+            rusqlite::params![eid, started_at, ended_at, seq],
+        )
+        .unwrap();
+}
+
+/// A still-running relay session that began before the window must still report
+/// its in-window ffmpeg-run events. Its bookends stay hidden by design: the
+/// feed keeps only events whose timestamp falls inside `[from, to]`.
+#[test]
+fn an_open_relay_session_reports_its_in_window_run_events() {
+    let (w, _) = writer("open-relay-run-events");
+    let from = T0;
+    let to = T0 + 10 * DAY;
+    raw_session(&w, "open-before-from", 1, from - DAY, None);
+    let session_id: i64 = w
+        .conn
+        .query_row(
+            "SELECT id FROM sessions WHERE eid='open-before-from'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    w.conn
+        .execute(
+            "INSERT INTO runs (eid,session_id,run,started_at,last_seen_at,ended_at,exit_code,
+             success,counted_failure,diagnostic)
+             VALUES ('open-before-from/1',?1,1,?2,?3,?3,1,0,1,'ffmpeg 退出')",
+            rusqlite::params![session_id, from + 60, from + 120],
+        )
+        .unwrap();
+
+    let feed = query::events(&w.conn, &q(from, to)).unwrap();
+    let kinds: Vec<(&str, i64)> = feed.items.iter().map(|e| (e.kind.as_str(), e.at)).collect();
+    assert!(
+        feed.items.iter().any(|e| e.kind == "stream.failed"),
+        "the in-window failure of a still-running session must be reported: {kinds:?}"
+    );
+}
+
+/// The list and the KPI/calendar paths must agree about the window boundary.
+/// They used to spell the overlap predicate four ways with `>` and `>=` mixed,
+/// so a session ending exactly at `from` was summarised but not listed.
+#[test]
+fn the_window_boundary_is_the_same_for_the_list_and_the_summary() {
+    let (w, _) = writer("overlap-boundary");
+    let from = T0;
+    let to = T0 + 10 * DAY;
+    // Starts exactly at `from`: inside the half-open window.
+    raw_session(&w, "starts-at-from", 1, from, Some(from + 600));
+    // Ends exactly at `from`: outside it.
+    raw_session(&w, "ends-at-from", 2, from - 600, Some(from));
+
+    let page = query::sessions(&w.conn, &q(from, to), to).unwrap();
+    let listed: Vec<&str> = page.items.iter().map(|s| s.eid.as_str()).collect();
+    let summed = query::load_sessions(&w.conn, from, to, to).unwrap();
+
+    assert!(listed.contains(&"starts-at-from"), "{listed:?}");
+    assert!(!listed.contains(&"ends-at-from"), "{listed:?}");
+    assert_eq!(
+        listed.len(),
+        summed.len(),
+        "the summary path ({}) must load exactly the rows the list shows ({listed:?})",
+        summed.len()
+    );
+}
+
 // ------------------------------------------------------------- schema
 
 #[test]
@@ -134,6 +207,46 @@ fn new_file_is_incremental_vacuum_v1_and_corrupt_file_is_recreated() {
         .unwrap();
     assert_eq!(version, schema::SCHEMA_VERSION);
     assert!(path.with_extension("sqlite.corrupt").exists());
+}
+
+#[test]
+fn read_path_indexes_exist_after_migration() {
+    let dir = tmp("indexes");
+    let conn = schema::open_rw(&dir.join("history.sqlite")).unwrap();
+    let indexes: String = conn
+        .query_row(
+            "SELECT group_concat(name, ' ') FROM sqlite_master WHERE type='index'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    for index in [
+        "sessions_start",
+        "sample_frames_session",
+        "node_segments_start",
+    ] {
+        assert!(indexes.contains(index), "missing {index} in {indexes}");
+    }
+}
+
+#[test]
+fn a_truncated_bucket_series_says_so() {
+    let (w, _) = writer("bucket-cap");
+    let to = T0 + 90 * DAY;
+    let mut wide = q(to - 90 * DAY, to);
+    wide.bucket = Some("hour".into());
+    let summary = query::summary(&w.conn, &wide, "local", to).unwrap();
+    assert_eq!(summary.buckets.len(), query::MAX_BUCKETS);
+    assert!(
+        summary.buckets_truncated,
+        "a series stopped by the cap must not look complete; kpis still totals the whole range"
+    );
+
+    let mut narrow = q(to - DAY, to);
+    narrow.bucket = Some("hour".into());
+    let narrow = query::summary(&w.conn, &narrow, "local", to).unwrap();
+    assert!(narrow.buckets.len() < query::MAX_BUCKETS);
+    assert!(!narrow.buckets_truncated);
 }
 
 #[test]

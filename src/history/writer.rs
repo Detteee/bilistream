@@ -164,7 +164,7 @@ impl Writer {
                     "INSERT OR REPLACE INTO boots (boot_id, node, started_at, last_seen_at, version) VALUES (?1,?2,?3,?3,?4)",
                     params![self.boot_id, self.node, at, version],
                 )?;
-                crash_sweep(&self.conn, &self.node, self.boot_id, at)?;
+                crash_sweep(&self.conn, &self.node, self.boot_id)?;
             }
             EventKind::SessionStarted {
                 seq,
@@ -760,12 +760,7 @@ fn close_session(conn: &Connection, id: i64, at: i64, reason: EndReason) -> rusq
 /// open (the room can outlive us). The restored book and claim lease recover
 /// pending summary work; restarting must not turn an unfinished fetch into
 /// a permanent failure.
-pub(crate) fn crash_sweep(
-    conn: &Connection,
-    node: &str,
-    boot_id: i64,
-    _now: i64,
-) -> rusqlite::Result<()> {
+pub(crate) fn crash_sweep(conn: &Connection, node: &str, boot_id: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE runs SET ended_at=last_seen_at WHERE ended_at IS NULL AND session_id IN (SELECT id FROM sessions WHERE node=?1 AND boot_id<>?2)",
         params![node, boot_id],

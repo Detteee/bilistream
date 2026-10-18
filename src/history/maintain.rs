@@ -157,16 +157,20 @@ fn delete_rows(
     } else {
         ""
     };
+    // Count once: the loop used to re-run `count(*)` on every batch (up to 12
+    // full scans of a 200k-row table per tick) for a value that only changes
+    // by the rows this call deletes.
+    let mut over_remaining: i64 = conn
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+            r.get::<_, i64>(0)
+        })?
+        .saturating_sub(cap.min(i64::MAX as u64) as i64)
+        .max(0);
     for _ in 0..MAX_BATCHES {
         if !admit_maintenance(conn)? {
             break;
         }
-        let count: i64 =
-            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
-        let over = count
-            .saturating_sub(cap.min(i64::MAX as u64) as i64)
-            .max(0)
-            .min(BATCH);
+        let over = over_remaining.min(BATCH);
         let tx = conn.unchecked_transaction()?;
         let ids: Vec<(i64, i64)> = {
             let mut stmt = tx.prepare(&format!(
@@ -204,6 +208,7 @@ fn delete_rows(
         )?;
         tx.commit()?;
         total += ids.len();
+        over_remaining = over_remaining.saturating_sub(ids.len() as i64);
     }
     Ok(total)
 }

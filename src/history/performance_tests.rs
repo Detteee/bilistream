@@ -36,7 +36,7 @@ fn history_existing_database_query_latency() {
     }
     assert!(
         exceeded.is_empty(),
-        "30-day queries exceed unchanged150ms p95 budget: {exceeded:?}"
+        "30-day queries exceed the 150ms p95 budget: {exceeded:?}"
     );
 }
 
@@ -105,7 +105,7 @@ fn history_real_cadence_storage_and_latency() {
             );
             assert!(
                 total < if day == 13 { 20_000_000 } else { 60_000_000 },
-                "history size exceeds unchanged acceptance budget"
+                "history size exceeds the acceptance budget"
             );
         }
     }

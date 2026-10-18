@@ -1,6 +1,9 @@
 //! Read API queries (design §9). Every function reads one node's DB and
 //! returns mergeable parts; `merge_*` combine nodes for `scope=cluster`.
-//! Parameters are validated and bound, never interpolated into SQL.
+//!
+//! Caller-supplied values are always bound. Table, column and metric names are
+//! interpolated from internal constants or the allowlisted `METRICS` ids (see
+//! `stats`), never from request text — keep it that way when adding a query.
 
 use super::event::{metric_id, EndReason, METRICS};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -10,7 +13,21 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 const DAY: i64 = 86_400;
 pub(crate) const MAX_POINTS: usize = 2000;
 pub(crate) const MAX_RANGE_DAYS: u64 = 90;
+/// Upper bound on the returned spectrum length. Hitting it used to stop the
+/// series silently while `kpis` still totalled the whole range; the response now
+/// carries `buckets_truncated` so a caller can tell a short series from a
+/// truncated one.
+pub(crate) const MAX_BUCKETS: usize = 400;
 const DEFAULT_POINTS: usize = 1000;
+
+/// Half-open overlap between a relay session and the queried window.
+///
+/// `?1` is `from`, `?2` is `to`, `?3` is `now`; a row without `ended_at` counts
+/// as still running at `now`. The list, KPI and calendar paths share this one
+/// clause: they used to spell it four ways with `>` and `>=` mixed, so a
+/// session starting exactly at `from` could appear in the KPIs but not in the
+/// list (and vice versa).
+const SESSION_OVERLAP: &str = "started_at<?2 AND coalesce(ended_at, ?3)>?1";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -412,6 +429,48 @@ fn runs_of(conn: &Connection, session: i64) -> rusqlite::Result<Vec<RunRow>> {
     rows.collect()
 }
 
+/// Every run of every relay session the window selects, in one pass.
+///
+/// `load_sessions` used to call [`runs_of`] once per row, which is an N+1 read
+/// on the summary path. The subquery repeats the shared overlap clause, so the
+/// run set is exactly the one the caller would have collected row by row, and
+/// the ordering (`started_at, id`) matches `runs_of`.
+///
+/// A subquery rather than a join: the shared clause names `started_at` and
+/// `ended_at` unqualified, and both `runs` and `sessions` carry those columns.
+fn runs_for_range(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+    now: i64,
+) -> rusqlite::Result<HashMap<i64, Vec<RunRow>>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT r.session_id,r.started_at,r.ended_at,r.success,coalesce(r.counted_failure,0),r.diagnostic
+         FROM runs r WHERE r.session_id IN (
+             SELECT id FROM sessions WHERE pruned=0 AND {SESSION_OVERLAP}
+         )
+         ORDER BY r.session_id,r.started_at,r.id"
+    ))?;
+    let rows = stmt.query_map(params![from, to, now], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            RunRow {
+                started_at: r.get(1)?,
+                ended_at: r.get(2)?,
+                success: r.get(3)?,
+                counted_failure: r.get::<_, i64>(4)? != 0,
+                diagnostic: r.get(5)?,
+            },
+        ))
+    })?;
+    let mut out: HashMap<i64, Vec<RunRow>> = HashMap::new();
+    for row in rows {
+        let (session_id, run) = row?;
+        out.entry(session_id).or_default().push(run);
+    }
+    Ok(out)
+}
+
 /// Gaps between runs: after a counted failure → failed, else reconnecting.
 fn gaps(runs: &[RunRow], session_end: Option<i64>) -> Vec<(i64, i64, String)> {
     let mut out = Vec::new();
@@ -655,20 +714,20 @@ pub(crate) fn sessions(conn: &Connection, q: &Query, now: i64) -> rusqlite::Resu
     let has_cursor = q.cursor.is_some();
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT {SESSION_COLS} FROM sessions
-         WHERE pruned=0 AND started_at<?2 AND coalesce(ended_at, ?6)>?1
-           AND (?3 IS NULL OR platform=?3) AND (?4 IS NULL OR channel_id=?4)
+         WHERE pruned=0 AND {SESSION_OVERLAP}
+           AND (?4 IS NULL OR platform=?4) AND (?5 IS NULL OR channel_id=?5)
            AND (?7=0 OR started_at<?8 OR (started_at=?8 AND eid<?9))
-         ORDER BY started_at DESC, eid DESC LIMIT ?5"
+         ORDER BY started_at DESC, eid DESC LIMIT ?6"
     ))?;
     let rows: Vec<Row> = stmt
         .query_map(
             params![
                 q.from,
                 q.to,
+                now,
                 q.platform,
                 q.channel,
                 (q.limit + 1) as i64,
-                now,
                 has_cursor as i64,
                 cur_at,
                 cur_eid
@@ -834,7 +893,7 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
         let mut stmt = conn.prepare_cached(
             "SELECT id,eid,node,channel_id,channel_name,title,started_at,ended_at,end_reason FROM sessions
              WHERE pruned=0 AND ((started_at>=?1 AND started_at<=?2) OR (ended_at>=?1 AND ended_at<=?2)
-                OR (started_at<?1 AND coalesce(ended_at, ?2)>?2))",
+                OR (started_at<?1 AND (ended_at IS NULL OR ended_at>?2)))",
         )?;
         type S = (
             i64,
@@ -884,15 +943,25 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
                         notify: None,
                     }
                 };
-            all.push(base(
-                "start",
-                started,
-                "stream.started",
-                format!("开始转播：{name}"),
-                title.clone().unwrap_or_default(),
-                "info",
-            ));
-            if let Some(end) = ended {
+            // The third arm above also selects relay sessions that span the
+            // whole window; `ended_at IS NULL` keeps a still-running session in
+            // that set. Their bookends lie outside `[from,to]` and would be
+            // dropped by the retain at the end of this function, so only emit
+            // them when they are in range. Their in-window ffmpeg-run events
+            // are still reported below, and those are the ones a reader wants
+            // for a long-running stream.
+            let in_window = |at: i64| at >= q.from && at <= q.to;
+            if in_window(started) {
+                all.push(base(
+                    "start",
+                    started,
+                    "stream.started",
+                    format!("开始转播：{name}"),
+                    title.clone().unwrap_or_default(),
+                    "info",
+                ));
+            }
+            if let Some(end) = ended.filter(|end| in_window(*end)) {
                 let code = reason.clone().unwrap_or_default();
                 let bad = matches!(code.as_str(), "aborted" | "process_restart");
                 all.push(base(
@@ -1345,6 +1414,10 @@ pub(crate) struct SummaryParts {
     #[serde(default)]
     pub source: Option<String>,
     pub buckets: Vec<BucketParts>,
+    /// True when the spectrum stopped at [`MAX_BUCKETS`] before covering the
+    /// requested range; `kpis` still totals the whole range.
+    #[serde(default)]
+    pub buckets_truncated: bool,
     pub kpis: KpiParts,
     pub prev_kpis: KpiParts,
     pub calendar: Vec<(i64, i64, i64)>,
@@ -1375,7 +1448,7 @@ fn clip(a: i64, b: i64, from: i64, to: i64) -> i64 {
     (b.min(to) - a.max(from)).max(0)
 }
 
-struct SumSession {
+pub(crate) struct SumSession {
     id: i64,
     eid: String,
     platform: String,
@@ -1393,21 +1466,22 @@ struct SumSession {
     online_peak: Option<f64>,
 }
 
-fn load_sessions(
+pub(crate) fn load_sessions(
     conn: &Connection,
     from: i64,
     to: i64,
     now: i64,
 ) -> rusqlite::Result<Vec<SumSession>> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {SESSION_COLS} FROM sessions WHERE pruned=0 AND started_at<?2 AND coalesce(ended_at, ?3)>=?1"
+        "SELECT {SESSION_COLS} FROM sessions WHERE pruned=0 AND {SESSION_OVERLAP}"
     ))?;
     let rows: Vec<Row> = stmt
         .query_map(params![from, to, now], row)?
         .collect::<rusqlite::Result<_>>()?;
+    let mut runs_by_session = runs_for_range(conn, from, to, now)?;
     let mut out = Vec::new();
     for r in rows {
-        let runs = runs_of(conn, r.id)?;
+        let runs = runs_by_session.remove(&r.id).unwrap_or_default();
         let broadcast = broadcast_id(&r.platform, &r.live_key, &r.source_id, &r.eid);
         out.push(SumSession {
             broadcast,
@@ -1586,7 +1660,7 @@ pub(crate) fn summary(
             sends.push(r?);
         }
     }
-    while start < q.to && buckets.len() < 400 {
+    while start < q.to && buckets.len() < MAX_BUCKETS {
         let end = start + size;
         let from = start.max(q.from);
         let to = end.min(q.to);
@@ -1697,9 +1771,11 @@ pub(crate) fn summary(
         partial_before,
         node_observed_secs: None,
     }];
+    let buckets_truncated = start < q.to;
     let mut parts = SummaryParts {
         source: Some(node.to_string()),
         buckets,
+        buckets_truncated,
         kpis: k,
         prev_kpis,
         calendar,
@@ -1837,6 +1913,7 @@ pub(crate) fn merge_summary(parts: Vec<SummaryParts>) -> SummaryParts {
     let mut segments: BTreeMap<String, NodeSegment> = BTreeMap::new();
     let mut nodes: BTreeMap<String, NodeParts> = BTreeMap::new();
     for p in parts {
+        out.buckets_truncated |= p.buckets_truncated;
         if let Some(source) = p
             .source
             .clone()

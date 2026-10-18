@@ -4,7 +4,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 pub(crate) const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -289,6 +289,18 @@ fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
         }
         if version <= 3 {
             tx.execute_batch("ALTER TABLE sessions ADD COLUMN source_id TEXT;")?;
+        }
+        if version <= 4 {
+            // The read path ranges on `sessions.started_at`, filters rollups by
+            // `sample_frames.session_id` and ranges on
+            // `node_segments.started_at`; without these, every sessions page,
+            // session-filtered sample scan and node timeline is a full scan
+            // plus a temporary sort over a table capped at `event_rows`.
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS sessions_start ON sessions(started_at);
+                 CREATE INDEX IF NOT EXISTS sample_frames_session ON sample_frames(session_id, ts);
+                 CREATE INDEX IF NOT EXISTS node_segments_start ON node_segments(started_at);",
+            )?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
