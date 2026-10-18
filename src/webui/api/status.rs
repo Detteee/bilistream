@@ -146,6 +146,11 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
             status.youtube = Some(YtStatus {
                 is_live: source.is_live,
                 enable_monitor: cfg.youtube.enable_monitor,
+                warning_held: crate::plugins::danmaku::source_warning_held(
+                    "YT",
+                    &cfg.youtube.channel_name,
+                    &cfg.youtube.channel_id,
+                ),
                 title: source.title,
                 topic: source.topic,
                 channel_name: cfg.youtube.channel_name.clone(),
@@ -179,6 +184,11 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
             status.twitch = Some(TwStatus {
                 is_live,
                 enable_monitor: cfg.twitch.enable_monitor,
+                warning_held: crate::plugins::danmaku::source_warning_held(
+                    "TW",
+                    &cfg.twitch.channel_name,
+                    &cfg.twitch.channel_id,
+                ),
                 title,
                 game,
                 channel_name: cfg.twitch.channel_name.clone(),
@@ -218,6 +228,11 @@ pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> R
         status.niconico = Some(NicoStatus {
             is_live,
             enable_monitor: cfg.niconico.enable_monitor,
+            warning_held: crate::plugins::danmaku::source_warning_held(
+                "NC",
+                &channel_name,
+                &channel_id,
+            ),
             title,
             channel_name,
             channel_id,

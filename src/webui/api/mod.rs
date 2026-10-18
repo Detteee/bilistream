@@ -242,6 +242,7 @@ mod tests {
             youtube: Some(YtStatus {
                 is_live: false,
                 enable_monitor: true,
+                warning_held: false,
                 title: None,
                 topic: None,
                 channel_name: "youtube".to_string(),
@@ -256,6 +257,7 @@ mod tests {
             twitch: Some(TwStatus {
                 is_live: false,
                 enable_monitor: true,
+                warning_held: false,
                 title: None,
                 game: None,
                 channel_name: "twitch".to_string(),
@@ -270,6 +272,7 @@ mod tests {
             niconico: Some(NicoStatus {
                 is_live: false,
                 enable_monitor: true,
+                warning_held: false,
                 title: None,
                 channel_name: "niconico".to_string(),
                 channel_id: "vspo".to_string(),

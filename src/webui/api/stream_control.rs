@@ -102,6 +102,8 @@ pub async fn restart_stream() -> Result<ApiResponse<()>, StatusCode> {
 #[derive(Deserialize)]
 pub struct ReleasePriorityWarningRequest {
     channel_name: String,
+    #[serde(default)]
+    platform: Option<String>,
 }
 
 pub(crate) async fn release_priority_warning(
@@ -119,8 +121,16 @@ pub(crate) async fn release_priority_warning(
     let cfg = load_config()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let platform = payload.platform.as_deref();
+    let priority_card = is_priority_warning_card(platform);
     let release = crate::config::with_current_config(&cfg, || {
-        release_priority_warning_for_config(&warnings, &before_action, &cfg, &payload.channel_name)
+        release_card_warning_for_config(
+            &warnings,
+            &before_action,
+            &cfg,
+            &payload.channel_name,
+            platform,
+        )
     })
     .ok_or(StatusCode::CONFLICT)?;
     let release = match release {
@@ -146,13 +156,28 @@ pub(crate) async fn release_priority_warning(
         data: Some(json!({"released": released})),
         message: Some(
             if released {
-                "优先频道的临时跳过已解除"
-            } else {
+                if priority_card {
+                    "优先频道的临时跳过已解除"
+                } else {
+                    "临时跳过已解除"
+                }
+            } else if priority_card {
                 "优先频道当前没有临时跳过"
+            } else {
+                "当前没有临时跳过"
             }
             .to_owned(),
         ),
     })
+}
+
+fn is_priority_warning_card(platform: Option<&str>) -> bool {
+    matches!(
+        platform
+            .map(str::trim)
+            .filter(|platform| !platform.is_empty()),
+        None | Some("priority")
+    )
 }
 
 fn release_priority_warning_for_config(
@@ -161,37 +186,86 @@ fn release_priority_warning_for_config(
     cfg: &Config,
     requested_name: &str,
 ) -> Result<Option<crate::plugins::danmaku::warning::WarningRelease>, &'static str> {
-    if requested_name.is_empty() || requested_name != cfg.priority_channel.channel_name {
-        return Err("优先频道已变更，请刷新后重试");
-    }
+    release_card_warning_for_config(warnings, before_action, cfg, requested_name, None)
+}
+
+fn release_card_warning_for_config(
+    warnings: &crate::plugins::danmaku::warning::WarningTracker,
+    before_action: &crate::plugins::danmaku::warning::WarningSnapshot,
+    cfg: &Config,
+    requested_name: &str,
+    platform: Option<&str>,
+) -> Result<Option<crate::plugins::danmaku::warning::WarningRelease>, &'static str> {
     use crate::plugins::danmaku::warning::{BroadcastSource, WarningReleaseReason};
-    Ok(warnings
-        .release_name(
-            before_action,
-            requested_name,
-            WarningReleaseReason::PriorityCard,
-        )
-        .or_else(|| {
-            warnings.release_source(
+    if is_priority_warning_card(platform) {
+        if requested_name.is_empty() || requested_name != cfg.priority_channel.channel_name {
+            return Err("优先频道已变更，请刷新后重试");
+        }
+        return Ok(warnings
+            .release_name(
                 before_action,
-                &BroadcastSource::new(
-                    "YT",
-                    requested_name,
-                    &cfg.priority_channel.youtube_channel_id,
-                    None,
-                ),
+                requested_name,
                 WarningReleaseReason::PriorityCard,
             )
-        })
+            .or_else(|| {
+                warnings.release_source(
+                    before_action,
+                    &BroadcastSource::new(
+                        "YT",
+                        requested_name,
+                        &cfg.priority_channel.youtube_channel_id,
+                        None,
+                    ),
+                    WarningReleaseReason::PriorityCard,
+                )
+            })
+            .or_else(|| {
+                warnings.release_source(
+                    before_action,
+                    &BroadcastSource::new(
+                        "TW",
+                        requested_name,
+                        &cfg.priority_channel.twitch_channel_id,
+                        None,
+                    ),
+                    WarningReleaseReason::PriorityCard,
+                )
+            }));
+    }
+    let source = match platform.map(str::trim) {
+        Some("YT") => {
+            if requested_name.is_empty() || requested_name != cfg.youtube.channel_name {
+                return Err("频道已变更，请刷新后重试");
+            }
+            BroadcastSource::new("YT", requested_name, &cfg.youtube.channel_id, None)
+        }
+        Some("TW") => {
+            if requested_name.is_empty() || requested_name != cfg.twitch.channel_name {
+                return Err("频道已变更，请刷新后重试");
+            }
+            BroadcastSource::new("TW", requested_name, &cfg.twitch.channel_id, None)
+        }
+        Some("NC") => {
+            let (channel_id, channel_name) =
+                crate::plugins::niconico_channel_identity(&cfg.niconico);
+            if requested_name.is_empty() || requested_name != channel_name {
+                return Err("频道已变更，请刷新后重试");
+            }
+            BroadcastSource::new("NC", requested_name, &channel_id, None)
+        }
+        _ => return Err("频道已变更，请刷新后重试"),
+    };
+    // `release_source` also matches display names. Gate on platform/id so a
+    // Twitch hold does not clear from the YouTube card of the same talent.
+    if !before_action.holds_identity(&source) {
+        return Ok(None);
+    }
+    Ok(warnings
+        .release_source(before_action, &source, WarningReleaseReason::PriorityCard)
         .or_else(|| {
-            warnings.release_source(
+            warnings.release_name(
                 before_action,
-                &BroadcastSource::new(
-                    "TW",
-                    requested_name,
-                    &cfg.priority_channel.twitch_channel_id,
-                    None,
-                ),
+                requested_name,
                 WarningReleaseReason::PriorityCard,
             )
         }))
@@ -992,6 +1066,49 @@ mod priority_warning_tests {
         }
     }
 
+    #[test]
+    fn ordinary_twitch_card_releases_that_live_id_without_lighting_youtube() {
+        let mut cfg = priority_config(false);
+        cfg.youtube.channel_name = "示例频道 A".into();
+        cfg.youtube.channel_id = "UC-other".into();
+        cfg.twitch.channel_name = "示例频道 A".into();
+        cfg.twitch.channel_id = "held_login".into();
+        let warnings = Arc::new(WarningTracker::default());
+        let held = BroadcastSource::new("TW", "示例频道 A", "held_login", Some("tw-stream-1"));
+        let _owner = warnings.own_source(93, held.clone());
+        let mut event = warnings.capture_event();
+        warnings.mark_event(&mut event, None).unwrap();
+        assert!(!warnings.snapshot().holds_identity(&BroadcastSource::new(
+            "YT",
+            "示例频道 A",
+            "UC-other",
+            None,
+        )));
+        assert!(
+            release_card_warning_for_config(
+                &warnings,
+                &warnings.snapshot(),
+                &cfg,
+                "示例频道 A",
+                Some("YT"),
+            )
+            .unwrap()
+            .is_none(),
+            "the YouTube card is not this hold"
+        );
+        assert!(warnings.snapshot().holds(&held));
+        assert!(release_card_warning_for_config(
+            &warnings,
+            &warnings.snapshot(),
+            &cfg,
+            "示例频道 A",
+            Some("TW"),
+        )
+        .unwrap()
+        .is_some());
+        assert!(!warnings.snapshot().holds(&held));
+    }
+
     #[tokio::test]
     async fn priority_release_route_requires_browser_auth_and_same_origin() {
         use crate::webui::listen::AuthState;
@@ -1311,6 +1428,7 @@ mod priority_warning_tests {
                 headers.clone(),
                 Json(ReleasePriorityWarningRequest {
                     channel_name: "示例频道 A".into(),
+                    platform: None,
                 }),
             )
             .await;

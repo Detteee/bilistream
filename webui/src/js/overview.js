@@ -83,15 +83,35 @@ let holodexKeyConfigured = false;
 let holodexLastFetchMs = 0;
 let holodexKeepAliveId = null;
 const monitorToggleSaveDebounceMs = 160;
+let youtubeWarningControl = null;
+let twitchWarningControl = null;
+let niconicoWarningControl = null;
 let priorityWarningControl = null;
-function initDashboardControls() {
-  priorityWarningControl = createPriorityWarningControl({
-    row: document.getElementById('priority-warning-row'),
-    button: document.getElementById('release-priority-warning-btn'),
+function bindWarningControl(platform, rowId, buttonId) {
+  return createPriorityWarningControl({
+    platform,
+    row: document.getElementById(rowId),
+    button: document.getElementById(buttonId),
     post: postJsonApi,
     refresh: refreshStatus,
     notify: showNotification,
   });
+}
+function renderPlatformWarningHolds(status) {
+  youtubeWarningControl?.render(status?.youtube);
+  twitchWarningControl?.render(status?.twitch);
+  niconicoWarningControl?.render(status?.niconico);
+  priorityWarningControl?.render(status?.priority_channel);
+}
+function initDashboardControls() {
+  youtubeWarningControl = bindWarningControl('YT', 'yt-warning-row', 'release-yt-warning-btn');
+  twitchWarningControl = bindWarningControl('TW', 'tw-warning-row', 'release-tw-warning-btn');
+  niconicoWarningControl = bindWarningControl('NC', 'nc-warning-row', 'release-nc-warning-btn');
+  priorityWarningControl = bindWarningControl(
+    'priority',
+    'priority-warning-row',
+    'release-priority-warning-btn'
+  );
   document
     .getElementById('startLiveBtn')
     ?.addEventListener('click', startStream);
@@ -1801,6 +1821,7 @@ async function refreshStatus() {
 
     if (data.success && data.data) {
       renderStatusCards(data.data);
+      renderPlatformWarningHolds(data.data);
       renderPriorityChannelStatus(data.data.priority_channel);
     } else {
       console.error('Invalid API response:', data);
@@ -1811,6 +1832,7 @@ async function refreshStatus() {
     console.error('Failed to refresh status:', error);
 
     setStatusCardsMessage('连接中断，等待重连');
+    renderPlatformWarningHolds(null);
     setPriorityStatusFields(null, '连接中断', '-', '-');
     setElementText('priority-channel-name', '连接中断');
 

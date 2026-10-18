@@ -374,6 +374,7 @@ mod tests {
             youtube: Some(YtStatus {
                 is_live: true,
                 enable_monitor: true,
+                warning_held: false,
                 title: Some("YT title".to_string()),
                 topic: Some("Gaming".to_string()),
                 channel_name: "Kamito".to_string(),
@@ -575,6 +576,7 @@ mod tests {
         status.twitch = Some(TwStatus {
             is_live: true,
             enable_monitor: true,
+            warning_held: false,
             title: Some("TW title".to_string()),
             game: Some("VALORANT".to_string()),
             channel_name: "kamito_jp".to_string(),

@@ -760,6 +760,13 @@
                 <span class="info-label">标题</span>
                 <span class="info-value info-value-right" id="yt-title">-</span>
               </div>
+              <div class="info-row hidden warning-hold-row" id="yt-warning-row">
+                <span class="info-label">警告 / 切断</span>
+                <div class="info-row-view">
+                  <span class="info-value">临时跳过</span>
+                  <button id="release-yt-warning-btn" class="btn-secondary compact-btn" type="button">解除临时跳过</button>
+                </div>
+              </div>
               <div class="info-row" id="yt-topic-row">
                 <span class="info-label">分区</span>
                 <span class="info-value info-value-right" id="yt-topic">-</span>
@@ -916,6 +923,13 @@
                 <span class="info-label">标题</span>
                 <span class="info-value info-value-right" id="tw-title">-</span>
               </div>
+              <div class="info-row hidden warning-hold-row" id="tw-warning-row">
+                <span class="info-label">警告 / 切断</span>
+                <div class="info-row-view">
+                  <span class="info-value">临时跳过</span>
+                  <button id="release-tw-warning-btn" class="btn-secondary compact-btn" type="button">解除临时跳过</button>
+                </div>
+              </div>
               <div class="info-row" id="tw-game-row">
                 <span class="info-label">游戏</span>
                 <span class="info-value info-value-right" id="tw-game">-</span>
@@ -1071,6 +1085,13 @@
               <div class="info-row" id="nc-title-row">
                 <span class="info-label">标题</span>
                 <span class="info-value info-value-right" id="nc-title">-</span>
+              </div>
+              <div class="info-row hidden warning-hold-row" id="nc-warning-row">
+                <span class="info-label">警告 / 切断</span>
+                <div class="info-row-view">
+                  <span class="info-value">临时跳过</span>
+                  <button id="release-nc-warning-btn" class="btn-secondary compact-btn" type="button">解除临时跳过</button>
+                </div>
               </div>
               <div class="info-row" id="nc-scheduled-row">
                 <span class="info-label">预定</span>
@@ -1235,7 +1256,7 @@
                 <span class="info-value info-value-right" id="priority-title">-</span>
               </div>
 
-              <div class="info-row hidden" id="priority-warning-row">
+              <div class="info-row hidden warning-hold-row" id="priority-warning-row">
                 <span class="info-label">警告 / 切断</span>
                 <div class="info-row-view">
                   <span class="info-value">临时跳过</span>
@@ -2315,6 +2336,10 @@
               <button id="analytics-refresh-btn" class="btn-ghost icon-btn compact-btn" type="button" aria-label="刷新统计">
                 <svg class="btn-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
               </button>
+              <button id="analytics-clean-btn" class="btn-danger icon-btn compact-btn analytics-clean" type="button"
+                title="清理集群历史" aria-label="清理集群历史">
+                <svg class="btn-icon" aria-hidden="true"><use href="#i-trash" /></svg>
+              </button>
             </div>
           </div>
           <div class="panel__body">
@@ -2331,14 +2356,6 @@
               <div class="empty-state">正在加载…</div>
             </div>
             <small class="settings-help-text analytics-retention" id="analytics-retention"></small>
-            <div class="analytics-maintenance">
-              <small class="settings-help-text">清理会同步到集群内所有节点，从此刻起一起重新记录。</small>
-              <button id="analytics-clean-btn" class="btn-danger compact-btn" type="button" title="清理集群历史"
-                aria-label="清理集群历史">
-                <svg class="btn-icon" aria-hidden="true"><use href="#i-trash" /></svg>
-                <span id="analytics-clean-label">清理历史…</span>
-              </button>
-            </div>
           </div>
         </section>
         <section class="panel analytics-wide" data-module="strip" data-empty="开始记录后，每个频道会显示一条转播状态条。" aria-labelledby="analytics-strip-title">

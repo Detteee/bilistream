@@ -16,6 +16,15 @@ pub struct StatusData {
 impl StatusData {
     /// Temporary source holds belong to this process's admin page only.
     pub(crate) fn for_cluster_snapshot(mut self) -> Self {
+        if let Some(youtube) = self.youtube.as_mut() {
+            youtube.warning_held = false;
+        }
+        if let Some(twitch) = self.twitch.as_mut() {
+            twitch.warning_held = false;
+        }
+        if let Some(niconico) = self.niconico.as_mut() {
+            niconico.warning_held = false;
+        }
         if let Some(priority) = self.priority_channel.as_mut() {
             priority.warning_held = false;
         }
@@ -144,6 +153,8 @@ pub struct YtStatus {
     pub is_live: bool,
     #[serde(default)]
     pub enable_monitor: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub warning_held: bool,
     pub title: Option<String>,
     pub topic: Option<String>,
     pub channel_name: String,
@@ -161,6 +172,8 @@ pub struct TwStatus {
     pub is_live: bool,
     #[serde(default)]
     pub enable_monitor: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub warning_held: bool,
     pub title: Option<String>,
     pub game: Option<String>,
     pub channel_name: String,
@@ -178,6 +191,8 @@ pub struct NicoStatus {
     pub is_live: bool,
     #[serde(default)]
     pub enable_monitor: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub warning_held: bool,
     pub title: Option<String>,
     pub channel_name: String,
     pub channel_id: String,
@@ -259,10 +274,20 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             yt_status.crop_enabled = cfg.youtube.crop.is_some();
             yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
             yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
+            yt_status.warning_held = crate::plugins::danmaku::source_warning_held(
+                "YT",
+                &cfg.youtube.channel_name,
+                &cfg.youtube.channel_id,
+            );
         } else {
             cached_status.youtube = Some(YtStatus {
                 is_live: false,
                 enable_monitor: cfg.youtube.enable_monitor,
+                warning_held: crate::plugins::danmaku::source_warning_held(
+                    "YT",
+                    &cfg.youtube.channel_name,
+                    &cfg.youtube.channel_id,
+                ),
                 title: Some("-".to_string()),
                 channel_name: cfg.youtube.channel_name.clone(),
                 channel_id: cfg.youtube.channel_id.clone(),
@@ -300,10 +325,20 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             tw_status.crop_enabled = cfg.twitch.crop.is_some();
             tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
             tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
+            tw_status.warning_held = crate::plugins::danmaku::source_warning_held(
+                "TW",
+                &cfg.twitch.channel_name,
+                &cfg.twitch.channel_id,
+            );
         } else {
             cached_status.twitch = Some(TwStatus {
                 is_live: false,
                 enable_monitor: cfg.twitch.enable_monitor,
+                warning_held: crate::plugins::danmaku::source_warning_held(
+                    "TW",
+                    &cfg.twitch.channel_name,
+                    &cfg.twitch.channel_id,
+                ),
                 title: Some("-".to_string()),
                 channel_name: cfg.twitch.channel_name.clone(),
                 channel_id: cfg.twitch.channel_id.clone(),
@@ -375,10 +410,20 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             nico_status.crop_enabled = cfg.niconico.crop.is_some();
             nico_status.ffmpeg_cache_enabled = cfg.niconico.ffmpeg_cache.enabled;
             nico_status.ffmpeg_cache_latency_secs = cfg.niconico.ffmpeg_cache.latency_secs;
+            nico_status.warning_held = crate::plugins::danmaku::source_warning_held(
+                "NC",
+                &nico_channel_name,
+                &nico_channel_id,
+            );
         } else {
             cached_status.niconico = Some(NicoStatus {
                 is_live: false,
                 enable_monitor: cfg.niconico.enable_monitor,
+                warning_held: crate::plugins::danmaku::source_warning_held(
+                    "NC",
+                    &nico_channel_name,
+                    &nico_channel_id,
+                ),
                 title: Some("-".to_string()),
                 channel_name: nico_channel_name,
                 channel_id: nico_channel_id,
@@ -493,11 +538,27 @@ mod tests {
             default_area_name: Some("其他单机".into()),
         };
         let admin = StatusData {
+            twitch: Some(TwStatus {
+                is_live: true,
+                enable_monitor: true,
+                warning_held: true,
+                title: None,
+                game: None,
+                channel_name: "示例频道 A".into(),
+                channel_id: "held_login".into(),
+                quality: "best".into(),
+                area_id: 86,
+                area_name: "英雄联盟".into(),
+                crop_enabled: false,
+                ffmpeg_cache_enabled: false,
+                ffmpeg_cache_latency_secs: 0,
+            }),
             priority_channel: Some(priority),
             ..StatusData::default()
         };
         let admin_json = serde_json::to_value(&admin).unwrap();
         assert_eq!(admin_json["priority_channel"]["warning_held"], true);
+        assert_eq!(admin_json["twitch"]["warning_held"], true);
 
         // Exercise the same projection used by collect_local_snapshot, then
         // encode the real heartbeat envelope, not a hand-built JSON substitute.

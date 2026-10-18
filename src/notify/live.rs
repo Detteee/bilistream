@@ -952,6 +952,7 @@ mod tests {
             twitch: Some(crate::webui::state::TwStatus {
                 is_live: true,
                 enable_monitor: true,
+                warning_held: false,
                 title: Some("hi".into()),
                 game: None,
                 channel_name: "x".into(),

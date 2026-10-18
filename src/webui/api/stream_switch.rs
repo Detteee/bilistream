@@ -288,12 +288,19 @@ pub async fn switch_stream(
         let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
             .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
 
+        let (nico_channel_id, nico_channel_name) =
+            crate::plugins::niconico_channel_identity(&cfg.niconico);
         current_cache.niconico = Some(NicoStatus {
             is_live,
             enable_monitor: cfg.niconico.enable_monitor,
+            warning_held: crate::plugins::danmaku::source_warning_held(
+                "NC",
+                &nico_channel_name,
+                &nico_channel_id,
+            ),
             title: Some(stream_title),
-            channel_name: cfg.niconico.channel_name.clone(),
-            channel_id: cfg.niconico.channel_id.clone(),
+            channel_name: nico_channel_name,
+            channel_id: nico_channel_id,
             live_id: niconico_live_id,
             scheduled_start: None,
             quality: cfg.niconico.quality.clone(),
@@ -386,6 +393,11 @@ pub async fn switch_stream(
         current_cache.twitch = Some(TwStatus {
             is_live,
             enable_monitor: cfg.twitch.enable_monitor,
+            warning_held: crate::plugins::danmaku::source_warning_held(
+                "TW",
+                &cfg.twitch.channel_name,
+                &cfg.twitch.channel_id,
+            ),
             title: Some(stream_title.clone()),
             game: Some(stream_topic),
             channel_name: cfg.twitch.channel_name.clone(),
@@ -469,6 +481,11 @@ pub async fn switch_stream(
     current_cache.youtube = Some(YtStatus {
         is_live, // From Holodex monitor data
         enable_monitor: cfg.youtube.enable_monitor,
+        warning_held: crate::plugins::danmaku::source_warning_held(
+            "YT",
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+        ),
         title: Some(stream_title.clone()),
         topic: Some(stream_topic),
         channel_name: cfg.youtube.channel_name.clone(),

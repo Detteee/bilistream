@@ -107,6 +107,19 @@ impl WarningSnapshot {
             .is_some_and(|hold| hold.channel_name == name)
     }
 
+    /// Card identity: same platform/channel id. Display-name-only matching
+    /// would light the YouTube card for a Twitch hold of the same talent.
+    pub fn holds_identity(&self, source: &BroadcastSource) -> bool {
+        let Some(hold) = self.hold.as_ref() else {
+            return false;
+        };
+        if let Some(held) = hold.source.as_ref() {
+            held.source.same_channel(source)
+        } else {
+            hold.channel_name == source.channel_name
+        }
+    }
+
     pub fn episode_id_for(&self, source: &BroadcastSource) -> Option<&str> {
         let held = self.hold.as_ref()?.source.as_ref()?;
         held.source
@@ -165,7 +178,6 @@ pub(crate) enum WarningReleaseReason {
     OtherChannelPushing,
     NewEpisode,
     Offline,
-    SameChannelCommand,
     ManualRestart,
     PriorityCard,
 }
@@ -176,9 +188,8 @@ impl WarningReleaseReason {
             Self::OtherChannelPushing => "另一频道已确认推流",
             Self::NewEpisode => "同频道已确认新的直播 ID",
             Self::Offline => "源频道已确认下播",
-            Self::SameChannelCommand => "弹幕明确重选该频道",
             Self::ManualRestart => "手动重启流",
-            Self::PriorityCard => "优先频道卡片手动解除",
+            Self::PriorityCard => "管理页卡片手动解除",
         }
     }
 }
@@ -630,7 +641,7 @@ mod tests {
             .release_name(
                 &before_new_warning,
                 &held.channel_name,
-                WarningReleaseReason::SameChannelCommand
+                WarningReleaseReason::PriorityCard
             )
             .is_none());
         assert!(tracker.snapshot().holds(&other));
@@ -677,7 +688,7 @@ mod tests {
             .release_name(
                 &before,
                 &a.channel_name,
-                WarningReleaseReason::SameChannelCommand
+                WarningReleaseReason::ManualRestart
             )
             .is_none());
         confirmed.send(()).unwrap();
@@ -754,6 +765,17 @@ mod tests {
             .is_none());
         assert!(tracker.snapshot().holds(&original));
         assert!(!tracker.snapshot().holds(&replacement));
+    }
+
+    #[test]
+    fn identity_hold_does_not_light_the_other_platform_of_the_same_display_name() {
+        let tracker = Arc::new(WarningTracker::default());
+        let held = source("TW", "示例频道 001", Some("stream-1"));
+        let _owner = mark(&tracker, held.clone(), 1);
+        let snap = tracker.snapshot();
+        assert!(snap.holds_identity(&held));
+        assert!(snap.holds(&source("YT", "示例频道 001", Some("other"))));
+        assert!(!snap.holds_identity(&source("YT", "示例频道 001", Some("other"))));
     }
 
     #[test]

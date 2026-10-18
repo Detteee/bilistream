@@ -2,11 +2,18 @@ import { setElementDisplay } from './dom.js';
 
 // A local hold release, independent of the saved targets and auto-restart
 // toggle. Status refresh is authoritative, including after a failed request.
-export function createPriorityWarningControl({ row, button, post, refresh, notify }) {
+export function createPriorityWarningControl({
+  row,
+  button,
+  post,
+  refresh,
+  notify,
+  platform = 'priority',
+}) {
   let channel = '';
   let pending = false;
-  function render(priority) {
-    channel = priority?.warning_held === true ? priority.channel_name || '' : '';
+  function render(status) {
+    channel = status?.warning_held === true ? status.channel_name || '' : '';
     row?.classList.toggle('hidden', !channel);
     setElementDisplay(row, !!channel, 'flex');
     if (button) button.disabled = pending || !channel;
@@ -17,7 +24,10 @@ export function createPriorityWarningControl({ row, button, post, refresh, notif
     pending = true;
     if (button) button.disabled = true;
     try {
-      const result = await post('/api/priority-channel/release-warning', { channel_name: requestedChannel });
+      const result = await post('/api/priority-channel/release-warning', {
+        channel_name: requestedChannel,
+        platform,
+      });
       if (!result.success) throw new Error(result.message || '解除临时跳过失败');
       notify(result.message || '临时跳过已解除', 'success');
     } catch (error) {

@@ -3130,8 +3130,9 @@ html.light-theme .analytics {
 .analytics .analytics-stat-value small { margin-left: 2px; color: var(--text-mute); font-size: var(--fs-xs); font-weight: 600; }
 .analytics .analytics-caption { color: var(--text-mute); font-size: var(--fs-xs); }
 .analytics .analytics-retention { display: block; margin-top: var(--sp-3); }
-.analytics .analytics-maintenance { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line-1); }
-.analytics .analytics-maintenance small { flex: 1 1 16ch; min-width: 0; }
+/* 清理历史 is destructive and rare, so it sits apart from the range and
+   refresh controls in the panel head; the confirm dialog carries the copy. */
+.analytics .panel__actions .analytics-clean { margin-left: var(--sp-2); }
 
 .analytics .analytics-platform-dot {
   display: inline-block;
@@ -3196,11 +3197,11 @@ html.light-theme .analytics {
 .analytics .analytics-detail-dialog > .panel { border: 0; }
 .analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
 .analytics .analytics-detail-open { min-height: 44px; }
-#priority-warning-row .info-row-view {
+.warning-hold-row .info-row-view {
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
 
-#priority-warning-row .info-value {
+.warning-hold-row .info-value {
   color: var(--warn);
 }

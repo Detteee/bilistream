@@ -49,7 +49,7 @@ Automatic selection checks playable, permitted sources in this order: **priority
 
 A Bilibili warning, cut or timed room lock temporarily holds the affected channel, including a priority channel. Changing another target or starting an ffmpeg process keeps that hold. It clears when another channel starts pushing successfully, the source is confirmed offline, or the same source starts a new YouTube video/Twitch stream with a new ID. A changed title, scheduled video, unknown ID or failed check keeps the hold.
 
-You can also clear the hold with **重启流**, a bilistream process restart, an explicit danmaku command for that same channel, or the priority card's release action. The card action clears the hold without stopping the current stream; an enabled **自动重启流** can then switch back to a playable priority channel. A timed room lock still waits until its unlock time.
+You can also clear the hold with **重启流**, a bilistream process restart, or **解除临时跳过** on the YouTube / Twitch / Niconico / priority card that is actually held. A `%转播%` command for the held channel does not clear it; the room reply asks the viewer to switch to another channel. The card action clears the hold without stopping the current stream; an enabled **自动重启流** can then switch back to a playable priority channel. A timed room lock still waits until its unlock time.
 
 ## YouTube discovery settings
 

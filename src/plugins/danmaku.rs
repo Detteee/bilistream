@@ -292,8 +292,7 @@ pub(crate) mod warning_test_support {
         name: &str,
         id: &str,
         area: u64,
-    ) -> usize {
-        let before = warnings.snapshot();
+    ) -> (usize, String) {
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let write_count = writes.clone();
         let update =
@@ -317,19 +316,25 @@ pub(crate) mod warning_test_support {
             area: Some((area, "示例分区".into())),
             ..Default::default()
         };
+        let viewer_reply_override = held_channel_switch_notice(&warnings, &request.source);
+        let reply_text = Arc::new(Mutex::new(String::new()));
+        let reply_slot = reply_text.clone();
         finish_target_update(
             update,
             outcome,
+            viewer_reply_override,
             move |_, _, _| async move {
-                if let Some(release) = accept_target_request(&warnings, &before, &request) {
-                    release.log();
-                }
+                accept_target_request(&request);
                 String::new()
             },
-            |_| std::future::ready(()),
+            move |message| {
+                *reply_slot.lock().unwrap() = message;
+                std::future::ready(())
+            },
         )
         .await;
-        writes.load(Ordering::Relaxed)
+        let reply = reply_text.lock().unwrap().clone();
+        (writes.load(Ordering::Relaxed), reply)
     }
 
     pub(crate) fn reset_trace() {
@@ -559,19 +564,23 @@ fn remember_target_request(request: TargetRequest) {
     }
 }
 
-fn accept_target_request(
+fn warning_cut_switch_notice(channel_name: &str) -> String {
+    format!("⚠️ {channel_name} 因警告/切断，请切换其他频道")
+}
+
+fn held_channel_switch_notice(
     warnings: &warning::WarningTracker,
-    before_command: &warning::WarningSnapshot,
-    request: &TargetRequest,
-) -> Option<warning::WarningRelease> {
-    let release = warnings.release_source(
-        before_command,
-        &request.source,
-        WarningReleaseReason::SameChannelCommand,
-    );
+    source: &BroadcastSource,
+) -> Option<String> {
+    warnings
+        .snapshot()
+        .holds(source)
+        .then(|| warning_cut_switch_notice(&source.channel_name))
+}
+
+fn accept_target_request(request: &TargetRequest) {
     remember_target_request(request.clone());
     set_config_updated();
-    release
 }
 
 pub(crate) fn reject_disabled_danmaku_target(node: &str, command: &str) {
@@ -734,6 +743,7 @@ impl DanmakuTargetLog {
 async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
     config_update: Result<TargetUpdate, Box<dyn std::error::Error>>,
     outcome: DanmakuTargetLog,
+    viewer_reply_override: Option<String>,
     after_update: AfterUpdate,
     reply: Reply,
 ) where
@@ -766,17 +776,19 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
                     safe_text(&sync_message, 240)
                 );
             }
-            let message = if changed {
-                format!(
-                    "更新：{} - {} - {}",
-                    outcome.platform, outcome.channel, area_name
-                )
-            } else {
-                format!(
-                    "{} 监听对象已是：{} - {}",
-                    outcome.platform, outcome.channel, area_name
-                )
-            };
+            let message = viewer_reply_override.unwrap_or_else(|| {
+                if changed {
+                    format!(
+                        "更新：{} - {} - {}",
+                        outcome.platform, outcome.channel, area_name
+                    )
+                } else {
+                    format!(
+                        "{} 监听对象已是：{} - {}",
+                        outcome.platform, outcome.channel, area_name
+                    )
+                }
+            });
             reply(message).await;
         }
         Err(error) => {
@@ -862,7 +874,6 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         ..Default::default()
     };
     let warnings = warning_tracker();
-    let warning_before_command = warnings.snapshot();
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
@@ -1099,19 +1110,17 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             ),
             area: updated_area_id,
         };
+        let viewer_reply_override = held_channel_switch_notice(&warnings, &request.source);
         finish_target_update(
             config_update,
             outcome,
+            viewer_reply_override,
             |old_monitored_config_version, updated_config, changed| async move {
-                let release = crate::config::with_current_config(&updated_config, || {
-                    // Also wake a validated no-op: repeating a warned target
-                    // explicitly releases it without a config revision/sync.
-                    accept_target_request(&warnings, &warning_before_command, &request)
-                })
-                .flatten();
-                if let Some(release) = release {
-                    release.log();
-                }
+                crate::config::with_current_config(&updated_config, || {
+                    // Wake ranking for a validated command, including an
+                    // unchanged target. A matching warning hold stays.
+                    accept_target_request(&request)
+                });
                 if let Some(active) = warnings.active_source() {
                     report_target_decision(
                         &request,
@@ -1276,6 +1285,12 @@ pub fn set_warning_stop(channel_name: String) {
 /// Check if we should skip streaming due to a recent warning
 pub fn should_skip_due_to_warning(channel_name: &str) -> bool {
     warning_tracker().snapshot().holds_name(channel_name)
+}
+
+pub(crate) fn source_warning_held(platform: &str, name: &str, channel_id: &str) -> bool {
+    warning_tracker()
+        .snapshot()
+        .holds_identity(&BroadcastSource::new(platform, name, channel_id, None))
 }
 
 pub(crate) fn priority_warning_held(cfg: &Config) -> bool {
@@ -1457,6 +1472,7 @@ mod tests {
             finish_target_update(
                 result,
                 context,
+                None,
                 move |old_version, config, changed| {
                     assert_eq!(old_version, "previous-version");
                     assert_eq!(config.youtube.channel_id, "example_channel_001");
@@ -1520,7 +1536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_unchanged_targets_only_release_the_explicit_same_source_without_a_save() {
+    async fn accepted_held_targets_keep_the_hold_and_ask_the_viewer_to_switch() {
         use warning::{BroadcastSource, WarningTracker};
         let _serial = warning_test_support::SERIAL.lock().await;
         warning_test_support::reset_trace();
@@ -1554,7 +1570,7 @@ mod tests {
                     86
                 )
                 .await,
-                0
+                (0, "TW 监听对象已是：示例频道 002 - 示例分区".into())
             );
             assert!(warnings.snapshot().holds(&held));
             assert_eq!(
@@ -1567,22 +1583,23 @@ mod tests {
                     329
                 )
                 .await,
-                0
+                (0, "⚠️ 示例频道 001 因警告/切断，请切换其他频道".into())
             );
-            assert!(!warnings.snapshot().has_hold());
+            assert!(warnings.snapshot().holds(&held));
+            assert!(is_config_updated());
         }
         .with_subscriber(dispatch)
         .await;
         let output = logs.text();
         assert_eq!(output.matches("监听目标未变").count(), 2);
-        assert_eq!(output.matches("临时跳过已解除").count(), 1);
-        assert!(output.contains("弹幕明确重选该频道"));
+        assert!(!output.contains("临时跳过已解除"));
+        assert!(!output.contains("弹幕明确重选该频道"));
         assert!(!output.contains("同步"));
         warning_test_support::reset_trace();
     }
 
     #[tokio::test]
-    async fn same_source_release_uses_raw_id_when_its_display_name_has_changed() {
+    async fn same_source_command_keeps_the_hold_when_its_display_name_has_changed() {
         let _serial = warning_test_support::SERIAL.lock().await;
         warning_test_support::reset_trace();
         let warnings = Arc::new(warning::WarningTracker::default());
@@ -1607,9 +1624,9 @@ mod tests {
                 86
             )
             .await,
-            0
+            (0, "⚠️ 新显示名称 因警告/切断，请切换其他频道".into())
         );
-        assert!(!warnings.snapshot().has_hold());
+        assert!(warnings.snapshot().has_hold());
         warning_test_support::reset_trace();
     }
 
@@ -1630,6 +1647,7 @@ mod tests {
         finish_target_update(
             result,
             DanmakuTargetLog::default(),
+            None,
             |_, _, _| async {
                 panic!("a failed write must not run accepted-command effects");
             },

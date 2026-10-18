@@ -1560,6 +1560,11 @@ fn publish_webui_status(
             Some(bilistream::YtStatus {
                 is_live: sources.youtube.is_live,
                 enable_monitor: cfg.youtube.enable_monitor,
+                warning_held: bilistream::plugins::danmaku::source_warning_held(
+                    "YT",
+                    &cfg.youtube.channel_name,
+                    &cfg.youtube.channel_id,
+                ),
                 title: sources.youtube.title.clone(),
                 topic: sources.youtube.topic.clone(),
                 channel_name: cfg.youtube.channel_name.clone(),
@@ -1580,6 +1585,11 @@ fn publish_webui_status(
             Some(bilistream::TwStatus {
                 is_live: sources.twitch.is_live,
                 enable_monitor: cfg.twitch.enable_monitor,
+                warning_held: bilistream::plugins::danmaku::source_warning_held(
+                    "TW",
+                    &cfg.twitch.channel_name,
+                    &cfg.twitch.channel_id,
+                ),
                 title: sources.twitch.title.clone(),
                 game: sources.twitch.topic.clone(),
                 channel_name: cfg.twitch.channel_name.clone(),
@@ -1600,6 +1610,11 @@ fn publish_webui_status(
             Some(bilistream::NicoStatus {
                 is_live: sources.niconico.is_live,
                 enable_monitor: cfg.niconico.enable_monitor,
+                warning_held: bilistream::plugins::danmaku::source_warning_held(
+                    "NC",
+                    &sources.nico_channel_name,
+                    &sources.nico_channel_id,
+                ),
                 title: sources.niconico.title.clone(),
                 channel_name: sources.nico_channel_name.clone(),
                 channel_id: sources.nico_channel_id.clone(),
@@ -4217,7 +4232,7 @@ mod tests {
                 assert!(warnings.snapshot().holds(&old_source));
                 drop(old_owner);
 
-                assert_eq!(command::accept_target(&mut cfg, warnings.clone(), "TW", "示例频道 002", "example002", 86).await, 1);
+                assert_eq!(command::accept_target(&mut cfg, warnings.clone(), "TW", "示例频道 002", "example002", 86).await.0, 1);
                 assert!(warnings.snapshot().holds(&old_source), "saving another target cannot release the old hold");
                 clear_config_updated(); // the next pass loads the saved target
                 let saved_targets = serde_json::to_value(&cfg).unwrap();
@@ -4293,6 +4308,123 @@ mod tests {
             assert!(!output.contains("https://"));
             println!("{output}");
         });
+    }
+
+    #[tokio::test]
+    async fn cut_then_same_channel_danmaku_keeps_the_twitch_live_id_skipped() {
+        use bilistream::plugins::danmaku::{
+            warning::WarningTracker, warning_test_support as command,
+        };
+        use bilistream::plugins::danmaku_client::{capture_warning_message, DanmakuMessage};
+        use tracing::instrument::WithSubscriber;
+
+        let _commands = command::SERIAL.lock().await;
+        command::reset_trace();
+        let (dispatch, logs) = bilistream::logging::test_capture::subscriber(tracing::Level::INFO);
+        async {
+            let mut cfg = test_config();
+            cfg.cluster.node_id = "jp".into();
+            cfg.twitch.channel_name = "示例频道 002".into();
+            cfg.twitch.channel_id = "example002".into();
+            cfg.twitch.area_v2 = 86;
+            let warnings = std::sync::Arc::new(WarningTracker::default());
+            let held = BroadcastSource::new(
+                "TW",
+                &cfg.twitch.channel_name,
+                &cfg.twitch.channel_id,
+                Some("tw-stream-1"),
+            );
+            let _owner = warnings.own_source(1, held.clone());
+            capture_warning_message(
+                &warnings,
+                &DanmakuMessage {
+                    cmd: "CUT_OFF".into(),
+                    info: None,
+                    data: Some(serde_json::json!({"msg": "Stream cut off"})),
+                },
+            )
+            .unwrap();
+            drop(_owner);
+            assert_eq!(
+                command::accept_target(
+                    &mut cfg,
+                    warnings.clone(),
+                    "TW",
+                    "示例频道 002",
+                    "example002",
+                    86
+                )
+                .await,
+                (0, "⚠️ 示例频道 002 因警告/切断，请切换其他频道".into())
+            );
+            assert!(warnings.snapshot().holds(&held));
+            assert!(is_config_updated());
+
+            let before_probe = warnings.snapshot();
+            let tw_status = SourceStatus {
+                is_live: true,
+                topic: Some("League of Legends".into()),
+                title: Some("練習！練習！練習！練習！".into()),
+                m3u8_url: Some("https://example.invalid/tw.m3u8".into()),
+                start_time: None,
+                video_id: Some("tw-stream-1".into()),
+            };
+            assert!(warnings
+                .observe_sources(
+                    &before_probe,
+                    &[source_observation(
+                        StreamPlatform::Twitch,
+                        &held.channel_name,
+                        &held.channel_id,
+                        &tw_status
+                    )]
+                )
+                .is_none());
+            assert!(warnings.snapshot().holds(&held));
+
+            let plan = SourceProbePlan::for_config(&cfg);
+            let probes: Vec<_> = plan
+                .channels
+                .iter()
+                .map(|channel| ProbedSource {
+                    channel: channel.clone(),
+                    client: None,
+                    status: Ok(if channel.platform == StreamPlatform::Twitch {
+                        tw_status.clone()
+                    } else {
+                        SourceStatus::OFFLINE
+                    }),
+                })
+                .collect();
+            let yt = StreamCandidate::from_status(
+                StreamPlatform::Youtube,
+                &cfg.youtube.channel_name,
+                &cfg.youtube.channel_id,
+                cfg.youtube.area_v2,
+                SourceStatus::OFFLINE,
+            );
+            let mut tw = StreamCandidate::from_status(
+                StreamPlatform::Twitch,
+                &cfg.twitch.channel_name,
+                &cfg.twitch.channel_id,
+                cfg.twitch.area_v2,
+                tw_status,
+            );
+            let nico = test_stream_candidate(StreamPlatform::Niconico, false);
+            skip_stream_if_previously_warned(&mut tw, &cfg, &warnings).await;
+            assert!(!tw.is_live);
+            assert!(select_stream(&yt, &tw, &nico).is_none());
+            report_danmaku_selection(&cfg, &probes, &yt, &tw, &nico, &[], &warnings.snapshot());
+            command::reset_trace();
+        }
+        .with_subscriber(dispatch)
+        .await;
+        let output = logs.text();
+        assert!(output.contains("请求频道仍因警告/切断临时跳过"), "{output}");
+        assert!(output.contains("跳过频道"), "{output}");
+        assert!(!output.contains("临时跳过已解除"), "{output}");
+        assert!(!output.contains("请求频道是本轮最高可用候选"), "{output}");
+        assert!(!output.contains("https://"), "{output}");
     }
 
     #[test]
