@@ -1485,6 +1485,32 @@ struct PassState {
     bili_room_was_live: bool,
 }
 
+/// Fetch the room's live status and emit the session 下播 edge when the room has
+/// just gone offline.
+///
+/// `None` means the fetch failed; the caller waits for the next pass. The edge is
+/// emitted before the pass selects a source, so a room that comes back opens a new
+/// session. `LiveLedger::end` only closes an open session and the first cause
+/// wins, so a stop this process already announced (manual/warning/auto) keeps its
+/// own cause.
+async fn observe_bili_room(
+    state: &mut PassState,
+    cfg: &bilistream::config::Config,
+) -> Option<bilibili::BiliLiveStatus> {
+    let bili_live = match fetch_bili_live_status_logged(cfg.bililive.room).await {
+        Ok(status) => status,
+        Err(_) => {
+            tracing::warn!("将在下次循环重试");
+            return None;
+        }
+    };
+    if state.bili_room_was_live && !bili_live.is_live {
+        bilistream::notify::live_ended(BroadcastEndCause::BiliStopped);
+    }
+    state.bili_room_was_live = bili_live.is_live;
+    Some(bili_live)
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -1655,25 +1681,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             release.log();
         }
 
-        // Get Bilibili status
-        let bili_live = match fetch_bili_live_status_logged(cfg.bililive.room).await {
-            Ok(status) => status,
-            Err(_) => {
-                tracing::warn!("将在下次循环重试");
-                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
-                continue 'outer;
-            }
+        let Some(bili_live) = observe_bili_room(&mut state, &cfg).await else {
+            wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
+            continue 'outer;
         };
         let bili_is_live = bili_live.is_live;
-        // Session 下播 edge: the room was live in the previous pass and is
-        // offline now. Emitted before this pass selects a source, so a room
-        // that comes back opens a new session. `LiveLedger::end` only closes
-        // an open session and the first cause wins, so a stop this process
-        // already announced (manual/warning/auto) keeps its own cause.
-        if state.bili_room_was_live && !bili_is_live {
-            bilistream::notify::live_ended(BroadcastEndCause::BiliStopped);
-        }
-        state.bili_room_was_live = bili_is_live;
         let bili_title = bili_live.title.clone();
         let bili_area_id = bili_live.area_id;
         let mut bili_status = bilistream::BiliStatus {
