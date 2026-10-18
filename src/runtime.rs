@@ -2130,6 +2130,109 @@ async fn read_end_live_states(
     (current_is_live, bili_is_live)
 }
 
+/// What the end announcement needs from the pass that ended.
+struct EndAnnouncement<'a> {
+    exit_reason: FfmpegLoopExitReason,
+    session_generation: u64,
+    channel_name: &'a str,
+    session_log: &'a str,
+    bili_live: bool,
+    /// Whether the 直播结束 notice still needs to go out for this broadcast.
+    end_announce: bool,
+}
+
+/// Announce the end of a stream whose source is positively offline: mark the
+/// session ended through the shared state, send the 结束弹幕 once, then auto-stop
+/// a room that has been live for `AUTO_STOP_AFTER_HOURS` or more.
+///
+/// `end_announce` is consumed here: it decides whether the 结束弹幕 still has to
+/// go out, and the value it takes afterwards is not read by anyone.
+async fn announce_stream_end(
+    cfg: &bilistream::config::Config,
+    state: &mut PassState,
+    ctx: EndAnnouncement<'_>,
+) {
+    let EndAnnouncement {
+        exit_reason,
+        session_generation,
+        channel_name,
+        session_log,
+        bili_live,
+        mut end_announce,
+    } = ctx;
+    // B站 stopped first (or another exit) with the source
+    // positively offline: mark it ended through the same
+    // state, with the same active-node and generation checks.
+    if exit_reason != FfmpegLoopExitReason::SourceEnded {
+        let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(cfg);
+        let signals = post_loop_end_signals(
+            exit_reason,
+            current_end_signals(session_generation, node_active),
+        );
+        let ended = state.stream_end.mark_ended(signals);
+        end_announce = ended.unwrap_or(false);
+    }
+    if bili_live {
+        tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
+    } else {
+        tracing::debug!("{session_log} 已确认源直播结束，B站房间已停播");
+    }
+    // One shared ended state drives the 换台 gate (and with
+    // it the page's 切换 button) and the danmaku. A node that
+    // lost the active role since the miss does neither.
+    let node_active = !cfg.cluster.enabled || cluster::local_monitoring_allowed(cfg);
+    let gate = state
+        .stream_end
+        .commands_gate(cfg.bililive.enable_danmaku_command, node_active);
+    if gate {
+        enable_danmaku_commands(true);
+    }
+    let send_result = if node_active && end_announce {
+        if gate {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        let text = end_danmaku_text(channel_name, cfg.bililive.enable_danmaku_command);
+        send_danmaku(cfg, &text).await.map(|_| ())
+    } else {
+        tracing::debug!("{session_log} 本节点非活动或本场已发送结束弹幕，不再发送");
+        Ok(())
+    };
+    if let Err(e) = send_result {
+        if bili_live {
+            tracing::error!("Failed to send danmaku: {}", e);
+        } else {
+            // Best effort: the room is already offline.
+            tracing::info!("{session_log} B站房间已停播，结束弹幕未发送: {}", e);
+        }
+    }
+
+    // Announce first, then stop a room that has been live for
+    // AUTO_STOP_AFTER_HOURS (3) hours or more.
+    if bili_live {
+        match get_bili_live_time(cfg.bililive.room).await {
+            Ok(Some(live_start)) => {
+                let hours = chrono::Local::now()
+                    .signed_duration_since(live_start)
+                    .num_hours();
+                if should_auto_stop_after_end(hours) {
+                    tracing::info!(
+                        "B站直播已超过{}小时（{}小时），自动停播",
+                        AUTO_STOP_AFTER_HOURS,
+                        hours
+                    );
+                    match bili_stop_live(cfg).await {
+                        Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
+                        Err(e) => tracing::error!("自动停播失败: {}", e),
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("获取B站直播时间失败: {}", e);
+            }
+        }
+    }
+}
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2759,83 +2862,19 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     tracing::info!("{session_log} 因B站警告或切断结束转播");
                 }
                 EndAction::AnnounceEnd { bili_live } => {
-                    // B站 stopped first (or another exit) with the source
-                    // positively offline: mark it ended through the same
-                    // state, with the same active-node and generation checks.
-                    if ffmpeg_loop_exit_reason != FfmpegLoopExitReason::SourceEnded {
-                        let node_active =
-                            !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
-                        let signals = post_loop_end_signals(
-                            ffmpeg_loop_exit_reason,
-                            current_end_signals(session_generation, node_active),
-                        );
-                        let ended = state.stream_end.mark_ended(signals);
-                        end_announce = ended.unwrap_or(false);
-                    }
-                    if bili_live {
-                        tracing::debug!("{session_log} 已确认源直播结束，B站房间仍开播");
-                    } else {
-                        tracing::debug!("{session_log} 已确认源直播结束，B站房间已停播");
-                    }
-                    // One shared ended state drives the 换台 gate (and with
-                    // it the page's 切换 button) and the danmaku. A node that
-                    // lost the active role since the miss does neither.
-                    let node_active =
-                        !cfg.cluster.enabled || cluster::local_monitoring_allowed(&cfg);
-                    let gate = state
-                        .stream_end
-                        .commands_gate(cfg.bililive.enable_danmaku_command, node_active);
-                    if gate {
-                        enable_danmaku_commands(true);
-                    }
-                    let send_result = if node_active && end_announce {
-                        if gate {
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                        }
-                        let text =
-                            end_danmaku_text(&channel_name, cfg.bililive.enable_danmaku_command);
-                        send_danmaku(&cfg, &text).await.map(|_| ())
-                    } else {
-                        tracing::debug!("{session_log} 本节点非活动或本场已发送结束弹幕，不再发送");
-                        Ok(())
-                    };
-                    if let Err(e) = send_result {
-                        if bili_live {
-                            tracing::error!("Failed to send danmaku: {}", e);
-                        } else {
-                            // Best effort: the room is already offline.
-                            tracing::info!("{session_log} B站房间已停播，结束弹幕未发送: {}", e);
-                        }
-                    }
-
-                    // Announce first, then stop a room that has been live for
-                    // AUTO_STOP_AFTER_HOURS (3) hours or more.
-                    if bili_live {
-                        match get_bili_live_time(cfg.bililive.room).await {
-                            Ok(Some(live_start)) => {
-                                let hours = chrono::Local::now()
-                                    .signed_duration_since(live_start)
-                                    .num_hours();
-                                if should_auto_stop_after_end(hours) {
-                                    tracing::info!(
-                                        "B站直播已超过{}小时（{}小时），自动停播",
-                                        AUTO_STOP_AFTER_HOURS,
-                                        hours
-                                    );
-                                    match bili_stop_live(&cfg).await {
-                                        Ok(()) => bilistream::notify::live_ended(
-                                            BroadcastEndCause::AutoStop,
-                                        ),
-                                        Err(e) => tracing::error!("自动停播失败: {}", e),
-                                    }
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::warn!("获取B站直播时间失败: {}", e);
-                            }
-                        }
-                    }
+                    announce_stream_end(
+                        &cfg,
+                        &mut state,
+                        EndAnnouncement {
+                            exit_reason: ffmpeg_loop_exit_reason,
+                            session_generation,
+                            channel_name: &channel_name,
+                            session_log: &session_log,
+                            bili_live,
+                            end_announce,
+                        },
+                    )
+                    .await;
                 }
                 EndAction::BiliStoppedQuietly => {
                     tracing::debug!("{session_log} 已确认B站房间停止直播");
