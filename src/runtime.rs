@@ -1922,6 +1922,62 @@ async fn rejected_by_keyword(
     true
 }
 
+/// Wait for this FFmpeg session to exit while sampling whether data is actually
+/// moving.
+///
+/// The sampling is the point: only time during which data moves may clear the
+/// stream-end error window (N1), so a stalled session that exits cleanly still
+/// counts as a failure.
+async fn wait_for_push_exit(
+    session: Option<ffmpeg::FfmpegSession>,
+) -> (Option<std::process::ExitStatus>, PushMovingTime) {
+    let mut push_moving = PushMovingTime::default();
+    let exit_status = match session {
+        Some(session) => {
+            let wait = ffmpeg::wait_ffmpeg_session(session);
+            tokio::pin!(wait);
+            let mut tick = tokio::time::interval(PUSH_SAMPLE_INTERVAL);
+            loop {
+                tokio::select! {
+                    status = &mut wait => break status,
+                    _ = tick.tick() => {
+                        push_moving.sample(std::time::Instant::now(), current_push_sample());
+                    }
+                }
+            }
+        }
+        None => None,
+    };
+    (exit_status, push_moving)
+}
+
+/// Attach the monitors that watch one push: the LoL keyword monitor when this
+/// stream has one, and the priority-channel monitor that keeps the priority
+/// source's URL warm. Both take the session they observe.
+async fn attach_push_monitors(
+    session: ffmpeg::FfmpegSession,
+    stream_log: &FfmpegStreamIdentity,
+    lol_monitor: Option<LolMonitor>,
+    selected_stream: &StreamCandidate,
+) {
+    if let Some(monitor) = lol_monitor {
+        ffmpeg::spawn_session_task(
+            session,
+            monitor.run(session, stream_log.session_label(Some(session))),
+        )
+        .await;
+    }
+    ffmpeg::spawn_session_task(
+        session,
+        monitor_priority_channel_background(
+            selected_stream.source_identity(),
+            session,
+            stream_log.session_label(Some(session)),
+        ),
+    )
+    .await;
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2334,46 +2390,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     run_history.attach(guard.seq(), run.id());
                 }
 
-                if let (Some(monitor), Some(session)) = (lol_monitor.clone(), session) {
-                    ffmpeg::spawn_session_task(
-                        session,
-                        monitor.run(session, stream_log.session_label(Some(session))),
-                    )
-                    .await;
-                }
-
                 if let Some(session) = session {
-                    ffmpeg::spawn_session_task(
+                    attach_push_monitors(
                         session,
-                        monitor_priority_channel_background(
-                            selected_stream.source_identity(),
-                            session,
-                            stream_log.session_label(Some(session)),
-                        ),
+                        &stream_log,
+                        lol_monitor.clone(),
+                        &selected_stream,
                     )
                     .await;
                 }
 
-                // Wait for this FFmpeg session to exit.
-                // Meanwhile, count only the time data is actually moving
-                // (N1): a stalled session must not clear the error window.
-                let mut push_moving = PushMovingTime::default();
-                let exit_status = match session {
-                    Some(session) => {
-                        let wait = ffmpeg::wait_ffmpeg_session(session);
-                        tokio::pin!(wait);
-                        let mut tick = tokio::time::interval(PUSH_SAMPLE_INTERVAL);
-                        loop {
-                            tokio::select! {
-                                status = &mut wait => break status,
-                                _ = tick.tick() => {
-                                    push_moving.sample(std::time::Instant::now(), current_push_sample());
-                                }
-                            }
-                        }
-                    }
-                    None => None,
-                };
+                let (exit_status, push_moving) = wait_for_push_exit(session).await;
 
                 // The supervisor owns child exit diagnostics. None can also
                 // mean declined startup or an intentional/obsolete session.
