@@ -1715,6 +1715,152 @@ fn stream_candidates(cfg: &bilistream::config::Config, sources: PassSources) -> 
     }
 }
 
+/// What [`align_bili_room`] needs of the selected source and the room this pass
+/// already observed. Grouped so the helper does not take twelve parameters.
+struct BiliAlign<'a> {
+    is_live: bool,
+    title: &'a str,
+    area_id: u64,
+    area_v2: u64,
+    cfg_title: &'a str,
+    platform: &'a str,
+    channel_id: &'a str,
+    channel_name: &'a str,
+    video_id_changed: bool,
+    current_video_id: Option<&'a str>,
+}
+
+/// Match the B站 room to the source this pass selected: startLive if the room
+/// is down, otherwise update title/area/cover.
+///
+/// `RestartPass` is the startLive failure paths that used to `continue 'outer`.
+/// The config-changed check after this block stays at the call site.
+enum AlignBiliRoom {
+    RestartPass,
+    Ready { history_area_v2: Option<u64> },
+}
+
+async fn align_bili_room(
+    cfg: &mut bilistream::config::Config,
+    stream_log: &FfmpegStreamIdentity,
+    align: BiliAlign<'_>,
+) -> AlignBiliRoom {
+    let mut history_area_v2 = align.is_live.then_some(align.area_id);
+    if !align.is_live {
+        tracing::info!("B站未直播");
+        let area_name = area_label(align.area_v2);
+
+        match bili_start_live(cfg, align.area_v2).await {
+            Ok(_) => {
+                history_area_v2 = Some(align.area_v2);
+                if align.title != align.cfg_title {
+                    if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
+                        tracing::error!("B站直播标题变更失败: {}", e);
+                    }
+                }
+                // 开播 notice (Addendum A) is recorded once the source
+                // for this pass is selected and the room is live (see
+                // `notify::live_source` below), so it carries the same
+                // source the push uses.
+                tracing::info!(
+                    "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
+                    safe_text(&area_name, 32),
+                    align.area_v2
+                );
+                recover_mutex_lock(&LAST_BANNED_KEYWORD_WARNING, "last banned keyword warning")
+                    .clear();
+            }
+            Err(e) => {
+                let error = e.to_string();
+                let message = error
+                    .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
+                    .unwrap_or(&error);
+                tracing::error!("{stream_log} B站开播失败；{}", safe_diagnostic(message));
+                // 60031 does not include the end time. A room_init lock with
+                // lock_till waits; only an untimed ban shuts the monitors off.
+                if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
+                    && wait_out_bili_room_lock(cfg.bililive.room).await
+                {
+                    return AlignBiliRoom::RestartPass;
+                }
+                if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
+                    && disable_monitors_after_bili_start_temp_ban(cfg)
+                {
+                    tracing::warn!("检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控");
+                    if let Err(save_err) = save_config(cfg).await {
+                        tracing::error!("保存配置失败: {}", save_err);
+                    }
+                }
+                tracing::warn!("{stream_log} 本次开播未完成，下轮监控重试");
+                wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
+                return AlignBiliRoom::RestartPass;
+            }
+        }
+
+        if cfg.auto_cover
+            && (align.title != align.cfg_title
+                || align.area_id != align.area_v2
+                || align.video_id_changed)
+        {
+            spawn_cover_update(
+                cfg,
+                align.platform,
+                align.channel_id,
+                align.current_video_id.map(str::to_owned),
+            );
+        }
+    } else {
+        if align.title != align.cfg_title {
+            if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
+                tracing::error!("B站直播标题变更失败: {}", e);
+            } else {
+                tracing::info!(
+                    "{stream_log} B站直播标题已更新；{} → {}",
+                    safe_text(align.title, 32),
+                    safe_text(align.cfg_title, 32)
+                );
+                // title is 【转播】频道名
+                let bili_channel_name = align.title.split("【转播】").last().unwrap();
+                if bili_channel_name != align.channel_name {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = send_danmaku(
+                        cfg,
+                        &format!("换台：{} → {}", bili_channel_name, align.channel_name),
+                    )
+                    .await
+                    {
+                        tracing::error!("发送弹幕失败: {}", e);
+                    }
+                }
+            }
+        }
+        if align.area_id != align.area_v2 {
+            if let Err(e) = update_area(align.area_id, align.area_v2).await {
+                tracing::error!("B站分区更新失败: {}", e);
+            } else {
+                history_area_v2 = Some(align.area_v2);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
+                    tracing::error!("B站直播标题变更失败: {}", e);
+                }
+            }
+        }
+        if cfg.auto_cover
+            && (align.title != align.cfg_title
+                || align.area_id != align.area_v2
+                || align.video_id_changed)
+        {
+            spawn_cover_update(
+                cfg,
+                align.platform,
+                align.channel_id,
+                align.current_video_id.map(str::to_owned),
+            );
+        }
+    }
+    AlignBiliRoom::Ready { history_area_v2 }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2045,116 +2191,26 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 enable_danmaku_commands(false);
             }
             // Reuse bili_is_live, bili_title, bili_area_id from earlier check (line 200)
-            let mut history_area_v2 = bili_is_live.then_some(bili_area_id);
-            if !bili_is_live {
-                tracing::info!("B站未直播");
-                let area_name = area_label(area_v2);
-
-                // Try to start live, but don't crash on error
-                match bili_start_live(&mut cfg, area_v2).await {
-                    Ok(_) => {
-                        history_area_v2 = Some(area_v2);
-                        if bili_title != cfg_title {
-                            if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
-                                tracing::error!("B站直播标题变更失败: {}", e);
-                            }
-                        }
-                        // 开播 notice (Addendum A) is recorded once the source
-                        // for this pass is selected and the room is live (see
-                        // `notify::live_source` below), so it carries the same
-                        // source the push uses.
-                        tracing::info!(
-                            "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
-                            safe_text(&area_name, 32),
-                            area_v2
-                        );
-                        // Clear banned keyword warning when successfully starting a new stream
-                        recover_mutex_lock(
-                            &LAST_BANNED_KEYWORD_WARNING,
-                            "last banned keyword warning",
-                        )
-                        .clear();
-                    }
-                    Err(e) => {
-                        let error = e.to_string();
-                        let message = error
-                            .strip_prefix(BILI_START_TEMP_BAN_PREFIX)
-                            .unwrap_or(&error);
-                        tracing::error!("{stream_log} B站开播失败；{}", safe_diagnostic(message));
-                        // 60031 does not include the end time. A room_init lock with
-                        // lock_till waits; only an untimed ban shuts the monitors off.
-                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
-                            && wait_out_bili_room_lock(cfg.bililive.room).await
-                        {
-                            continue 'outer;
-                        }
-                        if error.starts_with(BILI_START_TEMP_BAN_PREFIX)
-                            && disable_monitors_after_bili_start_temp_ban(&mut cfg)
-                        {
-                            tracing::warn!(
-                                "检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控"
-                            );
-                            if let Err(save_err) = save_config(&mut cfg).await {
-                                tracing::error!("保存配置失败: {}", save_err);
-                            }
-                        }
-                        tracing::warn!("{stream_log} 本次开播未完成，下轮监控重试");
-                        wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
-                        continue 'outer;
-                    }
-                }
-
-                // If auto_cover is enabled, update Bilibili live cover in background
-                if cfg.auto_cover
-                    && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
-                {
-                    spawn_cover_update(&cfg, platform, &channel_id, current_video_id.clone());
-                }
-            } else {
-                // 如果target channel改变，则变更B站直播标题
-                if bili_title != cfg_title {
-                    if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
-                        tracing::error!("B站直播标题变更失败: {}", e);
-                    } else {
-                        tracing::info!(
-                            "{stream_log} B站直播标题已更新；{} → {}",
-                            safe_text(&bili_title, 32),
-                            safe_text(&cfg_title, 32)
-                        );
-                        // title is 【转播】频道名
-                        let bili_channel_name = bili_title.split("【转播】").last().unwrap();
-                        if bili_channel_name != channel_name {
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                            if let Err(e) = send_danmaku(
-                                &cfg,
-                                &format!("换台：{} → {}", bili_channel_name, channel_name),
-                            )
-                            .await
-                            {
-                                tracing::error!("发送弹幕失败: {}", e);
-                            }
-                        }
-                    }
-                }
-                // If area_v2 changed, update Bilibili live area
-                if bili_area_id != area_v2 {
-                    if let Err(e) = update_area(bili_area_id, area_v2).await {
-                        tracing::error!("B站分区更新失败: {}", e);
-                    } else {
-                        history_area_v2 = Some(area_v2);
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        if let Err(e) = bili_change_live_title(&cfg, &cfg_title).await {
-                            tracing::error!("B站直播标题变更失败: {}", e);
-                        }
-                    }
-                }
-                // If auto_cover is enabled, update Bilibili live cover
-                if cfg.auto_cover
-                    && (bili_title != cfg_title || bili_area_id != area_v2 || video_id_changed)
-                {
-                    spawn_cover_update(&cfg, platform, &channel_id, current_video_id.clone());
-                }
-            }
+            let AlignBiliRoom::Ready { history_area_v2 } = align_bili_room(
+                &mut cfg,
+                &stream_log,
+                BiliAlign {
+                    is_live: bili_is_live,
+                    title: &bili_title,
+                    area_id: bili_area_id,
+                    area_v2,
+                    cfg_title: &cfg_title,
+                    platform,
+                    channel_id: &channel_id,
+                    channel_name: &channel_name,
+                    video_id_changed,
+                    current_video_id: current_video_id.as_deref(),
+                },
+            )
+            .await
+            else {
+                continue 'outer;
+            };
 
             if config_changed_since_pass(&cfg) {
                 continue 'outer;
