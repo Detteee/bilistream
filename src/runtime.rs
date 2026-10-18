@@ -2462,6 +2462,72 @@ async fn run_push_loop(
     }
 }
 
+/// The probe results a warning decision is made from.
+struct WarningObservationInputs<'a> {
+    probe_plan: &'a SourceProbePlan,
+    probes: &'a [ProbedSource],
+    nico_status: Option<&'a Result<SourceStatus, Box<dyn std::error::Error>>>,
+    nico_channel_id: &'a str,
+    nico_channel_name: &'a str,
+}
+
+/// Feed one observation per probed source to the warning tracker, which decides
+/// whether this pass's source change deserves a warning, and log the release note
+/// when the tracker hands one back.
+fn observe_source_warnings(
+    cfg: &bilistream::config::Config,
+    warnings: &bilistream::plugins::danmaku::warning::WarningTracker,
+    before_probe: &WarningSnapshot,
+    inputs: WarningObservationInputs<'_>,
+) {
+    let mut observations = Vec::new();
+    for (index, platform, name, id) in [
+        (
+            inputs.probe_plan.youtube,
+            StreamPlatform::Youtube,
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+        ),
+        (
+            inputs.probe_plan.priority_youtube,
+            StreamPlatform::Youtube,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+        ),
+        (
+            inputs.probe_plan.twitch,
+            StreamPlatform::Twitch,
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+        ),
+        (
+            inputs.probe_plan.priority_twitch,
+            StreamPlatform::Twitch,
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.twitch_channel_id,
+        ),
+    ] {
+        if let Some(status) = index.and_then(|index| inputs.probes[index].status.as_ref().ok()) {
+            observations.push(source_observation(platform, name, id, status));
+        }
+    }
+    if let Some(Ok(status)) = inputs.nico_status {
+        observations.push(source_observation(
+            StreamPlatform::Niconico,
+            inputs.nico_channel_name,
+            inputs.nico_channel_id,
+            status,
+        ));
+    }
+    if let Some(release) = bilistream::config::with_current_config(cfg, || {
+        warnings.observe_sources(before_probe, &observations)
+    })
+    .flatten()
+    {
+        release.log();
+    }
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2560,52 +2626,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             priority_youtube,
             priority_twitch,
         };
-        let mut observations = Vec::new();
-        for (index, platform, name, id) in [
-            (
-                probe_plan.youtube,
-                StreamPlatform::Youtube,
-                &cfg.youtube.channel_name,
-                &cfg.youtube.channel_id,
-            ),
-            (
-                probe_plan.priority_youtube,
-                StreamPlatform::Youtube,
-                &cfg.priority_channel.channel_name,
-                &cfg.priority_channel.youtube_channel_id,
-            ),
-            (
-                probe_plan.twitch,
-                StreamPlatform::Twitch,
-                &cfg.twitch.channel_name,
-                &cfg.twitch.channel_id,
-            ),
-            (
-                probe_plan.priority_twitch,
-                StreamPlatform::Twitch,
-                &cfg.priority_channel.channel_name,
-                &cfg.priority_channel.twitch_channel_id,
-            ),
-        ] {
-            if let Some(status) = index.and_then(|index| probes[index].status.as_ref().ok()) {
-                observations.push(source_observation(platform, name, id, status));
-            }
-        }
-        if let Some(Ok(status)) = &nico_status {
-            observations.push(source_observation(
-                StreamPlatform::Niconico,
-                &sources.nico_channel_name,
-                &sources.nico_channel_id,
-                status,
-            ));
-        }
-        if let Some(release) = bilistream::config::with_current_config(&cfg, || {
-            warnings.observe_sources(&warning_before_probe, &observations)
-        })
-        .flatten()
-        {
-            release.log();
-        }
+        observe_source_warnings(
+            &cfg,
+            &warnings,
+            &warning_before_probe,
+            WarningObservationInputs {
+                probe_plan: &probe_plan,
+                probes: &probes,
+                nico_status: nico_status.as_ref(),
+                nico_channel_id: &sources.nico_channel_id,
+                nico_channel_name: &sources.nico_channel_name,
+            },
+        );
 
         let Some(bili_live) = observe_bili_room(&mut state, &cfg).await else {
             wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
