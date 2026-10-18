@@ -1861,6 +1861,67 @@ async fn align_bili_room(
     AlignBiliRoom::Ready { history_area_v2 }
 }
 
+/// Per-platform ffmpeg inputs for one push, keyed by the platform code the pass
+/// carries. These three matches used to sit in the middle of the ffmpeg loop,
+/// where they were 31 lines of repetitive arms.
+struct PlatformPushOptions {
+    proxy: Option<String>,
+    crop: Option<(u32, u32, u32, u32)>,
+    cache: bilistream::config::FfmpegCache,
+}
+
+fn platform_push_options(cfg: &bilistream::config::Config, platform: &str) -> PlatformPushOptions {
+    let crop = |c: &Option<bilistream::config::CropConfig>| {
+        c.as_ref().map(|c| (c.width, c.height, c.x, c.y))
+    };
+    // The fallbacks match the original three matches exactly: an unknown platform
+    // gets no proxy and no crop, and reads the Twitch cache settings.
+    match platform {
+        "YT" => PlatformPushOptions {
+            proxy: cfg.youtube.proxy.clone(),
+            crop: crop(&cfg.youtube.crop),
+            cache: cfg.youtube.ffmpeg_cache.clone(),
+        },
+        "TW" => PlatformPushOptions {
+            proxy: cfg.twitch.proxy.clone(),
+            crop: crop(&cfg.twitch.crop),
+            cache: cfg.twitch.ffmpeg_cache.clone(),
+        },
+        "NC" => PlatformPushOptions {
+            proxy: cfg.niconico.proxy.clone(),
+            crop: crop(&cfg.niconico.crop),
+            cache: cfg.niconico.ffmpeg_cache.clone(),
+        },
+        _ => PlatformPushOptions {
+            proxy: None,
+            crop: None,
+            cache: cfg.twitch.ffmpeg_cache.clone(),
+        },
+    }
+}
+
+/// The LoL monitor refuses a stream whose title carries a banned word: stop the
+/// Bilibili broadcast (the room is offline because of the keyword, not because
+/// the source went away), then tell the caller to wait. Returns true when this
+/// pass must not push the stream.
+async fn rejected_by_keyword(
+    cfg: &bilistream::config::Config,
+    monitor: &LolMonitor,
+    bili_is_live: bool,
+) -> bool {
+    let Some(word) = monitor.invalid_word().await else {
+        return false;
+    };
+    tracing::error!("检测到非法词汇:{}，不转播", word);
+    if bili_is_live {
+        match bili_stop_live(cfg).await {
+            Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::ContentRejected),
+            Err(error) => tracing::error!("停止 B 站直播失败: {}", error),
+        }
+    }
+    true
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2169,18 +2230,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 None
             };
             if let Some(monitor) = &lol_monitor {
-                if let Some(word) = monitor.invalid_word().await {
-                    tracing::error!("检测到非法词汇:{}，不转播", word);
-                    if bili_is_live {
-                        match bili_stop_live(&cfg).await {
-                            // The room is offline because of the keyword, not
-                            // because it went away on its own.
-                            Ok(()) => {
-                                bilistream::notify::live_ended(BroadcastEndCause::ContentRejected)
-                            }
-                            Err(error) => tracing::error!("停止 B 站直播失败: {}", error),
-                        }
-                    }
+                if rejected_by_keyword(&cfg, monitor, bili_is_live).await {
                     wait_config_update_or_timeout(Duration::from_secs(cfg.interval.max(1))).await;
                     continue;
                 }
@@ -2246,37 +2296,8 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                     break FfmpegLoopExitReason::ClusterHandoff;
                 }
 
-                let proxy = match platform {
-                    "YT" => cfg.youtube.proxy.clone(),
-                    "TW" => cfg.twitch.proxy.clone(),
-                    "NC" => cfg.niconico.proxy.clone(),
-                    _ => None,
-                };
-
-                let crop = match platform {
-                    "YT" => cfg
-                        .youtube
-                        .crop
-                        .as_ref()
-                        .map(|c| (c.width, c.height, c.x, c.y)),
-                    "TW" => cfg
-                        .twitch
-                        .crop
-                        .as_ref()
-                        .map(|c| (c.width, c.height, c.x, c.y)),
-                    "NC" => cfg
-                        .niconico
-                        .crop
-                        .as_ref()
-                        .map(|c| (c.width, c.height, c.x, c.y)),
-                    _ => None,
-                };
-
-                let cache = match platform {
-                    "YT" => &cfg.youtube.ffmpeg_cache,
-                    "NC" => &cfg.niconico.ffmpeg_cache,
-                    _ => &cfg.twitch.ffmpeg_cache,
-                };
+                let PlatformPushOptions { proxy, crop, cache } =
+                    platform_push_options(&cfg, platform);
 
                 // Stop/restart requests from before this session must not
                 // cancel its end-of-stream recheck.
