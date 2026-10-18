@@ -154,7 +154,7 @@ fn membership_view(runtime: &Runtime, password_required: bool) -> std::io::Resul
                 })
                 .max_by_key(|op| (op.intent.base.revision, op.intent.sequence))
         })
-        .map(|op| project(runtime, &op));
+        .map(|op| project(runtime, op));
     let managed = matches!(local.lifecycle, Lifecycle::Managed);
     let manifest = manifest.filter(|_| managed);
     Ok(MembershipView {

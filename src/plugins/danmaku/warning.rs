@@ -452,10 +452,10 @@ impl WarningTracker {
         let mut state = self.lock();
         if state.generation != before_action.generation
             || state.event != before_action.event
-            || !state
+            || state
                 .hold
                 .as_ref()
-                .is_some_and(|hold| hold.channel_name == name)
+                .is_none_or(|hold| hold.channel_name != name)
         {
             return None;
         }

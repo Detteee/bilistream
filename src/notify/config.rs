@@ -126,9 +126,9 @@ impl QqNotifyConfig {
 /// Server-side validation; the ranges match the WebUI (frontend spec §10).
 pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
     let app_id = cfg.qq.app_id.trim();
-    if !app_id.is_empty()
-        && !(app_id.len() >= 5 && app_id.len() <= 20 && app_id.bytes().all(|b| b.is_ascii_digit()))
-    {
+    let well_formed =
+        (5..=20).contains(&app_id.len()) && app_id.bytes().all(|b| b.is_ascii_digit());
+    if !app_id.is_empty() && !well_formed {
         return Err("AppID 应为数字".to_string());
     }
     let ranges: [(&str, u64, u64, u64); 8] = [

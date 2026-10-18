@@ -289,7 +289,7 @@ fn prune_book_and_boots(
     let excess = |table: &str| -> rusqlite::Result<i64> {
         let count: i64 =
             conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
-        Ok(count.saturating_sub(cap).max(0).min(BATCH))
+        Ok(count.saturating_sub(cap).clamp(0, BATCH))
     };
     let lives_over = excess("bili_lives")?;
     let boots_over = excess("boots")?;

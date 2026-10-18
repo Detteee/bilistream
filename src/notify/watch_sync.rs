@@ -219,7 +219,6 @@ pub fn seed_if_needed(store: &Store, node: &str, now: u64) -> io::Result<bool> {
                 revision: 1,
                 updated_by: node,
                 updated_at: now,
-                ..WatchMeta::default()
             },
         )?;
         Ok(true)

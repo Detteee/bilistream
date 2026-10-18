@@ -646,7 +646,7 @@ mod tests {
             entries: vec![stopped],
         };
         let lease = claim_lease(&cfg);
-        assert!(lease >= 335 && lease < 600);
+        assert!((335..600).contains(&lease));
         book.claim(1, "synthetic-key", "a", 100, lease).unwrap();
         assert!(book
             .claim(1, "synthetic-key", "b", 100 + lease - 1, lease)
