@@ -104,34 +104,37 @@ export function formatScheduledStart(startScheduled) {
   return `将在 ${y}/${m}/${d}开播 (${clock})`;
 }
 
-export function getQualityDisplayText(technicalValue, platform = 'youtube') {
-  const qualityMappings = {
-    youtube: {
-      'best': '最佳质量',
-      'best[height<=1080]': '超清 (1080p)',
-      'best[height<=720]': '高清 (720p)',
-      'best[height<=480]': '标清 (480p)',
-      'best[height<=360]': '流畅 (360p)',
-      'worst': '最低质量'
-    },
-    twitch: {
-      'best': '原画质量',
-      'high': '高质量 (720p)',
-      'medium': '中等质量 (540p)',
-      'low': '低质量 (360p)',
-      'audio_only': '仅音频',
-      'worst': '最低质量'
-    },
-    niconico: {
-      'best': '最佳质量',
-      '1080p60': '1080p60',
-      '720p60': '720p60',
-      '450p': '450p',
-      '288p': '288p'
-    }
-  };
+// Technical quality value → operator-facing label. One table for both the
+// channel-card text (`getQualityDisplayText`) and the 画质 picker
+// (`overview.js:populateQualityOptions`), so the two cannot drift apart.
+export const QUALITY_MAPPINGS = {
+  youtube: {
+    'best': '最佳质量',
+    'best[height<=1080]': '超清 (1080p)',
+    'best[height<=720]': '高清 (720p)',
+    'best[height<=480]': '标清 (480p)',
+    'best[height<=360]': '流畅 (360p)',
+    'worst': '最低质量'
+  },
+  twitch: {
+    'best': '原画质量',
+    'high': '高质量 (720p)',
+    'medium': '中等质量 (540p)',
+    'low': '低质量 (360p)',
+    'audio_only': '仅音频',
+    'worst': '最低质量'
+  },
+  niconico: {
+    'best': '最佳质量',
+    '1080p60': '1080p60',
+    '720p60': '720p60',
+    '450p': '450p',
+    '288p': '288p'
+  }
+};
 
-  return qualityMappings[platform]?.[technicalValue] || technicalValue;
+export function getQualityDisplayText(technicalValue, platform = 'youtube') {
+  return QUALITY_MAPPINGS[platform]?.[technicalValue] || technicalValue;
 }
 
 export function asBitrateHistory(values) {

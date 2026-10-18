@@ -11,6 +11,7 @@ import { bindDialog, bindListboxKeyboard } from './dialog.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { createPriorityWarningControl } from './priority-warning.js';
 import {
+  QUALITY_MAPPINGS,
   formatHlsCacheStatus,
   getQualityDisplayText,
 } from './format.js';
@@ -2932,35 +2933,9 @@ function populateQualityOptions(selectElement, platform, includeEmpty = true) {
     selectElement.appendChild(createSelectOption('', '选择画质...'));
   }
 
-  // Get quality mappings for the platform
-  const qualityMappings = {
-    youtube: {
-      'best': '最佳质量',
-      'best[height<=1080]': '超清 (1080p)',
-      'best[height<=720]': '高清 (720p)',
-      'best[height<=480]': '标清 (480p)',
-      'best[height<=360]': '流畅 (360p)',
-      'worst': '最低质量'
-    },
-    twitch: {
-      'best': '原画质量',
-      'high': '高质量 (720p)',
-      'medium': '中等质量 (540p)',
-      'low': '低质量 (360p)',
-      'audio_only': '仅音频',
-      'worst': '最低质量'
-    },
-    niconico: {
-      'best': '最佳质量',
-      '1080p60': '1080p60',
-      '720p60': '720p60',
-      '450p': '450p',
-      '288p': '288p'
-    }
-  };
-
-  // Add options for the specified platform
-  const platformQualities = qualityMappings[platform];
+  // Add options for the specified platform; the labels are the shared table so
+  // the picker and the channel card cannot drift apart.
+  const platformQualities = QUALITY_MAPPINGS[platform];
   if (platformQualities) {
     Object.entries(platformQualities).forEach(([value, text]) => {
       const option = document.createElement('option');
