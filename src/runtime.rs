@@ -2528,6 +2528,79 @@ fn observe_source_warnings(
     }
 }
 
+/// Everything one pass's source probing produced.
+struct ProbePass {
+    /// The warning tracker plus the snapshot taken before probing: deciding
+    /// whether this pass's change is warn-worthy needs both.
+    warnings: std::sync::Arc<bilistream::plugins::danmaku::warning::WarningTracker>,
+    warning_before_probe: WarningSnapshot,
+    probe_plan: SourceProbePlan,
+    probes: Vec<ProbedSource>,
+    /// The per-platform answers plus the Niconico channel identity.
+    sources: PassSources,
+    nico_live: Option<NiconicoClient>,
+    nico_status: Option<Result<SourceStatus, Box<dyn std::error::Error>>>,
+}
+
+/// Probe every configured source once and collect what the rest of the pass needs.
+///
+/// `None` means this pass must start over, either because a probe asked for a
+/// reload or because the config changed underneath it. Both callers clear the
+/// reload signal before restarting the pass.
+async fn probe_pass_sources(cfg: &bilistream::config::Config) -> Option<ProbePass> {
+    let warnings = warning_tracker();
+    let warning_before_probe = warnings.snapshot();
+    let probe_plan = SourceProbePlan::for_config(cfg);
+    let probes = probe_sources(cfg, &probe_plan).await?;
+    let mut youtube = probed_status(&probes, probe_plan.youtube);
+    if youtube
+        .start_time
+        .as_ref()
+        .is_some_and(|start| start > &(Local::now() + Duration::from_secs(2 * 24 * 60 * 60)))
+    {
+        youtube.start_time = None;
+    }
+    let priority_youtube = probed_status(&probes, probe_plan.priority_youtube);
+    let twitch = probed_status(&probes, probe_plan.twitch);
+    let priority_twitch = probed_status(&probes, probe_plan.priority_twitch);
+    let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
+        Some(NiconicoClient::new(&cfg.niconico))
+    } else {
+        None
+    };
+    let nico_status = if nico_live.is_some() {
+        Some(bilistream::plugins::niconico_live::monitor_status(&cfg.niconico, false).await)
+    } else {
+        None
+    };
+    let niconico = nico_status
+        .as_ref()
+        .and_then(|status| status.as_ref().ok())
+        .cloned()
+        .unwrap_or(SourceStatus::OFFLINE);
+    if config_changed_since_pass(cfg) {
+        return None;
+    }
+    let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
+    Some(ProbePass {
+        warnings,
+        warning_before_probe,
+        probe_plan,
+        probes,
+        sources: PassSources {
+            youtube,
+            twitch,
+            niconico,
+            nico_channel_id,
+            nico_channel_name,
+            priority_youtube,
+            priority_twitch,
+        },
+        nico_live,
+        nico_status,
+    })
+}
+
 async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with timestamp format : 2024-11-21 12:00:00
     // Only init if not already initialized (webui mode initializes it earlier)
@@ -2578,53 +2651,18 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             continue 'outer;
         }
 
-        let warnings = warning_tracker();
-        let warning_before_probe = warnings.snapshot();
-        let probe_plan = SourceProbePlan::for_config(&cfg);
-        let Some(probes) = probe_sources(&cfg, &probe_plan).await else {
+        let Some(ProbePass {
+            warnings,
+            warning_before_probe,
+            probe_plan,
+            probes,
+            sources,
+            nico_live,
+            nico_status,
+        }) = probe_pass_sources(&cfg).await
+        else {
             clear_config_updated();
             continue 'outer;
-        };
-        let mut youtube = probed_status(&probes, probe_plan.youtube);
-        if youtube
-            .start_time
-            .as_ref()
-            .is_some_and(|start| start > &(Local::now() + Duration::from_secs(2 * 24 * 60 * 60)))
-        {
-            youtube.start_time = None;
-        }
-        let priority_youtube = probed_status(&probes, probe_plan.priority_youtube);
-        let twitch = probed_status(&probes, probe_plan.twitch);
-        let priority_twitch = probed_status(&probes, probe_plan.priority_twitch);
-        let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
-            Some(NiconicoClient::new(&cfg.niconico))
-        } else {
-            None
-        };
-        let nico_status = if nico_live.is_some() {
-            Some(bilistream::plugins::niconico_live::monitor_status(&cfg.niconico, false).await)
-        } else {
-            None
-        };
-        let niconico = nico_status
-            .as_ref()
-            .and_then(|status| status.as_ref().ok())
-            .cloned()
-            .unwrap_or(SourceStatus::OFFLINE);
-
-        if config_changed_since_pass(&cfg) {
-            clear_config_updated();
-            continue 'outer;
-        }
-        let (nico_channel_id, nico_channel_name) = niconico_channel_identity(&cfg.niconico);
-        let sources = PassSources {
-            youtube,
-            twitch,
-            niconico,
-            nico_channel_id,
-            nico_channel_name,
-            priority_youtube,
-            priority_twitch,
         };
         observe_source_warnings(
             &cfg,
