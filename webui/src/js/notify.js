@@ -13,7 +13,7 @@ import {
   DEFAULTS, bindView, configToForm, errorCopy,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
-  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature,
+  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature, reuseRows,
   credentialsSync, baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, appIdWriteOnly, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
   APPSECRET_HELP_SYNC, APPID_HELP_SYNC, APPID_EMPTY, pendingSettingsForm, LOCAL_SETTINGS_PENDING_TEXT,
 } from './notify-state.js';
@@ -51,6 +51,7 @@ let watchDraft = [];    // 关注列表 being edited
 let watchSig = '';      // inputs of the last renderWatch(); skip identical re-renders
 const watchMigrationAcks = createWatchMigrationAcknowledgements(() => window.localStorage);
 let statusSig = '';     // same for renderStatus()
+let statusRowCache = new Map();  // key -> { el, sig }: rows that survived a redraw
 let liveEventsError = '';  // inline invalid_field copy for the 开播/下播 switch
 const watchChips = new Map();    // watchKey → <li>, reused so focus survives
 const watchOptions = new Map();  // watchKey → <li> in the picker
@@ -458,7 +459,13 @@ function renderStatus() {
   const sig = rows.map(nodeSignature).join('\n');
   if (sig === statusSig) return;
   statusSig = sig;
-  box.replaceChildren(...rows);
+  // A row whose own signature is unchanged keeps its element. The list is
+  // aria-live and one row carries a relative uptime, so replacing the whole
+  // subtree about once a minute dropped keyboard focus and re-announced every
+  // row; now only the rows that actually changed are replaced.
+  const reused = reuseRows(rows, statusRowCache);
+  statusRowCache = reused.cache;
+  reconcileChildren(box, reused.elements);
 }
 
 // §16.x 可发送节点: count, then one nowrap span per node gap joined by ；.

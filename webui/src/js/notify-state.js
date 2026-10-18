@@ -621,14 +621,49 @@ export function activePushView(status, { available = true } = {}) {
 // Signature of a rendered status row tree: every child node including bare
 // text nodes (a dot followed by "已连接 · 2 小时 3 分钟"), plus each element's
 // class, data-tone and title, plus the full textContent as a backstop. So
-// renderStatus() rebuilds the 发送状态 rows only when what the user sees
-// changes, and the 10 s tick still moves the uptime / relative times.
+// renderStatus() touches the 发送状态 rows only when what the user sees changes,
+// and a row whose signature is unchanged keeps its element ([`reuseRows`]).
 export function nodeSignature(node) {
   if (!node) return '';
   if (node.nodeType === 3) return `#${node.textContent ?? node.nodeValue ?? ''}`;
   const kids = [...(node.childNodes || node.children || [])];
   const own = [node.className || '', node.dataset?.tone || '', node.title || ''].join('|');
   return `${own}:${node.textContent || ''}[${kids.map(nodeSignature).join(',')}]`;
+}
+
+// A row's identity for [`reuseRows`]: the label it renders in its first child.
+export function rowLabel(el) {
+  return el?.firstChild ? el.firstChild.textContent : '';
+}
+
+// Keyed reuse for a row list that is built fresh on every render.
+//
+// Rows are keyed by their label — repeated labels (`Trace ID` can appear twice)
+// get an occurrence suffix, so identity follows the position among peers. A row
+// whose content signature is unchanged hands back the element from the previous
+// render, so `reconcileChildren` leaves it attached: the 10 s tick can move one
+// relative uptime without dropping keyboard focus or re-announcing an entire
+// `aria-live` list.
+//
+// Returns the elements to reconcile plus the cache for the next render.
+export function reuseRows(rows, cache, { labelOf = rowLabel, sigOf = nodeSignature } = {}) {
+  const seen = new Map();
+  const next = new Map();
+  const elements = rows.map(el => {
+    const label = labelOf(el);
+    const n = (seen.get(label) ?? 0) + 1;
+    seen.set(label, n);
+    const key = n === 1 ? label : `${label}#${n}`;
+    const sig = sigOf(el);
+    const prev = cache?.get(key);
+    if (prev && prev.sig === sig) {
+      next.set(key, prev);
+      return prev.el;
+    }
+    next.set(key, { el, sig });
+    return el;
+  });
+  return { elements, cache: next };
 }
 
 export const LIVE_EVENTS_HINT = '占用 QQ 发送额度，故障提醒优先';

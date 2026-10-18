@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { activePushView, nodeSignature } from '../src/js/notify-state.js';
+import { activePushView, nodeSignature, reuseRows } from '../src/js/notify-state.js';
 import { mergeRetention } from '../src/js/analytics-format.js';
 
 const src = name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8');
@@ -25,9 +25,34 @@ test('N2: status signature is stable for identical rows and changes on text, ton
   assert.equal(nodeSignature(null), '');
 });
 
-test('N2: renderStatus skips the DOM rebuild when the signature is unchanged', async () => {
-  const js = await src('js/notify.js');
-  assert.match(js, /const sig = rows\.map\(nodeSignature\)\.join\('\\n'\);\s*if \(sig === statusSig\) return;\s*statusSig = sig;\s*box\.replaceChildren\(\.\.\.rows\);/);
+test('N2: an uptime tick replaces only the row that moved, not its neighbours', () => {
+  const labelOf = el => el.children[0].textContent;
+  const gateway = text => n('cluster-node-meta-row', 'x', {}, [n('l', 'QQ 网关'), n('v', text)]);
+  const trace = () => n('cluster-node-meta-row', 'x', {}, [n('l', 'Trace ID'), n('v', 'abc…')]);
+  const g1 = gateway('已连接 · 2 小时 3 分钟');
+  const t1 = trace();
+  const r1 = reuseRows([g1, t1], new Map(), { labelOf });
+  assert.deepEqual(r1.elements, [g1, t1], 'the first render places the built rows');
+  const g2 = gateway('已连接 · 2 小时 4 分钟');
+  const r2 = reuseRows([g2, trace()], r1.cache, { labelOf });
+  assert.equal(r2.elements[0], g2, 'the row whose text moved is rebuilt');
+  assert.equal(r2.elements[1], t1, 'its untouched neighbour keeps the element, and with it any focus');
+  const r3 = reuseRows([gateway('已连接 · 2 小时 5 分钟'), trace()], r2.cache, { labelOf });
+  assert.equal(r3.elements[1], t1, 'still reused on the next tick');
+});
+
+test('N2: equally labelled rows are keyed apart and dropped rows leave the cache', () => {
+  const labelOf = el => el.children[0].textContent;
+  const trace = id => n('cluster-node-meta-row', 'x', {}, [n('l', 'Trace ID'), n('v', id)]);
+  const x1 = trace('same');
+  const y1 = trace('same');
+  const r1 = reuseRows([x1, y1], new Map(), { labelOf });
+  const r2 = reuseRows([trace('same'), trace('same')], r1.cache, { labelOf });
+  assert.equal(r2.elements[0], x1, 'the first Trace ID row keeps its own element');
+  assert.equal(r2.elements[1], y1, 'the second row is not served from the first row key');
+  const r3 = reuseRows([], r2.cache, { labelOf });
+  assert.deepEqual(r3.elements, []);
+  assert.equal(r3.cache.size, 0, 'a row that disappeared does not stay cached');
 });
 
 test('N3: events-only reloads refresh W15/W16', async () => {
