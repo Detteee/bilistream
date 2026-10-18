@@ -10,6 +10,7 @@ use crate::plugins::banned_keywords::{
     banned_keyword_hit, danmaku_banned_keywords, danmaku_haystack,
 };
 use crate::plugins::bilibili;
+use crate::plugins::source_status::SourceStatus;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -956,7 +957,12 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
         let (live_title, live_topic, youtube_video_id) = if platform.eq_ignore_ascii_case("YT") {
             // get youtube live status
             match get_youtube_status(channel_id_str).await {
-                Ok((_, topic, title, _, _, video_id)) => {
+                Ok(SourceStatus {
+                    topic,
+                    title,
+                    video_id,
+                    ..
+                }) => {
                     let t = match title {
                         Some(t) => t,
                         None => {

@@ -11,6 +11,7 @@ pub mod niconico_live;
 pub(crate) mod niconico_session;
 pub mod priority;
 pub mod riot;
+pub(crate) mod source_status;
 pub mod twitch;
 pub mod twitch_live;
 pub mod utils;

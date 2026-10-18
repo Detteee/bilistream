@@ -12,6 +12,7 @@ use std::time::Duration;
 use super::ffmpeg::PipedIngest;
 use super::utils::{command_output_with_timeout, configure_no_window, executable_command};
 use crate::config::Niconico as NiconicoConfig;
+use crate::plugins::source_status::SourceStatus;
 
 lazy_static! {
     static ref LIVE_ID_FULL: Regex = Regex::new(r"live\.nicovideo\.jp/watch/(lv\d+)").unwrap();
@@ -57,38 +58,17 @@ impl Niconico {
         Niconico { cfg: cfg.clone() }
     }
 
-    pub async fn get_status(
-        &self,
-    ) -> Result<
-        (
-            bool,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<chrono::DateTime<chrono::Local>>,
-            Option<String>,
-        ),
-        Box<dyn Error>,
-    > {
+    pub async fn get_status(&self) -> Result<SourceStatus, Box<dyn Error>> {
         get_niconico_status(&self.cfg).await
     }
 
     /// The push loop's m3u8 refetch: "not live" only when the page parses and
     /// shows no broadcast on air (or streamlink says the program has no
     /// playable streams); an unparsed page or an empty stream list is an error.
-    pub async fn get_status_refetch(&self) -> Result<NiconicoStatus, Box<dyn Error>> {
+    pub async fn get_status_refetch(&self) -> Result<SourceStatus, Box<dyn Error>> {
         get_niconico_status_mode(&self.cfg, true).await
     }
 }
-
-pub type NiconicoStatus = (
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<chrono::DateTime<chrono::Local>>,
-    Option<String>,
-);
 
 pub fn normalize_live_id(input: &str) -> String {
     let trimmed = input.trim();
@@ -647,44 +627,41 @@ struct StreamlinkMetadata {
     title: Option<String>,
 }
 
-pub async fn get_niconico_status(cfg: &NiconicoConfig) -> Result<NiconicoStatus, Box<dyn Error>> {
+pub async fn get_niconico_status(cfg: &NiconicoConfig) -> Result<SourceStatus, Box<dyn Error>> {
     get_niconico_status_mode(cfg, false).await
 }
 
 async fn get_niconico_status_mode(
     cfg: &NiconicoConfig,
     strict: bool,
-) -> Result<
-    (
-        bool,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Local>>,
-        Option<String>,
-    ),
-    Box<dyn Error>,
-> {
+) -> Result<SourceStatus, Box<dyn Error>> {
     let channel_id = niconico_channel_id(cfg);
     if !channel_id.is_empty() {
         return match fetch_channel_listing(&channel_id, cfg.proxy.as_deref(), strict).await {
-            Ok(ChannelLiveListing::OnAir(program)) => Ok((
-                true,
-                None,
-                program.title,
-                Some(watch_url(&program.live_id)),
-                None,
-                Some(program.live_id),
-            )),
-            Ok(ChannelLiveListing::Scheduled(program)) => Ok((
-                false,
-                None,
-                program.title,
-                Some(watch_url(&program.live_id)),
-                program.start_at,
-                Some(program.live_id),
-            )),
-            Ok(ChannelLiveListing::Idle) => Ok((false, None, None, None, None, None)),
+            Ok(ChannelLiveListing::OnAir(program)) => Ok(SourceStatus {
+                is_live: true,
+                topic: None,
+                title: program.title,
+                m3u8_url: Some(watch_url(&program.live_id)),
+                start_time: None,
+                video_id: Some(program.live_id),
+            }),
+            Ok(ChannelLiveListing::Scheduled(program)) => Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title: program.title,
+                m3u8_url: Some(watch_url(&program.live_id)),
+                start_time: program.start_at,
+                video_id: Some(program.live_id),
+            }),
+            Ok(ChannelLiveListing::Idle) => Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title: None,
+                m3u8_url: None,
+                start_time: None,
+                video_id: None,
+            }),
             Err(e) => {
                 tracing::warn!("Niconico 频道直播页查询失败: {}", e);
                 Err(e)
@@ -694,7 +671,14 @@ async fn get_niconico_status_mode(
 
     let live_id = normalize_live_id(&cfg.live_id);
     if live_id.is_empty() {
-        return Ok((false, None, None, None, None, None));
+        return Ok(SourceStatus {
+            is_live: false,
+            topic: None,
+            title: None,
+            m3u8_url: None,
+            start_time: None,
+            video_id: None,
+        });
     }
     get_niconico_status_via_streamlink(&live_id, cfg, strict).await
 }
@@ -703,17 +687,7 @@ async fn get_niconico_status_via_streamlink(
     live_id: &str,
     cfg: &NiconicoConfig,
     strict: bool,
-) -> Result<
-    (
-        bool,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Local>>,
-        Option<String>,
-    ),
-    Box<dyn Error>,
-> {
+) -> Result<SourceStatus, Box<dyn Error>> {
     let mut args = streamlink_auth_args(cfg)?;
     args.push("--json".to_string());
     args.push(watch_url(live_id));
@@ -739,7 +713,14 @@ async fn get_niconico_status_via_streamlink(
         Err(_) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("No playable streams") || stdout.contains("No playable streams") {
-                return Ok((false, None, None, None, None, Some(live_id.to_string())));
+                return Ok(SourceStatus {
+                    is_live: false,
+                    topic: None,
+                    title: None,
+                    m3u8_url: None,
+                    start_time: None,
+                    video_id: Some(live_id.to_string()),
+                });
             }
             return Err(format!("streamlink niconico status failed: {}", stderr.trim()).into());
         }
@@ -747,7 +728,14 @@ async fn get_niconico_status_via_streamlink(
 
     if let Some(error) = parsed.error.as_deref().filter(|error| !error.is_empty()) {
         if error.contains("No playable streams") {
-            return Ok((false, None, None, None, None, Some(live_id.to_string())));
+            return Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title: None,
+                m3u8_url: None,
+                start_time: None,
+                video_id: Some(live_id.to_string()),
+            });
         }
         return Err(error.to_string().into());
     }
@@ -756,7 +744,14 @@ async fn get_niconico_status_via_streamlink(
         if strict {
             return Err("streamlink returned no streams for the program".into());
         }
-        return Ok((false, None, None, None, None, Some(live_id.to_string())));
+        return Ok(SourceStatus {
+            is_live: false,
+            topic: None,
+            title: None,
+            m3u8_url: None,
+            start_time: None,
+            video_id: Some(live_id.to_string()),
+        });
     }
 
     let metadata = parsed.metadata.unwrap_or_default();
@@ -769,14 +764,14 @@ async fn get_niconico_status_via_streamlink(
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| live_id.to_string());
 
-    Ok((
-        true,
-        None,
+    Ok(SourceStatus {
+        is_live: true,
+        topic: None,
         title,
-        Some(watch_url(live_id)),
-        None,
-        Some(stream_id),
-    ))
+        m3u8_url: Some(watch_url(live_id)),
+        start_time: None,
+        video_id: Some(stream_id),
+    })
 }
 
 #[cfg(test)]

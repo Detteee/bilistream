@@ -9,6 +9,7 @@ use super::danmaku::warning::{
 };
 use super::twitch::{get_twitch_status, Twitch};
 use super::youtube::{get_youtube_channel_metadata, get_youtube_status_ytdlp};
+use crate::plugins::source_status::SourceStatus;
 
 /// How long the URL confirmed at switch time may be reused by the main loop.
 ///
@@ -276,7 +277,14 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
     let keywords = super::banned_keywords::streaming_banned_keywords();
     if !cfg.priority_channel.youtube_channel_id.is_empty() {
         match get_youtube_status_ytdlp(&cfg.priority_channel.youtube_channel_id).await {
-            Ok((is_live, topic, title, m3u8_url, _, stream_id)) => {
+            Ok(SourceStatus {
+                is_live,
+                topic,
+                title,
+                m3u8_url,
+                video_id: stream_id,
+                ..
+            }) => {
                 if let Some(liveness) = playable_liveness(
                     PriorityChannelPlatform::Youtube,
                     is_live,
@@ -301,7 +309,14 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
             cfg.twitch.proxy.clone(),
         ) {
             Ok(client) => match client.get_status().await {
-                Ok((is_live, topic, title, m3u8_url, _, stream_id)) => {
+                Ok(SourceStatus {
+                    is_live,
+                    topic,
+                    title,
+                    m3u8_url,
+                    video_id: stream_id,
+                    ..
+                }) => {
                     if let Some(liveness) = playable_liveness(
                         PriorityChannelPlatform::Twitch,
                         is_live,

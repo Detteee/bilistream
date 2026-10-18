@@ -1,5 +1,4 @@
 use crate::logging::{exit_status, safe_diagnostic, safe_text};
-use chrono::{DateTime, Local};
 use reqwest_middleware::ClientBuilder;
 use reqwest_middleware::ClientWithMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
@@ -12,6 +11,7 @@ use std::process::{Command, Output};
 use std::time::Duration;
 
 use super::utils::{command_output_with_timeout, configure_no_window};
+use crate::plugins::source_status::SourceStatus;
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
 /// The Twitch web client's public GQL client ID.
@@ -68,30 +68,17 @@ impl Twitch {
         })
     }
 
-    pub async fn get_status(&self) -> Result<TwitchSourceStatus, Box<dyn Error>> {
+    pub async fn get_status(&self) -> Result<SourceStatus, Box<dyn Error>> {
         self.get_status_mode(false).await
     }
 
     /// The push loop's m3u8 refetch: "not live" only when Twitch returns the
     /// user with no live stream; anything else is an error.
-    pub async fn get_status_refetch(&self) -> Result<TwitchSourceStatus, Box<dyn Error>> {
+    pub async fn get_status_refetch(&self) -> Result<SourceStatus, Box<dyn Error>> {
         self.get_status_mode(true).await
     }
 
-    async fn get_status_mode(
-        &self,
-        strict: bool,
-    ) -> Result<
-        (
-            bool,                    // is_live
-            Option<String>,          // topic
-            Option<String>,          // title
-            Option<String>,          // m3u8_url
-            Option<DateTime<Local>>, // start_time
-            Option<String>,          // stream_id
-        ),
-        Box<dyn Error>,
-    > {
+    async fn get_status_mode(&self, strict: bool) -> Result<SourceStatus, Box<dyn Error>> {
         let (is_live, game_name, title, stream_id) =
             get_twitch_status_mode(&self.channel_id, strict).await?;
         if is_live {
@@ -100,16 +87,23 @@ impl Twitch {
             let m3u8_url = self
                 .get_streamlink_url(Some(&quality), &cfg.cluster.node_id)
                 .await?;
-            Ok((
+            Ok(SourceStatus {
                 is_live,
-                Some(game_name.unwrap_or_default()),
-                Some(title.unwrap_or_default()),
-                Some(m3u8_url),
-                None,
-                stream_id,
-            ))
+                topic: Some(game_name.unwrap_or_default()),
+                title: Some(title.unwrap_or_default()),
+                m3u8_url: Some(m3u8_url),
+                start_time: None,
+                video_id: stream_id,
+            })
         } else {
-            Ok((is_live, None, None, None, None, stream_id))
+            Ok(SourceStatus {
+                is_live,
+                topic: None,
+                title: None,
+                m3u8_url: None,
+                start_time: None,
+                video_id: stream_id,
+            })
         }
     }
     async fn get_streamlink_url(
@@ -324,15 +318,6 @@ fn streamlink_output(output: Output) -> Result<String, Box<dyn Error>> {
     };
     Err(format!("streamlink {status}；{reason}").into())
 }
-
-pub type TwitchSourceStatus = (
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<DateTime<Local>>,
-    Option<String>,
-);
 
 type TwitchGqlStatus = (bool, Option<String>, Option<String>, Option<String>);
 

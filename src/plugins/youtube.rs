@@ -6,6 +6,7 @@ pub use super::holodex::{
 };
 use super::utils::{configure_no_window, executable_command};
 use crate::config::load_config;
+use crate::plugins::source_status::SourceStatus;
 use chrono::{DateTime, Local};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -121,19 +122,7 @@ impl Youtube {
         }
     }
 
-    pub async fn get_status(
-        &self,
-    ) -> Result<
-        (
-            bool,                    // is_live
-            Option<String>,          // topic
-            Option<String>,          // title
-            Option<String>,          // m3u8_url
-            Option<DateTime<Local>>, // start_time
-            Option<String>,          // video_id
-        ),
-        Box<dyn Error>,
-    > {
+    pub async fn get_status(&self) -> Result<SourceStatus, Box<dyn Error>> {
         get_youtube_status_with(&self.channel_id, Probe::Throttled).await
     }
 
@@ -141,7 +130,7 @@ impl Youtube {
     /// throttled index or cached probe), and "not live" only when yt-dlp says
     /// the channel is offline or the stream is scheduled. Other yt-dlp errors
     /// (network, 429/5xx, bot check) are returned as errors.
-    pub async fn get_status_refetch(&self) -> Result<YoutubeStatus, Box<dyn Error>> {
+    pub async fn get_status_refetch(&self) -> Result<SourceStatus, Box<dyn Error>> {
         get_youtube_status_with(&self.channel_id, Probe::Refetch).await
     }
 }
@@ -417,19 +406,10 @@ fn decide_monitor_action(
     }
 }
 
-pub type YoutubeStatus = (
-    bool,                    // is_live
-    Option<String>,          // topic
-    Option<String>,          // title
-    Option<String>,          // m3u8_url
-    Option<DateTime<Local>>, // start_time
-    Option<String>,          // video_id
-);
-
 /// Last safety probe per channel, with its not-live answer so ticks between
 /// probes keep yt-dlp's title and schedule. A probe that finds live removes
 /// the entry, so the next tick probes again instead of reusing a stale URL.
-type SafetyProbes = HashMap<String, (Instant, Option<YoutubeStatus>)>;
+type SafetyProbes = HashMap<String, (Instant, Option<SourceStatus>)>;
 static SAFETY_PROBES: Mutex<Option<SafetyProbes>> = Mutex::new(None);
 
 /// Probes for different channels (the target and the priority channel) stay
@@ -497,16 +477,16 @@ fn with_probe_turns<T>(f: impl FnOnce(&mut ProbeTurns) -> T) -> T {
     f(guard.get_or_insert_with(ProbeTurns::default))
 }
 
-fn last_safety_probe(channel_id: &str) -> Option<(Duration, Option<YoutubeStatus>)> {
+fn last_safety_probe(channel_id: &str) -> Option<(Duration, Option<SourceStatus>)> {
     let guard = SAFETY_PROBES.lock().unwrap_or_else(|e| e.into_inner());
     let (at, status) = guard.as_ref()?.get(channel_id)?;
     Some((at.elapsed(), status.clone()))
 }
 
-fn record_safety_probe(channel_id: &str, status: Option<YoutubeStatus>) {
+fn record_safety_probe(channel_id: &str, status: Option<SourceStatus>) {
     let mut guard = SAFETY_PROBES.lock().unwrap_or_else(|e| e.into_inner());
     let probes = guard.get_or_insert_with(HashMap::new);
-    if status.as_ref().is_some_and(|status| status.0) {
+    if status.as_ref().is_some_and(|status| status.is_live) {
         probes.remove(channel_id);
     } else {
         probes.insert(channel_id.to_string(), (Instant::now(), status));
@@ -563,8 +543,14 @@ pub async fn get_youtube_channel_status(
 ) -> Result<YoutubeChannelStatus, Box<dyn Error>> {
     let cfg = load_config().await?;
     if monitor_mode(&cfg) == MonitorMode::Rescue {
-        let (is_live, topic, title, _, scheduled_start, video_id) =
-            get_youtube_status(channel_id).await?;
+        let SourceStatus {
+            is_live,
+            topic,
+            title,
+            start_time: scheduled_start,
+            video_id,
+            ..
+        } = get_youtube_status(channel_id).await?;
         return Ok(youtube_channel_status_from_probe(
             is_live,
             topic,
@@ -648,8 +634,14 @@ pub async fn get_youtube_channel_metadata(
         return get_youtube_channel_status(channel_id).await;
     }
 
-    let (is_live, topic, title, _, scheduled_start, video_id) =
-        get_youtube_status(channel_id).await?;
+    let SourceStatus {
+        is_live,
+        topic,
+        title,
+        start_time: scheduled_start,
+        video_id,
+        ..
+    } = get_youtube_status(channel_id).await?;
     Ok(youtube_channel_status_from_probe(
         is_live,
         topic,
@@ -673,8 +665,14 @@ pub(crate) async fn get_youtube_warning_status(
             return Ok(status);
         }
     }
-    let (is_live, topic, title, _, scheduled_start, video_id) =
-        get_youtube_status_with(channel_id, Probe::Refetch).await?;
+    let SourceStatus {
+        is_live,
+        topic,
+        title,
+        start_time: scheduled_start,
+        video_id,
+        ..
+    } = get_youtube_status_with(channel_id, Probe::Refetch).await?;
     Ok(youtube_channel_status_from_probe(
         is_live,
         topic,
@@ -697,16 +695,22 @@ fn warning_metadata_needs_confirmation(
 
 /// Keep the ID returned by the actual live confirmation. A stale index row
 /// must not label a current URL as a different (possibly older) episode.
-fn confirmed_index_status(status: YoutubeChannelStatus, confirmed: YoutubeStatus) -> YoutubeStatus {
-    let (is_live, _, _, m3u8_url, scheduled_start, confirmed_video_id) = confirmed;
-    (
+fn confirmed_index_status(status: YoutubeChannelStatus, confirmed: SourceStatus) -> SourceStatus {
+    let SourceStatus {
         is_live,
-        status.topic,
-        status.title,
         m3u8_url,
-        scheduled_start,
-        confirmed_video_id,
-    )
+        start_time: scheduled_start,
+        video_id: confirmed_video_id,
+        ..
+    } = confirmed;
+    SourceStatus {
+        is_live,
+        topic: status.topic,
+        title: status.title,
+        m3u8_url,
+        start_time: scheduled_start,
+        video_id: confirmed_video_id,
+    }
 }
 
 /// yt-dlp does not supply Holodex's game/topic. Look it up separately for area
@@ -758,19 +762,19 @@ fn youtube_area_topic_for_video(
         .filter(|topic| !topic.trim().is_empty())
 }
 
-pub async fn get_youtube_status(channel_id: &str) -> Result<YoutubeStatus, Box<dyn Error>> {
+pub async fn get_youtube_status(channel_id: &str) -> Result<SourceStatus, Box<dyn Error>> {
     get_youtube_status_with(channel_id, Probe::Now).await
 }
 
 /// `get_youtube_status` that always asks yt-dlp (see `Probe::Always`).
-pub async fn get_youtube_status_ytdlp(channel_id: &str) -> Result<YoutubeStatus, Box<dyn Error>> {
+pub async fn get_youtube_status_ytdlp(channel_id: &str) -> Result<SourceStatus, Box<dyn Error>> {
     get_youtube_status_with(channel_id, Probe::Always).await
 }
 
 async fn get_youtube_status_with(
     channel_id: &str,
     probe: Probe,
-) -> Result<YoutubeStatus, Box<dyn Error>> {
+) -> Result<SourceStatus, Box<dyn Error>> {
     let cfg = load_config().await?;
     let proxy = cfg.youtube.proxy.clone();
     let quality = cfg.youtube.quality.clone();
@@ -817,15 +821,13 @@ async fn get_youtube_status_with(
         Probe::Now | Probe::Always | Probe::Refetch => None,
     };
     let strict = probe == Probe::Refetch;
-    let index_answer = |status: YoutubeChannelStatus| {
-        (
-            false,
-            status.topic,
-            status.title,
-            None,
-            status.scheduled_start,
-            status.video_id,
-        )
+    let index_answer = |status: YoutubeChannelStatus| SourceStatus {
+        is_live: false,
+        topic: status.topic,
+        title: status.title,
+        m3u8_url: None,
+        start_time: status.scheduled_start,
+        video_id: status.video_id,
     };
 
     if skip_reuse(
@@ -834,14 +836,14 @@ async fn get_youtube_status_with(
         skipped_video(channel_id).as_deref(),
         status.video_id.as_deref(),
     ) {
-        return Ok((
-            true,
-            status.topic,
-            status.title,
-            None,
-            None,
-            status.video_id,
-        ));
+        return Ok(SourceStatus {
+            is_live: true,
+            topic: status.topic,
+            title: status.title,
+            m3u8_url: None,
+            start_time: None,
+            video_id: status.video_id,
+        });
     }
     drop_skipped_live_if_stale(channel_id, view, status.video_id.as_deref());
 
@@ -882,7 +884,14 @@ async fn get_youtube_status_with(
             // probe's answer.
             _ => Ok(last_probe
                 .and_then(|(_, status)| status)
-                .unwrap_or((false, None, None, None, None, None))),
+                .unwrap_or(SourceStatus {
+                    is_live: false,
+                    topic: None,
+                    title: None,
+                    m3u8_url: None,
+                    start_time: None,
+                    video_id: None,
+                })),
         },
         MonitorAction::YtDlp => {
             if view != IndexView::Unavailable {
@@ -906,13 +915,27 @@ async fn get_youtube_status_with(
                 strict,
             )
             .await?;
-            let (is_live, _, title, m3u8_url, start_time, video_id) = probed;
+            let SourceStatus {
+                is_live,
+                title,
+                m3u8_url,
+                start_time,
+                video_id,
+                ..
+            } = probed;
             let result = if !is_live && view == IndexView::Upcoming {
                 // YouTube's schedule for the listed stream beats yt-dlp's
                 // rounded "begins in N hours".
                 index_answer(status)
             } else {
-                (is_live, None, title, m3u8_url, start_time, video_id)
+                SourceStatus {
+                    is_live,
+                    topic: None,
+                    title,
+                    m3u8_url,
+                    start_time,
+                    video_id,
+                }
             };
             if probe == Probe::Throttled {
                 record_safety_probe(channel_id, Some(result.clone()));
@@ -957,17 +980,7 @@ async fn get_status_with_yt_dlp(
     cookies_from_browser: &Option<String>,
     deno_path: &Option<String>,
     strict: bool,
-) -> Result<
-    (
-        bool,                    // is_live
-        Option<String>,          // topic
-        Option<String>,          // title
-        Option<String>,          // m3u8_url
-        Option<DateTime<Local>>, // start_time
-        Option<String>,          // video_id
-    ),
-    Box<dyn Error>,
-> {
+) -> Result<SourceStatus, Box<dyn Error>> {
     let quality = quality.unwrap_or("best");
 
     let mut command = Command::new(get_yt_dlp_command());
@@ -1012,7 +1025,14 @@ async fn get_status_with_yt_dlp(
         // Check for scheduled start time in stderr
         if let Some(minutes) = capture_first_i64(live_event_minutes_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::minutes(minutes);
-            return Ok((false, None, title, None, Some(start_time), video_id));
+            return Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title,
+                m3u8_url: None,
+                start_time: Some(start_time),
+                video_id,
+            });
         }
         if let Some(hours) = capture_first_i64(live_event_hours_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::hours(hours);
@@ -1021,7 +1041,14 @@ async fn get_status_with_yt_dlp(
             } else {
                 get_youtube_live_title(channel_id).await?
             };
-            return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
+            return Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title,
+                m3u8_url: None,
+                start_time: Some(start_time),
+                video_id,
+            }); // Return scheduled start time
         }
         if let Some(days) = capture_first_i64(live_event_days_regex(), &stderr) {
             let start_time = chrono::Local::now() + chrono::Duration::days(days);
@@ -1030,7 +1057,14 @@ async fn get_status_with_yt_dlp(
             } else {
                 get_youtube_live_title(channel_id).await?
             };
-            return Ok((false, None, title, None, Some(start_time), video_id)); // Return scheduled start time
+            return Ok(SourceStatus {
+                is_live: false,
+                topic: None,
+                title,
+                m3u8_url: None,
+                start_time: Some(start_time),
+                video_id,
+            }); // Return scheduled start time
         }
         if strict && !yt_dlp_says_offline(&stderr) {
             // Network, 429/5xx, bot check or anything else: not a statement
@@ -1042,24 +1076,31 @@ async fn get_status_with_yt_dlp(
             .into());
         }
         // An explicit offline statement is distinct from a scheduled video ID.
-        return Ok((
-            false,
-            None,
-            None,
-            None,
-            None,
-            if yt_dlp_says_offline(&stderr) {
+        return Ok(SourceStatus {
+            is_live: false,
+            topic: None,
+            title: None,
+            m3u8_url: None,
+            start_time: None,
+            video_id: if yt_dlp_says_offline(&stderr) {
                 None
             } else {
                 video_id
             },
-        ));
+        });
     } else if let Some((m3u8_url, has_multiple)) = first_m3u8_url_from_stdout(&stdout) {
         if has_multiple {
             tracing::warn!("Multiple m3u8 URLs found (likely separate video and audio streams)");
             tracing::warn!("Using first URL: {}", m3u8_url);
         }
-        return Ok((true, None, title, Some(m3u8_url), None, video_id));
+        return Ok(SourceStatus {
+            is_live: true,
+            topic: None,
+            title,
+            m3u8_url: Some(m3u8_url),
+            start_time: None,
+            video_id,
+        });
     }
 
     Err("Unexpected output from yt-dlp".into())
@@ -1136,29 +1177,29 @@ mod tests {
         };
         let fresh = confirmed_index_status(
             index.clone(),
-            (
-                true,
-                None,
-                None,
-                Some("https://example.invalid/live.m3u8".into()),
-                None,
-                Some("fresh-id".into()),
-            ),
+            SourceStatus {
+                is_live: true,
+                topic: None,
+                title: None,
+                m3u8_url: Some("https://example.invalid/live.m3u8".into()),
+                start_time: None,
+                video_id: Some("fresh-id".into()),
+            },
         );
-        assert_eq!(fresh.5.as_deref(), Some("fresh-id"));
+        assert_eq!(fresh.video_id.as_deref(), Some("fresh-id"));
         let missing = confirmed_index_status(
             index,
-            (
-                true,
-                None,
-                None,
-                Some("https://example.invalid/live.m3u8".into()),
-                None,
-                None,
-            ),
+            SourceStatus {
+                is_live: true,
+                topic: None,
+                title: None,
+                m3u8_url: Some("https://example.invalid/live.m3u8".into()),
+                start_time: None,
+                video_id: None,
+            },
         );
         assert!(
-            missing.5.is_none(),
+            missing.video_id.is_none(),
             "missing proof must not fall back to an unrelated index ID"
         );
     }
@@ -1171,11 +1212,20 @@ mod tests {
             ..Default::default()
         };
         let schedule = Local::now() + chrono::Duration::minutes(5);
-        let upcoming =
-            confirmed_index_status(index, (false, None, None, None, Some(schedule), None));
-        assert!(!upcoming.0);
-        assert_eq!(upcoming.4, Some(schedule));
-        assert!(upcoming.5.is_none());
+        let upcoming = confirmed_index_status(
+            index,
+            SourceStatus {
+                is_live: false,
+                topic: None,
+                title: None,
+                m3u8_url: None,
+                start_time: Some(schedule),
+                video_id: None,
+            },
+        );
+        assert!(!upcoming.is_live);
+        assert_eq!(upcoming.start_time, Some(schedule));
+        assert!(upcoming.video_id.is_none());
     }
 
     #[test]
@@ -1403,14 +1453,28 @@ mod tests {
 
     #[test]
     fn a_probe_that_finds_live_is_not_reused() {
-        let offline: YoutubeStatus = (false, None, Some("t".to_string()), None, None, None);
+        let offline: SourceStatus = SourceStatus {
+            is_live: false,
+            topic: None,
+            title: Some("t".to_string()),
+            m3u8_url: None,
+            start_time: None,
+            video_id: None,
+        };
         record_safety_probe("UCprobe-offline", Some(offline.clone()));
         let (age, cached) = last_safety_probe("UCprobe-offline").unwrap();
         assert!(age < SAFETY_PROBE_INTERVAL);
         assert_eq!(cached, Some(offline));
 
         record_safety_probe("UCprobe-live", None);
-        let live: YoutubeStatus = (true, None, None, Some("u".to_string()), None, None);
+        let live: SourceStatus = SourceStatus {
+            is_live: true,
+            topic: None,
+            title: None,
+            m3u8_url: Some("u".to_string()),
+            start_time: None,
+            video_id: None,
+        };
         record_safety_probe("UCprobe-live", Some(live));
         assert!(last_safety_probe("UCprobe-live").is_none());
     }

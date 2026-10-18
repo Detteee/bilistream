@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::source_status::SourceStatus;
 
 pub(crate) static STATUS_REFRESH_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -200,10 +201,15 @@ pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> R
         return Err("Niconico channel not configured".to_string());
     }
 
-    let (is_live, _, title, _, scheduled_start, live_id) =
-        crate::plugins::get_niconico_status(&cfg.niconico)
-            .await
-            .map_err(|e| e.to_string())?;
+    let SourceStatus {
+        is_live,
+        title,
+        start_time: scheduled_start,
+        video_id: live_id,
+        ..
+    } = crate::plugins::get_niconico_status(&cfg.niconico)
+        .await
+        .map_err(|e| e.to_string())?;
     let area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
         .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
     let (channel_id, channel_name) = crate::plugins::niconico_channel_identity(&cfg.niconico);

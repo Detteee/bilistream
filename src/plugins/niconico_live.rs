@@ -30,6 +30,7 @@ use super::niconico::{
     ChannelProgram,
 };
 use crate::config::{load_config, Config};
+use crate::plugins::source_status::SourceStatus;
 
 /// Idle and far-scheduled listings. vspo announces the start and does not
 /// go live without one.
@@ -331,34 +332,25 @@ fn listing_if_fresh(
     (!due).then_some(listing).flatten()
 }
 
-type ListingStatus = (
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<DateTime<Local>>,
-    Option<String>,
-);
-
-fn status_from_listing(listing: &ChannelLiveListing) -> ListingStatus {
+fn status_from_listing(listing: &ChannelLiveListing) -> SourceStatus {
     match listing {
-        ChannelLiveListing::OnAir(program) => (
-            true,
-            None,
-            program.title.clone(),
-            Some(watch_url(&program.live_id)),
-            None,
-            Some(program.live_id.clone()),
-        ),
-        ChannelLiveListing::Scheduled(program) => (
-            false,
-            None,
-            program.title.clone(),
-            Some(watch_url(&program.live_id)),
-            program.start_at,
-            Some(program.live_id.clone()),
-        ),
-        ChannelLiveListing::Idle => (false, None, None, None, None, None),
+        ChannelLiveListing::OnAir(program) => SourceStatus {
+            is_live: true,
+            topic: None,
+            title: program.title.clone(),
+            m3u8_url: Some(watch_url(&program.live_id)),
+            start_time: None,
+            video_id: Some(program.live_id.clone()),
+        },
+        ChannelLiveListing::Scheduled(program) => SourceStatus {
+            is_live: false,
+            topic: None,
+            title: program.title.clone(),
+            m3u8_url: Some(watch_url(&program.live_id)),
+            start_time: program.start_at,
+            video_id: Some(program.live_id.clone()),
+        },
+        ChannelLiveListing::Idle => SourceStatus::OFFLINE,
     }
 }
 
@@ -388,17 +380,7 @@ fn remember_listing(
 pub async fn monitor_status(
     cfg: &crate::config::Niconico,
     force: bool,
-) -> Result<
-    (
-        bool,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<DateTime<Local>>,
-        Option<String>,
-    ),
-    Box<dyn std::error::Error>,
-> {
+) -> Result<SourceStatus, Box<dyn std::error::Error>> {
     let id = niconico_channel_id_of(&cfg.channel_id);
     if id.is_empty() {
         return super::niconico::get_niconico_status(cfg).await;
@@ -1009,22 +991,22 @@ mod tests {
 
     #[test]
     fn status_from_listing_matches_the_channel_page() {
-        assert!(!status_from_listing(&ChannelLiveListing::Idle).0);
+        assert!(!status_from_listing(&ChannelLiveListing::Idle).is_live);
         let live = status_from_listing(&ChannelLiveListing::OnAir(program(
             "lv351182284",
             "激ロー",
             true,
         )));
-        assert!(live.0);
-        assert_eq!(live.2.as_deref(), Some("激ロー"));
-        assert_eq!(live.5.as_deref(), Some("lv351182284"));
+        assert!(live.is_live);
+        assert_eq!(live.title.as_deref(), Some("激ロー"));
+        assert_eq!(live.video_id.as_deref(), Some("lv351182284"));
         let scheduled = status_from_listing(&ChannelLiveListing::Scheduled(program(
             "lv351230205",
             "TOYBOX",
             true,
         )));
-        assert!(!scheduled.0);
-        assert!(scheduled.4.is_some());
+        assert!(!scheduled.is_live);
+        assert!(scheduled.start_time.is_some());
     }
 
     #[test]

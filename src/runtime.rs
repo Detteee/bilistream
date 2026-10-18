@@ -5,6 +5,7 @@ pub use launch::{cli_main, request_shutdown, BackendRuntime};
 
 use crate as bilistream;
 
+use crate::plugins::source_status::SourceStatus;
 use bilistream::cluster::{self, ClusterStreamIdentity};
 use bilistream::config::{load_config, save_config, Config};
 use bilistream::events::BroadcastEndCause;
@@ -344,7 +345,12 @@ enum RefetchReading {
 impl RefetchReading {
     fn from_result<E>(result: Result<SourceStatus, E>) -> Self {
         match result {
-            Ok((true, _, _, m3u8_url, _, stream_id)) => RefetchReading::Live {
+            Ok(SourceStatus {
+                is_live: true,
+                m3u8_url,
+                video_id: stream_id,
+                ..
+            }) => RefetchReading::Live {
                 m3u8_url,
                 stream_id,
             },
@@ -747,7 +753,14 @@ impl StreamCandidate {
         area: u64,
         status: SourceStatus,
     ) -> Self {
-        let (is_live, topic, title, m3u8_url, _, stream_id) = status;
+        let SourceStatus {
+            is_live,
+            topic,
+            title,
+            m3u8_url,
+            video_id: stream_id,
+            ..
+        } = status;
         Self {
             platform,
             is_live,
@@ -817,19 +830,6 @@ fn select_stream(
         .find(|candidate| candidate.is_playable())
         .cloned()
 }
-
-/// (is_live, topic, title, m3u8_url, scheduled_start, stream_id) as returned by
-/// both platform clients' get_status().
-type SourceStatus = (
-    bool,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<chrono::DateTime<Local>>,
-    Option<String>,
-);
-
-const OFFLINE_SOURCE_STATUS: SourceStatus = (false, None, None, None, None, None);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChannelProbe {
@@ -957,15 +957,13 @@ async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<Probe
                                 warning.episode_id_for(&source),
                             )
                             .await
-                            .map(|status| {
-                                (
-                                    status.is_live,
-                                    status.topic,
-                                    status.title,
-                                    None,
-                                    status.scheduled_start,
-                                    status.video_id,
-                                )
+                            .map(|status| SourceStatus {
+                                is_live: status.is_live,
+                                topic: status.topic,
+                                title: status.title,
+                                m3u8_url: None,
+                                start_time: status.scheduled_start,
+                                video_id: status.video_id,
                             })
                             .map_err(|error| error.to_string())
                         }
@@ -973,7 +971,14 @@ async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<Probe
                             &channel.channel_id,
                         )
                         .await
-                        .map(|(is_live, topic, title, id)| (is_live, topic, title, None, None, id))
+                        .map(|(is_live, topic, title, id)| SourceStatus {
+                            is_live,
+                            topic,
+                            title,
+                            m3u8_url: None,
+                            start_time: None,
+                            video_id: id,
+                        })
                         .map_err(|error| error.to_string()),
                     }
                 } else if let Some(status) =
@@ -1019,7 +1024,7 @@ fn probed_status(probes: &[ProbedSource], index: Option<usize>) -> SourceStatus 
         .and_then(|index| probes.get(index))
         .and_then(|probe| probe.status.as_ref().ok())
         .cloned()
-        .unwrap_or(OFFLINE_SOURCE_STATUS)
+        .unwrap_or(SourceStatus::OFFLINE)
 }
 
 fn source_observation(
@@ -1029,11 +1034,11 @@ fn source_observation(
     status: &SourceStatus,
 ) -> SourceObservation {
     SourceObservation::new(
-        BroadcastSource::new(platform.code(), name, id, status.5.as_deref()),
-        status.0,
-        status.4.is_some()
+        BroadcastSource::new(platform.code(), name, id, status.video_id.as_deref()),
+        status.is_live,
+        status.start_time.is_some()
             || (platform == StreamPlatform::Youtube
-                && status.5.as_ref().is_some_and(|id| !id.is_empty())),
+                && status.video_id.as_ref().is_some_and(|id| !id.is_empty())),
     )
 }
 
@@ -1087,14 +1092,14 @@ fn take_prefetched_source_status(
             "复用优先频道已确认的 {} 流地址，跳过重新拉取",
             platform.label()
         );
-        (
-            true,
-            stream.topic,
-            stream.title,
-            Some(stream.m3u8_url),
-            None,
-            stream.stream_id,
-        )
+        SourceStatus {
+            is_live: true,
+            topic: stream.topic,
+            title: stream.title,
+            m3u8_url: Some(stream.m3u8_url),
+            start_time: None,
+            video_id: stream.stream_id,
+        }
     })
 }
 
@@ -1187,18 +1192,18 @@ fn report_danmaku_selection(
     } else if let Some(probe) = probe {
         match &probe.status {
             Err(_) => "请求频道状态检查失败",
-            Ok(status) if !status.0 => "请求频道未直播",
+            Ok(status) if !status.is_live => "请求频道未直播",
             Ok(status)
                 if bilistream::plugins::banned_keywords::streaming_banned_hit(
-                    status.1.as_deref(),
-                    status.2.as_deref(),
+                    status.topic.as_deref(),
+                    status.title.as_deref(),
                     keywords,
                 )
                 .is_some() =>
             {
                 "请求频道标题/游戏包含禁用关键词"
             }
-            Ok(status) if status.3.as_ref().is_none_or(|url| url.is_empty()) => {
+            Ok(status) if status.m3u8_url.as_ref().is_none_or(|url| url.is_empty()) => {
                 "请求频道暂无可播放的流地址"
             }
             Ok(_)
@@ -1496,32 +1501,44 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             clear_config_updated();
             continue 'outer;
         };
-        let (yt_is_live, yt_area, yt_title, yt_m3u8_url, mut scheduled_start, yt_video_id) =
-            probed_status(&probes, probe_plan.youtube);
+        let SourceStatus {
+            is_live: yt_is_live,
+            topic: yt_area,
+            title: yt_title,
+            m3u8_url: yt_m3u8_url,
+            start_time: mut scheduled_start,
+            video_id: yt_video_id,
+        } = probed_status(&probes, probe_plan.youtube);
         if scheduled_start
             .as_ref()
             .is_some_and(|start| start > &(Local::now() + Duration::from_secs(2 * 24 * 60 * 60)))
         {
             scheduled_start = None;
         }
-        let (
-            priority_yt_is_live,
-            priority_yt_area,
-            priority_yt_title,
-            priority_yt_m3u8_url,
-            _,
-            priority_yt_video_id,
-        ) = probed_status(&probes, probe_plan.priority_youtube);
-        let (tw_is_live, tw_area, tw_title, tw_m3u8_url, _, tw_stream_id) =
-            probed_status(&probes, probe_plan.twitch);
-        let (
-            priority_tw_is_live,
-            priority_tw_area,
-            priority_tw_title,
-            priority_tw_m3u8_url,
-            _,
-            priority_tw_stream_id,
-        ) = probed_status(&probes, probe_plan.priority_twitch);
+        let SourceStatus {
+            is_live: priority_yt_is_live,
+            topic: priority_yt_area,
+            title: priority_yt_title,
+            m3u8_url: priority_yt_m3u8_url,
+            video_id: priority_yt_video_id,
+            ..
+        } = probed_status(&probes, probe_plan.priority_youtube);
+        let SourceStatus {
+            is_live: tw_is_live,
+            topic: tw_area,
+            title: tw_title,
+            m3u8_url: tw_m3u8_url,
+            video_id: tw_stream_id,
+            ..
+        } = probed_status(&probes, probe_plan.twitch);
+        let SourceStatus {
+            is_live: priority_tw_is_live,
+            topic: priority_tw_area,
+            title: priority_tw_title,
+            m3u8_url: priority_tw_m3u8_url,
+            video_id: priority_tw_stream_id,
+            ..
+        } = probed_status(&probes, probe_plan.priority_twitch);
 
         let nico_live = if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
             Some(NiconicoClient::new(&cfg.niconico))
@@ -1533,11 +1550,17 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
         } else {
             None
         };
-        let (nico_is_live, _, nico_title, _, nico_scheduled_start, nico_stream_id) = nico_status
+        let SourceStatus {
+            is_live: nico_is_live,
+            title: nico_title,
+            start_time: nico_scheduled_start,
+            video_id: nico_stream_id,
+            ..
+        } = nico_status
             .as_ref()
             .and_then(|status| status.as_ref().ok())
             .cloned()
-            .unwrap_or(OFFLINE_SOURCE_STATUS);
+            .unwrap_or(SourceStatus::OFFLINE);
 
         if is_config_updated() || !bilistream::config::config_is_current(&cfg) {
             clear_config_updated();
@@ -1717,56 +1740,56 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             &cfg.youtube.channel_name,
             &cfg.youtube.channel_id,
             cfg.youtube.area_v2,
-            (
-                yt_is_live,
-                yt_area,
-                yt_title,
-                yt_m3u8_url,
-                None,
-                yt_video_id,
-            ),
+            SourceStatus {
+                is_live: yt_is_live,
+                topic: yt_area,
+                title: yt_title,
+                m3u8_url: yt_m3u8_url,
+                start_time: None,
+                video_id: yt_video_id,
+            },
         );
         let mut tw_stream = StreamCandidate::from_status(
             StreamPlatform::Twitch,
             &cfg.twitch.channel_name,
             &cfg.twitch.channel_id,
             cfg.twitch.area_v2,
-            (
-                tw_is_live,
-                tw_area,
-                tw_title,
-                tw_m3u8_url,
-                None,
-                tw_stream_id,
-            ),
+            SourceStatus {
+                is_live: tw_is_live,
+                topic: tw_area,
+                title: tw_title,
+                m3u8_url: tw_m3u8_url,
+                start_time: None,
+                video_id: tw_stream_id,
+            },
         );
         let mut priority_yt_stream = StreamCandidate::from_status(
             StreamPlatform::Youtube,
             &cfg.priority_channel.channel_name,
             &cfg.priority_channel.youtube_channel_id,
             priority_area(StreamPlatform::Youtube, &cfg),
-            (
-                priority_yt_is_live,
-                priority_yt_area,
-                priority_yt_title,
-                priority_yt_m3u8_url,
-                None,
-                priority_yt_video_id,
-            ),
+            SourceStatus {
+                is_live: priority_yt_is_live,
+                topic: priority_yt_area,
+                title: priority_yt_title,
+                m3u8_url: priority_yt_m3u8_url,
+                start_time: None,
+                video_id: priority_yt_video_id,
+            },
         );
         let mut priority_tw_stream = StreamCandidate::from_status(
             StreamPlatform::Twitch,
             &cfg.priority_channel.channel_name,
             &cfg.priority_channel.twitch_channel_id,
             priority_area(StreamPlatform::Twitch, &cfg),
-            (
-                priority_tw_is_live,
-                priority_tw_area,
-                priority_tw_title,
-                priority_tw_m3u8_url,
-                None,
-                priority_tw_stream_id,
-            ),
+            SourceStatus {
+                is_live: priority_tw_is_live,
+                topic: priority_tw_area,
+                title: priority_tw_title,
+                m3u8_url: priority_tw_m3u8_url,
+                start_time: None,
+                video_id: priority_tw_stream_id,
+            },
         );
 
         let mut nico_stream = StreamCandidate {
@@ -3586,7 +3609,7 @@ mod tests {
                 channel_id: cfg.youtube.channel_id.clone(),
             },
             client: Some(ProbedClient::Youtube(client)),
-            status: Ok(OFFLINE_SOURCE_STATUS),
+            status: Ok(SourceStatus::OFFLINE),
         }];
         let Some(SourceClient::Youtube(selected_client)) =
             selected_source_client(&selected, &probes, &None)
@@ -3647,14 +3670,14 @@ mod tests {
             .unwrap();
         let before = tracker.snapshot();
         for start in [Some(Local::now() + chrono::Duration::hours(1)), None] {
-            let status = (
-                false,
-                None,
-                Some("下一场预告".into()),
-                None,
-                start,
-                Some("upcoming-2".into()),
-            );
+            let status = SourceStatus {
+                is_live: false,
+                topic: None,
+                title: Some("下一场预告".into()),
+                m3u8_url: None,
+                start_time: start,
+                video_id: Some("upcoming-2".into()),
+            };
             let observation = source_observation(
                 StreamPlatform::Youtube,
                 &source.channel_name,
@@ -3669,7 +3692,7 @@ mod tests {
             StreamPlatform::Youtube,
             &source.channel_name,
             &source.channel_id,
-            &OFFLINE_SOURCE_STATUS,
+            &SourceStatus::OFFLINE,
         );
         assert_eq!(offline.presence, SourcePresence::Offline);
         assert!(tracker.observe_sources(&before, &[offline]).is_some());
@@ -3740,8 +3763,8 @@ mod tests {
                 clear_config_updated(); // the next pass loads the saved target
                 let saved_targets = serde_json::to_value(&cfg).unwrap();
                 let version = cluster::monitored_config_version(&cfg);
-                let a_status = (true, None, Some("示例直播 001".into()), Some("https://example.invalid/a.m3u8".into()), None, Some("yt-episode-1".into()));
-                let b_status = (true, Some("League of Legends".into()), Some("示例直播 002".into()), Some("https://example.invalid/b.m3u8".into()), None, Some("tw-episode-2".into()));
+                let a_status = SourceStatus { is_live: true, topic: None, title: Some("示例直播 001".into()), m3u8_url: Some("https://example.invalid/a.m3u8".into()), start_time: None, video_id: Some("yt-episode-1".into()) };
+                let b_status = SourceStatus { is_live: true, topic: Some("League of Legends".into()), title: Some("示例直播 002".into()), m3u8_url: Some("https://example.invalid/b.m3u8".into()), start_time: None, video_id: Some("tw-episode-2".into()) };
                 let plan = SourceProbePlan::for_config(&cfg);
                 assert_eq!(plan.channels.len(), 2);
                 assert_eq!(plan.youtube, plan.priority_youtube);
@@ -4059,7 +4082,7 @@ mod tests {
         );
         // A status reply that is "not live" maps to the miss.
         assert_eq!(
-            RefetchReading::from_result::<()>(Ok(OFFLINE_SOURCE_STATUS)),
+            RefetchReading::from_result::<()>(Ok(SourceStatus::OFFLINE)),
             RefetchReading::Offline
         );
     }
