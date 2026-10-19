@@ -181,6 +181,54 @@ fn the_window_boundary_is_the_same_for_the_list_and_the_summary() {
     );
 }
 
+/// D3 (decided 2026-10-19): B站 live-window totals belong to the *live window*,
+/// not to the query window. `kpis()` reads the whole `bili_lives` row for every
+/// in-range relay session carrying that `live_key`, so two overlapping ranges
+/// each report the same cumulative figures — the short window does not get a
+/// "proportional share", because a cumulative counter has no meaningful share.
+///
+/// This is intended behaviour, not a clipping bug: the UI shows one live
+/// window's totals once and must not add ranges together. The test pins that so
+/// a future "fix" that clips to `[from, to)` has to argue with a test that says
+/// why it should not.
+#[test]
+fn bili_live_window_totals_repeat_across_overlapping_queries() {
+    let (mut w, _) = writer("bili-live-window-totals");
+    session(&mut w, 1, T0, Some("K1"));
+    end(&mut w, 1, T0 + 3600, EndReason::SourceEnded);
+    let totals = parse_stop_live_data(&serde_json::from_str(LIVE_SESSION).unwrap()).ok();
+    w.apply(&ev(
+        T0 + 3700,
+        EventKind::BiliLiveSummary {
+            live_key: "K1".into(),
+            totals,
+        },
+    ))
+    .unwrap();
+
+    let render = |from: i64, to: i64| {
+        let parts = query::summary(&w.conn, &q(from, to), "local", to).unwrap();
+        query::render_summary(&parts, &[])
+    };
+    // The whole live window.
+    let whole = render(T0, T0 + 4000);
+    // Overlaps the live window by its last 600 s (a sixth of it).
+    let tail = render(T0 + 3000, T0 + 7000);
+
+    for key in ["watched", "danmu", "add_fans", "max_online"] {
+        assert_eq!(
+            whole["kpis"][key], tail["kpis"][key],
+            "{key} is a property of the live window, so a partially overlapping query must report it unchanged"
+        );
+    }
+    assert_eq!(whole["kpis"]["watched"], 469);
+    assert_eq!(
+        tail["kpis"]["watched"], 469,
+        "not 469/6: counters are not clipped"
+    );
+    assert_eq!(whole["kpis"]["danmu"], 457);
+}
+
 // ------------------------------------------------------------- schema
 
 #[test]
