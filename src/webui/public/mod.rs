@@ -8,11 +8,11 @@
 pub mod payload;
 pub mod server;
 pub mod snapshot;
-pub(crate) mod stream_list;
+pub(crate) mod streams;
 pub mod thumbnails;
 
 pub use server::start_public_status_supervisor;
-pub use stream_list::remap_after_areas_change;
+pub use streams::remap_after_areas_change;
 
 /// Content-derived validators survive process restarts. Weak validators also
 /// remain valid when the compression layer changes the wire representation.

@@ -1,11 +1,13 @@
 //! Stream and danmaku **control** endpoints: start/stop/restart, the priority
 //! warning release, the process restart, and the danmaku/cover/area writes.
 //!
-//! Named `stream_control` rather than `stream`: the bare name collided with
-//! `api::stream_list` (the admin list endpoint), `webui::stream_list` (the list
-//! core it wraps), `public::stream_list` (the public list) and
-//! `api::stream_switch` (layout switching), so `grep`-based navigation could not
-//! tell them apart.
+//! Named `stream_control` rather than `stream`: the bare name collided with the
+//! three stream-list modules and with `api::stream_switch` (layout switching),
+//! so `grep`-based navigation could not tell them apart. Those are now split by
+//! audience — `api::admin_stream_list` (admin HTTP edge), `webui::stream_list`
+//! (the shared list service), `public::streams` (the public page's list) — and
+//! the pair left here reads as control vs switching: this module starts, stops,
+//! restarts and writes, `stream_switch` changes the restream target.
 
 use super::*;
 

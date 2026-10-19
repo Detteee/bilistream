@@ -1,4 +1,9 @@
-//! Admin projection and queries for the multi-provider stream list.
+//! Admin HTTP edge for the multi-provider stream list: the GET projection the
+//! dashboard polls.
+//!
+//! The list itself (fetch, filter, lease, change events) is `webui::stream_list`;
+//! the public page's list is `webui::public::streams`. Only this module decides
+//! which fields the dashboard sees.
 use crate::plugins::stream_item::StreamItem;
 use crate::webui::stream_list::facts::resolve_stream_facts;
 use axum::{extract::Query, Json};

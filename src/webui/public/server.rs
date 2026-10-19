@@ -20,7 +20,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::snapshot::{current_public_status, SNAPSHOT_TTL};
-use super::stream_list::{current_public_streams, start_streams_watch};
+use super::streams::{current_public_streams, start_streams_watch};
 use super::thumbnails::read_thumbnail;
 use crate::webui::static_assets::not_modified;
 

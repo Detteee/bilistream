@@ -246,7 +246,10 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/update/status", get(api::update_status))
         .route("/update/download", post(api::download_update))
         .route("/deps/status", get(api::get_deps_status))
-        .route("/holodex/streams", get(api::stream_list::get_stream_list))
+        .route(
+            "/holodex/streams",
+            get(api::admin_stream_list::get_stream_list),
+        )
         .route("/holodex/auth/status", get(api::holodex_auth::auth_status))
         .route("/youtube/keys", get(api::youtube_api_status::get_status))
         .route("/holodex/switch", post(api::stream_switch::switch_stream))

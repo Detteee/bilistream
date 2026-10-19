@@ -1,4 +1,9 @@
-//! Public stream lists built from shared raw items; viewers read only snapshots.
+//! The public page's stream list: the shared rows projected for viewers and
+//! served as an ETag'd snapshot.
+//!
+//! Three modules carry the list, split by audience: `webui::stream_list` builds
+//! it, `api::admin_stream_list` projects it for the dashboard, and this one
+//! projects it for viewers (no channel ids, command names instead).
 mod images;
 mod payload;
 mod snapshot;

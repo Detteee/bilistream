@@ -820,7 +820,7 @@ mod tests {
         const CHILD: &str = "BILISTREAM_STREAM_LIST_AREA_TEST";
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "webui::public::stream_list::payload::tests::each_projection_resolves_current_areas_from_the_same_raw_snapshot", "--nocapture"])
+                .args(["--exact", "webui::public::streams::payload::tests::each_projection_resolves_current_areas_from_the_same_raw_snapshot", "--nocapture"])
                 .env(CHILD, "1")
                 .output().unwrap();
             assert!(
@@ -845,7 +845,7 @@ mod tests {
                 }),
             )
             .unwrap();
-            let admin = crate::webui::api::stream_list::map_stream_list(&snapshot.items);
+            let admin = crate::webui::api::admin_stream_list::map_stream_list(&snapshot.items);
             let public = build_public_streams(snapshot.items.clone(), &[], true, &[]);
             assert_eq!(admin[0].suggested_area_id, Some(id));
             assert_eq!(admin[0].suggested_area_name.as_deref(), Some(name));

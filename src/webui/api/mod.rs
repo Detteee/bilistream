@@ -36,6 +36,7 @@ use crate::plugins::{
 };
 use crate::updater;
 
+pub(crate) mod admin_stream_list;
 mod cluster;
 mod cluster_membership;
 mod config;
@@ -49,7 +50,6 @@ mod setup_data;
 mod status;
 mod storage;
 mod stream_control;
-pub(crate) mod stream_list;
 pub(crate) mod stream_switch;
 pub(crate) mod youtube_api_status;
 
