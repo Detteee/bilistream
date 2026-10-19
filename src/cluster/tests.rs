@@ -630,7 +630,7 @@ fn monitored_config_version_ignores_priority_channel_switches() {
 }
 
 #[test]
-fn monitored_config_version_changes_for_managed_json_payloads() {
+fn monitored_config_version_changes_for_managed_document_payloads() {
     let mut base = monitored_config_from_config(&config("a", 0));
     base.channels_json = Some(serde_json::json!({ "channels": [] }));
     base.areas_json = Some(serde_json::json!({ "areas": [] }));

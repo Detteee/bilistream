@@ -84,7 +84,7 @@ pub(crate) fn managed_json_error(message: String) -> Json<ApiResponse<()>> {
     })
 }
 
-pub(crate) fn schedule_managed_json_sync_after_change(file_name: &str) -> String {
+pub(crate) fn schedule_managed_document_sync_after_change(file_name: &str) -> String {
     let file_name = file_name.to_string();
     tokio::spawn(async move {
         let _guard = super::config::SETTINGS_PEER_SYNC.lock().await;
@@ -115,7 +115,7 @@ pub(crate) fn managed_json_success(
     success_message: &str,
 ) -> Json<ApiResponse<()>> {
     set_config_updated();
-    let sync_message = schedule_managed_json_sync_after_change(file_name);
+    let sync_message = schedule_managed_document_sync_after_change(file_name);
 
     Json(ApiResponse {
         success: true,
