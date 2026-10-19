@@ -88,7 +88,7 @@ mod tests {
     async fn credential_change_closes_idle_stream_and_subscribe_race_without_client_cooperation() {
         let root = std::env::temp_dir().join(format!("bilistream-auth-sse-{}", std::process::id()));
         let store =
-            crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
+            crate::storage::Store::open(root.join("data"), root.join("keys/master")).unwrap();
         let auth = AuthState::open(store.clone(), Some("synthetic".into())).unwrap();
         let revision = auth.sessions.snapshot().unwrap().revision;
         let token = auth

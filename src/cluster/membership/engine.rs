@@ -1610,12 +1610,7 @@ mod openid_departure_tests {
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         ));
         std::fs::create_dir_all(root.join("legacy")).unwrap();
-        let store = Store::open(
-            root.join("data"),
-            root.join("keys/master.key"),
-            Some(root.join("legacy")),
-        )
-        .unwrap();
+        let store = Store::open(root.join("data"), root.join("keys/master.key")).unwrap();
         let set = || crate::notify::store::OpenidWrite {
             change: crate::notify::store::OpenidChange::Set {
                 value: zeroize::Zeroizing::new("E4F0A1B2C3D4E5F60718293A4B5C6D7E".into()),

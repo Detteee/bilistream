@@ -298,7 +298,7 @@ mod tests {
             "bilistream-password-sessions-{}",
             std::process::id()
         ));
-        let open = || Store::open(root.join("data"), root.join("key/master"), None).unwrap();
+        let open = || Store::open(root.join("data"), root.join("key/master")).unwrap();
         let store = open();
         let token = new_token().unwrap();
         store.write(RECORD, serde_json::json!({"password_tag": digest(b"bilistream-password-v2\0first"), "tokens": {digest(token.as_bytes()): 10000}})).unwrap();
@@ -341,7 +341,7 @@ mod tests {
         assert!(disabled.snapshot().unwrap().password.is_none());
         assert!(disabled.snapshot().unwrap().revision.is_some());
         let backup = store.export_backup("synthetic-backup-password").unwrap();
-        let destination = Store::open(root.join("restored"), root.join("key/other"), None).unwrap();
+        let destination = Store::open(root.join("restored"), root.join("key/other")).unwrap();
         destination
             .restore_backup("synthetic-backup-password", &backup)
             .unwrap();
@@ -366,7 +366,7 @@ mod tests {
     fn concurrent_first_creation_has_one_winner_and_old_login_cannot_issue_after_rotation() {
         let root =
             std::env::temp_dir().join(format!("bilistream-password-race-{}", std::process::id()));
-        let store = Store::open(root.join("data"), root.join("key/master"), None).unwrap();
+        let store = Store::open(root.join("data"), root.join("key/master")).unwrap();
         let sessions = Arc::new(Sessions::open(store.clone(), || Ok(None)).unwrap());
         let first = PasswordMutation::new(None, Some("first".into()), true).unwrap();
         let second = PasswordMutation::new(None, Some("second".into()), true).unwrap();
@@ -421,7 +421,7 @@ mod tests {
             "bilistream-password-rollback-{}",
             std::process::id()
         ));
-        let store = Store::open(root.join("data"), root.join("key/master"), None).unwrap();
+        let store = Store::open(root.join("data"), root.join("key/master")).unwrap();
         let sessions = Sessions::open(store.clone(), || Ok(Some("saved".into()))).unwrap();
         let revision = sessions.snapshot().unwrap().revision;
         let before = sessions.issue(revision, None, 10).unwrap();

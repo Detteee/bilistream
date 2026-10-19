@@ -17,11 +17,11 @@ pub fn executable_dir() -> io::Result<PathBuf> {
 }
 
 #[cfg(not(test))]
-pub(super) fn global_paths() -> io::Result<(PathBuf, PathBuf, PathBuf)> {
-    let legacy = executable_dir()?;
-    let data = std::env::var_os("BILISTREAM_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| legacy.join("data"));
+pub(super) fn global_paths() -> io::Result<(PathBuf, PathBuf)> {
+    let data = match std::env::var_os("BILISTREAM_DATA_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => executable_dir()?.join("data"),
+    };
     let data = std::path::absolute(data)?;
     let key = if let Some(path) = std::env::var_os("BILISTREAM_KEY_FILE") {
         std::path::absolute(path)?
@@ -45,7 +45,7 @@ pub(super) fn global_paths() -> io::Result<(PathBuf, PathBuf, PathBuf)> {
             "密钥文件必须保存在数据库目录之外",
         ));
     }
-    Ok((data, key, legacy))
+    Ok((data, key))
 }
 
 pub fn private_dir(path: &Path) -> io::Result<()> {

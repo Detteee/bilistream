@@ -14,7 +14,7 @@ impl Installation {
     fn new() -> Self {
         let directory =
             std::env::temp_dir().join(format!("bilistream-peer-auth-{}", random_id().unwrap()));
-        let store = Store::open(directory.join("data"), directory.join("keys/key"), None).unwrap();
+        let store = Store::open(directory.join("data"), directory.join("keys/key")).unwrap();
         Self { directory, store }
     }
     fn identity(&self) -> NodeIdentity {

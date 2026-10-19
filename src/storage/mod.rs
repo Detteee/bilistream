@@ -1,8 +1,8 @@
 //! Installation-local data. Secrets are encrypted before SQLite sees them.
 mod crypto;
-mod legacy;
+mod documents;
 pub mod paths;
-pub(crate) use legacy::validate as validate_document;
+pub(crate) use documents::validate as validate_document;
 
 use crypto::Key;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -29,9 +29,9 @@ const MANAGED_RECORDS: &[&str] = &[
 /// The document ids this installation can hold.
 ///
 /// They keep their file-era spelling on purpose: the id is bound into the
-/// encryption context and is the filename contract of `export_legacy` and the
-/// legacy import, so renaming one is a data migration, not a rename. No file
-/// by these names exists — the payload lives in the `documents` table.
+/// encryption context and appears in backup exports, so renaming one is a data
+/// migration, not a rename. No file by these names exists — the payload lives
+/// in the `documents` table.
 pub const NAMES: &[&str] = &[
     "config.json",
     "cookies.json",
@@ -241,11 +241,13 @@ impl Transaction<'_> {
 }
 
 impl Store {
-    pub fn open(
-        data_dir: PathBuf,
-        key_file: PathBuf,
-        legacy_dir: Option<PathBuf>,
-    ) -> io::Result<Arc<Self>> {
+    /// Open (creating when needed) the document store.
+    ///
+    /// There is no import from a pre-SQL data directory any more: a legacy
+    /// directory beside the executable is simply ignored. An installation that
+    /// still holds JSON files must be upgraded through a build that imports
+    /// them, once.
+    pub fn open(data_dir: PathBuf, key_file: PathBuf) -> io::Result<Arc<Self>> {
         if std::path::absolute(&key_file)?.starts_with(std::path::absolute(&data_dir)?) {
             return Err(invalid("密钥文件必须在数据库目录之外"));
         }
@@ -320,7 +322,20 @@ impl Store {
                 )
                 .map_err(sql_error)?;
         }
-        legacy::initialize(&mut connection, &key, &id, &data_dir, legacy_dir.as_deref())?;
+        if !existing {
+            // First-run default, not a migration: the player filter reads this
+            // document and the settings page reports "过滤词不可用" when absent.
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO documents(name,payload,encrypted,revision,updated_at) VALUES('invalid_words.txt',?1,0,0,?2)",
+                    params![
+                        serde_json::to_vec(&Value::String(String::new()))
+                            .map_err(|_| invalid("默认文档无效"))?,
+                        now()
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
         let cache = Arc::new(RwLock::new(load_rows(&connection, &key, &id)?));
         let runtime_dir = data_dir.join("runtime");
         paths::private_dir(&runtime_dir)?;
@@ -446,79 +461,6 @@ impl Store {
         crypto::export(password, &bytes)
     }
 
-    /// Explicit offline downgrade only. Never overwrite an existing directory.
-    pub fn export_legacy(&self, destination: &Path) -> io::Result<()> {
-        let mut docs = self.portable_snapshot()?;
-        if !docs.contains_key("config.json") {
-            return Err(invalid("尚未配置，无法导出旧版数据"));
-        }
-        for (platform, name) in [
-            ("youtube", "cookies.txt"),
-            ("niconico", "niconico_cookies.txt"),
-        ] {
-            let has_cookie = docs
-                .get(name)
-                .is_some_and(|d| d.value.as_str().is_some_and(|s| !s.is_empty()));
-            if let Some(config) = docs.get_mut("config.json") {
-                if let Some(settings) = config
-                    .value
-                    .get_mut(platform)
-                    .and_then(Value::as_object_mut)
-                {
-                    settings.insert(
-                        "cookies_file".into(),
-                        if has_cookie {
-                            Value::String(name.into())
-                        } else {
-                            Value::Null
-                        },
-                    );
-                }
-            }
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            fs::DirBuilder::new().mode(0o700).create(destination)?;
-        }
-        #[cfg(not(unix))]
-        fs::create_dir(destination)?;
-        let result = (|| {
-            paths::private_dir(destination)?;
-            for &name in NAMES {
-                let Some(doc) = docs.get(name) else { continue };
-                legacy::validate(name, &doc.value)?;
-                let bytes = if name.ends_with(".txt") {
-                    doc.value
-                        .as_str()
-                        .ok_or_else(|| invalid("文本记录无效"))?
-                        .as_bytes()
-                        .to_vec()
-                } else {
-                    serde_json::to_vec_pretty(&doc.value).map_err(|_| invalid("无法导出数据"))?
-                };
-                let path = destination.join(name);
-                paths::write_private(&path, &bytes)?;
-                let file = File::options().write(true).open(&path)?;
-                file.set_times(
-                    fs::FileTimes::new()
-                        .set_modified(UNIX_EPOCH + Duration::from_secs(doc.updated_at)),
-                )?;
-                file.sync_all()?;
-                if fs::read(path)? != bytes {
-                    return Err(invalid("旧版数据导出验证失败"));
-                }
-            }
-            #[cfg(unix)]
-            File::open(destination)?.sync_all()?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_dir_all(destination);
-        }
-        result
-    }
-
     pub fn restore_backup(&self, password: &str, bytes: &[u8]) -> io::Result<()> {
         if bytes.len() > MAX_BACKUP_BYTES {
             return Err(invalid("备份文件过大"));
@@ -527,7 +469,7 @@ impl Store {
         let mut docs: HashMap<String, Document> =
             serde_json::from_slice(&plain).map_err(|_| invalid("备份内容无效"))?;
         for (name, doc) in &docs {
-            legacy::validate(name, &doc.value)?;
+            documents::validate(name, &doc.value)?;
         }
         self.transaction(move |tx| {
             let protected = MANAGED_RECORDS.iter().try_fold(false, |found, name| {
@@ -665,18 +607,14 @@ pub fn global() -> io::Result<Arc<Store>> {
         return Ok(Arc::clone(store));
     }
     #[cfg(not(test))]
-    let (data, key, legacy) = paths::global_paths()?;
+    let (data, key) = paths::global_paths()?;
     #[cfg(test)]
-    let (data, key, legacy) = {
+    let (data, key) = {
         let root =
             std::env::temp_dir().join(format!("bilistream-unit-store-{}", std::process::id()));
-        (
-            root.join("data"),
-            root.join("keys/master.key"),
-            root.join("legacy"),
-        )
+        (root.join("data"), root.join("keys/master.key"))
     };
-    let store = Store::open(data, key, Some(legacy))?;
+    let store = Store::open(data, key)?;
     let _ = GLOBAL.set(Arc::clone(&store));
     Ok(store)
 }

@@ -773,8 +773,7 @@ mod replay_tests {
             crate::cluster::peer_auth::random_id().unwrap()
         ));
         let store =
-            crate::storage::Store::open(directory.join("data"), directory.join("key"), None)
-                .unwrap();
+            crate::storage::Store::open(directory.join("data"), directory.join("key")).unwrap();
         let local = store.transaction(NodeIdentity::create_in).unwrap();
         store
             .write("cluster-local", serde_json::json!({"lifecycle":"left"}))
@@ -912,8 +911,7 @@ mod replay_tests {
             crate::cluster::peer_auth::random_id().unwrap()
         ));
         let store =
-            crate::storage::Store::open(directory.join("data"), directory.join("key"), None)
-                .unwrap();
+            crate::storage::Store::open(directory.join("data"), directory.join("key")).unwrap();
         let identity = store.transaction(NodeIdentity::create_in).unwrap();
         let receiver = PeerReceiver::new().unwrap();
         let challenge = HelloRequest::new().unwrap();

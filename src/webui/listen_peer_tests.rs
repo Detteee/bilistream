@@ -29,7 +29,7 @@ async fn installation() -> (std::path::PathBuf, Arc<AuthState>) {
         "bilistream-peer-admission-{}",
         random_id().unwrap()
     ));
-    let store = crate::storage::Store::open(root.join("data"), root.join("key"), None).unwrap();
+    let store = crate::storage::Store::open(root.join("data"), root.join("key")).unwrap();
     store
         .write(
             "config.json",

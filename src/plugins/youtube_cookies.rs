@@ -378,7 +378,7 @@ print('synthetic-result')
             Self(root)
         }
         fn store(&self) -> Arc<Store> {
-            let store = Store::open(self.0.join("data"), self.0.join("keys/master"), None).unwrap();
+            let store = Store::open(self.0.join("data"), self.0.join("keys/master")).unwrap();
             store.write(NAME, json!(INITIAL)).unwrap();
             store
         }

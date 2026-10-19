@@ -2361,7 +2361,7 @@ impl MembershipNode {
             "bilistream-handoff-{}",
             super::peer_auth::random_id().unwrap()
         ));
-        let store = crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+        let store = crate::storage::Store::open(dir.join("data"), dir.join("key")).unwrap();
         store
             .write(
                 "config.json",

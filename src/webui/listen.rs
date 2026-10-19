@@ -983,7 +983,7 @@ mod tests {
     fn store(name: &str) -> (std::path::PathBuf, Arc<crate::storage::Store>) {
         let root = std::env::temp_dir().join(format!("bilistream-{name}-{}", std::process::id()));
         let store =
-            crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
+            crate::storage::Store::open(root.join("data"), root.join("keys/master")).unwrap();
         (root, store)
     }
 
@@ -1456,7 +1456,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("bilistream-auth-routes-{}", std::process::id()));
         let store =
-            crate::storage::Store::open(root.join("data"), root.join("key/master"), None).unwrap();
+            crate::storage::Store::open(root.join("data"), root.join("key/master")).unwrap();
         let token = "synthetic-cluster-key-0123456789abcdef";
         let auth = AuthState::open(Arc::clone(&store), Some("password".into())).unwrap();
         let router = |auth| {

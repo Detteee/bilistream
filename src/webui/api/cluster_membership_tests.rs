@@ -22,7 +22,7 @@ impl Node {
         crate::install_crypto_provider();
         let dir =
             std::env::temp_dir().join(format!("bilistream-cm-{name}-{}", random_id().unwrap()));
-        let store = Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+        let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
         store.write("config.json", json!({})).unwrap();
         let auth = AuthState::open(store.clone(), password.map(str::to_owned)).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

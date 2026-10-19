@@ -1108,8 +1108,7 @@ mod priority_warning_tests {
             crate::cluster::peer_auth::random_id().unwrap(),
         ));
         {
-            let store =
-                crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+            let store = crate::storage::Store::open(dir.join("data"), dir.join("key")).unwrap();
             let auth = AuthState::open(store, Some("synthetic-priority-password".into())).unwrap();
             let app = crate::webui::server::build_app(crate::AppState::new(), auth);
             let login = app

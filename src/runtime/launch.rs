@@ -21,7 +21,6 @@ struct LaunchArgs {
 #[derive(Debug)]
 enum ParseOutcome {
     Launch(LaunchArgs),
-    ExportLegacy(std::path::PathBuf),
     ResetPanelPassword,
     Help,
     Version,
@@ -52,7 +51,6 @@ Options:\n\
   --tray                      System tray (default on Windows)\n\
   --webui                     Console Web UI (default on Linux/macOS)\n\
   --reset-panel-password      Clear panel password and sessions offline, then exit\n\
-  --export-legacy DIR         Export plaintext for downgrade and exit (stop service first)\n\
   -h, --help                  Print help\n\
   -V, --version               Print version",
         env!("CARGO_PKG_VERSION")
@@ -102,12 +100,6 @@ fn parse_launch_args_with(
             return Err("usage: bilistream --reset-panel-password (stop service first)".into());
         }
         return Ok(ParseOutcome::ResetPanelPassword);
-    }
-    if argv.get(1).is_some_and(|arg| arg == "--export-legacy") {
-        if argv.len() != 3 || argv[2].trim().is_empty() {
-            return Err("usage: bilistream --export-legacy NEW_DIRECTORY".into());
-        }
-        return Ok(ParseOutcome::ExportLegacy(argv[2].clone().into()));
     }
     let mut bind = env_bind.unwrap_or_else(|| "127.0.0.1".to_string());
     let mut password = env_password;
@@ -215,13 +207,9 @@ fn windows_needs_console(argv: &[String]) -> bool {
         let raw = argv[i].as_str();
         let key = raw.split_once('=').map(|(k, _)| k).unwrap_or(raw);
         match key {
-            "-h"
-            | "--help"
-            | "-V"
-            | "--version"
-            | "--webui"
-            | "--reset-panel-password"
-            | "--export-legacy" => return true,
+            "-h" | "--help" | "-V" | "--version" | "--webui" | "--reset-panel-password" => {
+                return true
+            }
             "--tray" => i += 1,
             "--bind"
             | "--password"
@@ -523,14 +511,6 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await??;
             println!("面板密码已清除，旧登录会话已失效。请在本机地址启动，然后在设置中设置新密码。未启动服务。");
-            return Ok(());
-        }
-        Ok(ParseOutcome::ExportLegacy(destination)) => {
-            tokio::task::spawn_blocking(move || {
-                crate::storage::global()?.export_legacy(&destination)
-            })
-            .await??;
-            println!("旧版数据已导出（明文），请妥善保管并在回退完成后删除。未启动监控。");
             return Ok(());
         }
         Ok(ParseOutcome::Help) => {

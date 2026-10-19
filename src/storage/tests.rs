@@ -129,14 +129,6 @@ fn protected_and_legacy_clusters_export_unjoined_and_off_without_changing_source
         assert_eq!(exported["priority_channel"]["enabled"], false);
         assert_eq!(exported["priority_channel"]["auto_restart"], false);
         assert_eq!(store.read("config.json").unwrap().unwrap().value, config);
-        let legacy = dir.0.join("export");
-        store.export_legacy(&legacy).unwrap();
-        let legacy_config: Value =
-            serde_json::from_slice(&fs::read(legacy.join("config.json")).unwrap()).unwrap();
-        assert_eq!(legacy_config["cluster"], exported["cluster"]);
-        for name in MANAGED_RECORDS {
-            assert!(!legacy.join(name).exists());
-        }
     }
 }
 
@@ -179,16 +171,6 @@ fn restore_old_cluster_backup_into_running_empty_store_is_immediately_safe() {
         }
         assert_eq!(schema_version(&store), 1);
         assert!(store.read("cluster-local").unwrap().is_none());
-        let legacy = destination.0.join("export");
-        store.export_legacy(&legacy).unwrap();
-        let exported: Value =
-            serde_json::from_slice(&fs::read(legacy.join("config.json")).unwrap()).unwrap();
-        for field in ["cluster", "priority_channel", "bililive", "extension"] {
-            assert_eq!(exported[field], restored[field]);
-        }
-        for platform in ["youtube", "twitch", "niconico"] {
-            assert_eq!(exported[platform]["enable_monitor"], !enabled);
-        }
         membership.initialize().unwrap();
         assert!(store.read("cluster-local").unwrap().is_none());
     }
@@ -246,15 +228,10 @@ impl Directory {
             "bilistream-storage-test-{}",
             paths::hex(&crypto::random::<16>().unwrap())
         ));
-        fs::create_dir_all(path.join("legacy")).unwrap();
         Self(path)
     }
     fn open(&self) -> io::Result<Arc<Store>> {
-        Store::open(
-            self.0.join("data"),
-            self.0.join("keys/master.key"),
-            Some(self.0.join("legacy")),
-        )
+        Store::open(self.0.join("data"), self.0.join("keys/master.key"))
     }
 }
 impl Drop for Directory {
@@ -268,96 +245,7 @@ pub(crate) fn config_fixture() -> Value {
 }
 
 #[test]
-fn migrates_preserves_extensions_and_encrypts_before_sqlite() {
-    let dir = Directory::new();
-    let value = config_fixture();
-    fs::write(
-        dir.0.join("legacy/config.json"),
-        serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
-    let store = dir.open().unwrap();
-    assert_eq!(store.read("config.json").unwrap().unwrap().value, value);
-    assert!(!dir.0.join("legacy/config.json").exists());
-    for entry in fs::read_dir(dir.0.join("data")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_file() {
-            assert!(!fs::read(path)
-                .unwrap()
-                .windows(23)
-                .any(|s| s == b"synthetic-secret-marker"));
-        }
-    }
-    drop(store);
-    let reopened = dir.open().unwrap();
-    assert_eq!(reopened.read("config.json").unwrap().unwrap().value, value);
-}
-
-#[test]
-fn malformed_migration_keeps_original_and_retries_without_reset() {
-    let dir = Directory::new();
-    let path = dir.0.join("legacy/config.json");
-    fs::write(&path, b"{broken").unwrap();
-    assert!(dir.open().is_err());
-    assert_eq!(fs::read(&path).unwrap(), b"{broken");
-    fs::write(&path, serde_json::to_vec(&config_fixture()).unwrap()).unwrap();
-    let store = dir.open().unwrap();
-    assert_eq!(
-        store.read("config.json").unwrap().unwrap().value["extension"]["keep"],
-        true
-    );
-}
-
-#[test]
-fn legacy_export_preserves_latest_state_times_and_local_cookie_paths() {
-    let dir = Directory::new();
-    let store = dir.open().unwrap();
-    let mut config = config_fixture();
-    config["youtube"]["cookies_file"] = json!("/old/shared/cookies.txt");
-    store.write("config.json", config).unwrap();
-    let jar = "# Netscape HTTP Cookie File\n.example.invalid\tTRUE\t/\tTRUE\t0\tsession\tsynthetic-only\n";
-    store.transaction(move |tx| {
-        tx.write_at("cookies.txt", json!(jar), 1000)?;
-        tx.write("youtube_quota.json", json!({"day":42,"keys":{"fixture":{"used":8500,"exhausted_until":43}}}))?;
-        tx.write("youtube_golive_hours.json", json!({"channels":{"fixture":vec![2.0;24]},"counted":{"fixture-video":123},"decayed_at":100}))?;
-        Ok(())
-    }).unwrap();
-    let output = dir.0.join("downgrade");
-    store.export_legacy(&output).unwrap();
-    assert_eq!(fs::read_to_string(output.join("cookies.txt")).unwrap(), jar);
-    assert_eq!(
-        fs::metadata(output.join("cookies.txt"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        UNIX_EPOCH + Duration::from_secs(1000)
-    );
-    let config: Value =
-        serde_json::from_slice(&fs::read(output.join("config.json")).unwrap()).unwrap();
-    assert_eq!(config["youtube"]["cookies_file"], "cookies.txt");
-    assert_eq!(config["extension"]["keep"], true);
-    assert!(store.export_legacy(&output).is_err());
-    // Round-trip through the real importer, including quota and learned hours.
-    let restored = Store::open(
-        dir.0.join("restored"),
-        dir.0.join("keys/restored.key"),
-        Some(output),
-    )
-    .unwrap();
-    for name in [
-        "cookies.txt",
-        "youtube_quota.json",
-        "youtube_golive_hours.json",
-    ] {
-        assert_eq!(
-            restored.read(name).unwrap().unwrap().value,
-            store.read(name).unwrap().unwrap().value
-        );
-    }
-}
-
-#[test]
-fn learned_hour_weights_keep_f64_precision_through_migration_and_reopen() {
+fn learned_hour_weights_keep_f64_precision_through_backup_and_reopen() {
     let dir = Directory::new();
     let decimals = [
         "1.4602988135614665",
@@ -373,14 +261,10 @@ fn learned_hour_weights_keep_f64_precision_through_migration_and_reopen() {
         r#"{{"channels":{{"fixture":[{}]}},"counted":{{"fixture-video":123}},"decayed_at":100}}"#,
         decimals.join(",")
     );
-    fs::write(dir.0.join("legacy/youtube_golive_hours.json"), raw).unwrap();
-    fs::write(
-        dir.0.join("legacy/config.json"),
-        serde_json::to_vec(&config_fixture()).unwrap(),
-    )
-    .unwrap();
+    let learned: Value = serde_json::from_str(&raw).unwrap();
+    let store = dir.open().unwrap();
+    store.write("youtube_golive_hours.json", learned).unwrap();
     for pass in 0..2 {
-        let store = dir.open().unwrap();
         let value = store
             .read("youtube_golive_hours.json")
             .unwrap()
@@ -392,13 +276,15 @@ fn learned_hour_weights_keep_f64_precision_through_migration_and_reopen() {
             .iter()
             .map(|number| number.as_f64().unwrap().to_bits())
             .collect();
-        assert_eq!(bits, expected, "migration/reopen pass {pass}");
+        assert_eq!(bits, expected, "write/reopen pass {pass}");
         if pass == 1 {
-            let export = dir.0.join("export");
-            store.export_legacy(&export).unwrap();
-            let text = fs::read_to_string(export.join("youtube_golive_hours.json")).unwrap();
+            // The encrypted backup is the surviving JSON boundary.
+            let backup = store.export_backup("synthetic-password").unwrap();
+            let decoded = crypto::restore("synthetic-password", &backup).unwrap();
+            let docs: HashMap<String, Document> = serde_json::from_slice(&decoded).unwrap();
+            let text = docs["youtube_golive_hours.json"].value.to_string();
             for decimal in &decimals {
-                assert!(text.contains(decimal), "export changed a stored weight");
+                assert!(text.contains(decimal), "backup changed a stored weight");
             }
         }
     }

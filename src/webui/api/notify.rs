@@ -1425,12 +1425,8 @@ mod tests {
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         ));
         std::fs::create_dir_all(root.join("legacy")).unwrap();
-        let store = crate::storage::Store::open(
-            root.join("data"),
-            root.join("keys/master.key"),
-            Some(root.join("legacy")),
-        )
-        .unwrap();
+        let store =
+            crate::storage::Store::open(root.join("data"), root.join("keys/master.key")).unwrap();
         (root, store)
     }
 

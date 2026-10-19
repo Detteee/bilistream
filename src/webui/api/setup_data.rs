@@ -323,7 +323,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("bilistream-setup-password-{}", std::process::id()));
         let store =
-            crate::storage::Store::open(root.join("data"), root.join("keys/master"), None).unwrap();
+            crate::storage::Store::open(root.join("data"), root.join("keys/master")).unwrap();
         let sessions = Sessions::open(store.clone(), || Ok(None)).unwrap();
         for failure in 0..4 {
             let before = serde_json::to_value(store.snapshot().unwrap()).unwrap();
@@ -388,10 +388,6 @@ mod tests {
         let areas = store.read("areas.json").unwrap().unwrap().value;
         assert_eq!(channels["channels"], serde_json::json!([]));
         assert!(areas["areas"].as_array().unwrap().is_empty());
-        let exported = root.join("export");
-        store.export_legacy(&exported).unwrap();
-        assert!(!exported.join("webui-password").exists());
-        assert!(!exported.join("webui-sessions").exists());
         drop((sessions, store));
         std::fs::remove_dir_all(root).unwrap();
     }

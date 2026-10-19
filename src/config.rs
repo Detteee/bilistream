@@ -1229,7 +1229,7 @@ mod tests {
     }
 
     fn isolated_store(dir: &Path) -> Arc<Store> {
-        Store::open(dir.join("data"), dir.join("keys/master.key"), None).unwrap()
+        Store::open(dir.join("data"), dir.join("keys/master.key")).unwrap()
     }
 
     #[tokio::test]

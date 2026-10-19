@@ -52,8 +52,7 @@ impl Directory {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let store =
-            bilistream::storage::Store::open(root.join("data"), root.join("key"), None).unwrap();
+        let store = bilistream::storage::Store::open(root.join("data"), root.join("key")).unwrap();
         store
             .write(
                 "config.json",

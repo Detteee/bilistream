@@ -11,7 +11,7 @@ impl Node {
     async fn new(name: &str, create: bool) -> Self {
         let dir =
             std::env::temp_dir().join(format!("bilistream-membership-{}", random_id().unwrap()));
-        let store = Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+        let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
         store.write("config.json",json!({"cluster":{"enabled":false},"youtube":{"enable_monitor":true,"proxy":"local-only"},"twitch":{"enable_monitor":true},"niconico":{"enable_monitor":true},"priority_channel":{"enabled":true,"auto_restart":true},"bililive":{"enable_danmaku_command":true},"enable_youtube_monitor":true,"enable_twitch_monitor":true,"unknown_extension":{"keep":42}})).unwrap();
         let engine = Membership::new(store);
         engine
@@ -454,7 +454,7 @@ async fn every_prepared_member_is_held_so_maintenance_has_no_publisher() {
 #[test]
 fn legacy_enabled_configuration_stays_held_and_never_creates_an_identity() {
     let dir = std::env::temp_dir().join(format!("bilistream-membership-{}", random_id().unwrap()));
-    let store = Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+    let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
     store
         .write("config.json", json!({"cluster":{"enabled":true}}))
         .unwrap();
@@ -468,7 +468,7 @@ fn legacy_enabled_configuration_stays_held_and_never_creates_an_identity() {
     assert!(execution_hold(&store).unwrap().is_some());
     drop(engine);
     drop(store);
-    let reopened = Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+    let reopened = Store::open(dir.join("data"), dir.join("key")).unwrap();
     assert!(execution_hold(&reopened).unwrap().is_some());
     drop(reopened);
     let _ = std::fs::remove_dir_all(dir);

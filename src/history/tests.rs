@@ -1477,7 +1477,7 @@ fn capture_writes_only_to_the_git_ignored_fixtures_dir() {
 async fn every_history_route_is_401_without_a_session() {
     crate::install_crypto_provider();
     let dir = tmp("auth");
-    let store = crate::storage::Store::open(dir.join("data"), dir.join("key"), None).unwrap();
+    let store = crate::storage::Store::open(dir.join("data"), dir.join("key")).unwrap();
     store.write("config.json", json!({})).unwrap();
     let auth = crate::webui::listen::AuthState::open(store.clone(), Some("synthetic-pass".into()))
         .unwrap();
