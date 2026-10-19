@@ -404,9 +404,6 @@ pub(crate) fn accept_tx(
 pub fn seed_if_needed(store: &Store, node: &str, now: u64, holder: bool) -> io::Result<bool> {
     let node = node.to_string();
     store.transaction(move |tx| {
-        // The migrated binding must be visible before assigning its AppID
-        // association to the initial credentials generation.
-        store::migrate_plain_openid_tx(tx)?;
         let meta = load_meta_tx(tx)?;
         if meta.generation > 0 {
             return Ok(false);

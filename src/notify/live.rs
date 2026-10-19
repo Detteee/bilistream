@@ -325,7 +325,6 @@ mod tests {
             &WatchConfig {
                 enabled: true,
                 channels: vec![WatchChannel::Configured { name: name.into() }],
-                ..Default::default()
             },
             &catalog,
         )
@@ -896,7 +895,6 @@ mod tests {
                     name: "missing".into(),
                 },
             ],
-            ..Default::default()
         };
         assert_eq!(
             resolve_watch(&config, &catalog)[0].accounts,

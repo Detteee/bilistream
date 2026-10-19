@@ -7,9 +7,8 @@
 //!   sealed by `Store` with its own per-record context, next to the AppSecret.
 //!   `{ admin_openid, bound_at, via, revision, writer }`; `revision` is the
 //!   logical `openid_revision` (monotonic: bind, change and unbind bump it).
-//!   A plain `qq.admin_openid` left in `notify-config` by an older build is
-//!   moved here in one `Store::transaction` on the first load (and in the
-//!   restore transaction), see `migrate_plain_openid`.
+//!   A plain `qq.admin_openid` left in `notify-config` by a pre-SQL build is
+//!   reported once and left untouched: the migration that sealed it is gone.
 //! - `notify-state`: the last ledger and send outcome, so a restart neither
 //!   repeats alerts nor forgets spent budgets.
 //! - `notify-watch`: follow-list revision metadata (`revision`, `updated_by`,
@@ -45,15 +44,7 @@ pub(crate) fn settings_records(
         super::credentials::CREDENTIALS_RECORD,
         super::watch_sync::WATCH_RECORD,
     ];
-    let mut records = store.read_many(&names)?;
-    if records
-        .get(CONFIG_RECORD)
-        .is_some_and(needs_settings_migration)
-    {
-        migrate_settings(store)?;
-        records = store.read_many(&names)?;
-    }
-    Ok(records)
+    store.read_many(&names)
 }
 
 pub struct SettingsSnapshot {
@@ -322,51 +313,6 @@ where
         before(tx)?;
         write_openid_tx(tx, &write)
     })
-}
-
-/// Move a plain `qq.admin_openid` out of `notify-config` into the sealed
-/// `notify-openid` (checklist B3). Both records change in the caller's
-/// transaction, so a crash leaves the old state or the new one. An existing
-/// sealed value wins; the plain copy is only removed.
-pub fn migrate_plain_openid_tx(tx: &mut Transaction<'_>) -> io::Result<bool> {
-    migrate_plain_openid_tx_with(tx, |_| Ok(()))
-}
-
-pub(crate) fn migrate_plain_openid_tx_with<F>(
-    tx: &mut Transaction<'_>,
-    between: F,
-) -> io::Result<bool>
-where
-    F: FnOnce(&mut Transaction<'_>) -> io::Result<()>,
-{
-    let Some(doc) = tx.read(CONFIG_RECORD)? else {
-        return Ok(false);
-    };
-    let mut value = doc.value;
-    let Some(plain) = value
-        .get_mut("qq")
-        .and_then(Value::as_object_mut)
-        .and_then(|qq| qq.remove("admin_openid"))
-    else {
-        return Ok(false);
-    };
-    let plain = Zeroizing::new(plain.as_str().unwrap_or_default().trim().to_string());
-    let current = parse_openid(tx.read(OPENID_RECORD)?)?;
-    if !current.is_set() && super::config::validate_openid(&plain).is_ok() {
-        let sealed = OpenidDoc {
-            admin_openid: plain.to_string(),
-            bound_at: Some(doc.updated_at),
-            via: Some("manual".to_string()),
-            revision: current.revision + 1,
-            writer: String::new(),
-        };
-        let sealed = serde_json::to_value(&sealed)
-            .map_err(|_| io::Error::other("管理员 openid 无法保存"))?;
-        tx.write(OPENID_RECORD, sealed)?;
-    }
-    between(tx)?;
-    tx.write(CONFIG_RECORD, value)?;
-    Ok(true)
 }
 
 /// Bound or explicitly unbound, as a peer copy says (batch 1b).
@@ -668,54 +614,26 @@ pub fn forget_openid_tx(tx: &mut Transaction<'_>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn migrate_plain_openid(store: &Store) -> io::Result<bool> {
-    store.transaction(migrate_plain_openid_tx)
-}
-
+/// A plain `qq.admin_openid` left by a pre-SQL build. The migration that
+/// sealed it is gone, so the record is reported and otherwise ignored.
 fn has_plain_openid(doc: &Document) -> bool {
     doc.value.pointer("/qq/admin_openid").is_some()
 }
 
-fn needs_settings_migration(doc: &Document) -> bool {
-    has_plain_openid(doc) || super::config::has_legacy_watch(&doc.value)
-}
-
-/// Migrate local preferences in the same transaction as any legacy binding.
-/// The roster is read inside this transaction so an account migration never
-/// uses half of a concurrent channel edit. No credential generation changes.
-fn migrate_settings(store: &Store) -> io::Result<bool> {
-    store.transaction(|tx| {
-        let openid_changed = migrate_plain_openid_tx(tx)?;
-        let Some(mut doc) = tx.read(CONFIG_RECORD)? else {
-            return Ok(openid_changed);
-        };
-        if !super::config::has_legacy_watch(&doc.value) {
-            return Ok(openid_changed);
-        }
-        let catalog = super::config::WatchCatalog::from_value(
-            tx.read("channels.json")?.map(|doc| doc.value),
-        )?;
-        let changed = super::config::migrate_watch(&mut doc.value, &catalog, crate::storage::now())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.message))?;
-        if changed {
-            tx.write(CONFIG_RECORD, doc.value)?;
-        }
-        Ok(openid_changed || changed)
-    })
+/// Watch entries without a `kind` tag predate the account-identity model.
+/// There is no migration to fold them, and they cannot be parsed, so the
+/// record is refused with an actionable message instead of half-loading.
+fn has_pre_migration_watch(doc: &Document) -> bool {
+    doc.value
+        .pointer("/watch/channels")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| entries.iter().any(|entry| entry.get("kind").is_none()))
 }
 
 pub fn load_config(store: &Store) -> io::Result<(NotifyConfig, Option<u64>)> {
-    let Some(mut doc) = store.read(CONFIG_RECORD)? else {
+    let Some(doc) = store.read(CONFIG_RECORD)? else {
         return Ok((NotifyConfig::default(), None));
     };
-    if needs_settings_migration(&doc) {
-        // First load after an upgrade: seal the binding and group old follows.
-        migrate_settings(store)?;
-        match store.read(CONFIG_RECORD)? {
-            Some(migrated) => doc = migrated,
-            None => return Ok((NotifyConfig::default(), None)),
-        }
-    }
     parse_config(Some(doc))
 }
 
@@ -723,6 +641,17 @@ fn parse_config(doc: Option<Document>) -> io::Result<(NotifyConfig, Option<u64>)
     let Some(doc) = doc else {
         return Ok((NotifyConfig::default(), None));
     };
+    if has_plain_openid(&doc) {
+        tracing::warn!(
+            "通知设置里仍有旧版明文 openid；不会自动迁移，请在面板重新绑定管理员 openid。"
+        );
+    }
+    if has_pre_migration_watch(&doc) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "通知设置仍是旧版关注列表格式；请先用仍含迁移的旧版本启动一次再升级",
+        ));
+    }
     let cfg = serde_json::from_value(doc.value)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "通知设置记录无效"))?;
     Ok((cfg, Some(doc.revision)))
@@ -1001,87 +930,6 @@ mod tests {
     const MARKER: &str = "synthetic-notify-secret-marker";
 
     #[test]
-    fn legacy_watch_migration_is_local_atomic_and_idempotent_on_settings_load() {
-        let temp = TempStore::new();
-        let store = &temp.1;
-        store
-            .write(
-                "channels.json",
-                serde_json::json!({"channels":[{
-                    "name":"canonical","niconico_name":"display alias","aliases":[],
-                    "platforms":{"youtube":"UCtest","twitch":"testlogin","niconico":"nico-test"}
-                }]}),
-            )
-            .unwrap();
-        let mut value = serde_json::to_value(NotifyConfig::default()).unwrap();
-        value["enabled"] = Value::Bool(true);
-        value["watch"] = serde_json::json!({"enabled":true,"channels":[
-            {"platform":"youtube","channel_id":"UCtest","name":"old"},
-            {"platform":"niconico","channel_id":"nico-test","name":"display alias"}
-        ]});
-        let before_revision = store.write(CONFIG_RECORD, value).unwrap();
-        save_secret(store, Some(MARKER), None).unwrap();
-        let before_secret = store.read(SECRETS_RECORD).unwrap().unwrap();
-        let before_credentials = store
-            .read(super::super::credentials::CREDENTIALS_RECORD)
-            .unwrap();
-        let settings = load_settings(store).unwrap();
-        assert!(settings.config.0.enabled);
-        assert!(settings.config.0.watch.enabled);
-        assert_eq!(
-            settings.config.0.watch.channels,
-            [super::super::config::WatchChannel::Configured {
-                name: "canonical".into()
-            }]
-        );
-        assert_eq!(
-            settings
-                .config
-                .0
-                .watch
-                .migration_notice
-                .as_ref()
-                .unwrap()
-                .folded,
-            2
-        );
-        assert!(settings.config.1.unwrap() > before_revision);
-        assert_eq!(settings.secret.0.unwrap().expose(), MARKER);
-        let after_secret = store.read(SECRETS_RECORD).unwrap().unwrap();
-        assert_eq!(
-            (after_secret.value, after_secret.revision),
-            (before_secret.value, before_secret.revision)
-        );
-        assert_eq!(
-            store
-                .read(super::super::credentials::CREDENTIALS_RECORD)
-                .unwrap()
-                .map(|doc| (doc.value, doc.revision)),
-            before_credentials.map(|doc| (doc.value, doc.revision))
-        );
-        let again = load_config(store).unwrap();
-        assert_eq!(again, settings.config);
-        assert_eq!(load_settings(store).unwrap().config, again);
-    }
-
-    #[test]
-    fn empty_disabled_watch_preferences_do_not_gain_a_migration_or_revision() {
-        let temp = TempStore::new();
-        let revision = temp
-            .1
-            .write(
-                CONFIG_RECORD,
-                serde_json::json!({"watch":{"enabled":false,"channels":[]}}),
-            )
-            .unwrap();
-        let settings = load_settings(&temp.1).unwrap();
-        assert!(!settings.config.0.watch.enabled);
-        assert!(settings.config.0.watch.channels.is_empty());
-        assert!(settings.config.0.watch.migration_notice.is_none());
-        assert_eq!(settings.config.1, Some(revision));
-    }
-
-    #[test]
     fn secret_round_trips_with_revision_checks_and_redacted_debug() {
         let temp = TempStore::new();
         let store = &temp.1;
@@ -1166,14 +1014,6 @@ mod tests {
         }
     }
 
-    fn plain_config(store: &Store, openid: &str) {
-        let mut value = serde_json::to_value(NotifyConfig::default()).unwrap();
-        value["qq"]["admin_openid"] = Value::String(openid.into());
-        store
-            .transaction(move |tx| tx.write_at(CONFIG_RECORD, value, 1_700_000_000))
-            .unwrap();
-    }
-
     #[test]
     fn openid_revision_is_monotonic_and_checked() {
         let temp = TempStore::new();
@@ -1209,70 +1049,6 @@ mod tests {
         assert_eq!(
             load_openid(store).unwrap_err().to_string(),
             "管理员 openid 记录无效"
-        );
-    }
-
-    #[test]
-    fn plain_openid_moves_to_the_sealed_record_on_first_load() {
-        let temp = TempStore::new();
-        let store = &temp.1;
-        plain_config(store, OPENID_MARKER);
-        let (cfg, _) = load_config(store).unwrap();
-        assert_eq!(cfg, NotifyConfig::default());
-        let raw = store.read(CONFIG_RECORD).unwrap().unwrap();
-        assert!(raw.value.pointer("/qq/admin_openid").is_none());
-        let state = load_openid(store).unwrap();
-        assert_eq!(state.openid.unwrap().expose(), OPENID_MARKER);
-        assert_eq!(state.bound_at, Some(1_700_000_000));
-        assert_eq!(state.revision, 1);
-        // Idempotent: nothing left to move.
-        assert!(!migrate_plain_openid(store).unwrap());
-        // An existing sealed value wins over a stale plain copy.
-        plain_config(store, "STALEPLAIN000000000000000000000");
-        load_config(store).unwrap();
-        assert_eq!(
-            load_openid(store).unwrap().openid.unwrap().expose(),
-            OPENID_MARKER
-        );
-    }
-
-    #[test]
-    fn a_failed_migration_changes_neither_record() {
-        let temp = TempStore::new();
-        let store = &temp.1;
-        plain_config(store, OPENID_MARKER);
-        let before = store.read(CONFIG_RECORD).unwrap().unwrap();
-        let error = store
-            .transaction(|tx| {
-                migrate_plain_openid_tx_with(tx, |_| Err(io::Error::other("injected crash")))
-            })
-            .unwrap_err();
-        assert_eq!(error.to_string(), "injected crash");
-        assert!(store.read(OPENID_RECORD).unwrap().is_none());
-        let after = store.read(CONFIG_RECORD).unwrap().unwrap();
-        assert_eq!(after.revision, before.revision);
-        assert_eq!(after.value, before.value);
-    }
-
-    #[test]
-    fn restoring_a_backup_seals_a_plain_openid_left_in_the_target() {
-        let source = TempStore::new();
-        source
-            .1
-            .write("config.json", crate::storage::tests::config_fixture())
-            .unwrap();
-        let backup = source.1.export_backup("synthetic backup password").unwrap();
-        let target = TempStore::new();
-        plain_config(&target.1, OPENID_MARKER);
-        target
-            .1
-            .restore_backup("synthetic backup password", &backup)
-            .unwrap();
-        let raw = target.1.read(CONFIG_RECORD).unwrap().unwrap();
-        assert!(raw.value.pointer("/qq/admin_openid").is_none());
-        assert_eq!(
-            load_openid(&target.1).unwrap().openid.unwrap().expose(),
-            OPENID_MARKER
         );
     }
 

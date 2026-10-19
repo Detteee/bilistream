@@ -1121,65 +1121,32 @@ async fn watched_channel_without_relay_reports_live_from_the_index() {
     worker.deliver(now + 26, &single_node()).await;
     assert_eq!(mock.messages().len(), 1);
 }
-
 #[tokio::test]
-async fn migrating_one_live_legacy_follow_sends_nothing_and_persists_episode_suppression() {
+async fn a_pre_migration_watch_record_fails_to_load_and_is_left_untouched() {
     crate::install_crypto_provider();
     let mock = MockQq::start().await;
     let (_temp, store) = store();
     configure(&store, &mock, OPENID);
-    store.write("channels.json", json!({"channels":[{
-        "name":"canonical","aliases":[],"platforms":{"youtube":"UClegacy","twitch":"linked-login"}
-    }]})).unwrap();
+    store
+        .write(
+            "channels.json",
+            json!({"channels":[{
+                "name":"canonical","aliases":[],"platforms":{"youtube":"UClegacy","twitch":"linked-login"}
+            }]}),
+        )
+        .unwrap();
     let mut value = store.read(store::CONFIG_RECORD).unwrap().unwrap().value;
-    value["watch"] = json!({"enabled":true,"channels":[{"platform":"youtube","channel_id":"UClegacy","name":"old label"}]});
-    store.write(store::CONFIG_RECORD, value).unwrap();
-    let now = now_secs();
-    let mut ledger = NotifyLedger::default();
-    ledger.record_notified("stream.live:youtube:UClegacy", now - 60);
-    store::save_state(
-        &store,
-        &PersistedState {
-            ledger,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let mut worker = ready_worker(&store, "solo").await;
-    assert!(worker.cfg.watch.enabled);
+    value["watch"] = json!({"enabled":true,"channels":[
+        {"platform":"youtube","channel_id":"UClegacy","name":"old label"}
+    ]});
+    store.write(store::CONFIG_RECORD, value.clone()).unwrap();
+    let error = store::load_config(&store).unwrap_err();
+    assert!(error.to_string().contains("旧版关注列表"), "{error}");
     assert_eq!(
-        worker.cfg.watch.channels,
-        [crate::notify::config::WatchChannel::Configured {
-            name: "canonical".into()
-        }]
+        store.read(store::CONFIG_RECORD).unwrap().unwrap().value,
+        value,
+        "a refused record must not be rewritten"
     );
-    // Even if a different linked source is what the new sender observes,
-    // the old per-platform delivered mark suppresses the whole channel.
-    let seen = vec![crate::notify::live::LiveObservation {
-        platform: "twitch".into(),
-        channel_id: "linked-login".into(),
-        channel_name: String::new(),
-        title: None,
-    }];
-    worker.apply_digest(&single_node(), false, now);
-    worker.channel_live(now, &seen);
-    assert_eq!(worker.tracker.queued(), 0);
-    assert!(worker.dirty, "the imported channel mark must be persisted");
-    worker.deliver(now + 11, &single_node()).await;
-    assert!(mock.messages().is_empty());
-    worker.save_state(now + 11);
-    // save_state fsyncs off the async thread; restart only after that write
-    // actually completes, rather than racing its spawn_blocking task.
-    worker.save_task.take().unwrap().await.unwrap();
-    assert!(store::load_state(&store)
-        .ledger
-        .mark("stream.live:configured:canonical")
-        .is_some());
-    let mut restarted = ready_worker(&store, "solo").await;
-    restarted.apply_digest(&single_node(), false, now + 20);
-    restarted.channel_live(now + 20, &seen);
-    restarted.deliver(now + 31, &single_node()).await;
-    assert!(mock.messages().is_empty());
 }
 
 #[test]

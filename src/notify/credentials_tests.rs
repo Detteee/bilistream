@@ -687,10 +687,9 @@ fn mixed_forwarded_update(store: &Store) -> crate::webui::api::notify::UpdateNot
     }))
     .unwrap()
 }
-
 #[tokio::test]
-async fn forwarded_credentials_and_a_legacy_watch_save_keep_watch_preferences_local() {
-    use crate::webui::api::notify::{credential_part, forwarded, strip_credentials};
+async fn a_pre_migration_watch_body_is_refused_instead_of_migrated() {
+    use crate::webui::api::notify::{credential_part, watch_part};
     let (a, b) = (holder("a"), temp());
     let cluster = MemCluster::new(&[("a", a.1.clone()), ("b", b.1.clone())]);
     *cluster.holder.lock().unwrap() = Some("a".into());
@@ -708,89 +707,16 @@ async fn forwarded_credentials_and_a_legacy_watch_save_keep_watch_preferences_lo
         {"platform":"youtube","channel_id":"UCwatch","name":"old"},
         {"platform":"twitch","channel_id":"WATCHLOGIN","name":"old"}
     ]});
-    let mut request = credential_part(&b.1, &update).unwrap().unwrap();
-    let watch = crate::webui::api::notify::watch_part(&b.1, &update)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        watch.channels,
-        vec![crate::notify::config::WatchChannel::Configured {
-            name: "canonical".into()
-        }]
-    );
-    request.watch = Some(watch);
-    strip_credentials(&mut update);
-    crate::webui::api::notify::strip_watch(&mut update);
-    let prepared = forwarded::prepare(&b.1, &update, "b", "a").unwrap();
-    let outcome = save(
-        &b.1,
-        &cluster.link("b"),
-        &Holder::Peer("a".into()),
-        &request,
-        "b",
-        NOW,
-    )
-    .await
-    .unwrap();
-    let complete = forwarded::complete(
-        b.1.clone(),
-        &cluster.link("b"),
-        "a",
-        outcome,
-        prepared,
-        |_| Ok(()),
-    )
-    .await;
-    assert!(complete.cache_ready);
-    assert!(!complete.local_settings_pending);
-    assert_eq!(complete.view["credentials_generation"], outcome.generation);
-    assert_eq!(
-        complete.view["config"]["watch"]["channels"],
-        serde_json::json!([{"kind":"configured","name":"canonical"}])
-    );
-    assert!(complete.view["config"]["watch"]["enabled"]
-        .as_bool()
-        .unwrap());
-    assert!(complete.view["config"]["watch"]["migration_notice"].is_null());
-    assert_eq!(
-        complete.view["configured_channels"],
-        serde_json::json!([{"name":"canonical","platforms":["youtube","twitch"]}])
-    );
-    assert_eq!(secret(&a.1).as_deref(), Some(SECRET2));
-    assert_eq!(secret(&b.1).as_deref(), Some(SECRET2));
-    assert_eq!(appid(&a.1), APPID2);
-    assert_eq!(appid(&b.1), APPID2);
-    let holder_watch = load_config(&a.1).unwrap().0.watch;
-    let local_watch = load_config(&b.1).unwrap().0.watch;
-    assert!(holder_watch.enabled && local_watch.enabled);
-    assert!(holder_watch.migration_notice.is_none());
-    assert_eq!(holder_watch.channels, local_watch.channels);
-    assert_eq!(
-        holder_watch.channels,
-        vec![crate::notify::config::WatchChannel::Configured {
-            name: "canonical".into()
-        }]
-    );
-    assert_eq!(
-        load_meta(&a.1).unwrap().generation,
-        load_meta(&b.1).unwrap().generation
-    );
-    assert_eq!(
-        crate::notify::watch_sync::load_meta(&a.1).unwrap().revision,
-        1
-    );
-    assert_eq!(
-        crate::notify::watch_sync::load_meta(&b.1).unwrap().revision,
-        1
-    );
-    assert!(
-        !load_config(&b.1).unwrap().0.commands_enabled,
-        "non-watch preferences stay on the forwarding node"
-    );
-    assert!(
-        load_config(&a.1).unwrap().0.commands_enabled,
-        "the holder does not take the forwarder's other preferences"
-    );
+    // The credential half still extracts, but the pre-migration watch body is
+    // refused instead of being folded into the account-identity model.
+    assert!(credential_part(&b.1, &update).unwrap().is_some());
+    let error = watch_part(&b.1, &update).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::webui::api::notify::UpdateError::Watch(_)
+    ));
+    let (cfg, _) = load_config(&b.1).unwrap();
+    assert!(cfg.watch.channels.is_empty());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Channel-name watch preferences and the one-way legacy account migration.
+//! Channel-name watch preferences.
 //! The follow list is cluster-wide (`watch_sync`); every other preference in
 //! this record stays on the node that saved it.
 
@@ -16,16 +16,6 @@ const MANUAL_NAME_CHARS: usize = 40;
 pub struct WatchConfig {
     pub enabled: bool,
     pub channels: Vec<WatchChannel>,
-    /// Set by migration, never accepted from a browser. A successful watch
-    /// save acknowledges it; other preference or credential saves keep it.
-    pub migration_notice: Option<WatchMigrationNotice>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct WatchMigrationNotice {
-    pub at: u64,
-    /// Number of old account rows converted to channel entries.
-    pub folded: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -194,17 +184,6 @@ impl WatchCatalog {
             json!({"name": name, "platforms": platforms.accounts().map(|(p, _)| p).collect::<Vec<_>>()})
         }).collect()
     }
-
-    fn containing_account(&self, ident: &str) -> Option<&str> {
-        let mut matches = self.channels.iter().filter(|(_, platforms)| {
-            platforms
-                .accounts()
-                .any(|(p, id)| watch_account_ident(p, id) == ident)
-        });
-        let first = matches.next()?;
-        // An ambiguous roster must not silently broaden a legacy follow.
-        matches.next().is_none().then_some(first.0.as_str())
-    }
 }
 
 #[derive(Debug)]
@@ -307,137 +286,6 @@ pub fn validate_watch(
         }
     }
     Ok(())
-}
-
-pub fn has_legacy_watch(config: &Value) -> bool {
-    config
-        .pointer("/watch/channels")
-        .and_then(Value::as_array)
-        .is_some_and(|entries| entries.iter().any(|entry| entry.get("kind").is_none()))
-}
-
-#[derive(Deserialize)]
-struct LegacyChannel {
-    platform: String,
-    channel_id: String,
-    #[serde(default)]
-    name: String,
-}
-
-fn legacy_name(name: &str, id: &str) -> String {
-    let clean: String = name.chars().filter(|c| !c.is_control()).collect();
-    let name = if clean.trim().is_empty() {
-        id
-    } else {
-        clean.trim()
-    };
-    name.chars().take(MANUAL_NAME_CHARS).collect()
-}
-
-fn unique_manual_name(base: &str, entries: &[WatchChannel]) -> String {
-    let taken = |name: &str| {
-        entries
-            .iter()
-            .any(|entry| matches!(entry, WatchChannel::Manual { name: known, .. } if known == name))
-    };
-    if !taken(base) {
-        return base.to_string();
-    }
-    for suffix in 2.. {
-        let suffix = format!(" ({suffix})");
-        let prefix: String = base
-            .chars()
-            .take(MANUAL_NAME_CHARS - suffix.chars().count())
-            .collect();
-        let name = format!("{prefix}{suffix}");
-        if !taken(&name) {
-            return name;
-        }
-    }
-    unreachable!()
-}
-
-/// Used both on local-store upgrade and for a stale, legacy browser save.
-/// Only account identity selects a configured entry. Every unmatched ID
-/// survives, including colliding names and two IDs on the same platform.
-pub fn migrate_watch(
-    config: &mut Value,
-    catalog: &WatchCatalog,
-    now: u64,
-) -> Result<bool, WatchError> {
-    if !has_legacy_watch(config) {
-        return Ok(false);
-    }
-    let values = config
-        .pointer("/watch/channels")
-        .and_then(Value::as_array)
-        .ok_or_else(WatchError::invalid)?;
-    let mut entries = Vec::new();
-    let mut legacy = Vec::new();
-    for value in values {
-        if value.get("kind").is_some() {
-            entries.push(
-                serde_json::from_value::<WatchChannel>(value.clone())
-                    .map_err(|_| WatchError::invalid())?,
-            );
-        } else {
-            let mut old: LegacyChannel =
-                serde_json::from_value(value.clone()).map_err(|_| WatchError::invalid())?;
-            old.channel_id = old.channel_id.trim().to_string();
-            if !watch_account_valid(&old.platform, &old.channel_id) {
-                return Err(WatchError::invalid());
-            }
-            if old.platform == "twitch" {
-                old.channel_id.make_ascii_lowercase();
-            }
-            legacy.push(old);
-        }
-    }
-    let folded = legacy.len();
-    let mut seen = HashSet::new();
-    for old in &legacy {
-        if let Some(name) =
-            catalog.containing_account(&watch_account_ident(&old.platform, &old.channel_id))
-        {
-            let entry = WatchChannel::Configured {
-                name: name.to_string(),
-            };
-            if !entries.contains(&entry) {
-                entries.push(entry);
-            }
-        }
-    }
-    for entry in &entries {
-        if let Some(platforms) = entry.platforms(catalog) {
-            seen.extend(platforms.identities());
-        }
-    }
-    for old in legacy {
-        if !seen.insert(watch_account_ident(&old.platform, &old.channel_id)) {
-            continue;
-        }
-        let base = legacy_name(&old.name, &old.channel_id);
-        let existing = entries.iter_mut().find_map(|entry| match entry {
-            WatchChannel::Manual { name, platforms }
-                if *name == base && !platforms.accounts().any(|(p, _)| p == old.platform) =>
-            {
-                Some(platforms)
-            }
-            _ => None,
-        });
-        if let Some(platforms) = existing {
-            *platforms.slot(&old.platform) = Some(old.channel_id);
-        } else {
-            let name = unique_manual_name(&base, &entries);
-            let mut platforms = WatchPlatforms::default();
-            *platforms.slot(&old.platform) = Some(old.channel_id);
-            entries.push(WatchChannel::Manual { name, platforms });
-        }
-    }
-    config["watch"]["channels"] =
-        serde_json::to_value(entries).map_err(|_| WatchError::invalid())?;
-    config["watch"]["migration_notice"] = json!({"at":now,"folded":folded});
-    Ok(true)
 }
 
 #[cfg(test)]

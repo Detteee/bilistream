@@ -362,9 +362,8 @@ fn merge(target: &mut Value, patch: &Value) {
     }
 }
 
-/// Shared by local and forwarded saves. Normalize legacy follows before
-/// validation, strip read-only metadata, and acknowledge migration only
-/// when this request actually saves watch preferences.
+/// Shared by local and forwarded saves: strip read-only metadata, then
+/// validate. A body in the pre-migration watch shape fails validation.
 pub(crate) fn updated_config(
     store: &crate::storage::Store,
     current: &NotifyConfig,
@@ -383,12 +382,7 @@ pub(crate) fn updated_config(
         }
     }
     let watch_saved = patch.get("watch").is_some();
-    if let Some(watch) = patch.get_mut("watch").and_then(Value::as_object_mut) {
-        watch.remove("migration_notice");
-    }
     merge(&mut value, &patch);
-    notify::config::migrate_watch(&mut value, &catalog, crate::storage::now())
-        .map_err(UpdateError::Watch)?;
     let mut parsed: NotifyConfig = serde_json::from_value(value).map_err(|_| {
         if watch_saved {
             UpdateError::Watch(notify::config::WatchError::invalid())
@@ -403,9 +397,6 @@ pub(crate) fn updated_config(
     notify::config::validate_watch(&parsed.watch, &catalog, &current.watch)
         .map_err(UpdateError::Watch)?;
     validate(&parsed).map_err(|message| UpdateError::Status(StatusCode::BAD_REQUEST, message))?;
-    if watch_saved {
-        parsed.watch.migration_notice = None;
-    }
     Ok(parsed)
 }
 
@@ -695,7 +686,6 @@ pub(crate) fn watch_part(
         base_revision: update.base_watch_revision,
         enabled: desired.watch.enabled,
         channels: desired.watch.channels,
-        migration_notice: desired.watch.migration_notice,
     }))
 }
 
@@ -1527,59 +1517,47 @@ mod tests {
             )
             .unwrap();
     }
-
     #[test]
-    fn watch_reads_and_saves_group_legacy_entries_and_keep_capability_metadata() {
+    fn a_pre_migration_watch_record_is_refused_and_left_untouched() {
         let (_root, store) = temp_store();
         watch_catalog(&store);
-        store
-            .write(
-                store::CONFIG_RECORD,
-                json!({"watch":{"enabled":true,"channels":[
-                    {"platform":"youtube","channel_id":"UCtest","name":"old"},
-                    {"platform":"twitch","channel_id":"TESTLOGIN","name":"old"}
-                ]}}),
-            )
-            .unwrap();
-        let first = settings_view(&store).unwrap();
-        let entries = json!([{"kind":"configured","name":"canonical"}]);
-        assert_eq!(first["config"]["watch"]["channels"], entries);
+        let legacy = json!({"watch":{"enabled":true,"channels":[
+            {"platform":"youtube","channel_id":"UChistorical","name":"historical"}
+        ]}});
+        store.write(store::CONFIG_RECORD, legacy.clone()).unwrap();
+        let error = settings_view(&store).unwrap_err();
+        assert!(error.to_string().contains("旧版关注列表"), "{error}");
         assert_eq!(
-            first["configured_channels"],
-            json!([{"name":"canonical","platforms":["youtube","twitch","niconico"]}])
+            store.read(store::CONFIG_RECORD).unwrap().unwrap().value,
+            legacy,
+            "a refused record must not be rewritten"
         );
-        assert_eq!(first["config"]["watch"]["migration_notice"]["folded"], 2);
-        // Saving other preferences leaves the notice in place.
-        let other = update(
+    }
+
+    #[test]
+    fn a_stale_legacy_watch_body_cannot_overwrite_the_watch_list() {
+        let (_root, store) = temp_store();
+        watch_catalog(&store);
+        let first = settings_view(&store).unwrap();
+        let error = update(
             &store,
             UpdateNotify {
-                config: Some(json!({"commands_enabled":false})),
+                config: Some(json!({"watch":{"enabled":true,"channels":[
+                    {"platform":"youtube","channel_id":"UCtest","name":"old"}
+                ]}})),
                 expected_revision: first["revision"].as_u64(),
                 ..Default::default()
             },
         )
-        .unwrap();
-        assert_eq!(
-            other["config"]["watch"]["migration_notice"],
-            first["config"]["watch"]["migration_notice"]
-        );
-        // A stale legacy panel can still submit account entries. The saved
-        // form is grouped, the notice is acknowledged, and GET/PUT agree.
-        let saved = update(
-            &store,
-            UpdateNotify {
-                config: Some(json!({"watch":{"enabled":true,"channels":[
-                {"platform":"niconico","channel_id":"nico-test","name":"nico alias"}
-            ],"migration_notice":{"at":0,"folded":999}}})),
-                expected_revision: other["revision"].as_u64(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(saved["config"]["watch"]["channels"], entries);
-        assert!(saved["config"]["watch"]["migration_notice"].is_null());
-        assert_eq!(saved["configured_channels"], first["configured_channels"]);
-        assert_eq!(settings_view(&store).unwrap(), saved);
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            UpdateError::Watch(notify::config::WatchError {
+                code: "invalid_field",
+                ..
+            })
+        ));
+        assert_eq!(settings_view(&store).unwrap(), first);
     }
 
     #[test]
@@ -1631,103 +1609,6 @@ mod tests {
             })
         ));
     }
-
-    #[test]
-    fn historical_unmatched_watch_data_is_retained_unchanged_or_removed_only() {
-        let (_root, store) = temp_store();
-        watch_catalog(&store);
-        store
-            .write(
-                store::CONFIG_RECORD,
-                json!({"watch":{"enabled":true,"channels":[
-                    {"platform":"youtube","channel_id":"UChistorical","name":"historical"}
-                ]}}),
-            )
-            .unwrap();
-        let first = settings_view(&store).unwrap();
-        let retained = first["config"]["watch"]["channels"][0].clone();
-        assert_eq!(
-            retained,
-            json!({"kind":"manual","name":"historical","platforms":{"youtube":"UChistorical"}})
-        );
-        // An unrelated save preserves the unavailable target and notice.
-        let other = update(
-            &store,
-            UpdateNotify {
-                config: Some(json!({"commands_enabled":false})),
-                expected_revision: first["revision"].as_u64(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(other["config"]["watch"], first["config"]["watch"]);
-        let mut renamed = retained.clone();
-        renamed["name"] = json!("edited");
-        let mut retargeted = retained.clone();
-        retargeted["platforms"]["youtube"] = json!("UCdifferent");
-        for entry in [
-            renamed,
-            retargeted,
-            // Even a catalog account cannot be newly submitted as manual.
-            json!({"kind":"manual","name":"canonical","platforms":{"youtube":"UCtest"}}),
-            json!({"kind":"manual","name":"forged","platforms":{"youtube":"UCexternal"},"legacy":true}),
-            // A legacy flat body cannot bypass configured-only admission.
-            json!({"platform":"youtube","channel_id":"UCexternal","name":"canonical"}),
-        ] {
-            let error = update(
-                &store,
-                UpdateNotify {
-                    config: Some(json!({"watch":{"enabled":true,"channels":[entry]}})),
-                    expected_revision: other["revision"].as_u64(),
-                    app_secret: Some("synthetic-not-saved".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap_err();
-            assert!(matches!(
-                error,
-                UpdateError::Watch(notify::config::WatchError {
-                    code: "invalid_field",
-                    ..
-                })
-            ));
-            assert_eq!(settings_view(&store).unwrap(), other);
-            assert!(store::load_secret(&store).unwrap().0.is_none());
-        }
-        let saved = update(&store, UpdateNotify {
-            config:Some(json!({"watch":{"channels":[retained,{"kind":"configured","name":"canonical"}]}})),
-            expected_revision:other["revision"].as_u64(), ..Default::default()
-        }).unwrap();
-        assert_eq!(saved["config"]["watch"]["channels"][0], retained);
-        assert!(saved["config"]["watch"]["migration_notice"].is_null());
-        let removed = update(
-            &store,
-            UpdateNotify {
-                config: Some(json!({"watch":{"channels":[]}})),
-                expected_revision: saved["revision"].as_u64(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(removed["config"]["watch"]["channels"], json!([]));
-        let error = update(
-            &store,
-            UpdateNotify {
-                config: Some(json!({"watch":{"channels":[retained]}})),
-                expected_revision: removed["revision"].as_u64(),
-                ..Default::default()
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            UpdateError::Watch(notify::config::WatchError {
-                code: "invalid_field",
-                ..
-            })
-        ));
-    }
-
     #[tokio::test]
     async fn watch_refusals_use_stable_envelopes_and_do_not_write_any_settings() {
         let (_root, store) = temp_store();

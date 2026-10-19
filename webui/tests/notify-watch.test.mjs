@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  addWatch, createWatchMigrationAcknowledgements, filterCandidates, groupedWatchSupported, normalizeWatch,
+  addWatch, filterCandidates, groupedWatchSupported, normalizeWatch,
   toggleWatchCandidate, watchCatalog, watchEntryError, watchForSave, watchKey,
-  watchMigrationText, watchRowLive, watchRows, watchSelection,
+  watchRowLive, watchRows, watchSelection,
 } from '../src/js/notify-watch.js';
 import { configToForm, formToPatch, mergeDraft, notifyRefusal, saveBody } from '../src/js/notify-state.js';
 
@@ -61,7 +61,7 @@ test('historical unmatched entries are unavailable and may only be retained unch
 });
 
 test('unresolved configured entries remain removable and round-trip without response metadata', () => {
-  const loaded = { ...settings.config, watch: { enabled: true, channels: [{ ...configured, unresolved: true }], migration_notice: { at: 1, folded: 2 } } };
+  const loaded = { ...settings.config, watch: { enabled: true, channels: [{ ...configured, unresolved: true }] } };
   const list = JSON.parse(configToForm(loaded).watch_channels);
   assert.deepEqual(list, [configured]);
   const row = watchRows(list, [])[0];
@@ -147,59 +147,12 @@ test('remote settings refresh preserves a watch draft and advances unchanged fie
   assert.deepEqual(normalizeWatch(JSON.parse(merged.watch_channels)), [configured]);
 });
 
-test('migration and stable refusal copy name the product channel list', () => {
-  assert.match(watchMigrationText({ config: { watch: { migration_notice: { at: 1, folded: 2 } } } }), /2 项合并为频道/);
-  assert.equal(watchMigrationText(settings), '');
+test('stable refusal copy names the product channel list', () => {
   for (const code of ['watch_duplicate', 'watch_too_many', 'watch_unknown_channel']) {
     const refusal = notifyRefusal({ status: 400, body: { data: { code } } }, null, { route: 'config' });
     assert.equal(refusal.kind, 'watch');
     assert.doesNotMatch(refusal.banner.lead, /channels\.json/);
   }
-});
-
-test('migration acknowledgement survives reload and stays scoped to the node and migration', () => {
-  const values = new Map();
-  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
-  const notice = { at: 1792032000, folded: 1 };
-  const firstPage = createWatchMigrationAcknowledgements(() => storage);
-  assert.equal(firstPage.isDismissed('jp', notice), false);
-  firstPage.dismiss('jp', notice);
-  const reloadedPage = createWatchMigrationAcknowledgements(() => storage);
-  assert.equal(reloadedPage.isDismissed('jp', { ...notice }), true);
-  assert.equal(reloadedPage.isDismissed('ny', notice), false);
-  assert.equal(reloadedPage.isDismissed('jp', { ...notice, at: notice.at + 1 }), false);
-  assert.equal(reloadedPage.isDismissed('jp', { ...notice, folded: 2 }), false);
-  assert.equal(reloadedPage.isDismissed('jp', null), false);
-  // Acknowledging a later notice does not discard the earlier acknowledgement.
-  reloadedPage.dismiss('jp', { ...notice, at: notice.at + 1 });
-  assert.equal(createWatchMigrationAcknowledgements(() => storage).isDismissed('jp', notice), true);
-});
-
-test('storage access failure or quota exhaustion still allows page-local acknowledgement', () => {
-  const notice = { at: 1792032000, folded: 1 };
-  for (const storage of [
-    () => { throw new Error('storage denied'); },
-    () => ({ getItem() { throw new Error('read denied'); }, setItem() { throw new Error('write denied'); } }),
-    () => ({ getItem() { return null; }, setItem() { throw new Error('quota'); } }),
-  ]) {
-    const page = createWatchMigrationAcknowledgements(storage);
-    assert.equal(page.isDismissed('jp', notice), false);
-    assert.doesNotThrow(() => page.dismiss('jp', notice));
-    assert.equal(page.isDismissed('jp', notice), true);
-    assert.equal(page.isDismissed('ny', notice), false);
-    assert.equal(createWatchMigrationAcknowledgements(storage).isDismissed('jp', notice), false);
-  }
-});
-
-test('unknown node or migration identity never creates an unscoped persistent dismissal', () => {
-  const values = new Map();
-  const page = createWatchMigrationAcknowledgements(() => ({ getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) }));
-  page.dismiss('', { at: 1792032000, folded: 1 });
-  page.dismiss('jp', { folded: 1 });
-  assert.equal(values.size, 0);
-  assert.equal(page.isDismissed('', { at: 1792032000, folded: 1 }), true);
-  assert.equal(page.isDismissed('ny', { at: 1792032000, folded: 1 }), false);
-  assert.equal(page.isDismissed('jp', { folded: 1 }), true);
 });
 
 test('a stale follow-list base refreshes and is not saved again by itself', () => {

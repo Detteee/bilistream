@@ -38,7 +38,6 @@ fn put_watch(store: &Store, enabled: bool, list: &[&str]) {
                 name: (*name).into(),
             })
             .collect(),
-        migration_notice: None,
     };
     store::save_config(store, &cfg, revision).unwrap();
 }
@@ -159,7 +158,6 @@ async fn an_explicit_clear_replicates_and_a_holder_seed_beats_another_seed() {
             base_revision: Some(2),
             enabled: false,
             channels: Vec::new(),
-            migration_notice: None,
         },
         "jp",
         700,
@@ -186,7 +184,6 @@ fn a_stale_or_missing_base_changes_nothing() {
             base_revision: Some(0),
             enabled: false,
             channels: Vec::new(),
-            migration_notice: None,
         },
         "jp",
         200,
@@ -199,7 +196,6 @@ fn a_stale_or_missing_base_changes_nothing() {
             base_revision: None,
             enabled: false,
             channels: Vec::new(),
-            migration_notice: None,
         },
         "jp",
         200,
@@ -250,7 +246,6 @@ fn credential_and_watch_writes_do_not_clobber_each_other() {
             revision,
             enabled: true,
             channels: vec![WatchChannel::Configured { name: name.into() }],
-            migration_notice: None,
             updated_by: by.into(),
             updated_at: 50,
         }
@@ -338,7 +333,6 @@ fn an_unseeded_list_rejects_a_stale_base_and_an_empty_one_still_saves() {
         base_revision: Some(0),
         enabled: false,
         channels: Vec::new(),
-        migration_notice: None,
     };
     assert_eq!(
         apply_save(&jp.1, &replace, "jp", 200),
@@ -399,7 +393,6 @@ fn an_unseeded_list_rejects_a_stale_base_and_an_empty_one_still_saves() {
             channels: vec![WatchChannel::Configured {
                 name: "Kamito".into(),
             }],
-            migration_notice: None,
         },
         "ca",
         400,

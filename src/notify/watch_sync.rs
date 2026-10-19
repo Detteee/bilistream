@@ -1,13 +1,13 @@
 //! Cluster-wide 开播通知关注列表 (contract “Watch-list cluster sync”).
 //!
-//! Only `watch.enabled`, `watch.channels`, `watch.migration_notice` and this
+//! Only `watch.enabled`, `watch.channels` and this
 //! record travel. Other notify preferences stay on the node that saved them.
 //! The value rides the existing signed openid copy as an optional field, and
 //! only toward members that advertise `watch_sync`. Revision 0 with an empty
 //! disabled list is “never saved”: it is not exported and cannot overwrite a
 //! peer. A non-empty or enabled revision-0 list seeds revision 1.
 
-use super::config::{validate_watch_fields, WatchChannel, WatchConfig, WatchMigrationNotice};
+use super::config::{validate_watch_fields, WatchChannel, WatchConfig};
 use super::credentials::{AcceptOutcome, SaveError, SaveFailed};
 use super::store;
 use crate::storage::{Store, Transaction};
@@ -43,8 +43,6 @@ pub struct WatchCopy {
     pub revision: u64,
     pub enabled: bool,
     pub channels: Vec<WatchChannel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub migration_notice: Option<WatchMigrationNotice>,
     #[serde(default)]
     pub updated_by: String,
     #[serde(default)]
@@ -72,7 +70,6 @@ impl WatchCopy {
         WatchConfig {
             enabled: self.enabled,
             channels: self.channels.clone(),
-            migration_notice: self.migration_notice.clone(),
         }
     }
 }
@@ -87,8 +84,6 @@ pub struct WatchSave {
     pub base_revision: Option<u64>,
     pub enabled: bool,
     pub channels: Vec<WatchChannel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub migration_notice: Option<WatchMigrationNotice>,
 }
 
 impl std::fmt::Debug for WatchSave {
@@ -106,7 +101,6 @@ impl WatchSave {
         WatchConfig {
             enabled: self.enabled,
             channels: self.channels.clone(),
-            migration_notice: self.migration_notice.clone(),
         }
     }
 }
@@ -248,7 +242,6 @@ pub(crate) fn export_snapshot(
         revision: meta.revision,
         enabled: watch.enabled,
         channels: watch.channels,
-        migration_notice: watch.migration_notice,
         updated_by: meta.updated_by,
         updated_at: meta.updated_at,
     }))
