@@ -36,12 +36,14 @@ import {
   startStreamListDurationTicker,
   stopStreamListDurationTicker,
   loadChannelData,
-  refreshStatus,
-  refreshNetworkStatus,
   switchToStream,
-  updatePriorityToggleAvailability,
   setOnAir,
 } from './overview.js';
+import {
+  refreshNetworkStatus,
+  refreshStatus,
+  updatePriorityToggleAvailability,
+} from './status-refresh.js';
 
 const VIEW_IDS = ['overview', 'manage', 'settings', 'logs', 'analytics'];
 const viewsLoaded = new Set();
