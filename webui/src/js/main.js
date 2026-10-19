@@ -30,13 +30,11 @@ import {
   initStreamListFold,
   initHolodexLoginModalControls,
   initFaceAuthModalControls,
-  initAreaModalControls,
   initStatusRefresh,
   maybeLoadStreamList,
   startStreamListDurationTicker,
   stopStreamListDurationTicker,
   loadChannelData,
-  switchToStream,
   setOnAir,
 } from './overview.js';
 import {
@@ -44,6 +42,7 @@ import {
   refreshStatus,
   updatePriorityToggleAvailability,
 } from './status-refresh.js';
+import { initAreaModalControls, switchToStream } from './switch-flow.js';
 
 const VIEW_IDS = ['overview', 'manage', 'settings', 'logs', 'analytics'];
 const viewsLoaded = new Set();
