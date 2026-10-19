@@ -12,8 +12,9 @@ import {
   hasConfiguredChannel,
   sameChannelCandidate,
   toAdminChannelCandidate,
+  toAdminStreamAction,
 } from './admin-stream-actions.js';
-import { managementJsonRequest, managementRequest, postJsonApi } from './api.js';
+import { getJson, managementJsonRequest, managementRequest, postJsonApi } from './api.js';
 import { isCropSessionCurrent, loadCapturedCropFrame, openCropConfig } from './crop.js';
 import {
   createSvgIcon,
@@ -24,8 +25,18 @@ import {
   showNotification,
 } from './dom.js';
 import { loadChannels } from './manage.js';
+import { streamIsOnAir } from './on-air.js';
 import { isViewActive, state } from './state.js';
-import { startDurationTicker, stopDurationTicker } from './stream-card.js';
+import {
+  createWatchLink,
+  renderCard,
+  startDurationTicker,
+  stopDurationTicker,
+  updateViewerCount,
+  watchUrl,
+} from './stream-card.js';
+import { fallbackThumbnailUrl, placeholderKind } from './stream-model.js';
+
 
 /// The Holodex panel's mutable state, in one place.
 ///
@@ -479,6 +490,93 @@ async function confirmHolodexAddChannel(button) {
   }
 }
 
+function createStreamCard(model) {
+  const onAirNow = streamIsOnAir(model, holodexState.holodexOnAir);
+  const kind = model.isPlaceholder ? placeholderKind(model) : '';
+  const href = watchUrl(model) || (model.id ? `https://www.youtube.com/watch?v=${model.id}` : '');
+  const channelHref = getHolodexChannelUrl(model.channelId);
+  const streamActionData = toAdminStreamAction(model);
+
+  const secondary = document.createElement('div');
+  secondary.className = 'holodex-stream-secondary';
+  if (href) {
+    secondary.appendChild(createWatchLink(href));
+  }
+  if (model.isLive && kind !== 'niconico') {
+    secondary.prepend(createHolodexStreamActionButton(
+      'holodex-stream-btn-crop crop-switch-button',
+      streamActionData,
+      createHolodexStreamSvg([
+        { d: 'M6.13 1L6 16a2 2 0 0 0 2 2h15' },
+        { d: 'M1 6.13L16 6a2 2 0 0 1 2 2v15' }
+      ])
+    ));
+  }
+
+  const card = renderCard(model, {
+    actions: [
+      secondary,
+      createHolodexStreamActionButton(
+        'holodex-stream-btn-switch switch-button',
+        streamActionData,
+        createHolodexStreamSvg([
+          { d: 'M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8' },
+          { d: 'm7 17l-4-1l-1 4M17 7l4 1l1-4' }
+        ])
+      ),
+    ],
+    onAir: onAirNow,
+    href,
+    thumbnail: model.thumbnail || fallbackThumbnailUrl(model),
+    channelHref,
+    avatarHref: model.channelId ? channelHref : '',
+    avatarPhoto: model.channelId ? getHolodexChannelPhotoUrl(model) : '',
+    areaHint: model.suggestedAreaId && model.suggestedAreaName
+      ? `🎯 建议分区: ${model.suggestedAreaName}`
+      : '',
+    channelExtra: createHolodexAddChannelControls(model),
+  });
+  updateViewerCount(card, model.liveViewers);
+  return card;
+}
+// Store pending switch data
+
+async function loadHolodexAuthStatus() {
+  try {
+    const data = await getJson('/api/holodex/auth/status');
+    if (!data.success) {
+      holodexState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+      holodexState.holodexUseFavorites = false;
+      holodexState.holodexUseFavoritesInitialized = false;
+      updateHolodexLoginButton();
+      updateHolodexModalHint();
+      return;
+    }
+    const info = data.data || {};
+    holodexState.holodexAuthState = {
+      logged_in: !!info.logged_in,
+      username: info.username || null,
+      expired: !!info.expired,
+      skip_jwt_verify: !!info.skip_jwt_verify
+    };
+    if (holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired) {
+      if (!holodexState.holodexUseFavoritesInitialized) {
+        holodexState.holodexUseFavorites = true;
+        holodexState.holodexUseFavoritesInitialized = true;
+      }
+    } else {
+      holodexState.holodexUseFavorites = false;
+      holodexState.holodexUseFavoritesInitialized = false;
+    }
+  } catch (error) {
+    holodexState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+    holodexState.holodexUseFavorites = false;
+    holodexState.holodexUseFavoritesInitialized = false;
+  }
+  updateHolodexLoginButton();
+  updateHolodexModalHint();
+}
+
 export {
   HOLODEX_STATUS_STATE_CLASSES,
   addHolodexChannelToCache,
@@ -489,6 +587,7 @@ export {
   createHolodexChannelAddedIndicator,
   createHolodexStreamActionButton,
   createHolodexStreamSvg,
+  createStreamCard,
   cropAndSwitchToHolodexStream,
   getHolodexChannelPhotoUrl,
   getHolodexChannelUrl,
@@ -499,6 +598,7 @@ export {
   holodexKeepAliveWithoutEventsMs,
   holodexStreamHasConfiguredChannel,
   isHolodexPanelOpen,
+  loadHolodexAuthStatus,
   markHolodexChannelAdded,
   openHolodexLogin,
   readHolodexAddChannelData,
