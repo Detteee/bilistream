@@ -278,6 +278,156 @@ fn read_path_indexes_exist_after_migration() {
 }
 
 #[test]
+fn schema_v6_reconciles_the_v5_summary_columns_and_drops_the_dead_table() {
+    let dir = tmp("v6-migration");
+    let path = dir.join("history.sqlite");
+    // Build a v5-shaped database by hand: the migration must handle a file
+    // written by the previous release, not only a fresh replay of V1..V6.
+    {
+        let conn = schema::open_rw(&path).unwrap();
+        conn.execute_batch(
+            "DROP TABLE bili_lives;
+             CREATE TABLE bili_lives (
+               live_key TEXT PRIMARY KEY, node TEXT NOT NULL, room INTEGER NOT NULL,
+               started_at INTEGER NOT NULL, ended_at INTEGER,
+               summary_state TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (summary_state IN ('pending','ok','failed','skipped')),
+               bili_live_time_raw INTEGER, add_fans INTEGER, danmu_num INTEGER,
+               watched_count INTEGER, new_fans_club INTEGER, max_online INTEGER,
+               started_by TEXT NOT NULL DEFAULT '',
+               summary_phase TEXT NOT NULL DEFAULT 'pending',
+               summary_node TEXT, summary_at INTEGER NOT NULL DEFAULT 0,
+               summary_generation INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+             CREATE INDEX bili_lives_end ON bili_lives(ended_at);
+             CREATE TABLE samples_1h (metric INTEGER NOT NULL, node TEXT NOT NULL,
+               bucket INTEGER NOT NULL, session_id INTEGER NOT NULL DEFAULT 0,
+               min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL,
+               count INTEGER NOT NULL, PRIMARY KEY(bucket,metric,node,session_id)) WITHOUT ROWID;
+             INSERT INTO bili_lives(live_key,node,room,started_at,summary_state,summary_phase,bili_live_time_raw) VALUES
+               ('state-failed-phase-claimed','local',1,1,'failed','claimed',20),
+               ('state-ok-phase-pending','local',1,1,'ok','pending',10),
+               ('state-pending-phase-claimed','local',1,1,'pending','claimed',50),
+               ('state-pending-phase-done','local',1,1,'pending','done',30),
+               ('state-skipped-phase-pending','local',1,1,'skipped','pending',40);
+             PRAGMA user_version=5;",
+        )
+        .unwrap();
+    }
+
+    let conn = schema::open_rw(&path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, schema::SCHEMA_VERSION);
+
+    let phases: Vec<(String, String)> = conn
+        .prepare("SELECT live_key,summary_phase FROM bili_lives ORDER BY live_key")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        phases,
+        vec![
+            // An observed failure is not undone by a claim.
+            ("state-failed-phase-claimed".into(), "failed".into()),
+            // `ok` carries no phase, so it upgrades a pending/claimed claim.
+            ("state-ok-phase-pending".into(), "done".into()),
+            ("state-pending-phase-claimed".into(), "claimed".into()),
+            ("state-pending-phase-done".into(), "done".into()),
+            ("state-skipped-phase-pending".into(), "skipped".into()),
+        ]
+    );
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM bili_lives", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 5, "the rebuild must keep every live window");
+
+    let columns: String = conn
+        .query_row(
+            "SELECT group_concat(name,' ') FROM pragma_table_info('bili_lives')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!columns.contains("summary_state"), "{columns}");
+    assert!(columns.contains("live_time_secs"), "{columns}");
+    let live_time: i64 = conn
+        .query_row(
+            "SELECT live_time_secs FROM bili_lives WHERE live_key='state-pending-phase-done'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(live_time, 30, "the raw LiveTime value carries over");
+
+    let dead_tables: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='samples_1h'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dead_tables, 0, "samples_1h was never written; v6 drops it");
+}
+
+#[test]
+fn a_fresh_database_is_already_v6_without_the_dead_rollup_table() {
+    let dir = tmp("fresh-v6");
+    let conn = schema::open_rw(&dir.join("history.sqlite")).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, schema::SCHEMA_VERSION);
+    for table in ["samples_1h", "bili_lives_v6"] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "{table} must not survive the replay to v6");
+    }
+    let columns: String = conn
+        .query_row(
+            "SELECT group_concat(name,' ') FROM pragma_table_info('bili_lives')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!columns.contains("summary_state"), "{columns}");
+    assert!(columns.contains("live_time_secs"), "{columns}");
+}
+
+#[test]
+fn live_row_reads_the_outcome_from_the_stored_phase() {
+    let dir = tmp("live-row-phase");
+    let conn = schema::open_rw(&dir.join("history.sqlite")).unwrap();
+    conn.execute_batch(
+        "INSERT INTO bili_lives(live_key,node,room,started_at,summary_phase,watched_count) VALUES
+           ('k-done','local',1,1,'done',5),
+           ('k-claimed','local',1,1,'claimed',NULL),
+           ('k-failed','local',1,1,'failed',NULL),
+           ('k-skipped','local',1,1,'skipped',NULL),
+           ('k-pending','local',1,1,'pending',NULL);",
+    )
+    .unwrap();
+    let state = |key: &str| query::live_row(&conn, key).unwrap().unwrap().state;
+    // The read-side vocabulary is unchanged even though only the phase is stored.
+    assert_eq!(state("k-done"), "ok");
+    assert_eq!(state("k-claimed"), "pending");
+    assert_eq!(state("k-failed"), "failed");
+    assert_eq!(state("k-skipped"), "skipped");
+    assert_eq!(state("k-pending"), "pending");
+    assert_eq!(
+        query::live_row(&conn, "k-done").unwrap().unwrap().watched,
+        Some(5)
+    );
+}
+
+#[test]
 fn a_truncated_bucket_series_says_so() {
     let (w, _) = writer("bucket-cap");
     let to = T0 + 90 * DAY;
@@ -350,7 +500,7 @@ fn live_session_fixture_is_valid_and_keeps_only_the_allowlist() {
     assert_eq!(
         totals,
         BiliTotals {
-            live_time_raw: Some(17434),
+            live_time_secs: Some(17434),
             add_fans: Some(0),
             new_fans_club: Some(0),
             danmu_num: Some(457),
@@ -453,7 +603,7 @@ fn failed_summary_leaves_totals_null_and_duration_is_our_own() {
     let nulls: (String, Option<i64>, Option<i64>, Option<i64>) = w
         .conn
         .query_row(
-            "SELECT summary_state, watched_count, bili_live_time_raw, add_fans FROM bili_lives WHERE live_key='K1'",
+            "SELECT summary_phase, watched_count, live_time_secs, add_fans FROM bili_lives WHERE live_key='K1'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
@@ -2570,13 +2720,12 @@ async fn short_coordinator_retention_does_not_truncate_a_longer_peer() {
 // --------------------------------------------------------- clear history
 
 /// Every table the operator can see through the 统计 view, children first.
-const CLEARED: [&str; 10] = [
+const CLEARED: [&str; 9] = [
     "runs",
     "events",
     "notify_sends",
     "node_segments",
     "samples_1m",
-    "samples_1h",
     "sample_frames",
     "bili_lives",
     "sessions",

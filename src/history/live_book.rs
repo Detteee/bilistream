@@ -136,7 +136,7 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
     fn totals(mark: &SummaryMark) -> Option<[Option<i64>; 6]> {
         mark.totals.as_ref().map(|t| {
             [
-                t.live_time_raw,
+                t.live_time_secs,
                 t.add_fans,
                 t.new_fans_club,
                 t.danmu_num,
@@ -724,7 +724,7 @@ mod tests {
         let restored = crate::history::writer::load_live_book(&writer.conn).unwrap();
         assert_eq!(restored, local.book);
         let (stopped_at, state): (Option<i64>, String) = writer.conn.query_row(
-            "SELECT ended_at,summary_state FROM bili_lives WHERE live_key='synthetic-broadcast'", [],
+            "SELECT ended_at,summary_phase FROM bili_lives WHERE live_key='synthetic-broadcast'", [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap();
         assert_eq!((stopped_at, state.as_str()), (None, "skipped"));

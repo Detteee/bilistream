@@ -552,7 +552,7 @@ fn event_book_boot_and_reserved_rollup_retention_is_bounded() {
          INSERT INTO boots(boot_id,node,started_at,last_seen_at,version) SELECT n+100,'local',n,n,'test' FROM x;
          INSERT INTO bili_lives(live_key,node,room,started_at,ended_at) VALUES
          ('active-key','local',1,1,NULL),('old-closed','local',1,1,2),('recent-closed','local',1,100,101),('live-24x7','local',2,1,NULL);
-         INSERT INTO samples_1h VALUES(1,'local',0,0,1,1,1,1);",
+",
     ).unwrap();
     let retention = HistoryRetention {
         event_rows: 1,
@@ -567,7 +567,17 @@ fn event_book_boot_and_reserved_rollup_retention_is_bounded() {
         "four batches of 2000 rows, not the full backlog"
     );
     assert_eq!(count(&w, "boots"), 1, "current referenced boot survives");
-    assert_eq!(count(&w, "samples_1h"), 0);
+    assert_eq!(
+        w.conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='samples_1h'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0,
+        "the never-written rollup table must be gone (schema v6)"
+    );
     let keys: Vec<String> = w
         .conn
         .prepare("SELECT live_key FROM bili_lives ORDER BY live_key")
@@ -911,7 +921,7 @@ fn export_browser_history_fixture() {
                     add_fans: Some(7),
                     new_fans_club: Some(2),
                     max_online: Some(210),
-                    live_time_raw: Some(600),
+                    live_time_secs: Some(600),
                 }),
             },
         ),

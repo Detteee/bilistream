@@ -364,20 +364,20 @@ impl Writer {
                 )?;
                 match totals {
                     Some(t) => self.conn.execute(
-                        "UPDATE bili_lives SET summary_state='ok', bili_live_time_raw=?2, add_fans=?3, danmu_num=?4,
+                        "UPDATE bili_lives SET summary_phase='done', live_time_secs=?2, add_fans=?3, danmu_num=?4,
                          watched_count=?5, new_fans_club=?6, max_online=?7 WHERE live_key=?1",
-                        params![live_key, t.live_time_raw, t.add_fans, t.danmu_num, t.watched_count, t.new_fans_club, t.max_online],
+                        params![live_key, t.live_time_secs, t.add_fans, t.danmu_num, t.watched_count, t.new_fans_club, t.max_online],
                     )?,
                     None => self.conn.execute(
-                        "UPDATE bili_lives SET summary_state='failed', bili_live_time_raw=NULL, add_fans=NULL, danmu_num=NULL,
-                         watched_count=NULL, new_fans_club=NULL, max_online=NULL WHERE live_key=?1 AND summary_state<>'ok'",
+                        "UPDATE bili_lives SET summary_phase='failed', live_time_secs=NULL, add_fans=NULL, danmu_num=NULL,
+                         watched_count=NULL, new_fans_club=NULL, max_online=NULL WHERE live_key=?1 AND summary_phase<>'done'",
                         params![live_key],
                     )?,
                 };
             }
             EventKind::BiliLiveSkipped { live_key } => {
                 self.conn.execute(
-                    "UPDATE bili_lives SET summary_state='skipped' WHERE live_key=?1 AND summary_state='pending'",
+                    "UPDATE bili_lives SET summary_phase='skipped' WHERE live_key=?1 AND summary_phase='pending'",
                     params![live_key],
                 )?;
             }
@@ -662,19 +662,19 @@ impl Writer {
         if previous.as_ref() == Some(&record) {
             return Ok(());
         }
-        let (phase, state) = match record.summary_phase {
-            BiliSummaryPhase::Pending => ("pending", "pending"),
-            BiliSummaryPhase::Claimed => ("claimed", "pending"),
-            BiliSummaryPhase::Failed => ("failed", "failed"),
-            BiliSummaryPhase::Done => ("done", "ok"),
-            BiliSummaryPhase::Skipped => ("skipped", "skipped"),
+        let phase = match record.summary_phase {
+            BiliSummaryPhase::Pending => "pending",
+            BiliSummaryPhase::Claimed => "claimed",
+            BiliSummaryPhase::Failed => "failed",
+            BiliSummaryPhase::Done => "done",
+            BiliSummaryPhase::Skipped => "skipped",
         };
         let totals = record.totals.as_ref().filter(|_| phase == "done");
         self.conn.execute(
-            "INSERT INTO bili_lives(live_key,node,room,started_at,ended_at,summary_state,started_by,summary_phase,summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,watched_count,new_fans_club,max_online)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
-             ON CONFLICT(live_key) DO UPDATE SET room=excluded.room,started_at=excluded.started_at,ended_at=excluded.ended_at,summary_state=excluded.summary_state,started_by=excluded.started_by,summary_phase=excluded.summary_phase,summary_node=excluded.summary_node,summary_at=excluded.summary_at,summary_generation=excluded.summary_generation,bili_live_time_raw=excluded.bili_live_time_raw,add_fans=excluded.add_fans,danmu_num=excluded.danmu_num,watched_count=excluded.watched_count,new_fans_club=excluded.new_fans_club,max_online=excluded.max_online",
-            params![record.live_key,self.node,record.room as i64,record.started_at as i64,record.stopped_at.map(|t|t as i64),state,self.scrub(&record.started_by),phase,record.summary_node.as_deref().map(|n|self.scrub(n)),record.summary_at as i64,record.summary_generation as i64,totals.and_then(|t|t.live_time_raw),totals.and_then(|t|t.add_fans),totals.and_then(|t|t.danmu_num),totals.and_then(|t|t.watched_count),totals.and_then(|t|t.new_fans_club),totals.and_then(|t|t.max_online)],
+            "INSERT INTO bili_lives(live_key,node,room,started_at,ended_at,started_by,summary_phase,summary_node,summary_at,summary_generation,live_time_secs,add_fans,danmu_num,watched_count,new_fans_club,max_online)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+             ON CONFLICT(live_key) DO UPDATE SET room=excluded.room,started_at=excluded.started_at,ended_at=excluded.ended_at,started_by=excluded.started_by,summary_phase=excluded.summary_phase,summary_node=excluded.summary_node,summary_at=excluded.summary_at,summary_generation=excluded.summary_generation,live_time_secs=excluded.live_time_secs,add_fans=excluded.add_fans,danmu_num=excluded.danmu_num,watched_count=excluded.watched_count,new_fans_club=excluded.new_fans_club,max_online=excluded.max_online",
+            params![record.live_key,self.node,record.room as i64,record.started_at as i64,record.stopped_at.map(|t|t as i64),self.scrub(&record.started_by),phase,record.summary_node.as_deref().map(|n|self.scrub(n)),record.summary_at as i64,record.summary_generation as i64,totals.and_then(|t|t.live_time_secs),totals.and_then(|t|t.add_fans),totals.and_then(|t|t.danmu_num),totals.and_then(|t|t.watched_count),totals.and_then(|t|t.new_fans_club),totals.and_then(|t|t.max_online)],
         )?;
         Ok(())
     }
@@ -705,21 +705,20 @@ impl Writer {
     }
 }
 
-const LIVE_RECORD_COLS: &str = "room,live_key,started_at,started_by,ended_at,summary_phase,summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,watched_count,new_fans_club,max_online,summary_state";
+const LIVE_RECORD_COLS: &str = "room,live_key,started_at,started_by,ended_at,summary_phase,summary_node,summary_at,summary_generation,live_time_secs,add_fans,danmu_num,watched_count,new_fans_club,max_online";
 
 fn live_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BiliLiveRecord> {
-    let state: String = row.get(15)?;
     let phase: String = row.get(5)?;
-    let summary_phase = match (phase.as_str(), state.as_str()) {
-        (_, "ok") => BiliSummaryPhase::Done,
-        (_, "skipped") => BiliSummaryPhase::Skipped,
-        (_, "failed") => BiliSummaryPhase::Failed,
-        ("claimed", _) => BiliSummaryPhase::Claimed,
+    let summary_phase = match phase.as_str() {
+        "claimed" => BiliSummaryPhase::Claimed,
+        "failed" => BiliSummaryPhase::Failed,
+        "done" => BiliSummaryPhase::Done,
+        "skipped" => BiliSummaryPhase::Skipped,
         _ => BiliSummaryPhase::Pending,
     };
     let totals = if summary_phase == BiliSummaryPhase::Done {
         Some(super::event::BiliTotals {
-            live_time_raw: row.get(9)?,
+            live_time_secs: row.get(9)?,
             add_fans: row.get(10)?,
             danmu_num: row.get(11)?,
             watched_count: row.get(12)?,

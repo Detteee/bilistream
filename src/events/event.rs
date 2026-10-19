@@ -92,8 +92,9 @@ impl BroadcastEndCause {
 /// StopLiveData totals after the allowlist. No revenue field exists.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BiliTotals {
-    /// `LiveTime`, stored raw only; never used as a duration.
-    pub live_time_raw: Option<i64>,
+    /// B站 `LiveTime`: seconds of live time reported by the room summary.
+    /// Never used as a duration — the relay session's own clock is authoritative.
+    pub live_time_secs: Option<i64>,
     pub add_fans: Option<i64>,
     pub new_fans_club: Option<i64>,
     pub danmu_num: Option<i64>,

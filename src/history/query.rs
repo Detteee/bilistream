@@ -562,11 +562,19 @@ pub(crate) struct LiveRow {
 
 pub(crate) fn live_row(conn: &Connection, key: &str) -> rusqlite::Result<Option<LiveRow>> {
     conn.query_row(
-        "SELECT summary_state,watched_count,danmu_num,add_fans,new_fans_club,max_online FROM bili_lives WHERE live_key=?1",
+        "SELECT summary_phase,watched_count,danmu_num,add_fans,new_fans_club,max_online FROM bili_lives WHERE live_key=?1",
         [key],
         |r| {
+            // The stored phase is the authority; this is the only place the
+            // read-side vocabulary (`ok`, and `claimed` read as still pending)
+            // survives, so `kpis` and the WebUI payload keep their values.
+            let phase: String = r.get(0)?;
             Ok(LiveRow {
-                state: r.get(0)?,
+                state: match phase.as_str() {
+                    "done" => "ok".into(),
+                    "claimed" => "pending".into(),
+                    other => other.to_string(),
+                },
                 watched: r.get(1)?,
                 danmu: r.get(2)?,
                 add_fans: r.get(3)?,

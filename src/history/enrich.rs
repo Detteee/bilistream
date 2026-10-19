@@ -45,9 +45,9 @@ pub(crate) fn parse_stop_live_data(reply: &Value) -> Result<BiliTotals, StopLive
         // and turn an upstream negative sentinel into a successful summary.
         *slot = value.and_then(Value::as_i64);
     }
-    let [live_time_raw, add_fans, new_fans_club, danmu_num, max_online, watched_count] = fields;
+    let [live_time_secs, add_fans, new_fans_club, danmu_num, max_online, watched_count] = fields;
     Ok(BiliTotals {
-        live_time_raw,
+        live_time_secs,
         add_fans,
         new_fans_club,
         danmu_num,

@@ -4,7 +4,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 pub(crate) const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -203,6 +203,55 @@ fn compact_raw(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// v6 removes the three pieces of naming/schema debt that survived the
+/// statistics rewrite:
+///
+/// * `samples_1h` was created by V1, rebuilt by V2, pruned every tick and
+///   listed in `clear()` — but never written. Dropped; V1/V2 are left alone so
+///   a fresh database still replays the historical migration chain.
+/// * `summary_state` (`pending`/`ok`/`failed`/`skipped`) and `summary_phase`
+///   (`pending`/`claimed`/`failed`/`done`/`skipped`) were two spellings of one
+///   lifecycle, written by different paths and able to disagree. The phase is
+///   the only stored authority now; the read-side outcome (`done → ok`,
+///   `claimed → pending`) is derived in `query::live_row`.
+/// * `bili_live_time_raw` did not say what its number means. It is B站's
+///   `LiveTime` in seconds, so the column is `live_time_secs` (the relay
+///   session clock remains the duration authority).
+///
+/// Reconciliation for existing rows is data-preserving and deterministic: an
+/// observed `failed`/`skipped` state wins (a failure is not undone by a claim),
+/// `ok` upgrades a pending/claimed phase to `done`, otherwise the phase wins.
+const V6: &str = r#"
+CREATE TABLE bili_lives_v6 (
+  live_key TEXT PRIMARY KEY, node TEXT NOT NULL, room INTEGER NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER,
+  started_by TEXT NOT NULL DEFAULT '',
+  summary_phase TEXT NOT NULL DEFAULT 'pending'
+    CHECK (summary_phase IN ('pending','claimed','failed','done','skipped')),
+  summary_node TEXT, summary_at INTEGER NOT NULL DEFAULT 0,
+  summary_generation INTEGER NOT NULL DEFAULT 0,
+  live_time_secs INTEGER, add_fans INTEGER, danmu_num INTEGER,
+  watched_count INTEGER, new_fans_club INTEGER, max_online INTEGER) WITHOUT ROWID;
+INSERT INTO bili_lives_v6
+  (live_key,node,room,started_at,ended_at,started_by,summary_phase,summary_node,
+   summary_at,summary_generation,live_time_secs,add_fans,danmu_num,watched_count,
+   new_fans_club,max_online)
+SELECT live_key,node,room,started_at,ended_at,started_by,
+  CASE
+    WHEN summary_state IN ('failed','skipped') THEN summary_state
+    WHEN summary_state = 'ok' AND summary_phase IN ('pending','claimed') THEN 'done'
+    WHEN summary_phase IN ('pending','claimed','failed','done','skipped') THEN summary_phase
+    ELSE 'pending'
+  END,
+  summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,
+  watched_count,new_fans_club,max_online
+FROM bili_lives;
+DROP TABLE bili_lives;
+ALTER TABLE bili_lives_v6 RENAME TO bili_lives;
+CREATE INDEX bili_lives_end ON bili_lives(ended_at);
+DROP TABLE IF EXISTS samples_1h;
+"#;
+
 fn pragmas(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=2000;
@@ -301,6 +350,9 @@ fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
                  CREATE INDEX IF NOT EXISTS sample_frames_session ON sample_frames(session_id, ts);
                  CREATE INDEX IF NOT EXISTS node_segments_start ON node_segments(started_at);",
             )?;
+        }
+        if version <= 5 {
+            tx.execute_batch(V6)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;

@@ -481,13 +481,6 @@ pub(crate) fn tick(
         cutoff(now, rollup_days),
         "samples_pruned_before",
     )?;
-    report.rollup_deleted += delete_samples(
-        conn,
-        "samples_1h",
-        "bucket",
-        cutoff(now, r.rollup_days),
-        "samples_pruned_before",
-    )?;
     let age = cutoff(now, r.event_days);
     let evict = s.pressure && report.raw_deleted == 0 && report.rollup_deleted == 0;
     for (table, col, key, closed) in [
@@ -529,13 +522,12 @@ pub(crate) fn tick(
 /// have drained its queue and dropped every cached row id first.
 pub(crate) fn clear(conn: &Connection) -> rusqlite::Result<u64> {
     // Children before parents; `runs` is the only foreign key into `sessions`.
-    const TABLES: [&str; 10] = [
+    const TABLES: [&str; 9] = [
         "runs",
         "events",
         "notify_sends",
         "node_segments",
         "samples_1m",
-        "samples_1h",
         "sample_frames",
         "bili_lives",
         "sessions",
