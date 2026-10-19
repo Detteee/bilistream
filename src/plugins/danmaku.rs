@@ -1287,10 +1287,36 @@ pub fn should_skip_due_to_warning(channel_name: &str) -> bool {
     warning_tracker().snapshot().holds_name(channel_name)
 }
 
-pub(crate) fn source_warning_held(platform: &str, name: &str, channel_id: &str) -> bool {
-    warning_tracker()
-        .snapshot()
-        .holds_identity(&BroadcastSource::new(platform, name, channel_id, None))
+/// The provider source a platform code names in this config. The status cards,
+/// the release endpoint and the runtime all ask here, so none of them can
+/// disagree about which channel a code means.
+pub(crate) fn configured_broadcast_source(cfg: &Config, platform: &str) -> Option<BroadcastSource> {
+    match platform {
+        "YT" => Some(BroadcastSource::new(
+            "YT",
+            &cfg.youtube.channel_name,
+            &cfg.youtube.channel_id,
+            None,
+        )),
+        "TW" => Some(BroadcastSource::new(
+            "TW",
+            &cfg.twitch.channel_name,
+            &cfg.twitch.channel_id,
+            None,
+        )),
+        "NC" => {
+            let (channel_id, channel_name) =
+                crate::plugins::niconico_channel_identity(&cfg.niconico);
+            Some(BroadcastSource::new("NC", &channel_name, &channel_id, None))
+        }
+        _ => None,
+    }
+}
+
+/// Whether this process still holds that card's source after a warning/cut.
+pub(crate) fn source_warning_held(cfg: &Config, platform: &str) -> bool {
+    configured_broadcast_source(cfg, platform)
+        .is_some_and(|source| warning_tracker().snapshot().holds_identity(&source))
 }
 
 pub(crate) fn priority_warning_held(cfg: &Config) -> bool {

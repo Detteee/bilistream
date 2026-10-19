@@ -180,6 +180,7 @@ fn is_priority_warning_card(platform: Option<&str>) -> bool {
     )
 }
 
+#[cfg(test)]
 fn release_priority_warning_for_config(
     warnings: &crate::plugins::danmaku::warning::WarningTracker,
     before_action: &crate::plugins::danmaku::warning::WarningSnapshot,
@@ -197,78 +198,46 @@ fn release_card_warning_for_config(
     platform: Option<&str>,
 ) -> Result<Option<crate::plugins::danmaku::warning::WarningRelease>, &'static str> {
     use crate::plugins::danmaku::warning::{BroadcastSource, WarningReleaseReason};
+    let reason = WarningReleaseReason::AdminCard;
     if is_priority_warning_card(platform) {
         if requested_name.is_empty() || requested_name != cfg.priority_channel.channel_name {
             return Err("优先频道已变更，请刷新后重试");
         }
+        let priority = &cfg.priority_channel;
+        let priority_source = |platform, channel_id: &str| {
+            BroadcastSource::new(platform, requested_name, channel_id, None)
+        };
         return Ok(warnings
-            .release_name(
-                before_action,
-                requested_name,
-                WarningReleaseReason::PriorityCard,
-            )
+            .release_name(before_action, requested_name, reason)
             .or_else(|| {
                 warnings.release_source(
                     before_action,
-                    &BroadcastSource::new(
-                        "YT",
-                        requested_name,
-                        &cfg.priority_channel.youtube_channel_id,
-                        None,
-                    ),
-                    WarningReleaseReason::PriorityCard,
+                    &priority_source("YT", &priority.youtube_channel_id),
+                    reason,
                 )
             })
             .or_else(|| {
                 warnings.release_source(
                     before_action,
-                    &BroadcastSource::new(
-                        "TW",
-                        requested_name,
-                        &cfg.priority_channel.twitch_channel_id,
-                        None,
-                    ),
-                    WarningReleaseReason::PriorityCard,
+                    &priority_source("TW", &priority.twitch_channel_id),
+                    reason,
                 )
             }));
     }
-    let source = match platform.map(str::trim) {
-        Some("YT") => {
-            if requested_name.is_empty() || requested_name != cfg.youtube.channel_name {
-                return Err("频道已变更，请刷新后重试");
-            }
-            BroadcastSource::new("YT", requested_name, &cfg.youtube.channel_id, None)
-        }
-        Some("TW") => {
-            if requested_name.is_empty() || requested_name != cfg.twitch.channel_name {
-                return Err("频道已变更，请刷新后重试");
-            }
-            BroadcastSource::new("TW", requested_name, &cfg.twitch.channel_id, None)
-        }
-        Some("NC") => {
-            let (channel_id, channel_name) =
-                crate::plugins::niconico_channel_identity(&cfg.niconico);
-            if requested_name.is_empty() || requested_name != channel_name {
-                return Err("频道已变更，请刷新后重试");
-            }
-            BroadcastSource::new("NC", requested_name, &channel_id, None)
-        }
-        _ => return Err("频道已变更，请刷新后重试"),
-    };
-    // `release_source` also matches display names. Gate on platform/id so a
-    // Twitch hold does not clear from the YouTube card of the same talent.
+    // A source card releases exactly the identity it renders: `release_source`
+    // also matches display names, so a Twitch hold must not clear from the
+    // YouTube card of the same talent. That gate also makes the release
+    // unconditional here — a matched identity always matches `release_source`.
+    let code = platform.map(str::trim).unwrap_or_default();
+    let source = crate::plugins::danmaku::configured_broadcast_source(cfg, code)
+        .ok_or("频道已变更，请刷新后重试")?;
+    if requested_name.is_empty() || requested_name != source.channel_name {
+        return Err("频道已变更，请刷新后重试");
+    }
     if !before_action.holds_identity(&source) {
         return Ok(None);
     }
-    Ok(warnings
-        .release_source(before_action, &source, WarningReleaseReason::PriorityCard)
-        .or_else(|| {
-            warnings.release_name(
-                before_action,
-                requested_name,
-                WarningReleaseReason::PriorityCard,
-            )
-        }))
+    Ok(warnings.release_source(before_action, &source, reason))
 }
 
 pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
@@ -1107,6 +1076,25 @@ mod priority_warning_tests {
         .unwrap()
         .is_some());
         assert!(!warnings.snapshot().holds(&held));
+    }
+
+    #[test]
+    fn a_card_platform_resolves_to_the_source_its_config_names() {
+        let mut cfg = priority_config(false);
+        cfg.youtube.channel_name = "示例频道 A".into();
+        cfg.youtube.channel_id = "UC-other".into();
+        cfg.twitch.channel_name = "示例频道 A".into();
+        cfg.twitch.channel_id = "Held_Login".into();
+        let yt = crate::plugins::danmaku::configured_broadcast_source(&cfg, "YT").unwrap();
+        let tw = crate::plugins::danmaku::configured_broadcast_source(&cfg, "TW").unwrap();
+        assert_eq!(
+            (yt.platform.as_str(), yt.channel_id.as_str()),
+            ("YT", "UC-other")
+        );
+        // Twitch ids compare case-insensitively, so the card still matches the hold.
+        assert_eq!(tw.channel_id, "held_login");
+        assert!(crate::plugins::danmaku::configured_broadcast_source(&cfg, "priority").is_none());
+        assert!(crate::plugins::danmaku::configured_broadcast_source(&cfg, "").is_none());
     }
 
     #[tokio::test]

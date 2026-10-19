@@ -1560,11 +1560,7 @@ fn publish_webui_status(
             Some(bilistream::YtStatus {
                 is_live: sources.youtube.is_live,
                 enable_monitor: cfg.youtube.enable_monitor,
-                warning_held: bilistream::plugins::danmaku::source_warning_held(
-                    "YT",
-                    &cfg.youtube.channel_name,
-                    &cfg.youtube.channel_id,
-                ),
+                warning_held: bilistream::plugins::danmaku::source_warning_held(cfg, "YT"),
                 title: sources.youtube.title.clone(),
                 topic: sources.youtube.topic.clone(),
                 channel_name: cfg.youtube.channel_name.clone(),
@@ -1585,11 +1581,7 @@ fn publish_webui_status(
             Some(bilistream::TwStatus {
                 is_live: sources.twitch.is_live,
                 enable_monitor: cfg.twitch.enable_monitor,
-                warning_held: bilistream::plugins::danmaku::source_warning_held(
-                    "TW",
-                    &cfg.twitch.channel_name,
-                    &cfg.twitch.channel_id,
-                ),
+                warning_held: bilistream::plugins::danmaku::source_warning_held(cfg, "TW"),
                 title: sources.twitch.title.clone(),
                 game: sources.twitch.topic.clone(),
                 channel_name: cfg.twitch.channel_name.clone(),
@@ -1610,11 +1602,7 @@ fn publish_webui_status(
             Some(bilistream::NicoStatus {
                 is_live: sources.niconico.is_live,
                 enable_monitor: cfg.niconico.enable_monitor,
-                warning_held: bilistream::plugins::danmaku::source_warning_held(
-                    "NC",
-                    &sources.nico_channel_name,
-                    &sources.nico_channel_id,
-                ),
+                warning_held: bilistream::plugins::danmaku::source_warning_held(cfg, "NC"),
                 title: sources.niconico.title.clone(),
                 channel_name: sources.nico_channel_name.clone(),
                 channel_id: sources.nico_channel_id.clone(),

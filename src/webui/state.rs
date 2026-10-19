@@ -274,20 +274,12 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             yt_status.crop_enabled = cfg.youtube.crop.is_some();
             yt_status.ffmpeg_cache_enabled = cfg.youtube.ffmpeg_cache.enabled;
             yt_status.ffmpeg_cache_latency_secs = cfg.youtube.ffmpeg_cache.latency_secs;
-            yt_status.warning_held = crate::plugins::danmaku::source_warning_held(
-                "YT",
-                &cfg.youtube.channel_name,
-                &cfg.youtube.channel_id,
-            );
+            yt_status.warning_held = crate::plugins::danmaku::source_warning_held(cfg, "YT");
         } else {
             cached_status.youtube = Some(YtStatus {
                 is_live: false,
                 enable_monitor: cfg.youtube.enable_monitor,
-                warning_held: crate::plugins::danmaku::source_warning_held(
-                    "YT",
-                    &cfg.youtube.channel_name,
-                    &cfg.youtube.channel_id,
-                ),
+                warning_held: crate::plugins::danmaku::source_warning_held(cfg, "YT"),
                 title: Some("-".to_string()),
                 channel_name: cfg.youtube.channel_name.clone(),
                 channel_id: cfg.youtube.channel_id.clone(),
@@ -325,20 +317,12 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             tw_status.crop_enabled = cfg.twitch.crop.is_some();
             tw_status.ffmpeg_cache_enabled = cfg.twitch.ffmpeg_cache.enabled;
             tw_status.ffmpeg_cache_latency_secs = cfg.twitch.ffmpeg_cache.latency_secs;
-            tw_status.warning_held = crate::plugins::danmaku::source_warning_held(
-                "TW",
-                &cfg.twitch.channel_name,
-                &cfg.twitch.channel_id,
-            );
+            tw_status.warning_held = crate::plugins::danmaku::source_warning_held(cfg, "TW");
         } else {
             cached_status.twitch = Some(TwStatus {
                 is_live: false,
                 enable_monitor: cfg.twitch.enable_monitor,
-                warning_held: crate::plugins::danmaku::source_warning_held(
-                    "TW",
-                    &cfg.twitch.channel_name,
-                    &cfg.twitch.channel_id,
-                ),
+                warning_held: crate::plugins::danmaku::source_warning_held(cfg, "TW"),
                 title: Some("-".to_string()),
                 channel_name: cfg.twitch.channel_name.clone(),
                 channel_id: cfg.twitch.channel_id.clone(),
@@ -410,20 +394,12 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
             nico_status.crop_enabled = cfg.niconico.crop.is_some();
             nico_status.ffmpeg_cache_enabled = cfg.niconico.ffmpeg_cache.enabled;
             nico_status.ffmpeg_cache_latency_secs = cfg.niconico.ffmpeg_cache.latency_secs;
-            nico_status.warning_held = crate::plugins::danmaku::source_warning_held(
-                "NC",
-                &nico_channel_name,
-                &nico_channel_id,
-            );
+            nico_status.warning_held = crate::plugins::danmaku::source_warning_held(cfg, "NC");
         } else {
             cached_status.niconico = Some(NicoStatus {
                 is_live: false,
                 enable_monitor: cfg.niconico.enable_monitor,
-                warning_held: crate::plugins::danmaku::source_warning_held(
-                    "NC",
-                    &nico_channel_name,
-                    &nico_channel_id,
-                ),
+                warning_held: crate::plugins::danmaku::source_warning_held(cfg, "NC"),
                 title: Some("-".to_string()),
                 channel_name: nico_channel_name,
                 channel_id: nico_channel_id,

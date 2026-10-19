@@ -179,7 +179,7 @@ pub(crate) enum WarningReleaseReason {
     NewEpisode,
     Offline,
     ManualRestart,
-    PriorityCard,
+    AdminCard,
 }
 
 impl WarningReleaseReason {
@@ -189,7 +189,7 @@ impl WarningReleaseReason {
             Self::NewEpisode => "同频道已确认新的直播 ID",
             Self::Offline => "源频道已确认下播",
             Self::ManualRestart => "手动重启流",
-            Self::PriorityCard => "管理页卡片手动解除",
+            Self::AdminCard => "管理页卡片手动解除",
         }
     }
 }
@@ -641,7 +641,7 @@ mod tests {
             .release_name(
                 &before_new_warning,
                 &held.channel_name,
-                WarningReleaseReason::PriorityCard
+                WarningReleaseReason::AdminCard
             )
             .is_none());
         assert!(tracker.snapshot().holds(&other));
@@ -682,7 +682,7 @@ mod tests {
             )
             .is_none());
         assert!(tracker
-            .release_name(&before, &a.channel_name, WarningReleaseReason::PriorityCard)
+            .release_name(&before, &a.channel_name, WarningReleaseReason::AdminCard)
             .is_none());
         assert!(tracker
             .release_name(
